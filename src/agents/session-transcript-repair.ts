@@ -5,6 +5,82 @@ type ToolCallLike = {
   name?: string;
 };
 
+type ToolCallBlock = {
+  type?: unknown;
+  id?: unknown;
+  name?: unknown;
+  partialJson?: unknown;
+  arguments?: unknown;
+};
+
+/**
+ * Checks if a tool call block is incomplete (has partialJson but no complete arguments).
+ * Incomplete tool calls happen when a request is terminated mid-stream.
+ */
+function isIncompleteToolCall(block: ToolCallBlock): boolean {
+  if (!block || typeof block !== "object") return false;
+  // If partialJson exists and arguments is missing or incomplete, it's partial
+  if (typeof block.partialJson === "string" && block.partialJson) {
+    // Check if arguments is missing or empty
+    const args = block.arguments;
+    if (args === undefined || args === null) return true;
+    if (typeof args === "object" && Object.keys(args as object).length === 0) return true;
+  }
+  return false;
+}
+
+/**
+ * Removes incomplete (partial) tool calls from assistant messages.
+ * These occur when a request is terminated mid-stream and can cause API rejections.
+ */
+export function sanitizePartialToolCalls(messages: AgentMessage[]): AgentMessage[] {
+  let changed = false;
+  const out: AgentMessage[] = [];
+
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") {
+      out.push(msg);
+      continue;
+    }
+
+    const role = (msg as { role?: unknown }).role;
+    if (role !== "assistant") {
+      out.push(msg);
+      continue;
+    }
+
+    const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
+    const content = assistant.content;
+    if (!Array.isArray(content)) {
+      out.push(msg);
+      continue;
+    }
+
+    // Filter out incomplete tool calls
+    const filteredContent = content.filter((block) => {
+      if (!block || typeof block !== "object") return true;
+      const rec = block as ToolCallBlock;
+      if (rec.type !== "toolCall" && rec.type !== "toolUse" && rec.type !== "functionCall") {
+        return true;
+      }
+      if (isIncompleteToolCall(rec)) {
+        changed = true;
+        return false;
+      }
+      return true;
+    });
+
+    if (filteredContent.length !== content.length) {
+      // Content was modified, create new message
+      out.push({ ...assistant, content: filteredContent } as AgentMessage);
+    } else {
+      out.push(msg);
+    }
+  }
+
+  return changed ? out : messages;
+}
+
 function extractToolCallsFromAssistant(
   msg: Extract<AgentMessage, { role: "assistant" }>,
 ): ToolCallLike[] {
@@ -14,10 +90,13 @@ function extractToolCallsFromAssistant(
   const toolCalls: ToolCallLike[] = [];
   for (const block of content) {
     if (!block || typeof block !== "object") continue;
-    const rec = block as { type?: unknown; id?: unknown; name?: unknown };
+    const rec = block as ToolCallBlock;
     if (typeof rec.id !== "string" || !rec.id) continue;
 
     if (rec.type === "toolCall" || rec.type === "toolUse" || rec.type === "functionCall") {
+      // Skip incomplete tool calls - they don't count as valid tool calls
+      if (isIncompleteToolCall(rec)) continue;
+
       toolCalls.push({
         id: rec.id,
         name: typeof rec.name === "string" ? rec.name : undefined,
@@ -57,7 +136,10 @@ function makeMissingToolResult(params: {
 export { makeMissingToolResult };
 
 export function sanitizeToolUseResultPairing(messages: AgentMessage[]): AgentMessage[] {
-  return repairToolUseResultPairing(messages).messages;
+  // First, sanitize partial tool calls that were terminated mid-stream
+  const sanitizedPartials = sanitizePartialToolCalls(messages);
+  // Then repair tool use/result pairing
+  return repairToolUseResultPairing(sanitizedPartials).messages;
 }
 
 export type ToolUseRepairReport = {
