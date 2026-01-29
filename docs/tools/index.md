@@ -205,14 +205,14 @@ Notes:
 - `process` is scoped per agent; sessions from other agents are not visible.
 
 ### `web_search`
-Search the web using Brave Search API.
+Search the web using Brave Search API (default), Perplexity Sonar, or [Querit](https://www.querit.ai).
 
 Core parameters:
 - `query` (required)
 - `count` (1–10; default from `tools.web.search.maxResults`)
 
 Notes:
-- Requires a Brave API key (recommended: `moltbot configure --section web`, or set `BRAVE_API_KEY`).
+- Requires an API key for your chosen provider (recommended: `moltbot configure --section web`, or set `BRAVE_API_KEY` / `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` / `QUERIT_API_KEY`).
 - Enable via `tools.web.search.enabled`.
 - Responses are cached (default 15 min).
 - See [Web tools](/tools/web) for setup.
