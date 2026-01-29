@@ -25,6 +25,8 @@ import {
   applySyntheticProviderConfig,
   applyVeniceConfig,
   applyVeniceProviderConfig,
+  applyMapleConfig,
+  applyMapleProviderConfig,
   applyVercelAiGatewayConfig,
   applyVercelAiGatewayProviderConfig,
   applyZaiConfig,
@@ -33,6 +35,7 @@ import {
   OPENROUTER_DEFAULT_MODEL_REF,
   SYNTHETIC_DEFAULT_MODEL_REF,
   VENICE_DEFAULT_MODEL_REF,
+  MAPLE_DEFAULT_MODEL_REF,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
   setGeminiApiKey,
   setKimiCodeApiKey,
@@ -41,6 +44,7 @@ import {
   setOpenrouterApiKey,
   setSyntheticApiKey,
   setVeniceApiKey,
+  setMapleApiKey,
   setVercelAiGatewayApiKey,
   setZaiApiKey,
   ZAI_DEFAULT_MODEL_REF,
@@ -83,6 +87,8 @@ export async function applyAuthChoiceApiProviders(
       authChoice = "synthetic-api-key";
     } else if (params.opts.tokenProvider === "venice") {
       authChoice = "venice-api-key";
+    } else if (params.opts.tokenProvider === "maple") {
+      authChoice = "maple-api-key";
     } else if (params.opts.tokenProvider === "opencode") {
       authChoice = "opencode-zen";
     }
@@ -513,6 +519,78 @@ export async function applyAuthChoiceApiProviders(
         applyDefaultConfig: applyVeniceConfig,
         applyProviderConfig: applyVeniceProviderConfig,
         noteDefault: VENICE_DEFAULT_MODEL_REF,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "maple-api-key") {
+    let hasCredential = false;
+    let baseUrl: string | undefined;
+
+    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "maple") {
+      await setMapleApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      hasCredential = true;
+    }
+
+    if (!hasCredential) {
+      await params.prompter.note(
+        [
+          "Maple AI provides TEE-based private inference with end-to-end encryption.",
+          "Download the Maple desktop app at: https://trymaple.ai/downloads",
+          "Run the app or Docker container, then configure the proxy URL.",
+          "Default URL: http://127.0.0.1:8080/v1",
+          "Generate your API key within the Maple app.",
+        ].join("\n"),
+        "Maple AI",
+      );
+    }
+
+    const envKey = resolveEnvApiKey("maple");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing MAPLE_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setMapleApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter Maple AI API key",
+        validate: validateApiKeyInput,
+      });
+      await setMapleApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+    }
+
+    // Ask for base URL (with default)
+    const customUrl = await params.prompter.text({
+      message: "Enter Maple proxy URL (press Enter for default)",
+      placeholder: "http://127.0.0.1:8080/v1",
+    });
+    if (customUrl && String(customUrl).trim()) {
+      baseUrl = String(customUrl).trim();
+    }
+
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "maple:default",
+      provider: "maple",
+      mode: "api_key",
+    });
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: MAPLE_DEFAULT_MODEL_REF,
+        applyDefaultConfig: (config) => applyMapleConfig(config, { baseUrl }),
+        applyProviderConfig: (config) => applyMapleProviderConfig(config, { baseUrl }),
+        noteDefault: MAPLE_DEFAULT_MODEL_REF,
         noteAgentModel,
         prompter: params.prompter,
       });

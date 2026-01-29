@@ -20,6 +20,7 @@ export type AuthChoiceGroupId =
   | "minimax"
   | "synthetic"
   | "venice"
+  | "maple"
   | "qwen";
 
 export type AuthChoiceGroup = {
@@ -70,6 +71,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     label: "Venice AI",
     hint: "Privacy-focused (uncensored models)",
     choices: ["venice-api-key"],
+  },
+  {
+    value: "maple",
+    label: "Maple AI",
+    hint: "TEE-based private inference",
+    choices: ["maple-api-key"],
   },
   {
     value: "google",
@@ -146,6 +153,11 @@ export function buildAuthChoiceOptions(params: {
     value: "venice-api-key",
     label: "Venice AI API key",
     hint: "Privacy-focused inference (uncensored models)",
+  });
+  options.push({
+    value: "maple-api-key",
+    label: "Maple AI API key",
+    hint: "TEE-based private inference (end-to-end encrypted)",
   });
   options.push({
     value: "github-copilot",
