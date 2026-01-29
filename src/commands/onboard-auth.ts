@@ -9,7 +9,7 @@ export {
   applyKimiCodeProviderConfig,
   applyMoonshotConfig,
   applyMoonshotProviderConfig,
-  applyNebiusConfig, 
+  applyNebiusConfig,
   applyNebiusProviderConfig,
   applyOpenrouterConfig,
   applyOpenrouterProviderConfig,

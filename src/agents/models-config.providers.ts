@@ -74,7 +74,6 @@ const NEBIUS_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
-
 const OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1";
 const OLLAMA_API_BASE_URL = "http://127.0.0.1:11434";
 const OLLAMA_DEFAULT_CONTEXT_WINDOW = 128000;
@@ -397,7 +396,6 @@ function buildNebiusProvider(): ProviderConfig {
   };
 }
 
-
 export async function resolveImplicitProviders(params: {
   agentDir: string;
 }): Promise<ModelsConfig["providers"]> {
@@ -458,13 +456,12 @@ export async function resolveImplicitProviders(params: {
   }
 
   const nebiusKey =
-  resolveEnvApiKeyVarName("nebius") ??
-  resolveApiKeyFromProfiles({ provider: "nebius", store: authStore });
+    resolveEnvApiKeyVarName("nebius") ??
+    resolveApiKeyFromProfiles({ provider: "nebius", store: authStore });
 
-if (nebiusKey) {
-  providers.nebius = { ...buildNebiusProvider(), apiKey: nebiusKey };
-}
-
+  if (nebiusKey) {
+    providers.nebius = { ...buildNebiusProvider(), apiKey: nebiusKey };
+  }
 
   return providers;
 }

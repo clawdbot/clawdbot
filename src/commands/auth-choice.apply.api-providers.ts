@@ -529,68 +529,67 @@ export async function applyAuthChoiceApiProviders(
   }
 
   if (authChoice === "nebius-api-key") {
-  let hasCredential = false;
+    let hasCredential = false;
 
-  if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "nebius") {
-    await setNebiusApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
-    hasCredential = true;
-  }
-
-  if (!hasCredential) {
-    await params.prompter.note(
-      [
-        "Nebius provides OpenAI-compatible inference for frontier and open models.",
-        "Get your API key at: hhttps://tokenfactory.nebius.com/",
-        "Available models: zai-glm-7, zai-glm-5",
-      ].join("\n"),
-      "Nebius",
-    );
-  }
-
-  const envKey = resolveEnvApiKey("nebius");
-  if (envKey) {
-    const useExisting = await params.prompter.confirm({
-      message: `Use existing NEBIUS_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
-      initialValue: true,
-    });
-    if (useExisting) {
-      await setNebiusApiKey(envKey.apiKey, params.agentDir);
+    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "nebius") {
+      await setNebiusApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
       hasCredential = true;
     }
-  }
 
-  if (!hasCredential) {
-    const key = await params.prompter.text({
-      message: "Enter Nebius API key",
-      validate: validateApiKeyInput,
+    if (!hasCredential) {
+      await params.prompter.note(
+        [
+          "Nebius provides OpenAI-compatible inference for frontier and open models.",
+          "Get your API key at: hhttps://tokenfactory.nebius.com/",
+          "Available models: zai-glm-7, zai-glm-5",
+        ].join("\n"),
+        "Nebius",
+      );
+    }
+
+    const envKey = resolveEnvApiKey("nebius");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing NEBIUS_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setNebiusApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter Nebius API key",
+        validate: validateApiKeyInput,
+      });
+      await setNebiusApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+    }
+
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "nebius:default",
+      provider: "nebius",
+      mode: "api_key",
     });
-    await setNebiusApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: NEBIUS_DEFAULT_MODEL_REF,
+        applyDefaultConfig: applyNebiusConfig,
+        applyProviderConfig: applyNebiusProviderConfig,
+        noteDefault: NEBIUS_DEFAULT_MODEL_REF,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+
+    return { config: nextConfig, agentModelOverride };
   }
-
-  nextConfig = applyAuthProfileConfig(nextConfig, {
-    profileId: "nebius:default",
-    provider: "nebius",
-    mode: "api_key",
-  });
-
-  {
-    const applied = await applyDefaultModelChoice({
-      config: nextConfig,
-      setDefaultModel: params.setDefaultModel,
-      defaultModel: NEBIUS_DEFAULT_MODEL_REF,
-      applyDefaultConfig: applyNebiusConfig,
-      applyProviderConfig: applyNebiusProviderConfig,
-      noteDefault: NEBIUS_DEFAULT_MODEL_REF,
-      noteAgentModel,
-      prompter: params.prompter,
-    });
-    nextConfig = applied.config;
-    agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
-  }
-
-  return { config: nextConfig, agentModelOverride };
-}
-
 
   if (authChoice === "opencode-zen") {
     let hasCredential = false;

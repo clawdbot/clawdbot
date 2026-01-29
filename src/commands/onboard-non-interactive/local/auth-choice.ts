@@ -339,24 +339,23 @@ export async function applyNonInteractiveAuthChoice(params: {
   if (authChoice === "minimax") return applyMinimaxConfig(nextConfig);
 
   if (authChoice === "nebius-api-key") {
-  const resolved = await resolveNonInteractiveApiKey({
-    provider: "nebius",
-    cfg: baseConfig,
-    flagValue: opts.nebiusApiKey,
-    flagName: "--nebius-api-key",
-    envVar: "NEBIUS_API_KEY",
-    runtime,
-  });
-  if (!resolved) return null;
-  if (resolved.source !== "profile") await setNebiusApiKey(resolved.key);
-  nextConfig = applyAuthProfileConfig(nextConfig, {
-    profileId: "nebius:default",
-    provider: "nebius",
-    mode: "api_key",
-  });
-  return applyNebiusConfig(nextConfig);
-}
-
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "nebius",
+      cfg: baseConfig,
+      flagValue: opts.nebiusApiKey,
+      flagName: "--nebius-api-key",
+      envVar: "NEBIUS_API_KEY",
+      runtime,
+    });
+    if (!resolved) return null;
+    if (resolved.source !== "profile") await setNebiusApiKey(resolved.key);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "nebius:default",
+      provider: "nebius",
+      mode: "api_key",
+    });
+    return applyNebiusConfig(nextConfig);
+  }
 
   if (authChoice === "opencode-zen") {
     const resolved = await resolveNonInteractiveApiKey({
