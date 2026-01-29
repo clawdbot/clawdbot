@@ -10,6 +10,15 @@ read_when:
 
 Use `pnpm` (Node 22+) from the repo root. Keep the working tree clean before tagging/publishing.
 
+## Release Sequence Summary
+1.  **Preparation**: Bump versions, sync plugins, and update CLI strings.
+2.  **Build**: Run `pnpm build` and bundle A2UI.
+3.  **Documentation**: Update `CHANGELOG.md` and README.
+4.  **Verification**: Execute linting, unit tests, and installer smoke tests.
+5.  **macOS Build**: Build, sign, and zip the macOS app; update Sparkle appcast.
+6.  **Publishing**: Publish to npm and create the GitHub release with artifacts.
+7.  **Final Ack**: Verify the published package via `npx`.
+
 ## Operator trigger
 When the operator says “release”, immediately do this preflight (no extra questions unless blocked):
 - Read this doc and `docs/platforms/mac/release.md`.

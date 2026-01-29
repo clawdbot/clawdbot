@@ -106,6 +106,13 @@
 ## Troubleshooting
 - Rebrand/migration issues or legacy config/service warnings: run `moltbot doctor` (see `docs/gateway/doctor.md`).
 
+## Security & Secrets Handling
+- **Never Read/Write**: Never attempt to read or modify session files, logs, or credentials outside the authorized agent directories (`~/.clawdbot/`).
+- **Data Redaction**: Always mask or use placeholders for PII (phone numbers, emails) and secrets (API keys) in any logs, documentation, or screenshots.
+- **Credential Storage**: Use the authorized `authStorage` and `authStore` mechanisms; never hardcode keys or store them in plain text files.
+- **Tool Safety**: Exercise extreme caution with shell execution tools. Never execute commands that could lead to data exfiltration or unauthorized system access.
+- **Reporting**: If you encounter exposed credentials or security vulnerabilities during exploration, stop and alert the operator immediately.
+
 ## Agent-Specific Notes
 - Vocabulary: "makeup" = "mac app".
 - Never edit `node_modules` (global/Homebrew/npm/git installs too). Updates overwrite. Skill notes go in `tools.md` or `AGENTS.md`.
