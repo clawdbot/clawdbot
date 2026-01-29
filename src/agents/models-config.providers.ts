@@ -75,6 +75,16 @@ const OLLAMA_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+const CEREBRAS_BASE_URL = "https://api.cerebras.ai/v1";
+const CEREBRAS_DEFAULT_CONTEXT_WINDOW = 128000;
+const CEREBRAS_DEFAULT_MAX_TOKENS = 8192;
+const CEREBRAS_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 interface OllamaModel {
   name: string;
   modified_at: string;
@@ -359,6 +369,69 @@ async function buildOllamaProvider(): Promise<ProviderConfig> {
   };
 }
 
+function buildCerebrasProvider(): ProviderConfig {
+  return {
+    baseUrl: CEREBRAS_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: "llama3.1-8b",
+        name: "Llama 3.1 8B",
+        reasoning: false,
+        input: ["text"],
+        cost: CEREBRAS_DEFAULT_COST,
+        contextWindow: CEREBRAS_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: CEREBRAS_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "llama-3.3-70b",
+        name: "Llama 3.3 70B",
+        reasoning: false,
+        input: ["text"],
+        cost: CEREBRAS_DEFAULT_COST,
+        contextWindow: CEREBRAS_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: CEREBRAS_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "gpt-oss-120b",
+        name: "GPT OSS 120B",
+        reasoning: false,
+        input: ["text"],
+        cost: CEREBRAS_DEFAULT_COST,
+        contextWindow: CEREBRAS_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: CEREBRAS_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "qwen-3-32b",
+        name: "Qwen 3 32B",
+        reasoning: false,
+        input: ["text"],
+        cost: CEREBRAS_DEFAULT_COST,
+        contextWindow: CEREBRAS_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: CEREBRAS_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "qwen-3-235b-a22b-instruct-2507",
+        name: "Qwen 3 235B A22B Instruct",
+        reasoning: false,
+        input: ["text"],
+        cost: CEREBRAS_DEFAULT_COST,
+        contextWindow: CEREBRAS_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: CEREBRAS_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "zai-glm-4.7",
+        name: "GLM 4.7",
+        reasoning: false,
+        input: ["text"],
+        cost: CEREBRAS_DEFAULT_COST,
+        contextWindow: CEREBRAS_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: CEREBRAS_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
 export async function resolveImplicitProviders(params: {
   agentDir: string;
 }): Promise<ModelsConfig["providers"]> {
@@ -416,6 +489,13 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "ollama", store: authStore });
   if (ollamaKey) {
     providers.ollama = { ...(await buildOllamaProvider()), apiKey: ollamaKey };
+  }
+
+  const cerebrasKey =
+    resolveEnvApiKeyVarName("cerebras") ??
+    resolveApiKeyFromProfiles({ provider: "cerebras", store: authStore });
+  if (cerebrasKey) {
+    providers.cerebras = { ...buildCerebrasProvider(), apiKey: cerebrasKey };
   }
 
   return providers;

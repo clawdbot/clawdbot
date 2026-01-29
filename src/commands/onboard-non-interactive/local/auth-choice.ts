@@ -8,6 +8,7 @@ import { buildTokenProfileId, validateAnthropicSetupToken } from "../../auth-tok
 import { applyGoogleGeminiModelDefault } from "../../google-gemini-model-default.js";
 import {
   applyAuthProfileConfig,
+  applyCerebrasConfig,
   applyKimiCodeConfig,
   applyMinimaxApiConfig,
   applyMinimaxConfig,
@@ -19,6 +20,7 @@ import {
   applyVercelAiGatewayConfig,
   applyZaiConfig,
   setAnthropicApiKey,
+  setCerebrasApiKey,
   setGeminiApiKey,
   setKimiCodeApiKey,
   setMinimaxApiKey,
@@ -307,6 +309,25 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyVeniceConfig(nextConfig);
+  }
+
+  if (authChoice === "cerebras-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "cerebras",
+      cfg: baseConfig,
+      flagValue: opts.cerebrasApiKey,
+      flagName: "--cerebras-api-key",
+      envVar: "CEREBRAS_API_KEY",
+      runtime,
+    });
+    if (!resolved) return null;
+    if (resolved.source !== "profile") await setCerebrasApiKey(resolved.key);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "cerebras:default",
+      provider: "cerebras",
+      mode: "api_key",
+    });
+    return applyCerebrasConfig(nextConfig);
   }
 
   if (

@@ -2561,9 +2561,35 @@ Notes:
 - Available model: `MiniMax-M2.1` (default).
 - Update pricing in `models.json` if you need exact cost tracking.
 
-### Cerebras (GLM 4.6 / 4.7)
+### Cerebras (Llama + GLM models)
 
-Use Cerebras via their OpenAI-compatible endpoint:
+Cerebras provides ultra-fast inference with Llama models and GLM models via their OpenAI-compatible endpoint.
+
+**Quick setup with native Llama models:**
+
+```bash
+clawdbot onboard --auth-choice cerebras-api-key
+```
+
+**Config snippet (Llama models):**
+
+```json5
+{
+  env: { CEREBRAS_API_KEY: "..." },
+  agents: {
+    defaults: {
+      model: { primary: "cerebras/llama3.1-8b" },
+      models: {
+        "cerebras/llama3.1-8b": { alias: "Llama 3.1 8B" },
+        "cerebras/llama3.1-70b": { alias: "Llama 3.1 70B" },
+        "cerebras/llama-3.3-70b": { alias: "Llama 3.3 70B" }
+      }
+    }
+  }
+}
+```
+
+**Advanced: GLM models via Cerebras:**
 
 ```json5
 {
@@ -2598,8 +2624,11 @@ Use Cerebras via their OpenAI-compatible endpoint:
 ```
 
 Notes:
+- Native Llama models: `cerebras/llama3.1-8b`, `cerebras/llama3.1-70b`, `cerebras/llama-3.3-70b`
 - Use `cerebras/zai-glm-4.7` for Cerebras; use `zai/glm-4.7` for Z.AI direct.
 - Set `CEREBRAS_API_KEY` in the environment or config.
+- Get your API key at [cloud.cerebras.ai](https://cloud.cerebras.ai/).
+- See [/providers/cerebras](/providers/cerebras) for more details.
 
 Notes:
 - Supported APIs: `openai-completions`, `openai-responses`, `anthropic-messages`,

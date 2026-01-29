@@ -45,6 +45,7 @@ See [Venice AI](/providers/venice).
 - [GLM models](/providers/glm)
 - [MiniMax](/providers/minimax)
 - [Venius (Venice AI, privacy-focused)](/providers/venice)
+- [Cerebras (ultra-fast inference, Llama/Qwen/GLM)](/providers/cerebras)
 - [Ollama (local models)](/providers/ollama)
 
 ## Transcription providers

@@ -114,8 +114,12 @@ Moltbot ships with the pi‑ai catalog. These providers require **no**
 - xAI: `xai` (`XAI_API_KEY`)
 - Groq: `groq` (`GROQ_API_KEY`)
 - Cerebras: `cerebras` (`CEREBRAS_API_KEY`)
-  - GLM models on Cerebras use ids `zai-glm-4.7` and `zai-glm-4.6`.
-  - OpenAI-compatible base URL: `https://api.cerebras.ai/v1`.
+  - Ultra-fast inference with custom AI accelerator chips
+  - Native models: `llama3.1-8b`, `llama-3.3-70b`, `gpt-oss-120b`, `qwen-3-32b`, `qwen-3-235b-a22b-instruct-2507`, `zai-glm-4.7`
+  - Example: `cerebras/llama3.1-8b`
+  - OpenAI-compatible base URL: `https://api.cerebras.ai/v1`
+  - CLI: `clawdbot onboard --auth-choice cerebras-api-key`
+  - See [/providers/cerebras](/providers/cerebras) for full setup
 - Mistral: `mistral` (`MISTRAL_API_KEY`)
 - GitHub Copilot: `github-copilot` (`COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`)
 

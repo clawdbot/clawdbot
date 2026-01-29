@@ -13,6 +13,8 @@ import {
 } from "./google-gemini-model-default.js";
 import {
   applyAuthProfileConfig,
+  applyCerebrasConfig,
+  applyCerebrasProviderConfig,
   applyKimiCodeConfig,
   applyKimiCodeProviderConfig,
   applyMoonshotConfig,
@@ -28,12 +30,14 @@ import {
   applyVercelAiGatewayConfig,
   applyVercelAiGatewayProviderConfig,
   applyZaiConfig,
+  CEREBRAS_DEFAULT_MODEL_REF,
   KIMI_CODE_MODEL_REF,
   MOONSHOT_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   SYNTHETIC_DEFAULT_MODEL_REF,
   VENICE_DEFAULT_MODEL_REF,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
+  setCerebrasApiKey,
   setGeminiApiKey,
   setKimiCodeApiKey,
   setMoonshotApiKey,
@@ -85,6 +89,8 @@ export async function applyAuthChoiceApiProviders(
       authChoice = "venice-api-key";
     } else if (params.opts.tokenProvider === "opencode") {
       authChoice = "opencode-zen";
+    } else if (params.opts.tokenProvider === "cerebras") {
+      authChoice = "cerebras-api-key";
     }
   }
 
@@ -513,6 +519,65 @@ export async function applyAuthChoiceApiProviders(
         applyDefaultConfig: applyVeniceConfig,
         applyProviderConfig: applyVeniceProviderConfig,
         noteDefault: VENICE_DEFAULT_MODEL_REF,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "cerebras-api-key") {
+    let hasCredential = false;
+
+    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "cerebras") {
+      await setCerebrasApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      hasCredential = true;
+    }
+
+    if (!hasCredential) {
+      await params.prompter.note(
+        [
+          "Cerebras provides ultra-fast inference with their custom AI chips.",
+          "Get your API key at: https://cloud.cerebras.ai/",
+          "Available models: llama3.1-8b, llama-3.3-70b, gpt-oss-120b, qwen-3-32b, qwen-3-235b, zai-glm-4.7",
+        ].join("\n"),
+        "Cerebras",
+      );
+    }
+
+    const envKey = resolveEnvApiKey("cerebras");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing CEREBRAS_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setCerebrasApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter Cerebras API key",
+        validate: validateApiKeyInput,
+      });
+      await setCerebrasApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "cerebras:default",
+      provider: "cerebras",
+      mode: "api_key",
+    });
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: CEREBRAS_DEFAULT_MODEL_REF,
+        applyDefaultConfig: applyCerebrasConfig,
+        applyProviderConfig: applyCerebrasProviderConfig,
+        noteDefault: CEREBRAS_DEFAULT_MODEL_REF,
         noteAgentModel,
         prompter: params.prompter,
       });

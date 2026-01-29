@@ -459,3 +459,64 @@ export function applyAuthProfileConfig(
     },
   };
 }
+
+export function applyCerebrasProviderConfig(cfg: ClawdbotConfig): ClawdbotConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models["cerebras/llama3.1-8b"] = {
+    ...models["cerebras/llama3.1-8b"],
+    alias: models["cerebras/llama3.1-8b"]?.alias ?? "Llama 3.1 8B",
+  };
+  models["cerebras/llama-3.3-70b"] = {
+    ...models["cerebras/llama-3.3-70b"],
+    alias: models["cerebras/llama-3.3-70b"]?.alias ?? "Llama 3.3 70B",
+  };
+  models["cerebras/gpt-oss-120b"] = {
+    ...models["cerebras/gpt-oss-120b"],
+    alias: models["cerebras/gpt-oss-120b"]?.alias ?? "GPT OSS 120B",
+  };
+  models["cerebras/qwen-3-32b"] = {
+    ...models["cerebras/qwen-3-32b"],
+    alias: models["cerebras/qwen-3-32b"]?.alias ?? "Qwen 3 32B",
+  };
+  models["cerebras/qwen-3-235b-a22b-instruct-2507"] = {
+    ...models["cerebras/qwen-3-235b-a22b-instruct-2507"],
+    alias: models["cerebras/qwen-3-235b-a22b-instruct-2507"]?.alias ?? "Qwen 3 235B",
+  };
+  models["cerebras/zai-glm-4.7"] = {
+    ...models["cerebras/zai-glm-4.7"],
+    alias: models["cerebras/zai-glm-4.7"]?.alias ?? "GLM 4.7",
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+  };
+}
+
+export function applyCerebrasConfig(cfg: ClawdbotConfig): ClawdbotConfig {
+  const next = applyCerebrasProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: "cerebras/llama3.1-8b",
+        },
+      },
+    },
+  };
+}
