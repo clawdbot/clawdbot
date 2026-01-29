@@ -25,7 +25,14 @@ export function armTimer(state: CronServiceState) {
 }
 
 export async function onTimer(state: CronServiceState) {
-  if (state.running) return;
+  if (state.running) {
+    setTimeout(() => {
+      void onTimer(state).catch((err) => {
+        state.deps.log.error({ err: String(err) }, "cron: timer retry failed");
+      });
+    }, 500).unref?.();
+    return;
+  }
   state.running = true;
   try {
     await locked(state, async () => {
