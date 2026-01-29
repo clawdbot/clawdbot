@@ -19,8 +19,12 @@ Translation: allowlisted senders can trigger Moltbot by mentioning it.
 
 > TL;DR
 > - **DM access** is controlled by `*.allowFrom`.
-> - **Group access** is controlled by `*.groupPolicy` + allowlists (`*.groups`, `*.groupAllowFrom`).
+> - **Which groups** are allowed is controlled by `*.groups` (keys are group/room IDs).
+> - **Which senders** can trigger in groups is controlled by `*.groupAllowFrom` (values are phone numbers, user IDs, or `"*"`).
+> - `*.groupPolicy` sets the overall mode (`open`/`disabled`/`allowlist`).
 > - **Reply triggering** is controlled by mention gating (`requireMention`, `/activation`).
+>
+> ⚠️ `groupAllowFrom` is a **sender** allowlist — use phone numbers/user IDs, not group IDs. To control which groups are allowed, use `groups`.
 
 Quick flow (what happens to a group message):
 ```
@@ -38,7 +42,10 @@ If you want...
 | Allow all groups but only reply on @mentions | `groups: { "*": { requireMention: true } }` |
 | Disable all group replies | `groupPolicy: "disabled"` |
 | Only specific groups | `groups: { "<group-id>": { ... } }` (no `"*"` key) |
-| Only you can trigger in groups | `groupPolicy: "allowlist"`, `groupAllowFrom: ["+1555..."]` |
+| Only you can trigger in groups | `groupPolicy: "allowlist"`, `groupAllowFrom: ["+1555..."]` (**phone numbers**, not group IDs) |
+| Anyone can trigger in allowed groups | `groupAllowFrom: ["*"]`, `groups: { "<group-id>": { ... } }` |
+
+> **Common mistake:** putting a group JID (e.g. `120363...@g.us`) in `groupAllowFrom`. That field filters **senders** by phone number/user ID — use `groups` to control which groups are allowed.
 
 ## Session keys
 - Group sessions use `agent:<agentId>:<channel>:group:<id>` session keys (rooms/channels use `agent:<agentId>:<channel>:channel:<id>`).
@@ -170,18 +177,20 @@ Control how group/room messages are handled per channel:
 
 Notes:
 - `groupPolicy` is separate from mention-gating (which requires @mentions).
-- WhatsApp/Telegram/Signal/iMessage/Microsoft Teams: use `groupAllowFrom` (fallback: explicit `allowFrom`).
+- WhatsApp/Telegram/Signal/iMessage/Microsoft Teams: use `groupAllowFrom` to restrict which **senders** (phone numbers/user IDs) can trigger the bot in groups. This is a sender filter, not a group filter — use `groups` to control which groups are allowed.
 - Discord: allowlist uses `channels.discord.guilds.<id>.channels`.
 - Slack: allowlist uses `channels.slack.channels`.
 - Matrix: allowlist uses `channels.matrix.groups` (room IDs, aliases, or names). Use `channels.matrix.groupAllowFrom` to restrict senders; per-room `users` allowlists are also supported.
 - Group DMs are controlled separately (`channels.discord.dm.*`, `channels.slack.dm.*`).
 - Telegram allowlist can match user IDs (`"123456789"`, `"telegram:123456789"`, `"tg:123456789"`) or usernames (`"@alice"` or `"alice"`); prefixes are case-insensitive.
 - Default is `groupPolicy: "allowlist"`; if your group allowlist is empty, group messages are blocked.
+- ⚠️ `groupAllowFrom` expects **sender identifiers** (phone numbers, user IDs, or `"*"` for any sender). Do not put group JIDs or room IDs here — those belong in `groups`.
 
 Quick mental model (evaluation order for group messages):
-1) `groupPolicy` (open/disabled/allowlist)
-2) group allowlists (`*.groups`, `*.groupAllowFrom`, channel-specific allowlist)
-3) mention gating (`requireMention`, `/activation`)
+1) `groupPolicy` — is group messaging enabled? (`open`/`disabled`/`allowlist`)
+2) `groups` — is this specific group allowed? (keys are group/room IDs)
+3) `groupAllowFrom` — is this sender allowed? (values are **phone numbers/user IDs**, not group IDs)
+4) mention gating — was the bot mentioned? (`requireMention`, `/activation`)
 
 ## Mention gating (default)
 Group messages require a mention unless overridden per group. Defaults live per subsystem under `*.groups."*"`.
