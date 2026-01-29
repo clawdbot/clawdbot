@@ -118,6 +118,44 @@ adjust the limit with `agents.defaults.bootstrapMaxChars` (default: 20000).
 `moltbot setup` can recreate missing defaults without overwriting existing
 files.
 
+## Extra workspace files
+
+You can inject additional workspace files into the system prompt alongside the
+defaults using `extraWorkspaceFiles`:
+
+```json5
+{
+  agents: {
+    defaults: {
+      extraWorkspaceFiles: ["PANTHEON.md", "protocols/SHARED.md"]
+    }
+  }
+}
+```
+
+Paths are relative to the workspace directory. Files that do not exist are
+silently skipped (no "missing file" marker). Duplicates of default files are
+ignored.
+
+Per-agent overrides are supported:
+
+```json5
+{
+  agents: {
+    defaults: {
+      extraWorkspaceFiles: ["PANTHEON.md"]
+    },
+    list: [
+      { id: "researcher", extraWorkspaceFiles: ["RESEARCH_PROTOCOL.md"] },
+      { id: "minimal", extraWorkspaceFiles: [] }  // disable extras
+    ]
+  }
+}
+```
+
+Extra files are included for subagent sessions alongside the default allowlist
+(AGENTS.md, TOOLS.md).
+
 ## What is NOT in the workspace
 
 These live under `~/.clawdbot/` and should NOT be committed to the workspace repo:

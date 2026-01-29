@@ -68,10 +68,13 @@ export type WorkspaceBootstrapFileName =
   | typeof DEFAULT_MEMORY_ALT_FILENAME;
 
 export type WorkspaceBootstrapFile = {
-  name: WorkspaceBootstrapFileName;
+  /** Filename (e.g., "AGENTS.md") or custom name for extra files */
+  name: WorkspaceBootstrapFileName | string;
   path: string;
   content?: string;
   missing: boolean;
+  /** True for user-configured extraWorkspaceFiles */
+  isExtra?: boolean;
 };
 
 async function writeFileIfMissing(filePath: string, content: string) {
@@ -221,12 +224,16 @@ async function resolveMemoryBootstrapEntries(
   return deduped;
 }
 
-export async function loadWorkspaceBootstrapFiles(dir: string): Promise<WorkspaceBootstrapFile[]> {
+export async function loadWorkspaceBootstrapFiles(
+  dir: string,
+  options?: { extraFiles?: string[] },
+): Promise<WorkspaceBootstrapFile[]> {
   const resolvedDir = resolveUserPath(dir);
 
   const entries: Array<{
-    name: WorkspaceBootstrapFileName;
+    name: WorkspaceBootstrapFileName | string;
     filePath: string;
+    isExtra?: boolean;
   }> = [
     {
       name: DEFAULT_AGENTS_FILENAME,
@@ -260,6 +267,23 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
 
   entries.push(...(await resolveMemoryBootstrapEntries(resolvedDir)));
 
+  // Add extra workspace files from config
+  if (options?.extraFiles) {
+    const seenPaths = new Set(entries.map((e) => e.filePath.toLowerCase()));
+    for (const extraPath of options.extraFiles) {
+      const trimmed = extraPath.trim();
+      if (!trimmed) continue;
+      // Resolve path relative to workspace dir
+      const filePath = path.isAbsolute(trimmed) ? trimmed : path.join(resolvedDir, trimmed);
+      // Dedupe: skip if already in the default list
+      if (seenPaths.has(filePath.toLowerCase())) continue;
+      seenPaths.add(filePath.toLowerCase());
+      // Use the basename as the display name
+      const name = path.basename(trimmed);
+      entries.push({ name, filePath, isExtra: true });
+    }
+  }
+
   const result: WorkspaceBootstrapFile[] = [];
   for (const entry of entries) {
     try {
@@ -269,8 +293,11 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
         path: entry.filePath,
         content,
         missing: false,
+        isExtra: entry.isExtra,
       });
     } catch {
+      // For extra files, only include if they exist (don't mark as missing)
+      if (entry.isExtra) continue;
       result.push({ name: entry.name, path: entry.filePath, missing: true });
     }
   }
@@ -284,5 +311,8 @@ export function filterBootstrapFilesForSession(
   sessionKey?: string,
 ): WorkspaceBootstrapFile[] {
   if (!sessionKey || !isSubagentSessionKey(sessionKey)) return files;
-  return files.filter((file) => SUBAGENT_BOOTSTRAP_ALLOWLIST.has(file.name));
+  // For subagents: include allowlisted defaults + all extra workspace files
+  return files.filter(
+    (file) => SUBAGENT_BOOTSTRAP_ALLOWLIST.has(file.name) || file.isExtra === true,
+  );
 }
