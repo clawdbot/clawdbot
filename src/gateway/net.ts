@@ -140,6 +140,7 @@ export async function canBindToHost(host: string): Promise<boolean> {
   return new Promise((resolve) => {
     const testServer = net.createServer();
     testServer.once("error", () => {
+      testServer.close();
       resolve(false);
     });
     testServer.once("listening", () => {
