@@ -2,6 +2,7 @@ import { extractText } from "../chat/message-extract";
 import type { GatewayBrowserClient } from "../gateway";
 import { generateUUID } from "../uuid";
 import type { ChatAttachment } from "../ui-types";
+import { debug } from "../debug";
 
 export type ChatState = {
   client: GatewayBrowserClient | null;
@@ -28,7 +29,11 @@ export type ChatEventPayload = {
 };
 
 export async function loadChatHistory(state: ChatState) {
-  if (!state.client || !state.connected) return;
+  debug(`loadChatHistory: starting, sessionKey="${state.sessionKey}"`);
+  if (!state.client || !state.connected) {
+    debug(`loadChatHistory: aborted - not connected`);
+    return;
+  }
   state.chatLoading = true;
   state.lastError = null;
   try {
@@ -36,9 +41,11 @@ export async function loadChatHistory(state: ChatState) {
       sessionKey: state.sessionKey,
       limit: 200,
     })) as { messages?: unknown[]; thinkingLevel?: string | null };
+    debug(`loadChatHistory: got ${res.messages?.length ?? 0} messages`);
     state.chatMessages = Array.isArray(res.messages) ? res.messages : [];
     state.chatThinkingLevel = res.thinkingLevel ?? null;
   } catch (err) {
+    debug(`loadChatHistory: error - ${err}`);
     state.lastError = String(err);
   } finally {
     state.chatLoading = false;
@@ -159,8 +166,13 @@ export function handleChatEvent(
   state: ChatState,
   payload?: ChatEventPayload,
 ) {
+  debug(`handleChatEvent: payload.sessionKey="${payload?.sessionKey}" state.sessionKey="${state.sessionKey}"`);
+  debug(`handleChatEvent: payload.runId="${payload?.runId}" state.chatRunId="${state.chatRunId}" payload.state="${payload?.state}"`);
   if (!payload) return null;
-  if (payload.sessionKey !== state.sessionKey) return null;
+  if (payload.sessionKey !== state.sessionKey) {
+    debug(`handleChatEvent: sessionKey mismatch, ignoring event`);
+    return null;
+  }
 
   // Final from another run (e.g. sub-agent announce): refresh history to show new message.
   // See https://github.com/moltbot/moltbot/issues/1909
@@ -169,19 +181,27 @@ export function handleChatEvent(
     state.chatRunId &&
     payload.runId !== state.chatRunId
   ) {
+    debug(`handleChatEvent: runId mismatch (payload=${payload.runId} state=${state.chatRunId}), dropping non-final`);
     if (payload.state === "final") return "final";
     return null;
   }
 
   if (payload.state === "delta") {
     const next = extractText(payload.message);
+    debug(`handleChatEvent: delta event, extracted text="${next?.slice(0, 50)}..."`);
     if (typeof next === "string") {
       const current = state.chatStream ?? "";
       if (!current || next.length >= current.length) {
+        debug(`handleChatEvent: updating chatStream (len ${current.length} -> ${next.length})`);
         state.chatStream = next;
       }
     }
   } else if (payload.state === "final") {
+    // Add the final message to chatMessages if present
+    if (payload.message) {
+      debug(`handleChatEvent: final with message, adding to chatMessages`);
+      state.chatMessages = [...state.chatMessages, payload.message];
+    }
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;

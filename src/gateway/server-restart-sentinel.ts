@@ -14,7 +14,24 @@ import { defaultRuntime } from "../runtime.js";
 import { deliveryContextFromSession, mergeDeliveryContext } from "../utils/delivery-context.js";
 import { loadSessionEntry } from "./session-utils.js";
 
-export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
+export type AddChatRunFn = (
+  runId: string,
+  entry: { sessionKey: string; clientRunId: string },
+) => void;
+
+export type BroadcastFn = (
+  event: string,
+  payload: unknown,
+  opts?: { dropIfSlow?: boolean },
+) => void;
+
+export interface RestartSentinelParams {
+  deps: CliDeps;
+  addChatRun?: AddChatRunFn;
+  broadcast?: BroadcastFn;
+}
+
+export async function scheduleRestartSentinelWake(params: RestartSentinelParams) {
   const sentinel = await consumeRestartSentinel();
   if (!sentinel) return;
   const payload = sentinel.payload;
@@ -61,7 +78,27 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
   const channel = channelRaw ? normalizeChannelId(channelRaw) : null;
   const to = origin?.to;
   if (!channel || !to) {
+    // No outbound channel (e.g., webchat sessions use WebSocket, not channel delivery).
+    // For webchat: register the run with addChatRun so responses stream to the client.
     enqueueSystemEvent(message, { sessionKey });
+    if (params.addChatRun && params.broadcast) {
+      const runId = `restart-${Date.now()}`;
+      params.addChatRun(runId, { sessionKey, clientRunId: runId });
+      try {
+        await agentCommand(
+          {
+            message: `System: ${summary}`,
+            sessionKey,
+            runId,
+            deliver: false,
+          },
+          defaultRuntime,
+          params.deps,
+        );
+      } catch {
+        // Agent turn failed; system event already queued as fallback context
+      }
+    }
     return;
   }
 

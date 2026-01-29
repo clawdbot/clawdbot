@@ -56,6 +56,33 @@ describe("buildTelegramMessageContext dm thread sessions", () => {
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:main:thread:42");
   });
 
+  it("sets ThreadLabel for dm topics for display in Sessions tab", async () => {
+    const ctx = await buildContext({
+      message_id: 1,
+      chat: { id: 1234, type: "private" },
+      date: 1700000000,
+      text: "hello",
+      message_thread_id: 42,
+      from: { id: 42, first_name: "Alice" },
+    });
+
+    expect(ctx).not.toBeNull();
+    expect(ctx?.ctxPayload?.ThreadLabel).toBe("Thread: 42");
+  });
+
+  it("does not set ThreadLabel for dm without thread id", async () => {
+    const ctx = await buildContext({
+      message_id: 1,
+      chat: { id: 1234, type: "private" },
+      date: 1700000000,
+      text: "hello",
+      from: { id: 42, first_name: "Alice" },
+    });
+
+    expect(ctx).not.toBeNull();
+    expect(ctx?.ctxPayload?.ThreadLabel).toBeUndefined();
+  });
+
   it("keeps legacy dm session key when no thread id", async () => {
     const ctx = await buildContext({
       message_id: 2,

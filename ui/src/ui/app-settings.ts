@@ -16,6 +16,7 @@ import { startThemeTransition, type ThemeTransitionContext } from "./theme-trans
 import { scheduleChatScroll, scheduleLogsScroll } from "./app-scroll";
 import { startLogsPolling, stopLogsPolling, startDebugPolling, stopDebugPolling } from "./app-polling";
 import { refreshChat } from "./app-chat";
+import { setDebugEnabled } from "./debug";
 import type { MoltbotApp } from "./app";
 
 type SettingsHost = {
@@ -43,6 +44,7 @@ export function applySettings(host: SettingsHost, next: UiSettings) {
   };
   host.settings = normalized;
   saveSettings(normalized);
+  setDebugEnabled(normalized.debugLogs);
   if (next.theme !== host.theme) {
     host.theme = next.theme;
     applyResolvedTheme(host, resolveTheme(next.theme));

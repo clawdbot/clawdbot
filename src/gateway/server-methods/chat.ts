@@ -1,6 +1,14 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { isTruthyEnvValue } from "../../infra/env.js";
+
+const debugChatEnabled = isTruthyEnvValue(process.env.CLAWDBOT_DEBUG_CHAT);
+const debugChat = (message: string) => {
+  if (debugChatEnabled) {
+    console.log(`[DEBUG] ${message}`);
+  }
+};
 
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
@@ -9,6 +17,7 @@ import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import { registerAgentRunContext } from "../../infra/agent-events.js";
 import {
   extractShortModelName,
   type ResponsePrefixContext,
@@ -199,8 +208,12 @@ export const chatHandlers: GatewayRequestHandlers = {
     };
     const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
     const sessionId = entry?.sessionId;
+    debugChat(
+      `chat.history: sessionKey="${sessionKey}" sessionId="${sessionId}" storePath="${storePath}" hasEntry=${!!entry}`,
+    );
     const rawMessages =
       sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
+    debugChat(`chat.history: rawMessages.length=${rawMessages.length}`);
     const hardMax = 1000;
     const defaultLimit = 200;
     const requested = typeof limit === "number" ? limit : defaultLimit;
@@ -362,13 +375,14 @@ export const chatHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    const { cfg, entry } = loadSessionEntry(p.sessionKey);
+    const { cfg, entry, canonicalKey } = loadSessionEntry(p.sessionKey);
     const timeoutMs = resolveAgentTimeoutMs({
       cfg,
       overrideMs: p.timeoutMs,
     });
     const now = Date.now();
     const clientRunId = p.idempotencyKey;
+    registerAgentRunContext(clientRunId, { sessionKey: p.sessionKey });
 
     const sendPolicy = resolveSendPolicy({
       cfg,
@@ -430,6 +444,10 @@ export const chatHandlers: GatewayRequestHandlers = {
         startedAtMs: now,
         expiresAtMs: resolveChatRunExpiresAtMs({ now, timeoutMs }),
       });
+      context.addChatRun(clientRunId, {
+        sessionKey: p.sessionKey,
+        clientRunId,
+      });
 
       const ackPayload = {
         runId: clientRunId,
@@ -449,7 +467,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         BodyForCommands: commandBody,
         RawBody: parsedMessage,
         CommandBody: commandBody,
-        SessionKey: p.sessionKey,
+        SessionKey: canonicalKey,
         Provider: INTERNAL_MESSAGE_CHANNEL,
         Surface: INTERNAL_MESSAGE_CHANNEL,
         OriginatingChannel: INTERNAL_MESSAGE_CHANNEL,

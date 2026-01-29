@@ -605,6 +605,7 @@ export function attachGatewayWsMessageHandler(params: {
             authMode: resolvedAuth.mode,
             authProvided,
             authReason: authResult.reason,
+            authTokenHint: authResult.tokenHint,
             allowTailscale: resolvedAuth.allowTailscale,
             client: connectParams.client.id,
             clientDisplayName: connectParams.client.displayName,

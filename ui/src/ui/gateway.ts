@@ -220,7 +220,9 @@ export class GatewayBrowserClient {
         this.opts.onHello?.(hello);
       })
       .catch(() => {
-        if (canFallbackToShared && deviceIdentity) {
+        // Always clear device auth token on connect failure when we have device identity.
+        // This handles stale tokens from previous gateway sessions that cause token_mismatch.
+        if (deviceIdentity) {
           clearDeviceAuthToken({ deviceId: deviceIdentity.deviceId, role });
         }
         this.ws?.close(CONNECT_FAILED_CLOSE_CODE, "connect failed");

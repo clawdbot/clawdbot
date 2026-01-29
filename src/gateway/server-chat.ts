@@ -1,9 +1,17 @@
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
 import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
+
+const debugChatEnabled = isTruthyEnvValue(process.env.CLAWDBOT_DEBUG_CHAT);
+const debugChat = (message: string) => {
+  if (debugChatEnabled) {
+    console.log(`[DEBUG] ${message}`);
+  }
+};
 
 /**
  * Check if webchat broadcasts should be suppressed for heartbeat runs.
@@ -134,10 +142,16 @@ export function createAgentEventHandler({
   clearAgentRunContext,
 }: AgentEventHandlerOptions) {
   const emitChatDelta = (sessionKey: string, clientRunId: string, seq: number, text: string) => {
+    debugChat(
+      `emitChatDelta: sessionKey=${sessionKey} runId=${clientRunId} textLen=${text.length}`,
+    );
     chatRunState.buffers.set(clientRunId, text);
     const now = Date.now();
     const last = chatRunState.deltaSentAt.get(clientRunId) ?? 0;
-    if (now - last < 150) return;
+    if (now - last < 150) {
+      debugChat(`emitChatDelta: throttled (${now - last}ms < 150ms)`);
+      return;
+    }
     chatRunState.deltaSentAt.set(clientRunId, now);
     const payload = {
       runId: clientRunId,
@@ -151,9 +165,13 @@ export function createAgentEventHandler({
       },
     };
     // Suppress webchat broadcast for heartbeat runs when showOk is false
-    if (!shouldSuppressHeartbeatBroadcast(clientRunId)) {
+    const suppressed = shouldSuppressHeartbeatBroadcast(clientRunId);
+    debugChat(`emitChatDelta: heartbeatSuppressed=${suppressed}`);
+    if (!suppressed) {
+      debugChat(`emitChatDelta: calling broadcast("chat")`);
       broadcast("chat", payload, { dropIfSlow: true });
     }
+    debugChat(`emitChatDelta: calling nodeSendToSession`);
     nodeSendToSession(sessionKey, "chat", payload);
   };
 
@@ -216,8 +234,11 @@ export function createAgentEventHandler({
   };
 
   return (evt: AgentEventPayload) => {
+    debugChat(`agent event: runId=${evt.runId} stream=${evt.stream} seq=${evt.seq}`);
     const chatLink = chatRunState.registry.peek(evt.runId);
+    debugChat(`chatLink: ${chatLink ? JSON.stringify(chatLink) : "null"}`);
     const sessionKey = chatLink?.sessionKey ?? resolveSessionKeyForRun(evt.runId);
+    debugChat(`sessionKey: ${sessionKey}`);
     const clientRunId = chatLink?.clientRunId ?? evt.runId;
     const isAborted =
       chatRunState.abortedRuns.has(clientRunId) || chatRunState.abortedRuns.has(evt.runId);
@@ -249,7 +270,11 @@ export function createAgentEventHandler({
 
     if (sessionKey) {
       nodeSendToSession(sessionKey, "agent", agentPayload);
+      debugChat(
+        `checking emitChatDelta: isAborted=${isAborted} stream=${evt.stream} hasText=${typeof evt.data?.text === "string"} text="${String(evt.data?.text ?? "").slice(0, 50)}..."`,
+      );
       if (!isAborted && evt.stream === "assistant" && typeof evt.data?.text === "string") {
+        debugChat(`calling emitChatDelta`);
         emitChatDelta(sessionKey, clientRunId, evt.seq, evt.data.text);
       } else if (!isAborted && (lifecyclePhase === "end" || lifecyclePhase === "error")) {
         if (chatLink) {

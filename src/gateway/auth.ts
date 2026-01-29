@@ -17,7 +17,13 @@ export type GatewayAuthResult = {
   method?: "token" | "password" | "tailscale" | "device-token";
   user?: string;
   reason?: string;
+  tokenHint?: string;
 };
+
+function maskToken(token: string): string {
+  if (token.length <= 8) return token.slice(0, 2) + "..." + token.slice(-2);
+  return token.slice(0, 4) + "..." + token.slice(-4);
+}
 
 type ConnectAuth = {
   token?: string;
@@ -229,7 +235,11 @@ export async function authorizeGatewayConnect(params: {
       return { ok: false, reason: "token_missing" };
     }
     if (!safeEqual(connectAuth.token, auth.token)) {
-      return { ok: false, reason: "token_mismatch" };
+      return {
+        ok: false,
+        reason: "token_mismatch",
+        tokenHint: `got=${maskToken(connectAuth.token)} expected=${maskToken(auth.token)}`,
+      };
     }
     return { ok: true, method: "token" };
   }

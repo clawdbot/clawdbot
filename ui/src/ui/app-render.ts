@@ -3,6 +3,7 @@ import { html, nothing } from "lit";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway";
 import type { AppViewState } from "./app-view-state";
 import { parseAgentSessionKey } from "../../../src/routing/session-key.js";
+import { debug } from "./debug";
 import {
   TAB_GROUPS,
   iconForTab,
@@ -427,7 +428,7 @@ export function renderApp(state: AppViewState) {
           : nothing}
 
         ${state.tab === "chat"
-          ? renderChat({
+          ? (() => { debug(`RENDER chatStream="${state.chatStream?.slice(0, 50) ?? "null"}..." chatRunId="${state.chatRunId}" messages=${state.chatMessages?.length ?? 0}`); return renderChat({
               sessionKey: state.sessionKey,
               onSessionKeyChange: (next) => {
                 state.sessionKey = next;
@@ -497,7 +498,7 @@ export function renderApp(state: AppViewState) {
               onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
               assistantName: state.assistantName,
               assistantAvatar: state.assistantAvatar,
-            })
+            }); })()
           : nothing}
 
         ${state.tab === "config"

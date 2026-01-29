@@ -10,6 +10,7 @@ import type { Tab } from "./navigation";
 import type { UiSettings } from "./storage";
 import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app-tool-stream";
 import { flushChatQueueForEvent } from "./app-chat";
+import { debug } from "./debug";
 import {
   applySettings,
   loadCron,
@@ -81,7 +82,12 @@ function normalizeSessionKeyForDefaults(
 }
 
 function applySessionDefaults(host: GatewayHost, defaults?: SessionDefaultsSnapshot) {
-  if (!defaults?.mainSessionKey) return;
+  debug(`applySessionDefaults: defaults=${JSON.stringify(defaults)}`);
+  debug(`applySessionDefaults: host.sessionKey="${host.sessionKey}" host.settings.sessionKey="${host.settings.sessionKey}"`);
+  if (!defaults?.mainSessionKey) {
+    debug(`applySessionDefaults: no mainSessionKey, returning early`);
+    return;
+  }
   const resolvedSessionKey = normalizeSessionKeyForDefaults(host.sessionKey, defaults);
   const resolvedSettingsSessionKey = normalizeSessionKeyForDefaults(
     host.settings.sessionKey,
@@ -91,6 +97,7 @@ function applySessionDefaults(host: GatewayHost, defaults?: SessionDefaultsSnaps
     host.settings.lastActiveSessionKey,
     defaults,
   );
+  debug(`applySessionDefaults: resolved="${resolvedSessionKey}" settingsResolved="${resolvedSettingsSessionKey}"`);
   const nextSessionKey = resolvedSessionKey || resolvedSettingsSessionKey || host.sessionKey;
   const nextSettings = {
     ...host.settings,
@@ -100,7 +107,9 @@ function applySessionDefaults(host: GatewayHost, defaults?: SessionDefaultsSnaps
   const shouldUpdateSettings =
     nextSettings.sessionKey !== host.settings.sessionKey ||
     nextSettings.lastActiveSessionKey !== host.settings.lastActiveSessionKey;
+  debug(`applySessionDefaults: nextSessionKey="${nextSessionKey}" shouldUpdate=${shouldUpdateSettings}`);
   if (nextSessionKey !== host.sessionKey) {
+    debug(`applySessionDefaults: updating host.sessionKey from "${host.sessionKey}" to "${nextSessionKey}"`);
     host.sessionKey = nextSessionKey;
   }
   if (shouldUpdateSettings) {
@@ -189,13 +198,18 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
       );
     }
     const state = handleChatEvent(host as unknown as MoltbotApp, payload);
+    // Force Lit to re-render after chatStream mutation
+    if (state === "delta") {
+      (host as unknown as MoltbotApp).requestUpdate();
+    }
     if (state === "final" || state === "error" || state === "aborted") {
       resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
       void flushChatQueueForEvent(
         host as unknown as Parameters<typeof flushChatQueueForEvent>[0],
       );
     }
-    if (state === "final") void loadChatHistory(host as unknown as MoltbotApp);
+    // Don't call loadChatHistory - we already added the message from the final payload
+    // loadChatHistory returns 0 messages because the session transcript file doesn't exist
     return;
   }
 
