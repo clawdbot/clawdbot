@@ -12,6 +12,7 @@ export type AuthChoice =
   | "openai-codex"
   | "openai-api-key"
   | "openrouter-api-key"
+  | "fireworks-api-key"
   | "ai-gateway-api-key"
   | "moonshot-api-key"
   | "kimi-code-api-key"
@@ -62,6 +63,7 @@ export type OnboardOptions = {
   anthropicApiKey?: string;
   openaiApiKey?: string;
   openrouterApiKey?: string;
+  fireworksApiKey?: string;
   aiGatewayApiKey?: string;
   moonshotApiKey?: string;
   kimiCodeApiKey?: string;

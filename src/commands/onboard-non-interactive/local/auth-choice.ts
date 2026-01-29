@@ -4,10 +4,12 @@ import { parseDurationMs } from "../../../cli/parse-duration.js";
 import type { MoltbotConfig } from "../../../config/config.js";
 import { upsertSharedEnvVar } from "../../../infra/env-file.js";
 import type { RuntimeEnv } from "../../../runtime.js";
+import { validateFireworksApiKey } from "../../auth-choice.api-key.js";
 import { buildTokenProfileId, validateAnthropicSetupToken } from "../../auth-token.js";
 import { applyGoogleGeminiModelDefault } from "../../google-gemini-model-default.js";
 import {
   applyAuthProfileConfig,
+  applyFireworksConfig,
   applyKimiCodeConfig,
   applyMinimaxApiConfig,
   applyMinimaxConfig,
@@ -19,6 +21,7 @@ import {
   applyVercelAiGatewayConfig,
   applyZaiConfig,
   setAnthropicApiKey,
+  setFireworksApiKey,
   setGeminiApiKey,
   setKimiCodeApiKey,
   setMinimaxApiKey,
@@ -307,6 +310,26 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyVeniceConfig(nextConfig);
+  }
+
+  if (authChoice === "fireworks-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "fireworks",
+      cfg: baseConfig,
+      flagValue: opts.fireworksApiKey,
+      flagName: "--fireworks-api-key",
+      envVar: "FIREWORKS_API_KEY",
+      runtime,
+      validate: validateFireworksApiKey,
+    });
+    if (!resolved) return null;
+    if (resolved.source !== "profile") await setFireworksApiKey(resolved.key);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "fireworks:default",
+      provider: "fireworks",
+      mode: "api_key",
+    });
+    return applyFireworksConfig(nextConfig);
   }
 
   if (

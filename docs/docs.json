@@ -1013,6 +1013,7 @@
           "providers/minimax",
           "providers/vercel-ai-gateway",
           "providers/openrouter",
+          "providers/fireworks",
           "providers/synthetic",
           "providers/opencode",
           "providers/glm",

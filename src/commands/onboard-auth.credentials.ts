@@ -141,6 +141,19 @@ export async function setOpenrouterApiKey(key: string, agentDir?: string) {
   });
 }
 
+export async function setFireworksApiKey(key: string, agentDir?: string) {
+  // Write to resolved agent dir so gateway finds credentials on startup.
+  upsertAuthProfile({
+    profileId: "fireworks:default",
+    credential: {
+      type: "api_key",
+      provider: "fireworks",
+      key,
+    },
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
 export async function setVercelAiGatewayApiKey(key: string, agentDir?: string) {
   upsertAuthProfile({
     profileId: "vercel-ai-gateway:default",

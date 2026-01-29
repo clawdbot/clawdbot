@@ -24,6 +24,21 @@ export function normalizeApiKeyInput(raw: string): string {
 export const validateApiKeyInput = (value: string) =>
   normalizeApiKeyInput(value).length > 0 ? undefined : "Required";
 
+export const FIREWORKS_API_KEY_PREFIX = "fw_";
+export const FIREWORKS_API_KEY_MIN_LENGTH = 13; // fw_ + at least 10 characters
+
+export function validateFireworksApiKey(raw: string): string | undefined {
+  const trimmed = normalizeApiKeyInput(raw);
+  if (!trimmed) return "Required";
+  if (!trimmed.startsWith(FIREWORKS_API_KEY_PREFIX)) {
+    return `Expected API key starting with ${FIREWORKS_API_KEY_PREFIX}`;
+  }
+  if (trimmed.length < FIREWORKS_API_KEY_MIN_LENGTH) {
+    return "API key looks too short; paste the full key";
+  }
+  return undefined;
+}
+
 export function formatApiKeyPreview(
   raw: string,
   opts: { head?: number; tail?: number } = {},

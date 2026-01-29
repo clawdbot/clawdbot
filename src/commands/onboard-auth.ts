@@ -1,4 +1,8 @@
 export {
+  FIREWORKS_DEFAULT_MODEL_ID,
+  FIREWORKS_DEFAULT_MODEL_REF,
+} from "../agents/fireworks-models.js";
+export {
   SYNTHETIC_DEFAULT_MODEL_ID,
   SYNTHETIC_DEFAULT_MODEL_REF,
 } from "../agents/synthetic-models.js";
@@ -11,6 +15,8 @@ export {
   applyMoonshotProviderConfig,
   applyOpenrouterConfig,
   applyOpenrouterProviderConfig,
+  applyFireworksConfig,
+  applyFireworksProviderConfig,
   applySyntheticConfig,
   applySyntheticProviderConfig,
   applyVeniceConfig,
@@ -41,6 +47,7 @@ export {
   setMoonshotApiKey,
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
+  setFireworksApiKey,
   setSyntheticApiKey,
   setVeniceApiKey,
   setVercelAiGatewayApiKey,
