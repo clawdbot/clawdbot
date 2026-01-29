@@ -75,6 +75,7 @@ import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manage
 import { prepareSessionManagerForRun } from "../session-manager-init.js";
 import { buildEmbeddedSystemPrompt, createSystemPromptOverride } from "../system-prompt.js";
 import { splitSdkTools } from "../tool-split.js";
+import { wrapToolsWithHooks } from "../../pi-tools.hooks.js";
 import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
@@ -432,6 +433,10 @@ export async function runEmbeddedAttempt(
         model: params.model,
       });
 
+      // Get hook runner once for tool-call hooks, before_agent_start, and agent_end
+      const hookRunner = getGlobalHookRunner();
+      const hookAgentId = params.sessionKey?.split(":")[0] ?? "main";
+
       const { builtInTools, customTools } = splitSdkTools({
         tools,
         sandboxEnabled: !!sandbox?.enabled,
@@ -447,6 +452,15 @@ export async function runEmbeddedAttempt(
 
       const allCustomTools = [...customTools, ...clientToolDefs];
 
+      // Wrap tools with before_tool_call / after_tool_call plugin hooks
+      const hookCtx = { agentId: hookAgentId, sessionKey: params.sessionKey };
+      const hookedBuiltInTools = hookRunner
+        ? wrapToolsWithHooks(builtInTools, hookRunner, hookCtx)
+        : builtInTools;
+      const hookedCustomTools = hookRunner
+        ? wrapToolsWithHooks(allCustomTools, hookRunner, hookCtx)
+        : allCustomTools;
+
       ({ session } = await createAgentSession({
         cwd: resolvedWorkspace,
         agentDir,
@@ -455,8 +469,8 @@ export async function runEmbeddedAttempt(
         model: params.model,
         thinkingLevel: mapThinkingLevel(params.thinkLevel),
         systemPrompt,
-        tools: builtInTools,
-        customTools: allCustomTools,
+        tools: hookedBuiltInTools,
+        customTools: hookedCustomTools,
         sessionManager,
         settingsManager,
         skills: [],
@@ -676,9 +690,6 @@ export async function runEmbeddedAttempt(
         }
       }
 
-      // Get hook runner once for both before_agent_start and agent_end hooks
-      const hookRunner = getGlobalHookRunner();
-
       let promptError: unknown = null;
       try {
         const promptStartedAt = Date.now();
@@ -693,7 +704,7 @@ export async function runEmbeddedAttempt(
                 messages: activeSession.messages,
               },
               {
-                agentId: params.sessionKey?.split(":")[0] ?? "main",
+                agentId: hookAgentId,
                 sessionKey: params.sessionKey,
                 workspaceDir: params.workspaceDir,
                 messageProvider: params.messageProvider ?? undefined,
@@ -821,7 +832,7 @@ export async function runEmbeddedAttempt(
                 durationMs: Date.now() - promptStartedAt,
               },
               {
-                agentId: params.sessionKey?.split(":")[0] ?? "main",
+                agentId: hookAgentId,
                 sessionKey: params.sessionKey,
                 workspaceDir: params.workspaceDir,
                 messageProvider: params.messageProvider ?? undefined,
