@@ -2,12 +2,20 @@
 title: Deploy on Render
 ---
 
-Deploy Moltbot on Render using Infrastructure as Code. The included `render.yaml` Blueprint defines your entire stack declaratively, service, disk, environment variables, so you can deploy with a single click and version your infrastructure alongside your code.
+Deploy Moltbot on Render using Infrastructure as Code. The included `render.yaml` Blueprint defines your entire stack declaratively—service, disk, environment variables—so you can deploy with a single click and version your infrastructure alongside your code.
 
 ## Prerequisites
 
 - A [Render account](https://render.com) (free tier available)
 - An API key from your preferred [model provider](/providers)
+
+## Alternative: Wrapper with Installer
+
+For a deployment with a built-in installer and proxied Control UI (including WebSocket support), see community wrappers (e.g. in the ecosystem docs). Such wrappers may provide:
+
+- **Install Wizard** at `/install` (password protected)
+- **Control UI** reverse-proxied with WebSocket support
+- **Export / Import backups** to migrate deployments
 
 ## Deploy with a Render Blueprint
 
@@ -16,8 +24,8 @@ Deploy Moltbot on Render using Infrastructure as Code. The included `render.yaml
 Clicking this link will:
 
 1. Create a new Render service from the `render.yaml` Blueprint at the root of this repo.
-2. Prompt you to set `SETUP_PASSWORD`
-3. Build the Docker image and deploy
+2. Prompt you to set `MOLTBOT_GATEWAY_TOKEN` (or set it in **Environment** after deploy).
+3. Build the Docker image and deploy.
 
 Once deployed, your service URL follows the pattern `https://<service-name>.onrender.com`.
 
@@ -32,18 +40,28 @@ services:
     name: moltbot
     runtime: docker
     plan: starter
-    healthCheckPath: /health
+    dockerCommand: /bin/sh scripts/render-start.sh
     envVars:
       - key: PORT
         value: "8080"
-      - key: SETUP_PASSWORD
-        sync: false          # prompts during deploy
-      - key: CLAWDBOT_STATE_DIR
-        value: /data/.clawdbot
-      - key: CLAWDBOT_WORKSPACE_DIR
+      - key: MOLTBOT_GATEWAY_TOKEN
+        sync: false          # set in Render dashboard (secret)
+      - key: MOLTBOT_STATE_DIR
+        value: /data/.moltbot
+      - key: MOLTBOT_WORKSPACE_DIR
         value: /data/workspace
-      - key: CLAWDBOT_GATEWAY_TOKEN
-        generateValue: true  # auto-generates a secure token
+      # LLM Provider API Keys (set these in Render dashboard as secrets)
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      # Add other provider keys as needed (MISTRAL_API_KEY, XAI_API_KEY, etc.)
     disk:
       name: moltbot-data
       mountPath: /data
@@ -55,9 +73,8 @@ Key Blueprint features used:
 | Feature | Purpose |
 |---------|---------|
 | `runtime: docker` | Builds from the repo's Dockerfile |
-| `healthCheckPath` | Render monitors `/health` and restarts unhealthy instances |
+| `dockerCommand` | Runs `scripts/render-start.sh` to create config and start the gateway |
 | `sync: false` | Prompts for value during deploy (secrets) |
-| `generateValue: true` | Auto-generates a cryptographically secure value |
 | `disk` | Persistent storage that survives redeploys |
 
 ## Choosing a plan
@@ -73,17 +90,14 @@ The Blueprint defaults to `starter`. To use free tier, change `plan: free` in yo
 
 ## After deployment
 
-### Complete the setup wizard
+### Set the gateway token
 
-1. Navigate to `https://<your-service>.onrender.com/setup`
-2. Enter your `SETUP_PASSWORD`
-3. Select a model provider and paste your API key
-4. Optionally configure messaging channels (Telegram, Discord, Slack)
-5. Click **Run setup**
+1. In Render **Dashboard → your service → Environment**, set `MOLTBOT_GATEWAY_TOKEN` to a long random secret (or generate one with `openssl rand -hex 32`).
+2. Save changes; Render will redeploy.
 
 ### Access the Control UI
 
-The web dashboard is available at `https://<your-service>.onrender.com/moltbot`.
+The web dashboard is at `https://<your-service>.onrender.com/moltbot`. Open a tokenized URL (e.g. from the service logs or your own link that includes the token) or paste the token into the Control UI settings to authenticate.
 
 ## Render Dashboard features
 
@@ -102,9 +116,53 @@ For debugging, open a shell session via **Dashboard → your service → Shell**
 
 Modify variables in **Dashboard → your service → Environment**. Changes trigger an automatic redeploy.
 
+#### Configuring LLM API Keys
+
+After deployment, you need to configure at least one LLM provider API key. Set these in the Render dashboard:
+
+**Most common providers:**
+
+- **Anthropic (Claude)**: `ANTHROPIC_API_KEY` — Get from [Anthropic Console](https://console.anthropic.com/)
+- **OpenAI (GPT)**: `OPENAI_API_KEY` — Get from [OpenAI Platform](https://platform.openai.com/api-keys)
+- **Google Gemini**: `GEMINI_API_KEY` — Get from [Google AI Studio](https://aistudio.google.com/app/apikey)
+- **Groq**: `GROQ_API_KEY` — Get from [Groq Console](https://console.groq.com/keys)
+- **OpenRouter**: `OPENROUTER_API_KEY` — Get from [OpenRouter](https://openrouter.ai/keys)
+
+**Additional providers:**
+
+- `MISTRAL_API_KEY` — Mistral AI
+- `XAI_API_KEY` — xAI (Grok)
+- `OPENCODE_API_KEY` — OpenCode Zen
+- `DEEPGRAM_API_KEY` — Deepgram (speech-to-text)
+
+To set API keys:
+
+1. Go to **Dashboard → your service → Environment**
+2. Click **Add Environment Variable**
+3. Enter the variable name (e.g., `ANTHROPIC_API_KEY`)
+4. Enter your API key value
+5. Click **Save Changes**
+
+The service will automatically redeploy with the new environment variable.
+
+**Alternative: Config file method**
+
+You can also configure API keys in the `moltbot.json` config file (under `MOLTBOT_STATE_DIR` or `~/.moltbot`) using the `env` block, though environment variables are preferred for security:
+
+```json5
+{
+  "env": {
+    "ANTHROPIC_API_KEY": "sk-ant-...",
+    "OPENAI_API_KEY": "sk-..."
+  }
+}
+```
+
+See [Model Providers](/concepts/model-providers) for a complete list of supported providers and their configuration.
+
 ### Auto-deploy
 
-If you use the original Moltbot repository, Render will not auto-deploy your Moltbot. To update it, run a manual Blueprint sync from the dashboard.
+If you use a fork, Render will not auto-deploy from the upstream repo. To update, run a manual Blueprint sync from the dashboard or push to your connected branch.
 
 ## Custom domain
 
@@ -124,13 +182,13 @@ For Moltbot, vertical scaling is usually sufficient. Horizontal scaling requires
 
 ## Backups and migration
 
-Export your configuration and workspace at any time:
+If your deployment exposes a setup/export endpoint, you can export configuration and workspace from:
 
 ```
 https://<your-service>.onrender.com/setup/export
 ```
 
-This downloads a portable backup you can restore on any Moltbot host.
+Otherwise, backup the persistent disk contents (e.g. under `/data/.moltbot`) via Render Shell or your own backup process.
 
 ## Troubleshooting
 
@@ -138,8 +196,8 @@ This downloads a portable backup you can restore on any Moltbot host.
 
 Check the deploy logs in the Render Dashboard. Common issues:
 
-- Missing `SETUP_PASSWORD` — the Blueprint prompts for this, but verify it's set
-- Port mismatch — ensure `PORT=8080` matches the Dockerfile's exposed port
+- Missing `MOLTBOT_GATEWAY_TOKEN` — set it in **Environment** (Dashboard → your service → Environment)
+- Port mismatch — ensure `PORT=8080` matches the gateway port
 
 ### Slow cold starts (free tier)
 
@@ -152,7 +210,4 @@ regularly export your config via `/setup/export`.
 
 ### Health check failures
 
-Render expects a 200 response from `/health` within 30 seconds. If builds succeed but deploys fail, the service may be taking too long to start. Check:
-
-- Build logs for errors
-- Whether the container runs locally with `docker build && docker run`
+If Render is configured with `healthCheckPath: /health`, it expects a 200 from `/health` within 30 seconds. This blueprint does not set a health check by default. If deploys fail, check deploy logs and that `scripts/render-start.sh` runs correctly (config written under `MOLTBOT_STATE_DIR` or `~/.moltbot`, then gateway started with the token).

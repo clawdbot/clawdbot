@@ -7,7 +7,12 @@ import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { rawDataToString } from "../infra/ws.js";
 import { defaultRuntime } from "../runtime.js";
-import { CANVAS_HOST_PATH, CANVAS_WS_PATH, injectCanvasLiveReload } from "./a2ui.js";
+import {
+  CANVAS_HOST_PATH,
+  CANVAS_WS_PATH,
+  injectCanvasLiveReload,
+  isA2uiAvailable,
+} from "./a2ui.js";
 import { createCanvasHostHandler, startCanvasHost } from "./server.js";
 
 describe("canvas host", () => {
@@ -201,6 +206,9 @@ describe("canvas host", () => {
   }, 20_000);
 
   it("serves the gateway-hosted A2UI scaffold", async () => {
+    if (!(await isA2uiAvailable())) {
+      return; // Skip when A2UI bundle not built (e.g. CI before canvas:a2ui:bundle or path not found)
+    }
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-canvas-"));
 
     const server = await startCanvasHost({

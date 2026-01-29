@@ -48,10 +48,58 @@ function parseRealIp(realIp?: string): string | undefined {
   return normalizeIp(stripOptionalPort(raw));
 }
 
+/**
+ * Parse an IPv4 address into a 32-bit number.
+ */
+function ipv4ToNumber(ip: string): number | null {
+  const parts = ip.split(".");
+  if (parts.length !== 4) return null;
+  let result = 0;
+  for (const part of parts) {
+    const num = parseInt(part, 10);
+    if (Number.isNaN(num) || num < 0 || num > 255) return null;
+    result = (result << 8) | num;
+  }
+  return result >>> 0; // Convert to unsigned 32-bit
+}
+
+/**
+ * Check if an IPv4 address is within a CIDR range.
+ * Supports both exact IPs (e.g., "10.0.0.1") and CIDR notation (e.g., "10.0.0.0/8").
+ */
+function isIpInCidr(ip: string, cidr: string): boolean {
+  const normalizedIp = normalizeIp(ip);
+  const normalizedCidr = normalizeIp(cidr.split("/")[0]);
+  if (!normalizedIp || !normalizedCidr) return false;
+
+  // Check if it's CIDR notation
+  const slashIndex = cidr.indexOf("/");
+  if (slashIndex === -1) {
+    // Exact IP match
+    return normalizedIp === normalizedCidr;
+  }
+
+  // Parse CIDR
+  const prefixLength = parseInt(cidr.slice(slashIndex + 1), 10);
+  if (Number.isNaN(prefixLength) || prefixLength < 0 || prefixLength > 32) {
+    // Invalid prefix, fall back to exact match
+    return normalizedIp === normalizedCidr;
+  }
+
+  const ipNum = ipv4ToNumber(normalizedIp);
+  const cidrNum = ipv4ToNumber(normalizedCidr);
+  if (ipNum === null || cidrNum === null) return false;
+
+  // Create mask: e.g., /8 -> 0xFF000000
+  const mask = prefixLength === 0 ? 0 : (0xffffffff << (32 - prefixLength)) >>> 0;
+
+  return (ipNum & mask) === (cidrNum & mask);
+}
+
 export function isTrustedProxyAddress(ip: string | undefined, trustedProxies?: string[]): boolean {
   const normalized = normalizeIp(ip);
   if (!normalized || !trustedProxies || trustedProxies.length === 0) return false;
-  return trustedProxies.some((proxy) => normalizeIp(proxy) === normalized);
+  return trustedProxies.some((proxy) => isIpInCidr(normalized, proxy));
 }
 
 export function resolveGatewayClientIp(params: {

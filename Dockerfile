@@ -20,11 +20,13 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY ui/package.json ./ui/package.json
 COPY patches ./patches
 COPY scripts ./scripts
+# Ensure startup script is executable
+RUN chmod +x scripts/render-start.sh
 
 RUN pnpm install --frozen-lockfile
 
 COPY . .
-RUN CLAWDBOT_A2UI_SKIP_MISSING=1 pnpm build
+RUN MOLTBOT_A2UI_SKIP_MISSING=1 pnpm build
 # Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
 ENV CLAWDBOT_PREFER_PNPM=1
 RUN pnpm ui:install

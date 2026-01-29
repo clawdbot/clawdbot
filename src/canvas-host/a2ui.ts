@@ -54,6 +54,11 @@ async function resolveA2uiRootReal(): Promise<string | null> {
   return resolvingA2uiRoot;
 }
 
+/** Returns true if A2UI assets (index.html + a2ui.bundle.js) are available. Use in tests to skip when bundle not built. */
+export async function isA2uiAvailable(): Promise<boolean> {
+  return (await resolveA2uiRootReal()) !== null;
+}
+
 function normalizeUrlPath(rawPath: string): string {
   const decoded = decodeURIComponent(rawPath || "/");
   const normalized = path.posix.normalize(decoded);
