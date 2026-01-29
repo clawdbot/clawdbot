@@ -36,6 +36,7 @@ export type HookMappingConfig = {
   thinking?: string;
   timeoutSeconds?: number;
   transform?: HookMappingTransform;
+    agentId?: string;
 };
 
 export type HooksGmailTailscaleMode = "off" | "serve" | "funnel";

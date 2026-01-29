@@ -22,6 +22,7 @@ export type HookMappingResolved = {
   thinking?: string;
   timeoutSeconds?: number;
   transform?: HookMappingTransformResolved;
+    agentId?: string;
 };
 
 export type HookMappingTransformResolved = {
@@ -55,6 +56,7 @@ export type HookAction =
       model?: string;
       thinking?: string;
       timeoutSeconds?: number;
+        agentId?: string;
     };
 
 export type HookMappingResult =
