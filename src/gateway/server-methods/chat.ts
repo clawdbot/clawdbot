@@ -82,6 +82,36 @@ function ensureTranscriptFile(params: { transcriptPath: string; sessionId: strin
   }
 }
 
+/**
+ * Find the leaf (last message) ID from a transcript file.
+ * Returns null if file doesn't exist, is empty, or has no messages (header only).
+ */
+function findTranscriptLeafId(transcriptPath: string): string | null {
+  if (!fs.existsSync(transcriptPath)) return null;
+
+  try {
+    const content = fs.readFileSync(transcriptPath, "utf-8");
+    const lines = content.split(/\r?\n/).filter((line) => line.trim());
+    if (lines.length === 0) return null;
+
+    // Walk backwards to find the last message entry with an id
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const parsed = JSON.parse(lines[i]);
+        // Skip non-message entries (like session headers)
+        if (parsed?.type === "message" && typeof parsed?.id === "string") {
+          return parsed.id;
+        }
+      } catch {
+        // Skip malformed lines
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 function appendAssistantTranscriptMessage(params: {
   message: string;
   label?: string;
@@ -112,6 +142,9 @@ function appendAssistantTranscriptMessage(params: {
     }
   }
 
+  // Find the current leaf ID before we append
+  const parentId = findTranscriptLeafId(transcriptPath);
+
   const now = Date.now();
   const messageId = randomUUID().slice(0, 8);
   const labelPrefix = params.label ? `[${params.label}]\n\n` : "";
@@ -125,6 +158,7 @@ function appendAssistantTranscriptMessage(params: {
   const transcriptEntry = {
     type: "message",
     id: messageId,
+    parentId,
     timestamp: new Date(now).toISOString(),
     message: messageBody,
   };
@@ -678,4 +712,10 @@ export const chatHandlers: GatewayRequestHandlers = {
 
     respond(true, { ok: true, messageId });
   },
+};
+
+// Exported for testing only
+export const _testExports = {
+  findTranscriptLeafId,
+  appendAssistantTranscriptMessage,
 };
