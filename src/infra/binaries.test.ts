@@ -4,6 +4,8 @@ import type { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { ensureBinary } from "./binaries.js";
 
+const expectedCmd = process.platform === "win32" ? "where" : "which";
+
 describe("ensureBinary", () => {
   it("passes through when binary exists", async () => {
     const exec: typeof runExec = vi.fn().mockResolvedValue({
@@ -16,7 +18,7 @@ describe("ensureBinary", () => {
       exit: vi.fn(),
     };
     await ensureBinary("node", exec, runtime);
-    expect(exec).toHaveBeenCalledWith("which", ["node"]);
+    expect(exec).toHaveBeenCalledWith(expectedCmd, ["node"]);
   });
 
   it("logs and exits when missing", async () => {
