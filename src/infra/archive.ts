@@ -61,7 +61,28 @@ export async function withTimeout<T>(
   }
 }
 
+function ensureTrailingSep(filePath: string): string {
+  return filePath.endsWith(path.sep) ? filePath : `${filePath}${path.sep}`;
+}
+
+async function normalizeDestRoot(
+  destDir: string,
+): Promise<{ destRoot: string; destRootLower?: string }> {
+  await fs.mkdir(destDir, { recursive: true });
+  const destReal = await fs.realpath(destDir);
+  const destRoot = ensureTrailingSep(destReal);
+  return process.platform === "win32"
+    ? { destRoot, destRootLower: destRoot.toLowerCase() }
+    : { destRoot };
+}
+
 async function extractZip(params: { archivePath: string; destDir: string }): Promise<void> {
+  const { destRoot, destRootLower } = await normalizeDestRoot(params.destDir);
+  const startsWithDest = (targetPath: string): boolean =>
+    destRootLower
+      ? targetPath.toLowerCase().startsWith(destRootLower)
+      : targetPath.startsWith(destRoot);
+
   const buffer = await fs.readFile(params.archivePath);
   const zip = await JSZip.loadAsync(buffer);
   const entries = Object.values(zip.files);
@@ -69,16 +90,16 @@ async function extractZip(params: { archivePath: string; destDir: string }): Pro
   for (const entry of entries) {
     const entryPath = entry.name.replaceAll("\\", "/");
     if (!entryPath || entryPath.endsWith("/")) {
-      const dirPath = path.resolve(params.destDir, entryPath);
-      if (!dirPath.startsWith(params.destDir)) {
+      const dirPath = path.resolve(destRoot, entryPath);
+      if (!startsWithDest(dirPath)) {
         throw new Error(`zip entry escapes destination: ${entry.name}`);
       }
       await fs.mkdir(dirPath, { recursive: true });
       continue;
     }
 
-    const outPath = path.resolve(params.destDir, entryPath);
-    if (!outPath.startsWith(params.destDir)) {
+    const outPath = path.resolve(destRoot, entryPath);
+    if (!startsWithDest(outPath)) {
       throw new Error(`zip entry escapes destination: ${entry.name}`);
     }
     await fs.mkdir(path.dirname(outPath), { recursive: true });

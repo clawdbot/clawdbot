@@ -49,6 +49,23 @@ describe("archive utils", () => {
     expect(content).toBe("hi");
   });
 
+  it("blocks zip entries that escape the destination directory", async () => {
+    const workDir = await makeTempDir();
+    const archivePath = path.join(workDir, "evil.zip");
+    const extractDir = path.join(workDir, "extract");
+    const siblingDir = path.join(workDir, "extractX");
+
+    const zip = new JSZip();
+    zip.file("../extractX/pwned.txt", "pwned");
+    await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
+
+    await fs.mkdir(extractDir, { recursive: true });
+    await expect(
+      extractArchive({ archivePath, destDir: extractDir, timeoutMs: 5_000 }),
+    ).rejects.toThrow(/escapes destination/i);
+    await expect(fs.stat(path.join(siblingDir, "pwned.txt"))).rejects.toThrow();
+  });
+
   it("extracts tar archives", async () => {
     const workDir = await makeTempDir();
     const archivePath = path.join(workDir, "bundle.tar");
