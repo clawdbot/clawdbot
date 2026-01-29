@@ -429,6 +429,8 @@ export const SlackAccountSchema = z
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     mediaMaxMb: z.number().positive().optional(),
+    canvasMaxMb: z.number().positive().optional(),
+    canvasTextMaxChars: z.number().int().positive().optional(),
     reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
     reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),
     replyToMode: ReplyToModeSchema.optional(),
@@ -444,6 +446,7 @@ export const SlackAccountSchema = z
         memberInfo: z.boolean().optional(),
         channelInfo: z.boolean().optional(),
         emojiList: z.boolean().optional(),
+        canvases: z.boolean().optional(),
       })
       .strict()
       .optional(),

@@ -1,7 +1,10 @@
 export type SlackFile = {
   id?: string;
   name?: string;
+  title?: string;
   mimetype?: string;
+  filetype?: string;
+  pretty_type?: string;
   size?: number;
   url_private?: string;
   url_private_download?: string;
@@ -21,6 +24,8 @@ export type SlackMessageEvent = {
   channel: string;
   channel_type?: "im" | "mpim" | "channel" | "group";
   files?: SlackFile[];
+  blocks?: unknown[];
+  attachments?: unknown[];
 };
 
 export type SlackAppMentionEvent = {

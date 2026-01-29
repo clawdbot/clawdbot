@@ -44,6 +44,7 @@ import { resolveSlackAllowListMatch, resolveSlackUserAllowed } from "../allow-li
 import { resolveSlackEffectiveAllowFrom } from "../auth.js";
 import { resolveSlackChannelConfig } from "../channel-config.js";
 import { normalizeSlackChannelType, type SlackMonitorContext } from "../context.js";
+import { extractCanvasRefsFromEvent, fetchSlackCanvasContent } from "../../canvases.js";
 import { resolveSlackMedia, resolveSlackThreadStarter } from "../media.js";
 
 import type { PreparedSlackMessage } from "./types.js";
@@ -336,8 +337,45 @@ export async function prepareSlackMessage(params: {
     token: ctx.botToken,
     maxBytes: ctx.mediaMaxBytes,
   });
-  const rawBody = (message.text ?? "").trim() || media?.placeholder || "";
-  if (!rawBody) return null;
+
+  const canvasRefs = extractCanvasRefsFromEvent(message);
+  const canvasBlocks: string[] = [];
+  for (const ref of canvasRefs) {
+    const label = ref.fileId ?? ref.canvasUrl ?? "unknown";
+    const result = await fetchSlackCanvasContent({
+      ref,
+      client: ctx.app.client,
+      token: ctx.botToken,
+      maxBytes: ctx.canvasMaxBytes,
+      maxChars: ctx.canvasTextMaxChars,
+    });
+    if (result.ok) {
+      const title = result.title ?? label;
+      const content = result.truncated
+        ? `${result.extractedText}\n[truncated]`
+        : result.extractedText;
+      canvasBlocks.push(`[Slack Canvas: ${title}]\n${content}`);
+    } else {
+      ctx.logger.warn(
+        {
+          fileId: ref.fileId,
+          url: ref.canvasUrl,
+          channelId: ref.channelId,
+          messageTs: ref.messageTs,
+          error: result.error,
+        },
+        "slack canvas fetch failed",
+      );
+      canvasBlocks.push(`[Slack Canvas: ${label}] Unable to fetch content (${result.error})`);
+    }
+  }
+  const canvasContext = canvasBlocks.length > 0 ? canvasBlocks.join("\n\n") : "";
+
+  const baseBody =
+    (message.text ?? "").trim() || media?.placeholder || (canvasContext ? "[Slack canvas]" : "");
+  if (!baseBody) return null;
+  const rawBody = baseBody;
+  const rawBodyWithCanvas = canvasContext ? `${rawBody}\n\n${canvasContext}` : rawBody;
 
   const ackReaction = resolveAckReaction(cfg, route.agentId);
   const ackReactionValue = ackReaction ?? "";
@@ -395,7 +433,7 @@ export async function prepareSlackMessage(params: {
       GroupSubject: isRoomish ? roomLabel : undefined,
       From: slackFrom,
     }) ?? (isDirectMessage ? senderName : roomLabel);
-  const textWithId = `${rawBody}\n[slack message id: ${message.ts} channel: ${message.channel}]`;
+  const textWithId = `${rawBodyWithCanvas}\n[slack message id: ${message.ts} channel: ${message.channel}]`;
   const storePath = resolveStorePath(ctx.cfg.session?.store, {
     agentId: route.agentId,
   });

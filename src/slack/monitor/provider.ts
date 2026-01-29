@@ -122,6 +122,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const textLimit = resolveTextChunkLimit(cfg, "slack", account.accountId);
   const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
   const mediaMaxBytes = (opts.mediaMaxMb ?? slackCfg.mediaMaxMb ?? 20) * 1024 * 1024;
+  const canvasMaxBytes = (slackCfg.canvasMaxMb ?? 2) * 1024 * 1024;
+  const canvasTextMaxChars = slackCfg.canvasTextMaxChars ?? 20000;
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
 
   const receiver =
@@ -203,6 +205,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     textLimit,
     ackReactionScope,
     mediaMaxBytes,
+    canvasMaxBytes,
+    canvasTextMaxChars,
     removeAckAfterReply,
   });
 

@@ -469,6 +469,10 @@ const FIELD_HELP: Record<string, string> = {
     'Scope for Slack thread history context ("thread" isolates per thread; "channel" reuses channel history).',
   "channels.slack.thread.inheritParent":
     "If true, Slack thread sessions inherit the parent channel transcript (default: false).",
+  "channels.slack.canvasMaxMb": "Max MB to download for Slack canvases (default: 2).",
+  "channels.slack.canvasTextMaxChars":
+    "Max characters of Slack canvas content injected into prompts (default: 20000).",
+  "channels.slack.actions.canvases": "Enable Slack canvas actions (default: false).",
   "channels.mattermost.botToken":
     "Bot token from Mattermost System Console -> Integrations -> Bot Accounts.",
   "channels.mattermost.baseUrl":

@@ -1251,6 +1251,7 @@ Slack action groups (gate `slack` tool actions):
 | pins | enabled | Pin/unpin/list |
 | memberInfo | enabled | Member info |
 | emojiList | enabled | Custom emoji list |
+| canvases | disabled | Create/update canvases |
 
 ### `channels.mattermost` (bot token)
 

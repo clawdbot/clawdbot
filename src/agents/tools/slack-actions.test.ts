@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { MoltbotConfig } from "../../config/config.js";
 import { handleSlackAction } from "./slack-actions.js";
 
+const createSlackCanvas = vi.fn(async () => ({}));
 const deleteSlackMessage = vi.fn(async () => ({}));
 const editSlackMessage = vi.fn(async () => ({}));
 const getSlackMemberInfo = vi.fn(async () => ({}));
@@ -16,8 +17,10 @@ const removeOwnSlackReactions = vi.fn(async () => ["thumbsup"]);
 const removeSlackReaction = vi.fn(async () => ({}));
 const sendSlackMessage = vi.fn(async () => ({}));
 const unpinSlackMessage = vi.fn(async () => ({}));
+const updateSlackCanvas = vi.fn(async () => ({}));
 
 vi.mock("../../slack/actions.js", () => ({
+  createSlackCanvas: (...args: unknown[]) => createSlackCanvas(...args),
   deleteSlackMessage: (...args: unknown[]) => deleteSlackMessage(...args),
   editSlackMessage: (...args: unknown[]) => editSlackMessage(...args),
   getSlackMemberInfo: (...args: unknown[]) => getSlackMemberInfo(...args),
@@ -31,6 +34,7 @@ vi.mock("../../slack/actions.js", () => ({
   removeSlackReaction: (...args: unknown[]) => removeSlackReaction(...args),
   sendSlackMessage: (...args: unknown[]) => sendSlackMessage(...args),
   unpinSlackMessage: (...args: unknown[]) => unpinSlackMessage(...args),
+  updateSlackCanvas: (...args: unknown[]) => updateSlackCanvas(...args),
 }));
 
 describe("handleSlackAction", () => {
@@ -122,6 +126,35 @@ describe("handleSlackAction", () => {
         cfg,
       ),
     ).rejects.toThrow(/Slack reactions are disabled/);
+  });
+
+  it("requires canvases to be enabled", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as ClawdbotConfig;
+    await expect(
+      handleSlackAction({ action: "createCanvas", title: "Test", content: "hello" }, cfg),
+    ).rejects.toThrow(/Slack canvases are disabled/);
+  });
+
+  it("creates a canvas when enabled", async () => {
+    const cfg = {
+      channels: { slack: { botToken: "tok", actions: { canvases: true } } },
+    } as ClawdbotConfig;
+    await handleSlackAction({ action: "createCanvas", title: "Test", content: "hello" }, cfg);
+    expect(createSlackCanvas).toHaveBeenCalledWith(
+      { title: "Test", content: "hello", channelId: undefined },
+      undefined,
+    );
+  });
+
+  it("updates a canvas by id", async () => {
+    const cfg = {
+      channels: { slack: { botToken: "tok", actions: { canvases: true } } },
+    } as ClawdbotConfig;
+    await handleSlackAction({ action: "updateCanvas", canvasId: "C123", content: "update" }, cfg);
+    expect(updateSlackCanvas).toHaveBeenCalledWith(
+      { canvasId: "C123", channelId: undefined, content: "update", updateMode: undefined },
+      undefined,
+    );
   });
 
   it("passes threadTs to sendSlackMessage for thread replies", async () => {

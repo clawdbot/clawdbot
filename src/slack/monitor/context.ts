@@ -86,6 +86,8 @@ export type SlackMonitorContext = {
   textLimit: number;
   ackReactionScope: string;
   mediaMaxBytes: number;
+  canvasMaxBytes: number;
+  canvasTextMaxChars: number;
   removeAckAfterReply: boolean;
 
   logger: ReturnType<typeof getChildLogger>;
@@ -147,6 +149,8 @@ export function createSlackMonitorContext(params: {
   textLimit: number;
   ackReactionScope: string;
   mediaMaxBytes: number;
+  canvasMaxBytes: number;
+  canvasTextMaxChars: number;
   removeAckAfterReply: boolean;
 }): SlackMonitorContext {
   const channelHistories = new Map<string, HistoryEntry[]>();
@@ -391,6 +395,8 @@ export function createSlackMonitorContext(params: {
     textLimit: params.textLimit,
     ackReactionScope: params.ackReactionScope,
     mediaMaxBytes: params.mediaMaxBytes,
+    canvasMaxBytes: params.canvasMaxBytes,
+    canvasTextMaxChars: params.canvasTextMaxChars,
     removeAckAfterReply: params.removeAckAfterReply,
     logger,
     markMessageSeen,

@@ -28,6 +28,8 @@ const baseParams = () => ({
   reactionMode: "off" as const,
   reactionAllowlist: [],
   replyToMode: "off" as const,
+  threadHistoryScope: "thread" as const,
+  threadInheritParent: false,
   slashCommand: {
     enabled: false,
     name: "clawd",
@@ -37,6 +39,8 @@ const baseParams = () => ({
   textLimit: 4000,
   ackReactionScope: "group-mentions",
   mediaMaxBytes: 1,
+  canvasMaxBytes: 1,
+  canvasTextMaxChars: 1000,
   removeAckAfterReply: false,
 });
 

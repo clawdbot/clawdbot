@@ -46,6 +46,10 @@ export function createSlackActions(providerId: string): ChannelMessageActionAdap
       }
       if (isActionEnabled("memberInfo")) actions.add("member-info");
       if (isActionEnabled("emojiList")) actions.add("emoji-list");
+      if (isActionEnabled("canvases", false)) {
+        actions.add("canvas-create");
+        actions.add("canvas-update");
+      }
       return Array.from(actions);
     },
     extractToolSend: ({ args }): ChannelToolSend | null => {
@@ -200,6 +204,40 @@ export function createSlackActions(providerId: string): ChannelMessageActionAdap
       if (action === "emoji-list") {
         return await handleSlackAction(
           { action: "emojiList", accountId: accountId ?? undefined },
+          cfg,
+        );
+      }
+
+      if (action === "canvas-create") {
+        const title = readStringParam(params, "title", { required: true });
+        const content = readStringParam(params, "content", { required: true, allowEmpty: true });
+        const channelId = readStringParam(params, "channelId");
+        return await handleSlackAction(
+          {
+            action: "createCanvas",
+            title,
+            content,
+            channelId: channelId ?? undefined,
+            accountId: accountId ?? undefined,
+          },
+          cfg,
+        );
+      }
+
+      if (action === "canvas-update") {
+        const content = readStringParam(params, "content", { required: true, allowEmpty: true });
+        const canvasId = readStringParam(params, "canvasId");
+        const channelId = readStringParam(params, "channelId");
+        const updateMode = readStringParam(params, "updateMode");
+        return await handleSlackAction(
+          {
+            action: "updateCanvas",
+            canvasId: canvasId ?? undefined,
+            channelId: channelId ?? undefined,
+            updateMode: updateMode ?? undefined,
+            content,
+            accountId: accountId ?? undefined,
+          },
           cfg,
         );
       }

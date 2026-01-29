@@ -258,3 +258,49 @@ export async function listSlackPins(
   const result = await client.pins.list({ channel: channelId });
   return (result.items ?? []) as SlackPin[];
 }
+
+type SlackCanvasCreatePayload = {
+  title: string;
+  document_content: string;
+  channel_id?: string;
+};
+
+type SlackCanvasEditPayload = {
+  canvas_id?: string;
+  channel_id?: string;
+  document_content: string;
+  mode?: string;
+};
+
+export async function createSlackCanvas(
+  params: { title: string; content: string; channelId?: string },
+  opts: SlackActionClientOpts = {},
+) {
+  const client = await getClient(opts);
+  const payload: SlackCanvasCreatePayload = {
+    title: params.title,
+    document_content: params.content,
+    ...(params.channelId ? { channel_id: params.channelId } : {}),
+  };
+  if (params.channelId) {
+    return await client.apiCall("conversations.canvases.create", payload);
+  }
+  return await client.apiCall("canvases.create", payload);
+}
+
+export async function updateSlackCanvas(
+  params: { canvasId?: string; channelId?: string; content: string; updateMode?: string },
+  opts: SlackActionClientOpts = {},
+) {
+  const client = await getClient(opts);
+  const payload: SlackCanvasEditPayload = {
+    ...(params.canvasId ? { canvas_id: params.canvasId } : {}),
+    ...(params.channelId ? { channel_id: params.channelId } : {}),
+    document_content: params.content,
+    ...(params.updateMode ? { mode: params.updateMode } : {}),
+  };
+  if (params.channelId && !params.canvasId) {
+    return await client.apiCall("conversations.canvases.edit", payload);
+  }
+  return await client.apiCall("canvases.edit", payload);
+}

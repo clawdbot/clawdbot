@@ -3,6 +3,7 @@ import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { MoltbotConfig } from "../../config/config.js";
 import { resolveSlackAccount } from "../../slack/accounts.js";
 import {
+  createSlackCanvas,
   deleteSlackMessage,
   editSlackMessage,
   getSlackMemberInfo,
@@ -16,6 +17,7 @@ import {
   removeSlackReaction,
   sendSlackMessage,
   unpinSlackMessage,
+  updateSlackCanvas,
 } from "../../slack/actions.js";
 import { parseSlackTarget, resolveSlackChannelId } from "../../slack/targets.js";
 import { withNormalizedTimestamp } from "../date-time.js";
@@ -25,6 +27,7 @@ const messagingActions = new Set(["sendMessage", "editMessage", "deleteMessage",
 
 const reactionsActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
+const canvasActions = new Set(["createCanvas", "updateCanvas"]);
 
 export type SlackActionContext = {
   /** Current channel ID for auto-threading. */
@@ -69,6 +72,29 @@ function resolveThreadTsFromContext(
     return context.currentThreadTs;
   }
   return undefined;
+}
+
+function formatSlackCanvasError(err: unknown): string {
+  const data = err as { data?: { error?: string; needed?: string | string[] } } | undefined;
+  const error = data?.data?.error ?? (err as { error?: string } | undefined)?.error;
+  if (error === "missing_scope") {
+    const needed = data?.data?.needed;
+    const scopes = Array.isArray(needed) ? needed.join(", ") : needed;
+    return scopes
+      ? `Slack canvas action failed (missing_scope: ${scopes}). Add scopes and reinstall the Slack app.`
+      : "Slack canvas action failed (missing_scope). Add scopes and reinstall the Slack app.";
+  }
+  if (error === "not_allowed_token_type") {
+    return "Slack canvas action failed (not_allowed_token_type). Use a bot token with canvases:write.";
+  }
+  if (error === "not_in_channel") {
+    return "Slack canvas action failed (not_in_channel). Invite the bot to the channel and retry.";
+  }
+  if (error === "channel_not_found") {
+    return "Slack canvas action failed (channel_not_found).";
+  }
+  if (error && typeof error === "string") return `Slack canvas action failed (${error}).`;
+  return `Slack canvas action failed (${String(err)}).`;
 }
 
 export async function handleSlackAction(
@@ -275,6 +301,49 @@ export async function handleSlackAction(
       return message ? { ...pin, message } : pin;
     });
     return jsonResult({ ok: true, pins: normalizedPins });
+  }
+
+  if (canvasActions.has(action)) {
+    if (!isActionEnabled("canvases", false)) {
+      throw new Error("Slack canvases are disabled.");
+    }
+    if (action === "createCanvas") {
+      const title = readStringParam(params, "title", { required: true });
+      const content = readStringParam(params, "content", { required: true, allowEmpty: true });
+      const channelIdRaw = readStringParam(params, "channelId");
+      const channelId = channelIdRaw ? resolveSlackChannelId(channelIdRaw) : undefined;
+      try {
+        const result = await createSlackCanvas(
+          { title, content, channelId },
+          writeOpts ?? undefined,
+        );
+        return jsonResult({ ok: true, result });
+      } catch (err) {
+        throw new Error(formatSlackCanvasError(err));
+      }
+    }
+    const content = readStringParam(params, "content", { required: true, allowEmpty: true });
+    const canvasId = readStringParam(params, "canvasId");
+    const channelIdRaw = readStringParam(params, "channelId");
+    const channelId = channelIdRaw ? resolveSlackChannelId(channelIdRaw) : undefined;
+    if (!canvasId && !channelId) {
+      throw new Error("canvasId or channelId required for Slack canvas updates");
+    }
+    const updateMode = readStringParam(params, "updateMode");
+    try {
+      const result = await updateSlackCanvas(
+        {
+          canvasId: canvasId ?? undefined,
+          channelId,
+          content,
+          updateMode: updateMode ?? undefined,
+        },
+        writeOpts ?? undefined,
+      );
+      return jsonResult({ ok: true, result });
+    } catch (err) {
+      throw new Error(formatSlackCanvasError(err));
+    }
   }
 
   if (action === "memberInfo") {

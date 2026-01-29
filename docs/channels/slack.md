@@ -199,7 +199,9 @@ user scopes if you plan to configure a user token.
         "emoji:read",
         "commands",
         "files:read",
-        "files:write"
+        "files:write",
+        "canvases:read",
+        "canvases:write"
       ],
       "user": [
         "channels:history",
@@ -268,9 +270,13 @@ https://docs.slack.dev/apis/web-api/using-the-conversations-api/ for the overvie
   https://docs.slack.dev/reference/scopes/emoji.read
 - `files:write` (uploads via `files.uploadV2`)
   https://docs.slack.dev/messaging/working-with-files/#upload
+- `files:read` (download canvas file content via `url_private_download`)
+- `canvases:read`, `canvases:write` (create/update canvases)
 
 ### User token scopes (optional, read-only by default)
 Add these under **User Token Scopes** if you configure `channels.slack.userToken`.
+
+**Canvas ingestion notes:** When a message includes a Slack Canvas, Clawdbot attempts to download the canvas file via `files.info` + `url_private_download`. This requires `files:read` and the bot must have access to the canvas file. Missing scopes will show a short diagnostic in the prompt context.
 
 - `channels:history`, `groups:history`, `im:history`, `mpim:history`
 - `channels:read`, `groups:read`, `im:read`, `mpim:read`
@@ -325,7 +331,8 @@ Slack uses Socket Mode only (no HTTP webhook server). Provide both tokens:
       "messages": true,
       "pins": true,
       "memberInfo": true,
-      "emojiList": true
+      "emojiList": true,
+      "canvases": false
     },
     "slashCommand": {
       "enabled": true,
@@ -334,7 +341,9 @@ Slack uses Socket Mode only (no HTTP webhook server). Provide both tokens:
       "ephemeral": true
     },
     "textChunkLimit": 4000,
-    "mediaMaxMb": 20
+    "mediaMaxMb": 20,
+    "canvasMaxMb": 2,
+    "canvasTextMaxChars": 20000
   }
 }
 ```
@@ -351,6 +360,7 @@ ack reaction after the bot replies.
 - Outbound text is chunked to `channels.slack.textChunkLimit` (default 4000).
 - Optional newline chunking: set `channels.slack.chunkMode="newline"` to split on blank lines (paragraph boundaries) before length chunking.
 - Media uploads are capped by `channels.slack.mediaMaxMb` (default 20).
+- Canvas downloads are capped by `channels.slack.canvasMaxMb` (default 2) and truncated to `channels.slack.canvasTextMaxChars` characters (default 20000).
 
 ## Reply threading
 By default, Moltbot replies in the main channel. Use `channels.slack.replyToMode` to control automatic threading:
