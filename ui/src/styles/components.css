@@ -49,6 +49,8 @@
     border-color var(--duration-normal) var(--ease-out),
     box-shadow var(--duration-normal) var(--ease-out);
   box-shadow: inset 0 1px 0 var(--card-highlight);
+  min-width: 0;
+  overflow: hidden;
 }
 
 .stat:hover {
@@ -62,6 +64,9 @@
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .stat-value {
@@ -70,6 +75,9 @@
   margin-top: 6px;
   letter-spacing: -0.03em;
   line-height: 1.1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .stat-value.ok {
@@ -201,6 +209,30 @@
   color: var(--danger);
 }
 
+/* Health pill - prominent status indicator */
+.pill--health {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.pill--health.ok {
+  border-color: rgba(34, 197, 94, 0.2);
+  background: var(--ok-subtle);
+}
+
+.pill--health.ok .mono {
+  color: var(--ok);
+}
+
+.pill--health.offline {
+  border-color: rgba(245, 158, 11, 0.2);
+  background: var(--warn-subtle);
+}
+
+.pill--health.offline .mono {
+  color: var(--warn);
+}
+
 /* ===========================================
    Theme Toggle
    =========================================== */
@@ -326,7 +358,7 @@
 
 .btn:active {
   background: var(--secondary);
-  transform: translateY(0);
+  transform: translateY(0) scale(0.98);
   box-shadow: none;
 }
 
@@ -447,6 +479,14 @@
 .field select:focus {
   border-color: var(--ring);
   box-shadow: var(--focus-ring);
+  outline: none;
+}
+
+.field input:focus-visible,
+.field textarea:focus-visible,
+.field select:focus-visible {
+  border-color: var(--ring);
+  box-shadow: var(--focus-glow);
 }
 
 .field select {
@@ -467,16 +507,49 @@
 }
 
 .field.checkbox {
-  grid-template-columns: auto 1fr;
+  display: flex;
+  flex-direction: row;
   align-items: center;
+  gap: 8px;
+}
+
+.field.checkbox span {
+  order: 2;
+}
+
+.field.checkbox input[type="checkbox"] {
+  order: 1;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* Checkboxes in filter rows - align to bottom like other fields */
+.filters .field.checkbox {
+  align-self: flex-end;
+  padding-bottom: 10px;
+}
+
+/* Checkboxes in form grids - align to bottom of grid cell */
+.form-grid .field.checkbox {
+  align-self: end;
+  padding-bottom: 8px;
 }
 
 .config-form .field.checkbox {
+  display: grid;
   grid-template-columns: 18px minmax(0, 1fr);
   column-gap: 10px;
 }
 
+.config-form .field.checkbox span {
+  order: unset;
+}
+
 .config-form .field.checkbox input[type="checkbox"] {
+  order: unset;
   margin: 0;
   width: 16px;
   height: 16px;
@@ -523,6 +596,39 @@
 }
 
 /* ===========================================
+   Keyboard Shortcuts (kbd)
+   =========================================== */
+
+kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--muted);
+  background: var(--secondary);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  box-shadow: 0 1px 0 var(--border);
+}
+
+kbd + kbd {
+  margin-left: 4px;
+}
+
+:root[data-theme="light"] kbd {
+  background: var(--bg);
+  border-color: var(--border-strong);
+  box-shadow: 0 1px 0 var(--border-strong);
+}
+
+/* ===========================================
    Callouts - Informative with subtle depth
    =========================================== */
 
@@ -552,6 +658,156 @@
   border-color: rgba(34, 197, 94, 0.25);
   background: linear-gradient(135deg, rgba(34, 197, 94, 0.08) 0%, rgba(34, 197, 94, 0.04) 100%);
   color: var(--ok);
+}
+
+.callout.warn {
+  border-color: rgba(245, 158, 11, 0.25);
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.08) 0%, rgba(245, 158, 11, 0.04) 100%);
+  color: var(--warn);
+}
+
+/* ===========================================
+   Empty States - Clear and helpful
+   =========================================== */
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 48px 24px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.empty-state__icon {
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-lg);
+  background: var(--secondary);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.empty-state__icon svg {
+  width: 24px;
+  height: 24px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.empty-state__title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+
+.empty-state__description {
+  font-size: 13px;
+  max-width: 320px;
+  line-height: 1.5;
+}
+
+.empty-state__action {
+  margin-top: 8px;
+}
+
+/* Disconnected state - More prominent */
+.disconnected-state {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 20px;
+  border-radius: var(--radius-lg);
+  border: 1px dashed var(--border-strong);
+  background: var(--secondary);
+  animation: rise 0.35s var(--ease-out) backwards;
+}
+
+.disconnected-state__icon {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  background: var(--warn-subtle);
+  color: var(--warn);
+  flex-shrink: 0;
+}
+
+.disconnected-state__icon svg {
+  width: 20px;
+  height: 20px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.disconnected-state__content {
+  flex: 1;
+  min-width: 0;
+}
+
+.disconnected-state__title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+
+.disconnected-state__description {
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.disconnected-state__action {
+  flex-shrink: 0;
+}
+
+/* Loading state placeholder */
+.loading-placeholder {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 24px;
+}
+
+.loading-placeholder__bar {
+  height: 12px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(
+    90deg,
+    var(--secondary) 25%,
+    var(--bg-hover) 50%,
+    var(--secondary) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+.loading-placeholder__bar--short {
+  width: 60%;
+}
+
+.loading-placeholder__bar--medium {
+  width: 80%;
+}
+
+.loading-placeholder__bar--full {
+  width: 100%;
 }
 
 /* Compaction indicator */
@@ -601,6 +857,23 @@
 :root[data-theme="light"] .table-row,
 :root[data-theme="light"] .chip {
   background: var(--bg);
+}
+
+/* Light theme cards - subtle shadow for elevation */
+:root[data-theme="light"] .card {
+  box-shadow: var(--shadow-sm);
+}
+
+:root[data-theme="light"] .card:hover {
+  box-shadow: var(--shadow-md);
+}
+
+:root[data-theme="light"] .stat {
+  box-shadow: var(--shadow-sm);
+}
+
+:root[data-theme="light"] .stat:hover {
+  box-shadow: var(--shadow-md);
 }
 
 /* ===========================================
@@ -1483,4 +1756,138 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+/* ===========================================
+   Crab Loader - Processing animation
+   =========================================== */
+
+.crab-loader {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  padding: 32px 24px;
+}
+
+.crab-loader__crab {
+  position: relative;
+  animation: crab-walk 0.6s ease-in-out infinite;
+}
+
+.crab-loader__svg {
+  display: block;
+}
+
+.crab-loader--sm .crab-loader__svg {
+  width: 32px;
+  height: auto;
+}
+
+.crab-loader--md .crab-loader__svg {
+  width: 56px;
+  height: auto;
+}
+
+.crab-loader--lg .crab-loader__svg {
+  width: 96px;
+  height: auto;
+}
+
+.crab-loader__claw-left {
+  transform-origin: 52px 78px;
+  animation: claw-pinch-left 0.4s ease-in-out infinite;
+}
+
+.crab-loader__claw-right {
+  transform-origin: 468px 78px;
+  animation: claw-pinch-right 0.4s ease-in-out infinite;
+}
+
+.crab-loader__text {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.crab-loader__dots {
+  display: flex;
+  gap: 3px;
+  margin-left: 2px;
+}
+
+.crab-loader__dot {
+  width: 4px;
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+  animation: dot-bounce 1.2s ease-in-out infinite;
+}
+
+.crab-loader__dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.crab-loader__dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+/* Crab walking animation - side to side sway */
+@keyframes crab-walk {
+  0%, 100% {
+    transform: translateX(-2px) rotate(-2deg);
+  }
+  50% {
+    transform: translateX(2px) rotate(2deg);
+  }
+}
+
+/* Left claw pinching */
+@keyframes claw-pinch-left {
+  0%, 100% {
+    transform: rotate(0deg);
+  }
+  50% {
+    transform: rotate(15deg);
+  }
+}
+
+/* Right claw pinching */
+@keyframes claw-pinch-right {
+  0%, 100% {
+    transform: rotate(0deg);
+  }
+  50% {
+    transform: rotate(-15deg);
+  }
+}
+
+/* Bouncing dots */
+@keyframes dot-bounce {
+  0%, 80%, 100% {
+    opacity: 0.4;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .crab-loader__crab,
+  .crab-loader__claw-left,
+  .crab-loader__claw-right,
+  .crab-loader__dot {
+    animation: none;
+  }
+
+  .crab-loader__dot {
+    opacity: 0.6;
+  }
 }

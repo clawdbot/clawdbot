@@ -2,7 +2,7 @@ import { html } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 
 import type { AppViewState } from "./app-view-state";
-import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation";
+import { iconForTab, pathForTab, titleForTab, TAB_GROUPS, type Tab } from "./navigation";
 import { icons } from "./icons";
 import { loadChatHistory } from "./controllers/chat";
 import { syncUrlWithSessionKey } from "./app-settings";
@@ -28,6 +28,13 @@ export function renderTab(state: AppViewState, tab: Tab) {
           return;
         }
         event.preventDefault();
+        // Auto-expand the group containing this tab
+        const group = TAB_GROUPS.find((g) => g.tabs.includes(tab));
+        if (group && state.settings.navGroupsCollapsed[group.label]) {
+          const next = { ...state.settings.navGroupsCollapsed };
+          next[group.label] = false;
+          state.applySettings({ ...state.settings, navGroupsCollapsed: next });
+        }
         state.setTab(tab);
       }}
       title=${titleForTab(tab)}

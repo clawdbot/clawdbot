@@ -344,6 +344,12 @@
   color: var(--text);
 }
 
+:root[data-theme="light"] .btn--icon.active {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
 .btn--icon svg {
   display: block;
   width: 18px;

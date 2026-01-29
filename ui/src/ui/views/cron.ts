@@ -117,13 +117,13 @@ export function renderCron(props: CronProps) {
             />
           </label>
           <label class="field checkbox">
-            <span>Enabled</span>
             <input
               type="checkbox"
               .checked=${props.form.enabled}
               @change=${(e: Event) =>
                 props.onFormChange({ enabled: (e.target as HTMLInputElement).checked })}
             />
+            <span>Enabled</span>
           </label>
           <label class="field">
             <span>Schedule</span>

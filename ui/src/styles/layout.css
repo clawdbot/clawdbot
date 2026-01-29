@@ -430,6 +430,17 @@
   background: var(--bg-content);
 }
 
+/* Light theme nav - subtle background difference */
+:root[data-theme="light"] .nav {
+  background: var(--bg);
+  border-right: 1px solid var(--border);
+}
+
+:root[data-theme="light"] .topbar {
+  background: var(--bg);
+  box-shadow: 0 1px 0 var(--border);
+}
+
 .content--chat {
   overflow: hidden;
   padding-bottom: 0;
@@ -437,19 +448,20 @@
 
 /* Content header */
 .content-header {
+  position: relative;
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
   gap: 16px;
-  padding: 4px 8px;
-  overflow: hidden;
+  padding: 4px 8px 12px;
+  overflow: visible;
   transform-origin: top center;
   transition:
     opacity var(--shell-focus-duration) var(--shell-focus-ease),
     transform var(--shell-focus-duration) var(--shell-focus-ease),
     max-height var(--shell-focus-duration) var(--shell-focus-ease),
     padding var(--shell-focus-duration) var(--shell-focus-ease);
-  max-height: 80px;
+  max-height: 90px;
 }
 
 .shell--chat-focus .content-header {
@@ -479,6 +491,28 @@
 .page-meta {
   display: flex;
   gap: 8px;
+}
+
+/* Page header separator - subtle gradient fade */
+.content-header::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--border) 20%,
+    var(--border) 80%,
+    transparent 100%
+  );
+  opacity: 0.6;
+}
+
+.shell--chat-focus .content-header::after {
+  display: none;
 }
 
 /* Chat view header adjustments */
