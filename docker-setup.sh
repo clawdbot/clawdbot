@@ -26,6 +26,10 @@ mkdir -p "${CLAWDBOT_WORKSPACE_DIR:-$HOME/clawd}"
 
 export CLAWDBOT_CONFIG_DIR="${CLAWDBOT_CONFIG_DIR:-$HOME/.clawdbot}"
 export CLAWDBOT_WORKSPACE_DIR="${CLAWDBOT_WORKSPACE_DIR:-$HOME/clawd}"
+
+# Set ownership to container user (uid 1000) so the container can write to mounted volumes
+chown -R 1000:1000 "$CLAWDBOT_CONFIG_DIR" 2>/dev/null || true
+chown -R 1000:1000 "$CLAWDBOT_WORKSPACE_DIR" 2>/dev/null || true
 export CLAWDBOT_GATEWAY_PORT="${CLAWDBOT_GATEWAY_PORT:-18789}"
 export CLAWDBOT_BRIDGE_PORT="${CLAWDBOT_BRIDGE_PORT:-18790}"
 export CLAWDBOT_GATEWAY_BIND="${CLAWDBOT_GATEWAY_BIND:-lan}"

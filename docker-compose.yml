@@ -3,6 +3,7 @@ services:
     image: ${CLAWDBOT_IMAGE:-moltbot:local}
     environment:
       HOME: /home/node
+      MOLTBOT_STATE_DIR: /home/node/.clawdbot
       TERM: xterm-256color
       CLAWDBOT_GATEWAY_TOKEN: ${CLAWDBOT_GATEWAY_TOKEN}
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
@@ -31,6 +32,7 @@ services:
     image: ${CLAWDBOT_IMAGE:-moltbot:local}
     environment:
       HOME: /home/node
+      MOLTBOT_STATE_DIR: /home/node/.clawdbot
       TERM: xterm-256color
       BROWSER: echo
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
