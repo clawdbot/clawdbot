@@ -324,9 +324,56 @@ interface VeniceModelsResponse {
   data: VeniceModel[];
 }
 
+/** Maximum number of discovery attempts before falling back to static catalog. */
+const DISCOVERY_MAX_ATTEMPTS = 2;
+/** Timeout per discovery attempt in milliseconds. */
+const DISCOVERY_TIMEOUT_MS = 10_000;
+/** Delay between retries in milliseconds. */
+const DISCOVERY_RETRY_DELAY_MS = 1_000;
+
+/**
+ * Fetch the Venice /models endpoint with a single retry on transient failures.
+ * Returns the parsed response or null on failure.
+ */
+async function fetchVeniceModelsWithRetry(): Promise<VeniceModelsResponse | null> {
+  for (let attempt = 1; attempt <= DISCOVERY_MAX_ATTEMPTS; attempt++) {
+    try {
+      const response = await fetch(`${VENICE_BASE_URL}/models`, {
+        signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
+      });
+
+      if (!response.ok) {
+        console.warn(
+          `[venice-models] Discovery attempt ${attempt}/${DISCOVERY_MAX_ATTEMPTS} failed: HTTP ${response.status}`,
+        );
+        if (attempt < DISCOVERY_MAX_ATTEMPTS) {
+          await new Promise((r) => setTimeout(r, DISCOVERY_RETRY_DELAY_MS));
+          continue;
+        }
+        return null;
+      }
+
+      return (await response.json()) as VeniceModelsResponse;
+    } catch (error) {
+      console.warn(
+        `[venice-models] Discovery attempt ${attempt}/${DISCOVERY_MAX_ATTEMPTS} failed: ${String(error)}`,
+      );
+      if (attempt < DISCOVERY_MAX_ATTEMPTS) {
+        await new Promise((r) => setTimeout(r, DISCOVERY_RETRY_DELAY_MS));
+        continue;
+      }
+      return null;
+    }
+  }
+  return null;
+}
+
 /**
  * Discover models from Venice API with fallback to static catalog.
  * The /models endpoint is public and doesn't require authentication.
+ *
+ * Uses a 10 s timeout (up from 5 s) and one automatic retry to handle
+ * transient network blips that previously caused TimeoutError fallbacks.
  */
 export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
   // Skip API discovery in test environment
@@ -334,60 +381,45 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
     return VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition);
   }
 
-  try {
-    const response = await fetch(`${VENICE_BASE_URL}/models`, {
-      signal: AbortSignal.timeout(5000),
-    });
+  const data = await fetchVeniceModelsWithRetry();
 
-    if (!response.ok) {
-      console.warn(
-        `[venice-models] Failed to discover models: HTTP ${response.status}, using static catalog`,
-      );
-      return VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition);
-    }
-
-    const data = (await response.json()) as VeniceModelsResponse;
-    if (!Array.isArray(data.data) || data.data.length === 0) {
-      console.warn("[venice-models] No models found from API, using static catalog");
-      return VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition);
-    }
-
-    // Merge discovered models with catalog metadata
-    const catalogById = new Map<string, VeniceCatalogEntry>(
-      VENICE_MODEL_CATALOG.map((m) => [m.id, m]),
-    );
-    const models: ModelDefinitionConfig[] = [];
-
-    for (const apiModel of data.data) {
-      const catalogEntry = catalogById.get(apiModel.id);
-      if (catalogEntry) {
-        // Use catalog metadata for known models
-        models.push(buildVeniceModelDefinition(catalogEntry));
-      } else {
-        // Create definition for newly discovered models not in catalog
-        const isReasoning =
-          apiModel.model_spec.capabilities.supportsReasoning ||
-          apiModel.id.toLowerCase().includes("thinking") ||
-          apiModel.id.toLowerCase().includes("reason") ||
-          apiModel.id.toLowerCase().includes("r1");
-
-        const hasVision = apiModel.model_spec.capabilities.supportsVision;
-
-        models.push({
-          id: apiModel.id,
-          name: apiModel.model_spec.name || apiModel.id,
-          reasoning: isReasoning,
-          input: hasVision ? ["text", "image"] : ["text"],
-          cost: VENICE_DEFAULT_COST,
-          contextWindow: apiModel.model_spec.availableContextTokens || 128000,
-          maxTokens: 8192,
-        });
-      }
-    }
-
-    return models.length > 0 ? models : VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition);
-  } catch (error) {
-    console.warn(`[venice-models] Discovery failed: ${String(error)}, using static catalog`);
+  if (!data || !Array.isArray(data.data) || data.data.length === 0) {
+    console.warn("[venice-models] Using static catalog");
     return VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition);
   }
+
+  // Merge discovered models with catalog metadata
+  const catalogById = new Map<string, VeniceCatalogEntry>(
+    VENICE_MODEL_CATALOG.map((m) => [m.id, m]),
+  );
+  const models: ModelDefinitionConfig[] = [];
+
+  for (const apiModel of data.data) {
+    const catalogEntry = catalogById.get(apiModel.id);
+    if (catalogEntry) {
+      // Use catalog metadata for known models
+      models.push(buildVeniceModelDefinition(catalogEntry));
+    } else {
+      // Create definition for newly discovered models not in catalog
+      const isReasoning =
+        apiModel.model_spec.capabilities.supportsReasoning ||
+        apiModel.id.toLowerCase().includes("thinking") ||
+        apiModel.id.toLowerCase().includes("reason") ||
+        apiModel.id.toLowerCase().includes("r1");
+
+      const hasVision = apiModel.model_spec.capabilities.supportsVision;
+
+      models.push({
+        id: apiModel.id,
+        name: apiModel.model_spec.name || apiModel.id,
+        reasoning: isReasoning,
+        input: hasVision ? ["text", "image"] : ["text"],
+        cost: VENICE_DEFAULT_COST,
+        contextWindow: apiModel.model_spec.availableContextTokens || 128000,
+        maxTokens: 8192,
+      });
+    }
+  }
+
+  return models.length > 0 ? models : VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition);
 }
