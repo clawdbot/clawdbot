@@ -7,7 +7,7 @@ read_when:
 ---
 # iOS App (Node)
 
-Availability: internal preview. The iOS app is not publicly distributed yet.
+> **Note:** The iOS app is currently in internal preview and not yet publicly available. Pre-built binaries are not distributed at this time. If you're interested in building from source or participating in early testing, please reach out via [Discord](https://discord.gg/clawd).
 
 ## What it does
 

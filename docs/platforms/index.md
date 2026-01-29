@@ -9,9 +9,12 @@ read_when:
 Moltbot core is written in TypeScript. **Node is the recommended runtime**.
 Bun is not recommended for the Gateway (WhatsApp/Telegram bugs).
 
-Companion apps exist for macOS (menu bar app) and mobile nodes (iOS/Android). Windows and
-Linux companion apps are planned, but the Gateway is fully supported today.
-Native companion apps for Windows are also planned; the Gateway is recommended via WSL2.
+**Companion apps:**
+- **macOS menu bar app:** Available for development builds (build from source)
+- **iOS/Android apps:** Currently in internal preview; not publicly distributed
+- **Windows/Linux companion apps:** Planned
+
+The Gateway itself is fully supported on macOS, Linux, and Windows (via WSL2) today. You can use Clawdbot's full feature set via the CLI and web interface without needing the companion apps.
 
 ## Choose your OS
 
