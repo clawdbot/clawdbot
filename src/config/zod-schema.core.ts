@@ -336,6 +336,9 @@ export const InboundDebounceSchema = z
   .object({
     debounceMs: z.number().int().nonnegative().optional(),
     byChannel: DebounceMsBySurfaceSchema,
+    channelDelayMs: z.number().int().nonnegative().optional(),
+    channelDelayMsByChannel: DebounceMsBySurfaceSchema,
+    skipIfPeerRepliedMs: z.number().int().nonnegative().optional(),
   })
   .strict()
   .optional();

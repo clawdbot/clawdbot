@@ -4,6 +4,8 @@ import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
+  resolveChannelDelayMs,
+  resolveSkipIfPeerRepliedMs,
 } from "../../auto-reply/inbound-debounce.js";
 import type { HistoryEntry } from "../../auto-reply/reply/history.js";
 import type { ReplyToMode } from "../../config/config.js";
@@ -41,6 +43,8 @@ export function createDiscordMessageHandler(params: {
   const groupPolicy = params.discordConfig?.groupPolicy ?? "open";
   const ackReactionScope = params.cfg.messages?.ackReactionScope ?? "group-mentions";
   const debounceMs = resolveInboundDebounceMs({ cfg: params.cfg, channel: "discord" });
+  const channelDelayMs = resolveChannelDelayMs({ cfg: params.cfg, channel: "discord" });
+  const skipIfPeerRepliedMs = resolveSkipIfPeerRepliedMs({ cfg: params.cfg });
 
   const debouncer = createInboundDebouncer<{ data: DiscordMessageEvent; client: Client }>({
     debounceMs,
@@ -121,8 +125,57 @@ export function createDiscordMessageHandler(params: {
     },
   });
 
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  const checkPeerReplied = async (data: DiscordMessageEvent, client: Client): Promise<boolean> => {
+    if (skipIfPeerRepliedMs <= 0) return false;
+    const channelId = data.message?.channelId;
+    const triggerMessageId = data.message?.id;
+    const triggerTimestamp = data.message?.timestamp;
+    if (!channelId || !triggerMessageId || !triggerTimestamp) return false;
+
+    try {
+      // Fetch recent messages after the trigger
+      const messages = (await client.rest.get(
+        `/channels/${channelId}/messages?after=${triggerMessageId}&limit=10`,
+      )) as
+        | Array<{ id: string; author?: { bot?: boolean; id?: string }; timestamp: string }>
+        | undefined;
+      if (!Array.isArray(messages)) return false;
+
+      const triggerTime = new Date(triggerTimestamp).getTime();
+      const windowEnd = triggerTime + skipIfPeerRepliedMs;
+
+      // Check if any bot (not us) replied within the window
+      for (const msg of messages) {
+        if (!msg.author?.bot) continue;
+        // Skip our own bot's messages
+        if (params.botUserId && msg.author?.id === params.botUserId) continue;
+        const msgTime = new Date(msg.timestamp).getTime();
+        if (msgTime <= windowEnd) {
+          params.runtime.log?.(
+            `Skipping response: peer bot replied within ${skipIfPeerRepliedMs}ms window`,
+          );
+          return true;
+        }
+      }
+      return false;
+    } catch {
+      // If we can't check, proceed anyway
+      return false;
+    }
+  };
+
   return async (data, client) => {
     try {
+      // Apply channel delay for multi-bot coordination
+      if (channelDelayMs > 0) {
+        await sleep(channelDelayMs);
+        // Check if a peer bot already replied
+        if (await checkPeerReplied(data, client)) {
+          return; // Skip responding
+        }
+      }
       await debouncer.enqueue({ data, client });
     } catch (err) {
       params.runtime.error?.(danger(`handler failed: ${String(err)}`));

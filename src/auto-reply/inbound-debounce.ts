@@ -29,6 +29,25 @@ export function resolveInboundDebounceMs(params: {
   return override ?? byChannel ?? base ?? 0;
 }
 
+export function resolveChannelDelayMs(params: {
+  cfg: MoltbotConfig;
+  channel: string;
+  overrideMs?: number;
+}): number {
+  const inbound = params.cfg.messages?.inbound;
+  const override = resolveMs(params.overrideMs);
+  const byChannel = resolveChannelOverride({
+    byChannel: inbound?.channelDelayMsByChannel,
+    channel: params.channel,
+  });
+  const base = resolveMs(inbound?.channelDelayMs);
+  return override ?? byChannel ?? base ?? 0;
+}
+
+export function resolveSkipIfPeerRepliedMs(params: { cfg: MoltbotConfig }): number {
+  return resolveMs(params.cfg.messages?.inbound?.skipIfPeerRepliedMs) ?? 0;
+}
+
 type DebounceBuffer<T> = {
   items: T[];
   timeout: ReturnType<typeof setTimeout> | null;

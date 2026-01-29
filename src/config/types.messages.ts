@@ -25,6 +25,19 @@ export type InboundDebounceByProvider = Record<string, number>;
 export type InboundDebounceConfig = {
   debounceMs?: number;
   byChannel?: InboundDebounceByProvider;
+  /**
+   * Delay (ms) before processing any inbound message.
+   * Useful for multi-bot coordination: gives other bots time to respond first.
+   * The bot can then check if a peer already replied before responding.
+   */
+  channelDelayMs?: number;
+  /** Per-channel delay overrides (ms). */
+  channelDelayMsByChannel?: InboundDebounceByProvider;
+  /**
+   * Skip responding if another bot replied within this window (ms) after the triggering message.
+   * Only effective when channelDelayMs is set. Default: 0 (disabled).
+   */
+  skipIfPeerRepliedMs?: number;
 };
 
 export type BroadcastStrategy = "parallel" | "sequential";
