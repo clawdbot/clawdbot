@@ -84,7 +84,7 @@ describe("memory index", () => {
     await result.manager.sync({ force: true });
     const results = await result.manager.search("alpha");
     expect(results.length).toBeGreaterThan(0);
-    expect(results[0]?.path).toContain("memory/2026-01-12.md");
+    expect(results[0]?.path).toContain("memory/2026/01/2026-01-12.md");
     const status = result.manager.status();
     expect(status.sourceCounts).toEqual(
       expect.arrayContaining([
@@ -254,7 +254,7 @@ describe("memory index", () => {
     await manager.sync({ force: true });
     const results = await manager.search("zebra");
     expect(results.length).toBeGreaterThan(0);
-    expect(results[0]?.path).toContain("memory/2026-01-12.md");
+    expect(results[0]?.path).toContain("memory/2026/01/2026-01-12.md");
   });
 
   it("hybrid weights can favor vector-only matches over keyword-only matches", async () => {

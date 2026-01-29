@@ -266,7 +266,9 @@ describe("memory indexing with OpenAI batches", () => {
 
   it("falls back to non-batch on failure and resets failures after success", async () => {
     const content = ["flaky", "batch"].join("\n\n");
-    await fs.writeFile(path.join(workspaceDir, "memory", "2026-01-09.md"), content);
+    // Create file in new format to avoid migration during sync
+    await fs.mkdir(path.join(workspaceDir, "memory", "2026", "01"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "memory", "2026", "01", "2026-01-09.md"), content);
 
     let uploadedRequests: Array<{ custom_id?: string }> = [];
     let mode: "fail" | "ok" = "fail";
@@ -363,8 +365,10 @@ describe("memory indexing with OpenAI batches", () => {
 
     embedBatch.mockClear();
     mode = "ok";
+    // Create file in new format to avoid migration during sync
+    await fs.mkdir(path.join(workspaceDir, "memory", "2026", "01"), { recursive: true });
     await fs.writeFile(
-      path.join(workspaceDir, "memory", "2026-01-09.md"),
+      path.join(workspaceDir, "memory", "2026", "01", "2026-01-09.md"),
       ["flaky", "batch", "recovery"].join("\n\n"),
     );
     await manager.sync({ force: true });
@@ -376,7 +380,9 @@ describe("memory indexing with OpenAI batches", () => {
 
   it("disables batch after repeated failures and skips batch thereafter", async () => {
     const content = ["repeat", "failures"].join("\n\n");
-    await fs.writeFile(path.join(workspaceDir, "memory", "2026-01-10.md"), content);
+    // Create file in new format to avoid migration during sync
+    await fs.mkdir(path.join(workspaceDir, "memory", "2026", "01"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "memory", "2026", "01", "2026-01-10.md"), content);
 
     let uploadedRequests: Array<{ custom_id?: string }> = [];
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -459,7 +465,7 @@ describe("memory indexing with OpenAI batches", () => {
 
     embedBatch.mockClear();
     await fs.writeFile(
-      path.join(workspaceDir, "memory", "2026-01-10.md"),
+      path.join(workspaceDir, "memory", "2026", "01", "2026-01-10.md"),
       ["repeat", "failures", "again"].join("\n\n"),
     );
     await manager.sync({ force: true });
@@ -470,7 +476,7 @@ describe("memory indexing with OpenAI batches", () => {
     const fetchCalls = fetchMock.mock.calls.length;
     embedBatch.mockClear();
     await fs.writeFile(
-      path.join(workspaceDir, "memory", "2026-01-10.md"),
+      path.join(workspaceDir, "memory", "2026", "01", "2026-01-10.md"),
       ["repeat", "failures", "fallback"].join("\n\n"),
     );
     await manager.sync({ force: true });

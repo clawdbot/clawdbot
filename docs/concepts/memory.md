@@ -16,8 +16,8 @@ Memory search tools are provided by the active memory plugin (default:
 
 The default workspace layout uses two memory layers:
 
-- `memory/YYYY-MM-DD.md`
-  - Daily log (append-only).
+- `memory/YYYY/MM/YYYY-MM-DD.md`
+  - Daily log (append-only), organized by year/month hierarchy.
   - Read today + yesterday at session start.
 - `MEMORY.md` (optional)
   - Curated long-term memory.
@@ -29,7 +29,7 @@ These files live under the workspace (`agents.defaults.workspace`, default
 ## When to write memory
 
 - Decisions, preferences, and durable facts go to `MEMORY.md`.
-- Day-to-day notes and running context go to `memory/YYYY-MM-DD.md`.
+- Day-to-day notes and running context go to `memory/YYYY/MM/YYYY-MM-DD.md`.
 - If someone says "remember this," write it down (do not keep it in RAM).
 - This area is still evolving. It helps to remind the model to store memories; it will know what to do.
 - If you want something to stick, **ask the bot to write it** into memory.
@@ -53,7 +53,7 @@ This is controlled by `agents.defaults.compaction.memoryFlush`:
           enabled: true,
           softThresholdTokens: 4000,
           systemPrompt: "Session nearing compaction. Store durable memories now.",
-          prompt: "Write any lasting notes to memory/YYYY-MM-DD.md; reply with NO_REPLY if nothing to store."
+          prompt: "Write any lasting notes to memory/YYYY/MM/YYYY-MM-DD.md; reply with NO_REPLY if nothing to store."
         }
       }
     }
@@ -386,3 +386,50 @@ agents: {
 Notes:
 - `remote.*` takes precedence over `models.providers.openai.*`.
 - `remote.headers` merge with OpenAI headers; remote wins on key conflicts. Omit `remote.headers` to use the OpenAI defaults.
+
+---
+
+## Backward Compatibility & Migration
+
+Moltbot supports **automatic migration** from the old memory format to the new hierarchical structure.
+
+### Old Format vs New Format
+
+**Old (flat):**
+```
+memory/2025-01-27.md
+memory/2025-01-26-conversation.md
+```
+
+**New (hierarchical):**
+```
+memory/2025/01/2025-01-27.md
+memory/2025/01/2025-01-26-conversation.md
+```
+
+### Automatic Migration
+
+When Moltbot encounters old-format files:
+1. Detects the old format
+2. Creates `memory/YYYY/MM/` directories
+3. Copies files to new location
+4. Uses new format going forward
+
+**Old files are not deleted** — they're kept as backup.
+
+### What You Need to Do
+
+**Nothing.** Migration is transparent and automatic.
+
+Memory search, read, and write operations work seamlessly across both formats.
+
+### Deprecation Timeline
+
+| Version | Old Format Support |
+|---------|-------------------|
+| **Current** | ✅ Fully supported, automatic migration |
+| **Future +1** | ⚠️ Deprecated warning |
+| **Future +2** | ❌ Not supported (error) |
+| **Future +3** | 🗑️ Removed from codebase |
+
+**See:** [Memory Migration Guide](/concepts/memory-migration) for detailed migration instructions.

@@ -1122,7 +1122,7 @@ Set `agents.defaults.sandbox.docker.binds` to `["host:path:mode"]` (e.g., `"/hom
 ### How does memory work
 
 Moltbot memory is just Markdown files in the agent workspace:
-- Daily notes in `memory/YYYY-MM-DD.md`
+- Daily notes in `memory/YYYY/MM/YYYY-MM-DD.md`
 - Curated long-term notes in `MEMORY.md` (main/private sessions only)
 
 Moltbot also runs a **silent pre-compaction memory flush** to remind the model
@@ -1132,7 +1132,7 @@ is writable (read-only sandboxes skip it). See [Memory](/concepts/memory).
 ### Memory keeps forgetting things How do I make it stick
 
 Ask the bot to **write the fact to memory**. Long-term notes belong in `MEMORY.md`,
-short-term context goes into `memory/YYYY-MM-DD.md`.
+short-term context goes into `memory/YYYY/MM/YYYY-MM-DD.md`.
 
 This is still an area we are improving. It helps to remind the model to store memories;
 it will know what to do. If it keeps forgetting, verify the Gateway is using the same
@@ -1146,6 +1146,36 @@ Only if you use **OpenAI embeddings**. Codex OAuth covers chat/completions and
 does **not** grant embeddings access, so **signing in with Codex (OAuth or the
 Codex CLI login)** does not help for semantic memory search. OpenAI embeddings
 still need a real API key (`OPENAI_API_KEY` or `models.providers.openai.apiKey`).
+
+### How do I migrate my old memory files to the new format
+
+Moltbot **automatically migrates** old-format memory files.
+
+If you have files in the old format (`memory/YYYY-MM-DD.md`), Moltbot will:
+1. Detect them automatically
+2. Create new directories (`memory/YYYY/MM/`)
+3. Copy files to the new location
+4. Use the new format going forward
+
+**Old files are not deleted** — they're kept as backup.
+
+**Docs:** [Memory Migration Guide](/concepts/memory-migration)
+
+### Will my old memory files still work after upgrading
+
+**Yes.** Moltbot supports both old and new memory formats with automatic migration.
+
+- Memory search works across both formats
+- Old files are automatically migrated when accessed
+- No manual action required
+
+**Timeline:**
+- Current version: Both formats supported
+- Future +1: Old format deprecated (warning)
+- Future +2: Old format not supported (error)
+- Future +3: Old format removed
+
+**See:** [Memory Migration Guide](/concepts/memory-migration) for details.
 
 If you don’t set a provider explicitly, Moltbot auto-selects a provider when it
 can resolve an API key (auth profiles, `models.providers.*.apiKey`, or env vars).
@@ -1209,7 +1239,7 @@ Your **workspace** (AGENTS.md, memory files, skills, etc.) is separate and confi
 These files live in the **agent workspace**, not `~/.clawdbot`.
 
 - **Workspace (per agent)**: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`,
-  `MEMORY.md` (or `memory.md`), `memory/YYYY-MM-DD.md`, optional `HEARTBEAT.md`.
+  `MEMORY.md` (or `memory.md`), `memory/YYYY/MM/YYYY-MM-DD.md`, optional `HEARTBEAT.md`.
 - **State dir (`~/.clawdbot`)**: config, credentials, auth profiles, sessions, logs,
   and shared skills (`~/.clawdbot/skills`).
 
