@@ -37,16 +37,23 @@ export async function fetchWithSlackAuth(url: string, token: string): Promise<Re
   return fetch(resolvedUrl, { redirect: "follow" });
 }
 
-export async function resolveSlackMedia(params: {
-  files?: SlackFile[];
-  token: string;
-  maxBytes: number;
-}): Promise<{
+export type SlackMediaInfo = {
   path: string;
   contentType?: string;
   placeholder: string;
-} | null> {
+};
+
+/**
+ * Resolves all Slack media files from a message.
+ * Returns an array of successfully downloaded files.
+ */
+export async function resolveSlackMediaList(params: {
+  files?: SlackFile[];
+  token: string;
+  maxBytes: number;
+}): Promise<SlackMediaInfo[]> {
   const files = params.files ?? [];
+  const out: SlackMediaInfo[] = [];
   for (const file of files) {
     const url = file.url_private_download ?? file.url_private;
     if (!url) continue;
@@ -71,16 +78,58 @@ export async function resolveSlackMedia(params: {
         params.maxBytes,
       );
       const label = fetched.fileName ?? file.name;
-      return {
+      out.push({
         path: saved.path,
         contentType: saved.contentType,
         placeholder: label ? `[Slack file: ${label}]` : "[Slack file]",
-      };
+      });
     } catch {
-      // Ignore download failures and fall through to the next file.
+      // Ignore download failures and continue to the next file.
     }
   }
-  return null;
+  return out;
+}
+
+/**
+ * Legacy function for backwards compatibility.
+ * @deprecated Use resolveSlackMediaList instead.
+ */
+export async function resolveSlackMedia(params: {
+  files?: SlackFile[];
+  token: string;
+  maxBytes: number;
+}): Promise<SlackMediaInfo | null> {
+  const list = await resolveSlackMediaList(params);
+  return list[0] ?? null;
+}
+
+/**
+ * Builds the media payload fields for the inbound context.
+ * Provides both singular (MediaPath) and plural (MediaPaths) fields for compatibility.
+ */
+export function buildSlackMediaPayload(mediaList: SlackMediaInfo[]): {
+  MediaPath?: string;
+  MediaType?: string;
+  MediaUrl?: string;
+  MediaPaths?: string[];
+  MediaUrls?: string[];
+  MediaTypes?: string[];
+  placeholder?: string;
+} {
+  if (mediaList.length === 0) return {};
+  const first = mediaList[0];
+  const mediaPaths = mediaList.map((media) => media.path);
+  const mediaTypes = mediaList.map((media) => media.contentType).filter(Boolean) as string[];
+  const placeholders = mediaList.map((media) => media.placeholder);
+  return {
+    MediaPath: first?.path,
+    MediaType: first?.contentType,
+    MediaUrl: first?.path,
+    MediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
+    MediaUrls: mediaPaths.length > 0 ? mediaPaths : undefined,
+    MediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
+    placeholder: placeholders.length > 0 ? placeholders.join(" ") : undefined,
+  };
 }
 
 export type SlackThreadStarter = {
