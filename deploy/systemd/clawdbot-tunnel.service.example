@@ -1,0 +1,24 @@
+[Unit]
+Description=Cloudflare Tunnel for Clawdbot
+# Ensure the tunnel only starts after the gateway is up
+After=network-online.target clawdbot-gateway.service
+Wants=network-online.target clawdbot-gateway.service
+
+[Service]
+# Replace <YOUR_USER> with your linux username
+User=<YOUR_USER>
+Group=<YOUR_USER>
+Type=notify
+
+# Replace <PATH_TO_CLOUDFLARED> with your cloudflared binary path (usually /usr/local/bin/cloudflared or /usr/bin/cloudflared)
+# Replace <TUNNEL_NAME> with your created tunnel name/UUID
+ExecStart=<PATH_TO_CLOUDFLARED> tunnel run <TUNNEL_NAME>
+
+Restart=always
+RestartSec=5s
+
+# Optional: Point to specific credentials if not in default ~/.cloudflared/ location
+# Environment=TUNNEL_ORIGIN_CERT=/home/<YOUR_USER>/.cloudflared/cert.pem
+
+[Install]
+WantedBy=multi-user.target

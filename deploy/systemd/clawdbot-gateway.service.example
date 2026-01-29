@@ -1,0 +1,21 @@
+[Unit]
+Description=Clawdbot Gateway
+After=network.target
+
+[Service]
+# Replace <YOUR_USER> with your linux username (e.g. ubuntu, pi, etc)
+User=<YOUR_USER>
+# Replace <PATH_TO_CLAWDBOT> with the absolute path to the repo (e.g. /home/user/clawdbot)
+WorkingDirectory=<PATH_TO_CLAWDBOT>
+
+# Adjust node path if necessary (run 'which node' to find yours)
+# You can change the port or auth settings here
+ExecStart=/usr/bin/node dist/entry.js gateway --port 18789 --auth token --token <YOUR_SECURE_TOKEN>
+
+# Restart configuration
+Restart=always
+RestartSec=3
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target
