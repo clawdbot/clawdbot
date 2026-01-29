@@ -553,6 +553,7 @@ export function listSessionsFromStore(params: {
         entry?.label ??
         originLabel;
       const deliveryFields = normalizeSessionDeliveryFields(entry);
+      const resolvedModel = resolveSessionModelRef(cfg, entry);
       return {
         key,
         entry,
@@ -578,8 +579,8 @@ export function listSessionsFromStore(params: {
         outputTokens: entry?.outputTokens,
         totalTokens: total,
         responseUsage: entry?.responseUsage,
-        modelProvider: entry?.modelProvider,
-        model: entry?.model,
+        modelProvider: resolvedModel.provider,
+        model: resolvedModel.model,
         contextTokens: entry?.contextTokens,
         deliveryContext: deliveryFields.deliveryContext,
         lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,
