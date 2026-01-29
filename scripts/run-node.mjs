@@ -115,7 +115,15 @@ if (!shouldBuild()) {
 } else {
   logRunner("Building TypeScript (dist is stale).");
   const pnpmArgs = ["exec", compiler, ...projectArgs];
-  const buildCmd = process.platform === "win32" ? "cmd.exe" : "pnpm";
+
+  // PR Fix: Check for local pnpm binary if global might be missing
+  let pnpmCmd = "pnpm";
+  const localPnpm = path.join(cwd, "node_modules", ".bin", process.platform === "win32" ? "pnpm.cmd" : "pnpm");
+  if (fs.existsSync(localPnpm)) {
+    pnpmCmd = localPnpm;
+  }
+
+  const buildCmd = process.platform === "win32" ? "cmd.exe" : pnpmCmd;
   const buildArgs =
     process.platform === "win32" ? ["/d", "/s", "/c", "pnpm", ...pnpmArgs] : pnpmArgs;
   const build = spawn(buildCmd, buildArgs, {
