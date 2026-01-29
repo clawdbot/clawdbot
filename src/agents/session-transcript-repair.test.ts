@@ -118,9 +118,7 @@ describe("sanitizeToolUseArgs", () => {
     const input = [
       {
         role: "assistant",
-        content: [
-          { type: "toolUse", id: "1", name: "tool", input: { key: "value" } },
-        ],
+        content: [{ type: "toolUse", id: "1", name: "tool", input: { key: "value" } }],
       },
     ] as any;
     const out = sanitizeToolUseArgs(input);
@@ -132,9 +130,7 @@ describe("sanitizeToolUseArgs", () => {
     const input = [
       {
         role: "assistant",
-        content: [
-          { type: "toolUse", id: "1", name: "tool", input: '{"key": "value"}' },
-        ],
+        content: [{ type: "toolUse", id: "1", name: "tool", input: '{"key": "value"}' }],
       },
     ] as any;
     const out = sanitizeToolUseArgs(input);
@@ -146,25 +142,21 @@ describe("sanitizeToolUseArgs", () => {
     const input = [
       {
         role: "assistant",
-        content: [
-          { type: "toolUse", id: "1", name: "tool", input: '{ bad json }' },
-        ],
+        content: [{ type: "toolUse", id: "1", name: "tool", input: "{ bad json }" }],
       },
     ] as any;
     const out = sanitizeToolUseArgs(input);
     const block = out[0].content[0] as any;
     expect(block.input).toEqual({});
     expect(block._sanitized).toBe(true);
-    expect(block._originalInput).toBe('{ bad json }');
+    expect(block._originalInput).toBe("{ bad json }");
   });
 
   it("handles 'arguments' alias", () => {
     const input = [
       {
         role: "assistant",
-        content: [
-          { type: "toolCall", id: "1", name: "tool", arguments: '{"key": "val"}' },
-        ],
+        content: [{ type: "toolCall", id: "1", name: "tool", arguments: '{"key": "val"}' }],
       },
     ] as any;
     const out = sanitizeToolUseArgs(input);
@@ -176,9 +168,7 @@ describe("sanitizeToolUseArgs", () => {
     const input = [
       {
         role: "assistant",
-        content: [
-          { type: "toolCall", id: "1", name: "tool", arguments: 'bad' },
-        ],
+        content: [{ type: "toolCall", id: "1", name: "tool", arguments: "bad" }],
       },
     ] as any;
     const out = sanitizeToolUseArgs(input);

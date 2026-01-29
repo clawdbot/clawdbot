@@ -78,11 +78,14 @@ export function sanitizeToolUseArgs(messages: AgentMessage[]): AgentMessage[] {
       if (
         anyBlock &&
         typeof anyBlock === "object" &&
-        (anyBlock.type === "toolUse" || anyBlock.type === "toolCall" || anyBlock.type === "functionCall")
+        (anyBlock.type === "toolUse" ||
+          anyBlock.type === "toolCall" ||
+          anyBlock.type === "functionCall")
       ) {
         const toolBlock = block as any;
         // Handle both 'input' and 'arguments' fields (some providers use arguments)
-        const inputField = "input" in toolBlock ? "input" : "arguments" in toolBlock ? "arguments" : null;
+        const inputField =
+          "input" in toolBlock ? "input" : "arguments" in toolBlock ? "arguments" : null;
 
         if (inputField && typeof toolBlock[inputField] === "string") {
           try {
@@ -97,7 +100,7 @@ export function sanitizeToolUseArgs(messages: AgentMessage[]): AgentMessage[] {
             // Invalid JSON found in tool args.
             // Replace with empty object to prevent downstream crashes.
             console.warn(
-              `[SessionRepair] Sanitized malformed JSON in tool use '${toolBlock.name || "unknown"}'. Original: ${toolBlock[inputField]}`
+              `[SessionRepair] Sanitized malformed JSON in tool use '${toolBlock.name || "unknown"}'. Original: ${toolBlock[inputField]}`,
             );
             nextContent.push({
               ...toolBlock,
