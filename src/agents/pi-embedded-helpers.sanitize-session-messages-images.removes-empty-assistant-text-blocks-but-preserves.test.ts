@@ -117,4 +117,48 @@ describe("sanitizeSessionMessagesImages", () => {
     expect(out[0]?.role).toBe("user");
     expect(out[1]?.role).toBe("toolResult");
   });
+
+  it("adds missing arguments field to tool calls", async () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_1", name: "session_status" }, // Missing arguments!
+        ],
+      },
+    ] satisfies AgentMessage[];
+
+    const out = await sanitizeSessionMessagesImages(input, "test");
+
+    expect(out).toHaveLength(1);
+    const content = (out[0] as { content?: unknown }).content as Array<{
+      type?: string;
+      arguments?: unknown;
+    }>;
+    expect(content).toHaveLength(1);
+    expect(content[0]?.type).toBe("toolCall");
+    expect(content[0]?.arguments).toEqual({});
+  });
+
+  it("adds missing input field to toolUse blocks", async () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolUse", id: "call_1", name: "session_status" }, // Missing input!
+        ],
+      },
+    ] satisfies AgentMessage[];
+
+    const out = await sanitizeSessionMessagesImages(input, "test");
+
+    expect(out).toHaveLength(1);
+    const content = (out[0] as { content?: unknown }).content as Array<{
+      type?: string;
+      input?: unknown;
+    }>;
+    expect(content).toHaveLength(1);
+    expect(content[0]?.type).toBe("toolUse");
+    expect(content[0]?.input).toEqual({});
+  });
 });

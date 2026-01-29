@@ -86,7 +86,7 @@ describe("sanitizeSessionMessagesImages", () => {
     expect(toolResult.role).toBe("toolResult");
     expect(toolResult.toolCallId).toBe("call123fc456");
   });
-  it("does not synthesize tool call input when missing", async () => {
+  it("synthesizes tool call arguments when missing (API requires it)", async () => {
     const input = [
       {
         role: "assistant",
@@ -98,7 +98,8 @@ describe("sanitizeSessionMessagesImages", () => {
     const assistant = out[0] as { content?: Array<Record<string, unknown>> };
     const toolCall = assistant.content?.find((b) => b.type === "toolCall");
     expect(toolCall).toBeTruthy();
-    expect("input" in (toolCall ?? {})).toBe(false);
-    expect("arguments" in (toolCall ?? {})).toBe(false);
+    // API requires arguments field to be present (even if empty)
+    expect("arguments" in (toolCall ?? {})).toBe(true);
+    expect(toolCall?.arguments).toEqual({});
   });
 });

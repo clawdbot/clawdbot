@@ -21,6 +21,25 @@ export function isEmptyAssistantMessageContent(
   });
 }
 
+/**
+ * Ensures tool call blocks have the required arguments/input field.
+ * Some models omit this field when calling tools with no parameters,
+ * but Anthropic/Cloud Code Assist APIs require it (even if empty `{}`).
+ */
+function sanitizeToolCallArguments(content: unknown[]): unknown[] {
+  return content.map((block) => {
+    if (!block || typeof block !== "object") return block;
+    const rec = block as { type?: unknown; arguments?: unknown; input?: unknown };
+    if (rec.type === "toolCall" && rec.arguments === undefined) {
+      return { ...rec, arguments: {} };
+    }
+    if ((rec.type === "toolUse" || rec.type === "functionCall") && rec.input === undefined) {
+      return { ...rec, input: {} };
+    }
+    return block;
+  });
+}
+
 export async function sanitizeSessionMessagesImages(
   messages: AgentMessage[],
   label: string,
@@ -97,17 +116,19 @@ export async function sanitizeSessionMessagesImages(
       }
       const content = assistantMsg.content;
       if (Array.isArray(content)) {
+        // Ensure all tool calls have required arguments/input field
+        const sanitizedContent = sanitizeToolCallArguments(content);
         if (!allowNonImageSanitization) {
           const nextContent = (await sanitizeContentBlocksImages(
-            content as unknown as ContentBlock[],
+            sanitizedContent as unknown as ContentBlock[],
             label,
           )) as unknown as typeof assistantMsg.content;
           out.push({ ...assistantMsg, content: nextContent });
           continue;
         }
         const strippedContent = options?.preserveSignatures
-          ? content // Keep signatures for Antigravity Claude
-          : stripThoughtSignatures(content, options?.sanitizeThoughtSignatures); // Strip for Gemini
+          ? sanitizedContent // Keep signatures for Antigravity Claude
+          : stripThoughtSignatures(sanitizedContent, options?.sanitizeThoughtSignatures); // Strip for Gemini
 
         const filteredContent = strippedContent.filter((block) => {
           if (!block || typeof block !== "object") return true;
