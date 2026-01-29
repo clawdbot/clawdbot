@@ -176,7 +176,14 @@ export const skillsHandlers: GatewayRequestHandlers = {
       ...cfg,
       skills,
     };
-    await writeConfigFile(nextConfig);
+    // Respond first to ensure the client receives the response before any gateway restart
     respond(true, { ok: true, skillKey: p.skillKey, config: current }, undefined);
+    // Write config asynchronously after responding to avoid aborting the response
+    // when the config file watcher triggers a gateway restart (SIGUSR1)
+    setImmediate(() => {
+      writeConfigFile(nextConfig).catch(() => {
+        // Config write errors are logged elsewhere; catch here to prevent unhandled rejection
+      });
+    });
   },
 };
