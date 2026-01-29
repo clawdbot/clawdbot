@@ -15,6 +15,7 @@
 *.mov
 *.wav
 *.mp3
+
 node_modules
 **/node_modules
 .pnpm-store
@@ -38,11 +39,20 @@ apps/macos/.build
 apps/ios/build
 **/*.trace
 
-# large app trees not needed for CLI build
-apps/
+# ignore ONLY large platform apps (not shared)
+apps/android/
+apps/ios/
+apps/macos/
+
+# DO NOT ignore apps/shared (required for build)
+# apps/shared/
+
+# DO NOT ignore vendor (required for A2UI)
+# vendor/
+
+# other unnecessary folders
 assets/
 Peekaboo/
 Swabble/
 Core/
 Users/
-vendor/
