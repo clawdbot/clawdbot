@@ -99,6 +99,19 @@ export async function setSyntheticApiKey(key: string, agentDir?: string) {
   });
 }
 
+export async function setNanoGptApiKey(key: string, agentDir?: string) {
+  // Write to resolved agent dir so gateway finds credentials on startup.
+  upsertAuthProfile({
+    profileId: "nanogpt:default",
+    credential: {
+      type: "api_key",
+      provider: "nanogpt",
+      key,
+    },
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
 export async function setVeniceApiKey(key: string, agentDir?: string) {
   // Write to resolved agent dir so gateway finds credentials on startup.
   upsertAuthProfile({

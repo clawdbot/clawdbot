@@ -17,6 +17,8 @@ import {
   applyKimiCodeProviderConfig,
   applyMoonshotConfig,
   applyMoonshotProviderConfig,
+  applyNanoGptConfig,
+  applyNanoGptProviderConfig,
   applyOpencodeZenConfig,
   applyOpencodeZenProviderConfig,
   applyOpenrouterConfig,
@@ -32,6 +34,7 @@ import {
   MOONSHOT_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   SYNTHETIC_DEFAULT_MODEL_REF,
+  NANOGPT_DEFAULT_MODEL_REF,
   VENICE_DEFAULT_MODEL_REF,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
   setGeminiApiKey,
@@ -39,6 +42,7 @@ import {
   setMoonshotApiKey,
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
+  setNanoGptApiKey,
   setSyntheticApiKey,
   setVeniceApiKey,
   setVercelAiGatewayApiKey,
@@ -83,6 +87,11 @@ export async function applyAuthChoiceApiProviders(
       authChoice = "synthetic-api-key";
     } else if (params.opts.tokenProvider === "venice") {
       authChoice = "venice-api-key";
+    } else if (
+      params.opts.tokenProvider === "nanogpt" ||
+      params.opts.tokenProvider === "nano-gpt"
+    ) {
+      authChoice = "nanogpt-api-key";
     } else if (params.opts.tokenProvider === "opencode") {
       authChoice = "opencode-zen";
     }
@@ -454,6 +463,59 @@ export async function applyAuthChoiceApiProviders(
         applyDefaultConfig: applySyntheticConfig,
         applyProviderConfig: applySyntheticProviderConfig,
         noteDefault: SYNTHETIC_DEFAULT_MODEL_REF,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "nanogpt-api-key") {
+    let hasCredential = false;
+
+    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider) {
+      const provider = params.opts.tokenProvider;
+      if (provider === "nanogpt" || provider === "nano-gpt") {
+        await setNanoGptApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+        hasCredential = true;
+      }
+    }
+
+    const envKey = resolveEnvApiKey("nanogpt");
+    if (!hasCredential && envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing NANOGPT_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setNanoGptApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter NanoGPT API key",
+        validate: validateApiKeyInput,
+      });
+      await setNanoGptApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+    }
+
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "nanogpt:default",
+      provider: "nanogpt",
+      mode: "api_key",
+    });
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: NANOGPT_DEFAULT_MODEL_REF,
+        applyDefaultConfig: applyNanoGptConfig,
+        applyProviderConfig: applyNanoGptProviderConfig,
+        noteDefault: NANOGPT_DEFAULT_MODEL_REF,
         noteAgentModel,
         prompter: params.prompter,
       });

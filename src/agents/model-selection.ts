@@ -29,6 +29,7 @@ export function normalizeProviderId(provider: string): string {
   if (normalized === "z.ai" || normalized === "z-ai") return "zai";
   if (normalized === "opencode-zen") return "opencode";
   if (normalized === "qwen") return "qwen-portal";
+  if (normalized === "nano-gpt") return "nanogpt";
   return normalized;
 }
 

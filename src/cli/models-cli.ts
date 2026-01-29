@@ -2,6 +2,7 @@ import type { Command } from "commander";
 
 import {
   githubCopilotLoginCommand,
+  nanogptLoginCommand,
   modelsAliasesAddCommand,
   modelsAliasesListCommand,
   modelsAliasesRemoveCommand,
@@ -357,6 +358,25 @@ export function registerModelsCli(program: Command) {
           {
             profileId: opts.profileId as string | undefined,
             yes: Boolean(opts.yes),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  auth
+    .command("login-nanogpt")
+    .description("Login to NanoGPT via browser device flow (TTY required)")
+    .option("--profile-id <id>", "Auth profile id (default: nanogpt:default)")
+    .option("--yes", "Overwrite existing profile without prompting", false)
+    .option("--set-default", "Set NanoGPT as the default model", false)
+    .action(async (opts) => {
+      await runModelsCommand(async () => {
+        await nanogptLoginCommand(
+          {
+            profileId: opts.profileId as string | undefined,
+            yes: Boolean(opts.yes),
+            setDefault: Boolean(opts.setDefault),
           },
           defaultRuntime,
         );

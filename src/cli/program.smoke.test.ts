@@ -177,6 +177,12 @@ describe("cli program (smoke)", () => {
         field: "syntheticApiKey",
       },
       {
+        authChoice: "nanogpt-api-key",
+        flag: "--nanogpt-api-key",
+        key: "sk-nanogpt-test",
+        field: "nanogptApiKey",
+      },
+      {
         authChoice: "zai-api-key",
         flag: "--zai-api-key",
         key: "sk-zai-test",

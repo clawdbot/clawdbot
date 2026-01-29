@@ -13,6 +13,11 @@ import {
   SYNTHETIC_MODEL_CATALOG,
 } from "./synthetic-models.js";
 import { discoverVeniceModels, VENICE_BASE_URL } from "./venice-models.js";
+import {
+  buildNanoGptModelDefinition,
+  NANOGPT_BASE_URL,
+  NANOGPT_MODEL_CATALOG,
+} from "./nanogpt-models.js";
 
 type ModelsConfig = NonNullable<MoltbotConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
@@ -359,6 +364,14 @@ async function buildOllamaProvider(): Promise<ProviderConfig> {
   };
 }
 
+function buildNanoGptProvider(): ProviderConfig {
+  return {
+    baseUrl: NANOGPT_BASE_URL,
+    api: "openai-completions",
+    models: NANOGPT_MODEL_CATALOG.map(buildNanoGptModelDefinition),
+  };
+}
+
 export async function resolveImplicitProviders(params: {
   agentDir: string;
 }): Promise<ModelsConfig["providers"]> {
@@ -408,6 +421,13 @@ export async function resolveImplicitProviders(params: {
       ...buildQwenPortalProvider(),
       apiKey: QWEN_PORTAL_OAUTH_PLACEHOLDER,
     };
+  }
+
+  const nanogptKey =
+    resolveEnvApiKeyVarName("nanogpt") ??
+    resolveApiKeyFromProfiles({ provider: "nanogpt", store: authStore });
+  if (nanogptKey) {
+    providers.nanogpt = { ...buildNanoGptProvider(), apiKey: nanogptKey };
   }
 
   // Ollama provider - only add if explicitly configured

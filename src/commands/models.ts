@@ -1,4 +1,5 @@
 export { githubCopilotLoginCommand } from "../providers/github-copilot-auth.js";
+export { nanogptLoginCommand } from "../providers/nanogpt-auth.js";
 export {
   modelsAliasesAddCommand,
   modelsAliasesListCommand,

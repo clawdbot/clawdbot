@@ -158,6 +158,34 @@ Moonshot uses OpenAI-compatible endpoints, so configure it as a custom provider:
 }
 ```
 
+### NanoGPT
+
+NanoGPT exposes OpenAI-compatible endpoints:
+
+- Provider: `nanogpt`
+- Auth: `NANOGPT_API_KEY`
+- Example model: `nanogpt/zai-org/glm-4.7`
+- CLI: `clawdbot onboard --auth-choice nanogpt-api-key`
+
+```json5
+{
+  agents: {
+    defaults: { model: { primary: "nanogpt/zai-org/glm-4.7" } }
+  },
+  models: {
+    mode: "merge",
+    providers: {
+      nanogpt: {
+        baseUrl: "https://nano-gpt.com/api/v1",
+        apiKey: "${NANOGPT_API_KEY}",
+        api: "openai-completions",
+        models: [{ id: "zai-org/glm-4.7", name: "GLM 4.7" }]
+      }
+    }
+  }
+}
+```
+
 ### Kimi Code
 
 Kimi Code uses a dedicated endpoint and key (separate from Moonshot):

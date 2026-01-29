@@ -10,6 +10,12 @@ import {
   VENICE_DEFAULT_MODEL_REF,
   VENICE_MODEL_CATALOG,
 } from "../agents/venice-models.js";
+import {
+  buildNanoGptModelDefinition,
+  NANOGPT_BASE_URL,
+  NANOGPT_DEFAULT_MODEL_REF,
+  NANOGPT_MODEL_CATALOG,
+} from "../agents/nanogpt-models.js";
 import type { MoltbotConfig } from "../config/config.js";
 import {
   OPENROUTER_DEFAULT_MODEL_REF,
@@ -330,6 +336,81 @@ export function applySyntheticConfig(cfg: MoltbotConfig): MoltbotConfig {
               }
             : undefined),
           primary: SYNTHETIC_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
+}
+
+/**
+ * Apply NanoGPT provider configuration without changing the default model.
+ */
+export function applyNanoGptProviderConfig(cfg: MoltbotConfig): MoltbotConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[NANOGPT_DEFAULT_MODEL_REF] = {
+    ...models[NANOGPT_DEFAULT_MODEL_REF],
+    alias: models[NANOGPT_DEFAULT_MODEL_REF]?.alias ?? "GLM 4.7",
+  };
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.nanogpt;
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+  const nanogptModels = NANOGPT_MODEL_CATALOG.map(buildNanoGptModelDefinition);
+  const mergedModels = [
+    ...existingModels,
+    ...nanogptModels.filter(
+      (model) => !existingModels.some((existing) => existing.id === model.id),
+    ),
+  ];
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > as { apiKey?: string };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+  providers.nanogpt = {
+    ...existingProviderRest,
+    baseUrl: NANOGPT_BASE_URL,
+    api: "openai-completions",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : nanogptModels,
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
+/**
+ * Apply NanoGPT provider configuration AND set NanoGPT as the default model.
+ */
+export function applyNanoGptConfig(cfg: MoltbotConfig): MoltbotConfig {
+  const next = applyNanoGptProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: NANOGPT_DEFAULT_MODEL_REF,
         },
       },
     },
