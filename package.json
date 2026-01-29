@@ -245,6 +245,9 @@
     "tar": "7.5.4"
   },
   "pnpm": {
+    "patchedDependencies": {
+      "@mariozechner/pi-ai@0.49.3": "patches/@mariozechner__pi-ai@0.49.3.patch"
+    },
     "minimumReleaseAge": 2880,
     "overrides": {
       "@sinclair/typebox": "0.34.47",

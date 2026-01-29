@@ -1,0 +1,12 @@
+diff --git a/dist/providers/openai-completions.js b/dist/providers/openai-completions.js
+--- a/dist/providers/openai-completions.js
++++ b/dist/providers/openai-completions.js
+@@ -624,6 +624,8 @@ function detectCompat(model) {
+         baseUrl.includes("chutes.ai") ||
+         isZai ||
+         provider === "opencode" ||
++        provider === "deepseek" ||
++        baseUrl.includes("api.deepseek.com") ||
+         baseUrl.includes("opencode.ai");
+     const useMaxTokens = provider === "mistral" || baseUrl.includes("mistral.ai") || baseUrl.includes("chutes.ai");
+     const isGrok = provider === "xai" || baseUrl.includes("api.x.ai");
