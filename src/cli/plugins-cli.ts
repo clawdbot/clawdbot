@@ -446,6 +446,94 @@ export function registerPluginsCli(program: Command) {
     });
 
   plugins
+    .command("uninstall")
+    .description("Uninstall a plugin")
+    .argument("<id>", "Plugin id")
+    .option("--keep-config", "Keep plugin config in entries (only remove install)", false)
+    .action(async (id: string, opts: { keepConfig?: boolean }) => {
+      const cfg = loadConfig();
+      const report = buildPluginStatusReport({ config: cfg });
+      const plugin = report.plugins.find((p) => p.id === id || p.name === id);
+
+      if (!plugin) {
+        defaultRuntime.error(`Plugin not found: ${id}`);
+        process.exit(1);
+      }
+
+      const install = cfg.plugins?.installs?.[plugin.id];
+      if (!install) {
+        defaultRuntime.error(
+          `No install record for plugin "${plugin.id}". It may have been manually installed.`,
+        );
+        process.exit(1);
+      }
+
+      // Remove the install directory (but not if it's a linked path)
+      if (install.installPath && install.source !== "path") {
+        try {
+          if (fs.existsSync(install.installPath)) {
+            await fs.promises.rm(install.installPath, { recursive: true, force: true });
+            defaultRuntime.log(`Removed: ${shortenHomePath(install.installPath)}`);
+          }
+        } catch (err) {
+          defaultRuntime.log(theme.warn(`Failed to remove directory: ${String(err)}`));
+        }
+      }
+
+      // Build new config
+      let next = { ...cfg };
+
+      // Remove from installs record
+      const { [plugin.id]: _removed, ...remainingInstalls } = cfg.plugins?.installs ?? {};
+      next = {
+        ...next,
+        plugins: {
+          ...next.plugins,
+          installs: remainingInstalls,
+        },
+      };
+
+      // Remove from load paths if it was linked
+      if (install.source === "path" && install.installPath) {
+        const paths = cfg.plugins?.load?.paths ?? [];
+        const installPath = install.installPath;
+        const filtered = paths.filter((p) => path.resolve(p) !== path.resolve(installPath));
+        if (filtered.length !== paths.length) {
+          next = {
+            ...next,
+            plugins: {
+              ...next.plugins,
+              load: {
+                ...next.plugins?.load,
+                paths: filtered,
+              },
+            },
+          };
+          defaultRuntime.log(`Removed from load paths: ${shortenHomePath(installPath)}`);
+        }
+      }
+
+      // Disable plugin in entries unless --keep-config
+      if (!opts.keepConfig) {
+        const { [plugin.id]: _removedEntry, ...remainingEntries } = next.plugins?.entries ?? {};
+        next = {
+          ...next,
+          plugins: {
+            ...next.plugins,
+            entries: remainingEntries,
+          },
+        };
+      }
+
+      await writeConfigFile(next);
+      defaultRuntime.log(`Uninstalled plugin: ${plugin.id}`);
+      if (opts.keepConfig) {
+        defaultRuntime.log("Plugin config preserved. Use 'plugins disable' to disable it.");
+      }
+      defaultRuntime.log("Restart the gateway to apply changes.");
+    });
+
+  plugins
     .command("update")
     .description("Update installed plugins (npm installs only)")
     .argument("[id]", "Plugin id (omit with --all)")
