@@ -3,6 +3,7 @@ import { dispatchChannelMessageAction } from "../../channels/plugins/message-act
 import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
 import type { MoltbotConfig } from "../../config/config.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import type { OutboundSendDeps } from "./deliver.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
@@ -81,17 +82,58 @@ export async function executeSendAction(params: {
 }> {
   throwIfAborted(params.ctx.abortSignal);
   if (!params.ctx.dryRun) {
-    const handled = await dispatchChannelMessageAction({
-      channel: params.ctx.channel,
-      action: "send",
-      cfg: params.ctx.cfg,
-      params: params.ctx.params,
-      accountId: params.ctx.accountId ?? undefined,
-      gateway: params.ctx.gateway,
-      toolContext: params.ctx.toolContext,
-      dryRun: params.ctx.dryRun,
-    });
+    let handled: AgentToolResult<unknown> | null = null;
+    let pluginError: string | undefined;
+
+    try {
+      handled = await dispatchChannelMessageAction({
+        channel: params.ctx.channel,
+        action: "send",
+        cfg: params.ctx.cfg,
+        params: params.ctx.params,
+        accountId: params.ctx.accountId ?? undefined,
+        gateway: params.ctx.gateway,
+        toolContext: params.ctx.toolContext,
+        dryRun: params.ctx.dryRun,
+      });
+    } catch (err) {
+      pluginError = err instanceof Error ? err.message : String(err);
+      // Fire hook for failed plugin send
+      const hookRunner = getGlobalHookRunner();
+      if (hookRunner) {
+        hookRunner.runMessageSent(
+          {
+            to: params.to,
+            content: params.message,
+            success: false,
+            error: pluginError,
+          },
+          {
+            channelId: params.ctx.channel,
+            accountId: params.ctx.accountId ?? undefined,
+          },
+        );
+      }
+      throw err;
+    }
+
     if (handled) {
+      // Fire hook for successful plugin send
+      const hookRunner = getGlobalHookRunner();
+      if (hookRunner) {
+        hookRunner.runMessageSent(
+          {
+            to: params.to,
+            content: params.message,
+            success: true,
+          },
+          {
+            channelId: params.ctx.channel,
+            accountId: params.ctx.accountId ?? undefined,
+          },
+        );
+      }
+
       if (params.ctx.mirror) {
         const mirrorText = params.ctx.mirror.text ?? params.message;
         const mirrorMediaUrls =
@@ -114,22 +156,63 @@ export async function executeSendAction(params: {
   }
 
   throwIfAborted(params.ctx.abortSignal);
-  const result: MessageSendResult = await sendMessage({
-    cfg: params.ctx.cfg,
-    to: params.to,
-    content: params.message,
-    mediaUrl: params.mediaUrl || undefined,
-    mediaUrls: params.mediaUrls,
-    channel: params.ctx.channel || undefined,
-    accountId: params.ctx.accountId ?? undefined,
-    gifPlayback: params.gifPlayback,
-    dryRun: params.ctx.dryRun,
-    bestEffort: params.bestEffort ?? undefined,
-    deps: params.ctx.deps,
-    gateway: params.ctx.gateway,
-    mirror: params.ctx.mirror,
-    abortSignal: params.ctx.abortSignal,
-  });
+
+  let result: MessageSendResult;
+  let sendError: string | undefined;
+
+  try {
+    result = await sendMessage({
+      cfg: params.ctx.cfg,
+      to: params.to,
+      content: params.message,
+      mediaUrl: params.mediaUrl || undefined,
+      mediaUrls: params.mediaUrls,
+      channel: params.ctx.channel || undefined,
+      accountId: params.ctx.accountId ?? undefined,
+      gifPlayback: params.gifPlayback,
+      dryRun: params.ctx.dryRun,
+      bestEffort: params.bestEffort ?? undefined,
+      deps: params.ctx.deps,
+      gateway: params.ctx.gateway,
+      mirror: params.ctx.mirror,
+      abortSignal: params.ctx.abortSignal,
+    });
+  } catch (err) {
+    sendError = err instanceof Error ? err.message : String(err);
+    // Fire hook for failed send
+    const hookRunner = getGlobalHookRunner();
+    if (hookRunner) {
+      hookRunner.runMessageSent(
+        {
+          to: params.to,
+          content: params.message,
+          success: false,
+          error: sendError,
+        },
+        {
+          channelId: params.ctx.channel,
+          accountId: params.ctx.accountId ?? undefined,
+        },
+      );
+    }
+    throw err;
+  }
+
+  // Fire hook for successful send
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner) {
+    hookRunner.runMessageSent(
+      {
+        to: params.to,
+        content: params.message,
+        success: true,
+      },
+      {
+        channelId: params.ctx.channel,
+        accountId: params.ctx.accountId ?? undefined,
+      },
+    );
+  }
 
   return {
     handledBy: "core",
