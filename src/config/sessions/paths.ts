@@ -54,8 +54,10 @@ export function resolveSessionFilePath(
   entry?: SessionEntry,
   opts?: { agentId?: string },
 ): string {
-  const candidate = entry?.sessionFile?.trim();
-  return candidate ? candidate : resolveSessionTranscriptPath(sessionId, opts?.agentId);
+  // Always compute path from current environment rather than trusting stored paths.
+  // Stored absolute paths in sessions.json break when migrating to a different user
+  // or home directory, causing EACCES errors when accessing the old user's paths.
+  return resolveSessionTranscriptPath(sessionId, opts?.agentId);
 }
 
 export function resolveStorePath(store?: string, opts?: { agentId?: string }) {
