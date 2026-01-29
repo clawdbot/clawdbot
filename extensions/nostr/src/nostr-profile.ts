@@ -150,7 +150,8 @@ export async function publishProfileEvent(
         setTimeout(() => reject(new Error("timeout")), RELAY_PUBLISH_TIMEOUT_MS);
       });
 
-      await Promise.race([pool.publish([relay], event), timeoutPromise]);
+      // pool.publish returns Promise<string>[], get the first promise
+      await Promise.race([pool.publish([relay], event)[0], timeoutPromise]);
 
       successes.push(relay);
     } catch (err) {

@@ -32,7 +32,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
     selectionLabel: "Nostr",
     docsPath: "/channels/nostr",
     docsLabel: "nostr",
-    blurb: "Decentralized DMs via Nostr relays (NIP-04)",
+    blurb: "Decentralized DMs via Nostr relays (NIP-04/NIP-17)",
     order: 100,
   },
   capabilities: {
@@ -218,21 +218,88 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
         accountId: account.accountId,
         privateKey: account.privateKey,
         relays: account.relays,
-        onMessage: async (senderPubkey, text, reply) => {
+        dmProtocol: account.dmProtocol,
+        onMessage: async (senderPubkey, text, replyFn) => {
           ctx.log?.debug(`[${account.accountId}] DM from ${senderPubkey}: ${text.slice(0, 50)}...`);
 
-          // Forward to moltbot's message pipeline
-          await runtime.channel.reply.handleInboundMessage({
-            channel: "nostr",
-            accountId: account.accountId,
-            senderId: senderPubkey,
-            chatType: "direct",
-            chatId: senderPubkey, // For DMs, chatId is the sender's pubkey
-            text,
-            reply: async (responseText: string) => {
-              await reply(responseText);
-            },
-          });
+          try {
+            // Load config for routing and session handling
+            const config = runtime.config.loadConfig();
+
+            // Resolve agent route for this DM
+            const route = runtime.channel.routing.resolveAgentRoute({
+              cfg: config,
+              channel: "nostr",
+              accountId: account.accountId,
+              peer: { kind: "dm", id: senderPubkey },
+            });
+
+            // Resolve store path for session recording
+            const storePath = runtime.channel.session.resolveStorePath(config.session?.store, {
+              agentId: route.agentId,
+            });
+
+            // Build the inbound context payload (no envelope - pass raw text)
+            const fromLabel = `nostr:${senderPubkey.slice(0, 8)}`;
+            const ctxPayload = runtime.channel.reply.finalizeInboundContext({
+              Body: text,
+              RawBody: text,
+              CommandBody: text,
+              From: `nostr:${senderPubkey}`,
+              To: `nostr:${account.publicKey}`,
+              SessionKey: route.sessionKey,
+              AccountId: account.accountId,
+              ChatType: "direct",
+              ConversationLabel: fromLabel,
+              SenderName: undefined,
+              SenderId: senderPubkey,
+              Provider: "nostr" as const,
+              Surface: "nostr" as const,
+              MessageSid: `nostr-${Date.now()}`,
+              OriginatingChannel: "nostr" as const,
+              OriginatingTo: `nostr:${account.publicKey}`,
+            });
+
+            // Record the inbound session
+            await runtime.channel.session.recordInboundSession({
+              storePath,
+              sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+              ctx: ctxPayload,
+              onRecordError: (err) => {
+                ctx.log?.error(`[${account.accountId}] Failed to record session: ${String(err)}`);
+              },
+            });
+
+            // Resolve table mode for reply formatting
+            const tableMode = runtime.channel.text.resolveMarkdownTableMode({
+              cfg: config,
+              channel: "nostr",
+              accountId: account.accountId,
+            });
+
+            // Dispatch the reply through the agent pipeline
+            await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
+              ctx: ctxPayload,
+              cfg: config,
+              dispatcherOptions: {
+                deliver: async (payload) => {
+                  const replyText = runtime.channel.text.convertMarkdownTables(
+                    payload.text ?? "",
+                    tableMode
+                  );
+                  if (replyText.trim()) {
+                    await replyFn(replyText);
+                    ctx.setStatus({ lastOutboundAt: Date.now() });
+                  }
+                },
+                onError: (err, info) => {
+                  ctx.log?.error(`[${account.accountId}] Nostr ${info.kind} reply failed: ${String(err)}`);
+                },
+              },
+            });
+          } catch (err) {
+            ctx.log?.error(`[${account.accountId}] onMessage error: ${String(err)}`);
+          }
         },
         onError: (error, context) => {
           ctx.log?.error(`[${account.accountId}] Nostr error (${context}): ${error.message}`);

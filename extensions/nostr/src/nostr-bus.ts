@@ -5,8 +5,17 @@ import {
   verifyEvent,
   nip19,
   type Event,
+  type Filter,
 } from "nostr-tools";
 import { decrypt, encrypt } from "nostr-tools/nip04";
+import {
+  EncryptedDirectMessage,
+  GiftWrap,
+  PrivateDirectMessage,
+  DirectMessageRelaysList,
+} from "nostr-tools/kinds";
+import { unwrapEvent, type Rumor } from "nostr-tools/nip59";
+import * as nip17 from "nostr-tools/nip17";
 
 import {
   readNostrBusState,
@@ -32,6 +41,23 @@ import {
 export const DEFAULT_RELAYS = ["wss://relay.damus.io", "wss://nos.lol"];
 
 // ============================================================================
+// Shared Pool (singleton for bunker tools)
+// ============================================================================
+
+let sharedPool: SimplePool | null = null;
+
+/**
+ * Get a shared SimplePool instance for bunker tools.
+ * Uses a singleton pattern to reuse connections.
+ */
+export function getSharedPool(): SimplePool {
+  if (!sharedPool) {
+    sharedPool = new SimplePool();
+  }
+  return sharedPool;
+}
+
+// ============================================================================
 // Constants
 // ============================================================================
 
@@ -55,6 +81,9 @@ const HEALTH_WINDOW_MS = 60000; // 1 minute window for health stats
 // Types
 // ============================================================================
 
+/** DM protocol preference */
+export type DmProtocol = "dual" | "nip17" | "nip04";
+
 export interface NostrBusOptions {
   /** Private key in hex or nsec format */
   privateKey: string;
@@ -62,6 +91,8 @@ export interface NostrBusOptions {
   relays?: string[];
   /** Account ID for state persistence (optional, defaults to pubkey prefix) */
   accountId?: string;
+  /** DM protocol: "dual" (default - both NIP-04 and NIP-17), "nip17" (NIP-17 only), or "nip04" (NIP-04 only) */
+  dmProtocol?: DmProtocol;
   /** Called when a DM is received */
   onMessage: (
     pubkey: string,
@@ -344,6 +375,7 @@ export async function startNostrBus(
   const {
     privateKey,
     relays = DEFAULT_RELAYS,
+    dmProtocol = "dual",
     onMessage,
     onError,
     onEose,
@@ -420,7 +452,7 @@ export async function startNostrBus(
 
   const inflight = new Set<string>();
 
-  // Event handler
+  // Event handler - supports both NIP-04 (kind 4) and NIP-17 (kind 1059)
   async function handleEvent(event: Event): Promise<void> {
     try {
       metrics.emit("event.received");
@@ -432,14 +464,10 @@ export async function startNostrBus(
       }
       inflight.add(event.id);
 
-      // Self-message loop prevention: skip our own messages
-      if (event.pubkey === pk) {
-        metrics.emit("event.rejected.self_message");
-        return;
-      }
-
       // Skip events older than our `since` (relay may ignore filter)
-      if (event.created_at < since) {
+      // IMPORTANT: For NIP-17 GiftWrap events, timestamps are randomized up to 2 days in the past
+      // to protect metadata, so we skip the stale check for kind 1059
+      if (event.kind !== GiftWrap && event.created_at < since) {
         metrics.emit("event.rejected.stale");
         return;
       }
@@ -468,35 +496,87 @@ export async function startNostrBus(
       seen.add(event.id);
       metrics.emit("memory.seen_tracker_size", seen.size());
 
-      // Decrypt the message
+      // Variables to be set by protocol-specific handling
       let plaintext: string;
-      try {
-        plaintext = await decrypt(sk, event.pubkey, event.content);
+      let senderPubkey: string;
+
+      // Handle based on event kind
+      if (event.kind === GiftWrap) {
+        // NIP-17: Gift wrap containing sealed private DM
+        let rumor: Rumor;
+        try {
+          rumor = unwrapEvent(event, sk);
+        } catch (err) {
+          metrics.emit("event.rejected.decrypt_failed");
+          onError?.(err as Error, `unwrap gift wrap from ${event.pubkey}`);
+          return;
+        }
+
+        // Validate the unwrapped rumor is a private DM
+        if (rumor.kind !== PrivateDirectMessage) {
+          metrics.emit("event.rejected.wrong_kind");
+          onError?.(
+            new Error(`Unexpected rumor kind ${rumor.kind}, expected ${PrivateDirectMessage}`),
+            `event ${event.id}`
+          );
+          return;
+        }
+
+        // For NIP-17, the actual sender is in the rumor, not the gift wrap
+        senderPubkey = rumor.pubkey;
+        plaintext = rumor.content;
+
+        // Self-message check on rumor.pubkey (the real sender)
+        if (senderPubkey === pk) {
+          metrics.emit("event.rejected.self_message");
+          return;
+        }
+
         metrics.emit("decrypt.success");
-      } catch (err) {
-        metrics.emit("decrypt.failure");
-        metrics.emit("event.rejected.decrypt_failed");
-        onError?.(err as Error, `decrypt from ${event.pubkey}`);
+      } else if (event.kind === EncryptedDirectMessage) {
+        // NIP-04: Legacy encrypted DM
+        // Self-message loop prevention for NIP-04
+        if (event.pubkey === pk) {
+          metrics.emit("event.rejected.self_message");
+          return;
+        }
+
+        senderPubkey = event.pubkey;
+        try {
+          plaintext = await decrypt(sk, event.pubkey, event.content);
+          metrics.emit("decrypt.success");
+        } catch (err) {
+          metrics.emit("decrypt.failure");
+          metrics.emit("event.rejected.decrypt_failed");
+          onError?.(err as Error, `decrypt from ${event.pubkey}`);
+          return;
+        }
+      } else {
+        // Unknown kind - shouldn't happen with our filter, but be defensive
+        metrics.emit("event.rejected.wrong_kind");
         return;
       }
 
       // Create reply function (try relays by health score)
+      // Reply uses the same protocol as the incoming message
+      const replyProtocol = event.kind === GiftWrap ? "nip17" : "nip04";
       const replyTo = async (text: string): Promise<void> => {
         await sendEncryptedDm(
           pool,
           sk,
-          event.pubkey,
+          senderPubkey,
           text,
           relays,
           metrics,
           circuitBreakers,
           healthTracker,
-          onError
+          onError,
+          replyProtocol
         );
       };
 
       // Call the message handler
-      await onMessage(event.pubkey, plaintext, replyTo);
+      await onMessage(senderPubkey, plaintext, replyTo);
 
       // Mark as processed
       metrics.emit("event.processed");
@@ -510,33 +590,76 @@ export async function startNostrBus(
     }
   }
 
-  const sub = pool.subscribeMany(
-    relays,
-    [{ kinds: [4], "#p": [pk], since }],
-    {
-      onevent: handleEvent,
-      oneose: () => {
-        // EOSE handler - called when all stored events have been received
-        for (const relay of relays) {
-          metrics.emit("relay.message.eose", 1, { relay });
-        }
-        onEose?.(relays.join(", "));
-      },
-      onclose: (reason) => {
-        // Handle subscription close
-        for (const relay of relays) {
-          metrics.emit("relay.message.closed", 1, { relay });
-          options.onDisconnect?.(relay);
-        }
-        onError?.(
-          new Error(`Subscription closed: ${reason}`),
-          "subscription"
-        );
-      },
-    }
-  );
+  // Build subscription filters based on dmProtocol setting
+  // NIP-17 gift wraps have randomized timestamps up to 2 days in the past,
+  // so we need a much older `since` for kind 1059 to avoid relay filtering
+  const NIP17_LOOKBACK_SEC = 48 * 60 * 60; // 48 hours
+  const nip17Since = Math.floor(Date.now() / 1000) - NIP17_LOOKBACK_SEC;
 
-  // Public sendDm function
+  const subscriptions: Array<{ close: (reason?: string) => void }> = [];
+
+  // Subscribe to NIP-04 (kind 4) with normal since
+  if (dmProtocol !== "nip17") {
+    const nip04Filter: Filter = {
+      kinds: [EncryptedDirectMessage],
+      "#p": [pk],
+      since,
+    };
+    const nip04Sub = pool.subscribeMany(
+      relays,
+      nip04Filter,
+      {
+        onevent: handleEvent,
+        oneose: () => {
+          for (const relay of relays) {
+            metrics.emit("relay.message.eose", 1, { relay });
+          }
+        },
+        onclose: (reason) => {
+          for (const relay of relays) {
+            metrics.emit("relay.message.closed", 1, { relay });
+            options.onDisconnect?.(relay);
+          }
+          onError?.(new Error(`NIP-04 subscription closed: ${reason}`), "subscription");
+        },
+      }
+    );
+    subscriptions.push(nip04Sub);
+  }
+
+  // Subscribe to NIP-17 gift wrap (kind 1059) with extended lookback
+  if (dmProtocol !== "nip04") {
+    const nip17Filter: Filter = {
+      kinds: [GiftWrap],
+      "#p": [pk],
+      since: nip17Since,
+    };
+    const nip17Sub = pool.subscribeMany(
+      relays,
+      nip17Filter,
+      {
+        onevent: handleEvent,
+        oneose: () => {
+          for (const relay of relays) {
+            metrics.emit("relay.message.eose", 1, { relay });
+          }
+          // Only call onEose once all subscriptions have received EOSE
+          onEose?.(relays.join(", "));
+        },
+        onclose: (reason) => {
+          for (const relay of relays) {
+            metrics.emit("relay.message.closed", 1, { relay });
+            options.onDisconnect?.(relay);
+          }
+          onError?.(new Error(`NIP-17 subscription closed: ${reason}`), "subscription");
+        },
+      }
+    );
+    subscriptions.push(nip17Sub);
+  }
+
+  // Public sendDm function - uses NIP-17 by default, or NIP-04 if dmProtocol is "nip04"
+  const defaultSendProtocol = dmProtocol === "nip04" ? "nip04" : "nip17";
   const sendDm = async (toPubkey: string, text: string): Promise<void> => {
     await sendEncryptedDm(
       pool,
@@ -547,7 +670,8 @@ export async function startNostrBus(
       metrics,
       circuitBreakers,
       healthTracker,
-      onError
+      onError,
+      defaultSendProtocol
     );
   };
 
@@ -592,7 +716,10 @@ export async function startNostrBus(
 
   return {
     close: () => {
-      sub.close();
+      // Close all active subscriptions
+      for (const sub of subscriptions) {
+        sub.close();
+      }
       seen.stop();
       // Flush pending state write synchronously on close
       if (pendingWrite) {
@@ -618,7 +745,7 @@ export async function startNostrBus(
 // ============================================================================
 
 /**
- * Send an encrypted DM to a pubkey
+ * Send an encrypted DM to a pubkey using the specified protocol
  */
 async function sendEncryptedDm(
   pool: SimplePool,
@@ -629,56 +756,83 @@ async function sendEncryptedDm(
   metrics: NostrMetrics,
   circuitBreakers: Map<string, CircuitBreaker>,
   healthTracker: RelayHealthTracker,
-  onError?: (error: Error, context: string) => void
+  onError?: (error: Error, context: string) => void,
+  protocol: "nip04" | "nip17" = "nip17"
 ): Promise<void> {
-  const ciphertext = await encrypt(sk, toPubkey, text);
-  const reply = finalizeEvent(
-    {
-      kind: 4,
-      content: ciphertext,
-      tags: [["p", toPubkey]],
-      created_at: Math.floor(Date.now() / 1000),
-    },
-    sk
-  );
+  // Build the event(s) to publish based on protocol
+  let eventsToPublish: Event[];
+
+  if (protocol === "nip17") {
+    // NIP-17: Create gift-wrapped private DM
+    // wrapManyEvents returns [senderCopy, recipientCopy]
+    const wrappedEvents = nip17.wrapManyEvents(
+      sk,
+      [{ publicKey: toPubkey }],
+      text
+    );
+    // Publish both sender copy (for our inbox) and recipient copy
+    eventsToPublish = wrappedEvents;
+  } else {
+    // NIP-04: Legacy encrypted DM
+    const ciphertext = await encrypt(sk, toPubkey, text);
+    const reply = finalizeEvent(
+      {
+        kind: EncryptedDirectMessage,
+        content: ciphertext,
+        tags: [["p", toPubkey]],
+        created_at: Math.floor(Date.now() / 1000),
+      },
+      sk
+    );
+    eventsToPublish = [reply];
+  }
 
   // Sort relays by health score (best first)
   const sortedRelays = healthTracker.getSortedRelays(relays);
 
-  // Try relays in order of health, respecting circuit breakers
-  let lastError: Error | undefined;
-  for (const relay of sortedRelays) {
-    const cb = circuitBreakers.get(relay);
+  // Publish all events - for NIP-17 this includes both sender and recipient copies
+  for (const eventToPublish of eventsToPublish) {
+    // Try relays in order of health, respecting circuit breakers
+    let lastError: Error | undefined;
+    let published = false;
 
-    // Skip if circuit breaker is open
-    if (cb && !cb.canAttempt()) {
-      continue;
+    for (const relay of sortedRelays) {
+      const cb = circuitBreakers.get(relay);
+
+      // Skip if circuit breaker is open
+      if (cb && !cb.canAttempt()) {
+        continue;
+      }
+
+      const startTime = Date.now();
+      try {
+        // pool.publish returns Promise<string>[], await the first promise
+        await pool.publish([relay], eventToPublish)[0];
+        const latency = Date.now() - startTime;
+
+        // Record success
+        cb?.recordSuccess();
+        healthTracker.recordSuccess(relay, latency);
+
+        published = true;
+        break; // Success - move to next event
+      } catch (err) {
+        lastError = err as Error;
+        const latency = Date.now() - startTime;
+
+        // Record failure
+        cb?.recordFailure();
+        healthTracker.recordFailure(relay);
+        metrics.emit("relay.error", 1, { relay, latency });
+
+        onError?.(lastError, `publish to ${relay}`);
+      }
     }
 
-    const startTime = Date.now();
-    try {
-      await pool.publish([relay], reply);
-      const latency = Date.now() - startTime;
-
-      // Record success
-      cb?.recordSuccess();
-      healthTracker.recordSuccess(relay, latency);
-
-      return; // Success - exit early
-    } catch (err) {
-      lastError = err as Error;
-      const latency = Date.now() - startTime;
-
-      // Record failure
-      cb?.recordFailure();
-      healthTracker.recordFailure(relay);
-      metrics.emit("relay.error", 1, { relay, latency });
-
-      onError?.(lastError, `publish to ${relay}`);
+    if (!published) {
+      throw new Error(`Failed to publish to any relay: ${lastError?.message}`);
     }
   }
-
-  throw new Error(`Failed to publish to any relay: ${lastError?.message}`);
 }
 
 // ============================================================================
@@ -718,8 +872,13 @@ export function normalizePubkey(input: string): string {
     if (decoded.type !== "npub") {
       throw new Error("Invalid npub key");
     }
-    // Convert Uint8Array to hex string
-    return Array.from(decoded.data)
+    // In nostr-tools v2+, decoded.data is already a hex string
+    // In older versions, it was a Uint8Array
+    if (typeof decoded.data === "string") {
+      return decoded.data.toLowerCase();
+    }
+    // Fallback for Uint8Array (older nostr-tools)
+    return Array.from(decoded.data as Uint8Array)
       .map((b) => b.toString(16).padStart(2, "0"))
       .join("");
   }
