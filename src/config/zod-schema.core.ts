@@ -43,6 +43,7 @@ export const ModelDefinitionSchema = z
     maxTokens: z.number().positive().optional(),
     headers: z.record(z.string(), z.string()).optional(),
     compat: ModelCompatSchema,
+    confidentialCompute: z.boolean().optional(),
   })
   .strict();
 
@@ -57,6 +58,7 @@ export const ModelProviderSchema = z
     headers: z.record(z.string(), z.string()).optional(),
     authHeader: z.boolean().optional(),
     models: z.array(ModelDefinitionSchema),
+    teeOnly: z.boolean().optional(),
   })
   .strict();
 

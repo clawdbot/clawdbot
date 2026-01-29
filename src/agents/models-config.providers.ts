@@ -13,6 +13,7 @@ import {
   SYNTHETIC_MODEL_CATALOG,
 } from "./synthetic-models.js";
 import { discoverVeniceModels, VENICE_BASE_URL } from "./venice-models.js";
+import { discoverChutesModels, CHUTES_BASE_URL } from "./chutes-models.js";
 
 type ModelsConfig = NonNullable<MoltbotConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
@@ -350,6 +351,16 @@ async function buildVeniceProvider(): Promise<ProviderConfig> {
   };
 }
 
+async function buildChutesProvider(opts?: { teeOnly?: boolean }): Promise<ProviderConfig> {
+  const models = await discoverChutesModels(opts);
+  return {
+    baseUrl: CHUTES_BASE_URL,
+    api: "openai-completions",
+    models,
+    teeOnly: opts?.teeOnly,
+  };
+}
+
 async function buildOllamaProvider(): Promise<ProviderConfig> {
   const models = await discoverOllamaModels();
   return {
@@ -361,6 +372,7 @@ async function buildOllamaProvider(): Promise<ProviderConfig> {
 
 export async function resolveImplicitProviders(params: {
   agentDir: string;
+  config?: MoltbotConfig;
 }): Promise<ModelsConfig["providers"]> {
   const providers: Record<string, ProviderConfig> = {};
   const authStore = ensureAuthProfileStore(params.agentDir, {
@@ -400,6 +412,15 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "venice", store: authStore });
   if (veniceKey) {
     providers.venice = { ...(await buildVeniceProvider()), apiKey: veniceKey };
+  }
+
+  const chutesKey =
+    resolveEnvApiKeyVarName("chutes") ??
+    resolveApiKeyFromProfiles({ provider: "chutes", store: authStore });
+  if (chutesKey) {
+    const chutesCfg = params.config?.models?.providers?.chutes;
+    const teeOnly = chutesCfg?.teeOnly === true;
+    providers.chutes = { ...(await buildChutesProvider({ teeOnly })), apiKey: chutesKey };
   }
 
   const qwenProfiles = listProfilesForProvider(authStore, "qwen-portal");

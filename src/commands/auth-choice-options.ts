@@ -20,6 +20,7 @@ export type AuthChoiceGroupId =
   | "minimax"
   | "synthetic"
   | "venice"
+  | "chutes"
   | "qwen";
 
 export type AuthChoiceGroup = {
@@ -52,6 +53,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     label: "MiniMax",
     hint: "M2.1 (recommended)",
     choices: ["minimax-api", "minimax-api-lightning"],
+  },
+  {
+    value: "chutes",
+    label: "Chutes AI",
+    hint: "OAuth + API key",
+    choices: ["chutes", "chutes-api-key"],
   },
   {
     value: "qwen",
@@ -133,6 +140,7 @@ export function buildAuthChoiceOptions(params: {
     label: "OpenAI Codex (ChatGPT OAuth)",
   });
   options.push({ value: "chutes", label: "Chutes (OAuth)" });
+  options.push({ value: "chutes-api-key", label: "Chutes API key" });
   options.push({ value: "openai-api-key", label: "OpenAI API key" });
   options.push({ value: "openrouter-api-key", label: "OpenRouter API key" });
   options.push({

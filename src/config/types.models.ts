@@ -31,6 +31,8 @@ export type ModelDefinitionConfig = {
   maxTokens: number;
   headers?: Record<string, string>;
   compat?: ModelCompatConfig;
+  /** Chutes-only: indicates the model runs in a Trusted Execution Environment */
+  confidentialCompute?: boolean;
 };
 
 export type ModelProviderConfig = {
@@ -41,6 +43,8 @@ export type ModelProviderConfig = {
   headers?: Record<string, string>;
   authHeader?: boolean;
   models: ModelDefinitionConfig[];
+  /** Chutes-only: filter models by confidential_compute: true */
+  teeOnly?: boolean;
 };
 
 export type BedrockDiscoveryConfig = {
