@@ -143,6 +143,18 @@ export function connectGateway(host: GatewayHost) {
       host.connected = false;
       // Code 1012 = Service Restart (expected during config saves, don't show as error)
       if (code !== 1012) {
+        // PR Fix: Prompt for password on auth failure (1008/4008) instead of just showing error
+        if ((code === 1008 || code === 4008) && reason.includes("password")) {
+          const newPass = window.prompt("Gateway Authentication Required\n\nPlease enter your gateway password:");
+          if (newPass) {
+            host.password = newPass;
+            // Clear error and retry immediately
+            host.lastError = null;
+            // Defer reconnect to let the close handler finish
+            window.setTimeout(() => connectGateway(host), 100);
+            return;
+          }
+        }
         host.lastError = `disconnected (${code}): ${reason || "no reason"}`;
       }
     },
