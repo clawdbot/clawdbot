@@ -406,7 +406,7 @@ const FIELD_HELP: Record<string, string> = {
   "diagnostics.cacheTrace.enabled":
     "Log cache trace snapshots for embedded agent runs (default: false).",
   "diagnostics.cacheTrace.filePath":
-    "JSONL output path for cache trace logs (default: $CLAWDBOT_STATE_DIR/logs/cache-trace.jsonl).",
+    "JSONL output path for cache trace logs (default: $MOLTBOT_STATE_DIR/logs/cache-trace.jsonl).",
   "diagnostics.cacheTrace.includeMessages":
     "Include full message payloads in trace output (default: true).",
   "diagnostics.cacheTrace.includePrompt": "Include prompt text in trace output (default: true).",
@@ -501,7 +501,8 @@ const FIELD_HELP: Record<string, string> = {
     'Sources to index for memory search (default: ["memory"]; add "sessions" to include session transcripts).',
   "agents.defaults.memorySearch.experimental.sessionMemory":
     "Enable experimental session transcript indexing for memory search (default: false).",
-  "agents.defaults.memorySearch.provider": 'Embedding provider ("openai", "gemini", or "local").',
+  "agents.defaults.memorySearch.provider":
+    'Embedding provider ("openai", "gemini", "voyage", or "local").',
   "agents.defaults.memorySearch.remote.baseUrl":
     "Custom base URL for remote embeddings (OpenAI-compatible proxies or Gemini overrides).",
   "agents.defaults.memorySearch.remote.apiKey": "Custom API key for the remote embedding provider.",
@@ -681,7 +682,7 @@ const FIELD_PLACEHOLDERS: Record<string, string> = {
   "gateway.remote.sshTarget": "user@host",
   "gateway.controlUi.basePath": "/moltbot",
   "channels.mattermost.baseUrl": "https://chat.example.com",
-  "agents.list[].identity.avatar": "avatars/clawd.png",
+  "agents.list[].identity.avatar": "avatars/molt.png",
 };
 
 const SENSITIVE_PATTERNS = [/token/i, /password/i, /secret/i, /api.?key/i];
