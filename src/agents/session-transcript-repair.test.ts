@@ -1,9 +1,48 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
-import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
+import {
+  repairToolUseResultPairing,
+  sanitizeToolUseResultPairing,
+} from "./session-transcript-repair.js";
 
 describe("sanitizeToolUseResultPairing", () => {
-  it("moves tool results directly after tool calls and inserts missing results", () => {
+  it("truncates at assistant with incomplete tool calls (missing results)", () => {
+    // When an assistant has tool calls but some results are missing,
+    // we truncate BEFORE that assistant to produce valid history.
+    // This is safer than inserting synthetic error results.
+    const input = [
+      { role: "user", content: "hello" },
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+          { type: "toolCall", id: "call_2", name: "exec", arguments: {} },
+        ],
+      },
+      { role: "user", content: "user message that should come after tool use" },
+      {
+        role: "toolResult",
+        toolCallId: "call_2",
+        toolName: "exec",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      },
+    ] satisfies AgentMessage[];
+
+    const report = repairToolUseResultPairing(input);
+
+    // Truncates before the assistant with incomplete tool calls
+    expect(report.messages).toHaveLength(1);
+    expect(report.messages[0]?.role).toBe("user");
+
+    // Report shows truncation details
+    expect(report.truncation).toBeDefined();
+    expect(report.truncation?.truncatedAtIndex).toBe(1);
+    expect(report.truncation?.missingToolCallIds).toEqual(["call_1"]);
+    expect(report.truncation?.messagesDropped).toBe(3);
+  });
+
+  it("moves tool results directly after tool calls when all results exist", () => {
     const input = [
       {
         role: "assistant",
@@ -13,6 +52,13 @@ describe("sanitizeToolUseResultPairing", () => {
         ],
       },
       { role: "user", content: "user message that should come after tool use" },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "file contents" }],
+        isError: false,
+      },
       {
         role: "toolResult",
         toolCallId: "call_2",

@@ -66,22 +66,107 @@ export type ToolUseRepairReport = {
   droppedDuplicateCount: number;
   droppedOrphanCount: number;
   moved: boolean;
+  /** If truncation occurred, details about what was dropped. */
+  truncation?: {
+    /** Index in original messages where truncation happened. */
+    truncatedAtIndex: number;
+    /** Tool call IDs that were missing results. */
+    missingToolCallIds: string[];
+    /** Number of messages dropped. */
+    messagesDropped: number;
+  };
 };
 
+/**
+ * Find all tool result IDs that exist anywhere in the message array.
+ */
+function indexAllToolResultIds(messages: AgentMessage[]): Set<string> {
+  const ids = new Set<string>();
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") continue;
+    if ((msg as { role?: unknown }).role === "toolResult") {
+      const id = extractToolResultId(msg as Extract<AgentMessage, { role: "toolResult" }>);
+      if (id) ids.add(id);
+    }
+  }
+  return ids;
+}
+
+/**
+ * Find the first assistant message with tool calls that has ANY missing results.
+ * Returns the index of that assistant message, or -1 if all are complete.
+ */
+function findFirstIncompleteToolCallIndex(messages: AgentMessage[]): {
+  index: number;
+  missingIds: string[];
+} | null {
+  const allResultIds = indexAllToolResultIds(messages);
+
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (!msg || typeof msg !== "object") continue;
+    if ((msg as { role?: unknown }).role !== "assistant") continue;
+
+    const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
+    const toolCalls = extractToolCallsFromAssistant(assistant);
+    if (toolCalls.length === 0) continue;
+
+    const missingIds: string[] = [];
+    for (const call of toolCalls) {
+      if (!allResultIds.has(call.id)) {
+        missingIds.push(call.id);
+      }
+    }
+
+    if (missingIds.length > 0) {
+      return { index: i, missingIds };
+    }
+  }
+
+  return null;
+}
+
 export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRepairReport {
-  // Anthropic (and Cloud Code Assist) reject transcripts where assistant tool calls are not
-  // immediately followed by matching tool results. Session files can end up with results
-  // displaced (e.g. after user turns) or duplicated. Repair by:
-  // - moving matching toolResult messages directly after their assistant toolCall turn
-  // - inserting synthetic error toolResults for missing ids
-  // - dropping duplicate toolResults for the same id (anywhere in the transcript)
+  // Anthropic (and similar APIs) reject transcripts where assistant tool calls are not
+  // followed by matching tool results. This can happen when:
+  // - Session branching separates tool calls from their results
+  // - Interruptions (crash, network, user edit) occur mid-tool-execution
+  // - Compaction/pruning breaks the pairing
+  //
+  // Strategy: TRUNCATE at the first incomplete tool call sequence.
+  // This is simpler and safer than trying to repair with synthetic results:
+  // - Always produces valid history (just shorter)
+  // - No confusing synthetic error results in conversation
+  // - Agent continues working, may just need to redo some work
+  //
+  // After truncation, we still:
+  // - Move displaced tool results to correct positions
+  // - Drop duplicate tool results
+  // - Drop orphaned tool results (results without matching calls)
+
+  // First pass: check if truncation is needed
+  const incomplete = findFirstIncompleteToolCallIndex(messages);
+  let workingMessages = messages;
+  let truncation: ToolUseRepairReport["truncation"];
+
+  if (incomplete) {
+    // Truncate before the incomplete assistant message
+    workingMessages = messages.slice(0, incomplete.index);
+    truncation = {
+      truncatedAtIndex: incomplete.index,
+      missingToolCallIds: incomplete.missingIds,
+      messagesDropped: messages.length - incomplete.index,
+    };
+  }
+
+  // Second pass: repair ordering and duplicates in the (possibly truncated) messages
   const out: AgentMessage[] = [];
   const added: Array<Extract<AgentMessage, { role: "toolResult" }>> = [];
   const seenToolResultIds = new Set<string>();
   let droppedDuplicateCount = 0;
   let droppedOrphanCount = 0;
   let moved = false;
-  let changed = false;
+  let changed = truncation !== undefined;
 
   const pushToolResult = (msg: Extract<AgentMessage, { role: "toolResult" }>) => {
     const id = extractToolResultId(msg);
@@ -94,8 +179,8 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
     out.push(msg);
   };
 
-  for (let i = 0; i < messages.length; i += 1) {
-    const msg = messages[i] as AgentMessage;
+  for (let i = 0; i < workingMessages.length; i += 1) {
+    const msg = workingMessages[i] as AgentMessage;
     if (!msg || typeof msg !== "object") {
       out.push(msg);
       continue;
@@ -104,8 +189,7 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
     const role = (msg as { role?: unknown }).role;
     if (role !== "assistant") {
       // Tool results must only appear directly after the matching assistant tool call turn.
-      // Any "free-floating" toolResult entries in session history can make strict providers
-      // (Anthropic-compatible APIs, MiniMax, Cloud Code Assist) reject the entire request.
+      // Any "free-floating" toolResult entries can make strict providers reject the request.
       if (role !== "toolResult") {
         out.push(msg);
       } else {
@@ -123,13 +207,12 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
     }
 
     const toolCallIds = new Set(toolCalls.map((t) => t.id));
-
     const spanResultsById = new Map<string, Extract<AgentMessage, { role: "toolResult" }>>();
     const remainder: AgentMessage[] = [];
 
     let j = i + 1;
-    for (; j < messages.length; j += 1) {
-      const next = messages[j] as AgentMessage;
+    for (; j < workingMessages.length; j += 1) {
+      const next = workingMessages[j] as AgentMessage;
       if (!next || typeof next !== "object") {
         remainder.push(next);
         continue;
@@ -170,19 +253,13 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
       changed = true;
     }
 
+    // All tool calls should have results (we truncated incomplete ones above)
     for (const call of toolCalls) {
       const existing = spanResultsById.get(call.id);
       if (existing) {
         pushToolResult(existing);
-      } else {
-        const missing = makeMissingToolResult({
-          toolCallId: call.id,
-          toolName: call.name,
-        });
-        added.push(missing);
-        changed = true;
-        pushToolResult(missing);
       }
+      // No synthetic results - we truncated incomplete sequences
     }
 
     for (const rem of remainder) {
@@ -197,10 +274,11 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
 
   const changedOrMoved = changed || moved;
   return {
-    messages: changedOrMoved ? out : messages,
+    messages: changedOrMoved ? out : workingMessages,
     added,
     droppedDuplicateCount,
     droppedOrphanCount,
     moved: changedOrMoved,
+    truncation,
   };
 }
