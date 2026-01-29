@@ -185,18 +185,40 @@ const MEMORY_TRIGGERS = [
   /always|never|important/i,
 ];
 
+// Strip injected memory context from message text before processing
+function stripMemoryContext(text: string): string {
+  const memoryBlockEnd = text.indexOf("</relevant-memories>");
+  if (memoryBlockEnd !== -1) {
+    return text.slice(memoryBlockEnd + "</relevant-memories>".length).trim();
+  }
+  return text;
+}
+
+// Check if text is a system prompt that shouldn't be captured
+function isSystemPrompt(text: string): boolean {
+  if (text.includes("HEARTBEAT.md") || text.includes("Read HEARTBEAT.md")) return true;
+  if (text.includes("[SECURITY DETECTION - ANALYZE]")) return true;
+  if (text.includes("Pre-compaction memory flush")) return true;
+  if (text === "HEARTBEAT_OK" || text === "NO_REPLY") return true;
+  return false;
+}
+
 function shouldCapture(text: string): boolean {
-  if (text.length < 10 || text.length > 500) return false;
-  // Skip injected context from memory recall
-  if (text.includes("<relevant-memories>")) return false;
-  // Skip system-generated content
-  if (text.startsWith("<") && text.includes("</")) return false;
+  // Strip any injected memory context first
+  const cleanText = stripMemoryContext(text);
+  
+  // Skip system prompts
+  if (isSystemPrompt(cleanText)) return false;
+  
+  if (cleanText.length < 10 || cleanText.length > 500) return false;
+  // Skip system-generated content (pure XML)
+  if (cleanText.startsWith("<") && cleanText.includes("</")) return false;
   // Skip agent summary responses (contain markdown formatting)
-  if (text.includes("**") && text.includes("\n-")) return false;
+  if (cleanText.includes("**") && cleanText.includes("\n-")) return false;
   // Skip emoji-heavy responses (likely agent output)
-  const emojiCount = (text.match(/[\u{1F300}-\u{1F9FF}]/gu) || []).length;
+  const emojiCount = (cleanText.match(/[\u{1F300}-\u{1F9FF}]/gu) || []).length;
   if (emojiCount > 3) return false;
-  return MEMORY_TRIGGERS.some((r) => r.test(text));
+  return MEMORY_TRIGGERS.some((r) => r.test(cleanText));
 }
 
 function detectCategory(text: string): MemoryCategory {
@@ -467,19 +489,40 @@ const memoryPlugin = {
     if (cfg.autoRecall) {
       api.on("before_agent_start", async (event) => {
         if (!event.prompt || event.prompt.length < 5) return;
+        
+        // Skip recall for system prompts (heartbeats, webhooks, etc.)
+        if (isSystemPrompt(event.prompt)) return;
 
         try {
           const vector = await embeddings.embed(event.prompt);
-          const results = await db.search(vector, 3, 0.3);
+          // Fetch more candidates with higher threshold, then re-rank
+          const rawResults = await db.search(vector, 8, 0.5);
 
-          if (results.length === 0) return;
+          if (rawResults.length === 0) return;
+
+          // Re-rank by score * recency * importance
+          const now = Date.now();
+          const dayMs = 24 * 60 * 60 * 1000;
+          const ranked = rawResults.map((r) => {
+            const ageInDays = (now - r.entry.createdAt) / dayMs;
+            // Recency: 1.0 for today, decays to 0.5 over 60 days
+            const recencyFactor = Math.max(0.5, 1 - (ageInDays / 60));
+            // Importance is 0-1, default 0.7
+            const importanceFactor = r.entry.importance || 0.7;
+            const finalScore = r.score * recencyFactor * importanceFactor;
+            return { ...r, finalScore };
+          });
+          
+          // Sort by final score, take top 3
+          ranked.sort((a, b) => b.finalScore - a.finalScore);
+          const results = ranked.slice(0, 3);
 
           const memoryContext = results
             .map((r) => `- [${r.entry.category}] ${r.entry.text}`)
             .join("\n");
 
           api.logger.info?.(
-            `memory-lancedb: injecting ${results.length} memories into context`,
+            `memory-lancedb: injecting ${results.length} memories into context (from ${rawResults.length} candidates)`,
           );
 
           return {
