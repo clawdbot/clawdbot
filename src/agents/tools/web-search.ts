@@ -375,6 +375,7 @@ async function runWebSearch(params: {
     method: "GET",
     headers: {
       Accept: "application/json",
+      "Cache-Control": "no-cache",
       "X-Subscription-Token": params.apiKey,
     },
     signal: withTimeout(undefined, params.timeoutSeconds * 1000),
