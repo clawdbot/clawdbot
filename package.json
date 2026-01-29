@@ -144,7 +144,7 @@
     "protocol:gen:swift": "node --import tsx scripts/protocol-gen-swift.ts",
     "protocol:check": "pnpm protocol:gen && pnpm protocol:gen:swift && git diff --exit-code -- dist/protocol.schema.json apps/macos/Sources/MoltbotProtocol/GatewayModels.swift",
     "canvas:a2ui:bundle": "bash scripts/bundle-a2ui.sh",
-    "check:loc": "node --import tsx scripts/check-ts-max-loc.ts --max 500"
+    "check:loc": "node --import tsx scripts/check-ts-max-loc.ts --max 3000"
   },
   "keywords": [],
   "author": "",

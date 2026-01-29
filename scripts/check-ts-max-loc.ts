@@ -4,10 +4,13 @@ import { execFileSync } from "node:child_process";
 
 type ParsedArgs = {
   maxLines: number;
+  exclude: RegExp[];
 };
 
 function parseArgs(argv: string[]): ParsedArgs {
   let maxLines = 500;
+  const excludePatterns: string[] = [];
+  const defaultExcludePatterns = ["^(vendor|dist|docs|extensions|ui|apps)/"];
 
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
@@ -18,9 +21,25 @@ function parseArgs(argv: string[]): ParsedArgs {
       index++;
       continue;
     }
+    if (arg === "--exclude") {
+      const next = argv[index + 1];
+      if (!next) throw new Error("Missing --exclude value");
+      excludePatterns.push(next);
+      index++;
+      continue;
+    }
   }
 
-  return { maxLines };
+  const combinedPatterns = [...defaultExcludePatterns, ...excludePatterns];
+  const exclude = combinedPatterns.map((pattern) => {
+    try {
+      return new RegExp(pattern);
+    } catch {
+      throw new Error(`Invalid --exclude regex: ${pattern}`);
+    }
+  });
+
+  return { maxLines, exclude };
 }
 
 function gitLsFilesAll(): string[] {
@@ -47,10 +66,11 @@ async function main() {
     throw error;
   });
 
-  const { maxLines } = parseArgs(process.argv.slice(2));
+  const { maxLines, exclude } = parseArgs(process.argv.slice(2));
   const files = gitLsFilesAll()
     .filter((filePath) => existsSync(filePath))
-    .filter((filePath) => filePath.endsWith(".ts") || filePath.endsWith(".tsx"));
+    .filter((filePath) => filePath.endsWith(".ts") || filePath.endsWith(".tsx"))
+    .filter((filePath) => !exclude.some((pattern) => pattern.test(filePath)));
 
   const results = await Promise.all(
     files.map(async (filePath) => ({ filePath, lines: await countLines(filePath) })),

@@ -86,6 +86,9 @@ jobs:
           - runtime: node
             task: format
             command: pnpm format
+          - runtime: node
+            task: check-loc
+            command: pnpm check:loc
           - runtime: bun
             task: test
             command: pnpm canvas:a2ui:bundle && bunx vitest run
