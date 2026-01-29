@@ -263,6 +263,8 @@ Use `discord.actions.*` to disable action groups:
 }
 ```
 
+**Note:** Discord search does **not** support boolean operators like `OR` or `AND`. Queries are matched literally as phrases. To search for multiple terms, make separate search calls for each term.
+
 ### Member + role info
 
 ```json
