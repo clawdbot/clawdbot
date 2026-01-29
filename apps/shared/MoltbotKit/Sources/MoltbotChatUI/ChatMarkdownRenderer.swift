@@ -20,15 +20,28 @@ struct ChatMarkdownRenderer: View {
     let textColor: Color
 
     var body: some View {
-        let processed = ChatMarkdownPreprocessor.preprocess(markdown: self.text)
-        VStack(alignment: .leading, spacing: 10) {
-            StructuredText(markdown: processed.cleaned)
-                .modifier(ChatMarkdownStyle(
-                    variant: self.variant,
-                    context: self.context,
-                    font: self.font,
-                    textColor: self.textColor))
+        // First extract any MEDIA: audio references
+        let audioResult = InlineAudioParser.parse(self.text)
+        // Then process images from the remaining text
+        let processed = ChatMarkdownPreprocessor.preprocess(markdown: audioResult.cleaned)
 
+        VStack(alignment: .leading, spacing: 10) {
+            // Only render text if there's content after processing
+            if !processed.cleaned.isEmpty {
+                StructuredText(markdown: processed.cleaned)
+                    .modifier(ChatMarkdownStyle(
+                        variant: self.variant,
+                        context: self.context,
+                        font: self.font,
+                        textColor: self.textColor))
+            }
+
+            // Render inline audio players
+            if !audioResult.audioFiles.isEmpty {
+                InlineAudioList(audioFiles: audioResult.audioFiles)
+            }
+
+            // Render inline images
             if !processed.images.isEmpty {
                 InlineImageList(images: processed.images)
             }
