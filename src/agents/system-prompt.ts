@@ -51,7 +51,12 @@ function buildUserIdentitySection(ownerLine: string | undefined, isMinimal: bool
 
 function buildTimeSection(params: { userTimezone?: string }) {
   if (!params.userTimezone) return [];
-  return ["## Current Date & Time", `Time zone: ${params.userTimezone}`, ""];
+  return [
+    "## Current Date & Time",
+    `Time zone: ${params.userTimezone}`,
+    "If you need the current date, time, or day of week, use the session_status tool.",
+    "",
+  ];
 }
 
 function buildReplyTagsSection(isMinimal: boolean) {
