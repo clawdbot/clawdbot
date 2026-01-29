@@ -8,7 +8,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { MoltbotConfig } from "../../../config/config.js";
 import { resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
@@ -119,7 +119,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
         // Going up ../.. puts us at dist/hooks/, so just add llm-slug-generator.js
         const moltbotRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
         const slugGenPath = path.join(moltbotRoot, "llm-slug-generator.js");
-        const { generateSlugViaLLM } = await import(slugGenPath);
+        const { generateSlugViaLLM } = await import(pathToFileURL(slugGenPath).href);
 
         // Use LLM to generate a descriptive slug
         slug = await generateSlugViaLLM({ sessionContent, cfg });
