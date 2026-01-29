@@ -258,3 +258,46 @@ export async function listSlackPins(
   const result = await client.pins.list({ channel: channelId });
   return (result.items ?? []) as SlackPin[];
 }
+
+export type SlackChannelInfo = {
+  id?: string;
+  name?: string;
+  lastRead?: string;
+  unreadCount?: number;
+  unreadCountDisplay?: number;
+  latest?: string;
+};
+
+/**
+ * Get channel info including unread state (last_read, unread_count).
+ * Useful for tracking what messages the bot hasn't processed yet.
+ */
+export async function getSlackChannelInfo(
+  channelId: string,
+  opts: SlackActionClientOpts = {},
+): Promise<SlackChannelInfo> {
+  const client = await getClient(opts);
+  const result = await client.conversations.info({ channel: channelId });
+  const channel = result.channel as Record<string, unknown> | undefined;
+  return {
+    id: channel?.id as string | undefined,
+    name: channel?.name as string | undefined,
+    lastRead: channel?.last_read as string | undefined,
+    unreadCount: channel?.unread_count as number | undefined,
+    unreadCountDisplay: channel?.unread_count_display as number | undefined,
+    latest: (channel?.latest as Record<string, unknown> | undefined)?.ts as string | undefined,
+  };
+}
+
+/**
+ * Mark a channel as read up to a specific timestamp.
+ * Updates the bot's read cursor for the channel.
+ */
+export async function markSlackChannelRead(
+  channelId: string,
+  timestamp: string,
+  opts: SlackActionClientOpts = {},
+): Promise<void> {
+  const client = await getClient(opts);
+  await client.conversations.mark({ channel: channelId, ts: timestamp });
+}

@@ -39,6 +39,7 @@ export const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, Messag
     "role-add": "none",
     "role-remove": "none",
     "channel-info": "channelId",
+    "mark-read": "channelId",
     "channel-list": "none",
     "channel-create": "none",
     "channel-edit": "channelId",

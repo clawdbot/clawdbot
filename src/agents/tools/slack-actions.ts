@@ -5,10 +5,12 @@ import { resolveSlackAccount } from "../../slack/accounts.js";
 import {
   deleteSlackMessage,
   editSlackMessage,
+  getSlackChannelInfo,
   getSlackMemberInfo,
   listSlackEmojis,
   listSlackPins,
   listSlackReactions,
+  markSlackChannelRead,
   pinSlackMessage,
   reactSlackMessage,
   readSlackMessages,
@@ -294,6 +296,31 @@ export async function handleSlackAction(
     }
     const emojis = readOpts ? await listSlackEmojis(readOpts) : await listSlackEmojis();
     return jsonResult({ ok: true, emojis });
+  }
+
+  if (action === "channelInfo") {
+    if (!isActionEnabled("channelInfo")) {
+      throw new Error("Slack channel info is disabled.");
+    }
+    const channelId = resolveChannelId();
+    const info = readOpts
+      ? await getSlackChannelInfo(channelId, readOpts)
+      : await getSlackChannelInfo(channelId);
+    return jsonResult({ ok: true, ...info });
+  }
+
+  if (action === "markRead") {
+    if (!isActionEnabled("channelInfo")) {
+      throw new Error("Slack channel info is disabled.");
+    }
+    const channelId = resolveChannelId();
+    const timestamp = readStringParam(params, "timestamp", { required: true });
+    if (writeOpts) {
+      await markSlackChannelRead(channelId, timestamp, writeOpts);
+    } else {
+      await markSlackChannelRead(channelId, timestamp);
+    }
+    return jsonResult({ ok: true, markedAt: timestamp });
   }
 
   throw new Error(`Unknown action: ${action}`);
