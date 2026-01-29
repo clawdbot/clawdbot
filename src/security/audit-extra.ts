@@ -926,6 +926,47 @@ function listGroupPolicyOpen(cfg: MoltbotConfig): string[] {
   return out;
 }
 
+export function collectStrictLocalFindings(cfg: MoltbotConfig): SecurityAuditFinding[] {
+  const findings: SecurityAuditFinding[] = [];
+  if (cfg.security?.strictLocal !== true) return findings;
+
+  if (cfg.update?.checkOnStart !== false) {
+    findings.push({
+      checkId: "security.strict_local.update_check",
+      severity: "warn",
+      title: "Strict Local: update checks are not disabled",
+      detail: "security.strictLocal is true but update.checkOnStart is not false. Metadata could leak to npm registry.",
+      remediation: "Set update.checkOnStart: false.",
+    });
+  }
+
+  if (cfg.diagnostics?.enabled !== false) {
+    findings.push({
+      checkId: "security.strict_local.diagnostics",
+      severity: "warn",
+      title: "Strict Local: diagnostics are enabled",
+      detail: "security.strictLocal is true but diagnostics.enabled is not false.",
+      remediation: "Set diagnostics.enabled: false.",
+    });
+  }
+
+  const cloudProviders = ["anthropic", "openai", "google", "amazon-bedrock", "github-copilot"];
+  const configuredProviders = Object.keys(cfg.models?.providers ?? {});
+  const activeCloudProviders = cloudProviders.filter((p) => configuredProviders.includes(p));
+
+  if (activeCloudProviders.length > 0) {
+    findings.push({
+      checkId: "security.strict_local.cloud_providers",
+      severity: "critical",
+      title: "Strict Local: cloud providers are configured",
+      detail: `security.strictLocal is true but cloud providers are configured: ${activeCloudProviders.join(", ")}. These will be ignored at runtime but should be removed from config.`,
+      remediation: "Remove cloud providers from models.providers.",
+    });
+  }
+
+  return findings;
+}
+
 export function collectExposureMatrixFindings(cfg: MoltbotConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const openGroups = listGroupPolicyOpen(cfg);

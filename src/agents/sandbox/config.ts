@@ -38,6 +38,7 @@ export function resolveSandboxDockerConfig(params: {
   scope: SandboxScope;
   globalDocker?: Partial<SandboxDockerConfig>;
   agentDocker?: Partial<SandboxDockerConfig>;
+  strictLocal?: boolean;
 }): SandboxDockerConfig {
   const agentDocker = params.scope === "shared" ? undefined : params.agentDocker;
   const globalDocker = params.globalDocker;
@@ -59,9 +60,9 @@ export function resolveSandboxDockerConfig(params: {
       globalDocker?.containerPrefix ??
       DEFAULT_SANDBOX_CONTAINER_PREFIX,
     workdir: agentDocker?.workdir ?? globalDocker?.workdir ?? DEFAULT_SANDBOX_WORKDIR,
-    readOnlyRoot: agentDocker?.readOnlyRoot ?? globalDocker?.readOnlyRoot ?? true,
+    readOnlyRoot: params.strictLocal ? true : (agentDocker?.readOnlyRoot ?? globalDocker?.readOnlyRoot ?? true),
     tmpfs: agentDocker?.tmpfs ?? globalDocker?.tmpfs ?? ["/tmp", "/var/tmp", "/run"],
-    network: agentDocker?.network ?? globalDocker?.network ?? "none",
+    network: params.strictLocal ? "none" : (agentDocker?.network ?? globalDocker?.network ?? "none"),
     user: agentDocker?.user ?? globalDocker?.user,
     capDrop: agentDocker?.capDrop ?? globalDocker?.capDrop ?? ["ALL"],
     env,
@@ -148,6 +149,7 @@ export function resolveSandboxConfigForAgent(cfg?: MoltbotConfig, agentId?: stri
       scope,
       globalDocker: agent?.docker,
       agentDocker: agentSandbox?.docker,
+      strictLocal: cfg?.security?.strictLocal,
     }),
     browser: resolveSandboxBrowserConfig({
       scope,

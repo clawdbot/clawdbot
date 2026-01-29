@@ -14,6 +14,7 @@ import path from "node:path";
 import { completeSimple, type TextContent } from "@mariozechner/pi-ai";
 import { EdgeTTS } from "node-edge-tts";
 
+import { runExec } from "../process/exec.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
@@ -123,6 +124,10 @@ export type ResolvedTtsConfig = {
     saveSubtitles: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  cli: {
+    command: string;
+    args: string[];
   };
   prefsPath?: string;
   maxTextLength: number;
@@ -296,6 +301,10 @@ export function resolveTtsConfig(cfg: MoltbotConfig): ResolvedTtsConfig {
       proxy: raw.edge?.proxy?.trim() || undefined,
       timeoutMs: raw.edge?.timeoutMs,
     },
+    cli: {
+      command: raw.cli?.command?.trim() || "",
+      args: raw.cli?.args ?? [],
+    },
     prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
     timeoutMs: raw.timeoutMs ?? DEFAULT_TIMEOUT_MS,
@@ -410,6 +419,7 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
   if (prefs.tts?.provider) return prefs.tts.provider;
   if (config.providerSource === "config") return config.provider;
 
+  if (config.cli.command) return "cli";
   if (resolveTtsApiKey(config, "openai")) return "openai";
   if (resolveTtsApiKey(config, "elevenlabs")) return "elevenlabs";
   return "edge";
@@ -477,7 +487,7 @@ export function resolveTtsApiKey(
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = ["cli", "openai", "elevenlabs", "edge"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
@@ -485,6 +495,7 @@ export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
 
 export function isTtsProviderConfigured(config: ResolvedTtsConfig, provider: TtsProvider): boolean {
   if (provider === "edge") return config.edge.enabled;
+  if (provider === "cli") return Boolean(config.cli.command);
   return Boolean(resolveTtsApiKey(config, provider));
 }
 
@@ -1055,6 +1066,24 @@ function inferEdgeExtension(outputFormat: string): string {
   return ".mp3";
 }
 
+async function cliTTS(params: {
+  text: string;
+  outputPath: string;
+  config: ResolvedTtsConfig["cli"];
+  timeoutMs: number;
+}): Promise<void> {
+  const { text, outputPath, config, timeoutMs } = params;
+  if (!config.command) {
+    throw new Error("CLI TTS command not configured");
+  }
+
+  const args = config.args.map((arg) => arg.replace("{text}", text).replace("{output}", outputPath));
+
+  await runExec(config.command, args, {
+    timeoutMs,
+  });
+}
+
 async function edgeTTS(params: {
   text: string;
   outputPath: string;
@@ -1105,6 +1134,45 @@ export async function textToSpeech(params: {
   for (const provider of providers) {
     const providerStart = Date.now();
     try {
+      if (provider === "cli") {
+        if (!config.cli.command) {
+          lastError = "cli: not configured";
+          continue;
+        }
+
+        const tempDir = mkdtempSync(path.join(tmpdir(), "tts-"));
+        // We assume .wav as a safe default for CLI TTS like Piper, but we could infer from args if needed.
+        const audioPath = path.join(tempDir, `voice-${Date.now()}.wav`);
+
+        try {
+          await cliTTS({
+            text: params.text,
+            outputPath: audioPath,
+            config: config.cli,
+            timeoutMs: config.timeoutMs,
+          });
+        } catch (err) {
+          try {
+            rmSync(tempDir, { recursive: true, force: true });
+          } catch {
+            // ignore cleanup errors
+          }
+          throw err;
+        }
+
+        scheduleCleanup(tempDir);
+        const voiceCompatible = isVoiceCompatibleAudio({ fileName: audioPath });
+
+        return {
+          success: true,
+          audioPath,
+          latencyMs: Date.now() - providerStart,
+          provider,
+          outputFormat: "wav",
+          voiceCompatible,
+        };
+      }
+
       if (provider === "edge") {
         if (!config.edge.enabled) {
           lastError = "edge: disabled";
@@ -1270,6 +1338,11 @@ export async function textToSpeechTelephony(params: {
   for (const provider of providers) {
     const providerStart = Date.now();
     try {
+      if (provider === "cli") {
+        lastError = "cli: unsupported for telephony";
+        continue;
+      }
+
       if (provider === "edge") {
         lastError = "edge: unsupported for telephony";
         continue;

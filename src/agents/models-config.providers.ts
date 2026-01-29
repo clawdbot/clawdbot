@@ -361,8 +361,23 @@ async function buildOllamaProvider(): Promise<ProviderConfig> {
 
 export async function resolveImplicitProviders(params: {
   agentDir: string;
+  config?: MoltbotConfig;
 }): Promise<ModelsConfig["providers"]> {
   const providers: Record<string, ProviderConfig> = {};
+  if (params.config?.security?.strictLocal) {
+    // In strict local mode, only allow Ollama if explicitly configured
+    const ollamaKey =
+      resolveEnvApiKeyVarName("ollama") ??
+      resolveApiKeyFromProfiles({
+        provider: "ollama",
+        store: ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false }),
+      });
+    if (ollamaKey) {
+      providers.ollama = { ...(await buildOllamaProvider()), apiKey: ollamaKey };
+    }
+    return providers;
+  }
+
   const authStore = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
   });
@@ -423,8 +438,10 @@ export async function resolveImplicitProviders(params: {
 
 export async function resolveImplicitCopilotProvider(params: {
   agentDir: string;
+  config?: MoltbotConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<ProviderConfig | null> {
+  if (params.config?.security?.strictLocal) return null;
   const env = params.env ?? process.env;
   const authStore = ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false });
   const hasProfile = listProfilesForProvider(authStore, "github-copilot").length > 0;

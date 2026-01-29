@@ -18,6 +18,7 @@ import {
   collectPluginsTrustFindings,
   collectSecretsInConfigFindings,
   collectStateDeepFilesystemFindings,
+  collectStrictLocalFindings,
   collectSyncedFolderFindings,
   readConfigSnapshotForAudit,
 } from "./audit-extra.js";
@@ -876,6 +877,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...collectSecretsInConfigFindings(cfg));
   findings.push(...collectModelHygieneFindings(cfg));
   findings.push(...collectSmallModelRiskFindings({ cfg, env }));
+  findings.push(...collectStrictLocalFindings(cfg));
   findings.push(...collectExposureMatrixFindings(cfg));
 
   const configSnapshot =

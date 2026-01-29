@@ -27,6 +27,13 @@ const NodeHostSchema = z
   .strict()
   .optional();
 
+const SecuritySchema = z
+  .object({
+    strictLocal: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
 export const MoltbotSchema = z
   .object({
     meta: z
@@ -206,6 +213,7 @@ export const MoltbotSchema = z
       })
       .strict()
       .optional(),
+    security: SecuritySchema,
     models: ModelsConfigSchema,
     nodeHost: NodeHostSchema,
     agents: AgentsSchema,

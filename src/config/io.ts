@@ -20,6 +20,7 @@ import {
   applyMessageDefaults,
   applyModelDefaults,
   applySessionDefaults,
+  applyStrictLocalDefaults,
   applyTalkApiKey,
 } from "./defaults.js";
 import { VERSION } from "../version.js";
@@ -287,7 +288,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         });
       }
 
-      return applyConfigOverrides(cfg);
+      return applyStrictLocalDefaults(applyConfigOverrides(cfg));
     } catch (err) {
       if (err instanceof DuplicateAgentDirError) {
         deps.logger.error(err.message);
@@ -430,10 +431,12 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         parsed: parsedRes.parsed,
         valid: true,
         config: normalizeConfigPaths(
-          applyTalkApiKey(
-            applyModelDefaults(
-              applyAgentDefaults(
-                applySessionDefaults(applyLoggingDefaults(applyMessageDefaults(validated.config))),
+          applyStrictLocalDefaults(
+            applyTalkApiKey(
+              applyModelDefaults(
+                applyAgentDefaults(
+                  applySessionDefaults(applyLoggingDefaults(applyMessageDefaults(validated.config))),
+                ),
               ),
             ),
           ),

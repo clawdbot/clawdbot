@@ -143,6 +143,57 @@ export function applyTalkApiKey(config: MoltbotConfig): MoltbotConfig {
   };
 }
 
+export function applyStrictLocalDefaults(cfg: MoltbotConfig): MoltbotConfig {
+  if (cfg.security?.strictLocal !== true) return cfg;
+
+  let next = { ...cfg };
+
+  // 1. Disable update checks
+  if (next.update?.checkOnStart !== false) {
+    next.update = { ...next.update, checkOnStart: false };
+  }
+
+  // 2. Disable diagnostics
+  if (next.diagnostics?.enabled !== false) {
+    next.diagnostics = { ...next.diagnostics, enabled: false };
+  }
+
+  // 3. Clear model fallbacks
+  const defaults = next.agents?.defaults;
+  if (defaults?.model && typeof defaults.model === "object") {
+    if (Array.isArray(defaults.model.fallbacks) && defaults.model.fallbacks.length > 0) {
+      next.agents = {
+        ...next.agents,
+        defaults: {
+          ...defaults,
+          model: { ...defaults.model, fallbacks: [] },
+        },
+      };
+    }
+  }
+
+  // 4. Deny external tools
+  const webToolsDeny = ["group:web", "browser", "skills-install"];
+  const currentDeny = next.tools?.deny ?? [];
+  const nextDeny = Array.from(new Set([...currentDeny, ...webToolsDeny]));
+  if (nextDeny.length !== currentDeny.length) {
+    next.tools = { ...next.tools, deny: nextDeny };
+  }
+
+  // 5. Enforce Docker sandboxing for non-main sessions
+  if (defaults?.sandbox?.mode === undefined || defaults.sandbox.mode === "off") {
+    next.agents = {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        sandbox: { ...next.agents?.defaults?.sandbox, mode: "non-main" },
+      },
+    };
+  }
+
+  return next;
+}
+
 export function applyModelDefaults(cfg: MoltbotConfig): MoltbotConfig {
   let mutated = false;
   let nextCfg = cfg;

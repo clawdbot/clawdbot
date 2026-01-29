@@ -27,6 +27,7 @@ import {
   maybeRepairAnthropicOAuthProfileId,
   noteAuthProfileHealth,
 } from "./doctor-auth.js";
+import { noteOllamaHealth } from "./doctor-ollama.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
 import { maybeRepairGatewayDaemon } from "./doctor-gateway-daemon-flow.js";
 import { checkGatewayHealth } from "./doctor-gateway-health.js";
@@ -189,6 +190,8 @@ export async function doctorCommand(
   await maybeRepairGatewayServiceConfig(cfg, resolveMode(cfg), runtime, prompter);
   await noteMacLaunchAgentOverrides();
   await noteMacLaunchctlGatewayEnvOverrides(cfg);
+
+  await noteOllamaHealth(cfg);
 
   await noteSecurityWarnings(cfg);
 

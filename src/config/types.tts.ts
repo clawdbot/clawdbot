@@ -1,4 +1,4 @@
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "cli";
 
 export type TtsMode = "final" | "all";
 
@@ -72,6 +72,13 @@ export type TtsConfig = {
     saveSubtitles?: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  /** Local CLI TTS configuration (e.g. Piper, Sherpa-ONNX). */
+  cli?: {
+    /** CLI binary command. */
+    command: string;
+    /** CLI arguments. Use {text} as placeholder for input text. */
+    args?: string[];
   };
   /** Optional path for local TTS user preferences JSON. */
   prefsPath?: string;

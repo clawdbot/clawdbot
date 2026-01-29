@@ -21,6 +21,7 @@ export * from "./types.msteams.js";
 export * from "./types.plugins.js";
 export * from "./types.queue.js";
 export * from "./types.sandbox.js";
+export * from "./types.security.js";
 export * from "./types.signal.js";
 export * from "./types.skills.js";
 export * from "./types.slack.js";

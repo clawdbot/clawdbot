@@ -80,7 +80,7 @@ export async function ensureMoltbotModelsJson(
   const agentDir = agentDirOverride?.trim() ? agentDirOverride.trim() : resolveMoltbotAgentDir();
 
   const explicitProviders = (cfg.models?.providers ?? {}) as Record<string, ProviderConfig>;
-  const implicitProviders = await resolveImplicitProviders({ agentDir });
+  const implicitProviders = await resolveImplicitProviders({ agentDir, config: cfg });
   const providers: Record<string, ProviderConfig> = mergeProviders({
     implicit: implicitProviders,
     explicit: explicitProviders,
@@ -92,7 +92,7 @@ export async function ensureMoltbotModelsJson(
       ? mergeProviderModels(implicitBedrock, existing)
       : implicitBedrock;
   }
-  const implicitCopilot = await resolveImplicitCopilotProvider({ agentDir });
+  const implicitCopilot = await resolveImplicitCopilotProvider({ agentDir, config: cfg });
   if (implicitCopilot && !providers["github-copilot"]) {
     providers["github-copilot"] = implicitCopilot;
   }

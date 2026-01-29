@@ -72,6 +72,34 @@ export function isBundledSkillAllowed(entry: SkillEntry, allowlist?: string[]): 
   return allowlist.includes(key) || allowlist.includes(entry.skill.name);
 }
 
+function vetSkillForStrictLocal(entry: SkillEntry): { ok: boolean; reason?: string } {
+  const metadata = entry.metadata;
+  const frontmatter = entry.frontmatter;
+
+  // Check for external URLs in metadata or common frontmatter fields
+  const urlPattern = /https?:\/\//i;
+  const fieldsToCheck = [
+    metadata?.url,
+    frontmatter?.url,
+    frontmatter?.homepage,
+    frontmatter?.repository,
+  ];
+
+  for (const field of fieldsToCheck) {
+    if (typeof field === "string" && urlPattern.test(field)) {
+      return { ok: false, reason: `Skill declares external URL: ${field}` };
+    }
+  }
+
+  // Check for suspicious instructions in the skill description or content
+  const description = entry.skill.description ?? "";
+  if (urlPattern.test(description)) {
+    return { ok: false, reason: "Skill description contains external URLs" };
+  }
+
+  return { ok: true };
+}
+
 export function hasBinary(bin: string): boolean {
   const pathEnv = process.env.PATH ?? "";
   const parts = pathEnv.split(path.delimiter).filter(Boolean);
@@ -144,6 +172,14 @@ export function shouldIncludeSkill(params: {
   if (requiredConfig.length > 0) {
     for (const configPath of requiredConfig) {
       if (!isConfigPathTruthy(config, configPath)) return false;
+    }
+  }
+
+  if (config?.security?.strictLocal) {
+    const vetting = vetSkillForStrictLocal(entry);
+    if (!vetting.ok) {
+      console.warn(`[skills] Strict Local: omitting skill "${entry.skill.name}" - ${vetting.reason}`);
+      return false;
     }
   }
 
