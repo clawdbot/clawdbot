@@ -25,6 +25,8 @@ export type MemoryFlushSettings = {
   prompt: string;
   systemPrompt: string;
   reserveTokensFloor: number;
+  hardThresholdTokens: number | null;
+  hardThresholdCommand: string | null;
 };
 
 const normalizeNonNegativeInt = (value: unknown): number | null => {
@@ -44,6 +46,8 @@ export function resolveMemoryFlushSettings(cfg?: MoltbotConfig): MemoryFlushSett
   const reserveTokensFloor =
     normalizeNonNegativeInt(cfg?.agents?.defaults?.compaction?.reserveTokensFloor) ??
     DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR;
+  const hardThresholdTokens = normalizeNonNegativeInt(defaults?.hardThresholdTokens);
+  const hardThresholdCommand = defaults?.hardThresholdCommand?.trim() || null;
 
   return {
     enabled,
@@ -51,6 +55,8 @@ export function resolveMemoryFlushSettings(cfg?: MoltbotConfig): MemoryFlushSett
     prompt: ensureNoReplyHint(prompt),
     systemPrompt: ensureNoReplyHint(systemPrompt),
     reserveTokensFloor,
+    hardThresholdTokens,
+    hardThresholdCommand,
   };
 }
 
@@ -83,6 +89,38 @@ export function shouldRunMemoryFlush(params: {
   if (threshold <= 0) return false;
   if (totalTokens < threshold) return false;
 
+  const compactionCount = params.entry?.compactionCount ?? 0;
+  const lastFlushAt = params.entry?.memoryFlushCompactionCount;
+  if (typeof lastFlushAt === "number" && lastFlushAt === compactionCount) {
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Check if the hard threshold has been reached and the command should auto-execute.
+ * Returns true if totalTokens exceeds the hard threshold.
+ */
+export function shouldRunHardThresholdCommand(params: {
+  entry?: Pick<SessionEntry, "totalTokens" | "compactionCount" | "memoryFlushCompactionCount">;
+  contextWindowTokens: number;
+  reserveTokensFloor: number;
+  hardThresholdTokens: number | null;
+}): boolean {
+  if (!params.hardThresholdTokens) return false;
+  const totalTokens = params.entry?.totalTokens;
+  if (!totalTokens || totalTokens <= 0) return false;
+
+  const contextWindow = Math.max(1, Math.floor(params.contextWindowTokens));
+  const reserveTokens = Math.max(0, Math.floor(params.reserveTokensFloor));
+  const hardThreshold = Math.max(0, Math.floor(params.hardThresholdTokens));
+  const threshold = Math.max(0, contextWindow - reserveTokens - hardThreshold);
+
+  if (threshold <= 0) return false;
+  if (totalTokens < threshold) return false;
+
+  // Check if we already ran the hard flush this compaction cycle
   const compactionCount = params.entry?.compactionCount ?? 0;
   const lastFlushAt = params.entry?.memoryFlushCompactionCount;
   if (typeof lastFlushAt === "number" && lastFlushAt === compactionCount) {

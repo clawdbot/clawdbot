@@ -97,6 +97,8 @@ export const AgentDefaultsSchema = z
             softThresholdTokens: z.number().int().nonnegative().optional(),
             prompt: z.string().optional(),
             systemPrompt: z.string().optional(),
+            hardThresholdTokens: z.number().int().nonnegative().optional(),
+            hardThresholdCommand: z.string().optional(),
           })
           .strict()
           .optional(),

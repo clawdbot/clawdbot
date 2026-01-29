@@ -259,4 +259,8 @@ export type AgentCompactionMemoryFlushConfig = {
   prompt?: string;
   /** System prompt appended for the memory flush turn. */
   systemPrompt?: string;
+  /** Auto-execute hardThresholdCommand when context exceeds this many tokens (no agent prompt). */
+  hardThresholdTokens?: number;
+  /** Shell command to auto-execute when hard threshold is reached (e.g., "kernle -a agent checkpoint save 'auto-backup'"). */
+  hardThresholdCommand?: string;
 };

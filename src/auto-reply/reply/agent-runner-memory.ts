@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { spawn } from "node:child_process";
 import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
@@ -20,6 +21,7 @@ import {
   resolveMemoryFlushContextWindowTokens,
   resolveMemoryFlushSettings,
   shouldRunMemoryFlush,
+  shouldRunHardThresholdCommand,
 } from "./memory-flush.js";
 import type { FollowupRun } from "./queue.js";
 import { incrementCompactionCount } from "./session-updates.js";
@@ -70,6 +72,63 @@ export async function runMemoryFlushIfNeeded(params: {
     });
 
   if (!shouldFlushMemory) return params.sessionEntry;
+
+  // Check if hard threshold is reached - auto-execute command without agent prompt
+  const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
+    modelId: params.followupRun.run.model ?? params.defaultModel,
+    agentCfgContextTokens: params.agentCfgContextTokens,
+  });
+
+  const shouldRunHardCommand =
+    memoryFlushSettings.hardThresholdCommand &&
+    memoryFlushSettings.hardThresholdTokens &&
+    shouldRunHardThresholdCommand({
+      entry:
+        params.sessionEntry ??
+        (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined),
+      contextWindowTokens,
+      reserveTokensFloor: memoryFlushSettings.reserveTokensFloor,
+      hardThresholdTokens: memoryFlushSettings.hardThresholdTokens,
+    });
+
+  if (shouldRunHardCommand && memoryFlushSettings.hardThresholdCommand) {
+    logVerbose(
+      `hard threshold reached, auto-executing: ${memoryFlushSettings.hardThresholdCommand}`,
+    );
+    try {
+      await runHardThresholdCommand(
+        memoryFlushSettings.hardThresholdCommand,
+        params.followupRun.run.workspaceDir,
+      );
+      logVerbose("hard threshold command completed");
+      // Update session metadata to mark flush completed
+      if (params.storePath && params.sessionKey) {
+        const compactionCount =
+          params.sessionEntry?.compactionCount ??
+          (params.sessionKey ? params.sessionStore?.[params.sessionKey]?.compactionCount : 0) ??
+          0;
+        try {
+          const updatedEntry = await updateSessionStoreEntry({
+            storePath: params.storePath,
+            sessionKey: params.sessionKey,
+            update: async () => ({
+              memoryFlushAt: Date.now(),
+              memoryFlushCompactionCount: compactionCount,
+            }),
+          });
+          if (updatedEntry) {
+            return updatedEntry;
+          }
+        } catch (err) {
+          logVerbose(`failed to persist hard threshold flush metadata: ${String(err)}`);
+        }
+      }
+      return params.sessionEntry;
+    } catch (err) {
+      logVerbose(`hard threshold command failed: ${String(err)}`);
+      // Fall through to soft threshold agent prompt
+    }
+  }
 
   let activeSessionEntry = params.sessionEntry;
   const activeSessionStore = params.sessionStore;
@@ -190,4 +249,45 @@ export async function runMemoryFlushIfNeeded(params: {
   }
 
   return activeSessionEntry;
+}
+
+/**
+ * Execute the hard threshold command directly (no agent involvement).
+ * Runs the command in a shell with the workspace as cwd.
+ */
+async function runHardThresholdCommand(command: string, workspaceDir?: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, [], {
+      shell: true,
+      cwd: workspaceDir || process.cwd(),
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 30000, // 30 second timeout
+    });
+
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout?.on("data", (data) => {
+      stdout += data.toString();
+    });
+
+    child.stderr?.on("data", (data) => {
+      stderr += data.toString();
+    });
+
+    child.on("close", (code) => {
+      if (code === 0) {
+        if (stdout.trim()) {
+          logVerbose(`hard threshold command output: ${stdout.trim()}`);
+        }
+        resolve();
+      } else {
+        reject(new Error(`Command exited with code ${code}: ${stderr || stdout}`));
+      }
+    });
+
+    child.on("error", (err) => {
+      reject(err);
+    });
+  });
 }
