@@ -122,11 +122,17 @@ function defaultIndexHTML() {
   const hasHelper = () =>
     typeof window.moltbotSendUserAction === "function" ||
     typeof window.clawdbotSendUserAction === "function";
-  statusEl.innerHTML =
-    "Bridge: " +
-    (hasHelper() ? "<span class='ok'>ready</span>" : "<span class='bad'>missing</span>") +
-    " · iOS=" + (hasIOS() ? "yes" : "no") +
-    " · Android=" + (hasAndroid() ? "yes" : "no");
+  // Build status message safely using DOM manipulation to prevent XSS
+  statusEl.textContent = "";
+  statusEl.appendChild(document.createTextNode("Bridge: "));
+
+  const bridgeSpan = document.createElement("span");
+  bridgeSpan.className = hasHelper() ? "ok" : "bad";
+  bridgeSpan.textContent = hasHelper() ? "ready" : "missing";
+  statusEl.appendChild(bridgeSpan);
+
+  statusEl.appendChild(document.createTextNode(" · iOS=" + (hasIOS() ? "yes" : "no")));
+  statusEl.appendChild(document.createTextNode(" · Android=" + (hasAndroid() ? "yes" : "no")));
 
   window.addEventListener("moltbot:a2ui-action-status", (ev) => {
     const d = ev && ev.detail || {};
