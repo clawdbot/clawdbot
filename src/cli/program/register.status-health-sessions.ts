@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { healthCommand } from "../../commands/health.js";
 import { sessionsCommand } from "../../commands/sessions.js";
 import { statusCommand } from "../../commands/status.js";
+import { monitorCommand } from "../../commands/monitor.command.js";
 import { setVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
@@ -74,6 +75,28 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           },
           defaultRuntime,
         );
+      });
+    });
+
+  program
+    .command("monitor")
+    .description("Live TUI dashboard for monitoring Moltbot status")
+    .option("--interval <ms>", "Refresh interval in milliseconds", "2000")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          ["moltbot monitor", "Start the live monitor."],
+          ["moltbot monitor --interval 5000", "Update every 5 seconds."],
+        ])}\n`,
+    )
+    .action(async (opts) => {
+      const interval = parseTimeoutMs(opts.interval);
+      if (interval === null) {
+        return;
+      }
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await monitorCommand({ intervalMs: interval }, defaultRuntime);
       });
     });
 
