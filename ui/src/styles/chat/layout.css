@@ -344,6 +344,15 @@
   color: var(--text);
 }
 
+/* Active state for icon buttons in light mode — without this override the
+   white .btn--icon background (specificity) masks the generic .btn.active
+   orange tint, making on/off states visually identical.  See #2832. */
+:root[data-theme="light"] .btn--icon.active {
+  background: rgba(245, 159, 74, 0.18);
+  border-color: rgba(245, 159, 74, 0.5);
+  color: rgba(16, 24, 40, 0.9);
+}
+
 .btn--icon svg {
   display: block;
   width: 18px;

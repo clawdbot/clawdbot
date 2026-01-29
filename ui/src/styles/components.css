@@ -510,6 +510,11 @@
   border-color: var(--accent);
 }
 
+:root[data-theme="light"] .btn.active {
+  background: rgba(245, 159, 74, 0.14);
+  border-color: rgba(245, 159, 74, 0.45);
+}
+
 /* ===========================================
    Utilities
    =========================================== */
