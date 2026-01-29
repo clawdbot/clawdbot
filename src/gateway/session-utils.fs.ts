@@ -23,7 +23,7 @@ export function readSessionMessages(
     try {
       const parsed = JSON.parse(line);
       if (parsed?.message) {
-        messages.push(parsed.message);
+        messages.push({ ...parsed.message, id: parsed.id });
       }
     } catch {
       // ignore bad lines

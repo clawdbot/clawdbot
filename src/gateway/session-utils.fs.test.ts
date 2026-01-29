@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import {
   readFirstUserMessageFromTranscript,
   readLastMessagePreviewFromTranscript,
+  readSessionMessages,
   readSessionPreviewItemsFromTranscript,
 } from "./session-utils.fs.js";
 
@@ -402,5 +403,121 @@ describe("readSessionPreviewItemsFromTranscript", () => {
     expect(result).toHaveLength(1);
     expect(result[0]?.text.length).toBe(24);
     expect(result[0]?.text.endsWith("...")).toBe(true);
+  });
+});
+
+describe("readSessionMessages", () => {
+  let tmpDir: string;
+  let sessionFile: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "session-messages-test-"));
+    sessionFile = path.join(tmpDir, "test-session.jsonl");
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("includes stable entry ID in returned messages", () => {
+    // Create JSONL transcript with entries that have IDs
+    const entries = [
+      {
+        id: "entry-1",
+        message: { role: "user", content: "Hello" },
+      },
+      {
+        id: "entry-2",
+        message: { role: "assistant", content: "Hi there!" },
+      },
+      {
+        id: "entry-3",
+        message: { role: "user", content: "How are you?" },
+      },
+    ];
+
+    const jsonl = entries.map((e) => JSON.stringify(e)).join("\n");
+    fs.writeFileSync(sessionFile, jsonl, "utf-8");
+
+    // Read messages
+    const messages = readSessionMessages("test-session", undefined, sessionFile);
+
+    // Verify each message includes the stable entry ID
+    expect(messages).toHaveLength(3);
+    expect(messages[0]).toMatchObject({ role: "user", content: "Hello", id: "entry-1" });
+    expect(messages[1]).toMatchObject({ role: "assistant", content: "Hi there!", id: "entry-2" });
+    expect(messages[2]).toMatchObject({ role: "user", content: "How are you?", id: "entry-3" });
+  });
+
+  test("handles entries without IDs gracefully", () => {
+    // Create JSONL with mixed entries (some with IDs, some without)
+    const entries = [
+      {
+        id: "entry-1",
+        message: { role: "user", content: "Hello" },
+      },
+      {
+        // No id field
+        message: { role: "assistant", content: "Hi!" },
+      },
+    ];
+
+    const jsonl = entries.map((e) => JSON.stringify(e)).join("\n");
+    fs.writeFileSync(sessionFile, jsonl, "utf-8");
+
+    const messages = readSessionMessages("test-session", undefined, sessionFile);
+
+    expect(messages).toHaveLength(2);
+    expect(messages[0]).toMatchObject({ role: "user", content: "Hello", id: "entry-1" });
+    // Second message should have id: undefined (spread of undefined value)
+    expect(messages[1]).toMatchObject({ role: "assistant", content: "Hi!", id: undefined });
+  });
+
+  test("skips empty lines and invalid JSON", () => {
+    const jsonl = [
+      JSON.stringify({ id: "entry-1", message: { role: "user", content: "Valid" } }),
+      "", // Empty line
+      "invalid json {",
+      JSON.stringify({ id: "entry-2", message: { role: "user", content: "Also valid" } }),
+    ].join("\n");
+
+    fs.writeFileSync(sessionFile, jsonl, "utf-8");
+
+    const messages = readSessionMessages("test-session", undefined, sessionFile);
+
+    expect(messages).toHaveLength(2);
+    expect(messages[0]).toMatchObject({ id: "entry-1" });
+    expect(messages[1]).toMatchObject({ id: "entry-2" });
+  });
+
+  test("returns empty array when session file does not exist", () => {
+    const messages = readSessionMessages("nonexistent", undefined, "/nonexistent/path.jsonl");
+    expect(messages).toEqual([]);
+  });
+
+  test("preserves message content and metadata", () => {
+    const entries = [
+      {
+        id: "msg-1",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Complex content" }],
+          metadata: { foo: "bar" },
+        },
+      },
+    ];
+
+    const jsonl = entries.map((e) => JSON.stringify(e)).join("\n");
+    fs.writeFileSync(sessionFile, jsonl, "utf-8");
+
+    const messages = readSessionMessages("test-session", undefined, sessionFile);
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "Complex content" }],
+      metadata: { foo: "bar" },
+      id: "msg-1",
+    });
   });
 });
