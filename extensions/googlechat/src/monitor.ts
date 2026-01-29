@@ -297,6 +297,27 @@ function normalizeUserId(raw?: string | null): string {
   return trimmed.replace(/^users\//i, "").toLowerCase();
 }
 
+/**
+ * Resolves the space type from Google Chat space object.
+ * Normalizes to modern 'spaceType' format with fallback for deprecated 'type' field.
+ */
+export function resolveSpaceType(space: { type?: string; spaceType?: string }): {
+  spaceType: string;
+  isGroup: boolean;
+} {
+  // Normalize to modern 'spaceType' format
+  let spaceType = (space.spaceType ?? "").toUpperCase();
+
+  // @deprecated fallback: map legacy 'type' to modern values
+  if (!spaceType && space.type) {
+    const legacyType = space.type.toUpperCase();
+    spaceType = legacyType === "DM" ? "DIRECT_MESSAGE" : "SPACE";
+  }
+
+  const isGroup = spaceType !== "DIRECT_MESSAGE";
+  return { spaceType, isGroup };
+}
+
 export function isSenderAllowed(
   senderId: string,
   senderEmail: string | undefined,
@@ -388,16 +409,7 @@ async function processMessageWithPipeline(params: {
   const spaceId = space.name ?? "";
   if (!spaceId) return;
 
-  // Normalize to modern 'spaceType' format
-  let spaceType = (space.spaceType ?? "").toUpperCase();
-
-  // @deprecated fallback: map legacy 'type' to modern values
-  if (!spaceType && space.type) {
-    const legacyType = space.type.toUpperCase();
-    spaceType = legacyType === "DM" ? "DIRECT_MESSAGE" : "SPACE";
-  }
-
-  const isGroup = spaceType !== "DIRECT_MESSAGE";
+  const { isGroup } = resolveSpaceType(space);
   const sender = message.sender ?? event.user;
   const senderId = sender?.name ?? "";
   const senderName = sender?.displayName ?? "";
