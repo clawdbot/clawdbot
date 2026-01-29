@@ -34,4 +34,23 @@ describe("resolveGatewayStateDir", () => {
     const env = { CLAWDBOT_STATE_DIR: "C:\\State\\moltbot" };
     expect(resolveGatewayStateDir(env)).toBe("C:\\State\\moltbot");
   });
+
+  it("uses MOLTBOT_STATE_DIR when provided", () => {
+    const env = { HOME: "/Users/test", MOLTBOT_STATE_DIR: "/var/lib/moltbot" };
+    expect(resolveGatewayStateDir(env)).toBe(path.resolve("/var/lib/moltbot"));
+  });
+
+  it("prefers MOLTBOT_STATE_DIR over CLAWDBOT_STATE_DIR", () => {
+    const env = {
+      HOME: "/Users/test",
+      MOLTBOT_STATE_DIR: "/var/lib/moltbot-new",
+      CLAWDBOT_STATE_DIR: "/var/lib/moltbot-old",
+    };
+    expect(resolveGatewayStateDir(env)).toBe(path.resolve("/var/lib/moltbot-new"));
+  });
+
+  it("expands ~ in MOLTBOT_STATE_DIR", () => {
+    const env = { HOME: "/Users/test", MOLTBOT_STATE_DIR: "~/.moltbot" };
+    expect(resolveGatewayStateDir(env)).toBe(path.resolve("/Users/test/.moltbot"));
+  });
 });
