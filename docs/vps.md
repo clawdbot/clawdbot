@@ -32,6 +32,18 @@ deployments work at a high level.
 Remote access: [Gateway remote](/gateway/remote)  
 Platforms hub: [Platforms](/platforms)
 
+## Hardening your VPS
+
+Running Clawdbot on a production VPS? Consider these security measures:
+
+- **SSH key-only auth** — Disable password authentication
+- **fail2ban** — Auto-ban IPs after failed login attempts
+- **Clauditor** — Tamper-resistant audit watchdog for agent activity monitoring
+
+Clauditor creates an independent audit trail that the agent cannot tamper with, even if compromised. It tracks command executions, detects exfiltration patterns, and alerts on suspicious behavior.
+
+Docs: [Clauditor](/security/clauditor)
+
 ## Using nodes with a VPS
 
 You can keep the Gateway in the cloud and pair **nodes** on your local devices
