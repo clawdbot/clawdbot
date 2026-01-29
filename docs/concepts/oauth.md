@@ -44,6 +44,59 @@ Legacy import-only file (still supported, but not the main store):
 
 All of the above also respect `$CLAWDBOT_STATE_DIR` (state dir override). Full reference: [/gateway/configuration](/gateway/configuration#auth-storage-oauth--api-keys)
 
+## auth-profiles.json format
+
+The `auth-profiles.json` file stores credentials. There are three credential types:
+
+### Setup-token (for Claude Max/Pro subscriptions)
+
+```json
+{
+  "version": 1,
+  "profiles": {
+    "anthropic:default": {
+      "type": "token",
+      "provider": "anthropic",
+      "token": "sk-ant-oat01-..."
+    }
+  }
+}
+```
+
+### API key
+
+```json
+{
+  "version": 1,
+  "profiles": {
+    "anthropic:default": {
+      "type": "api_key",
+      "provider": "anthropic",
+      "key": "sk-ant-api03-..."
+    }
+  }
+}
+```
+
+### OAuth (for providers with OAuth flow)
+
+```json
+{
+  "version": 1,
+  "profiles": {
+    "openai:default": {
+      "type": "oauth",
+      "provider": "openai",
+      "accessToken": "...",
+      "refreshToken": "...",
+      "expires": 1704067200000
+    }
+  }
+}
+```
+
+**Important:** For Anthropic setup-tokens, always use `type: "token"` with `token` field. Using `type: "oauth"` with `accessToken` will fail.
+
 ## Anthropic setup-token (subscription auth)
 
 Run `claude setup-token` on any machine, then paste it into Moltbot:

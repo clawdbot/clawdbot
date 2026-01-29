@@ -96,6 +96,27 @@ moltbot onboard --auth-choice setup-token
 }
 ```
 
+### Manual auth-profiles.json setup
+
+If you're configuring credentials manually, the setup-token must use `type: "token"` (not `"oauth"`):
+
+```json
+{
+  "version": 1,
+  "profiles": {
+    "anthropic:default": {
+      "type": "token",
+      "provider": "anthropic",
+      "token": "sk-ant-oat01-..."
+    }
+  }
+}
+```
+
+**Common mistake:** Using `type: "oauth"` with `accessToken` will fail silently. Setup-tokens require `type: "token"` with a `token` field.
+
+File location: `~/.clawdbot/agents/<agentId>/agent/auth-profiles.json`
+
 ## Notes
 
 - Generate the setup-token with `claude setup-token` and paste it, or run `moltbot models auth setup-token` on the gateway host.
