@@ -50,6 +50,7 @@ export type AgentCliOpts = {
   runId?: string;
   extraSystemPrompt?: string;
   local?: boolean;
+  url?: string;
 };
 
 function parseTimeoutSeconds(opts: { cfg: ReturnType<typeof loadConfig>; timeout?: string }) {
@@ -118,6 +119,7 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
     },
     async () =>
       await callGateway<GatewayAgentResponse>({
+        url: opts.url,
         method: "agent",
         params: {
           message: body,

@@ -45,6 +45,7 @@ export function registerAgentCommands(program: Command, args: { agentChannelOpti
       "--timeout <seconds>",
       "Override agent command timeout (seconds, default 600 or config value)",
     )
+    .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
     .addHelpText(
       "after",
       () =>
@@ -65,6 +66,10 @@ ${formatHelpExamples([
   [
     'moltbot agent --agent ops --message "Generate report" --deliver --reply-channel slack --reply-to "#reports"',
     "Send reply to a different channel/target.",
+  ],
+  [
+    'docker compose run --rm clawdbot-cli agent --agent main --message "test" --url ws://clawdbot-gateway:18789',
+    "Connect from CLI container to gateway container (Docker).",
   ],
 ])}
 

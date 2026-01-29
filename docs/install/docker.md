@@ -11,8 +11,8 @@ Docker is **optional**. Use it only if you want a containerized gateway or to va
 
 ## Is Docker right for me?
 
-- **Yes**: you want an isolated, throwaway gateway environment or to run Moltbot on a host without local installs.
-- **No**: you’re running on your own machine and just want the fastest dev loop. Use the normal install flow instead.
+- **Yes**: you want an isolated gateway environment (for security or reproducibility), or you prefer not to install dependencies on your host.
+- **No**: you trust the software and want the fastest dev loop. Use the normal install flow instead.
 - **Sandboxing note**: agent sandboxing uses Docker too, but it does **not** require the full gateway to run in Docker. See [Sandboxing](/gateway/sandboxing).
 
 This guide covers:
@@ -50,7 +50,18 @@ Optional env vars:
 
 After it finishes:
 - Open `http://127.0.0.1:18789/` in your browser.
-- Paste the token into the Control UI (Settings → token).
+- The dashboard will show **"Pairing Required"** (because Docker containers appear as remote devices).
+- To approve the pairing:
+
+```bash
+# List pending requests (find your browser request)
+docker compose run --rm clawdbot-cli devices list
+
+# Approve it
+docker compose run --rm clawdbot-cli devices approve <request-id>
+```
+
+> **Note:** If you change `.env`, you must run `docker compose up -d` to apply it. `docker compose restart` is not enough.
 
 It writes config/workspace on the host:
 - `~/.clawdbot/`
@@ -186,6 +197,19 @@ docker compose run --rm moltbot-cli channels add --channel discord --token "<tok
 ```
 
 Docs: [WhatsApp](/channels/whatsapp), [Telegram](/channels/telegram), [Discord](/channels/discord)
+
+### Running agent commands
+
+When running `clawdbot agent` from the CLI container, use `--url` to connect to the
+gateway container (the default `127.0.0.1:18789` refers to the CLI container's own
+loopback, not the gateway):
+
+```bash
+docker compose run --rm clawdbot-cli agent --agent main --message "test" --url ws://clawdbot-gateway:18789
+```
+
+Note: The CLI container and gateway container share the same config volume
+(`~/.clawdbot/`), so authentication tokens are available automatically.
 
 ### Health check
 

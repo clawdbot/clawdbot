@@ -123,4 +123,40 @@ describe("agentCliCommand", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("passes url option to callGateway", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-agent-cli-"));
+    const store = path.join(dir, "sessions.json");
+    mockConfig(store);
+
+    vi.mocked(callGateway).mockResolvedValue({
+      runId: "idem-1",
+      status: "ok",
+      result: {
+        payloads: [{ text: "hello" }],
+        meta: { stub: true },
+      },
+    });
+
+    try {
+      await agentCliCommand(
+        {
+          message: "hi",
+          to: "+1555",
+          url: "ws://clawdbot-gateway:18789",
+        },
+        runtime,
+      );
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "ws://clawdbot-gateway:18789",
+        }),
+      );
+      expect(agentCommand).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
