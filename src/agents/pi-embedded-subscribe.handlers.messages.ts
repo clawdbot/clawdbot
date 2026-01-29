@@ -165,6 +165,25 @@ export function handleMessageEnd(
   const assistantMessage = msg as AssistantMessage;
   promoteThinkingTagsToBlocks(assistantMessage);
 
+  // Normalize Moonshot thinking signatures on receipt (not on send)
+  // Moonshot via OpenRouter returns "reasoning" but expects "reasoning_content" on replay
+  if (
+    ctx.params.provider === "openrouter" &&
+    ctx.params.modelId?.startsWith("moonshotai/kimi-") &&
+    Array.isArray(assistantMessage.content)
+  ) {
+    for (const block of assistantMessage.content) {
+      if (
+        block &&
+        typeof block === "object" &&
+        (block as { type?: unknown }).type === "thinking" &&
+        (block as { thinkingSignature?: unknown }).thinkingSignature === "reasoning"
+      ) {
+        (block as { thinkingSignature: string }).thinkingSignature = "reasoning_content";
+      }
+    }
+  }
+
   const rawText = extractAssistantText(assistantMessage);
   appendRawStream({
     ts: Date.now(),
