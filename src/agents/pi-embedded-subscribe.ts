@@ -229,7 +229,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (!cleanedText && (!mediaUrls || mediaUrls.length === 0)) return;
     try {
       void params.onToolResult({
-        text: cleanedText,
+        text: params.secrets ? params.secrets.scrub(cleanedText) : cleanedText,
         mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
       });
     } catch {
@@ -246,7 +246,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (!cleanedText && (!mediaUrls || mediaUrls.length === 0)) return;
     try {
       void params.onToolResult({
-        text: cleanedText,
+        text: params.secrets ? params.secrets.scrub(cleanedText) : cleanedText,
         mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
       });
     } catch {
@@ -390,7 +390,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     // Skip empty payloads, but always emit if audioAsVoice is set (to propagate the flag)
     if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) return;
     void params.onBlockReply({
-      text: cleanedText,
+      text: ctx.scrub(cleanedText),
       mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
       audioAsVoice,
       replyToId,
@@ -422,7 +422,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (formatted === state.lastStreamedReasoning) return;
     state.lastStreamedReasoning = formatted;
     void params.onReasoningStream({
-      text: formatted,
+      text: ctx.scrub(formatted),
     });
   };
 
@@ -463,6 +463,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     noteCompactionRetry,
     resolveCompactionRetry,
     maybeResolveCompactionWait,
+    scrub: (text: string) => (params.secrets ? params.secrets.scrub(text) : text),
   };
 
   const unsubscribe = params.session.subscribe(createEmbeddedPiSessionEventHandler(ctx));

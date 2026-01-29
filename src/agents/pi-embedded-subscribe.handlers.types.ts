@@ -94,6 +94,7 @@ export type EmbeddedPiSubscribeContext = {
   noteCompactionRetry: () => void;
   resolveCompactionRetry: () => void;
   maybeResolveCompactionWait: () => void;
+  scrub: (text: string) => string;
 };
 
 export type EmbeddedPiSubscribeEvent =

@@ -1,5 +1,6 @@
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
 
+import type { SecretScrubber } from "../security/scrubber.js";
 import type { ReasoningLevel, VerboseLevel } from "../auto-reply/thinking.js";
 import type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";
 
@@ -31,6 +32,7 @@ export type SubscribeEmbeddedPiSessionParams = {
   onAssistantMessageStart?: () => void | Promise<void>;
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void | Promise<void>;
   enforceFinalTag?: boolean;
+  secrets?: SecretScrubber;
 };
 
 export type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";

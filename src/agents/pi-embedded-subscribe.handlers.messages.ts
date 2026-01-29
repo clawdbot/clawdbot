@@ -118,22 +118,22 @@ export function handleMessageUpdate(
         runId: ctx.params.runId,
         stream: "assistant",
         data: {
-          text: cleanedText,
-          delta: deltaText,
+          text: ctx.scrub(cleanedText),
+          delta: ctx.scrub(deltaText),
           mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
         },
       });
       void ctx.params.onAgentEvent?.({
         stream: "assistant",
         data: {
-          text: cleanedText,
-          delta: deltaText,
+          text: ctx.scrub(cleanedText),
+          delta: ctx.scrub(deltaText),
           mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
         },
       });
       if (ctx.params.onPartialReply && ctx.state.shouldEmitPartialReplies) {
         void ctx.params.onPartialReply({
-          text: cleanedText,
+          text: ctx.scrub(cleanedText),
           mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
         });
       }
@@ -198,7 +198,7 @@ export function handleMessageEnd(
   const maybeEmitReasoning = () => {
     if (!shouldEmitReasoning || !formattedReasoning) return;
     ctx.state.lastReasoningSent = formattedReasoning;
-    void onBlockReply?.({ text: formattedReasoning });
+    void onBlockReply?.({ text: ctx.scrub(formattedReasoning) });
   };
 
   if (shouldEmitReasoningBeforeAnswer) maybeEmitReasoning();
@@ -239,7 +239,7 @@ export function handleMessageEnd(
           // Emit if there's content OR audioAsVoice flag (to propagate the flag).
           if (cleanedText || (mediaUrls && mediaUrls.length > 0) || audioAsVoice) {
             void onBlockReply({
-              text: cleanedText,
+              text: ctx.scrub(cleanedText),
               mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
               audioAsVoice,
               replyToId,
@@ -270,7 +270,7 @@ export function handleMessageEnd(
       } = tailResult;
       if (cleanedText || (mediaUrls && mediaUrls.length > 0) || audioAsVoice) {
         void onBlockReply({
-          text: cleanedText,
+          text: ctx.scrub(cleanedText),
           mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
           audioAsVoice,
           replyToId,
