@@ -3,6 +3,7 @@ import lockfile from "proper-lockfile";
 
 import type { MoltbotConfig } from "../../config/config.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
+import { refreshKimiCodeCredentials } from "../../providers/kimi-code-oauth.js";
 import { refreshQwenPortalCredentials } from "../../providers/qwen-portal-oauth.js";
 import { AUTH_STORE_LOCK_OPTIONS, log } from "./constants.js";
 import { formatAuthDoctorHint } from "./doctor.js";
@@ -62,7 +63,12 @@ async function refreshOAuthTokenWithLock(params: {
               const newCredentials = await refreshQwenPortalCredentials(cred);
               return { apiKey: newCredentials.access, newCredentials };
             })()
-          : await getOAuthApiKey(cred.provider as OAuthProvider, oauthCreds);
+          : String(cred.provider) === "kimi-code"
+            ? await (async () => {
+                const newCredentials = await refreshKimiCodeCredentials(cred);
+                return { apiKey: newCredentials.access, newCredentials };
+              })()
+            : await getOAuthApiKey(cred.provider as OAuthProvider, oauthCreds);
     if (!result) return null;
     store.profiles[params.profileId] = {
       ...cred,

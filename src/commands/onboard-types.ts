@@ -15,6 +15,7 @@ export type AuthChoice =
   | "ai-gateway-api-key"
   | "moonshot-api-key"
   | "kimi-code-api-key"
+  | "kimi-code-oauth"
   | "synthetic-api-key"
   | "venice-api-key"
   | "codex-cli"

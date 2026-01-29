@@ -252,6 +252,52 @@ export async function applyNonInteractiveAuthChoice(params: {
     return applyMoonshotConfig(nextConfig);
   }
 
+  if (authChoice === "kimi-code-oauth") {
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const fs = await import("node:fs");
+    const kimiCredPath = path.join(os.homedir(), ".kimi", "credentials", "kimi-code.json");
+    if (!fs.existsSync(kimiCredPath)) {
+      runtime.error(
+        `Kimi CLI credentials not found at ${kimiCredPath}.\n` +
+          "Please log in with Kimi CLI first: kimi login",
+      );
+      runtime.exit(1);
+      return null;
+    }
+    let raw: { access_token?: string; refresh_token?: string; expires_at?: number };
+    try {
+      raw = JSON.parse(fs.readFileSync(kimiCredPath, "utf-8"));
+    } catch {
+      runtime.error(`Failed to parse Kimi CLI credentials at ${kimiCredPath}.`);
+      runtime.exit(1);
+      return null;
+    }
+    if (!raw.access_token || !raw.refresh_token) {
+      runtime.error("Kimi CLI credentials file is missing access_token or refresh_token.");
+      runtime.exit(1);
+      return null;
+    }
+    upsertAuthProfile({
+      profileId: "kimi-code:default",
+      credential: {
+        type: "oauth",
+        provider: "kimi-code",
+        access: raw.access_token,
+        refresh: raw.refresh_token,
+        // Kimi stores expires_at in seconds; Moltbot uses milliseconds
+        expires: raw.expires_at ? raw.expires_at * 1000 : 0,
+      },
+    });
+    runtime.log("Imported Kimi Code OAuth credentials from Kimi CLI.");
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "kimi-code:default",
+      provider: "kimi-code",
+      mode: "oauth",
+    });
+    return applyKimiCodeConfig(nextConfig);
+  }
+
   if (authChoice === "kimi-code-api-key") {
     const resolved = await resolveNonInteractiveApiKey({
       provider: "kimi-code",
