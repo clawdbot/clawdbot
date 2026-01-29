@@ -90,6 +90,12 @@ export type SlackThreadStarter = {
   files?: SlackFile[];
 };
 
+export type SlackThreadReply = {
+  text: string;
+  userId?: string;
+  ts?: string;
+};
+
 const THREAD_STARTER_CACHE = new Map<string, SlackThreadStarter>();
 
 export async function resolveSlackThreadStarter(params: {
@@ -120,5 +126,52 @@ export async function resolveSlackThreadStarter(params: {
     return starter;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Fetches recent thread replies (excluding the thread starter and a specific message).
+ * Returns messages in chronological order (oldest first).
+ */
+export async function resolveSlackThreadReplies(params: {
+  channelId: string;
+  threadTs: string;
+  client: SlackWebClient;
+  /** Message ts to exclude (usually the current inbound message). */
+  excludeTs?: string;
+  /** Maximum number of replies to fetch (default: 10). */
+  limit?: number;
+}): Promise<SlackThreadReply[]> {
+  const limit = params.limit ?? 10;
+  try {
+    const response = (await params.client.conversations.replies({
+      channel: params.channelId,
+      ts: params.threadTs,
+      // Fetch more than limit to account for exclusions.
+      limit: limit + 2,
+      inclusive: true,
+    })) as { messages?: Array<{ text?: string; user?: string; ts?: string }> };
+    const messages = response?.messages ?? [];
+    // Filter out the thread starter (first message) and the excluded message.
+    const replies = messages
+      .filter((msg) => {
+        if (!msg.ts) return false;
+        // Exclude thread starter (ts === threadTs).
+        if (msg.ts === params.threadTs) return false;
+        // Exclude the specified message (usually the current inbound).
+        if (params.excludeTs && msg.ts === params.excludeTs) return false;
+        return true;
+      })
+      .map((msg) => ({
+        text: (msg.text ?? "").trim(),
+        userId: msg.user,
+        ts: msg.ts,
+      }))
+      .filter((reply) => reply.text.length > 0);
+    // Return in chronological order, limited to the specified count.
+    // conversations.replies returns messages in chronological order by default.
+    return replies.slice(-limit);
+  } catch {
+    return [];
   }
 }

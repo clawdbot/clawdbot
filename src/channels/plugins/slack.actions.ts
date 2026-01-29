@@ -137,6 +137,7 @@ export function createSlackActions(providerId: string): ChannelMessageActionAdap
             accountId: accountId ?? undefined,
           },
           cfg,
+          toolContext,
         );
       }
 

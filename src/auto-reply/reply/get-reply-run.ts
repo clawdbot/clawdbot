@@ -231,6 +231,10 @@ export async function runPreparedReply(
     isNewSession && threadStarterBody
       ? `[Thread starter - for context]\n${threadStarterBody}`
       : undefined;
+  const threadRepliesBody = ctx.ThreadRepliesBody?.trim();
+  const threadRepliesNote = threadRepliesBody
+    ? `[Thread replies - for context]\n${threadRepliesBody}`
+    : undefined;
   const skillResult = await ensureSkillSnapshot({
     sessionEntry,
     sessionStore,
@@ -245,7 +249,9 @@ export async function runPreparedReply(
   sessionEntry = skillResult.sessionEntry ?? sessionEntry;
   currentSystemSent = skillResult.systemSent;
   const skillsSnapshot = skillResult.skillsSnapshot;
-  const prefixedBody = [threadStarterNote, prefixedBodyBase].filter(Boolean).join("\n\n");
+  const prefixedBody = [threadStarterNote, threadRepliesNote, prefixedBodyBase]
+    .filter(Boolean)
+    .join("\n\n");
   const mediaNote = buildInboundMediaNote(ctx);
   const mediaReplyHint = mediaNote
     ? "To send an image back, prefer the message tool (media/path/filePath). If you must inline, use MEDIA:/path or MEDIA:https://example.com/image.jpg (spaces ok, quote if needed). Keep caption in the text body."

@@ -341,6 +341,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
             accountId: accountId ?? undefined,
           },
           cfg,
+          toolContext,
         );
       }
 
