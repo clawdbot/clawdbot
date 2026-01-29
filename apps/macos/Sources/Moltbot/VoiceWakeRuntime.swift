@@ -740,6 +740,8 @@ actor VoiceWakeRuntime {
             let token = trigger.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
             guard !token.isEmpty, let range = lower.range(of: token) else { continue }
             let after = range.upperBound
+            // Guard against index out of bounds when the trigger is at the end of the string
+            guard after <= text.endIndex else { continue }
             let trimmed = text[after...].trimmingCharacters(in: .whitespacesAndNewlines)
             return String(trimmed)
         }

@@ -35,6 +35,19 @@ import Testing
         #expect(VoiceWakeRuntime._testHasContentAfterTrigger(text, triggers: triggers))
     }
 
+    @Test func trimsAfterTriggerHandlesTriggerAtEnd() {
+        let triggers = ["clawd"]
+        let text = "hey clawd"
+        #expect(VoiceWakeRuntime._testTrimmedAfterTrigger(text, triggers: triggers) == "")
+    }
+
+    @Test func trimsAfterTriggerHandlesEdgeCaseIndexBounds() {
+        // Regression test for crash when trigger range upperBound exceeds text.endIndex
+        let triggers = ["claude"]
+        let text = "claude"
+        #expect(VoiceWakeRuntime._testTrimmedAfterTrigger(text, triggers: triggers) == "")
+    }
+
     @Test func gateRequiresGapBetweenTriggerAndCommand() {
         let transcript = "hey clawd do thing"
         let segments = makeSegments(
