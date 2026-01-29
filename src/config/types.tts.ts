@@ -56,8 +56,12 @@ export type TtsConfig = {
   /** OpenAI configuration. */
   openai?: {
     apiKey?: string;
+    /** Custom base URL for OpenAI-compatible TTS servers (e.g., Kokoro, LocalAI). */
+    baseUrl?: string;
     model?: string;
     voice?: string;
+    /** Speed multiplier (0.25-4.0 for OpenAI, server-dependent for compatible APIs). */
+    speed?: number;
   };
   /** Microsoft Edge (node-edge-tts) configuration. */
   edge?: {
