@@ -384,12 +384,24 @@ export async function runSubagentAnnounceFlow(params: {
             : "finished with unknown status";
 
     // Build instructional message for main agent
+    // Include error context in findings when no reply available
+    let findings = reply;
+    if (!findings) {
+      if (outcome?.status === "error" && outcome?.error) {
+        findings = `Error encountered:\n${outcome.error}`;
+      } else if (outcome?.status === "timeout") {
+        findings = `Task timed out before producing output.`;
+      } else if (outcome?.status === "unknown") {
+        findings = `Task ended with unknown status.`;
+      }
+    }
+
     const taskLabel = params.label || params.task || "background task";
     const triggerMessage = [
       `A background task "${taskLabel}" just ${statusLabel}.`,
       "",
       "Findings:",
-      reply || "(no output)",
+      findings || "(no output)",
       "",
       statsLine,
       "",
