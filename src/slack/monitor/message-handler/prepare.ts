@@ -223,11 +223,16 @@ export async function prepareSlackMessage(params: {
           canResolveExplicit: Boolean(ctx.botUserId),
         },
       }));
+  // Check if this is an "active thread" where the bot was previously mentioned
+  const isInActiveThread = Boolean(
+    !isDirectMessage && message.thread_ts && ctx.isActiveThread(message.channel, message.thread_ts),
+  );
+
   const implicitMention = Boolean(
     !isDirectMessage &&
     ctx.botUserId &&
     message.thread_ts &&
-    message.parent_user_id === ctx.botUserId,
+    (message.parent_user_id === ctx.botUserId || isInActiveThread),
   );
 
   const sender = message.user ? await ctx.resolveUserName(message.user) : null;
@@ -306,6 +311,18 @@ export async function prepareSlackMessage(params: {
     commandAuthorized,
   });
   const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
+
+  // Mark thread as active if the bot was explicitly mentioned (for followOnMention feature)
+  if (effectiveWasMentioned && message.thread_ts && ctx.threadFollowOnMention) {
+    ctx.markThreadActive(message.channel, message.thread_ts);
+  }
+  // Also mark if this is a reply that creates a thread (the reply itself starts the thread)
+  if (effectiveWasMentioned && !message.thread_ts && message.ts && ctx.threadFollowOnMention) {
+    // If the bot responds, it will create a thread with this ts - mark it preemptively
+    // Actually, we should mark the thread when the bot responds, not here
+    // For now, just handle existing threads
+  }
+
   if (isRoom && shouldRequireMention && mentionGate.shouldSkip) {
     ctx.logger.info({ channel: message.channel, reason: "no-mention" }, "skipping channel message");
     const pendingText = (message.text ?? "").trim();

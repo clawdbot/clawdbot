@@ -337,6 +337,8 @@ const FIELD_LABELS: Record<string, string> = {
   "channels.slack.userTokenReadOnly": "Slack User Token Read Only",
   "channels.slack.thread.historyScope": "Slack Thread History Scope",
   "channels.slack.thread.inheritParent": "Slack Thread Parent Inheritance",
+  "channels.slack.thread.followOnMention": "Slack Thread Follow on Mention",
+  "channels.slack.thread.followIdleMinutes": "Slack Thread Follow Idle Minutes",
   "channels.mattermost.botToken": "Mattermost Bot Token",
   "channels.mattermost.baseUrl": "Mattermost Base URL",
   "channels.mattermost.chatmode": "Mattermost Chat Mode",
@@ -469,6 +471,10 @@ const FIELD_HELP: Record<string, string> = {
     'Scope for Slack thread history context ("thread" isolates per thread; "channel" reuses channel history).',
   "channels.slack.thread.inheritParent":
     "If true, Slack thread sessions inherit the parent channel transcript (default: false).",
+  "channels.slack.thread.followOnMention":
+    "If true, continue responding in threads where the bot was mentioned without requiring repeated @mentions (default: false).",
+  "channels.slack.thread.followIdleMinutes":
+    "Minutes of inactivity before a thread is no longer considered 'active' for followOnMention (default: 60).",
   "channels.mattermost.botToken":
     "Bot token from Mattermost System Console -> Integrations -> Bot Accounts.",
   "channels.mattermost.baseUrl":

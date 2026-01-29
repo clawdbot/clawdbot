@@ -392,6 +392,8 @@ export const SlackThreadSchema = z
   .object({
     historyScope: z.enum(["thread", "channel"]).optional(),
     inheritParent: z.boolean().optional(),
+    followOnMention: z.boolean().optional(),
+    followIdleMinutes: z.number().int().positive().optional(),
   })
   .strict();
 

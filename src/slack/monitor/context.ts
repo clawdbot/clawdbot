@@ -82,6 +82,8 @@ export type SlackMonitorContext = {
   replyToMode: "off" | "first" | "all";
   threadHistoryScope: "thread" | "channel";
   threadInheritParent: boolean;
+  threadFollowOnMention: boolean;
+  threadFollowIdleMinutes: number;
   slashCommand: Required<import("../../config/config.js").SlackSlashCommandConfig>;
   textLimit: number;
   ackReactionScope: string;
@@ -112,6 +114,10 @@ export type SlackMonitorContext = {
     threadTs?: string;
     status: string;
   }) => Promise<void>;
+  /** Check if a thread is active (bot was mentioned recently). */
+  isActiveThread: (channelId: string, threadTs: string) => boolean;
+  /** Mark a thread as active (called when bot is mentioned in a thread). */
+  markThreadActive: (channelId: string, threadTs: string) => void;
 };
 
 export function createSlackMonitorContext(params: {
@@ -143,6 +149,8 @@ export function createSlackMonitorContext(params: {
   replyToMode: SlackMonitorContext["replyToMode"];
   threadHistoryScope: SlackMonitorContext["threadHistoryScope"];
   threadInheritParent: SlackMonitorContext["threadInheritParent"];
+  threadFollowOnMention?: boolean;
+  threadFollowIdleMinutes?: number;
   slashCommand: SlackMonitorContext["slashCommand"];
   textLimit: number;
   ackReactionScope: string;
@@ -151,6 +159,34 @@ export function createSlackMonitorContext(params: {
 }): SlackMonitorContext {
   const channelHistories = new Map<string, HistoryEntry[]>();
   const logger = getChildLogger({ module: "slack-auto-reply" });
+
+  // Thread following: track threads where the bot was mentioned
+  // Key: "channelId:threadTs", Value: timestamp when last active
+  const activeThreads = new Map<string, number>();
+  const threadFollowOnMention = params.threadFollowOnMention ?? false;
+  const threadFollowIdleMinutes = params.threadFollowIdleMinutes ?? 60;
+  const threadFollowIdleMs = threadFollowIdleMinutes * 60 * 1000;
+
+  const isActiveThread = (channelId: string, threadTs: string): boolean => {
+    if (!threadFollowOnMention) return false;
+    const key = `${channelId}:${threadTs}`;
+    const lastActive = activeThreads.get(key);
+    if (!lastActive) return false;
+    const now = Date.now();
+    if (now - lastActive > threadFollowIdleMs) {
+      // Thread has gone idle, remove it
+      activeThreads.delete(key);
+      return false;
+    }
+    return true;
+  };
+
+  const markThreadActive = (channelId: string, threadTs: string): void => {
+    if (!threadFollowOnMention) return;
+    const key = `${channelId}:${threadTs}`;
+    activeThreads.set(key, Date.now());
+    logVerbose(`slack: marked thread ${key} as active for followOnMention`);
+  };
 
   const channelCache = new Map<
     string,
@@ -387,6 +423,8 @@ export function createSlackMonitorContext(params: {
     replyToMode: params.replyToMode,
     threadHistoryScope: params.threadHistoryScope,
     threadInheritParent: params.threadInheritParent,
+    threadFollowOnMention,
+    threadFollowIdleMinutes,
     slashCommand: params.slashCommand,
     textLimit: params.textLimit,
     ackReactionScope: params.ackReactionScope,
@@ -400,5 +438,7 @@ export function createSlackMonitorContext(params: {
     resolveChannelName,
     resolveUserName,
     setSlackThreadStatus,
+    isActiveThread,
+    markThreadActive,
   };
 }

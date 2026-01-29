@@ -73,6 +73,16 @@ export type SlackThreadConfig = {
   historyScope?: "thread" | "channel";
   /** If true, thread sessions inherit the parent channel transcript. Default: false. */
   inheritParent?: boolean;
+  /**
+   * If true, continue responding in threads where the bot was mentioned
+   * without requiring repeated @mentions. Default: false.
+   */
+  followOnMention?: boolean;
+  /**
+   * Minutes of inactivity before a thread is no longer considered "active"
+   * for followOnMention. Default: 60.
+   */
+  followIdleMinutes?: number;
 };
 
 export type SlackAccountConfig = {
