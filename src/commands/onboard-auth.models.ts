@@ -20,6 +20,12 @@ export const KIMI_CODE_MAX_TOKENS = 32768;
 export const KIMI_CODE_HEADERS = { "User-Agent": "KimiCLI/0.77" } as const;
 export const KIMI_CODE_COMPAT = { supportsDeveloperRole: false } as const;
 
+export const NOVA_BASE_URL = "https://api.nova.amazon.com/v1";
+export const NOVA_DEFAULT_MODEL_ID = "nova-2-lite-v1";
+export const NOVA_DEFAULT_MODEL_REF = `nova/${NOVA_DEFAULT_MODEL_ID}`;
+export const NOVA_DEFAULT_CONTEXT_WINDOW = 64000;
+export const NOVA_DEFAULT_MAX_TOKENS = 10000;
+
 // Pricing: MiniMax doesn't publish public rates. Override in models.json for accurate costs.
 export const MINIMAX_API_COST = {
   input: 15,
@@ -46,6 +52,13 @@ export const MOONSHOT_DEFAULT_COST = {
   cacheWrite: 0,
 };
 export const KIMI_CODE_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
+export const NOVA_DEFAULT_COST = {
   input: 0,
   output: 0,
   cacheRead: 0,
@@ -114,5 +127,19 @@ export function buildKimiCodeModelDefinition(): ModelDefinitionConfig {
     maxTokens: KIMI_CODE_MAX_TOKENS,
     headers: KIMI_CODE_HEADERS,
     compat: KIMI_CODE_COMPAT,
+  };
+}
+
+export function buildNovaModelDefinition(
+  modelId: string = NOVA_DEFAULT_MODEL_ID,
+): ModelDefinitionConfig {
+  return {
+    id: modelId,
+    name: "Nova 2 Lite",
+    reasoning: false,
+    input: ["text", "image"],
+    cost: NOVA_DEFAULT_COST,
+    contextWindow: NOVA_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: NOVA_DEFAULT_MAX_TOKENS,
   };
 }

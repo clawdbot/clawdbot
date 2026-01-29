@@ -12,6 +12,7 @@ import {
   applyMinimaxApiConfig,
   applyMinimaxConfig,
   applyMoonshotConfig,
+  applyNovaConfig,
   applyOpencodeZenConfig,
   applyOpenrouterConfig,
   applySyntheticConfig,
@@ -23,6 +24,7 @@ import {
   setKimiCodeApiKey,
   setMinimaxApiKey,
   setMoonshotApiKey,
+  setNovaApiKey,
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
   setSyntheticApiKey,
@@ -250,6 +252,25 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyMoonshotConfig(nextConfig);
+  }
+
+  if (authChoice === "nova-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "nova",
+      cfg: baseConfig,
+      flagValue: opts.novaApiKey,
+      flagName: "--nova-api-key",
+      envVar: "NOVA_API_KEY",
+      runtime,
+    });
+    if (!resolved) return null;
+    if (resolved.source !== "profile") await setNovaApiKey(resolved.key);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "nova:default",
+      provider: "nova",
+      mode: "api_key",
+    });
+    return applyNovaConfig(nextConfig);
   }
 
   if (authChoice === "kimi-code-api-key") {

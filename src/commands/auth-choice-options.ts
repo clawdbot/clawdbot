@@ -15,6 +15,7 @@ export type AuthChoiceGroupId =
   | "openrouter"
   | "ai-gateway"
   | "moonshot"
+  | "nova"
   | "zai"
   | "opencode-zen"
   | "minimax"
@@ -102,6 +103,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["moonshot-api-key", "kimi-code-api-key"],
   },
   {
+    value: "nova",
+    label: "Amazon Nova",
+    hint: "API key",
+    choices: ["nova-api-key"],
+  },
+  {
     value: "zai",
     label: "Z.AI (GLM 4.7)",
     hint: "API key",
@@ -140,6 +147,11 @@ export function buildAuthChoiceOptions(params: {
     label: "Vercel AI Gateway API key",
   });
   options.push({ value: "moonshot-api-key", label: "Moonshot AI API key" });
+  options.push({
+    value: "nova-api-key",
+    label: "Amazon Nova API key",
+    hint: "Nova chat completion API",
+  });
   options.push({ value: "kimi-code-api-key", label: "Kimi Code API key" });
   options.push({ value: "synthetic-api-key", label: "Synthetic API key" });
   options.push({

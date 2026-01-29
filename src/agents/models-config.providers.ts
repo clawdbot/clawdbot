@@ -53,6 +53,17 @@ const KIMI_CODE_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+const NOVA_BASE_URL = "https://api.nova.amazon.com/v1";
+const NOVA_DEFAULT_MODEL_ID = "nova-2-lite-v1";
+const NOVA_DEFAULT_CONTEXT_WINDOW = 64000;
+const NOVA_DEFAULT_MAX_TOKENS = 10000;
+const NOVA_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 const QWEN_PORTAL_BASE_URL = "https://portal.qwen.ai/v1";
 const QWEN_PORTAL_OAUTH_PLACEHOLDER = "qwen-oauth";
 const QWEN_PORTAL_DEFAULT_CONTEXT_WINDOW = 128000;
@@ -350,6 +361,24 @@ async function buildVeniceProvider(): Promise<ProviderConfig> {
   };
 }
 
+function buildNovaProvider(): ProviderConfig {
+  return {
+    baseUrl: NOVA_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: NOVA_DEFAULT_MODEL_ID,
+        name: "Nova 2 Lite",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: NOVA_DEFAULT_COST,
+        contextWindow: NOVA_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: NOVA_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
 async function buildOllamaProvider(): Promise<ProviderConfig> {
   const models = await discoverOllamaModels();
   return {
@@ -400,6 +429,13 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "venice", store: authStore });
   if (veniceKey) {
     providers.venice = { ...(await buildVeniceProvider()), apiKey: veniceKey };
+  }
+
+  const novaKey =
+    resolveEnvApiKeyVarName("nova") ??
+    resolveApiKeyFromProfiles({ provider: "nova", store: authStore });
+  if (novaKey) {
+    providers.nova = { ...buildNovaProvider(), apiKey: novaKey };
   }
 
   const qwenProfiles = listProfilesForProvider(authStore, "qwen-portal");
