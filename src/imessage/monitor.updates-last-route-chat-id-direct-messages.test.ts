@@ -131,6 +131,77 @@ describe("monitorIMessageProvider", () => {
     );
   });
 
+  it("skips self-chat messages that are not marked from me", async () => {
+    const run = monitorIMessageProvider();
+    await waitForSubscribe();
+
+    notificationHandler?.({
+      method: "message",
+      params: {
+        message: {
+          id: 5,
+          chat_id: 42,
+          sender: "+15550004444",
+          is_from_me: false,
+          text: "echo",
+          is_group: false,
+          participants: ["+15550004444"],
+        },
+      },
+    });
+
+    await flush();
+    closeResolve?.();
+    await run;
+
+    expect(replyMock).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("drops inbound echoes that match recently sent outbound ids", async () => {
+    sendMock.mockResolvedValueOnce({ messageId: "MSG-1" });
+    replyMock.mockResolvedValueOnce({ text: "ok" });
+    const run = monitorIMessageProvider();
+    await waitForSubscribe();
+
+    notificationHandler?.({
+      method: "message",
+      params: {
+        message: {
+          id: 10,
+          chat_id: 7,
+          sender: "+15550004444",
+          is_from_me: false,
+          text: "hey",
+          is_group: false,
+        },
+      },
+    });
+
+    await flush();
+
+    notificationHandler?.({
+      method: "message",
+      params: {
+        message: {
+          id: "MSG-1",
+          chat_id: 7,
+          sender: "+15550004444",
+          is_from_me: false,
+          text: "echoed",
+          is_group: false,
+        },
+      },
+    });
+
+    await flush();
+    closeResolve?.();
+    await run;
+
+    expect(replyMock).toHaveBeenCalledTimes(1);
+    expect(sendMock).toHaveBeenCalledTimes(1);
+  });
+
   it("does not trigger unhandledRejection when aborting during shutdown", async () => {
     requestMock.mockImplementation((method: string) => {
       if (method === "watch.subscribe") return Promise.resolve({ subscription: 1 });

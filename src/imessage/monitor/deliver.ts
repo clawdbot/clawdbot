@@ -15,8 +15,9 @@ export async function deliverReplies(params: {
   runtime: RuntimeEnv;
   maxBytes: number;
   textLimit: number;
+  onSent?: (messageId: string) => void;
 }) {
-  const { replies, target, client, runtime, maxBytes, textLimit, accountId } = params;
+  const { replies, target, client, runtime, maxBytes, textLimit, accountId, onSent } = params;
   const cfg = loadConfig();
   const tableMode = resolveMarkdownTableMode({
     cfg,
@@ -31,23 +32,29 @@ export async function deliverReplies(params: {
     if (!text && mediaList.length === 0) continue;
     if (mediaList.length === 0) {
       for (const chunk of chunkTextWithMode(text, textLimit, chunkMode)) {
-        await sendMessageIMessage(target, chunk, {
+        const result = await sendMessageIMessage(target, chunk, {
           maxBytes,
           client,
           accountId,
         });
+        if (result.messageId && result.messageId !== "ok" && result.messageId !== "unknown") {
+          onSent?.(result.messageId);
+        }
       }
     } else {
       let first = true;
       for (const url of mediaList) {
         const caption = first ? text : "";
         first = false;
-        await sendMessageIMessage(target, caption, {
+        const result = await sendMessageIMessage(target, caption, {
           mediaUrl: url,
           maxBytes,
           client,
           accountId,
         });
+        if (result.messageId && result.messageId !== "ok" && result.messageId !== "unknown") {
+          onSent?.(result.messageId);
+        }
       }
     }
     runtime.log?.(`imessage: delivered reply to ${target}`);

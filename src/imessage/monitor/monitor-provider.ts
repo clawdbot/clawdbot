@@ -97,6 +97,26 @@ function normalizeReplyField(value: unknown): string | undefined {
   return undefined;
 }
 
+function normalizeMessageId(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : undefined;
+  }
+  if (typeof value === "number") return String(value);
+  return undefined;
+}
+
+function isSelfChatMessage(message: IMessagePayload, senderNormalized: string): boolean {
+  if (Boolean(message.is_group)) return false;
+  const participants =
+    message.participants?.map((entry) => (entry ? normalizeIMessageHandle(entry) : "")).filter(Boolean) ??
+    [];
+  if (participants.length === 0) return false;
+  const unique = new Set(participants);
+  if (unique.size !== 1) return false;
+  return unique.has(senderNormalized);
+}
+
 function describeReplyContext(message: IMessagePayload): IMessageReplyContext | null {
   const body = normalizeReplyField(message.reply_to_text);
   if (!body) return null;
@@ -134,6 +154,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   const mediaMaxBytes = (opts.mediaMaxMb ?? imessageCfg.mediaMaxMb ?? 16) * 1024 * 1024;
   const cliPath = opts.cliPath ?? imessageCfg.cliPath ?? "imsg";
   const dbPath = opts.dbPath ?? imessageCfg.dbPath;
+  const OUTBOUND_CACHE_TTL_MS = 5 * 60 * 1000;
+  const OUTBOUND_CACHE_MAX = 200;
+  const recentOutboundIds = new Map<string, number>();
 
   // Resolve remoteHost: explicit config, or auto-detect from SSH wrapper script
   let remoteHost = imessageCfg.remoteHost;
@@ -185,12 +208,53 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     },
   });
 
+  function pruneRecentOutboundIds(now = Date.now()) {
+    for (const [key, timestamp] of recentOutboundIds) {
+      if (now - timestamp > OUTBOUND_CACHE_TTL_MS) {
+        recentOutboundIds.delete(key);
+      }
+    }
+    if (recentOutboundIds.size > OUTBOUND_CACHE_MAX) {
+      const entries = Array.from(recentOutboundIds.entries()).sort((a, b) => a[1] - b[1]);
+      for (let i = 0; i < entries.length - OUTBOUND_CACHE_MAX; i += 1) {
+        recentOutboundIds.delete(entries[i]?.[0] ?? "");
+      }
+    }
+  }
+
+  function trackOutboundId(messageId: string | undefined) {
+    if (!messageId) return;
+    const trimmed = messageId.trim();
+    if (!trimmed) return;
+    recentOutboundIds.set(trimmed, Date.now());
+    pruneRecentOutboundIds();
+  }
+
   async function handleMessageNow(message: IMessagePayload) {
     const senderRaw = message.sender ?? "";
     const sender = senderRaw.trim();
     if (!sender) return;
     const senderNormalized = normalizeIMessageHandle(sender);
     if (message.is_from_me) return;
+    const messageId = normalizeMessageId(message.id);
+    if (messageId && recentOutboundIds.has(messageId)) {
+      logInboundDrop({
+        log: logVerbose,
+        channel: "imessage",
+        reason: "outbound echo",
+        target: sender,
+      });
+      return;
+    }
+    if (isSelfChatMessage(message, senderNormalized)) {
+      logInboundDrop({
+        log: logVerbose,
+        channel: "imessage",
+        reason: "self chat",
+        target: sender,
+      });
+      return;
+    }
 
     const chatId = message.chat_id ?? undefined;
     const chatGuid = message.chat_guid ?? undefined;
@@ -543,6 +607,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           runtime,
           maxBytes: mediaMaxBytes,
           textLimit,
+          onSent: trackOutboundId,
         });
       },
       onError: (err, info) => {
