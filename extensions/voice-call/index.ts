@@ -1,13 +1,14 @@
 import { Type } from "@sinclair/typebox";
+
 import type { CoreConfig } from "./src/core-bridge.js";
 import {
   VoiceCallConfigSchema,
-  resolveVoiceCallConfig,
   validateProviderConfig,
   type VoiceCallConfig,
 } from "./src/config.js";
 import { registerVoiceCallCli } from "./src/cli.js";
 import { createVoiceCallRuntime, type VoiceCallRuntime } from "./src/runtime.js";
+import { callGateway } from "../../dist/gateway/call.js";
 
 const voiceCallConfigSchema = {
   parse(value: unknown): VoiceCallConfig {
@@ -62,8 +63,8 @@ const voiceCallConfigSchema = {
       advanced: true,
     },
     "tunnel.ngrokDomain": { label: "ngrok Domain", advanced: true },
-    "tunnel.allowNgrokFreeTierLoopbackBypass": {
-      label: "Allow ngrok Free Tier (Loopback Bypass)",
+    "tunnel.allowNgrokFreeTier": {
+      label: "Allow ngrok Free Tier",
       advanced: true,
     },
     "streaming.enabled": { label: "Enable Streaming", advanced: true },
@@ -145,10 +146,8 @@ const voiceCallPlugin = {
   description: "Voice-call plugin with Telnyx/Twilio/Plivo providers",
   configSchema: voiceCallConfigSchema,
   register(api) {
-    const config = resolveVoiceCallConfig(
-      voiceCallConfigSchema.parse(api.pluginConfig),
-    );
-    const validation = validateProviderConfig(config);
+    const cfg = voiceCallConfigSchema.parse(api.pluginConfig);
+    const validation = validateProviderConfig(cfg);
 
     if (api.pluginConfig && typeof api.pluginConfig === "object") {
       const raw = api.pluginConfig as Record<string, unknown>;
@@ -169,7 +168,7 @@ const voiceCallPlugin = {
     let runtime: VoiceCallRuntime | null = null;
 
     const ensureRuntime = async () => {
-      if (!config.enabled) {
+      if (!cfg.enabled) {
         throw new Error("Voice call disabled in plugin config");
       }
       if (!validation.valid) {
@@ -178,7 +177,7 @@ const voiceCallPlugin = {
       if (runtime) return runtime;
       if (!runtimePromise) {
         runtimePromise = createVoiceCallRuntime({
-          config,
+          config: cfg,
           coreConfig: api.config as CoreConfig,
           ttsRuntime: api.runtime.tts,
           logger: api.logger,
@@ -188,8 +187,14 @@ const voiceCallPlugin = {
       return runtime;
     };
 
-    const sendError = (respond: (ok: boolean, payload?: unknown) => void, err: unknown) => {
-      respond(false, { error: err instanceof Error ? err.message : String(err) });
+    // PATCHED: Use proper error format for gateway responses
+    // respond(false, undefined, { message: "error" }) instead of respond(false, { error: "..." })
+    const respondError = (respond: (ok: boolean, payload?: unknown, error?: unknown) => void, msg: string) => {
+      respond(false, undefined, { message: msg });
+    };
+
+    const sendError = (respond: (ok: boolean, payload?: unknown, error?: unknown) => void, err: unknown) => {
+      respond(false, undefined, { message: err instanceof Error ? err.message : String(err) });
     };
 
     api.registerGatewayMethod("voicecall.initiate", async ({ params, respond }) => {
@@ -197,7 +202,7 @@ const voiceCallPlugin = {
         const message =
           typeof params?.message === "string" ? params.message.trim() : "";
         if (!message) {
-          respond(false, { error: "message required" });
+          respondError(respond, "message required");
           return;
         }
         const rt = await ensureRuntime();
@@ -206,7 +211,7 @@ const voiceCallPlugin = {
             ? params.to.trim()
             : rt.config.toNumber;
         if (!to) {
-          respond(false, { error: "to required" });
+          respondError(respond, "to required");
           return;
         }
         const mode =
@@ -218,7 +223,7 @@ const voiceCallPlugin = {
           mode,
         });
         if (!result.success) {
-          respond(false, { error: result.error || "initiate failed" });
+          respondError(respond, result.error || "initiate failed");
           return;
         }
         respond(true, { callId: result.callId, initiated: true });
@@ -234,13 +239,13 @@ const voiceCallPlugin = {
         const message =
           typeof params?.message === "string" ? params.message.trim() : "";
         if (!callId || !message) {
-          respond(false, { error: "callId and message required" });
+          respondError(respond, "callId and message required");
           return;
         }
         const rt = await ensureRuntime();
         const result = await rt.manager.continueCall(callId, message);
         if (!result.success) {
-          respond(false, { error: result.error || "continue failed" });
+          respondError(respond, result.error || "continue failed");
           return;
         }
         respond(true, { success: true, transcript: result.transcript });
@@ -256,13 +261,13 @@ const voiceCallPlugin = {
         const message =
           typeof params?.message === "string" ? params.message.trim() : "";
         if (!callId || !message) {
-          respond(false, { error: "callId and message required" });
+          respondError(respond, "callId and message required");
           return;
         }
         const rt = await ensureRuntime();
         const result = await rt.manager.speak(callId, message);
         if (!result.success) {
-          respond(false, { error: result.error || "speak failed" });
+          respondError(respond, result.error || "speak failed");
           return;
         }
         respond(true, { success: true });
@@ -276,13 +281,13 @@ const voiceCallPlugin = {
         const callId =
           typeof params?.callId === "string" ? params.callId.trim() : "";
         if (!callId) {
-          respond(false, { error: "callId required" });
+          respondError(respond, "callId required");
           return;
         }
         const rt = await ensureRuntime();
         const result = await rt.manager.endCall(callId);
         if (!result.success) {
-          respond(false, { error: result.error || "end failed" });
+          respondError(respond, result.error || "end failed");
           return;
         }
         respond(true, { success: true });
@@ -300,7 +305,7 @@ const voiceCallPlugin = {
               ? params.sid.trim()
               : "";
         if (!raw) {
-          respond(false, { error: "callId required" });
+          respondError(respond, "callId required");
           return;
         }
         const rt = await ensureRuntime();
@@ -322,7 +327,7 @@ const voiceCallPlugin = {
         const message =
           typeof params?.message === "string" ? params.message.trim() : "";
         if (!to) {
-          respond(false, { error: "to required" });
+          respondError(respond, "to required");
           return;
         }
         const rt = await ensureRuntime();
@@ -330,7 +335,7 @@ const voiceCallPlugin = {
           message: message || undefined,
         });
         if (!result.success) {
-          respond(false, { error: result.error || "initiate failed" });
+          respondError(respond, result.error || "initiate failed");
           return;
         }
         respond(true, { callId: result.callId, initiated: true });
@@ -339,6 +344,9 @@ const voiceCallPlugin = {
       }
     });
 
+    // PATCHED: Detect embedded vs sandbox mode and use appropriate call path
+    // In embedded mode (runtime available): use ensureRuntime() directly
+    // In sandbox mode (runtime null): use gateway RPC
     api.registerTool({
       name: "voice_call",
       label: "Voice Call",
@@ -353,100 +361,155 @@ const voiceCallPlugin = {
           details: payload,
         });
 
-        try {
-          const rt = await ensureRuntime();
+        // Detect mode: if runtime exists, we're in gateway process (embedded)
+        // If runtime is null, we're in sandbox - use gateway RPC
+        const useDirectCalls = runtime !== null;
 
+        // Gateway RPC helper (for sandbox mode)
+        const gatewayCall = async (method: string, callParams: Record<string, unknown>): Promise<Record<string, unknown>> => {
+          try {
+            const result = await callGateway({
+              method,
+              params: callParams,
+              timeoutMs: 10000,
+            });
+            return result as Record<string, unknown>;
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return { error: msg };
+          }
+        };
+
+        // Direct call helper (for embedded mode)
+        const directCall = async (action: string, callParams: Record<string, unknown>): Promise<Record<string, unknown>> => {
+          const rt = await ensureRuntime();
+          switch (action) {
+            case "initiate": {
+              const to = callParams.to as string | undefined ?? rt.config.toNumber;
+              if (!to) return { error: "to required" };
+              const result = await rt.manager.initiateCall(to, undefined, {
+                message: callParams.message as string | undefined,
+                mode: callParams.mode as "notify" | "conversation" | undefined,
+              });
+              if (!result.success) return { error: result.error || "initiate failed" };
+              return { callId: result.callId, initiated: true };
+            }
+            case "continue": {
+              const result = await rt.manager.continueCall(
+                callParams.callId as string,
+                callParams.message as string
+              );
+              if (!result.success) return { error: result.error || "continue failed" };
+              return { success: true, transcript: result.transcript };
+            }
+            case "speak": {
+              const result = await rt.manager.speak(
+                callParams.callId as string,
+                callParams.message as string
+              );
+              if (!result.success) return { error: result.error || "speak failed" };
+              return { success: true };
+            }
+            case "end": {
+              const result = await rt.manager.endCall(callParams.callId as string);
+              if (!result.success) return { error: result.error || "end failed" };
+              return { success: true };
+            }
+            case "status": {
+              const raw = callParams.callId as string;
+              const call = rt.manager.getCall(raw) || rt.manager.getCallByProviderCallId(raw);
+              if (!call) return { found: false };
+              return { found: true, call };
+            }
+            default:
+              return { error: "unknown action" };
+          }
+        };
+
+        // Unified call function that routes based on mode
+        const doCall = async (action: string, callParams: Record<string, unknown>): Promise<Record<string, unknown>> => {
+          if (useDirectCalls) {
+            return directCall(action, callParams);
+          } else {
+            const methodMap: Record<string, string> = {
+              initiate: "voicecall.initiate",
+              continue: "voicecall.continue",
+              speak: "voicecall.speak",
+              end: "voicecall.end",
+              status: "voicecall.status",
+            };
+            return gatewayCall(methodMap[action] || action, callParams);
+          }
+        };
+
+        try {
           if (typeof params?.action === "string") {
             switch (params.action) {
               case "initiate_call": {
                 const message = String(params.message || "").trim();
                 if (!message) throw new Error("message required");
-                const to =
-                  typeof params.to === "string" && params.to.trim()
-                    ? params.to.trim()
-                    : rt.config.toNumber;
-                if (!to) throw new Error("to required");
-                const result = await rt.manager.initiateCall(to, undefined, {
-                  message,
-                  mode:
-                    params.mode === "notify" || params.mode === "conversation"
-                      ? params.mode
-                      : undefined,
-                });
-                if (!result.success) {
-                  throw new Error(result.error || "initiate failed");
-                }
+                const to = typeof params.to === "string" && params.to.trim()
+                  ? params.to.trim()
+                  : undefined;
+                const mode = params.mode === "notify" || params.mode === "conversation"
+                  ? params.mode
+                  : undefined;
+                const result = await doCall("initiate", { to, message, mode });
+                if (result.error) throw new Error(String(result.error));
                 return json({ callId: result.callId, initiated: true });
               }
               case "continue_call": {
                 const callId = String(params.callId || "").trim();
                 const message = String(params.message || "").trim();
-                if (!callId || !message) {
-                  throw new Error("callId and message required");
-                }
-                const result = await rt.manager.continueCall(callId, message);
-                if (!result.success) {
-                  throw new Error(result.error || "continue failed");
-                }
+                if (!callId || !message) throw new Error("callId and message required");
+                const result = await doCall("continue", { callId, message });
+                if (result.error) throw new Error(String(result.error));
                 return json({ success: true, transcript: result.transcript });
               }
               case "speak_to_user": {
                 const callId = String(params.callId || "").trim();
                 const message = String(params.message || "").trim();
-                if (!callId || !message) {
-                  throw new Error("callId and message required");
-                }
-                const result = await rt.manager.speak(callId, message);
-                if (!result.success) {
-                  throw new Error(result.error || "speak failed");
-                }
+                if (!callId || !message) throw new Error("callId and message required");
+                const result = await doCall("speak", { callId, message });
+                if (result.error) throw new Error(String(result.error));
                 return json({ success: true });
               }
               case "end_call": {
                 const callId = String(params.callId || "").trim();
                 if (!callId) throw new Error("callId required");
-                const result = await rt.manager.endCall(callId);
-                if (!result.success) {
-                  throw new Error(result.error || "end failed");
-                }
+                const result = await doCall("end", { callId });
+                if (result.error) throw new Error(String(result.error));
                 return json({ success: true });
               }
               case "get_status": {
                 const callId = String(params.callId || "").trim();
                 if (!callId) throw new Error("callId required");
-                const call =
-                  rt.manager.getCall(callId) ||
-                  rt.manager.getCallByProviderCallId(callId);
-                return json(call ? { found: true, call } : { found: false });
+                const result = await doCall("status", { callId });
+                return json(result);
               }
             }
           }
 
+          // Legacy mode-based params
           const mode = params?.mode ?? "call";
           if (mode === "status") {
-            const sid =
-              typeof params.sid === "string" ? params.sid.trim() : "";
+            const sid = typeof params.sid === "string" ? params.sid.trim() : "";
             if (!sid) throw new Error("sid required for status");
-            const call =
-              rt.manager.getCall(sid) || rt.manager.getCallByProviderCallId(sid);
-            return json(call ? { found: true, call } : { found: false });
+            const result = await doCall("status", { callId: sid });
+            return json(result);
           }
 
-          const to =
-            typeof params.to === "string" && params.to.trim()
-              ? params.to.trim()
-              : rt.config.toNumber;
-          if (!to) throw new Error("to required for call");
-          const result = await rt.manager.initiateCall(to, undefined, {
-            message:
-              typeof params.message === "string" && params.message.trim()
-                ? params.message.trim()
-                : undefined,
-          });
-          if (!result.success) {
-            throw new Error(result.error || "initiate failed");
-          }
+          // Default: initiate call
+          const to = typeof params.to === "string" && params.to.trim()
+            ? params.to.trim()
+            : undefined;
+          const message = typeof params.message === "string" && params.message.trim()
+            ? params.message.trim()
+            : undefined;
+          const result = await doCall("initiate", { to, message });
+          if (result.error) throw new Error(String(result.error));
           return json({ callId: result.callId, initiated: true });
+
         } catch (err) {
           return json({
             error: err instanceof Error ? err.message : String(err),
@@ -459,7 +522,7 @@ const voiceCallPlugin = {
       ({ program }) =>
         registerVoiceCallCli({
           program,
-          config,
+          config: cfg,
           ensureRuntime,
           logger: api.logger,
         }),
@@ -469,7 +532,7 @@ const voiceCallPlugin = {
     api.registerService({
       id: "voicecall",
       start: async () => {
-        if (!config.enabled) return;
+        if (!cfg.enabled) return;
         try {
           await ensureRuntime();
         } catch (err) {

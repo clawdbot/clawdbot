@@ -40,6 +40,8 @@ export class CallManager {
   >();
   /** Max duration timers to auto-hangup calls after configured timeout */
   private maxDurationTimers = new Map<CallId, NodeJS.Timeout>();
+  /** Calls pending speak completion for notify auto-hangup */
+  private pendingNotifyHangup = new Set<CallId>();
 
   constructor(config: VoiceCallConfig, storePath?: string) {
     this.config = config;
@@ -269,21 +271,26 @@ export class CallManager {
       return;
     }
 
-    // In notify mode, auto-hangup after delay
+    // In notify mode, register for speak completion hangup
     if (mode === "notify") {
-      const delaySec = this.config.outbound.notifyHangupDelaySec;
+      this.pendingNotifyHangup.add(call.callId);
       console.log(
-        `[voice-call] Notify mode: auto-hangup in ${delaySec}s for call ${call.callId}`,
+        `[voice-call] Notify mode: will hangup after speak completes for call ${call.callId}`,
       );
+      // Fallback timeout in case speak.ended event never arrives
+      const fallbackSec = this.config.outbound.notifyHangupDelaySec;
       setTimeout(async () => {
-        const currentCall = this.getCall(call.callId);
-        if (currentCall && !TerminalStates.has(currentCall.state)) {
-          console.log(
-            `[voice-call] Notify mode: hanging up call ${call.callId}`,
-          );
-          await this.endCall(call.callId);
+        if (this.pendingNotifyHangup.has(call.callId)) {
+          this.pendingNotifyHangup.delete(call.callId);
+          const currentCall = this.getCall(call.callId);
+          if (currentCall && !TerminalStates.has(currentCall.state)) {
+            console.log(
+              `[voice-call] Notify mode: fallback hangup (no speak.ended) for call ${call.callId}`,
+            );
+            await this.endCall(call.callId);
+          }
         }
-      }, delaySec * 1000);
+      }, fallbackSec * 1000);
     }
   }
 
@@ -623,6 +630,18 @@ export class CallManager {
 
       case "call.speaking":
         this.transitionState(call, "speaking");
+        break;
+
+      case "call.speak.ended":
+        this.transitionState(call, "active");
+        // If this call was pending notify hangup, end it now
+        if (this.pendingNotifyHangup.has(call.callId)) {
+          this.pendingNotifyHangup.delete(call.callId);
+          console.log(
+            `[voice-call] Notify mode: speak completed, hanging up call ${call.callId}`,
+          );
+          void this.endCall(call.callId);
+        }
         break;
 
       case "call.speech":

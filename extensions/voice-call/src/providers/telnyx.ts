@@ -200,6 +200,13 @@ export class TelnyxProvider implements VoiceCallProvider {
           text: data.payload?.text || "",
         };
 
+      case "call.speak.ended":
+        return {
+          ...baseEvent,
+          type: "call.speak.ended",
+          text: data.payload?.text || "",
+        };
+
       case "call.transcription":
         return {
           ...baseEvent,
