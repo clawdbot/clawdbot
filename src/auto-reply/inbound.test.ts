@@ -15,7 +15,10 @@ import {
   shouldSkipDuplicateInbound,
 } from "./reply/inbound-dedupe.js";
 import { formatInboundBodyWithSenderMeta } from "./reply/inbound-sender-meta.js";
-import { normalizeInboundTextNewlines } from "./reply/inbound-text.js";
+import {
+  normalizeInboundTextNewlines,
+  normalizeOutboundTextNewlines,
+} from "./reply/inbound-text.js";
 import { resolveGroupRequireMention } from "./reply/groups.js";
 import {
   buildMentionRegexes,
@@ -66,6 +69,40 @@ describe("normalizeInboundTextNewlines", () => {
 
   it("decodes literal \\n to newlines when no real newlines exist", () => {
     expect(normalizeInboundTextNewlines("a\\nb")).toBe("a\nb");
+  });
+});
+
+describe("normalizeOutboundTextNewlines", () => {
+  it("keeps real newlines", () => {
+    expect(normalizeOutboundTextNewlines("a\nb")).toBe("a\nb");
+  });
+
+  it("converts literal \\n to real newlines", () => {
+    expect(normalizeOutboundTextNewlines("Hello\\nWorld")).toBe("Hello\nWorld");
+  });
+
+  it("converts multiple literal \\n sequences", () => {
+    expect(normalizeOutboundTextNewlines("Line1\\n\\nLine2")).toBe("Line1\n\nLine2");
+  });
+
+  it("converts literal \\r\\n to real newlines", () => {
+    expect(normalizeOutboundTextNewlines("a\\r\\nb")).toBe("a\nb");
+  });
+
+  it("converts literal \\r to real newlines", () => {
+    expect(normalizeOutboundTextNewlines("a\\rb")).toBe("a\nb");
+  });
+
+  it("handles empty string", () => {
+    expect(normalizeOutboundTextNewlines("")).toBe("");
+  });
+
+  it("handles text without escape sequences", () => {
+    expect(normalizeOutboundTextNewlines("Hello World")).toBe("Hello World");
+  });
+
+  it("handles mixed real and literal newlines", () => {
+    expect(normalizeOutboundTextNewlines("Real\nand\\nliteral")).toBe("Real\nand\nliteral");
   });
 });
 

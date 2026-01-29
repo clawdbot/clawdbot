@@ -1,4 +1,5 @@
 import { chunkText } from "../../../auto-reply/chunk.js";
+import { normalizeOutboundTextNewlines } from "../../../auto-reply/reply/inbound-text.js";
 import { shouldLogVerbose } from "../../../globals.js";
 import { sendPollWhatsApp } from "../../../web/outbound.js";
 import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../../whatsapp/normalize.js";
@@ -60,7 +61,8 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
   sendText: async ({ to, text, accountId, deps, gifPlayback }) => {
     const send =
       deps?.sendWhatsApp ?? (await import("../../../web/outbound.js")).sendMessageWhatsApp;
-    const result = await send(to, text, {
+    const normalizedText = normalizeOutboundTextNewlines(text);
+    const result = await send(to, normalizedText, {
       verbose: false,
       accountId: accountId ?? undefined,
       gifPlayback,
@@ -70,7 +72,8 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
   sendMedia: async ({ to, text, mediaUrl, accountId, deps, gifPlayback }) => {
     const send =
       deps?.sendWhatsApp ?? (await import("../../../web/outbound.js")).sendMessageWhatsApp;
-    const result = await send(to, text, {
+    const normalizedText = normalizeOutboundTextNewlines(text);
+    const result = await send(to, normalizedText, {
       verbose: false,
       mediaUrl,
       accountId: accountId ?? undefined,
