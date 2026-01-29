@@ -90,7 +90,9 @@ export function matchesMentionWithExplicit(params: {
   const explicit = params.explicit?.isExplicitlyMentioned === true;
   const explicitAvailable = params.explicit?.canResolveExplicit === true;
   const hasAnyMention = params.explicit?.hasAnyMention === true;
-  if (hasAnyMention && explicitAvailable) return explicit;
+  if (hasAnyMention && explicitAvailable) {
+    return explicit || params.mentionRegexes.some((re) => re.test(cleaned));
+  }
   if (!cleaned) return explicit;
   return explicit || params.mentionRegexes.some((re) => re.test(cleaned));
 }

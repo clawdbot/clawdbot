@@ -212,7 +212,7 @@ describe("createTelegramBot", () => {
     );
   });
 
-  it("skips group messages when another user is explicitly mentioned", async () => {
+  it("accepts group messages when mentionPatterns match even if another user is mentioned", async () => {
     onSpy.mockReset();
     const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
     replySpy.mockReset();
@@ -249,7 +249,8 @@ describe("createTelegramBot", () => {
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
-    expect(replySpy).not.toHaveBeenCalled();
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    expect(replySpy.mock.calls[0][0].WasMentioned).toBe(true);
   });
 
   it("keeps group envelope headers stable (sender identity is separate)", async () => {

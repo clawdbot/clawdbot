@@ -135,7 +135,7 @@ describe("discord tool result dispatch", () => {
     expect(sendMock).toHaveBeenCalledTimes(1);
   }, 20_000);
 
-  it("skips guild messages when another user is explicitly mentioned", async () => {
+  it("accepts guild messages when mentionPatterns match even if another user is mentioned", async () => {
     const { createDiscordMessageHandler } = await import("./monitor.js");
     const cfg = {
       agents: {
@@ -211,8 +211,8 @@ describe("discord tool result dispatch", () => {
       client,
     );
 
-    expect(dispatchMock).not.toHaveBeenCalled();
-    expect(sendMock).not.toHaveBeenCalled();
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    expect(sendMock).toHaveBeenCalledTimes(1);
   }, 20_000);
 
   it("accepts guild reply-to-bot messages as implicit mentions", async () => {
