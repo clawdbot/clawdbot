@@ -900,6 +900,13 @@ export async function runMessageAction(
     }
   }
 
+  // Inject thread id from session context when not explicitly provided.
+  // This ensures the message tool sends to the correct Telegram DM topic
+  // (or forum thread) instead of the General/root chat.
+  if (!params.threadId && input.toolContext?.currentThreadTs) {
+    params.threadId = input.toolContext.currentThreadTs;
+  }
+
   applyTargetToParams({ action, args: params });
   if (actionRequiresTarget(action)) {
     if (!actionHasTarget(action, params)) {
