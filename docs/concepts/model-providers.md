@@ -164,13 +164,13 @@ Kimi Code uses a dedicated endpoint and key (separate from Moonshot):
 
 - Provider: `kimi-code`
 - Auth: `KIMICODE_API_KEY`
-- Example model: `kimi-code/kimi-for-coding`
+- Example model: `kimi-code/kimi-k2.5`
 
 ```json5
 {
   env: { KIMICODE_API_KEY: "sk-..." },
   agents: {
-    defaults: { model: { primary: "kimi-code/kimi-for-coding" } }
+    defaults: { model: { primary: "kimi-code/kimi-k2.5" } }
   },
   models: {
     mode: "merge",
@@ -179,7 +179,7 @@ Kimi Code uses a dedicated endpoint and key (separate from Moonshot):
         baseUrl: "https://api.kimi.com/coding/v1",
         apiKey: "${KIMICODE_API_KEY}",
         api: "openai-completions",
-        models: [{ id: "kimi-for-coding", name: "Kimi For Coding" }]
+        models: [{ id: "kimi-k2.5", name: "Kimi K2.5" },{ id: "kimi-for-coding", name: "Kimi For Coding" }]
       }
     }
   }

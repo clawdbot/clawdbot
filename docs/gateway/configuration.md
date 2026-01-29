@@ -2438,8 +2438,8 @@ Use Kimi Code's dedicated OpenAI-compatible endpoint (separate from Moonshot):
   env: { KIMICODE_API_KEY: "sk-..." },
   agents: {
     defaults: {
-      model: { primary: "kimi-code/kimi-for-coding" },
-      models: { "kimi-code/kimi-for-coding": { alias: "Kimi Code" } }
+      model: { primary: "kimi-code/kimi-k2.5" },
+      models: {"kimi-code/kimi-k2.5": { alias: "Kimi K2.5" }, "kimi-code/kimi-for-coding": { alias: "Kimi Code" } }
     }
   },
   models: {
@@ -2450,6 +2450,17 @@ Use Kimi Code's dedicated OpenAI-compatible endpoint (separate from Moonshot):
         apiKey: "${KIMICODE_API_KEY}",
         api: "openai-completions",
         models: [
+                  {
+            id: "kimi-k2.5",
+            name: "Kimi K2.5",
+            reasoning: true,
+            input: ["text","image"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 262144,
+            maxTokens: 32768,
+            headers: { "User-Agent": "KimiCLI/0.77" },
+            compat: { supportsDeveloperRole: false }
+          },
           {
             id: "kimi-for-coding",
             name: "Kimi For Coding",
@@ -2470,7 +2481,7 @@ Use Kimi Code's dedicated OpenAI-compatible endpoint (separate from Moonshot):
 
 Notes:
 - Set `KIMICODE_API_KEY` in the environment or use `moltbot onboard --auth-choice kimi-code-api-key`.
-- Model ref: `kimi-code/kimi-for-coding`.
+- Model ref: `kimi-code/kimi-k2.5`.
 
 ### Synthetic (Anthropic-compatible)
 

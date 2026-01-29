@@ -41,7 +41,7 @@ const MOONSHOT_DEFAULT_COST = {
   cacheWrite: 0,
 };
 const KIMI_CODE_BASE_URL = "https://api.kimi.com/coding/v1";
-const KIMI_CODE_MODEL_ID = "kimi-for-coding";
+const KIMI_CODE_MODEL_ID = "kimi-k2.5";
 const KIMI_CODE_CONTEXT_WINDOW = 262144;
 const KIMI_CODE_MAX_TOKENS = 32768;
 const KIMI_CODE_HEADERS = { "User-Agent": "KimiCLI/0.77" } as const;
@@ -293,9 +293,9 @@ function buildKimiCodeProvider(): ProviderConfig {
     models: [
       {
         id: KIMI_CODE_MODEL_ID,
-        name: "Kimi For Coding",
+        name: "Kimi-K2.5",
         reasoning: true,
-        input: ["text"],
+        input: ["text,image"],
         cost: KIMI_CODE_DEFAULT_COST,
         contextWindow: KIMI_CODE_CONTEXT_WINDOW,
         maxTokens: KIMI_CODE_MAX_TOKENS,
