@@ -205,9 +205,17 @@ export type GatewayNodesConfig = {
   denyCommands?: string[];
 };
 
+export type GatewayUnhandledRejectionsMode = "exit" | "warn";
+
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
+  /**
+   * What to do on unhandled promise rejections in the gateway process.
+   * - exit (default): log + exit(1)
+   * - warn: log but keep running
+   */
+  unhandledRejections?: GatewayUnhandledRejectionsMode;
   /**
    * Explicit gateway mode. When set to "remote", local gateway start is disabled.
    * When set to "local", the CLI may start the gateway locally.

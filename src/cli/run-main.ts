@@ -10,6 +10,7 @@ import { ensureMoltbotCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { formatUncaughtError } from "../infra/errors.js";
 import { installUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
+import { loadConfig } from "../config/config.js";
 import { enableConsoleCapture } from "../logging.js";
 import { getPrimaryCommand, hasHelpOrVersion } from "./argv.js";
 import { tryRouteCli } from "./route.js";
@@ -41,8 +42,10 @@ export async function runCli(argv: string[] = process.argv) {
   const program = buildProgram();
 
   // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
-  // These log the error and exit gracefully instead of crashing without trace.
-  installUnhandledRejectionHandler();
+  // Default behavior is "exit" (preserves historical behavior). Users can opt into
+  // "warn" via config: gateway.unhandledRejections.
+  const cfg = loadConfig();
+  installUnhandledRejectionHandler({ mode: cfg.gateway?.unhandledRejections ?? "exit" });
 
   process.on("uncaughtException", (error) => {
     console.error("[moltbot] Uncaught exception:", formatUncaughtError(error));

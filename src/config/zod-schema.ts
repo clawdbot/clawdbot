@@ -304,6 +304,7 @@ export const MoltbotSchema = z
       .object({
         port: z.number().int().positive().optional(),
         mode: z.union([z.literal("local"), z.literal("remote")]).optional(),
+        unhandledRejections: z.union([z.literal("exit"), z.literal("warn")]).optional(),
         bind: z
           .union([
             z.literal("auto"),

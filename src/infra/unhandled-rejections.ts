@@ -123,7 +123,11 @@ export function isUnhandledRejectionHandled(reason: unknown): boolean {
   return false;
 }
 
-export function installUnhandledRejectionHandler(): void {
+export type UnhandledRejectionsMode = "exit" | "warn";
+
+export function installUnhandledRejectionHandler(opts: { mode?: UnhandledRejectionsMode } = {}): void {
+  const mode: UnhandledRejectionsMode = opts.mode ?? "exit";
+
   process.on("unhandledRejection", (reason, _promise) => {
     if (isUnhandledRejectionHandled(reason)) return;
 
@@ -155,6 +159,7 @@ export function installUnhandledRejectionHandler(): void {
     }
 
     console.error("[moltbot] Unhandled promise rejection:", formatUncaughtError(reason));
+    if (mode === "warn") return;
     process.exit(1);
   });
 }
