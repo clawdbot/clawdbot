@@ -1,6 +1,7 @@
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
+import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 
@@ -32,16 +33,30 @@ function buildSkillsSection(params: {
   ];
 }
 
-function buildMemorySection(params: { isMinimal: boolean; availableTools: Set<string> }) {
+function buildMemorySection(params: {
+  isMinimal: boolean;
+  availableTools: Set<string>;
+  citationsMode?: MemoryCitationsMode;
+}) {
   if (params.isMinimal) return [];
   if (!params.availableTools.has("memory_search") && !params.availableTools.has("memory_get")) {
     return [];
   }
-  return [
+  const lines = [
     "## Memory Recall",
     "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search on MEMORY.md + memory/*.md; then use memory_get to pull only the needed lines. If low confidence after search, say you checked.",
-    "",
   ];
+  if (params.citationsMode === "off") {
+    lines.push(
+      "Citations are disabled: do not mention file paths or line numbers in replies unless the user explicitly asks.",
+    );
+  } else {
+    lines.push(
+      "Citations: include Source: <path#line> when it helps the user verify memory snippets.",
+    );
+  }
+  lines.push("");
+  return lines;
 }
 
 function buildUserIdentitySection(ownerLine: string | undefined, isMinimal: boolean) {
@@ -178,6 +193,7 @@ export function buildAgentSystemPrompt(params: {
     level: "minimal" | "extensive";
     channel: string;
   };
+  memoryCitationsMode?: MemoryCitationsMode;
 }) {
   const coreToolSummaries: Record<string, string> = {
     read: "Read file contents",
@@ -314,7 +330,11 @@ export function buildAgentSystemPrompt(params: {
     isMinimal,
     readToolName,
   });
-  const memorySection = buildMemorySection({ isMinimal, availableTools });
+  const memorySection = buildMemorySection({
+    isMinimal,
+    availableTools,
+    citationsMode: params.memoryCitationsMode,
+  });
   const docsSection = buildDocsSection({
     docsPath: params.docsPath,
     isMinimal,

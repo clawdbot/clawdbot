@@ -6,7 +6,8 @@ import { probeGateway } from "../gateway/probe.js";
 import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
 import { getTailnetHostname } from "../infra/tailscale.js";
-import type { MemoryIndexManager } from "../memory/manager.js";
+import { getMemorySearchManager } from "../memory/index.js";
+import type { MemoryProviderStatus } from "../memory/types.js";
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { getAgentLocalStatuses } from "./status.agent-local.js";
@@ -15,7 +16,7 @@ import { getStatusSummary } from "./status.summary.js";
 import { getUpdateCheckResult } from "./status.update.js";
 import { buildChannelsTable } from "./status-all/channels.js";
 
-type MemoryStatusSnapshot = ReturnType<MemoryIndexManager["status"]> & {
+type MemoryStatusSnapshot = MemoryProviderStatus & {
   agentId: string;
 };
 
@@ -151,14 +152,13 @@ export async function scanStatus(
         if (!memoryPlugin.enabled) return null;
         if (memoryPlugin.slot !== "memory-core") return null;
         const agentId = agentStatus.defaultId ?? "main";
-        const { MemoryIndexManager } = await import("../memory/manager.js");
-        const manager = await MemoryIndexManager.get({ cfg, agentId }).catch(() => null);
+        const { manager } = await getMemorySearchManager({ cfg, agentId });
         if (!manager) return null;
         try {
           await manager.probeVectorAvailability();
         } catch {}
         const status = manager.status();
-        await manager.close().catch(() => {});
+        await manager.close?.().catch(() => {});
         return { agentId, ...status };
       })();
       progress.tick();

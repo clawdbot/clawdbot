@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { hashText } from "./internal.js";
 
 const log = createSubsystemLogger("memory");
@@ -87,8 +88,9 @@ export async function buildSessionEntry(absPath: string): Promise<SessionFileEnt
       if (message.role !== "user" && message.role !== "assistant") continue;
       const text = extractSessionText(message.content);
       if (!text) continue;
+      const safe = redactSensitiveText(text, { mode: "tools" });
       const label = message.role === "user" ? "User" : "Assistant";
-      collected.push(`${label}: ${text}`);
+      collected.push(`${label}: ${safe}`);
     }
     const content = collected.join("\n");
     return {

@@ -150,6 +150,7 @@ async function resolveContextReport(
     ttsHint,
     runtimeInfo,
     sandboxInfo,
+    memoryCitationsMode: params.cfg?.memory?.citations,
   });
 
   return buildSystemPromptReport({
