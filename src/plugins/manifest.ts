@@ -21,6 +21,7 @@ export type PluginManifest = {
   description?: string;
   version?: string;
   uiHints?: Record<string, PluginConfigUiHint>;
+  setupGuide?: string;
 };
 
 export type PluginManifestLoadResult =
@@ -84,6 +85,8 @@ export function loadPluginManifest(rootDir: string): PluginManifestLoadResult {
     uiHints = raw.uiHints as Record<string, PluginConfigUiHint>;
   }
 
+  const setupGuide = typeof raw.setupGuide === "string" ? raw.setupGuide.trim() : undefined;
+
   return {
     ok: true,
     manifest: {
@@ -97,6 +100,7 @@ export function loadPluginManifest(rootDir: string): PluginManifestLoadResult {
       description,
       version,
       uiHints,
+      setupGuide,
     },
     manifestPath,
   };

@@ -7,6 +7,7 @@ import type { MoltbotConfig } from "../config/config.js";
 import { resolveArchiveKind } from "../infra/archive.js";
 import { installPluginFromNpmSpec, installPluginFromPath } from "../plugins/install.js";
 import { recordPluginInstall } from "../plugins/installs.js";
+import { loadPluginManifest } from "../plugins/manifest.js";
 import { applyExclusiveSlotSelection } from "../plugins/slots.js";
 import type { PluginRecord } from "../plugins/registry.js";
 import { buildPluginStatusReport } from "../plugins/status.js";
@@ -31,6 +32,16 @@ export type PluginUpdateOptions = {
   all?: boolean;
   dryRun?: boolean;
 };
+
+function printSetupGuideIfPresent(targetDir: string): void {
+  const manifestResult = loadPluginManifest(targetDir);
+  if (manifestResult.ok && manifestResult.manifest.setupGuide) {
+    defaultRuntime.log("");
+    defaultRuntime.log(theme.heading("Setup Guide:"));
+    defaultRuntime.log(manifestResult.manifest.setupGuide);
+    defaultRuntime.log("");
+  }
+}
 
 function formatPluginLine(plugin: PluginRecord, verbose = false): string {
   const status =
@@ -379,6 +390,7 @@ export function registerPluginsCli(program: Command) {
         await writeConfigFile(next);
         logSlotWarnings(slotResult.warnings);
         defaultRuntime.log(`Installed plugin: ${result.pluginId}`);
+        printSetupGuideIfPresent(result.targetDir);
         defaultRuntime.log(`Restart the gateway to load plugins.`);
         return;
       }
@@ -442,6 +454,7 @@ export function registerPluginsCli(program: Command) {
       await writeConfigFile(next);
       logSlotWarnings(slotResult.warnings);
       defaultRuntime.log(`Installed plugin: ${result.pluginId}`);
+      printSetupGuideIfPresent(result.targetDir);
       defaultRuntime.log(`Restart the gateway to load plugins.`);
     });
 
