@@ -76,4 +76,39 @@ private func withUserDefaults<T>(_ updates: [String: Any?], _ body: () throws ->
             #expect(commands.contains(MoltbotLocationCommand.get.rawValue))
         }
     }
+
+    @Test @MainActor func currentCommandsMatchGatewayIOSAllowlist() {
+        // Verify only iOS-allowlisted commands are declared.
+        // iOS allowlist per node-command-policy.ts: canvas, camera, screen, location
+        // System commands (run, which, notify, execApprovals.*) are NOT allowed on iOS.
+        withUserDefaults([
+            "node.instanceId": "ios-test",
+            "camera.enabled": true,
+            "location.enabledMode": MoltbotLocationMode.whileUsing.rawValue,
+        ]) {
+            let appModel = NodeAppModel()
+            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+            let commands = Set(controller._test_currentCommands())
+
+            #expect(commands.contains(MoltbotCanvasCommand.present.rawValue))
+            #expect(commands.contains(MoltbotCanvasCommand.hide.rawValue))
+            #expect(commands.contains(MoltbotCanvasCommand.navigate.rawValue))
+            #expect(commands.contains(MoltbotCanvasCommand.evalJS.rawValue))
+            #expect(commands.contains(MoltbotCanvasCommand.snapshot.rawValue))
+            #expect(commands.contains(MoltbotCanvasA2UICommand.push.rawValue))
+            #expect(commands.contains(MoltbotCanvasA2UICommand.pushJSONL.rawValue))
+            #expect(commands.contains(MoltbotCanvasA2UICommand.reset.rawValue))
+            #expect(commands.contains(MoltbotScreenCommand.record.rawValue))
+            #expect(commands.contains(MoltbotCameraCommand.list.rawValue))
+            #expect(commands.contains(MoltbotCameraCommand.snap.rawValue))
+            #expect(commands.contains(MoltbotCameraCommand.clip.rawValue))
+            #expect(commands.contains(MoltbotLocationCommand.get.rawValue))
+
+            #expect(!commands.contains(MoltbotSystemCommand.notify.rawValue))
+            #expect(!commands.contains(MoltbotSystemCommand.which.rawValue))
+            #expect(!commands.contains(MoltbotSystemCommand.run.rawValue))
+            #expect(!commands.contains(MoltbotSystemCommand.execApprovalsGet.rawValue))
+            #expect(!commands.contains(MoltbotSystemCommand.execApprovalsSet.rawValue))
+        }
+    }
 }

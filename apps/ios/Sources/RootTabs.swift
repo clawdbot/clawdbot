@@ -64,8 +64,39 @@ struct RootTabs: View {
         }
     }
 
+    private var pairingRole: StatusPill.PairingRole? {
+        switch self.appModel.gatewayPairingState {
+        case .none:
+            return nil
+        case .operatorPending:
+            return .operator
+        case .nodePending:
+            return .node
+        case .bothPending:
+            return .both
+        }
+    }
+
+    private var connectionRole: StatusPill.ConnectionRole? {
+        switch (self.appModel.operatorConnected, self.appModel.nodeConnected) {
+        case (true, true):
+            return .both
+        case (true, false):
+            return .operatorOnly
+        case (false, true):
+            return .nodeOnly
+        case (false, false):
+            return nil
+        }
+    }
+
     private var gatewayStatus: StatusPill.GatewayState {
-        if self.appModel.gatewayServerName != nil { return .connected }
+        if let pairingRole {
+            return .pairingPending(pairingRole)
+        }
+        if let connectionRole {
+            return .connected(connectionRole)
+        }
 
         let text = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.localizedCaseInsensitiveContains("connecting") ||
@@ -88,6 +119,10 @@ struct RootTabs: View {
                 title: "Foreground required",
                 systemImage: "exclamationmark.triangle.fill",
                 tint: .orange)
+        }
+
+        if self.pairingRole != nil {
+            return nil
         }
 
         let gatewayStatus = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)

@@ -65,8 +65,22 @@ struct SettingsTab: View {
                 }
 
                 Section("Gateway") {
-                    LabeledContent("Discovery", value: self.gatewayController.discoveryStatusText)
+                    LabeledContent("Discovery (Bonjour)", value: self.gatewayController.discoveryStatusText)
+                    Text("Discovery stays active while Moltbot is open to find other gateways.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                     LabeledContent("Status", value: self.appModel.gatewayStatusText)
+
+                    TextField("Gateway Token", text: self.$gatewayToken)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+
+                    SecureField("Gateway Password", text: self.$gatewayPassword)
+
+                    Text("Required to pair with a gateway. Provide a token or password from the gateway settings.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+
                     if let serverName = self.appModel.gatewayServerName {
                         LabeledContent("Server", value: serverName)
                         if let addr = self.appModel.gatewayRemoteAddress {
@@ -120,7 +134,7 @@ struct SettingsTab: View {
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
 
-                        TextField("Port", value: self.$manualGatewayPort, format: .number)
+                        TextField("Port", value: self.$manualGatewayPort, formatter: Self.portFormatter)
                             .keyboardType(.numberPad)
 
                         Toggle("Use TLS", isOn: self.$manualGatewayTLS)
@@ -158,12 +172,6 @@ struct SettingsTab: View {
                         }
 
                         Toggle("Debug Canvas Status", isOn: self.$canvasDebugStatusEnabled)
-
-                        TextField("Gateway Token", text: self.$gatewayToken)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-
-                        SecureField("Gateway Password", text: self.$gatewayPassword)
                     }
                 }
 
@@ -398,6 +406,13 @@ struct SettingsTab: View {
             useTLS: self.manualGatewayTLS)
     }
 
+    private static let portFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .none
+        formatter.usesGroupingSeparator = false
+        return formatter
+    }()
+
     private static func primaryIPv4Address() -> String? {
         var addrList: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&addrList) == 0, let first = addrList else { return nil }
@@ -458,7 +473,7 @@ struct SettingsTab: View {
         }
 
         if lines.isEmpty {
-            lines.append(gateway.debugID)
+            lines.append("Discovery details unavailable yet.")
         }
 
         return lines

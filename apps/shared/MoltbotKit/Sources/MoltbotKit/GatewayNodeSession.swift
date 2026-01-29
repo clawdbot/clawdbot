@@ -191,10 +191,10 @@ public actor GatewayNodeSession {
         self.broadcastServerEvent(evt)
         guard evt.event == "node.invoke.request" else { return }
         guard let payload = evt.payload else { return }
+        guard let onInvoke = self.onInvoke else { return }
         do {
             let data = try self.encoder.encode(payload)
             let request = try self.decoder.decode(NodeInvokeRequestPayload.self, from: data)
-            guard let onInvoke else { return }
             let req = BridgeInvokeRequest(id: request.id, command: request.command, paramsJSON: request.paramsJSON)
             let response = await Self.invokeWithTimeout(
                 request: req,

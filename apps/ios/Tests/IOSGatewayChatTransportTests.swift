@@ -4,8 +4,9 @@ import Testing
 
 @Suite struct IOSGatewayChatTransportTests {
     @Test func requestsFailFastWhenGatewayNotConnected() async {
-        let gateway = GatewayNodeSession()
-        let transport = IOSGatewayChatTransport(gateway: gateway)
+        let gateway = GatewayOperatorSession()
+        let nodeSession = GatewayNodeSession()
+        let transport = IOSGatewayChatTransport(gateway: gateway, nodeSession: nodeSession)
 
         do {
             _ = try await transport.requestHistory(sessionKey: "node-test")

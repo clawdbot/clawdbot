@@ -43,15 +43,17 @@ final class TalkModeManager: NSObject {
     var pcmPlayer: PCMStreamingAudioPlaying = PCMStreamingAudioPlayer.shared
     var mp3Player: StreamingAudioPlaying = StreamingAudioPlayer.shared
 
-    private var gateway: GatewayNodeSession?
+    private var gateway: GatewayOperatorSession?
+    private var nodeSession: GatewayNodeSession?
     private let silenceWindow: TimeInterval = 0.7
 
     private var chatSubscribedSessionKeys = Set<String>()
 
     private let logger = Logger(subsystem: "bot.molt", category: "TalkMode")
 
-    func attachGateway(_ gateway: GatewayNodeSession) {
+    func attachGateway(_ gateway: GatewayOperatorSession, nodeSession: GatewayNodeSession? = nil) {
         self.gateway = gateway
+        self.nodeSession = nodeSession
     }
 
     func updateMainSessionKey(_ sessionKey: String?) {
@@ -298,22 +300,23 @@ final class TalkModeManager: NSObject {
     private func subscribeChatIfNeeded(sessionKey: String) async {
         let key = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return }
-        guard let gateway else { return }
+        // Use nodeSession for node.event (chat.subscribe).
+        guard let nodeSession else { return }
         guard !self.chatSubscribedSessionKeys.contains(key) else { return }
 
         let payload = "{\"sessionKey\":\"\(key)\"}"
-        await gateway.sendEvent(event: "chat.subscribe", payloadJSON: payload)
+        await nodeSession.sendEvent(event: "chat.subscribe", payloadJSON: payload)
         self.chatSubscribedSessionKeys.insert(key)
         self.logger.info("chat.subscribe ok sessionKey=\(key, privacy: .public)")
     }
 
     private func unsubscribeAllChats() async {
-        guard let gateway else { return }
+        guard let nodeSession else { return }
         let keys = self.chatSubscribedSessionKeys
         self.chatSubscribedSessionKeys.removeAll()
         for key in keys {
             let payload = "{\"sessionKey\":\"\(key)\"}"
-            await gateway.sendEvent(event: "chat.unsubscribe", payloadJSON: payload)
+            await nodeSession.sendEvent(event: "chat.unsubscribe", payloadJSON: payload)
         }
     }
 
@@ -339,7 +342,7 @@ final class TalkModeManager: NSObject {
         }
     }
 
-    private func sendChat(_ message: String, gateway: GatewayNodeSession) async throws -> String {
+    private func sendChat(_ message: String, gateway: GatewayOperatorSession) async throws -> String {
         struct SendResponse: Decodable { let runId: String }
         let payload: [String: Any] = [
             "sessionKey": self.mainSessionKey,
@@ -362,7 +365,7 @@ final class TalkModeManager: NSObject {
 
     private func waitForChatCompletion(
         runId: String,
-        gateway: GatewayNodeSession,
+        gateway: GatewayOperatorSession,
         timeoutSeconds: Int = 120) async -> ChatCompletionState
     {
         let stream = await gateway.subscribeServerEvents(bufferingNewest: 200)
@@ -397,7 +400,7 @@ final class TalkModeManager: NSObject {
     }
 
     private func waitForAssistantText(
-        gateway: GatewayNodeSession,
+        gateway: GatewayOperatorSession,
         since: Double,
         timeoutSeconds: Int) async throws -> String?
     {
@@ -411,7 +414,10 @@ final class TalkModeManager: NSObject {
         return nil
     }
 
-    private func fetchLatestAssistantText(gateway: GatewayNodeSession, since: Double? = nil) async throws -> String? {
+    private func fetchLatestAssistantText(
+        gateway: GatewayOperatorSession,
+        since: Double? = nil) async throws -> String?
+    {
         let res = try await gateway.request(
             method: "chat.history",
             paramsJSON: "{\"sessionKey\":\"\(self.mainSessionKey)\"}",

@@ -23,24 +23,47 @@ Availability: internal preview. The iOS app is not publicly distributed yet.
   - Tailnet via unicast DNS-SD (`moltbot.internal.`), **or**
   - Manual host/port (fallback).
 
-## Quick start (pair + connect)
+## Quick start (authenticate + pair + connect)
 
-1) Start the Gateway:
+### 1. Start the Gateway
 
 ```bash
 moltbot gateway --port 18789
 ```
 
-2) In the iOS app, open Settings and pick a discovered gateway (or enable Manual Host and enter host/port).
+### 2. Configure authentication in the iOS app
 
-3) Approve the pairing request on the gateway host:
+Open Settings in the Moltbot iOS app and configure **one** of the following:
+
+- **Gateway Token**: Paste the token from `moltbot config get gateway.token` (recommended for secure setups)
+- **Gateway Password**: Enter the password from `moltbot config get gateway.password` (simpler alternative)
+
+If neither is set on the gateway, you can set one:
 
 ```bash
-moltbot nodes pending
-moltbot nodes approve <requestId>
+moltbot config set gateway.token "your-secret-token"
+# or
+moltbot config set gateway.password "your-password"
 ```
 
-4) Verify connection:
+### 3. Select the gateway
+
+In the iOS app Settings, pick a discovered gateway from the list, or enable **Manual Host** and enter the host/port manually.
+
+### 4. Approve the pairing request
+
+The iOS app requires device pairing for both operator and node roles. On the gateway host, list and approve pending devices:
+
+```bash
+moltbot devices list
+moltbot devices approve <id>
+```
+
+You may need to approve twice (once for operator role, once for node role).
+
+> **Note**: Use `moltbot devices` for WebSocket pairing, not `moltbot nodes pending/approve`.
+
+### 5. Verify connection
 
 ```bash
 moltbot nodes status
@@ -94,8 +117,9 @@ moltbot nodes invoke --node "iOS Node" --command canvas.snapshot --params '{"max
 
 - `NODE_BACKGROUND_UNAVAILABLE`: bring the iOS app to the foreground (canvas/camera/screen commands require it).
 - `A2UI_HOST_NOT_CONFIGURED`: the Gateway did not advertise a canvas host URL; check `canvasHost` in [Gateway configuration](/gateway/configuration).
-- Pairing prompt never appears: run `moltbot nodes pending` and approve manually.
-- Reconnect fails after reinstall: the Keychain pairing token was cleared; re-pair the node.
+- **Authentication failed**: Ensure the gateway token or password in iOS Settings matches what is configured on the gateway (`moltbot config get gateway.token` or `gateway.password`).
+- **Pairing prompt never appears**: Run `moltbot devices list` to see pending requests and approve with `moltbot devices approve <id>`.
+- **Reconnect fails after reinstall**: The Keychain pairing token was cleared; re-pair the device using `moltbot devices list` and `moltbot devices approve`.
 
 ## Related docs
 

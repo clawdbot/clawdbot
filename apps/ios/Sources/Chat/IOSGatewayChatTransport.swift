@@ -4,10 +4,13 @@ import MoltbotProtocol
 import Foundation
 
 struct IOSGatewayChatTransport: MoltbotChatTransport, Sendable {
-    private let gateway: GatewayNodeSession
+    private let gateway: GatewayOperatorSession
+    /// Node session is used for sending node.event (e.g., chat.subscribe).
+    private let nodeSession: GatewayNodeSession
 
-    init(gateway: GatewayNodeSession) {
+    init(gateway: GatewayOperatorSession, nodeSession: GatewayNodeSession) {
         self.gateway = gateway
+        self.nodeSession = nodeSession
     }
 
     func abortRun(sessionKey: String, runId: String) async throws {
@@ -36,7 +39,8 @@ struct IOSGatewayChatTransport: MoltbotChatTransport, Sendable {
         struct Subscribe: Codable { var sessionKey: String }
         let data = try JSONEncoder().encode(Subscribe(sessionKey: sessionKey))
         let json = String(data: data, encoding: .utf8)
-        await self.gateway.sendEvent(event: "chat.subscribe", payloadJSON: json)
+        // Use node session for chat.subscribe (node.event).
+        await self.nodeSession.sendEvent(event: "chat.subscribe", payloadJSON: json)
     }
 
     func requestHistory(sessionKey: String) async throws -> MoltbotChatHistoryPayload {

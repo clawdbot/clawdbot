@@ -128,7 +128,7 @@ public actor GatewayChannelActor {
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
     private let connectTimeoutSeconds: Double = 6
-    private let connectChallengeTimeoutSeconds: Double = 0.75
+    private let connectChallengeTimeoutSeconds: Double = 2.0
     private var watchdogTask: Task<Void, Never>?
     private var tickTask: Task<Void, Never>?
     private let defaultRequestTimeoutMs: Double = 15000
@@ -247,16 +247,11 @@ public actor GatewayChannelActor {
             self.logger.error("gateway ws connect failed \(wrapped.localizedDescription, privacy: .public)")
             throw wrapped
         }
-        self.listen()
-        self.connected = true
+        // Note: listen(), connected, isConnecting, and connectWaiters are now
+        // handled inside handleConnectResponse() before pushHandler is called,
+        // so that nested requests from onConnected callbacks can proceed.
         self.backoffMs = 500
         self.lastSeq = nil
-
-        let waiters = self.connectWaiters
-        self.connectWaiters.removeAll()
-        for waiter in waiters {
-            waiter.resume(returning: ())
-        }
     }
 
     private func sendConnect() async throws {
@@ -416,6 +411,16 @@ public actor GatewayChannelActor {
             guard let self else { return }
             await self.watchTicks()
         }
+        // Mark as connected and start listening BEFORE calling pushHandler,
+        // so that any requests made from onConnected callbacks can proceed.
+        self.listen()
+        self.connected = true
+        self.isConnecting = false
+        let waiters = self.connectWaiters
+        self.connectWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume(returning: ())
+        }
         await self.pushHandler?(.snapshot(ok))
     }
 
@@ -477,28 +482,23 @@ public actor GatewayChannelActor {
 
     private func waitForConnectChallenge() async throws -> String? {
         guard let task = self.task else { return nil }
-        do {
-            return try await AsyncTimeout.withTimeout(
-                seconds: self.connectChallengeTimeoutSeconds,
-                onTimeout: { ConnectChallengeError.timeout },
-                operation: { [weak self] in
-                    guard let self else { return nil }
-                    while true {
-                        let msg = try await task.receive()
-                        guard let data = self.decodeMessageData(msg) else { continue }
-                        guard let frame = try? self.decoder.decode(GatewayFrame.self, from: data) else { continue }
-                        if case let .event(evt) = frame, evt.event == "connect.challenge" {
-                            if let payload = evt.payload?.value as? [String: ProtoAnyCodable],
-                               let nonce = payload["nonce"]?.value as? String {
-                                return nonce
-                            }
+        return try await AsyncTimeout.withTimeout(
+            seconds: self.connectChallengeTimeoutSeconds,
+            onTimeout: { ConnectChallengeError.timeout },
+            operation: { [weak self] in
+                guard let self else { return nil }
+                while true {
+                    let msg = try await task.receive()
+                    guard let data = self.decodeMessageData(msg) else { continue }
+                    guard let frame = try? self.decoder.decode(GatewayFrame.self, from: data) else { continue }
+                    if case let .event(evt) = frame, evt.event == "connect.challenge" {
+                        if let payload = evt.payload?.value as? [String: ProtoAnyCodable],
+                           let nonce = payload["nonce"]?.value as? String {
+                            return nonce
                         }
                     }
-                })
-        } catch {
-            if error is ConnectChallengeError { return nil }
-            throw error
-        }
+                }
+            })
     }
 
     private func waitForConnectResponse(reqId: String) async throws -> ResponseFrame {

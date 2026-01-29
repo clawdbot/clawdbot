@@ -205,7 +205,8 @@ final class GatewayConnectionController {
         password: String?)
     {
         guard let appModel else { return }
-        let connectOptions = self.makeConnectOptions()
+        let operatorConnectOptions = self.makeOperatorConnectOptions()
+        let nodeConnectOptions = self.makeNodeConnectOptions()
 
         Task { [weak self] in
             guard let self else { return }
@@ -218,7 +219,8 @@ final class GatewayConnectionController {
                 tls: tls,
                 token: token,
                 password: password,
-                connectOptions: connectOptions)
+                operatorConnectOptions: operatorConnectOptions,
+                nodeConnectOptions: nodeConnectOptions)
         }
     }
 
@@ -273,10 +275,28 @@ final class GatewayConnectionController {
         "manual|\(host.lowercased())|\(port)"
     }
 
-    private func makeConnectOptions() -> GatewayConnectOptions {
+    private func makeOperatorConnectOptions() -> GatewayConnectOptions {
         let defaults = UserDefaults.standard
         let displayName = self.resolvedDisplayName(defaults: defaults)
 
+        return GatewayConnectOptions(
+            role: "operator",
+            scopes: self.currentScopes(),
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "moltbot-ios",
+            clientMode: "ui",
+            clientDisplayName: displayName)
+    }
+
+    private func makeNodeConnectOptions() -> GatewayConnectOptions {
+        let defaults = UserDefaults.standard
+        let displayName = self.resolvedDisplayName(defaults: defaults)
+
+        // Node role should not request operator scopes. The gateway treats scopes
+        // as operator-only permissions and each role has its own device token, so
+        // node connections should have empty scopes.
         return GatewayConnectOptions(
             role: "node",
             scopes: [],
@@ -286,6 +306,12 @@ final class GatewayConnectionController {
             clientId: "moltbot-ios",
             clientMode: "node",
             clientDisplayName: displayName)
+    }
+
+    private func currentScopes() -> [String] {
+        // operator.read/write for chat operations.
+        // operator.pairing to receive device.pair.* events for pairing UI.
+        ["operator.read", "operator.write", "operator.pairing"]
     }
 
     private func resolvedDisplayName(defaults: UserDefaults) -> String {
@@ -324,6 +350,10 @@ final class GatewayConnectionController {
     }
 
     private func currentCommands() -> [String] {
+        // Only declare commands that match the gateway iOS allowlist.
+        // See: src/gateway/node-command-policy.ts - PLATFORM_DEFAULTS.ios
+        // iOS allowlist: CANVAS_COMMANDS + CAMERA_COMMANDS + SCREEN_COMMANDS + LOCATION_COMMANDS
+        // System commands (run, which, notify, execApprovals.*) are NOT on the iOS allowlist.
         var commands: [String] = [
             MoltbotCanvasCommand.present.rawValue,
             MoltbotCanvasCommand.hide.rawValue,
@@ -334,11 +364,6 @@ final class GatewayConnectionController {
             MoltbotCanvasA2UICommand.pushJSONL.rawValue,
             MoltbotCanvasA2UICommand.reset.rawValue,
             MoltbotScreenCommand.record.rawValue,
-            MoltbotSystemCommand.notify.rawValue,
-            MoltbotSystemCommand.which.rawValue,
-            MoltbotSystemCommand.run.rawValue,
-            MoltbotSystemCommand.execApprovalsGet.rawValue,
-            MoltbotSystemCommand.execApprovalsSet.rawValue,
         ]
 
         let caps = Set(self.currentCaps())

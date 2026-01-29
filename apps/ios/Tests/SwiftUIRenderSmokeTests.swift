@@ -67,8 +67,10 @@ import UIKit
 
     @Test @MainActor func chatSheetBuildsAViewHierarchy() {
         let appModel = NodeAppModel()
-        let gateway = GatewayNodeSession()
-        let root = ChatSheet(gateway: gateway, sessionKey: "test")
+        let root = ChatSheet(
+            gateway: appModel.gatewaySession,
+            nodeSession: appModel.gatewayNodeSession,
+            sessionKey: "test")
             .environment(appModel)
             .environment(appModel.voiceWake)
         _ = Self.host(root)

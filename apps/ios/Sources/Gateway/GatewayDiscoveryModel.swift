@@ -33,6 +33,9 @@ final class GatewayDiscoveryModel {
 
     private var browsers: [String: NWBrowser] = [:]
     private var gatewaysByDomain: [String: [DiscoveredGateway]] = [:]
+    private var resultsByDomain: [String: Set<NWBrowser.Result>] = [:]
+    private var resolvedTXTByID: [String: [String: String]] = [:]
+    private var pendingTXTResolvers: [String: GatewayTXTResolver] = [:]
     private var statesByDomain: [String: NWBrowser.State] = [:]
     private var debugLoggingEnabled = false
     private var lastStableIDs = Set<String>()
@@ -71,34 +74,8 @@ final class GatewayDiscoveryModel {
             browser.browseResultsChangedHandler = { [weak self] results, _ in
                 Task { @MainActor in
                     guard let self else { return }
-                    self.gatewaysByDomain[domain] = results.compactMap { result -> DiscoveredGateway? in
-                        switch result.endpoint {
-                        case let .service(name, _, _, _):
-                            let decodedName = BonjourEscapes.decode(name)
-                            let txt = result.endpoint.txtRecord?.dictionary ?? [:]
-                            let advertisedName = txt["displayName"]
-                            let prettyAdvertised = advertisedName
-                                .map(Self.prettifyInstanceName)
-                                .flatMap { $0.isEmpty ? nil : $0 }
-                            let prettyName = prettyAdvertised ?? Self.prettifyInstanceName(decodedName)
-                            return DiscoveredGateway(
-                                name: prettyName,
-                                endpoint: result.endpoint,
-                                stableID: GatewayEndpointID.stableID(result.endpoint),
-                                debugID: GatewayEndpointID.prettyDescription(result.endpoint),
-                                lanHost: Self.txtValue(txt, key: "lanHost"),
-                                tailnetDns: Self.txtValue(txt, key: "tailnetDns"),
-                                gatewayPort: Self.txtIntValue(txt, key: "gatewayPort"),
-                                canvasPort: Self.txtIntValue(txt, key: "canvasPort"),
-                                tlsEnabled: Self.txtBoolValue(txt, key: "gatewayTls"),
-                                tlsFingerprintSha256: Self.txtValue(txt, key: "gatewayTlsSha256"),
-                                cliPath: Self.txtValue(txt, key: "cliPath"))
-                        default:
-                            return nil
-                        }
-                    }
-                    .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-
+                    self.resultsByDomain[domain] = results
+                    self.updateGatewaysForDomain(domain: domain, results: results)
                     self.recomputeGateways()
                 }
             }
@@ -115,9 +92,104 @@ final class GatewayDiscoveryModel {
         }
         self.browsers = [:]
         self.gatewaysByDomain = [:]
+        self.resultsByDomain = [:]
+        self.resolvedTXTByID = [:]
+        self.pendingTXTResolvers.values.forEach { $0.cancel() }
+        self.pendingTXTResolvers = [:]
         self.statesByDomain = [:]
         self.gateways = []
         self.statusText = "Stopped"
+    }
+
+    private func updateGatewaysForAllDomains() {
+        for (domain, results) in self.resultsByDomain {
+            self.updateGatewaysForDomain(domain: domain, results: results)
+        }
+    }
+
+    private func updateGatewaysForDomain(domain: String, results: Set<NWBrowser.Result>) {
+        self.gatewaysByDomain[domain] = results.compactMap { result -> DiscoveredGateway? in
+            switch result.endpoint {
+            case let .service(name, type, domainName, _):
+                let decodedName = BonjourEscapes.decode(name)
+                let stableID = GatewayEndpointID.stableID(result.endpoint)
+                let txt = self.mergedTXT(for: result, stableID: stableID)
+                let advertisedName = txt["displayName"]
+                let prettyAdvertised = advertisedName
+                    .map(Self.prettifyInstanceName)
+                    .flatMap { $0.isEmpty ? nil : $0 }
+                let prettyName = prettyAdvertised ?? Self.prettifyInstanceName(decodedName)
+                let lanHost = Self.txtValue(txt, key: "lanHost")
+                let tailnetDns = Self.txtValue(txt, key: "tailnetDns")
+                if lanHost == nil && tailnetDns == nil {
+                    self.ensureTXTResolution(
+                        stableID: stableID,
+                        serviceName: name,
+                        type: type,
+                        domain: domainName)
+                }
+                return DiscoveredGateway(
+                    name: prettyName,
+                    endpoint: result.endpoint,
+                    stableID: stableID,
+                    debugID: GatewayEndpointID.prettyDescription(result.endpoint),
+                    lanHost: lanHost,
+                    tailnetDns: tailnetDns,
+                    gatewayPort: Self.txtIntValue(txt, key: "gatewayPort"),
+                    canvasPort: Self.txtIntValue(txt, key: "canvasPort"),
+                    tlsEnabled: Self.txtBoolValue(txt, key: "gatewayTls"),
+                    tlsFingerprintSha256: Self.txtValue(txt, key: "gatewayTlsSha256"),
+                    cliPath: Self.txtValue(txt, key: "cliPath"))
+            default:
+                return nil
+            }
+        }
+        .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private func mergedTXT(for result: NWBrowser.Result, stableID: String) -> [String: String] {
+        var merged = self.resolvedTXTByID[stableID] ?? [:]
+        if case let .bonjour(txt) = result.metadata {
+            merged.merge(txt.dictionary, uniquingKeysWith: { _, new in new })
+        }
+        if let endpointTxt = result.endpoint.txtRecord?.dictionary {
+            merged.merge(endpointTxt, uniquingKeysWith: { _, new in new })
+        }
+        return merged
+    }
+
+    private func ensureTXTResolution(
+        stableID: String,
+        serviceName: String,
+        type: String,
+        domain: String)
+    {
+        guard self.resolvedTXTByID[stableID] == nil else { return }
+        guard self.pendingTXTResolvers[stableID] == nil else { return }
+
+        let resolver = GatewayTXTResolver(
+            name: serviceName,
+            type: type,
+            domain: domain)
+        { [weak self] result in
+            Task { @MainActor in
+                guard let self else { return }
+                self.pendingTXTResolvers[stableID] = nil
+                switch result {
+                case let .success(txt):
+                    guard !txt.isEmpty else { return }
+                    self.resolvedTXTByID[stableID] = txt
+                    self.appendDebugLog("resolved TXT for \(serviceName)")
+                    self.updateGatewaysForAllDomains()
+                    self.recomputeGateways()
+                case .failure:
+                    break
+                }
+            }
+        }
+
+        self.pendingTXTResolvers[stableID] = resolver
+        resolver.start()
     }
 
     private func recomputeGateways() {
@@ -221,4 +293,66 @@ final class GatewayDiscoveryModel {
         guard let raw = self.txtValue(dict, key: key)?.lowercased() else { return false }
         return raw == "1" || raw == "true" || raw == "yes"
     }
+}
+
+final class GatewayTXTResolver: NSObject, NetServiceDelegate {
+    private let service: NetService
+    private let completion: (Result<[String: String], Error>) -> Void
+    private var didFinish = false
+
+    init(
+        name: String,
+        type: String,
+        domain: String,
+        completion: @escaping (Result<[String: String], Error>) -> Void)
+    {
+        self.service = NetService(domain: domain, type: type, name: name)
+        self.completion = completion
+        super.init()
+        self.service.delegate = self
+    }
+
+    func start(timeout: TimeInterval = 2.0) {
+        self.service.schedule(in: .main, forMode: .common)
+        self.service.resolve(withTimeout: timeout)
+    }
+
+    func cancel() {
+        self.finish(result: .failure(GatewayTXTResolverError.cancelled))
+    }
+
+    func netServiceDidResolveAddress(_ sender: NetService) {
+        let txt = Self.decodeTXT(sender.txtRecordData())
+        self.finish(result: .success(txt))
+    }
+
+    func netService(_ sender: NetService, didNotResolve errorDict: [String: NSNumber]) {
+        self.finish(result: .failure(GatewayTXTResolverError.resolveFailed(errorDict)))
+    }
+
+    private func finish(result: Result<[String: String], Error>) {
+        guard !self.didFinish else { return }
+        self.didFinish = true
+        self.service.stop()
+        self.service.remove(from: .main, forMode: .common)
+        self.completion(result)
+    }
+
+    private static func decodeTXT(_ data: Data?) -> [String: String] {
+        guard let data else { return [:] }
+        let dict = NetService.dictionary(fromTXTRecord: data)
+        var out: [String: String] = [:]
+        out.reserveCapacity(dict.count)
+        for (key, value) in dict {
+            if let str = String(data: value, encoding: .utf8) {
+                out[key] = str
+            }
+        }
+        return out
+    }
+}
+
+enum GatewayTXTResolverError: Error {
+    case cancelled
+    case resolveFailed([String: NSNumber])
 }

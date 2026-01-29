@@ -3,16 +3,52 @@ import SwiftUI
 struct StatusPill: View {
     @Environment(\.scenePhase) private var scenePhase
 
+    enum PairingRole: Equatable {
+        case `operator`
+        case node
+        case both
+
+        var title: String {
+            switch self {
+            case .operator:
+                "Pairing pending (operator)"
+            case .node:
+                "Pairing pending (node)"
+            case .both:
+                "Pairing pending (operator + node)"
+            }
+        }
+    }
+
+    enum ConnectionRole: Equatable {
+        case operatorOnly
+        case nodeOnly
+        case both
+
+        var title: String {
+            switch self {
+            case .operatorOnly:
+                "Connected (operator only)"
+            case .nodeOnly:
+                "Connected (node only)"
+            case .both:
+                "Connected (operator + node)"
+            }
+        }
+    }
+
     enum GatewayState: Equatable {
-        case connected
+        case connected(ConnectionRole)
         case connecting
+        case pairingPending(PairingRole)
         case error
         case disconnected
 
         var title: String {
             switch self {
-            case .connected: "Connected"
+            case let .connected(role): role.title
             case .connecting: "Connecting…"
+            case let .pairingPending(role): role.title
             case .error: "Error"
             case .disconnected: "Offline"
             }
@@ -22,9 +58,15 @@ struct StatusPill: View {
             switch self {
             case .connected: .green
             case .connecting: .yellow
+            case .pairingPending: .orange
             case .error: .red
             case .disconnected: .gray
             }
+        }
+
+        var isConnecting: Bool {
+            if case .connecting = self { return true }
+            return false
         }
     }
 
@@ -49,8 +91,8 @@ struct StatusPill: View {
                     Circle()
                         .fill(self.gateway.color)
                         .frame(width: 9, height: 9)
-                        .scaleEffect(self.gateway == .connecting ? (self.pulse ? 1.15 : 0.85) : 1.0)
-                        .opacity(self.gateway == .connecting ? (self.pulse ? 1.0 : 0.6) : 1.0)
+                        .scaleEffect(self.gateway.isConnecting ? (self.pulse ? 1.15 : 0.85) : 1.0)
+                        .opacity(self.gateway.isConnecting ? (self.pulse ? 1.0 : 0.6) : 1.0)
 
                     Text(self.gateway.title)
                         .font(.system(size: 13, weight: .semibold))
@@ -114,7 +156,7 @@ struct StatusPill: View {
     }
 
     private func updatePulse(for gateway: GatewayState, scenePhase: ScenePhase) {
-        guard gateway == .connecting, scenePhase == .active else {
+        guard gateway.isConnecting, scenePhase == .active else {
             withAnimation(.easeOut(duration: 0.2)) { self.pulse = false }
             return
         }

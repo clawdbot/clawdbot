@@ -1,4 +1,5 @@
 import MoltbotKit
+import MoltbotProtocol
 import Network
 import Observation
 import SwiftUI
@@ -14,6 +15,18 @@ final class NodeAppModel {
         case error
     }
 
+    enum ConnectionRole: String {
+        case `operator`
+        case node
+    }
+
+    enum GatewayPairingState: Equatable {
+        case none
+        case operatorPending
+        case nodePending
+        case bothPending
+    }
+
     var isBackgrounded: Bool = false
     let screen = ScreenController()
     let camera = CameraController()
@@ -23,26 +36,52 @@ final class NodeAppModel {
     var gatewayRemoteAddress: String?
     var connectedGatewayID: String?
     var seamColorHex: String?
-    var mainSessionKey: String = "main"
+    var mainSessionKey: String = "agent:main:main"
+    var operatorPairingPending: Bool = false
+    var nodePairingPending: Bool = false
 
-    private let gateway = GatewayNodeSession()
-    private var gatewayTask: Task<Void, Never>?
+    var gatewayPairingState: GatewayPairingState {
+        switch (self.operatorPairingPending, self.nodePairingPending) {
+        case (true, true):
+            return .bothPending
+        case (true, false):
+            return .operatorPending
+        case (false, true):
+            return .nodePending
+        case (false, false):
+            return .none
+        }
+    }
+
+    private let gateway: GatewayOperatorSession
+    private let nodeSession: GatewayNodeSession
+    private var operatorTask: Task<Void, Never>?
+    private var nodeTask: Task<Void, Never>?
     private var voiceWakeSyncTask: Task<Void, Never>?
+    private var pairingEventTask: Task<Void, Never>?
     @ObservationIgnored private var cameraHUDDismissTask: Task<Void, Never>?
     let voiceWake = VoiceWakeManager()
     let talkMode = TalkModeManager()
     private let locationService = LocationService()
     private var lastAutoA2uiURL: String?
 
-    private var gatewayConnected = false
-    var gatewaySession: GatewayNodeSession { self.gateway }
+    var operatorConnected: Bool = false
+    var nodeConnected: Bool = false
+    var gatewaySession: GatewayOperatorSession { self.gateway }
+    var gatewayNodeSession: GatewayNodeSession { self.nodeSession }
 
     var cameraHUDText: String?
     var cameraHUDKind: CameraHUDKind?
     var cameraFlashNonce: Int = 0
     var screenRecordActive: Bool = false
 
-    init() {
+    init(
+        gatewaySession: GatewayOperatorSession = GatewayOperatorSession(),
+        nodeSession: GatewayNodeSession = GatewayNodeSession())
+    {
+        self.gateway = gatewaySession
+        self.nodeSession = nodeSession
+
         self.voiceWake.configure { [weak self] cmd in
             guard let self else { return }
             let sessionKey = await MainActor.run { self.mainSessionKey }
@@ -55,7 +94,7 @@ final class NodeAppModel {
 
         let enabled = UserDefaults.standard.bool(forKey: "voiceWake.enabled")
         self.voiceWake.setEnabled(enabled)
-        self.talkMode.attachGateway(self.gateway)
+        self.talkMode.attachGateway(self.gateway, nodeSession: self.nodeSession)
         let talkEnabled = UserDefaults.standard.bool(forKey: "talk.enabled")
         self.talkMode.setEnabled(talkEnabled)
 
@@ -151,7 +190,7 @@ final class NodeAppModel {
     }
 
     private func resolveA2UIHostURL() async -> String? {
-        guard let raw = await self.gateway.currentCanvasHostUrl() else { return nil }
+        guard let raw = await self.nodeSession.currentCanvasHostUrl() else { return nil }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let base = URL(string: trimmed) else { return nil }
         return base.appendingPathComponent("__moltbot__/a2ui/").absoluteString + "?platform=ios"
@@ -209,121 +248,349 @@ final class NodeAppModel {
         tls: GatewayTLSParams?,
         token: String?,
         password: String?,
-        connectOptions: GatewayConnectOptions)
+        operatorConnectOptions: GatewayConnectOptions,
+        nodeConnectOptions: GatewayConnectOptions,
+        sessionBox: WebSocketSessionBox? = nil)
     {
-        self.gatewayTask?.cancel()
+        // Cancel any existing connection tasks
+        self.operatorTask?.cancel()
+        self.nodeTask?.cancel()
+        self.voiceWakeSyncTask?.cancel()
+        self.voiceWakeSyncTask = nil
+        self.pairingEventTask?.cancel()
+        self.pairingEventTask = nil
+
+        // Reset state
         self.gatewayServerName = nil
         self.gatewayRemoteAddress = nil
         let id = gatewayStableID.trimmingCharacters(in: .whitespacesAndNewlines)
         self.connectedGatewayID = id.isEmpty ? url.absoluteString : id
-        self.gatewayConnected = false
-        self.voiceWakeSyncTask?.cancel()
-        self.voiceWakeSyncTask = nil
-        let sessionBox = tls.map { WebSocketSessionBox(session: GatewayTLSPinningSession(params: $0)) }
+        self.operatorConnected = false
+        self.nodeConnected = false
+        self.clearPairingPending()
+        self.gatewayStatusText = "Connecting…"
 
-        self.gatewayTask = Task {
-            var attempt = 0
-            while !Task.isCancelled {
-                await MainActor.run {
-                    if attempt == 0 {
-                        self.gatewayStatusText = "Connecting…"
-                    } else {
-                        self.gatewayStatusText = "Reconnecting…"
-                    }
-                    self.gatewayServerName = nil
-                    self.gatewayRemoteAddress = nil
-                }
+        // Create separate session boxes for operator and node to avoid shared websocket state.
+        // Each connection needs its own URLSession/TLS session to prevent response cross-talk.
+        func makeSessionBox() -> WebSocketSessionBox? {
+            if let sessionBox { return sessionBox }
+            if let tls { return WebSocketSessionBox(session: GatewayTLSPinningSession(params: tls)) }
+            return nil
+        }
 
-                do {
-                    try await self.gateway.connect(
-                        url: url,
-                        token: token,
-                        password: password,
-                        connectOptions: connectOptions,
-                        sessionBox: sessionBox,
-                        onConnected: { [weak self] in
-                            guard let self else { return }
+        // Start independent connection loops for operator and node
+        self.operatorTask = Task { [weak self] in
+            await self?.operatorConnectLoop(
+                url: url,
+                token: token,
+                password: password,
+                connectOptions: operatorConnectOptions,
+                sessionBox: makeSessionBox())
+        }
+
+        self.nodeTask = Task { [weak self] in
+            await self?.nodeConnectLoop(
+                url: url,
+                token: token,
+                password: password,
+                connectOptions: nodeConnectOptions,
+                sessionBox: makeSessionBox())
+        }
+    }
+
+    /// Independent connection loop for the operator session.
+    private func operatorConnectLoop(
+        url: URL,
+        token: String?,
+        password: String?,
+        connectOptions: GatewayConnectOptions,
+        sessionBox: WebSocketSessionBox?)
+    async {
+        var attempt = 0
+
+        while !Task.isCancelled {
+            do {
+                try await self.gateway.connect(
+                    url: url,
+                    token: token,
+                    password: password,
+                    connectOptions: connectOptions,
+                    sessionBox: sessionBox,
+                    onConnected: { [weak self] in
+                        guard let self else { return }
+                        await MainActor.run {
+                            self.setPairingPending(for: .operator, pending: false)
+                            self.operatorConnected = true
+                            self.gatewayServerName = url.host ?? "gateway"
+                            self.updateGatewayConnectionStatus()
+                        }
+                        if let addr = await self.gateway.currentRemoteAddress() {
                             await MainActor.run {
-                                self.gatewayStatusText = "Connected"
-                                self.gatewayServerName = url.host ?? "gateway"
-                                self.gatewayConnected = true
+                                self.gatewayRemoteAddress = addr
                             }
-                            if let addr = await self.gateway.currentRemoteAddress() {
-                                await MainActor.run {
-                                    self.gatewayRemoteAddress = addr
-                                }
-                            }
-                            await self.refreshBrandingFromGateway()
-                            await self.startVoiceWakeSync()
-                            await self.showA2UIOnConnectIfNeeded()
-                        },
-                        onDisconnected: { [weak self] reason in
-                            guard let self else { return }
-                            await MainActor.run {
-                                self.gatewayStatusText = "Disconnected"
-                                self.gatewayRemoteAddress = nil
-                                self.gatewayConnected = false
+                        }
+                        await self.refreshBrandingFromGateway()
+                        await self.startVoiceWakeSync()
+                        await self.startPairingEventSync()
+                    },
+                    onDisconnected: { [weak self] reason in
+                        guard let self else { return }
+                        await MainActor.run {
+                            self.operatorConnected = false
+                            self.gatewayRemoteAddress = nil
+                            if !self.nodeConnected {
+                                self.gatewayServerName = nil
                                 self.showLocalCanvasOnDisconnect()
-                                self.gatewayStatusText = "Disconnected: \(reason)"
                             }
-                        },
-                        onInvoke: { [weak self] req in
-                            guard let self else {
-                                return BridgeInvokeResponse(
-                                    id: req.id,
-                                    ok: false,
-                                    error: MoltbotNodeError(
-                                        code: .unavailable,
-                                        message: "UNAVAILABLE: node not ready"))
-                            }
-                            return await self.handleInvoke(req)
-                        })
+                            self.updateGatewayConnectionStatus(reason: reason)
+                            self.updatePairingPending(for: .operator, reason: reason)
+                        }
+                    })
 
-                    if Task.isCancelled { break }
-                    attempt = 0
-                    try? await Task.sleep(nanoseconds: 1_000_000_000)
-                } catch {
-                    if Task.isCancelled { break }
-                    attempt += 1
-                    await MainActor.run {
-                        self.gatewayStatusText = "Gateway error: \(error.localizedDescription)"
-                        self.gatewayServerName = nil
-                        self.gatewayRemoteAddress = nil
-                        self.gatewayConnected = false
-                        self.showLocalCanvasOnDisconnect()
-                    }
-                    let sleepSeconds = min(8.0, 0.5 * pow(1.7, Double(attempt)))
-                    try? await Task.sleep(nanoseconds: UInt64(sleepSeconds * 1_000_000_000))
+                // Connection succeeded - reset attempt counter and wait before checking again
+                attempt = 0
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+
+            } catch {
+                if Task.isCancelled { break }
+                attempt += 1
+                await MainActor.run {
+                    self.updatePairingPending(for: .operator, reason: error.localizedDescription)
+                    self.operatorConnected = false
+                    self.updateGatewayConnectionStatus(reason: error.localizedDescription)
                 }
+
+                // Exponential backoff
+                let sleepSeconds = min(8.0, 0.5 * pow(1.7, Double(attempt)))
+                try? await Task.sleep(nanoseconds: UInt64(sleepSeconds * 1_000_000_000))
             }
+        }
 
-            await MainActor.run {
-                self.gatewayStatusText = "Offline"
-                self.gatewayServerName = nil
-                self.gatewayRemoteAddress = nil
-                self.connectedGatewayID = nil
-                self.gatewayConnected = false
-                self.seamColorHex = nil
-                if !SessionKey.isCanonicalMainSessionKey(self.mainSessionKey) {
-                    self.mainSessionKey = "main"
-                    self.talkMode.updateMainSessionKey(self.mainSessionKey)
+        // Cleanup on task cancellation
+        await self.gateway.disconnect()
+        await MainActor.run {
+            self.operatorConnected = false
+            self.setPairingPending(for: .operator, pending: false)
+            self.updateGatewayConnectionStatus()
+        }
+    }
+
+    /// Independent connection loop for the node session.
+    private func nodeConnectLoop(
+        url: URL,
+        token: String?,
+        password: String?,
+        connectOptions: GatewayConnectOptions,
+        sessionBox: WebSocketSessionBox?)
+    async {
+        var attempt = 0
+
+        while !Task.isCancelled {
+            do {
+                try await self.nodeSession.connect(
+                    url: url,
+                    token: token,
+                    password: password,
+                    connectOptions: connectOptions,
+                    sessionBox: sessionBox,
+                    onConnected: { [weak self] in
+                        guard let self else { return }
+                        await MainActor.run {
+                            self.setPairingPending(for: .node, pending: false)
+                            self.nodeConnected = true
+                            if self.gatewayServerName == nil {
+                                self.gatewayServerName = url.host ?? "gateway"
+                            }
+                            self.updateGatewayConnectionStatus()
+                        }
+                        await self.showA2UIOnConnectIfNeeded()
+                    },
+                    onDisconnected: { [weak self] reason in
+                        guard let self else { return }
+                        await MainActor.run {
+                            self.nodeConnected = false
+                            if !self.operatorConnected {
+                                self.gatewayServerName = nil
+                                self.showLocalCanvasOnDisconnect()
+                            }
+                            self.updateGatewayConnectionStatus(reason: reason)
+                        }
+                    },
+                    onInvoke: { [weak self] req in
+                        guard let self else {
+                            return BridgeInvokeResponse(
+                                id: req.id,
+                                ok: false,
+                                error: MoltbotNodeError(
+                                    code: .unavailable,
+                                    message: "UNAVAILABLE: node not ready"))
+                        }
+                        return await self.handleInvoke(req)
+                    })
+
+                // Connection succeeded - reset attempt counter and wait before checking again
+                attempt = 0
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+
+            } catch {
+                if Task.isCancelled { break }
+                attempt += 1
+                await MainActor.run {
+                    self.updatePairingPending(for: .node, reason: error.localizedDescription)
+                    self.nodeConnected = false
+                    self.updateGatewayConnectionStatus(reason: error.localizedDescription)
                 }
-                self.showLocalCanvasOnDisconnect()
+
+                // Exponential backoff
+                let sleepSeconds = min(8.0, 0.5 * pow(1.7, Double(attempt)))
+                try? await Task.sleep(nanoseconds: UInt64(sleepSeconds * 1_000_000_000))
+            }
+        }
+
+        // Cleanup on task cancellation
+        await self.nodeSession.disconnect()
+        await MainActor.run {
+            self.nodeConnected = false
+            self.setPairingPending(for: .node, pending: false)
+            self.updateGatewayConnectionStatus()
+        }
+    }
+
+    private func updateGatewayConnectionStatus(reason: String? = nil) {
+        let trimmedReason = (reason ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        switch (self.operatorConnected, self.nodeConnected) {
+        case (true, true):
+            self.gatewayStatusText = "Connected (operator + node)"
+        case (true, false):
+            self.gatewayStatusText = "Connected (operator only)"
+        case (false, true):
+            self.gatewayStatusText = "Connected (node only)"
+        case (false, false):
+            if trimmedReason.isEmpty {
+                self.gatewayStatusText = "Disconnected"
+            } else {
+                self.gatewayStatusText = "Disconnected: \(trimmedReason)"
             }
         }
     }
 
+    private func setPairingPending(for role: ConnectionRole, pending: Bool) {
+        switch role {
+        case .operator:
+            self.operatorPairingPending = pending
+        case .node:
+            self.nodePairingPending = pending
+        }
+    }
+
+    private func clearPairingPending() {
+        self.operatorPairingPending = false
+        self.nodePairingPending = false
+    }
+
+    private func updatePairingPending(for role: ConnectionRole, reason: String) {
+        let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            self.setPairingPending(for: role, pending: false)
+            return
+        }
+        let lower = trimmed.lowercased()
+        let pending = lower.contains("pairing") || lower.contains("approval")
+        self.setPairingPending(for: role, pending: pending)
+    }
+
+    private func startPairingEventSync() async {
+        self.pairingEventTask?.cancel()
+        let myDeviceId = DeviceIdentityStore.loadOrCreate().deviceId
+        self.pairingEventTask = Task { [weak self] in
+            guard let self else { return }
+            let stream = await self.gateway.subscribeServerEvents(bufferingNewest: 200)
+            for await evt in stream {
+                if Task.isCancelled { return }
+                await self.handlePairingEvent(evt, myDeviceId: myDeviceId)
+            }
+        }
+    }
+
+    private func handlePairingEvent(_ evt: EventFrame, myDeviceId: String) async {
+        // Handle device.pair.requested: set pairing pending for the role
+        // Handle device.pair.resolved: clear pairing pending for the role
+        switch evt.event {
+        case "device.pair.requested":
+            guard let payload = evt.payload else { return }
+            struct RequestedPayload: Decodable {
+                var deviceId: String
+                var role: String?
+            }
+            guard let decoded = try? GatewayPayloadDecoding.decode(payload, as: RequestedPayload.self) else { return }
+            guard decoded.deviceId == myDeviceId else { return }
+            let role = self.parsePairingRole(decoded.role)
+            await MainActor.run {
+                self.setPairingPendingFromEvent(role: role, pending: true)
+            }
+        case "device.pair.resolved":
+            guard let payload = evt.payload else { return }
+            struct ResolvedPayload: Decodable {
+                var deviceId: String
+                var decision: String?
+            }
+            guard let decoded = try? GatewayPayloadDecoding.decode(payload, as: ResolvedPayload.self) else { return }
+            guard decoded.deviceId == myDeviceId else { return }
+            // On resolution (approved or rejected), clear the pending state.
+            // The role isn't always in resolved events, so clear both for this device.
+            await MainActor.run {
+                self.operatorPairingPending = false
+                self.nodePairingPending = false
+            }
+        default:
+            break
+        }
+    }
+
+    private func parsePairingRole(_ roleString: String?) -> ConnectionRole? {
+        guard let role = roleString?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else {
+            return nil
+        }
+        switch role {
+        case "operator": return .operator
+        case "node": return .node
+        default: return nil
+        }
+    }
+
+    private func setPairingPendingFromEvent(role: ConnectionRole?, pending: Bool) {
+        // If role is known, set just that role. Otherwise set both.
+        switch role {
+        case .operator:
+            self.operatorPairingPending = pending
+        case .node:
+            self.nodePairingPending = pending
+        case nil:
+            self.operatorPairingPending = pending
+            self.nodePairingPending = pending
+        }
+    }
+
     func disconnectGateway() {
-        self.gatewayTask?.cancel()
-        self.gatewayTask = nil
+        self.operatorTask?.cancel()
+        self.operatorTask = nil
+        self.nodeTask?.cancel()
+        self.nodeTask = nil
         self.voiceWakeSyncTask?.cancel()
         self.voiceWakeSyncTask = nil
-        Task { await self.gateway.disconnect() }
+        self.pairingEventTask?.cancel()
+        self.pairingEventTask = nil
+        Task {
+            await self.gateway.disconnect()
+            await self.nodeSession.disconnect()
+        }
         self.gatewayStatusText = "Offline"
         self.gatewayServerName = nil
         self.gatewayRemoteAddress = nil
         self.connectedGatewayID = nil
-        self.gatewayConnected = false
+        self.operatorConnected = false
+        self.nodeConnected = false
+        self.clearPairingPending()
         self.seamColorHex = nil
         if !SessionKey.isCanonicalMainSessionKey(self.mainSessionKey) {
             self.mainSessionKey = "main"
@@ -445,7 +712,7 @@ final class NodeAppModel {
                 NSLocalizedDescriptionKey: "Failed to encode voice transcript payload as UTF-8",
             ])
         }
-        await self.gateway.sendEvent(event: "voice.transcript", payloadJSON: json)
+        await self.nodeSession.sendEvent(event: "voice.transcript", payloadJSON: json)
     }
 
     func handleDeepLink(url: URL) async {
@@ -494,11 +761,11 @@ final class NodeAppModel {
                 NSLocalizedDescriptionKey: "Failed to encode agent request payload as UTF-8",
             ])
         }
-        await self.gateway.sendEvent(event: "agent.request", payloadJSON: json)
+        await self.nodeSession.sendEvent(event: "agent.request", payloadJSON: json)
     }
 
     private func isGatewayConnected() async -> Bool {
-        self.gatewayConnected
+        self.operatorConnected
     }
 
     private func handleInvoke(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse {
@@ -705,7 +972,7 @@ final class NodeAppModel {
             """)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
         case MoltbotCanvasA2UICommand.push.rawValue, MoltbotCanvasA2UICommand.pushJSONL.rawValue:
-            let messages: [AnyCodable]
+            let messages: [MoltbotKit.AnyCodable]
             if command == MoltbotCanvasA2UICommand.pushJSONL.rawValue {
                 let params = try Self.decodeParams(MoltbotCanvasA2UIPushJSONLParams.self, from: req.paramsJSON)
                 messages = try MoltbotCanvasA2UIJSONL.decodeMessagesFromJSONL(params.jsonl)
@@ -954,6 +1221,22 @@ extension NodeAppModel {
 
     func _test_showLocalCanvasOnDisconnect() {
         self.showLocalCanvasOnDisconnect()
+    }
+
+    func _test_setPairingPending(role: ConnectionRole, pending: Bool) {
+        self.setPairingPending(for: role, pending: pending)
+    }
+
+    func _test_clearPairingPending() {
+        self.clearPairingPending()
+    }
+
+    func _test_updatePairingPending(role: ConnectionRole, reason: String) {
+        self.updatePairingPending(for: role, reason: reason)
+    }
+
+    func _test_handlePairingEvent(_ evt: EventFrame, myDeviceId: String) async {
+        await self.handlePairingEvent(evt, myDeviceId: myDeviceId)
     }
 }
 #endif

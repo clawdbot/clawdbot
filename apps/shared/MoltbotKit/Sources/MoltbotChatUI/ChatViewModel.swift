@@ -408,7 +408,10 @@ public final class MoltbotChatViewModel {
     }
 
     private func handleAgentEvent(_ evt: MoltbotAgentEventPayload) {
-        if let sessionId, evt.runId != sessionId {
+        // Agent events use runId (client idempotency key), not sessionId (Pi session UUID).
+        // Match against our pending runs, not the session ID.
+        let isOurRun = self.pendingRuns.contains(evt.runId)
+        if !isOurRun {
             return
         }
 

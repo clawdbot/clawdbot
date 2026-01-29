@@ -7,8 +7,13 @@ struct ChatSheet: View {
     @State private var viewModel: MoltbotChatViewModel
     private let userAccent: Color?
 
-    init(gateway: GatewayNodeSession, sessionKey: String, userAccent: Color? = nil) {
-        let transport = IOSGatewayChatTransport(gateway: gateway)
+    init(
+        gateway: GatewayOperatorSession,
+        nodeSession: GatewayNodeSession,
+        sessionKey: String,
+        userAccent: Color? = nil
+    ) {
+        let transport = IOSGatewayChatTransport(gateway: gateway, nodeSession: nodeSession)
         self._viewModel = State(
             initialValue: MoltbotChatViewModel(
                 sessionKey: sessionKey,
