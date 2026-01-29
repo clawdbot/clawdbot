@@ -18,6 +18,8 @@ const ALLOWED_INVALID_GATEWAY_SUBCOMMANDS = new Set([
   "stop",
   "restart",
 ]);
+
+const CLIENT_MODE_COMMANDS = new Set(["tui"]);
 let didRunDoctorConfigFlow = false;
 
 function formatConfigIssues(issues: Array<{ path: string; message: string }>): string[] {
@@ -27,6 +29,7 @@ function formatConfigIssues(issues: Array<{ path: string; message: string }>): s
 export async function ensureConfigReady(params: {
   runtime: RuntimeEnv;
   commandPath?: string[];
+  rawArgs?: string[];
 }): Promise<void> {
   if (!didRunDoctorConfigFlow) {
     didRunDoctorConfigFlow = true;
@@ -39,8 +42,13 @@ export async function ensureConfigReady(params: {
   const snapshot = await readConfigFileSnapshot();
   const commandName = params.commandPath?.[0];
   const subcommandName = params.commandPath?.[1];
+
+  const hasUrlFlag = params.rawArgs?.some((arg) => arg === "--url" || arg.startsWith("--url="));
+  const isClientModeCommand = commandName && CLIENT_MODE_COMMANDS.has(commandName) && hasUrlFlag;
+
   const allowInvalid = commandName
     ? ALLOWED_INVALID_COMMANDS.has(commandName) ||
+      isClientModeCommand ||
       (commandName === "gateway" &&
         subcommandName &&
         ALLOWED_INVALID_GATEWAY_SUBCOMMANDS.has(subcommandName))
