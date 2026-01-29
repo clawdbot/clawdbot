@@ -16,7 +16,7 @@ Use `slack` to react, manage pins, send/edit/delete messages, and fetch member i
 - For reactions, an `emoji` (Unicode or `:name:`).
 - For message sends, a `to` target (`channel:<id>` or `user:<id>`) and `content`.
 
-Message context lines include `slack message id` and `channel` fields you can reuse directly.
+Message text no longer includes `slack message id`. Use metadata fields like `MessageSid` or `ReplyToId`.
 
 ## Actions
 

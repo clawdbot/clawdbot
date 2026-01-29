@@ -44,7 +44,14 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
   const messageTs = message.ts ?? message.event_ts;
   const incomingThreadTs = message.thread_ts;
+  const toolThreadTs = incomingThreadTs ?? (ctx.replyToMode === "all" ? messageTs : undefined);
   let didSetStatus = false;
+
+  if (shouldLogVerbose()) {
+    logVerbose(
+      `slack threading: inbound channel=${message.channel} ts=${messageTs ?? "unknown"} thread_ts=${incomingThreadTs ?? "none"} replyToMode=${ctx.replyToMode}`,
+    );
+  }
 
   // Shared mutable ref for "replyToMode=first". Both tool + auto-reply flows
   // mark this to ensure only the first reply is threaded.
@@ -101,8 +108,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     responsePrefix: prefixContext.responsePrefix,
     responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
-    deliver: async (payload) => {
-      const replyThreadTs = replyPlan.nextThreadTs();
+    deliver: async (payload, info) => {
+      const replyThreadTs = info.kind === "tool" ? toolThreadTs : replyPlan.nextThreadTs();
+      if (shouldLogVerbose()) {
+        logVerbose(
+          `slack threading: deliver kind=${info.kind} target=${prepared.replyTarget} thread_ts=${replyThreadTs ?? "none"} payload.replyToId=${payload.replyToId ?? "none"}`,
+        );
+      }
       await deliverReplies({
         replies: [payload],
         target: prepared.replyTarget,
@@ -112,7 +124,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         textLimit: ctx.textLimit,
         replyThreadTs,
       });
-      replyPlan.markSent();
+      if (info.kind !== "tool") {
+        replyPlan.markSent();
+      }
     },
     onError: (err, info) => {
       runtime.error?.(danger(`slack ${info.kind} reply failed: ${String(err)}`));

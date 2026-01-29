@@ -263,7 +263,11 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       const to = typeof args.to === "string" ? args.to : undefined;
       if (!to) return null;
       const accountId = typeof args.accountId === "string" ? args.accountId.trim() : undefined;
-      return { to, accountId };
+      const threadIdRaw = typeof args.threadId === "string" ? args.threadId.trim() : "";
+      const replyToRaw = typeof args.replyTo === "string" ? args.replyTo.trim() : "";
+      const threadTsRaw = typeof args.threadTs === "string" ? args.threadTs.trim() : "";
+      const threadId = threadIdRaw || replyToRaw || threadTsRaw || undefined;
+      return { to, accountId, threadId };
     },
     handleAction: async ({ action, params, cfg, accountId, toolContext }) => {
       const resolveChannelId = () =>

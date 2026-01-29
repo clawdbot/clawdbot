@@ -118,6 +118,14 @@ export function extractMessagingToolSend(
   toolName: string,
   args: Record<string, unknown>,
 ): MessagingToolSend | undefined {
+  const readThreadId = (value: unknown): string | number | undefined => {
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      return trimmed ? trimmed : undefined;
+    }
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    return undefined;
+  };
   // Provider docking: new provider tools must implement plugin.actions.extractToolSend.
   const action = typeof args.action === "string" ? args.action.trim() : "";
   const accountIdRaw = typeof args.accountId === "string" ? args.accountId.trim() : undefined;
@@ -132,7 +140,11 @@ export function extractMessagingToolSend(
     const providerId = providerHint ? normalizeChannelId(providerHint) : null;
     const provider = providerId ?? (providerHint ? providerHint.toLowerCase() : "message");
     const to = normalizeTargetForProvider(provider, toRaw);
-    return to ? { tool: toolName, provider, accountId, to } : undefined;
+    let threadId = readThreadId(args.threadId);
+    if (!threadId && provider === "slack") {
+      threadId = readThreadId(args.replyTo ?? args.threadTs);
+    }
+    return to ? { tool: toolName, provider, accountId, to, threadId } : undefined;
   }
   const providerId = normalizeChannelId(toolName);
   if (!providerId) return undefined;
@@ -146,6 +158,7 @@ export function extractMessagingToolSend(
         provider: providerId,
         accountId: extracted.accountId ?? accountId,
         to,
+        threadId: extracted.threadId,
       }
     : undefined;
 }

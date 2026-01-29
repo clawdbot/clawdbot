@@ -31,6 +31,7 @@ export function buildReplyPayloads(params: {
     typeof shouldSuppressMessagingToolReplies
   >[0]["messagingToolSentTargets"];
   originatingTo?: string;
+  originatingThreadId?: string | number;
   accountId?: string;
 }): { replyPayloads: ReplyPayload[]; didLogHeartbeatStrip: boolean } {
   let didLogHeartbeatStrip = params.didLogHeartbeatStrip;
@@ -94,7 +95,9 @@ export function buildReplyPayloads(params: {
     messageProvider: params.messageProvider,
     messagingToolSentTargets,
     originatingTo: params.originatingTo,
+    originatingThreadId: params.originatingThreadId,
     accountId: params.accountId,
+    replyToMode: params.replyToMode,
   });
   const dedupedPayloads = filterMessagingToolDuplicates({
     payloads: replyTaggedPayloads,

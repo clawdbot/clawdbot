@@ -1,3 +1,5 @@
+import type { WebClient as SlackWebClient } from "@slack/web-api";
+
 import { resolveAckReaction } from "../../../agents/identity.js";
 import { hasControlCommand } from "../../../auto-reply/command-detection.js";
 import { shouldHandleTextCommands } from "../../../auto-reply/commands-registry.js";
@@ -48,13 +50,41 @@ import { resolveSlackMedia, resolveSlackThreadStarter } from "../media.js";
 
 import type { PreparedSlackMessage } from "./types.js";
 
+async function resolveSlackThreadTsFromHistory(params: {
+  client: SlackWebClient;
+  channelId: string;
+  messageTs: string;
+}): Promise<string | undefined> {
+  try {
+    const response = (await params.client.conversations.history({
+      channel: params.channelId,
+      latest: params.messageTs,
+      oldest: params.messageTs,
+      inclusive: true,
+      limit: 1,
+    })) as { messages?: Array<{ ts?: string; thread_ts?: string }> };
+    const message =
+      response.messages?.find((entry) => entry.ts === params.messageTs) ?? response.messages?.[0];
+    const threadTs = message?.thread_ts?.trim();
+    return threadTs || undefined;
+  } catch (err) {
+    if (shouldLogVerbose()) {
+      logVerbose(
+        `slack inbound: failed to resolve thread_ts via conversations.history for channel=${params.channelId} ts=${params.messageTs}: ${String(err)}`,
+      );
+    }
+    return undefined;
+  }
+}
+
 export async function prepareSlackMessage(params: {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;
   message: SlackMessageEvent;
   opts: { source: "message" | "app_mention"; wasMentioned?: boolean };
 }): Promise<PreparedSlackMessage | null> {
-  const { ctx, account, message, opts } = params;
+  const { ctx, account, opts } = params;
+  let message = params.message;
   const cfg = ctx.cfg;
 
   let channelInfo: {
@@ -193,18 +223,48 @@ export async function prepareSlackMessage(params: {
     },
   });
 
+  // Slack occasionally delivers events that include parent_user_id (so they're thread replies)
+  // but omit thread_ts. If we don't recover the thread_ts, replies can end up in the channel root.
+  if (!message.thread_ts && message.parent_user_id && message.ts) {
+    if (shouldLogVerbose()) {
+      logVerbose(
+        `slack inbound: missing thread_ts for thread reply channel=${message.channel} ts=${message.ts} source=${opts.source}`,
+      );
+    }
+    const resolved = await resolveSlackThreadTsFromHistory({
+      client: ctx.app.client,
+      channelId: message.channel,
+      messageTs: message.ts,
+    });
+    if (resolved) {
+      message = { ...message, thread_ts: resolved };
+      if (shouldLogVerbose()) {
+        logVerbose(
+          `slack inbound: resolved missing thread_ts channel=${message.channel} ts=${message.ts} -> thread_ts=${resolved}`,
+        );
+      }
+    } else if (shouldLogVerbose()) {
+      logVerbose(
+        `slack inbound: could not resolve missing thread_ts channel=${message.channel} ts=${message.ts}`,
+      );
+    }
+  }
+
   const baseSessionKey = route.sessionKey;
   const threadContext = resolveSlackThreadContext({ message, replyToMode: ctx.replyToMode });
   const threadTs = threadContext.incomingThreadTs;
   const isThreadReply = threadContext.isThreadReply;
+  const autoThreadId =
+    !isThreadReply && ctx.replyToMode === "all" ? threadContext.messageThreadId : undefined;
+  const threadSessionId = isThreadReply ? threadTs : autoThreadId;
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey,
-    threadId: isThreadReply ? threadTs : undefined,
-    parentSessionKey: isThreadReply && ctx.threadInheritParent ? baseSessionKey : undefined,
+    threadId: threadSessionId,
+    parentSessionKey: threadSessionId && ctx.threadInheritParent ? baseSessionKey : undefined,
   });
   const sessionKey = threadKeys.sessionKey;
   const historyKey =
-    isThreadReply && ctx.threadHistoryScope === "thread" ? sessionKey : message.channel;
+    threadSessionId && ctx.threadHistoryScope === "thread" ? sessionKey : message.channel;
 
   const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
   const hasAnyMention = /<@[^>]+>/.test(message.text ?? "");
@@ -395,20 +455,19 @@ export async function prepareSlackMessage(params: {
       GroupSubject: isRoomish ? roomLabel : undefined,
       From: slackFrom,
     }) ?? (isDirectMessage ? senderName : roomLabel);
-  const textWithId = `${rawBody}\n[slack message id: ${message.ts} channel: ${message.channel}]`;
   const storePath = resolveStorePath(ctx.cfg.session?.store, {
     agentId: route.agentId,
   });
   const envelopeOptions = resolveEnvelopeFormatOptions(ctx.cfg);
   const previousTimestamp = readSessionUpdatedAt({
     storePath,
-    sessionKey: route.sessionKey,
+    sessionKey,
   });
   const body = formatInboundEnvelope({
     channel: "Slack",
     from: envelopeFrom,
     timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
-    body: textWithId,
+    body: rawBody,
     chatType: isDirectMessage ? "direct" : "channel",
     sender: { name: senderName, id: senderId },
     previousTimestamp,
@@ -427,9 +486,7 @@ export async function prepareSlackMessage(params: {
           channel: "Slack",
           from: roomLabel,
           timestamp: entry.timestamp,
-          body: `${entry.body}${
-            entry.messageId ? ` [id:${entry.messageId} channel:${message.channel}]` : ""
-          }`,
+          body: entry.body,
           chatType: "channel",
           senderLabel: entry.sender,
           envelope: envelopeOptions,
@@ -463,12 +520,11 @@ export async function prepareSlackMessage(params: {
     if (starter?.text) {
       const starterUser = starter.userId ? await ctx.resolveUserName(starter.userId) : null;
       const starterName = starterUser?.name ?? starter.userId ?? "Unknown";
-      const starterWithId = `${starter.text}\n[slack message id: ${starter.ts ?? threadTs} channel: ${message.channel}]`;
       threadStarterBody = formatThreadStarterEnvelope({
         channel: "Slack",
         author: starterName,
         timestamp: starter.ts ? Math.round(Number(starter.ts) * 1000) : undefined,
-        body: starterWithId,
+        body: starter.text,
         envelope: envelopeOptions,
       });
       const snippet = starter.text.replace(/\s+/g, " ").slice(0, 80);

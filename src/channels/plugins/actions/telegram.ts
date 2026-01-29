@@ -69,7 +69,9 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     const to = typeof args.to === "string" ? args.to : undefined;
     if (!to) return null;
     const accountId = typeof args.accountId === "string" ? args.accountId.trim() : undefined;
-    return { to, accountId };
+    const threadIdRaw = typeof args.threadId === "string" ? args.threadId.trim() : "";
+    const threadId = threadIdRaw || undefined;
+    return { to, accountId, threadId };
   },
   handleAction: async ({ action, params, cfg, accountId }) => {
     if (action === "send") {

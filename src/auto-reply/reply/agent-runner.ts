@@ -408,6 +408,7 @@ export async function runReplyAgent(params: {
       messagingToolSentTexts: runResult.messagingToolSentTexts,
       messagingToolSentTargets: runResult.messagingToolSentTargets,
       originatingTo: sessionCtx.OriginatingTo ?? sessionCtx.To,
+      originatingThreadId: sessionCtx.MessageThreadId,
       accountId: sessionCtx.AccountId,
     });
     const { replyPayloads } = payloadResult;
