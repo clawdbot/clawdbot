@@ -368,7 +368,12 @@ export async function resolveMedia(
   }
 
   const m =
-    msg.photo?.[msg.photo.length - 1] ?? msg.video ?? msg.document ?? msg.audio ?? msg.voice;
+    msg.photo?.[msg.photo.length - 1] ??
+    msg.video ??
+    msg.video_note ??
+    msg.document ??
+    msg.audio ??
+    msg.voice;
   if (!m?.file_id) return null;
   const file = await ctx.getFile();
   if (!file.file_path) {
@@ -395,6 +400,7 @@ export async function resolveMedia(
   let placeholder = "<media:document>";
   if (msg.photo) placeholder = "<media:image>";
   else if (msg.video) placeholder = "<media:video>";
+  else if (msg.video_note) placeholder = "<media:video>";
   else if (msg.audio || msg.voice) placeholder = "<media:audio>";
   return { path: saved.path, contentType: saved.contentType, placeholder };
 }

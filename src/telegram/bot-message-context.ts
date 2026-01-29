@@ -335,6 +335,7 @@ export const buildTelegramMessageContext = async ({
   let placeholder = "";
   if (msg.photo) placeholder = "<media:image>";
   else if (msg.video) placeholder = "<media:video>";
+  else if (msg.video_note) placeholder = "<media:video>";
   else if (msg.audio || msg.voice) placeholder = "<media:audio>";
   else if (msg.document) placeholder = "<media:document>";
   else if (msg.sticker) placeholder = "<media:sticker>";
