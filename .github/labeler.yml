@@ -77,6 +77,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/voice-call/**"
+"channel: zoom":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/zoom/**"
+          - "docs/channels/zoom.md"
 "channel: whatsapp-web":
   - changed-files:
       - any-glob-to-any-file:

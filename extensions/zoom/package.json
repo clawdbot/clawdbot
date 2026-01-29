@@ -1,0 +1,32 @@
+{
+  "name": "@moltbot/zoom",
+  "version": "2026.1.27-beta.1",
+  "type": "module",
+  "description": "Moltbot Zoom Team Chat channel plugin",
+  "moltbot": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "zoom",
+      "label": "Zoom Team Chat",
+      "selectionLabel": "Zoom Team Chat (S2S OAuth)",
+      "docsPath": "/channels/zoom",
+      "docsLabel": "zoom",
+      "blurb": "S2S OAuth; enterprise messaging.",
+      "aliases": [],
+      "order": 70
+    },
+    "install": {
+      "npmSpec": "@moltbot/zoom",
+      "localPath": "extensions/zoom",
+      "defaultChoice": "npm"
+    }
+  },
+  "dependencies": {
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "moltbot": "workspace:*"
+  }
+}
