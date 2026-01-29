@@ -82,6 +82,13 @@ describe("exec approval handlers", () => {
     const id = (requested?.payload as { id?: string })?.id ?? "";
     expect(id).not.toBe("");
 
+    // First response should be "accepted" (registration confirmation)
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "accepted", id }),
+      undefined,
+    );
+
     const resolveRespond = vi.fn();
     await handlers["exec.approval.resolve"]({
       params: { id, decision: "allow-once" },
@@ -97,6 +104,7 @@ describe("exec approval handlers", () => {
     await requestPromise;
 
     expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    // Second response should contain the decision
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ id, decision: "allow-once" }),

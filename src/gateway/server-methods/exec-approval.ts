@@ -62,7 +62,9 @@ export function createExecApprovalHandlers(
         sessionKey: p.sessionKey ?? null,
       };
       const record = manager.create(request, timeoutMs, explicitId);
-      const decisionPromise = manager.waitForDecision(record, timeoutMs);
+      // Use register() to synchronously add to pending map before sending any response.
+      // This ensures the approval ID is valid immediately after the "accepted" response.
+      const decisionPromise = manager.register(record, timeoutMs);
       context.broadcast(
         "exec.approval.requested",
         {
@@ -83,7 +85,24 @@ export function createExecApprovalHandlers(
         .catch((err) => {
           context.logGateway?.error?.(`exec approvals: forward request failed: ${String(err)}`);
         });
+
+      // Send immediate "accepted" response so callers know the approval ID is registered.
+      // Callers using expectFinal:false will receive this and can return immediately.
+      // Callers using expectFinal:true will continue waiting for the decision.
+      // Note: "accepted" status is recognized by the gateway client for dual-response pattern.
+      respond(
+        true,
+        {
+          status: "accepted",
+          id: record.id,
+          createdAtMs: record.createdAtMs,
+          expiresAtMs: record.expiresAtMs,
+        },
+        undefined,
+      );
+
       const decision = await decisionPromise;
+      // Send final response with decision for callers using expectFinal:true.
       respond(
         true,
         {
@@ -91,6 +110,31 @@ export function createExecApprovalHandlers(
           decision,
           createdAtMs: record.createdAtMs,
           expiresAtMs: record.expiresAtMs,
+        },
+        undefined,
+      );
+    },
+    "exec.approval.waitDecision": async ({ params, respond }) => {
+      const p = params as { id?: string; timeoutMs?: number };
+      const id = typeof p.id === "string" ? p.id.trim() : "";
+      if (!id) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "id is required"));
+        return;
+      }
+      const decisionPromise = manager.awaitDecision(id);
+      if (!decisionPromise) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown approval id"));
+        return;
+      }
+      const decision = await decisionPromise;
+      const snapshot = manager.getSnapshot(id);
+      respond(
+        true,
+        {
+          id,
+          decision,
+          createdAtMs: snapshot?.createdAtMs,
+          expiresAtMs: snapshot?.expiresAtMs,
         },
         undefined,
       );
