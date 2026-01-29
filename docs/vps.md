@@ -18,6 +18,7 @@ deployments work at a high level.
 - **Hetzner (Docker)**: [Hetzner](/platforms/hetzner)
 - **GCP (Compute Engine)**: [GCP](/platforms/gcp)
 - **exe.dev** (VM + HTTPS proxy): [exe.dev](/platforms/exe-dev)
+- **Tencent Cloud Lighthouse**: [Tencent Cloud Lighthouse](/platforms/tencentcloud)
 - **AWS (EC2/Lightsail/free tier)**: works well too. Video guide:
   https://x.com/techfrenAJ/status/2014934471095812547
 
