@@ -487,6 +487,7 @@ export async function startGatewayServer(
   const tailscaleCleanup = await startGatewayTailscaleExposure({
     tailscaleMode,
     resetOnExit: tailscaleConfig.resetOnExit,
+    socket: tailscaleConfig.socket,
     port,
     controlUiBasePath,
     logTailscale,

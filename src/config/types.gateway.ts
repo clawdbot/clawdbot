@@ -90,6 +90,8 @@ export type GatewayTailscaleConfig = {
   mode?: GatewayTailscaleMode;
   /** Reset serve/funnel configuration on shutdown. */
   resetOnExit?: boolean;
+  /** Path to tailscaled socket (for userspace Tailscale). */
+  socket?: string;
 };
 
 export type GatewayRemoteConfig = {

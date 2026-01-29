@@ -9,6 +9,7 @@ import {
 export async function startGatewayTailscaleExposure(params: {
   tailscaleMode: "off" | "serve" | "funnel";
   resetOnExit?: boolean;
+  socket?: string;
   port: number;
   controlUiBasePath?: string;
   logTailscale: { info: (msg: string) => void; warn: (msg: string) => void };
@@ -17,13 +18,15 @@ export async function startGatewayTailscaleExposure(params: {
     return null;
   }
 
+  const socketOpts = params.socket ? { socket: params.socket } : undefined;
+
   try {
     if (params.tailscaleMode === "serve") {
-      await enableTailscaleServe(params.port);
+      await enableTailscaleServe(params.port, undefined, socketOpts);
     } else {
-      await enableTailscaleFunnel(params.port);
+      await enableTailscaleFunnel(params.port, undefined, socketOpts);
     }
-    const host = await getTailnetHostname().catch(() => null);
+    const host = await getTailnetHostname(undefined, undefined, socketOpts).catch(() => null);
     if (host) {
       const uiPath = params.controlUiBasePath ? `${params.controlUiBasePath}/` : "/";
       params.logTailscale.info(
@@ -45,9 +48,9 @@ export async function startGatewayTailscaleExposure(params: {
   return async () => {
     try {
       if (params.tailscaleMode === "serve") {
-        await disableTailscaleServe();
+        await disableTailscaleServe(undefined, socketOpts);
       } else {
-        await disableTailscaleFunnel();
+        await disableTailscaleFunnel(undefined, socketOpts);
       }
     } catch (err) {
       params.logTailscale.warn(

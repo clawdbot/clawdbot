@@ -336,6 +336,7 @@ export const MoltbotSchema = z
           .object({
             mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),
             resetOnExit: z.boolean().optional(),
+            socket: z.string().optional(),
           })
           .strict()
           .optional(),
