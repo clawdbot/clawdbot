@@ -26,6 +26,7 @@ import type {
   SkillEntry,
   SkillSnapshot,
 } from "./types.js";
+import type { SkillsPromptMode } from "../../config/types.skills.js";
 
 const fsp = fs.promises;
 const skillsLogger = createSubsystemLogger("skills");
@@ -39,6 +40,46 @@ function debugSkillCommandOnce(
   if (skillCommandDebugOnce.has(messageKey)) return;
   skillCommandDebugOnce.add(messageKey);
   skillsLogger.debug(message, meta);
+}
+
+const COMPACT_DESCRIPTION_MAX_LENGTH = 60;
+
+/**
+ * Format skills in compact mode - only name and truncated description.
+ * Reduces token usage by ~50% compared to full mode.
+ */
+function formatSkillsCompact(skills: Skill[]): string {
+  if (skills.length === 0) return "";
+
+  const lines = skills.map((skill) => {
+    const desc = skill.description?.trim() || skill.name;
+    const truncated =
+      desc.length > COMPACT_DESCRIPTION_MAX_LENGTH
+        ? desc.slice(0, COMPACT_DESCRIPTION_MAX_LENGTH - 1) + "…"
+        : desc;
+    return `- ${skill.name}: ${truncated}`;
+  });
+
+  return [
+    "## Skills (compact mode)",
+    "Use `read` tool to load skill instructions from `skills/<name>/SKILL.md` when needed.",
+    "",
+    ...lines,
+  ].join("\n");
+}
+
+/**
+ * Format skills in lazy mode - minimal prompt, skills available via tool.
+ * Maximum token savings - near zero overhead for skill-agnostic conversations.
+ */
+function formatSkillsLazy(skillCount: number): string {
+  if (skillCount === 0) return "";
+
+  return [
+    "## Skills (lazy mode)",
+    `${skillCount} skills are available. Use the \`list_skills\` tool to see them.`,
+    "When a skill matches, use \`read\` to load its SKILL.md instructions.",
+  ].join("\n");
 }
 
 function filterSkillEntries(
@@ -199,7 +240,25 @@ export function buildWorkspaceSkillSnapshot(
   );
   const resolvedSkills = promptEntries.map((entry) => entry.skill);
   const remoteNote = opts?.eligibility?.remote?.note?.trim();
-  const prompt = [remoteNote, formatSkillsForPrompt(resolvedSkills)].filter(Boolean).join("\n");
+
+  // Resolve prompt mode from config (default: "full" for backward compatibility)
+  const promptMode: SkillsPromptMode = opts?.config?.skills?.promptMode ?? "full";
+
+  let skillsPrompt: string;
+  switch (promptMode) {
+    case "compact":
+      skillsPrompt = formatSkillsCompact(resolvedSkills);
+      break;
+    case "lazy":
+      skillsPrompt = formatSkillsLazy(resolvedSkills.length);
+      break;
+    case "full":
+    default:
+      skillsPrompt = formatSkillsForPrompt(resolvedSkills);
+      break;
+  }
+
+  const prompt = [remoteNote, skillsPrompt].filter(Boolean).join("\n");
   return {
     prompt,
     skills: eligible.map((entry) => ({
@@ -234,9 +293,26 @@ export function buildWorkspaceSkillsPrompt(
     (entry) => entry.invocation?.disableModelInvocation !== true,
   );
   const remoteNote = opts?.eligibility?.remote?.note?.trim();
-  return [remoteNote, formatSkillsForPrompt(promptEntries.map((entry) => entry.skill))]
-    .filter(Boolean)
-    .join("\n");
+
+  // Resolve prompt mode from config (default: "full" for backward compatibility)
+  const promptMode: SkillsPromptMode = opts?.config?.skills?.promptMode ?? "full";
+  const skills = promptEntries.map((entry) => entry.skill);
+
+  let skillsPrompt: string;
+  switch (promptMode) {
+    case "compact":
+      skillsPrompt = formatSkillsCompact(skills);
+      break;
+    case "lazy":
+      skillsPrompt = formatSkillsLazy(skills.length);
+      break;
+    case "full":
+    default:
+      skillsPrompt = formatSkillsForPrompt(skills);
+      break;
+  }
+
+  return [remoteNote, skillsPrompt].filter(Boolean).join("\n");
 }
 
 export function resolveSkillsPromptForRun(params: {

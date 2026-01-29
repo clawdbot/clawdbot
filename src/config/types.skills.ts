@@ -22,9 +22,22 @@ export type SkillsInstallConfig = {
   nodeManager?: "npm" | "pnpm" | "yarn" | "bun";
 };
 
+/**
+ * Controls how skills are injected into the system prompt.
+ * - "full": Inject all skill metadata (default, current behavior)
+ * - "compact": Inject only skill names and truncated descriptions
+ * - "lazy": No upfront injection; skills available via list_skills tool
+ */
+export type SkillsPromptMode = "full" | "compact" | "lazy";
+
 export type SkillsConfig = {
   /** Optional bundled-skill allowlist (only affects bundled skills). */
   allowBundled?: string[];
+  /**
+   * Controls how skills are injected into the system prompt.
+   * @default "full"
+   */
+  promptMode?: SkillsPromptMode;
   load?: SkillsLoadConfig;
   install?: SkillsInstallConfig;
   entries?: Record<string, SkillConfig>;
