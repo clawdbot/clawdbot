@@ -8,6 +8,7 @@ import { recordPluginInstall } from "../../plugins/installs.js";
 import { enablePluginInConfig } from "../../plugins/enable.js";
 import { loadMoltbotPlugins } from "../../plugins/loader.js";
 import { installPluginFromNpmSpec } from "../../plugins/install.js";
+import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 
@@ -17,6 +18,24 @@ type InstallResult = {
   cfg: MoltbotConfig;
   installed: boolean;
 };
+
+function findExistingPluginOrigin(params: {
+  pluginId: string;
+  cfg: ClawdbotConfig;
+  workspaceDir?: string;
+}): "config" | "workspace" | "global" | "bundled" | null {
+  const workspaceDir =
+    params.workspaceDir ??
+    resolveAgentWorkspaceDir(params.cfg, resolveDefaultAgentId(params.cfg)) ??
+    undefined;
+  const registry = loadPluginManifestRegistry({
+    config: params.cfg,
+    workspaceDir,
+    cache: false,
+  });
+  const found = registry.plugins.find((plugin) => plugin.id === params.pluginId);
+  return found?.origin ?? null;
+}
 
 function hasGitWorkspace(workspaceDir?: string): boolean {
   const candidates = new Set<string>();
@@ -122,7 +141,24 @@ export async function ensureOnboardingPluginInstalled(params: {
 }): Promise<InstallResult> {
   const { entry, prompter, runtime, workspaceDir } = params;
   let next = params.cfg;
+
   const allowLocal = hasGitWorkspace(workspaceDir);
+  const existingOrigin = findExistingPluginOrigin({
+    pluginId: entry.id,
+    cfg: next,
+    workspaceDir,
+  });
+  if (existingOrigin && (existingOrigin !== "bundled" || !allowLocal)) {
+    const enabled = enablePluginInConfig(next, entry.id);
+    next = enabled.config;
+    if (enabled.enabled) return { cfg: next, installed: true };
+    await prompter.note(
+      `Cannot enable ${entry.id}: ${enabled.reason ?? "plugin disabled"}.`,
+      "Plugin install",
+    );
+    return { cfg: next, installed: false };
+  }
+
   const localPath = resolveLocalPath(entry, workspaceDir, allowLocal);
   const defaultChoice = resolveInstallDefaultChoice({
     cfg: next,

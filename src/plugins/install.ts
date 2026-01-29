@@ -164,8 +164,23 @@ async function installPluginFromPackageDir(params: {
   }
 
   const deps = manifest.dependencies ?? {};
-  const hasDeps = Object.keys(deps).length > 0;
+  // Filter out workspace:* dependencies as they're not supported in standalone npm packages
+  const filteredDeps = Object.fromEntries(
+    Object.entries(deps).filter(([, version]) => !String(version).startsWith("workspace:")),
+  );
+  const hasDeps = Object.keys(filteredDeps).length > 0;
   if (hasDeps) {
+    // Update package.json in targetDir to remove workspace: dependencies before npm install
+    const targetManifestPath = path.join(targetDir, "package.json");
+    const filteredManifest = {
+      ...manifest,
+      dependencies: filteredDeps,
+    };
+    await fs.writeFile(
+      targetManifestPath,
+      JSON.stringify(filteredManifest, null, 2) + "\n",
+      "utf-8",
+    );
     logger.info?.("Installing plugin dependencies…");
     const npmRes = await runCommandWithTimeout(["npm", "install", "--omit=dev", "--silent"], {
       timeoutMs: Math.max(timeoutMs, 300_000),
