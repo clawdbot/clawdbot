@@ -26,7 +26,9 @@ import {
   resolveShellEnvFallbackTimeoutMs,
 } from "../infra/shell-env.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { logInfo, logWarn } from "../logger.js";
+import { runExec } from "../process/exec.js";
 import { formatSpawnError, spawnWithFallback } from "../process/spawn-utils.js";
 import {
   type ProcessSession,
@@ -34,6 +36,7 @@ import {
   addSession,
   appendOutput,
   createSessionSlug,
+  deleteSession,
   markBackgrounded,
   markExited,
   tail,
@@ -124,6 +127,7 @@ export type ExecToolDefaults = {
   safeBins?: string[];
   agentId?: string;
   backgroundMs?: number;
+  backgroundRunner?: "process" | "systemd";
   timeoutSec?: number;
   approvalRunningNoticeMs?: number;
   sandbox?: BashSandboxConfig;
@@ -197,6 +201,7 @@ export type ExecToolDetails =
       status: "running";
       sessionId: string;
       pid?: number;
+      systemdUnit?: string;
       startedAt: number;
       cwd?: string;
       tail?: string;
@@ -703,6 +708,105 @@ async function runExecProcess(opts: {
   };
 }
 
+function resolveBackgroundRunner(defaults?: ExecToolDefaults) {
+  const envOverride = process.env.CLAWDBOT_EXEC_BACKGROUND_RUNNER?.trim().toLowerCase();
+  if (envOverride === "systemd") return "systemd";
+  if (envOverride === "process") return "process";
+  return defaults?.backgroundRunner ?? "process";
+}
+
+function canUseSystemdRun() {
+  return process.platform === "linux";
+}
+
+function normalizeSystemdSetenv(env: Record<string, string>) {
+  const entries: string[] = [];
+  for (const [key, value] of Object.entries(env)) {
+    const k = key.trim();
+    if (!k) continue;
+    const v = `${value ?? ""}`;
+    if (v.includes("\0") || v.includes("\n")) continue;
+    entries.push(`${k}=${v}`);
+  }
+  return entries;
+}
+
+async function startSystemdScopeBackground(opts: {
+  command: string;
+  workdir: string;
+  env: Record<string, string>;
+  maxOutput: number;
+  pendingMaxOutput: number;
+  scopeKey?: string;
+  sessionKey?: string;
+}): Promise<ProcessSession> {
+  const startedAt = Date.now();
+  const sessionId = createSessionSlug();
+  const unit = `clawdbot-exec-${sessionId}.scope`;
+  const { shell, args: shellArgs } = getShellConfig();
+
+  const session = {
+    id: sessionId,
+    command: opts.command,
+    scopeKey: opts.scopeKey,
+    sessionKey: opts.sessionKey,
+    notifyOnExit: false,
+    exitNotified: false,
+    pid: undefined,
+    systemdUnit: unit,
+    startedAt,
+    cwd: opts.workdir,
+    maxOutputChars: opts.maxOutput,
+    pendingMaxOutputChars: opts.pendingMaxOutput,
+    totalOutputChars: 0,
+    pendingStdout: [],
+    pendingStderr: [],
+    pendingStdoutChars: 0,
+    pendingStderrChars: 0,
+    aggregated: "",
+    tail: "",
+    exited: false,
+    exitCode: undefined as number | null | undefined,
+    exitSignal: undefined as NodeJS.Signals | number | null | undefined,
+    truncated: false,
+    backgrounded: true,
+  } satisfies ProcessSession;
+
+  addSession(session);
+  markBackgrounded(session);
+
+  if (!canUseSystemdRun()) {
+    deleteSession(sessionId);
+    throw new Error("systemd background runner is only supported on Linux");
+  }
+
+  const setenv = normalizeSystemdSetenv(opts.env);
+  const argv = [
+    "--user",
+    "--scope",
+    "--collect",
+    "--no-block",
+    "--unit",
+    unit,
+    "--working-directory",
+    opts.workdir,
+    ...setenv.flatMap((entry) => ["-E", entry]),
+    "--",
+    shell,
+    ...shellArgs,
+    opts.command,
+  ];
+
+  try {
+    await runExec("systemd-run", argv, { timeoutMs: 10_000, maxBuffer: 1024 * 1024 });
+  } catch (err) {
+    deleteSession(sessionId);
+    throw err;
+  }
+
+  return session;
+}
+
 export function createExecTool(
   defaults?: ExecToolDefaults,
   // biome-ignore lint/suspicious/noExplicitAny: TypeBox schema type from pi-agent-core uses a different module instance.
@@ -768,6 +872,7 @@ export function createExecTool(
           ? 0
           : clampNumber(params.yieldMs ?? defaultBackgroundMs, defaultBackgroundMs, 10, 120_000)
         : null;
+      const backgroundRunner = resolveBackgroundRunner(defaults);
       const elevatedDefaults = defaults?.elevated;
       const elevatedAllowed = Boolean(elevatedDefaults?.enabled && elevatedDefaults.allowed);
       const elevatedDefaultMode =
@@ -1382,6 +1487,54 @@ export function createExecTool(
         typeof params.timeout === "number" ? params.timeout : defaultTimeoutSec;
       const getWarningText = () => (warnings.length ? `${warnings.join("\n")}\n\n` : "");
       const usePty = params.pty === true && !sandbox;
+
+      const immediateBackground = backgroundRequested || yieldWindow === 0;
+      const wantsSystemdRunner =
+        backgroundRunner === "systemd" &&
+        immediateBackground &&
+        host === "gateway" &&
+        !sandbox &&
+        !usePty;
+
+      if (wantsSystemdRunner) {
+        try {
+          const session = await startSystemdScopeBackground({
+            command: params.command,
+            workdir,
+            env,
+            maxOutput,
+            pendingMaxOutput,
+            scopeKey: defaults?.scopeKey,
+            sessionKey: notifySessionKey,
+          });
+          return {
+            content: [
+              {
+                type: "text",
+                text:
+                  `${getWarningText()}` +
+                  `Started in systemd (${session.systemdUnit}) as a background job (session ${session.id}). ` +
+                  "Use process (list/poll/log/kill/remove) to manage it.",
+              },
+            ],
+            details: {
+              status: "running",
+              sessionId: session.id,
+              pid: undefined,
+              systemdUnit: session.systemdUnit,
+              startedAt: session.startedAt,
+              cwd: session.cwd,
+              tail: session.tail,
+            },
+          };
+        } catch (err) {
+          const msg = formatErrorMessage(err);
+          warnings.push(
+            `Warning: systemd background runner failed (${msg}); falling back to process runner.`,
+          );
+        }
+      }
+
       const run = await runExecProcess({
         command: params.command,
         workdir,

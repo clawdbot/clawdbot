@@ -48,6 +48,7 @@ Notes:
 - `tools.exec.node` (default: unset)
 - `tools.exec.pathPrepend`: list of directories to prepend to `PATH` for exec runs.
 - `tools.exec.safeBins`: stdin-only safe binaries that can run without explicit allowlist entries.
+- `tools.exec.backgroundRunner` (default: `"process"`): when set to `"systemd"` (Linux only), background jobs started with `background=true` run in a systemd user unit via `systemd-run --user`, so long-running tasks (tmux/codex) don’t stay in the gateway cgroup.
 
 Example:
 ```json5

@@ -1934,6 +1934,7 @@ of `every`, keep `HEARTBEAT.md` tiny, and/or choose a cheaper `model`.
 
 `tools.exec` configures background exec defaults:
 - `backgroundMs`: time before auto-background (ms, default 10000)
+- `backgroundRunner`: `"process"` (default) or `"systemd"` (Linux only). When `"systemd"`, background jobs started with `background=true` run via `systemd-run --user` so long-running tasks (tmux/codex) don’t stay in the gateway cgroup.
 - `timeoutSec`: auto-kill after this runtime (seconds, default 1800)
 - `cleanupMs`: how long to keep finished sessions in memory (ms, default 1800000)
 - `notifyOnExit`: enqueue a system event + request heartbeat when backgrounded exec exits (default true)

@@ -175,6 +175,13 @@ export type ExecToolConfig = {
   safeBins?: string[];
   /** Default time (ms) before an exec command auto-backgrounds. */
   backgroundMs?: number;
+  /**
+   * Background runner strategy:
+   * - "process": track a child process managed by the gateway process (default).
+   * - "systemd": run background jobs in a systemd user scope via `systemd-run --user --scope`,
+   *   so long-lived tasks (tmux/codex) don't remain in the gateway cgroup.
+   */
+  backgroundRunner?: "process" | "systemd";
   /** Default timeout (seconds) before auto-killing exec commands. */
   timeoutSec?: number;
   /** Emit a running notice (ms) when approval-backed exec runs long (default: 10000, 0 = off). */

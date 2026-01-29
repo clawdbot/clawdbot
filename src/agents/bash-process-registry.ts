@@ -31,6 +31,7 @@ export interface ProcessSession {
   child?: ChildProcessWithoutNullStreams;
   stdin?: SessionStdin;
   pid?: number;
+  systemdUnit?: string;
   startedAt: number;
   cwd?: string;
   maxOutputChars: number;
@@ -59,6 +60,7 @@ export interface FinishedSession {
   status: ProcessStatus;
   exitCode?: number | null;
   exitSignal?: NodeJS.Signals | number | null;
+  systemdUnit?: string;
   aggregated: string;
   tail: string;
   truncated: boolean;
@@ -166,6 +168,7 @@ function moveToFinished(session: ProcessSession, status: ProcessStatus) {
     status,
     exitCode: session.exitCode,
     exitSignal: session.exitSignal,
+    systemdUnit: session.systemdUnit,
     aggregated: session.aggregated,
     tail: session.tail,
     truncated: session.truncated,

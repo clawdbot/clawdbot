@@ -1,6 +1,9 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 
+import { formatErrorMessage } from "../infra/errors.js";
+import { runExec } from "../process/exec.js";
+
 import {
   deleteSession,
   drainSession,
@@ -25,6 +28,71 @@ export type ProcessToolDefaults = {
   cleanupMs?: number;
   scopeKey?: string;
 };
+
+type SystemdUnitState = {
+  activeState?: string;
+  subState?: string;
+};
+
+async function systemdShowUserUnit(unit: string): Promise<SystemdUnitState | null> {
+  try {
+    const { stdout } = await runExec("systemctl", [
+      "--user",
+      "show",
+      unit,
+      "-p",
+      "ActiveState",
+      "-p",
+      "SubState",
+    ]);
+    const out = stdout.trim();
+    if (!out) return null;
+    const lines = out.split("\n");
+    const state: SystemdUnitState = {};
+    for (const line of lines) {
+      const [key, ...rest] = line.split("=");
+      const value = rest.join("=").trim();
+      if (key === "ActiveState") state.activeState = value;
+      if (key === "SubState") state.subState = value;
+    }
+    return state;
+  } catch (err) {
+    const msg = formatErrorMessage(err).toLowerCase();
+    if (msg.includes("could not be found") || msg.includes("not found")) {
+      return null;
+    }
+    if (
+      msg.includes("failed to connect to bus") ||
+      msg.includes("systemctl not available") ||
+      msg.includes("not been booted with systemd")
+    ) {
+      return null;
+    }
+    throw err;
+  }
+}
+
+async function systemdJournalTail(unit: string, limit: number): Promise<string> {
+  try {
+    const { stdout, stderr } = await runExec("journalctl", [
+      "--user",
+      "-u",
+      unit,
+      "--no-pager",
+      "-o",
+      "cat",
+      "-n",
+      String(Math.max(1, Math.floor(limit))),
+    ]);
+    return (stdout || stderr).trimEnd();
+  } catch (err) {
+    return `journalctl failed: ${formatErrorMessage(err)}`.trim();
+  }
+}
+
+async function systemdStopUserUnit(unit: string): Promise<void> {
+  await runExec("systemctl", ["--user", "stop", unit]).catch(() => undefined);
+}
 
 const processSchema = Type.Object({
   action: Type.String({ description: "Process action" }),
@@ -91,6 +159,7 @@ export function createProcessTool(
             sessionId: s.id,
             status: "running",
             pid: s.pid ?? undefined,
+            systemdUnit: s.systemdUnit ?? undefined,
             startedAt: s.startedAt,
             runtimeMs: Date.now() - s.startedAt,
             cwd: s.cwd,
@@ -114,6 +183,7 @@ export function createProcessTool(
             truncated: s.truncated,
             exitCode: s.exitCode ?? undefined,
             exitSignal: s.exitSignal ?? undefined,
+            systemdUnit: s.systemdUnit ?? undefined,
           }));
         const lines = [...running, ...finished]
           .sort((a, b) => b.startedAt - a.startedAt)
@@ -194,6 +264,58 @@ export function createProcessTool(
               details: { status: "failed" },
             };
           }
+
+          if (scopedSession.systemdUnit) {
+            const unit = scopedSession.systemdUnit;
+            const state = await systemdShowUserUnit(unit);
+            const output = await systemdJournalTail(unit, 200);
+            const active = state?.activeState ?? "unknown";
+            const sub = state?.subState ?? "unknown";
+            const exited = state == null || (active !== "active" && active !== "activating");
+            if (exited) {
+              const failed = active === "failed" || sub === "failed";
+              const status = failed ? "failed" : "completed";
+              scopedSession.aggregated = output;
+              scopedSession.tail = scopedSession.aggregated
+                ? truncateMiddle(scopedSession.aggregated, 2000)
+                : scopedSession.tail;
+              markExited(scopedSession, failed ? 1 : 0, null, status);
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text:
+                      (output || "(no output)") +
+                      `\n\nsystemd unit exited (${unit}; state=${active}/${sub}).`,
+                  },
+                ],
+                details: {
+                  status: status === "completed" ? "completed" : "failed",
+                  sessionId: params.sessionId,
+                  exitCode: failed ? 1 : 0,
+                  aggregated: output,
+                  name: deriveSessionName(scopedSession.command),
+                },
+              };
+            }
+            return {
+              content: [
+                {
+                  type: "text",
+                  text:
+                    (output || "(no recent output)") +
+                    `\n\nsystemd unit running (${unit}; state=${active}/${sub}).`,
+                },
+              ],
+              details: {
+                status: "running",
+                sessionId: params.sessionId,
+                aggregated: output,
+                name: deriveSessionName(scopedSession.command),
+              },
+            };
+          }
+
           const { stdout, stderr } = drainSession(scopedSession);
           const exited = scopedSession.exited;
           const exitCode = scopedSession.exitCode ?? 0;
@@ -247,6 +369,20 @@ export function createProcessTool(
                   },
                 ],
                 details: { status: "failed" },
+              };
+            }
+            if (scopedSession.systemdUnit) {
+              const unit = scopedSession.systemdUnit;
+              const limit = typeof params.limit === "number" ? Math.floor(params.limit) : 200;
+              const output = await systemdJournalTail(unit, limit);
+              return {
+                content: [{ type: "text", text: output || "(no output yet)" }],
+                details: {
+                  status: "running",
+                  sessionId: params.sessionId,
+                  aggregated: output,
+                  name: deriveSessionName(scopedSession.command),
+                },
               };
             }
             const { slice, totalLines, totalChars } = sliceLogLines(
@@ -323,6 +459,17 @@ export function createProcessTool(
               details: { status: "failed" },
             };
           }
+          if (scopedSession.systemdUnit) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Session ${params.sessionId} is managed by systemd (${scopedSession.systemdUnit}); stdin write is not supported.`,
+                },
+              ],
+              details: { status: "failed" },
+            };
+          }
           const stdin = scopedSession.stdin ?? scopedSession.child?.stdin;
           if (!stdin || stdin.destroyed) {
             return {
@@ -379,6 +526,17 @@ export function createProcessTool(
                 {
                   type: "text",
                   text: `Session ${params.sessionId} is not backgrounded.`,
+                },
+              ],
+              details: { status: "failed" },
+            };
+          }
+          if (scopedSession.systemdUnit) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Session ${params.sessionId} is managed by systemd (${scopedSession.systemdUnit}); interactive input is not supported.`,
                 },
               ],
               details: { status: "failed" },
@@ -458,6 +616,17 @@ export function createProcessTool(
               details: { status: "failed" },
             };
           }
+          if (scopedSession.systemdUnit) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Session ${params.sessionId} is managed by systemd (${scopedSession.systemdUnit}); interactive input is not supported.`,
+                },
+              ],
+              details: { status: "failed" },
+            };
+          }
           const stdin = scopedSession.stdin ?? scopedSession.child?.stdin;
           if (!stdin || stdin.destroyed) {
             return {
@@ -509,6 +678,17 @@ export function createProcessTool(
                 {
                   type: "text",
                   text: `Session ${params.sessionId} is not backgrounded.`,
+                },
+              ],
+              details: { status: "failed" },
+            };
+          }
+          if (scopedSession.systemdUnit) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Session ${params.sessionId} is managed by systemd (${scopedSession.systemdUnit}); interactive input is not supported.`,
                 },
               ],
               details: { status: "failed" },
@@ -582,6 +762,23 @@ export function createProcessTool(
               details: { status: "failed" },
             };
           }
+          if (scopedSession.systemdUnit) {
+            const unit = scopedSession.systemdUnit;
+            await systemdStopUserUnit(unit);
+            markExited(scopedSession, null, "SIGTERM", "killed");
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Stopped systemd unit ${unit} (session ${params.sessionId}).`,
+                },
+              ],
+              details: {
+                status: "completed",
+                name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
+              },
+            };
+          }
           killSession(scopedSession);
           markExited(scopedSession, null, "SIGKILL", "failed");
           return {
@@ -614,6 +811,23 @@ export function createProcessTool(
 
         case "remove": {
           if (scopedSession) {
+            if (scopedSession.systemdUnit) {
+              const unit = scopedSession.systemdUnit;
+              await systemdStopUserUnit(unit);
+              markExited(scopedSession, null, "SIGTERM", "killed");
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: `Removed systemd unit ${unit} (session ${params.sessionId}).`,
+                  },
+                ],
+                details: {
+                  status: "completed",
+                  name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
+                },
+              };
+            }
             killSession(scopedSession);
             markExited(scopedSession, null, "SIGKILL", "failed");
             return {
