@@ -12,6 +12,7 @@ import {
   SYNTHETIC_BASE_URL,
   SYNTHETIC_MODEL_CATALOG,
 } from "./synthetic-models.js";
+import { discoverPixelmlModels, PIXELML_BASE_URL } from "./pixelml-models.js";
 import { discoverVeniceModels, VENICE_BASE_URL } from "./venice-models.js";
 
 type ModelsConfig = NonNullable<MoltbotConfig["models"]>;
@@ -350,6 +351,15 @@ async function buildVeniceProvider(): Promise<ProviderConfig> {
   };
 }
 
+async function buildPixelmlProvider(apiKey?: string): Promise<ProviderConfig> {
+  const models = await discoverPixelmlModels(apiKey);
+  return {
+    baseUrl: PIXELML_BASE_URL,
+    api: "openai-completions",
+    models,
+  };
+}
+
 async function buildOllamaProvider(): Promise<ProviderConfig> {
   const models = await discoverOllamaModels();
   return {
@@ -400,6 +410,13 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "venice", store: authStore });
   if (veniceKey) {
     providers.venice = { ...(await buildVeniceProvider()), apiKey: veniceKey };
+  }
+
+  const pixelmlKey =
+    resolveEnvApiKeyVarName("pixelml") ??
+    resolveApiKeyFromProfiles({ provider: "pixelml", store: authStore });
+  if (pixelmlKey) {
+    providers.pixelml = { ...(await buildPixelmlProvider(pixelmlKey)), apiKey: pixelmlKey };
   }
 
   const qwenProfiles = listProfilesForProvider(authStore, "qwen-portal");
