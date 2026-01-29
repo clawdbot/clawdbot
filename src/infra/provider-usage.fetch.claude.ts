@@ -99,8 +99,10 @@ export async function fetchClaudeUsage(
   timeoutMs: number,
   fetchFn: typeof fetch,
 ): Promise<ProviderUsageSnapshot> {
+  const baseUrl = process.env.ANTHROPIC_BASE_URL?.trim() || "https://api.anthropic.com";
+  const url = `${baseUrl}/api/oauth/usage`;
   const res = await fetchJson(
-    "https://api.anthropic.com/api/oauth/usage",
+    url,
     {
       headers: {
         Authorization: `Bearer ${token}`,

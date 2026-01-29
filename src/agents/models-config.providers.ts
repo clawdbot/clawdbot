@@ -235,6 +235,15 @@ export function normalizeProviders(params: {
       normalizedProvider = googleNormalized;
     }
 
+    // Apply ANTHROPIC_BASE_URL environment variable override
+    if (normalizedKey === "anthropic") {
+      const baseUrl = process.env.ANTHROPIC_BASE_URL?.trim();
+      if (baseUrl && normalizedProvider.baseUrl !== baseUrl) {
+        mutated = true;
+        normalizedProvider = { ...normalizedProvider, baseUrl };
+      }
+    }
+
     next[key] = normalizedProvider;
   }
 
@@ -366,6 +375,15 @@ export async function resolveImplicitProviders(params: {
   const authStore = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
   });
+
+  // Add Anthropic provider if ANTHROPIC_BASE_URL is set
+  const anthropicBaseUrl = process.env.ANTHROPIC_BASE_URL?.trim();
+  if (anthropicBaseUrl) {
+    providers.anthropic = {
+      baseUrl: anthropicBaseUrl,
+      models: [],
+    };
+  }
 
   const minimaxKey =
     resolveEnvApiKeyVarName("minimax") ??

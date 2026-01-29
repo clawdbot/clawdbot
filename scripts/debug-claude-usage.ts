@@ -67,7 +67,9 @@ const pickAnthropicTokens = (store: {
 };
 
 const fetchAnthropicOAuthUsage = async (token: string) => {
-  const res = await fetch("https://api.anthropic.com/api/oauth/usage", {
+  const baseUrl = process.env.ANTHROPIC_BASE_URL?.trim() || "https://api.anthropic.com";
+  const url = `${baseUrl}/api/oauth/usage`;
+  const res = await fetch(url, {
     headers: {
       Authorization: `Bearer ${token}`,
       Accept: "application/json",
