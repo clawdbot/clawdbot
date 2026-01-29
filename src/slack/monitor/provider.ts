@@ -123,6 +123,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
   const mediaMaxBytes = (opts.mediaMaxMb ?? slackCfg.mediaMaxMb ?? 20) * 1024 * 1024;
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
+  const loadingMessages = slackCfg.loadingMessages;
+  const typingStatus = slackCfg.typingStatus;
 
   const receiver =
     slackMode === "http"
@@ -204,6 +206,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     ackReactionScope,
     mediaMaxBytes,
     removeAckAfterReply,
+    loadingMessages,
+    typingStatus,
   });
 
   const handleSlackMessage = createSlackMessageHandler({ ctx, account });

@@ -111,7 +111,10 @@ export type SlackMonitorContext = {
     channelId: string;
     threadTs?: string;
     status: string;
+    loadingMessages?: string[];
   }) => Promise<void>;
+  loadingMessages?: string[];
+  typingStatus: string;
 };
 
 export function createSlackMonitorContext(params: {
@@ -148,6 +151,8 @@ export function createSlackMonitorContext(params: {
   ackReactionScope: string;
   mediaMaxBytes: number;
   removeAckAfterReply: boolean;
+  loadingMessages?: string[];
+  typingStatus?: string;
 }): SlackMonitorContext {
   const channelHistories = new Map<string, HistoryEntry[]>();
   const logger = getChildLogger({ module: "slack-auto-reply" });
@@ -247,14 +252,18 @@ export function createSlackMonitorContext(params: {
     channelId: string;
     threadTs?: string;
     status: string;
+    loadingMessages?: string[];
   }) => {
     if (!p.threadTs) return;
-    const payload = {
+    const payload: Record<string, unknown> = {
       token: params.botToken,
       channel_id: p.channelId,
       thread_ts: p.threadTs,
       status: p.status,
     };
+    if (p.loadingMessages && p.loadingMessages.length > 0) {
+      payload.loading_messages = p.loadingMessages;
+    }
     const client = params.app.client as unknown as {
       assistant?: {
         threads?: {
@@ -400,5 +409,7 @@ export function createSlackMonitorContext(params: {
     resolveChannelName,
     resolveUserName,
     setSlackThreadStatus,
+    loadingMessages: params.loadingMessages,
+    typingStatus: params.typingStatus ?? "is typing...",
   };
 }
