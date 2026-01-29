@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import * as fs from "node:fs/promises";
+import { homedir } from "node:os";
 import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
@@ -202,6 +204,14 @@ export type ExecToolDetails =
       tail?: string;
     }
   | {
+      status: "running";
+      mode: "resilient-screen";
+      screenSession: string;
+      logFile: string;
+      rawLogFile: string;
+      workdir: string;
+    }
+  | {
       status: "completed" | "failed";
       exitCode: number | null;
       durationMs: number;
@@ -301,6 +311,339 @@ function applyShellPath(env: Record<string, string>, shellPath?: string | null) 
   if (entries.length === 0) return;
   const merged = mergePathPrepend(env.PATH, entries);
   if (merged) env.PATH = merged;
+}
+
+const CODING_AGENT_BINS = new Set(["claude", "codex", "opencode", "pi"]);
+
+function tokenizeCommand(command: string) {
+  return (command.match(/(?:[^\s"']+|"(?:\\.|[^"])*"|'(?:\\.|[^'])*')+/gu) ?? []).map((token) =>
+    stripQuotes(token),
+  );
+}
+
+function stripQuotes(value: string) {
+  const trimmed = value.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+function isEnvAssignmentToken(token: string) {
+  return /^[A-Za-z_][A-Za-z0-9_]*=/.test(token);
+}
+
+function resolveLeadingCommandBinary(command: string) {
+  const tokens = tokenizeCommand(command);
+  for (const token of tokens) {
+    if (!token) continue;
+    if (isEnvAssignmentToken(token)) continue;
+    return token;
+  }
+  return null;
+}
+
+function isAlreadyResilientCodingCommand(command: string) {
+  const lowered = command.toLowerCase();
+  if (lowered.includes("resilient-spawn.sh")) return true;
+  if (lowered.includes("spawn-monitored.sh")) return true;
+  // Avoid double-wrapping when a user explicitly uses screen/tmux already.
+  if (lowered.includes("screen -dm") || lowered.includes("screen\t-dm")) return true;
+  if (lowered.includes("tmux new-session") || lowered.includes("tmux\tnew-session")) return true;
+  return false;
+}
+
+function isLikelyCodingAgentCommand(command: string) {
+  const trimmed = command.trim();
+  if (!trimmed) return false;
+  if (isAlreadyResilientCodingCommand(trimmed)) return false;
+  const verb = resolveLeadingCommandBinary(trimmed);
+  if (!verb) return false;
+  const base = path.basename(verb);
+  return CODING_AGENT_BINS.has(base);
+}
+
+function resolveCodingAgentLogDir() {
+  const stateDir =
+    (process.env.CLAWDBOT_STATE_DIR ?? "").trim() || path.join(homedir(), ".clawdbot");
+  return path.join(stateDir, "logs", "coding-agent");
+}
+
+function buildResilientCodingAgentWrapperScript() {
+  // bash 3.2 compatible (macOS default)
+  return `#!/bin/bash
+set -euo pipefail
+
+SESSION_KEY="$1"
+AGENT_ID="$2"
+WORKDIR="$3"
+CMD_FILE="$4"
+LOG_FILE="$5"
+RAW_LOG_FILE="$6"
+MARKER_FILE="$7"
+META_FILE="$8"
+SCREEN_SESSION="$9"
+
+INTERVAL="\${CLAWDBOT_CODING_AGENT_UPDATE_SEC:-180}"
+NOTIFY_MODE="\${CLAWDBOT_CODING_AGENT_NOTIFY_MODE:-send}" # send|dry-run|off
+
+STATE_DIR="\${CLAWDBOT_STATE_DIR:-$HOME/.clawdbot}"
+SESSIONS_FILE="$STATE_DIR/agents/$AGENT_ID/sessions/sessions.json"
+
+MSG_CHANNEL=""
+MSG_TARGET=""
+MSG_ACCOUNT=""
+
+if command -v jq >/dev/null 2>&1 && [[ -f "$SESSIONS_FILE" ]] && [[ -n "$SESSION_KEY" ]]; then
+  MSG_CHANNEL="$(jq -r --arg k "$SESSION_KEY" '.[$k].deliveryContext.channel // empty' "$SESSIONS_FILE" 2>/dev/null || true)"
+  MSG_TARGET="$(jq -r --arg k "$SESSION_KEY" '.[$k].deliveryContext.to // empty' "$SESSIONS_FILE" 2>/dev/null || true)"
+  MSG_ACCOUNT="$(jq -r --arg k "$SESSION_KEY" '.[$k].deliveryContext.accountId // empty' "$SESSIONS_FILE" 2>/dev/null || true)"
+fi
+
+notify_once() {
+  local msg="$1"
+  if [[ "$NOTIFY_MODE" == "off" ]]; then
+    return 0
+  fi
+  if [[ -n "$MSG_CHANNEL" && -n "$MSG_TARGET" ]]; then
+    local args=(message send --channel "$MSG_CHANNEL" --target "$MSG_TARGET" --message "$msg")
+    if [[ -n "$MSG_ACCOUNT" ]]; then
+      args+=(--account "$MSG_ACCOUNT")
+    fi
+    if [[ "$NOTIFY_MODE" == "dry-run" ]]; then
+      args+=(--dry-run)
+    fi
+    clawdbot "\${args[@]}" >/dev/null 2>&1
+    return $?
+  fi
+  # Fallback to system events (main session). Note: if HEARTBEAT.md is empty, these may not fire immediately.
+  if [[ "$NOTIFY_MODE" == "dry-run" ]]; then
+    echo "[notify dry-run] $msg" >> "$LOG_FILE" 2>/dev/null || true
+    return 0
+  fi
+  clawdbot system event --text "$msg" --mode now >/dev/null 2>&1
+  return $?
+}
+
+notify_best_effort() {
+  notify_once "$1" || true
+}
+
+notify_critical() {
+  local msg="$1"
+  local attempts="\${2:-360}"
+  local sleep_sec="\${3:-5}"
+  local i=1
+  while [[ "$i" -le "$attempts" ]]; do
+    if notify_once "$msg"; then
+      return 0
+    fi
+    sleep "$sleep_sec" || true
+    i=$((i + 1))
+  done
+  echo "[notify failed] $msg" >> "$LOG_FILE" 2>/dev/null || true
+  return 0
+}
+
+START_ISO="$(date '+%Y-%m-%dT%H:%M:%S%z')"
+mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
+touch "$MARKER_FILE" 2>/dev/null || true
+
+CMD="$(cat "$CMD_FILE" 2>/dev/null || true)"
+
+{
+  echo "=== clawdbot resilient coding agent ==="
+  echo "session: $SCREEN_SESSION"
+  echo "started: $START_ISO"
+  echo "workdir: $WORKDIR"
+  echo "command: $CMD"
+  echo "log: $LOG_FILE"
+  echo "raw: $RAW_LOG_FILE"
+  echo "meta: $META_FILE"
+  echo "======================================="
+  echo ""
+} >> "$LOG_FILE"
+
+if command -v jq >/dev/null 2>&1; then
+  jq -n \\
+    --arg session "$SCREEN_SESSION" \\
+    --arg startedAt "$START_ISO" \\
+    --arg workdir "$WORKDIR" \\
+    --arg command "$CMD" \\
+    --arg logFile "$LOG_FILE" \\
+    --arg rawLogFile "$RAW_LOG_FILE" \\
+    --arg sessionKey "$SESSION_KEY" \\
+    --arg agentId "$AGENT_ID" \\
+    '{session:$session, startedAt:$startedAt, workdir:$workdir, command:$command, logFile:$logFile, rawLogFile:$rawLogFile, sessionKey:$sessionKey, agentId:$agentId}' \\
+    > "$META_FILE" 2>/dev/null || true
+fi
+
+notify_best_effort "🚀 Starting coding agent session '$SCREEN_SESSION'\\n📁 $WORKDIR\\n📄 $LOG_FILE"
+
+SHELL_BIN="\${CLAWDBOT_CODING_AGENT_SHELL:-\${SHELL:-/bin/bash}}"
+
+(
+  if command -v script >/dev/null 2>&1; then
+    script -q "$RAW_LOG_FILE" "$SHELL_BIN" -lc "$CMD" 2>&1 | tee -a "$LOG_FILE"
+  else
+    "$SHELL_BIN" -lc "$CMD" 2>&1 | tee -a "$LOG_FILE"
+  fi
+) &
+PIPE_PID=$!
+
+LAST_BYTES=0
+SILENT=0
+
+while kill -0 "$PIPE_PID" >/dev/null 2>&1; do
+  sleep "$INTERVAL" || true
+  if ! kill -0 "$PIPE_PID" >/dev/null 2>&1; then
+    break
+  fi
+
+  if [[ -f "$LOG_FILE" ]]; then
+    BYTES="$(stat -f%z "$LOG_FILE" 2>/dev/null || stat -c%s "$LOG_FILE" 2>/dev/null || echo 0)"
+    LINES="$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)"
+
+    if [[ "$BYTES" -le "$LAST_BYTES" ]]; then
+      SILENT=$((SILENT + 1))
+    else
+      SILENT=0
+    fi
+    LAST_BYTES="$BYTES"
+
+    CHANGED_FILES=0
+    if [[ -f "$MARKER_FILE" ]]; then
+      CHANGED_FILES="$(find "$WORKDIR" -type f -newer "$MARKER_FILE" 2>/dev/null | wc -l | tr -d ' ' || echo 0)"
+    fi
+
+    if [[ "$SILENT" -ge 3 ]]; then
+      MIN=$(( (SILENT * INTERVAL) / 60 ))
+      notify_best_effort "⏸️ [$SCREEN_SESSION] No output for ~\${MIN}m. Still running. (log: \${LINES} lines, \${CHANGED_FILES} files touched)"
+      SILENT=0
+    else
+      notify_best_effort "⏳ [$SCREEN_SESSION] Still running. (log: \${LINES} lines, \${CHANGED_FILES} files touched)"
+    fi
+  else
+    notify_best_effort "⏳ [$SCREEN_SESSION] Still running. (log pending)"
+  fi
+done
+
+wait "$PIPE_PID"
+EXIT_CODE=$?
+
+CHANGED_TOTAL=0
+CHANGED_LIST=""
+if [[ -f "$MARKER_FILE" ]]; then
+  CHANGED_TOTAL="$(find "$WORKDIR" -type f -newer "$MARKER_FILE" 2>/dev/null | wc -l | tr -d ' ' || echo 0)"
+  CHANGED_LIST="$(find "$WORKDIR" -type f -newer "$MARKER_FILE" 2>/dev/null | sed "s#^$WORKDIR/##" | sort | head -n 12 | paste -sd ',' - | sed 's/,/, /g' || true)"
+fi
+
+TAIL_LINE="$(tail -n 1 "$LOG_FILE" 2>/dev/null | tr -d '\\\\r' | head -c 200 || true)"
+
+if [[ "$EXIT_CODE" -eq 0 ]]; then
+  MSG="✅ [$SCREEN_SESSION] Done (exit 0)."
+else
+  MSG="❌ [$SCREEN_SESSION] Exited (code $EXIT_CODE)."
+fi
+
+if [[ "$CHANGED_TOTAL" -gt 0 ]]; then
+  MSG="$MSG\\n🧾 Changed files: $CHANGED_TOTAL"
+  if [[ -n "$CHANGED_LIST" ]]; then
+    MSG="$MSG\\n• $CHANGED_LIST"
+    if [[ "$CHANGED_TOTAL" -gt 12 ]]; then
+      MSG="$MSG, …"
+    fi
+  fi
+fi
+
+if [[ -n "$TAIL_LINE" ]]; then
+  MSG="$MSG\\n🪵 Last log line: $TAIL_LINE"
+fi
+
+MSG="$MSG\\n📄 Log: $LOG_FILE\\n🔎 Attach: screen -r $SCREEN_SESSION"
+notify_critical "$MSG"
+
+if command -v jq >/dev/null 2>&1 && [[ -f "$META_FILE" ]]; then
+  tmp="$META_FILE.tmp"
+  jq --argjson code "$EXIT_CODE" '. + {exitCode:$code, endedAt:(now|todateiso8601)}' "$META_FILE" > "$tmp" 2>/dev/null && mv "$tmp" "$META_FILE" || true
+fi
+
+exit "$EXIT_CODE"
+`;
+}
+
+async function spawnResilientCodingAgentSession(opts: {
+  command: string;
+  workdir: string;
+  env: Record<string, string>;
+  sessionKey: string;
+  agentId: string;
+  warnings: string[];
+}) {
+  const logDir = resolveCodingAgentLogDir();
+  await fs.mkdir(logDir, { recursive: true });
+
+  const slug = createSessionSlug();
+  const screenSession = `coding-${slug}`;
+
+  const cmdFile = path.join(logDir, `${screenSession}.cmd`);
+  const logFile = path.join(logDir, `${screenSession}.log`);
+  const rawLogFile = path.join(logDir, `${screenSession}.raw.log`);
+  const markerFile = path.join(logDir, `${screenSession}.start`);
+  const metaFile = path.join(logDir, `${screenSession}.json`);
+  const wrapperFile = path.join(logDir, `${screenSession}.sh`);
+
+  await fs.writeFile(cmdFile, opts.command, "utf8");
+  await fs.writeFile(wrapperFile, buildResilientCodingAgentWrapperScript(), "utf8");
+  await fs.chmod(wrapperFile, 0o755);
+
+  const env = { ...opts.env };
+  if (!env.CLAWDBOT_CODING_AGENT_SHELL) {
+    env.CLAWDBOT_CODING_AGENT_SHELL = getShellConfig().shell;
+  }
+
+  const { child } = await spawnWithFallback({
+    argv: [
+      "screen",
+      "-dmS",
+      screenSession,
+      wrapperFile,
+      opts.sessionKey,
+      opts.agentId,
+      opts.workdir,
+      cmdFile,
+      logFile,
+      rawLogFile,
+      markerFile,
+      metaFile,
+      screenSession,
+    ],
+    options: {
+      cwd: opts.workdir,
+      env,
+      detached: process.platform !== "win32",
+      stdio: "ignore",
+      windowsHide: true,
+    },
+    fallbacks: [
+      {
+        label: "no-detach",
+        options: { detached: false },
+      },
+    ],
+    onFallback: (err, fallback) => {
+      const errText = formatSpawnError(err);
+      const warning = `Warning: spawn failed (${errText}); retrying with ${fallback.label}.`;
+      logWarn(`exec: resilient spawn failed (${errText}); retrying with ${fallback.label}.`);
+      opts.warnings.push(warning);
+    },
+  });
+  child.unref?.();
+
+  return { screenSession, logFile, rawLogFile };
 }
 
 function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "failed") {
@@ -884,6 +1227,59 @@ export function createExecTool(
         applyShellPath(env, shellPath);
       }
       applyPathPrepend(env, defaultPathPrepend);
+
+      // Resilient coding agents: long-running PTY CLIs (claude/codex/opencode/pi) die when the
+      // gateway restarts because their PTY is owned by the gateway process. When the model
+      // backgrounds a coding agent, run it inside a detached `screen` session with its own PTY
+      // and a lightweight notifier so the job survives restarts and users get progress updates.
+      if (
+        !sandbox &&
+        host !== "node" &&
+        allowBackground &&
+        notifySessionKey &&
+        yieldWindow !== null &&
+        isLikelyCodingAgentCommand(params.command) &&
+        process.platform !== "win32"
+      ) {
+        try {
+          const started = await spawnResilientCodingAgentSession({
+            command: params.command,
+            workdir,
+            env,
+            sessionKey: notifySessionKey,
+            agentId: agentId ?? "main",
+            warnings,
+          });
+
+          const warningText = warnings.length ? `${warnings.join("\n")}\n\n` : "";
+          return {
+            content: [
+              {
+                type: "text",
+                text:
+                  `${warningText}Resilient coding agent started in screen session "${started.screenSession}".\n` +
+                  `Workdir: ${workdir}\n` +
+                  `Log: ${started.logFile}\n` +
+                  `Attach: screen -r ${started.screenSession}\n` +
+                  `Tail: tail -f ${started.logFile}`,
+              },
+            ],
+            details: {
+              status: "running",
+              mode: "resilient-screen",
+              screenSession: started.screenSession,
+              logFile: started.logFile,
+              rawLogFile: started.rawLogFile,
+              workdir,
+            },
+          } satisfies AgentToolResult<ExecToolDetails>;
+        } catch (err) {
+          const errText = err instanceof Error ? err.message : String(err);
+          warnings.push(
+            `Warning: resilient coding agent spawn failed (${errText}); falling back to normal exec.`,
+          );
+        }
+      }
 
       if (host === "node") {
         const approvals = resolveExecApprovals(agentId, { security, ask });
@@ -1491,5 +1887,12 @@ export function createExecTool(
     },
   };
 }
+
+export const __testing = {
+  isLikelyCodingAgentCommand,
+  isAlreadyResilientCodingCommand,
+  resolveLeadingCommandBinary,
+  tokenizeCommand,
+};
 
 export const execTool = createExecTool();
