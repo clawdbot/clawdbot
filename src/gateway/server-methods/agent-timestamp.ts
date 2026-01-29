@@ -53,14 +53,13 @@ export function injectTimestamp(message: string, opts?: TimestampInjectionOption
   const formatted = formatZonedTimestamp(now, timezone);
   if (!formatted) return message;
 
-  // "Current Date:" label is unambiguous even for tiny models (1.7B+).
-  // 3-letter DOW included because small models can't derive it from a date.
-  // Total cost: ~18 tokens — saves thousands when it prevents hallucination.
+  // 3-letter DOW: small models (8B) can't reliably derive day-of-week from
+  // a date, and may treat a bare "Wed" as a typo. Costs ~1 token.
   const dow = new Intl.DateTimeFormat("en-US", { timeZone: timezone, weekday: "short" }).format(
     now,
   );
 
-  return `[Current Date: ${dow} ${formatted}] ${message}`;
+  return `[${dow} ${formatted}] ${message}`;
 }
 
 /**
