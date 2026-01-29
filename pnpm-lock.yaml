@@ -383,12 +383,12 @@ importers:
       '@microsoft/agents-hosting-extensions-teams':
         specifier: ^1.2.2
         version: 1.2.2
-      moltbot:
-        specifier: workspace:*
-        version: link:../..
       express:
         specifier: ^5.2.1
         version: 5.2.1
+      moltbot:
+        specifier: workspace:*
+        version: link:../..
       proper-lockfile:
         specifier: ^4.1.2
         version: 4.1.2
@@ -454,6 +454,8 @@ importers:
       zod:
         specifier: ^4.3.6
         version: 4.3.6
+
+  extensions/web4-governance: {}
 
   extensions/whatsapp: {}
 

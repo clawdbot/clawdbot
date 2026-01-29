@@ -19,6 +19,7 @@ import { listChannelAgentTools } from "./channel-tools.js";
 import { createMoltbotTools } from "./moltbot-tools.js";
 import type { ModelAuthMode } from "./model-auth.js";
 import { wrapToolWithAbortSignal } from "./pi-tools.abort.js";
+import { wrapToolWithHooks } from "./pi-tools.hooks.js";
 import {
   filterToolsByPolicy,
   isToolAllowedByPolicies,
@@ -413,8 +414,12 @@ export function createMoltbotCodingTools(options?: {
     ? normalized.map((tool) => wrapToolWithAbortSignal(tool, options.abortSignal))
     : normalized;
 
+  // Wrap tools with plugin before_tool_call / after_tool_call hooks.
+  const hookCtx = { agentId, sessionKey: options?.sessionKey };
+  const withHooks = withAbort.map((tool) => wrapToolWithHooks(tool, hookCtx));
+
   // NOTE: Keep canonical (lowercase) tool names here.
   // pi-ai's Anthropic OAuth transport remaps tool names to Claude Code-style names
   // on the wire and maps them back for tool dispatch.
-  return withAbort;
+  return withHooks;
 }

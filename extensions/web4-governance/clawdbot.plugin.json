@@ -1,0 +1,102 @@
+{
+  "id": "web4-governance",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "auditLevel": {
+        "type": "string",
+        "enum": ["minimal", "standard", "verbose"],
+        "default": "standard"
+      },
+      "showR6Status": {
+        "type": "boolean",
+        "default": true
+      },
+      "storagePath": {
+        "type": "string",
+        "description": "Override default ~/.web4/ storage path"
+      },
+      "policy": {
+        "type": "object",
+        "description": "Policy engine configuration for pre-action gating",
+        "properties": {
+          "preset": {
+            "type": "string",
+            "enum": ["permissive", "safety", "strict", "audit-only"],
+            "description": "Named preset to use as base config. Rules become optional when preset is set."
+          },
+          "defaultPolicy": {
+            "type": "string",
+            "enum": ["allow", "deny", "warn"],
+            "default": "allow",
+            "description": "Default decision when no rule matches"
+          },
+          "enforce": {
+            "type": "boolean",
+            "default": true,
+            "description": "When false, deny decisions are logged but not enforced (dry-run)"
+          },
+          "rules": {
+            "type": "array",
+            "default": [],
+            "items": {
+              "type": "object",
+              "required": ["id", "name", "priority", "decision", "match"],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "description": "Unique rule identifier"
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Human-readable rule name"
+                },
+                "priority": {
+                  "type": "number",
+                  "description": "Lower = evaluated first. First match wins."
+                },
+                "decision": {
+                  "type": "string",
+                  "enum": ["allow", "deny", "warn"]
+                },
+                "reason": {
+                  "type": "string",
+                  "description": "Human-readable reason for the decision"
+                },
+                "match": {
+                  "type": "object",
+                  "properties": {
+                    "tools": {
+                      "type": "array",
+                      "items": { "type": "string" },
+                      "description": "Tool names to match (e.g. Bash, Write)"
+                    },
+                    "categories": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": ["file_read", "file_write", "command", "network", "delegation", "state", "mcp", "unknown"]
+                      },
+                      "description": "Tool categories to match"
+                    },
+                    "targetPatterns": {
+                      "type": "array",
+                      "items": { "type": "string" },
+                      "description": "Patterns to match against the tool target (glob by default)"
+                    },
+                    "targetPatternsAreRegex": {
+                      "type": "boolean",
+                      "default": false,
+                      "description": "Treat targetPatterns as regex instead of glob"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
