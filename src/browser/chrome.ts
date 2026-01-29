@@ -204,6 +204,11 @@ export async function launchClawdChrome(
       args.push("--disable-dev-shm-usage");
     }
 
+    // Add custom Chrome flags from profile config (e.g., for stealth mode, experimental features)
+    if (profile.chromeFlags && profile.chromeFlags.length > 0) {
+      args.push(...profile.chromeFlags);
+    }
+
     // Always open a blank tab to ensure a target exists.
     args.push("about:blank");
 

@@ -7,6 +7,8 @@ export type BrowserProfileConfig = {
   driver?: "clawd" | "extension";
   /** Profile color (hex). Auto-assigned at creation. */
   color: string;
+  /** Additional Chrome command-line flags for this profile. Use to bypass automation detection or enable experimental features. */
+  chromeFlags?: string[];
 };
 export type BrowserSnapshotDefaults = {
   /** Default snapshot mode (applies when mode is not provided). */

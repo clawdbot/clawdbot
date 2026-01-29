@@ -40,6 +40,7 @@ export type ResolvedBrowserProfile = {
   cdpIsLoopback: boolean;
   color: string;
   driver: "clawd" | "extension";
+  chromeFlags?: string[];
 };
 
 function isLoopbackHost(host: string) {
@@ -253,6 +254,7 @@ export function resolveProfile(
     cdpIsLoopback: isLoopbackHost(cdpHost),
     color: profile.color,
     driver,
+    chromeFlags: profile.chromeFlags,
   };
 }
 
