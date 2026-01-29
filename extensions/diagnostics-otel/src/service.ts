@@ -3,7 +3,7 @@ import type { SeverityNumber } from "@opentelemetry/api-logs";
 import { OTLPLogExporter } from "@opentelemetry/exporter-logs-otlp-http";
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-http";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
-import { Resource } from "@opentelemetry/resources";
+import { resourceFromAttributes } from "@opentelemetry/resources";
 import { BatchLogRecordProcessor, LoggerProvider } from "@opentelemetry/sdk-logs";
 import { PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
 import { NodeSDK } from "@opentelemetry/sdk-node";
@@ -62,7 +62,7 @@ export function createDiagnosticsOtelService(): MoltbotPluginService {
       const logsEnabled = otel.logs === true;
       if (!tracesEnabled && !metricsEnabled && !logsEnabled) return;
 
-      const resource = new Resource({
+      const resource = resourceFromAttributes({
         [SemanticResourceAttributes.SERVICE_NAME]: serviceName,
       });
 
