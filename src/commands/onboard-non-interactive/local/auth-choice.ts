@@ -16,6 +16,7 @@ import {
   applyOpenrouterConfig,
   applySyntheticConfig,
   applyVeniceConfig,
+  applyTogetherConfig,
   applyVercelAiGatewayConfig,
   applyZaiConfig,
   setAnthropicApiKey,
@@ -27,6 +28,7 @@ import {
   setOpenrouterApiKey,
   setSyntheticApiKey,
   setVeniceApiKey,
+  setTogetherApiKey,
   setVercelAiGatewayApiKey,
   setZaiApiKey,
 } from "../../onboard-auth.js";
@@ -353,6 +355,25 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyOpencodeZenConfig(nextConfig);
+  }
+
+  if (authChoice === "together-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "together",
+      cfg: baseConfig,
+      flagValue: opts.togetherApiKey,
+      flagName: "--together-api-key",
+      envVar: "TOGETHER_API_KEY",
+      runtime,
+    });
+    if (!resolved) return null;
+    if (resolved.source !== "profile") await setTogetherApiKey(resolved.key);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "together:default",
+      provider: "together",
+      mode: "api_key",
+    });
+    return applyTogetherConfig(nextConfig);
   }
 
   if (

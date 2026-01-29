@@ -13,6 +13,8 @@ export {
   applyOpenrouterProviderConfig,
   applySyntheticConfig,
   applySyntheticProviderConfig,
+  applyTogetherConfig,
+  applyTogetherProviderConfig,
   applyVeniceConfig,
   applyVeniceProviderConfig,
   applyVercelAiGatewayConfig,
@@ -42,12 +44,14 @@ export {
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
   setSyntheticApiKey,
+  setTogetherApiKey,
   setVeniceApiKey,
   setVercelAiGatewayApiKey,
   setZaiApiKey,
   writeOAuthCredentials,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
   ZAI_DEFAULT_MODEL_REF,
+  TOGETHER_DEFAULT_MODEL_REF,
 } from "./onboard-auth.credentials.js";
 export {
   buildKimiCodeModelDefinition,

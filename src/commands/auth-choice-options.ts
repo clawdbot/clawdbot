@@ -20,7 +20,8 @@ export type AuthChoiceGroupId =
   | "minimax"
   | "synthetic"
   | "venice"
-  | "qwen";
+  | "qwen"
+  | "together";
 
 export type AuthChoiceGroup = {
   value: AuthChoiceGroupId;
@@ -64,6 +65,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     label: "Synthetic",
     hint: "Anthropic-compatible (multi-model)",
     choices: ["synthetic-api-key"],
+  },
+  {
+    value: "together",
+    label: "Together AI",
+    hint: "API key",
+    choices: ["together-api-key"],
   },
   {
     value: "venice",
@@ -146,6 +153,11 @@ export function buildAuthChoiceOptions(params: {
     value: "venice-api-key",
     label: "Venice AI API key",
     hint: "Privacy-focused inference (uncensored models)",
+  });
+  options.push({
+    value: "together-api-key",
+    label: "Together AI API key",
+    hint: "Access to Llama, DeepSeek, Qwen, and more open models",
   });
   options.push({
     value: "github-copilot",
