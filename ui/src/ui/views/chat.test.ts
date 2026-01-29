@@ -93,4 +93,24 @@ describe("chat view", () => {
     expect(onNewSession).toHaveBeenCalledTimes(1);
     expect(container.textContent).not.toContain("Stop");
   });
+
+  it("renders file input for image attachments", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          onAttachmentsChange: vi.fn(),
+        }),
+      ),
+      container,
+    );
+
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement | null;
+    expect(fileInput).not.toBeNull();
+    expect(fileInput?.accept).toBe("image/*");
+    expect(fileInput?.multiple).toBe(true);
+
+    const attachLabel = container.querySelector('label[for="chat-file-input"]');
+    expect(attachLabel).not.toBeNull();
+  });
 });

@@ -263,6 +263,43 @@
   cursor: not-allowed;
 }
 
+/* Drag-over visual feedback */
+.chat-compose--drag-over {
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+  background: rgba(var(--accent-rgb), 0.05);
+  border-radius: 12px;
+}
+
+/* File attach button */
+.chat-compose__attach {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  transition: all 150ms ease-out;
+}
+
+.chat-compose__attach:hover {
+  background: var(--panel);
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.chat-compose__attach svg {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+}
+
 .chat-compose__actions {
   flex-shrink: 0;
   display: flex;
