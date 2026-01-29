@@ -186,7 +186,7 @@
     "express": "^5.2.1",
     "file-type": "^21.3.0",
     "grammy": "^1.39.3",
-    "hono": "4.11.4",
+    "hono": "4.11.7",
     "jiti": "^2.6.1",
     "json5": "^2.2.3",
     "jszip": "^3.10.1",
@@ -248,7 +248,7 @@
     "minimumReleaseAge": 2880,
     "overrides": {
       "@sinclair/typebox": "0.34.47",
-      "hono": "4.11.4",
+      "hono": "4.11.7",
       "tar": "7.5.4"
     }
   },
