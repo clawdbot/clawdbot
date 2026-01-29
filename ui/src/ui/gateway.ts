@@ -53,6 +53,15 @@ export type GatewayBrowserClientOptions = {
   platform?: string;
   mode?: GatewayClientMode;
   instanceId?: string;
+
+  /**
+   * Gateway role/scopes for this client.
+   * Control UI defaults to operator + admin scopes.
+   * Public WebChat will override this in a follow-up PR once the gateway enforces role allowlists.
+   */
+  role?: string;
+  scopes?: string[];
+
   onHello?: (hello: GatewayHelloOk) => void;
   onEvent?: (evt: GatewayEventFrame) => void;
   onClose?: (info: { code: number; reason: string }) => void;
@@ -132,8 +141,9 @@ export class GatewayBrowserClient {
     // Gateways may reject this unless gateway.controlUi.allowInsecureAuth is enabled.
     const isSecureContext = typeof crypto !== "undefined" && !!crypto.subtle;
 
-    const scopes = ["operator.admin", "operator.approvals", "operator.pairing"];
-    const role = "operator";
+    const scopes =
+      this.opts.scopes ?? ["operator.admin", "operator.approvals", "operator.pairing"];
+    const role = this.opts.role ?? "operator";
     let deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null = null;
     let canFallbackToShared = false;
     let authToken = this.opts.token;

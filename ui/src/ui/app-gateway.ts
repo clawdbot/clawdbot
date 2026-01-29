@@ -4,6 +4,7 @@ import { loadNodes } from "./controllers/nodes";
 import { loadAgents } from "./controllers/agents";
 import type { GatewayEventFrame, GatewayHelloOk } from "./gateway";
 import { GatewayBrowserClient } from "./gateway";
+import { GATEWAY_CLIENT_NAMES } from "../../../src/gateway/protocol/client-info.js";
 import type { EventLogEntry } from "./app-events";
 import type { AgentsListResult, PresenceEntry, HealthSnapshot, StatusSummary } from "./types";
 import type { Tab } from "./navigation";
@@ -116,12 +117,20 @@ export function connectGateway(host: GatewayHost) {
   host.execApprovalError = null;
 
   host.client?.stop();
+  const clientName =
+    host.tab === "public-chat" ? GATEWAY_CLIENT_NAMES.WEBCHAT_UI : "moltbot-control-ui";
+
+  const role = host.tab === "public-chat" ? "webchat" : undefined;
+
   host.client = new GatewayBrowserClient({
     url: host.settings.gatewayUrl,
     token: host.settings.token.trim() ? host.settings.token : undefined,
     password: host.password.trim() ? host.password : undefined,
-    clientName: "moltbot-control-ui",
+    clientName,
     mode: "webchat",
+    role,
+    // Leave scopes undefined for operator (gateway will default). For webchat we want no scopes.
+    scopes: role === "webchat" ? [] : undefined,
     onHello: (hello) => {
       host.connected = true;
       host.lastError = null;

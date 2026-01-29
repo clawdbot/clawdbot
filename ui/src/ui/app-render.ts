@@ -86,6 +86,80 @@ import { loadLogs } from "./controllers/logs";
 const AVATAR_DATA_RE = /^data:/i;
 const AVATAR_HTTP_RE = /^https?:\/\//i;
 
+function renderPublicChat(state: AppViewState) {
+  const chatDisabledReason = state.connected ? null : "Disconnected from gateway.";
+  const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
+  const assistantAvatarUrl = resolveAssistantAvatarUrl(state);
+  const chatAvatarUrl = state.chatAvatarUrl ?? assistantAvatarUrl ?? null;
+
+  return html`
+    <div class="public-chat">
+      ${renderChat({
+        sessionKey: state.sessionKey,
+        onSessionKeyChange: (next) => {
+          state.sessionKey = next;
+          state.chatMessage = "";
+          state.chatAttachments = [];
+          state.chatStream = null;
+          state.chatStreamStartedAt = null;
+          state.chatRunId = null;
+          state.chatQueue = [];
+          state.resetToolStream();
+          state.resetChatScroll();
+          state.applySettings({
+            ...state.settings,
+            sessionKey: next,
+            lastActiveSessionKey: next,
+          });
+          void state.loadAssistantIdentity();
+          void loadChatHistory(state);
+          void refreshChatAvatar(state);
+        },
+        thinkingLevel: state.chatThinkingLevel,
+        showThinking,
+        loading: state.chatLoading,
+        sending: state.chatSending,
+        compactionStatus: state.compactionStatus,
+        assistantAvatarUrl: chatAvatarUrl,
+        messages: state.chatMessages,
+        toolMessages: state.chatToolMessages,
+        stream: state.chatStream,
+        streamStartedAt: state.chatStreamStartedAt,
+        draft: state.chatMessage,
+        queue: state.chatQueue,
+        connected: state.connected,
+        canSend: state.connected,
+        disabledReason: chatDisabledReason,
+        error: state.lastError,
+        // Public chat should not expose session lists.
+        sessions: null,
+        // Always "focus" (no sidebar/nav).
+        focusMode: true,
+        onRefresh: () => {
+          state.resetToolStream();
+          return Promise.all([loadChatHistory(state), refreshChatAvatar(state)]);
+        },
+        onToggleFocusMode: () => {
+          // no-op
+        },
+        onChatScroll: (event) => state.handleChatScroll(event),
+        onDraftChange: (next) => (state.chatMessage = next),
+        attachments: state.chatAttachments,
+        onAttachmentsChange: (next) => (state.chatAttachments = next),
+        onSend: () => state.handleSendChat(),
+        canAbort: Boolean(state.chatRunId),
+        onAbort: () => void state.handleAbortChat(),
+        onQueueRemove: (id) => state.removeQueuedMessage(id),
+        onNewSession: () => state.handleSendChat("/new", { restoreDraft: true }),
+        // Hide tool sidebar in public chat.
+        sidebarOpen: false,
+        assistantName: state.assistantName,
+        assistantAvatar: state.assistantAvatar,
+      })}
+    </div>
+  `;
+}
+
 function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
   const list = state.agentsList?.agents ?? [];
   const parsed = parseAgentSessionKey(state.sessionKey);
@@ -102,6 +176,10 @@ function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
 }
 
 export function renderApp(state: AppViewState) {
+  if (state.tab === "public-chat") {
+    return renderPublicChat(state);
+  }
+
   const presenceCount = state.presenceEntries.length;
   const sessionsCount = state.sessionsResult?.count ?? null;
   const cronNext = state.cronStatus?.nextWakeAtMs ?? null;

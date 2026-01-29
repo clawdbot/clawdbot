@@ -19,6 +19,7 @@ export type Tab =
   | "skills"
   | "nodes"
   | "chat"
+  | "public-chat"
   | "config"
   | "debug"
   | "logs";
@@ -32,6 +33,7 @@ const TAB_PATHS: Record<Tab, string> = {
   skills: "/skills",
   nodes: "/nodes",
   chat: "/chat",
+  "public-chat": "/public/chat",
   config: "/config",
   debug: "/debug",
   logs: "/logs",
@@ -103,6 +105,7 @@ export function inferBasePathFromPathname(pathname: string): string {
 export function iconForTab(tab: Tab): IconName {
   switch (tab) {
     case "chat":
+    case "public-chat":
       return "messageSquare";
     case "overview":
       return "barChart";
@@ -133,6 +136,8 @@ export function titleForTab(tab: Tab) {
   switch (tab) {
     case "overview":
       return "Overview";
+    case "public-chat":
+      return "Chat";
     case "channels":
       return "Channels";
     case "instances":
@@ -146,6 +151,7 @@ export function titleForTab(tab: Tab) {
     case "nodes":
       return "Nodes";
     case "chat":
+    case "public-chat":
       return "Chat";
     case "config":
       return "Config";
@@ -162,6 +168,8 @@ export function subtitleForTab(tab: Tab) {
   switch (tab) {
     case "overview":
       return "Gateway status, entry points, and a fast health read.";
+    case "public-chat":
+      return "Public web chat (mobile-friendly).";
     case "channels":
       return "Manage channels and settings.";
     case "instances":
@@ -176,6 +184,8 @@ export function subtitleForTab(tab: Tab) {
       return "Paired devices, capabilities, and command exposure.";
     case "chat":
       return "Direct gateway chat session for quick interventions.";
+    case "public-chat":
+      return "A minimal chat UI intended for sharing.";
     case "config":
       return "Edit ~/.clawdbot/moltbot.json safely.";
     case "debug":

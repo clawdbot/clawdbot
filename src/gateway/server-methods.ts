@@ -34,6 +34,15 @@ const PAIRING_SCOPE = "operator.pairing";
 
 const APPROVAL_METHODS = new Set(["exec.approval.request", "exec.approval.resolve"]);
 const NODE_ROLE_METHODS = new Set(["node.invoke.result", "node.event", "skills.bins"]);
+
+// Minimal method surface for public webchat clients.
+// This is intentionally tiny; expand only when a concrete UI need is proven.
+const WEBCHAT_ROLE_METHODS = new Set([
+  "agent.identity.get",
+  "chat.history",
+  "chat.send",
+  "chat.abort",
+]);
 const PAIRING_METHODS = new Set([
   "node.pair.request",
   "node.pair.list",
@@ -98,9 +107,19 @@ function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["c
     if (role === "node") return null;
     return errorShape(ErrorCodes.INVALID_REQUEST, `unauthorized role: ${role}`);
   }
+
   if (role === "node") {
     return errorShape(ErrorCodes.INVALID_REQUEST, `unauthorized role: ${role}`);
   }
+
+  if (role === "webchat") {
+    if (WEBCHAT_ROLE_METHODS.has(method)) return null;
+    return errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      `unauthorized method for role webchat: ${method}`,
+    );
+  }
+
   if (role !== "operator") {
     return errorShape(ErrorCodes.INVALID_REQUEST, `unauthorized role: ${role}`);
   }

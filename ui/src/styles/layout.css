@@ -607,3 +607,16 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Public chat mode: minimal chrome for shareable/mobile use. */
+.public-chat {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+.public-chat .chat {
+  flex: 1;
+  min-height: 0;
+}

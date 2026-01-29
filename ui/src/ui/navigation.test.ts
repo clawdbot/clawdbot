@@ -129,6 +129,7 @@ describe("pathForTab", () => {
 describe("tabFromPath", () => {
   it("returns tab for valid path", () => {
     expect(tabFromPath("/chat")).toBe("chat");
+    expect(tabFromPath("/public/chat")).toBe("public-chat");
     expect(tabFromPath("/overview")).toBe("overview");
     expect(tabFromPath("/sessions")).toBe("sessions");
   });
@@ -148,6 +149,7 @@ describe("tabFromPath", () => {
 
   it("is case-insensitive", () => {
     expect(tabFromPath("/CHAT")).toBe("chat");
+    expect(tabFromPath("/Public/Chat")).toBe("public-chat");
     expect(tabFromPath("/Overview")).toBe("overview");
   });
 });

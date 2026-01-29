@@ -10,6 +10,7 @@ import {
   onceMessage,
   startGatewayServer,
   startServerWithClient,
+  rpcReq,
   testState,
 } from "./test-helpers.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -210,6 +211,48 @@ describe("gateway server auth/connect", () => {
       const res = await connectReq(ws, { password: "wrong" });
       expect(res.ok).toBe(false);
       expect(res.error?.message ?? "").toContain("unauthorized");
+      ws.close();
+    });
+  });
+
+  describe("webchat role authz", () => {
+    let server: Awaited<ReturnType<typeof startGatewayServer>>;
+    let port: number;
+    let prevToken: string | undefined;
+
+    beforeAll(async () => {
+      prevToken = process.env.CLAWDBOT_GATEWAY_TOKEN;
+      process.env.CLAWDBOT_GATEWAY_TOKEN = "secret";
+      port = await getFreePort();
+      server = await startGatewayServer(port);
+    });
+
+    afterAll(async () => {
+      await server.close();
+      if (prevToken === undefined) {
+        delete process.env.CLAWDBOT_GATEWAY_TOKEN;
+      } else {
+        process.env.CLAWDBOT_GATEWAY_TOKEN = prevToken;
+      }
+    });
+
+    test("webchat role can connect but is restricted to chat methods", async () => {
+      const ws = await openWs(port);
+      const res = await connectReq(ws, {
+        token: "secret",
+        role: "webchat",
+        client: {
+          id: GATEWAY_CLIENT_NAMES.WEBCHAT_UI,
+          version: "1.0.0",
+          platform: "test",
+          mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+        },
+      });
+      expect(res.ok).toBe(true);
+
+      const deny = await rpcReq(ws, "sessions.list", { limit: 1 });
+      expect(deny.ok).toBe(false);
+
       ws.close();
     });
   });
