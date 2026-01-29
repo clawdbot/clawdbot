@@ -1,0 +1,35 @@
+/* Make Mintlify navbar sticky - override all positioning */
+#navbar {
+  position: sticky !important;
+  top: 0 !important;
+  z-index: 9999 !important;
+  width: 100% !important;
+}
+
+/* Override fixed positioning from Tailwind */
+#navbar.fixed,
+#navbar[class*="fixed"],
+div#navbar {
+  position: sticky !important;
+}
+
+/* Remove any overflow restrictions on parents that break sticky */
+* {
+  overflow-x: visible !important;
+}
+
+body,
+html,
+body > div,
+body > div > div {
+  overflow-y: visible !important;
+  overflow-x: visible !important;
+}
+
+/* Ensure layout containers don't break sticky */
+[class*="layout"],
+[class*="Layout"],
+main,
+[role="main"] {
+  overflow: visible !important;
+}

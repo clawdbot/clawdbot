@@ -26,7 +26,7 @@ echo "$PATH"
 
 If `$(npm prefix -g)/bin` (macOS/Linux) or `$(npm prefix -g)` (Windows) is **not** present inside `echo "$PATH"`, your shell can’t find global npm binaries (including `moltbot`).
 
-## Fix: put npm’s global bin dir on PATH
+## Fix: put npm's global bin dir on PATH
 
 1) Find your global npm prefix:
 
@@ -52,7 +52,7 @@ On Windows, add the output of `npm prefix -g` to your PATH.
 
 ## Fix: avoid `sudo npm install -g` / permission errors (Linux)
 
-If `npm install -g ...` fails with `EACCES`, switch npm’s global prefix to a user-writable directory:
+If `npm install -g ...` fails with `EACCES`, switch npm's global prefix to a user-writable directory:
 
 ```bash
 mkdir -p "$HOME/.npm-global"
@@ -64,7 +64,7 @@ Persist the `export PATH=...` line in your shell startup file.
 
 ## Recommended Node install options
 
-You’ll have the fewest surprises if Node/npm are installed in a way that:
+You'll have the fewest surprises if Node/npm are installed in a way that:
 
 - keeps Node updated (22+)
 - makes the global npm bin dir stable and on PATH in new shells
@@ -75,4 +75,4 @@ Common choices:
 - Linux: your preferred version manager, or a distro-supported install that provides Node 22+
 - Windows: official Node installer, `winget`, or a Windows Node version manager
 
-If you use a version manager (nvm/fnm/asdf/etc), ensure it’s initialized in the shell you use day-to-day (zsh vs bash) so the PATH it sets is present when you run installers.
+If you use a version manager (nvm/fnm/asdf/etc), ensure it's initialized in the shell you use day-to-day (zsh vs bash) so the PATH it sets is present when you run installers.

@@ -7,6 +7,7 @@
     "dark": "/assets/pixel-lobster.svg"
   },
   "favicon": "/assets/pixel-lobster.svg",
+  "css": "/assets/mintlify-navbar.css",
   "colors": {
     "primary": "#FF5A36"
   },
