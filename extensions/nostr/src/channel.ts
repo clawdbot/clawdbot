@@ -1,7 +1,10 @@
 import {
   buildChannelConfigSchema,
+  createReplyPrefixContext,
+  createTypingCallbacks,
   DEFAULT_ACCOUNT_ID,
   formatPairingApproveHint,
+  logTypingFailure,
   type ChannelPlugin,
 } from "clawdbot/plugin-sdk";
 
@@ -218,19 +221,153 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
         accountId: account.accountId,
         privateKey: account.privateKey,
         relays: account.relays,
-        onMessage: async (senderPubkey, text, reply) => {
+        onMessage: async (senderPubkey, text, reply, eventId) => {
           ctx.log?.debug(`[${account.accountId}] DM from ${senderPubkey}: ${text.slice(0, 50)}...`);
 
-          // Forward to moltbot's message pipeline
-          await runtime.channel.reply.handleInboundMessage({
+          const cfg = runtime.config.loadConfig();
+          const route = runtime.channel.routing.resolveAgentRoute({
+            cfg,
             channel: "nostr",
             accountId: account.accountId,
-            senderId: senderPubkey,
-            chatType: "direct",
-            chatId: senderPubkey, // For DMs, chatId is the sender's pubkey
-            text,
-            reply: async (responseText: string) => {
-              await reply(responseText);
+            peer: { kind: "dm", id: senderPubkey },
+          });
+
+          ctx.log?.debug(`[${account.accountId}] Route resolved: sessionKey=${route.sessionKey}, agentId=${route.agentId}`);
+
+          const storePath = runtime.channel.session.resolveStorePath(cfg.session?.store, {
+            agentId: route.agentId,
+          });
+          const envelopeOptions = runtime.channel.reply.resolveEnvelopeFormatOptions(cfg);
+          const previousTimestamp = runtime.channel.session.readSessionUpdatedAt({
+            storePath,
+            sessionKey: route.sessionKey,
+          });
+          const body = runtime.channel.reply.formatAgentEnvelope({
+            channel: "Nostr",
+            from: senderPubkey,
+            timestamp: Date.now(),
+            previousTimestamp,
+            envelope: envelopeOptions,
+            body: text,
+          });
+
+          // Create typing callbacks for this conversation
+          // Note: busHandle is checked at invocation time (not creation time)
+          // to handle the race condition during startup
+          const typingCallbacks = createTypingCallbacks({
+            start: async () => {
+              if (!busHandle) {
+                ctx.log?.debug(`[${account.accountId}] Skipping typing START (bus not ready)`);
+                return;
+              }
+              ctx.log?.debug(`[${account.accountId}] Sending typing START to ${senderPubkey.slice(0, 8)}`);
+              return busHandle.sendTypingStart(senderPubkey);
+            },
+            stop: async () => {
+              if (!busHandle) {
+                ctx.log?.debug(`[${account.accountId}] Skipping typing STOP (bus not ready)`);
+                return;
+              }
+              ctx.log?.debug(`[${account.accountId}] Sending typing STOP to ${senderPubkey.slice(0, 8)}`);
+              return busHandle.sendTypingStop(senderPubkey);
+            },
+            onStartError: (err) =>
+              logTypingFailure({
+                log: (msg) => ctx.log?.warn(msg),
+                channel: "nostr",
+                target: senderPubkey,
+                action: "start",
+                error: err,
+              }),
+            onStopError: (err) =>
+              logTypingFailure({
+                log: (msg) => ctx.log?.warn(msg),
+                channel: "nostr",
+                target: senderPubkey,
+                action: "stop",
+                error: err,
+              }),
+          });
+
+          // Build the inbound message context
+          const ctxPayload = runtime.channel.reply.finalizeInboundContext({
+            Body: body,
+            RawBody: text,
+            CommandBody: text,
+            From: `nostr:${senderPubkey}`,
+            To: `nostr:${senderPubkey}`,
+            SessionKey: route.sessionKey,
+            AccountId: account.accountId,
+            ChatType: "direct",
+            ConversationLabel: senderPubkey,
+            SenderName: senderPubkey.slice(0, 8),
+            SenderId: senderPubkey,
+            Provider: "nostr" as const,
+            Surface: "nostr" as const,
+            Timestamp: Date.now(),
+            MessageSid: eventId, // Nostr event ID for deduplication
+            CommandAuthorized: true, // TODO: implement proper authorization
+            CommandSource: "text" as const,
+            OriginatingChannel: "nostr" as const,
+            OriginatingTo: `nostr:${senderPubkey}`,
+          });
+
+          await runtime.channel.session.recordInboundSession({
+            storePath,
+            sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+            ctx: ctxPayload,
+            updateLastRoute: {
+              sessionKey: route.mainSessionKey,
+              channel: "nostr",
+              to: `nostr:${senderPubkey}`,
+              accountId: route.accountId,
+            },
+            onRecordError: (err) => {
+              ctx.log?.warn?.(`nostr: failed updating session meta: ${String(err)}`);
+            },
+          });
+
+          // Get table mode for formatting
+          const tableMode = runtime.channel.text.resolveMarkdownTableMode({
+            cfg,
+            channel: "nostr",
+            accountId: account.accountId,
+          });
+
+          // Create reply prefix context
+          const prefixContext = createReplyPrefixContext({ cfg, agentId: route.agentId });
+
+          // Create the reply dispatcher
+          const { dispatcher, replyOptions, markDispatchIdle } =
+            runtime.channel.reply.createReplyDispatcherWithTyping({
+              responsePrefix: prefixContext.responsePrefix,
+              responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
+              humanDelay: runtime.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
+              deliver: async (payload) => {
+                const message = runtime.channel.text.convertMarkdownTables(
+                  payload.text ?? "",
+                  tableMode
+                );
+                if (!message) return;
+                ctx.log?.debug(`[${account.accountId}] Delivering reply to ${senderPubkey.slice(0, 8)}: ${message.slice(0, 50)}...`);
+                await reply(message);
+                ctx.log?.info(`[${account.accountId}] Reply delivered to ${senderPubkey.slice(0, 8)}`);
+              },
+              onError: (err, info) => {
+                ctx.log?.error(`[${account.accountId}] nostr ${info.kind} reply failed: ${String(err)}`);
+              },
+              onReplyStart: typingCallbacks?.onReplyStart,
+              onIdle: typingCallbacks?.onIdle,
+            });
+
+          // Dispatch the reply
+          const { queuedFinal, counts } = await runtime.channel.reply.dispatchReplyFromConfig({
+            ctx: ctxPayload,
+            cfg,
+            dispatcher,
+            replyOptions: {
+              ...replyOptions,
+              onModelSelected: prefixContext.onModelSelected,
             },
           });
         },

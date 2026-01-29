@@ -51,6 +51,11 @@ const CIRCUIT_BREAKER_RESET_MS = 30000; // 30 seconds before half-open
 // Health tracker configuration
 const HEALTH_WINDOW_MS = 60000; // 1 minute window for health stats
 
+// Typing indicator configuration (NIP-01 ephemeral events)
+const TYPING_KIND = 20001; // Community convention for typing indicators
+const TYPING_TTL_SEC = 30; // 30 second expiration
+const TYPING_THROTTLE_MS = 5000; // Max 1 event per 5 seconds per recipient
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -66,7 +71,8 @@ export interface NostrBusOptions {
   onMessage: (
     pubkey: string,
     text: string,
-    reply: (text: string) => Promise<void>
+    reply: (text: string) => Promise<void>,
+    eventId: string
   ) => Promise<void>;
   /** Called on errors (optional) */
   onError?: (error: Error, context: string) => void;
@@ -101,6 +107,10 @@ export interface NostrBusHandle {
     lastPublishedEventId: string | null;
     lastPublishResults: Record<string, "ok" | "failed" | "timeout"> | null;
   }>;
+  /** Send typing indicator start (kind 20001) */
+  sendTypingStart: (toPubkey: string, conversationEventId?: string) => Promise<void>;
+  /** Send typing indicator stop (kind 20001) */
+  sendTypingStop: (toPubkey: string, conversationEventId?: string) => Promise<void>;
 }
 
 // ============================================================================
@@ -496,7 +506,7 @@ export async function startNostrBus(
       };
 
       // Call the message handler
-      await onMessage(event.pubkey, plaintext, replyTo);
+      await onMessage(event.pubkey, plaintext, replyTo, event.id);
 
       // Mark as processed
       metrics.emit("event.processed");
@@ -512,26 +522,21 @@ export async function startNostrBus(
 
   const sub = pool.subscribeMany(
     relays,
-    [{ kinds: [4], "#p": [pk], since }],
+    { kinds: [4], "#p": [pk], since },
     {
       onevent: handleEvent,
       oneose: () => {
-        // EOSE handler - called when all stored events have been received
         for (const relay of relays) {
           metrics.emit("relay.message.eose", 1, { relay });
         }
         onEose?.(relays.join(", "));
       },
       onclose: (reason) => {
-        // Handle subscription close
         for (const relay of relays) {
           metrics.emit("relay.message.closed", 1, { relay });
           options.onDisconnect?.(relay);
         }
-        onError?.(
-          new Error(`Subscription closed: ${reason}`),
-          "subscription"
-        );
+        onError?.(new Error(`Subscription closed: ${reason}`), "subscription");
       },
     }
   );
@@ -590,6 +595,17 @@ export async function startNostrBus(
     };
   };
 
+  // Create typing controller for throttled typing indicators
+  const typingController = createTypingController(
+    pool,
+    sk,
+    relays,
+    metrics,
+    circuitBreakers,
+    healthTracker,
+    onError
+  );
+
   return {
     close: () => {
       sub.close();
@@ -610,6 +626,8 @@ export async function startNostrBus(
     getMetrics: () => metrics.getSnapshot(),
     publishProfile,
     getProfileState,
+    sendTypingStart: typingController.sendTypingStart,
+    sendTypingStop: typingController.sendTypingStop,
   };
 }
 
@@ -646,6 +664,7 @@ async function sendEncryptedDm(
   const sortedRelays = healthTracker.getSortedRelays(relays);
 
   // Try relays in order of health, respecting circuit breakers
+  let successCount = 0;
   let lastError: Error | undefined;
   for (const relay of sortedRelays) {
     const cb = circuitBreakers.get(relay);
@@ -657,13 +676,16 @@ async function sendEncryptedDm(
 
     const startTime = Date.now();
     try {
-      await pool.publish([relay], reply);
+      const [publishResult] = await Promise.allSettled(pool.publish([relay], reply));
+      if (publishResult?.status === "rejected") {
+        throw publishResult.reason;
+      }
       const latency = Date.now() - startTime;
 
       // Record success
       cb?.recordSuccess();
       healthTracker.recordSuccess(relay, latency);
-
+      successCount++;
       return; // Success - exit early
     } catch (err) {
       lastError = err as Error;
@@ -678,7 +700,150 @@ async function sendEncryptedDm(
     }
   }
 
-  throw new Error(`Failed to publish to any relay: ${lastError?.message}`);
+  if (successCount === 0) {
+    throw new Error(`Failed to publish to any relay: ${lastError?.message}`);
+  }
+}
+
+// ============================================================================
+// Typing Indicator (Kind 20001 Ephemeral Event)
+// ============================================================================
+
+/**
+ * Send a typing indicator event to a pubkey
+ * Uses kind 20001 (community convention for typing)
+ * Content is NIP-04 encrypted for privacy consistency with DMs
+ */
+async function sendTypingIndicator(
+  pool: SimplePool,
+  sk: Uint8Array,
+  toPubkey: string,
+  action: "start" | "stop",
+  relays: string[],
+  metrics: NostrMetrics,
+  circuitBreakers: Map<string, CircuitBreaker>,
+  healthTracker: RelayHealthTracker,
+  conversationEventId?: string,
+  onError?: (error: Error, context: string) => void
+): Promise<void> {
+  // Encrypt the action for privacy (consistent with DMs)
+  const ciphertext = await encrypt(sk, toPubkey, action);
+
+  // Build tags
+  const tags: string[][] = [
+    ["p", toPubkey],
+    ["t", "clawdbot-typing"], // Namespace tag for collision protection
+    ["expiration", String(Math.floor(Date.now() / 1000) + TYPING_TTL_SEC)],
+  ];
+
+  // Add conversation scope if provided
+  if (conversationEventId) {
+    tags.push(["e", conversationEventId]);
+  }
+
+  const event = finalizeEvent(
+    {
+      kind: TYPING_KIND,
+      content: ciphertext,
+      tags,
+      created_at: Math.floor(Date.now() / 1000),
+    },
+    sk
+  );
+
+  // Sort relays by health score
+  const sortedRelays = healthTracker.getSortedRelays(relays);
+
+  // Try relays in order, respecting circuit breakers
+  let lastError: Error | undefined;
+  for (const relay of sortedRelays) {
+    const cb = circuitBreakers.get(relay);
+    if (cb && !cb.canAttempt()) {
+      continue;
+    }
+
+    const startTime = Date.now();
+    try {
+      const [publishResult] = await Promise.allSettled(pool.publish([relay], event));
+      if (publishResult?.status === "rejected") {
+        throw publishResult.reason;
+      }
+      const latency = Date.now() - startTime;
+      cb?.recordSuccess();
+      healthTracker.recordSuccess(relay, latency);
+      const metricName = action === "start" ? "typing.start.sent" : "typing.stop.sent";
+      metrics.emit(metricName, 1, { relay });
+      return; // Success - exit early
+    } catch (err) {
+      lastError = err as Error;
+      cb?.recordFailure();
+      healthTracker.recordFailure(relay);
+      metrics.emit("typing.error", 1, { relay });
+      onError?.(lastError, `typing ${action} to ${relay}`);
+    }
+  }
+
+  // Don't throw for typing failures - they're non-critical
+  if (lastError) {
+    onError?.(lastError, `typing ${action} failed on all relays`);
+  }
+}
+
+/**
+ * Create throttled typing indicator functions
+ * Returns start/stop functions that respect throttling (max 1 event per 5s per recipient)
+ */
+function createTypingController(
+  pool: SimplePool,
+  sk: Uint8Array,
+  relays: string[],
+  metrics: NostrMetrics,
+  circuitBreakers: Map<string, CircuitBreaker>,
+  healthTracker: RelayHealthTracker,
+  onError?: (error: Error, context: string) => void
+): {
+  sendTypingStart: (toPubkey: string, conversationEventId?: string) => Promise<void>;
+  sendTypingStop: (toPubkey: string, conversationEventId?: string) => Promise<void>;
+} {
+  // Track last send time per recipient for throttling
+  const lastSendTime = new Map<string, number>();
+
+  const sendWithThrottle = async (
+    toPubkey: string,
+    action: "start" | "stop",
+    conversationEventId?: string
+  ): Promise<void> => {
+    const now = Date.now();
+    const lastSent = lastSendTime.get(toPubkey) ?? 0;
+
+    // Stop events bypass throttle for better UX
+    if (action === "start") {
+      if (now - lastSent < TYPING_THROTTLE_MS) {
+        return; // Throttled
+      }
+      lastSendTime.set(toPubkey, now);
+    }
+
+    await sendTypingIndicator(
+      pool,
+      sk,
+      toPubkey,
+      action,
+      relays,
+      metrics,
+      circuitBreakers,
+      healthTracker,
+      conversationEventId,
+      onError
+    );
+  };
+
+  return {
+    sendTypingStart: (toPubkey: string, conversationEventId?: string) =>
+      sendWithThrottle(toPubkey, "start", conversationEventId),
+    sendTypingStop: (toPubkey: string, conversationEventId?: string) =>
+      sendWithThrottle(toPubkey, "stop", conversationEventId),
+  };
 }
 
 // ============================================================================
