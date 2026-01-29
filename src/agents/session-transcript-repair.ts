@@ -8,6 +8,14 @@ type ToolCallLike = {
 function extractToolCallsFromAssistant(
   msg: Extract<AgentMessage, { role: "assistant" }>,
 ): ToolCallLike[] {
+  // Skip extracting tool calls if the assistant turn errored/terminated.
+  // Errored turns contain incomplete tool calls (often with partialJson) that
+  // were never executed. Inserting synthetic tool_results for these would cause
+  // Anthropic's API to reject subsequent requests with "unexpected tool_use_id".
+  // See: https://github.com/clawdbot/clawdbot/issues/1826
+  const stopReason = (msg as { stopReason?: unknown }).stopReason;
+  if (stopReason === "error") return [];
+
   const content = msg.content;
   if (!Array.isArray(content)) return [];
 

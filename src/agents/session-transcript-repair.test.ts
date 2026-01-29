@@ -109,4 +109,34 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(out.some((m) => m.role === "toolResult")).toBe(false);
     expect(out.map((m) => m.role)).toEqual(["user", "assistant"]);
   });
+
+  it("does not insert synthetic tool results for errored/terminated assistant turns", () => {
+    // When an assistant turn has stopReason: "error", the tool calls within it were
+    // never completed. Inserting synthetic tool_results would cause Anthropic's API
+    // to reject requests with "unexpected tool_use_id".
+    // See: https://github.com/clawdbot/clawdbot/issues/1826
+    const input = [
+      { role: "user", content: "schedule a reminder" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "toolu_terminated",
+            name: "cron",
+            arguments: { action: "add" },
+            partialJson: '{"action": "add", "job": {"name": "test',
+          },
+        ],
+        stopReason: "error",
+        errorMessage: "terminated",
+      },
+      { role: "user", content: "what happened?" },
+    ] satisfies AgentMessage[];
+
+    const out = sanitizeToolUseResultPairing(input);
+    // Should NOT have any tool results - the errored turn's tool calls are ignored
+    expect(out.some((m) => m.role === "toolResult")).toBe(false);
+    expect(out.map((m) => m.role)).toEqual(["user", "assistant", "user"]);
+  });
 });
