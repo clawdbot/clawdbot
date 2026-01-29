@@ -64,12 +64,26 @@ export function extractGeminiCliCredentials(): { clientId: string; clientSecret:
     if (!geminiPath) return null;
 
     const resolvedPath = realpathSync(geminiPath);
-    const geminiCliDir = dirname(dirname(resolvedPath));
-
-    const searchPaths = [
-      join(geminiCliDir, "node_modules", "@google", "gemini-cli-core", "dist", "src", "code_assist", "oauth2.js"),
-      join(geminiCliDir, "node_modules", "@google", "gemini-cli-core", "dist", "code_assist", "oauth2.js"),
+    
+    // Support both Unix symlinks and Windows npm shims
+    const bases = [
+      dirname(dirname(resolvedPath)), // Unix: .../pkg/bin/run -> .../pkg
+      dirname(resolvedPath),          // Windows: .../npm/gemini.cmd -> .../npm
     ];
+
+    const searchPaths: string[] = [];
+    for (const base of bases) {
+      // 1. Check for flat installation of gemini-cli-core
+      searchPaths.push(
+        join(base, "node_modules", "@google", "gemini-cli-core", "dist", "src", "code_assist", "oauth2.js"),
+        join(base, "node_modules", "@google", "gemini-cli-core", "dist", "code_assist", "oauth2.js")
+      );
+      // 2. Check for nested installation inside gemini-cli
+      searchPaths.push(
+        join(base, "node_modules", "@google", "gemini-cli", "node_modules", "@google", "gemini-cli-core", "dist", "src", "code_assist", "oauth2.js"),
+        join(base, "node_modules", "@google", "gemini-cli", "node_modules", "@google", "gemini-cli-core", "dist", "code_assist", "oauth2.js")
+      );
+    }
 
     let content: string | null = null;
     for (const p of searchPaths) {
