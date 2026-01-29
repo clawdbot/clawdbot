@@ -185,7 +185,14 @@ export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>)
 }
 
 export function getStatusCode(err: unknown) {
+  // Extract status from nested Baileys error structures (same as formatError)
+  const boom =
+    extractBoomDetails(err) ??
+    extractBoomDetails((err as { error?: unknown })?.error) ??
+    extractBoomDetails((err as { lastDisconnect?: { error?: unknown } })?.lastDisconnect?.error);
+
   return (
+    boom?.statusCode ??
     (err as { output?: { statusCode?: number } })?.output?.statusCode ??
     (err as { status?: number })?.status
   );
