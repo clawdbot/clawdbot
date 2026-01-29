@@ -42,20 +42,65 @@ export function extractMessageText(content: unknown): string {
   if (!content || !Array.isArray(content)) return "";
 
   return content
-    .map((block: any) => {
-      if (block.inline && Array.isArray(block.inline)) {
-        return block.inline
+    .map((verse: any) => {
+      // Handle inline content (text, ships, links, etc.)
+      if (verse.inline && Array.isArray(verse.inline)) {
+        return verse.inline
           .map((item: any) => {
             if (typeof item === "string") return item;
             if (item && typeof item === "object") {
               if (item.ship) return item.ship;
               if (item.break !== undefined) return "\n";
               if (item.link && item.link.href) return item.link.href;
+              // Handle inline code
+              if (item.code) return `\`${item.code}\``;
+              // Handle bold/italic/strike
+              if (item.bold && Array.isArray(item.bold)) {
+                return item.bold.map((b: any) => typeof b === "string" ? b : "").join("");
+              }
+              if (item.italics && Array.isArray(item.italics)) {
+                return item.italics.map((i: any) => typeof i === "string" ? i : "").join("");
+              }
+              if (item.strike && Array.isArray(item.strike)) {
+                return item.strike.map((s: any) => typeof s === "string" ? s : "").join("");
+              }
             }
             return "";
           })
           .join("");
       }
+      
+      // Handle block content (images, code blocks, etc.)
+      if (verse.block && typeof verse.block === "object") {
+        const block = verse.block;
+        
+        // Image blocks
+        if (block.image && block.image.src) {
+          const alt = block.image.alt ? ` (${block.image.alt})` : "";
+          return `\n${block.image.src}${alt}\n`;
+        }
+        
+        // Code blocks
+        if (block.code && typeof block.code === "object") {
+          const lang = block.code.lang || "";
+          const code = block.code.code || "";
+          return `\n\`\`\`${lang}\n${code}\n\`\`\`\n`;
+        }
+        
+        // Header blocks
+        if (block.header && typeof block.header === "object") {
+          const text = block.header.content?.map((item: any) => 
+            typeof item === "string" ? item : ""
+          ).join("") || "";
+          return `\n## ${text}\n`;
+        }
+        
+        // Cite/quote blocks
+        if (block.cite && typeof block.cite === "object") {
+          return `\n> [quoted message]\n`;
+        }
+      }
+      
       return "";
     })
     .join("\n")
