@@ -40,6 +40,27 @@ moltbot channels login --channel whatsapp
 moltbot channels logout --channel whatsapp
 ```
 
+### JSON mode (programmatic)
+
+For programmatic use (e.g., web dashboards, hosting platforms), use `--json` to get QR data as JSON instead of terminal output:
+
+```bash
+moltbot channels login --channel whatsapp --json --timeout 60000
+```
+
+This outputs two JSON objects:
+1. Initial response with QR data:
+```json
+{"status":"pending","qrDataUrl":"data:image/png;base64,...","message":"Scan this QR...","accountId":"default","channel":"whatsapp"}
+```
+
+2. Final response after scan (or timeout):
+```json
+{"status":"connected","connected":true,"message":"✅ Linked!","accountId":"default","channel":"whatsapp"}
+```
+
+The `qrDataUrl` is a base64-encoded PNG that can be displayed directly in an `<img>` tag.
+
 ## Troubleshooting
 
 - Run `moltbot status --deep` for a broad probe.

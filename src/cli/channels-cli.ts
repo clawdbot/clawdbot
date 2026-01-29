@@ -215,6 +215,8 @@ export function registerChannelsCli(program: Command) {
     .option("--channel <channel>", "Channel alias (default: whatsapp)")
     .option("--account <id>", "Account id (accountId)")
     .option("--verbose", "Verbose connection logs", false)
+    .option("--json", "Output QR data as JSON (for programmatic use)", false)
+    .option("--timeout <ms>", "Timeout for QR generation in ms", "60000")
     .action(async (opts) => {
       await runChannelsCommandWithDanger(async () => {
         await runChannelLogin(
@@ -222,6 +224,8 @@ export function registerChannelsCli(program: Command) {
             channel: opts.channel as string | undefined,
             account: opts.account as string | undefined,
             verbose: Boolean(opts.verbose),
+            json: Boolean(opts.json),
+            timeoutMs: parseInt(String(opts.timeout), 10) || 60000,
           },
           defaultRuntime,
         );

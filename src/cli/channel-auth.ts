@@ -9,6 +9,8 @@ type ChannelAuthOptions = {
   channel?: string;
   account?: string;
   verbose?: boolean;
+  json?: boolean;
+  timeoutMs?: number;
 };
 
 export async function runChannelLogin(
@@ -21,6 +23,54 @@ export async function runChannelLogin(
     throw new Error(`Unsupported channel: ${channelInput}`);
   }
   const plugin = getChannelPlugin(channelId);
+
+  // JSON mode: use gateway QR login methods for programmatic access
+  if (opts.json) {
+    if (!plugin?.gateway?.loginWithQrStart || !plugin?.gateway?.loginWithQrWait) {
+      throw new Error(`Channel ${channelId} does not support JSON login mode`);
+    }
+    setVerbose(Boolean(opts.verbose));
+    const cfg = loadConfig();
+    const accountId = opts.account?.trim() || resolveChannelDefaultAccountId({ plugin, cfg });
+    const timeoutMs = opts.timeoutMs ?? 60000;
+
+    // Start QR login and get QR data
+    const startResult = await plugin.gateway.loginWithQrStart({
+      accountId,
+      force: false,
+      timeoutMs,
+      verbose: Boolean(opts.verbose),
+    });
+
+    // Output QR data as JSON
+    const output = {
+      status: "pending",
+      qrDataUrl: startResult.qrDataUrl ?? null,
+      message: startResult.message,
+      accountId,
+      channel: channelId,
+    };
+    runtime.log(JSON.stringify(output));
+
+    // Wait for connection
+    const waitResult = await plugin.gateway.loginWithQrWait({
+      accountId,
+      timeoutMs,
+    });
+
+    // Output final result
+    const finalOutput = {
+      status: waitResult.connected ? "connected" : "failed",
+      connected: waitResult.connected,
+      message: waitResult.message,
+      accountId,
+      channel: channelId,
+    };
+    runtime.log(JSON.stringify(finalOutput));
+    return;
+  }
+
+  // Standard interactive mode
   if (!plugin?.auth?.login) {
     throw new Error(`Channel ${channelId} does not support login`);
   }
