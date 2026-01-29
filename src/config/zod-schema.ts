@@ -494,7 +494,7 @@ export const MoltbotSchema = z
           .optional(),
         slots: z
           .object({
-            memory: z.string().optional(),
+            memory: z.union([z.string(), z.array(z.string())]).optional(),
           })
           .strict()
           .optional(),

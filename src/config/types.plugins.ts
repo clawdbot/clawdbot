@@ -4,8 +4,13 @@ export type PluginEntryConfig = {
 };
 
 export type PluginSlotsConfig = {
-  /** Select which plugin owns the memory slot ("none" disables memory plugins). */
-  memory?: string;
+  /**
+   * Select which plugin(s) own the memory slot.
+   * - Single string: "memory-lancedb" - one plugin active
+   * - Array: ["memory-core", "memory-lancedb"] - multiple plugins active (stackable)
+   * - "none": disables all memory plugins
+   */
+  memory?: string | string[];
 };
 
 export type PluginsLoadConfig = {

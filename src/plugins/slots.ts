@@ -52,9 +52,15 @@ export function applyExclusiveSlotSelection(params: {
   };
 
   const inferredPrevSlot = prevSlot ?? defaultSlotIdForKey(slotKey);
+  // Format slot value for display (handles both string and array)
+  const formatSlotValue = (v: string | string[] | null | undefined): string => {
+    if (v === null || v === undefined) return "none";
+    if (Array.isArray(v)) return `[${v.join(", ")}]`;
+    return v;
+  };
   if (inferredPrevSlot && inferredPrevSlot !== params.selectedId) {
     warnings.push(
-      `Exclusive slot "${slotKey}" switched from "${inferredPrevSlot}" to "${params.selectedId}".`,
+      `Exclusive slot "${slotKey}" switched from "${formatSlotValue(inferredPrevSlot)}" to "${params.selectedId}".`,
     );
   }
 

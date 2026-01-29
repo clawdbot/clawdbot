@@ -8,7 +8,7 @@ export type NormalizedPluginsConfig = {
   deny: string[];
   loadPaths: string[];
   slots: {
-    memory?: string | null;
+    memory?: string | string[] | null;
   };
   entries: Record<string, { enabled?: boolean; config?: unknown }>;
 };
@@ -20,7 +20,15 @@ const normalizeList = (value: unknown): string[] => {
   return value.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
 };
 
-const normalizeSlotValue = (value: unknown): string | null | undefined => {
+const normalizeSlotValue = (value: unknown): string | string[] | null | undefined => {
+  // Handle array of plugin ids (stackable mode)
+  if (Array.isArray(value)) {
+    const normalized = value
+      .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+      .filter(Boolean);
+    return normalized.length > 0 ? normalized : undefined;
+  }
+  // Handle single string
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
   if (!trimmed) return undefined;
@@ -78,7 +86,9 @@ export function resolveEnableState(
   if (config.allow.length > 0 && !config.allow.includes(id)) {
     return { enabled: false, reason: "not in allowlist" };
   }
-  if (config.slots.memory === id) {
+  // Check if plugin is selected in memory slot (handles both string and array)
+  const memorySlot = config.slots.memory;
+  if (memorySlot === id || (Array.isArray(memorySlot) && memorySlot.includes(id))) {
     return { enabled: true };
   }
   const entry = config.entries[id];
@@ -100,13 +110,24 @@ export function resolveEnableState(
 export function resolveMemorySlotDecision(params: {
   id: string;
   kind?: string;
-  slot: string | null | undefined;
+  slot: string | string[] | null | undefined;
   selectedId: string | null;
 }): { enabled: boolean; reason?: string; selected?: boolean } {
   if (params.kind !== "memory") return { enabled: true };
   if (params.slot === null) {
     return { enabled: false, reason: "memory slot disabled" };
   }
+  // Handle array of memory plugins (stackable mode)
+  if (Array.isArray(params.slot)) {
+    if (params.slot.includes(params.id)) {
+      return { enabled: true, selected: true };
+    }
+    return {
+      enabled: false,
+      reason: `memory slot set to [${params.slot.join(", ")}]`,
+    };
+  }
+  // Handle single string (exclusive mode - original behavior)
   if (typeof params.slot === "string") {
     if (params.slot === params.id) {
       return { enabled: true, selected: true };

@@ -199,11 +199,21 @@ export function validateConfigObjectWithPlugins(raw: unknown):
   }
 
   const memorySlot = normalizedPlugins.slots.memory;
+  // Validate memory slot - can be string or array of strings
   if (typeof memorySlot === "string" && memorySlot.trim() && !knownIds.has(memorySlot)) {
     issues.push({
       path: "plugins.slots.memory",
       message: `plugin not found: ${memorySlot}`,
     });
+  } else if (Array.isArray(memorySlot)) {
+    for (const slotId of memorySlot) {
+      if (typeof slotId === "string" && slotId.trim() && !knownIds.has(slotId)) {
+        issues.push({
+          path: "plugins.slots.memory",
+          message: `plugin not found: ${slotId}`,
+        });
+      }
+    }
   }
 
   const allowedChannels = new Set<string>(["defaults", ...CHANNEL_IDS]);
