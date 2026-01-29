@@ -60,9 +60,9 @@ describe("archive utils", () => {
     await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
 
     await fs.mkdir(extractDir, { recursive: true });
-    await expect(extractArchive({ archivePath, destDir: extractDir, timeoutMs: 5_000 })).rejects.toThrow(
-      /escapes destination/i,
-    );
+    await expect(
+      extractArchive({ archivePath, destDir: extractDir, timeoutMs: 5_000 }),
+    ).rejects.toThrow(/escapes destination/i);
     await expect(fs.stat(path.join(siblingDir, "pwned.txt"))).rejects.toThrow();
   });
 

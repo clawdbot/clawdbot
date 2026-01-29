@@ -65,7 +65,9 @@ function ensureTrailingSep(filePath: string): string {
   return filePath.endsWith(path.sep) ? filePath : `${filePath}${path.sep}`;
 }
 
-async function normalizeDestRoot(destDir: string): Promise<{ destRoot: string; destRootLower?: string }> {
+async function normalizeDestRoot(
+  destDir: string,
+): Promise<{ destRoot: string; destRootLower?: string }> {
   await fs.mkdir(destDir, { recursive: true });
   const destReal = await fs.realpath(destDir);
   const destRoot = ensureTrailingSep(destReal);
@@ -77,7 +79,9 @@ async function normalizeDestRoot(destDir: string): Promise<{ destRoot: string; d
 async function extractZip(params: { archivePath: string; destDir: string }): Promise<void> {
   const { destRoot, destRootLower } = await normalizeDestRoot(params.destDir);
   const startsWithDest = (targetPath: string): boolean =>
-    destRootLower ? targetPath.toLowerCase().startsWith(destRootLower) : targetPath.startsWith(destRoot);
+    destRootLower
+      ? targetPath.toLowerCase().startsWith(destRootLower)
+      : targetPath.startsWith(destRoot);
 
   const buffer = await fs.readFile(params.archivePath);
   const zip = await JSZip.loadAsync(buffer);
