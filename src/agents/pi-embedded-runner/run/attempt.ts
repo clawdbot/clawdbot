@@ -717,18 +717,26 @@ export async function runEmbeddedAttempt(
         });
 
         // Repair orphaned trailing user messages so new prompts don't violate role ordering.
-        const leafEntry = sessionManager.getLeafEntry();
-        if (leafEntry?.type === "message" && leafEntry.message.role === "user") {
-          if (leafEntry.parentId) {
-            sessionManager.branch(leafEntry.parentId);
-          } else {
-            sessionManager.resetLeaf();
+        try {
+          const leafEntry = sessionManager.getLeafEntry();
+          if (leafEntry?.type === "message" && leafEntry.message.role === "user") {
+            if (leafEntry.parentId) {
+              sessionManager.branch(leafEntry.parentId);
+            } else {
+              sessionManager.resetLeaf();
+            }
+            const sessionContext = sessionManager.buildSessionContext();
+            activeSession.agent.replaceMessages(sessionContext.messages);
+            log.warn(
+              `Removed orphaned user message to prevent consecutive user turns. ` +
+                `runId=${params.runId} sessionId=${params.sessionId}`,
+            );
           }
-          const sessionContext = sessionManager.buildSessionContext();
-          activeSession.agent.replaceMessages(sessionContext.messages);
-          log.warn(
-            `Removed orphaned user message to prevent consecutive user turns. ` +
+        } catch (err) {
+          log.error(
+            `Failed to repair orphaned user message, continuing anyway. ` +
               `runId=${params.runId} sessionId=${params.sessionId}`,
+            { error: err instanceof Error ? err.message : String(err) },
           );
         }
 
