@@ -147,36 +147,48 @@ ACTIONS:
 
 JOB SCHEMA (for add action):
 {
-  "name": "string (optional)",
-  "schedule": { ... },      // Required: when to run
-  "payload": { ... },       // Required: what to execute
-  "sessionTarget": "main" | "isolated",  // Required
-  "enabled": true | false   // Optional, default true
+  "name": "string (optional, required for update)",
+  "schedule": { ... },                  // REQUIRED: when to run
+  "payload": { ... },                   // REQUIRED: what to execute
+  "sessionTarget": "main" | "isolated",  // REQUIRED: which session type
+  "enabled": true | false,              // OPTIONAL, default true
+  "deleteAfterRun": true | false        // OPTIONAL, default false (for one-shot jobs)
 }
 
-SCHEDULE TYPES (schedule.kind):
-- "at": One-shot at absolute time
-  { "kind": "at", "atMs": <unix-ms-timestamp> }
-- "every": Recurring interval
-  { "kind": "every", "everyMs": <interval-ms>, "anchorMs": <optional-start-ms> }
-- "cron": Cron expression
-  { "kind": "cron", "expr": "<cron-expression>", "tz": "<optional-timezone>" }
+SCHEDULE TYPES (schedule.kind - choose exactly one):
+- "at": One-shot job at absolute timestamp (ms since epoch)
+  { "kind": "at", "atMs": 1699900000000 }
 
-PAYLOAD TYPES (payload.kind):
-- "systemEvent": Injects text as system event into session
-  { "kind": "systemEvent", "text": "<message>" }
-- "agentTurn": Runs agent with message (isolated sessions only)
-  { "kind": "agentTurn", "message": "<prompt>", "model": "<optional>", "thinking": "<optional>", "timeoutSeconds": <optional>, "deliver": <optional-bool>, "channel": "<optional>", "to": "<optional>", "bestEffortDeliver": <optional-bool> }
+- "every": Recurring interval (milliseconds)
+  { "kind": "every", "everyMs": 3600000 }
 
-CRITICAL CONSTRAINTS:
-- sessionTarget="main" REQUIRES payload.kind="systemEvent"
-- sessionTarget="isolated" REQUIRES payload.kind="agentTurn"
+- "cron": Standard cron expression
+  { "kind": "cron", "expr": "0 9 * * 1-5", "tz": "America/New_York" }
+
+PAYLOAD TYPES (payload.kind - choose exactly one):
+- "systemEvent": Inject text as system event (for sessionTarget="main" ONLY)
+  { "kind": "systemEvent", "text": "Your reminder message" }
+  REQUIRED FIELDS: kind, text
+
+- "agentTurn": Run agent with message (for sessionTarget="isolated" ONLY)
+  { "kind": "agentTurn", "message": "Your prompt here" }
+  REQUIRED FIELDS: kind, message
+  OPTIONAL FIELDS: model, thinking, timeoutSeconds, deliver, channel, to, bestEffortDeliver
+
+SESSION TARGET (sessionTarget - choose exactly one):
+- "main": Main session - REQUIRES payload.kind="systemEvent"
+- "isolated": Sub-agent session - REQUIRES payload.kind="agentTurn"
+
+CRITICAL CONSTRAINTS (will fail validation if violated):
+1. sessionTarget="main" MUST use payload.kind="systemEvent" with text field
+2. sessionTarget="isolated" MUST use payload.kind="agentTurn" with message field
+3. Do NOT mix: main+agentTurn or isolated+systemEvent
 
 WAKE MODES (for wake action):
-- "next-heartbeat" (default): Wake on next heartbeat
-- "now": Wake immediately
+- "next-heartbeat" (default): Deliver on next heartbeat cycle
+- "now": Deliver immediately
 
-Use jobId as the canonical identifier; id is accepted for compatibility. Use contextMessages (0-10) to add previous messages as context to the job text.`,
+Use jobId as the canonical identifier; id is accepted for backward compatibility. Use contextMessages (0-10) to add previous chat messages as context to reminder jobs.`,
     parameters: CronToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
