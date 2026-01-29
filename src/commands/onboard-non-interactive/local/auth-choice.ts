@@ -8,6 +8,7 @@ import { buildTokenProfileId, validateAnthropicSetupToken } from "../../auth-tok
 import { applyGoogleGeminiModelDefault } from "../../google-gemini-model-default.js";
 import {
   applyAuthProfileConfig,
+  applyFireworksConfig,
   applyKimiCodeConfig,
   applyMinimaxApiConfig,
   applyMinimaxConfig,
@@ -19,6 +20,7 @@ import {
   applyVercelAiGatewayConfig,
   applyZaiConfig,
   setAnthropicApiKey,
+  setFireworksApiKey,
   setGeminiApiKey,
   setKimiCodeApiKey,
   setMinimaxApiKey,
@@ -307,6 +309,25 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyVeniceConfig(nextConfig);
+  }
+
+  if (authChoice === "fireworks-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "fireworks",
+      cfg: baseConfig,
+      flagValue: opts.fireworksApiKey,
+      flagName: "--fireworks-api-key",
+      envVar: "FIREWORKS_API_KEY",
+      runtime,
+    });
+    if (!resolved) return null;
+    if (resolved.source !== "profile") await setFireworksApiKey(resolved.key);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "fireworks:default",
+      provider: "fireworks",
+      mode: "api_key",
+    });
+    return applyFireworksConfig(nextConfig);
   }
 
   if (
