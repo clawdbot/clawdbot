@@ -32,6 +32,8 @@ const CONTEXT_OVERFLOW_HINT_RE =
 export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) return false;
   if (CONTEXT_WINDOW_TOO_SMALL_RE.test(errorMessage)) return false;
+  // Rate limit errors should not be classified as context overflow
+  if (isRateLimitErrorMessage(errorMessage)) return false;
   if (isContextOverflowError(errorMessage)) return true;
   return CONTEXT_OVERFLOW_HINT_RE.test(errorMessage);
 }
