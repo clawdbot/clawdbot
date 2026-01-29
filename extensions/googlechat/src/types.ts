@@ -1,7 +1,9 @@
 export type GoogleChatSpace = {
   name?: string;
   displayName?: string;
+  /** @deprecated Use spaceType instead */
   type?: string;
+  spaceType?: string;
 };
 
 export type GoogleChatUser = {
