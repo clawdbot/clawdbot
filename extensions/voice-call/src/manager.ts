@@ -830,6 +830,10 @@ export class CallManager {
     const logPath = path.join(this.storePath, "calls.jsonl");
     if (!fs.existsSync(logPath)) return;
 
+    // Calls older than maxDurationSeconds are definitely stale
+    const maxAgeMs = this.config.maxDurationSeconds * 1000;
+    const now = Date.now();
+
     // Read file synchronously and parse lines
     const content = fs.readFileSync(logPath, "utf-8");
     const lines = content.split("\n");
@@ -847,18 +851,28 @@ export class CallManager {
       }
     }
 
-    // Only keep non-terminal calls
+    // Only keep non-terminal calls that aren't stale
     for (const [callId, call] of callMap) {
-      if (!TerminalStates.has(call.state)) {
-        this.activeCalls.set(callId, call);
-        // Populate providerCallId mapping for lookups
-        if (call.providerCallId) {
-          this.providerCallIdMap.set(call.providerCallId, callId);
-        }
-        // Populate processed event IDs
-        for (const eventId of call.processedEventIds) {
-          this.processedEventIds.add(eventId);
-        }
+      // Skip terminal states
+      if (TerminalStates.has(call.state)) continue;
+
+      // Skip stale calls (older than max duration)
+      const callAge = now - call.startedAt;
+      if (callAge > maxAgeMs) {
+        console.log(
+          `[voice-call] Skipping stale call ${callId} (age: ${Math.round(callAge / 1000)}s, max: ${this.config.maxDurationSeconds}s)`,
+        );
+        continue;
+      }
+
+      this.activeCalls.set(callId, call);
+      // Populate providerCallId mapping for lookups
+      if (call.providerCallId) {
+        this.providerCallIdMap.set(call.providerCallId, callId);
+      }
+      // Populate processed event IDs
+      for (const eventId of call.processedEventIds) {
+        this.processedEventIds.add(eventId);
       }
     }
   }
