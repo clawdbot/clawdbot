@@ -21,6 +21,7 @@ type ChatHost = {
   basePath: string;
   hello: GatewayHelloOk | null;
   chatAvatarUrl: string | null;
+  refreshSessionsAfterChat: boolean;
 };
 
 export function isChatBusy(host: ChatHost) {
@@ -39,6 +40,14 @@ export function isChatStopCommand(text: string) {
     normalized === "wait" ||
     normalized === "exit"
   );
+}
+
+function isChatResetCommand(text: string) {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  const normalized = trimmed.toLowerCase();
+  if (normalized === "/new" || normalized === "/reset") return true;
+  return normalized.startsWith("/new ") || normalized.startsWith("/reset ");
 }
 
 export async function handleAbortChat(host: ChatHost) {
@@ -71,6 +80,7 @@ async function sendChatMessageNow(
     attachments?: ChatAttachment[];
     previousAttachments?: ChatAttachment[];
     restoreAttachments?: boolean;
+    refreshSessions?: boolean;
   },
 ) {
   resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
@@ -93,6 +103,9 @@ async function sendChatMessageNow(
   scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
   if (ok && !host.chatRunId) {
     void flushChatQueue(host);
+  }
+  if (ok && opts?.refreshSessions) {
+    host.refreshSessionsAfterChat = true;
   }
   return ok;
 }
@@ -132,6 +145,7 @@ export async function handleSendChat(
     return;
   }
 
+  const refreshSessions = isChatResetCommand(message);
   if (messageOverride == null) {
     host.chatMessage = "";
     // Clear attachments when sending
@@ -149,13 +163,14 @@ export async function handleSendChat(
     attachments: hasAttachments ? attachmentsToSend : undefined,
     previousAttachments: messageOverride == null ? attachments : undefined,
     restoreAttachments: Boolean(messageOverride && opts?.restoreDraft),
+    refreshSessions,
   });
 }
 
 export async function refreshChat(host: ChatHost) {
   await Promise.all([
     loadChatHistory(host as unknown as MoltbotApp),
-    loadSessions(host as unknown as MoltbotApp),
+    loadSessions(host as unknown as MoltbotApp, { activeMinutes: 0 }),
     refreshChatAvatar(host),
   ]);
   scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], true);

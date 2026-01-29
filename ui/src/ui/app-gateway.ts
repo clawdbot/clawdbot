@@ -26,6 +26,7 @@ import {
 import type { MoltbotApp } from "./app";
 import type { ExecApprovalRequest } from "./controllers/exec-approval";
 import { loadAssistantIdentity } from "./controllers/assistant-identity";
+import { loadSessions } from "./controllers/sessions";
 
 type GatewayHost = {
   settings: UiSettings;
@@ -50,6 +51,7 @@ type GatewayHost = {
   assistantAgentId: string | null;
   sessionKey: string;
   chatRunId: string | null;
+  refreshSessionsAfterChat: boolean;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
 };
@@ -194,6 +196,12 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
       void flushChatQueueForEvent(
         host as unknown as Parameters<typeof flushChatQueueForEvent>[0],
       );
+      if (host.refreshSessionsAfterChat) {
+        host.refreshSessionsAfterChat = false;
+        if (state === "final") {
+          void loadSessions(host as unknown as MoltbotApp, { activeMinutes: 0 });
+        }
+      }
     }
     if (state === "final") void loadChatHistory(host as unknown as MoltbotApp);
     return;

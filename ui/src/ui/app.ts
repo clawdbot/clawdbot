@@ -258,6 +258,7 @@ export class MoltbotApp extends LitElement {
   private logsScrollFrame: number | null = null;
   private toolStreamById = new Map<string, ToolStreamEntry>();
   private toolStreamOrder: string[] = [];
+  refreshSessionsAfterChat = false;
   basePath = "";
   private popStateHandler = () =>
     onPopStateInternal(

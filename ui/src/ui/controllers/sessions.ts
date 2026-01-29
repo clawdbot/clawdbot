@@ -14,18 +14,29 @@ export type SessionsState = {
   sessionsIncludeUnknown: boolean;
 };
 
-export async function loadSessions(state: SessionsState) {
+export async function loadSessions(
+  state: SessionsState,
+  overrides?: {
+    activeMinutes?: number;
+    limit?: number;
+    includeGlobal?: boolean;
+    includeUnknown?: boolean;
+  },
+) {
   if (!state.client || !state.connected) return;
   if (state.sessionsLoading) return;
   state.sessionsLoading = true;
   state.sessionsError = null;
   try {
+    const includeGlobal = overrides?.includeGlobal ?? state.sessionsIncludeGlobal;
+    const includeUnknown = overrides?.includeUnknown ?? state.sessionsIncludeUnknown;
+    const activeMinutes =
+      overrides?.activeMinutes ?? toNumber(state.sessionsFilterActive, 0);
+    const limit = overrides?.limit ?? toNumber(state.sessionsFilterLimit, 0);
     const params: Record<string, unknown> = {
-      includeGlobal: state.sessionsIncludeGlobal,
-      includeUnknown: state.sessionsIncludeUnknown,
+      includeGlobal,
+      includeUnknown,
     };
-    const activeMinutes = toNumber(state.sessionsFilterActive, 0);
-    const limit = toNumber(state.sessionsFilterLimit, 0);
     if (activeMinutes > 0) params.activeMinutes = activeMinutes;
     if (limit > 0) params.limit = limit;
     const res = (await state.client.request("sessions.list", params)) as
