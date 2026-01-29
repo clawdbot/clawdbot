@@ -39,6 +39,7 @@ import {
   createDiscordNativeCommand,
 } from "./native-command.js";
 import { createExecApprovalButton, DiscordExecApprovalHandler } from "./exec-approvals.js";
+import { updateBotPresence } from "./bot-presence.js";
 
 export type MonitorDiscordOpts = {
   token?: string;
@@ -557,6 +558,19 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   }
 
   const gateway = client.getPlugin<GatewayPlugin>("gateway");
+
+  // Set bot presence if configured
+  if (gateway && discordCfg.presence?.enabled) {
+    try {
+      await updateBotPresence(gateway, cfg, {
+        presenceConfig: discordCfg.presence,
+        log: runtime.log ? (msg) => runtime.log?.(msg) : undefined,
+      });
+    } catch (err) {
+      runtime.error?.(danger(`discord: failed to set bot presence: ${formatErrorMessage(err)}`));
+    }
+  }
+
   const gatewayEmitter = getDiscordGatewayEmitter(gateway);
   const stopGatewayLogging = attachDiscordGatewayLogging({
     emitter: gatewayEmitter,

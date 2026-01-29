@@ -275,6 +275,24 @@ export const DiscordAccountSchema = z
       })
       .strict()
       .optional(),
+    presence: z
+      .object({
+        enabled: z.boolean().optional(),
+        template: z.string().optional(),
+        activityType: z
+          .union([
+            z.literal(0),
+            z.literal(1),
+            z.literal(2),
+            z.literal(3),
+            z.literal(4),
+            z.literal(5),
+          ])
+          .optional(),
+        status: z.enum(["online", "idle", "dnd", "invisible"]).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

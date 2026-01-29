@@ -81,6 +81,27 @@ export type DiscordIntentsConfig = {
   guildMembers?: boolean;
 };
 
+export type DiscordPresenceActivityType = 0 | 1 | 2 | 3 | 4 | 5;
+
+export type DiscordPresenceConfig = {
+  /** Enable dynamic bot presence showing model/auth info. Default: false. */
+  enabled?: boolean;
+  /**
+   * Template for the activity text.
+   * Variables: {model}, {modelFull}, {authProfile}, {provider}.
+   * Default: "{model} • {authProfile}".
+   */
+  template?: string;
+  /**
+   * Discord activity type:
+   * 0 = Playing, 1 = Streaming, 2 = Listening, 3 = Watching, 4 = Custom, 5 = Competing.
+   * Default: 4 (Custom).
+   */
+  activityType?: DiscordPresenceActivityType;
+  /** Bot status: online, idle, dnd, invisible. Default: online. */
+  status?: "online" | "idle" | "dnd" | "invisible";
+};
+
 export type DiscordExecApprovalConfig = {
   /** Enable exec approval forwarding to Discord DMs. Default: false. */
   enabled?: boolean;
@@ -150,6 +171,8 @@ export type DiscordAccountConfig = {
   execApprovals?: DiscordExecApprovalConfig;
   /** Privileged Gateway Intents (must also be enabled in Discord Developer Portal). */
   intents?: DiscordIntentsConfig;
+  /** Bot presence (status/activity) showing current model and auth profile. */
+  presence?: DiscordPresenceConfig;
 };
 
 export type DiscordConfig = {

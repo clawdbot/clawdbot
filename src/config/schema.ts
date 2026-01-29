@@ -328,6 +328,10 @@ const FIELD_LABELS: Record<string, string> = {
   "channels.discord.maxLinesPerMessage": "Discord Max Lines Per Message",
   "channels.discord.intents.presence": "Discord Presence Intent",
   "channels.discord.intents.guildMembers": "Discord Guild Members Intent",
+  "channels.discord.presence.enabled": "Discord Bot Presence Enabled",
+  "channels.discord.presence.template": "Discord Bot Presence Template",
+  "channels.discord.presence.activityType": "Discord Bot Presence Activity Type",
+  "channels.discord.presence.status": "Discord Bot Presence Status",
   "channels.slack.dm.policy": "Slack DM Policy",
   "channels.slack.allowBots": "Slack Allow Bot Messages",
   "channels.discord.token": "Discord Bot Token",
@@ -674,6 +678,14 @@ const FIELD_HELP: Record<string, string> = {
     "Enable the Guild Presences privileged intent. Must also be enabled in the Discord Developer Portal. Allows tracking user activities (e.g. Spotify). Default: false.",
   "channels.discord.intents.guildMembers":
     "Enable the Guild Members privileged intent. Must also be enabled in the Discord Developer Portal. Default: false.",
+  "channels.discord.presence.enabled":
+    "Enable dynamic bot presence showing current model and auth profile. Default: false.",
+  "channels.discord.presence.template":
+    'Template for the presence activity text. Variables: {model}, {modelFull}, {authProfile}, {provider}. Default: "{model} • {authProfile}".',
+  "channels.discord.presence.activityType":
+    "Discord activity type: 0=Playing, 1=Streaming, 2=Listening, 3=Watching, 4=Custom, 5=Competing. Default: 4 (Custom).",
+  "channels.discord.presence.status":
+    "Bot status: online, idle, dnd, or invisible. Default: online.",
   "channels.slack.dm.policy":
     'Direct message access control ("pairing" recommended). "open" requires channels.slack.dm.allowFrom=["*"].',
 };
