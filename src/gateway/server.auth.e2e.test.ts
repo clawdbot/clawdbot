@@ -255,7 +255,7 @@ describe("gateway server auth/connect", () => {
         },
       });
       expect(res.ok).toBe(false);
-      expect(res.error?.message ?? "").toContain("Control UI settings");
+      expect(res.error?.message ?? "").toContain("Overview → Gateway Access");
       ws.close();
     });
 
