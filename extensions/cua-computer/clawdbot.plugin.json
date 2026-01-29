@@ -1,0 +1,22 @@
+{
+  "id": "cua-computer",
+  "name": "Cua Computer",
+  "description": "GUI automation via cua-computer-server - screenshots, clicks, typing, scrolling",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "serverUrl": {
+        "type": "string",
+        "description": "computer-server URL (default: http://localhost:8000)"
+      }
+    }
+  },
+  "uiHints": {
+    "serverUrl": {
+      "label": "Server URL",
+      "placeholder": "http://localhost:8000",
+      "help": "URL of the cua-computer-server instance"
+    }
+  }
+}

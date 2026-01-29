@@ -1,0 +1,6 @@
+{
+  "name": "@clawdbot/plugin-cua-computer",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.ts"
+}
