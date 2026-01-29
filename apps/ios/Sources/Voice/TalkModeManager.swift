@@ -44,14 +44,16 @@ final class TalkModeManager: NSObject {
     var mp3Player: StreamingAudioPlaying = StreamingAudioPlayer.shared
 
     private var gateway: GatewayNodeSession?
+    private var supportsChatSubscribe: Bool = true
     private let silenceWindow: TimeInterval = 0.7
 
     private var chatSubscribedSessionKeys = Set<String>()
 
     private let logger = Logger(subsystem: "bot.molt", category: "TalkMode")
 
-    func attachGateway(_ gateway: GatewayNodeSession) {
+    func attachGateway(_ gateway: GatewayNodeSession, supportsChatSubscribe: Bool = true) {
         self.gateway = gateway
+        self.supportsChatSubscribe = supportsChatSubscribe
     }
 
     func updateMainSessionKey(_ sessionKey: String?) {
@@ -296,6 +298,7 @@ final class TalkModeManager: NSObject {
     }
 
     private func subscribeChatIfNeeded(sessionKey: String) async {
+        guard self.supportsChatSubscribe else { return }
         let key = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return }
         guard let gateway else { return }
@@ -308,6 +311,7 @@ final class TalkModeManager: NSObject {
     }
 
     private func unsubscribeAllChats() async {
+        guard self.supportsChatSubscribe else { return }
         guard let gateway else { return }
         let keys = self.chatSubscribedSessionKeys
         self.chatSubscribedSessionKeys.removeAll()

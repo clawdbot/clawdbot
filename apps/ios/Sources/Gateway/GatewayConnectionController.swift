@@ -205,7 +205,8 @@ final class GatewayConnectionController {
         password: String?)
     {
         guard let appModel else { return }
-        let connectOptions = self.makeConnectOptions()
+        let nodeConnectOptions = self.makeNodeConnectOptions()
+        let operatorConnectOptions = self.makeOperatorConnectOptions()
 
         Task { [weak self] in
             guard let self else { return }
@@ -218,7 +219,8 @@ final class GatewayConnectionController {
                 tls: tls,
                 token: token,
                 password: password,
-                connectOptions: connectOptions)
+                nodeConnectOptions: nodeConnectOptions,
+                operatorConnectOptions: operatorConnectOptions)
         }
     }
 
@@ -273,7 +275,7 @@ final class GatewayConnectionController {
         "manual|\(host.lowercased())|\(port)"
     }
 
-    private func makeConnectOptions() -> GatewayConnectOptions {
+    private func makeNodeConnectOptions() -> GatewayConnectOptions {
         let defaults = UserDefaults.standard
         let displayName = self.resolvedDisplayName(defaults: defaults)
 
@@ -285,6 +287,21 @@ final class GatewayConnectionController {
             permissions: [:],
             clientId: "moltbot-ios",
             clientMode: "node",
+            clientDisplayName: displayName)
+    }
+
+    private func makeOperatorConnectOptions() -> GatewayConnectOptions {
+        let defaults = UserDefaults.standard
+        let displayName = self.resolvedDisplayName(defaults: defaults)
+
+        return GatewayConnectOptions(
+            role: "operator",
+            scopes: [],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "clawdbot-ios",
+            clientMode: "ui",
             clientDisplayName: displayName)
     }
 

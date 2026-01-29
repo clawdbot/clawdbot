@@ -52,7 +52,7 @@ struct RootCanvas: View {
                 SettingsTab()
             case .chat:
                 ChatSheet(
-                    gateway: self.appModel.gatewaySession,
+                    gateway: self.appModel.operatorGatewaySession,
                     sessionKey: self.appModel.mainSessionKey,
                     userAccent: self.appModel.seamColor)
             }

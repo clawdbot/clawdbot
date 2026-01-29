@@ -8,7 +8,7 @@ struct ChatSheet: View {
     private let userAccent: Color?
 
     init(gateway: GatewayNodeSession, sessionKey: String, userAccent: Color? = nil) {
-        let transport = IOSGatewayChatTransport(gateway: gateway)
+        let transport = IOSGatewayChatTransport(gateway: gateway, supportsChatSubscribe: false)
         self._viewModel = State(
             initialValue: MoltbotChatViewModel(
                 sessionKey: sessionKey,

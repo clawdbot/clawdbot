@@ -33,7 +33,16 @@ const APPROVALS_SCOPE = "operator.approvals";
 const PAIRING_SCOPE = "operator.pairing";
 
 const APPROVAL_METHODS = new Set(["exec.approval.request", "exec.approval.resolve"]);
-const NODE_ROLE_METHODS = new Set(["node.invoke.result", "node.event", "skills.bins"]);
+const NODE_ROLE_METHODS = new Set([
+  "node.invoke.result",
+  "node.event",
+  "skills.bins",
+  // Allow node role to access chat for iOS/mobile chat UI
+  "chat.history",
+  "chat.send",
+  "chat.abort",
+  "sessions.list",
+]);
 const PAIRING_METHODS = new Set([
   "node.pair.request",
   "node.pair.list",

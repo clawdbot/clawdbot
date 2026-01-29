@@ -67,6 +67,7 @@ struct SettingsTab: View {
                 Section("Gateway") {
                     LabeledContent("Discovery", value: self.gatewayController.discoveryStatusText)
                     LabeledContent("Status", value: self.appModel.gatewayStatusText)
+                    LabeledContent("Operator Status", value: self.appModel.operatorGatewayStatusText)
                     if let serverName = self.appModel.gatewayServerName {
                         LabeledContent("Server", value: serverName)
                         if let addr = self.appModel.gatewayRemoteAddress {

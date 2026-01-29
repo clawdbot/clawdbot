@@ -5,9 +5,11 @@ import Foundation
 
 struct IOSGatewayChatTransport: MoltbotChatTransport, Sendable {
     private let gateway: GatewayNodeSession
+    private let supportsChatSubscribe: Bool
 
-    init(gateway: GatewayNodeSession) {
+    init(gateway: GatewayNodeSession, supportsChatSubscribe: Bool = true) {
         self.gateway = gateway
+        self.supportsChatSubscribe = supportsChatSubscribe
     }
 
     func abortRun(sessionKey: String, runId: String) async throws {
@@ -33,6 +35,7 @@ struct IOSGatewayChatTransport: MoltbotChatTransport, Sendable {
     }
 
     func setActiveSessionKey(_ sessionKey: String) async throws {
+        guard self.supportsChatSubscribe else { return }
         struct Subscribe: Codable { var sessionKey: String }
         let data = try JSONEncoder().encode(Subscribe(sessionKey: sessionKey))
         let json = String(data: data, encoding: .utf8)
