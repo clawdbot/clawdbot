@@ -100,6 +100,12 @@ export const AgentDefaultsSchema = z
           })
           .strict()
           .optional(),
+        contextRecovery: z
+          .object({
+            messages: z.number().int().nonnegative().max(50).optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

@@ -30,6 +30,7 @@ import {
 } from "./agent-runner-helpers.js";
 import { runMemoryFlushIfNeeded } from "./agent-runner-memory.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
+import { checkContextRecoveryNeeded, recoverContext } from "./context-recovery.js";
 import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-utils.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveBlockStreamingCoalescing } from "./block-streaming.js";
@@ -212,6 +213,42 @@ export async function runReplyAgent(params: {
     storePath,
     isHeartbeat,
   });
+
+  // Context recovery: inject recent messages after compaction
+  if (sessionKey && !isHeartbeat) {
+    const recoveryCheck = checkContextRecoveryNeeded({
+      cfg,
+      sessionEntry: activeSessionEntry,
+    });
+
+    if (recoveryCheck.needed) {
+      const recoveryResult = await recoverContext({
+        sessionKey,
+        messageCount: recoveryCheck.messageCount,
+      });
+
+      if (recoveryResult.ok && recoveryResult.contextBlock) {
+        // Prepend recovered context to extraSystemPrompt
+        const existingPrompt = followupRun.run.extraSystemPrompt;
+        followupRun.run.extraSystemPrompt = existingPrompt
+          ? `${recoveryResult.contextBlock}\n\n${existingPrompt}`
+          : recoveryResult.contextBlock;
+
+        // Update session to track that we've recovered for this compaction
+        if (activeSessionEntry && activeSessionStore && storePath) {
+          activeSessionEntry.lastContextRecoveryCompactionCount = recoveryCheck.compactionCount;
+          activeSessionStore[sessionKey] = activeSessionEntry;
+          await updateSessionStoreEntry({
+            storePath,
+            sessionKey,
+            update: async () => ({
+              lastContextRecoveryCompactionCount: recoveryCheck.compactionCount,
+            }),
+          });
+        }
+      }
+    }
+  }
 
   const runFollowupTurn = createFollowupRunner({
     opts,

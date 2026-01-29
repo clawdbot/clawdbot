@@ -248,6 +248,8 @@ export type AgentCompactionConfig = {
   maxHistoryShare?: number;
   /** Pre-compaction memory flush (agentic turn). Default: enabled. */
   memoryFlush?: AgentCompactionMemoryFlushConfig;
+  /** Auto-recover recent messages from session history after compaction. */
+  contextRecovery?: AgentCompactionContextRecoveryConfig;
 };
 
 export type AgentCompactionMemoryFlushConfig = {
@@ -259,4 +261,9 @@ export type AgentCompactionMemoryFlushConfig = {
   prompt?: string;
   /** System prompt appended for the memory flush turn. */
   systemPrompt?: string;
+};
+
+export type AgentCompactionContextRecoveryConfig = {
+  /** Number of recent messages to recover from session history after compaction (0 = disabled). Default: 0. */
+  messages?: number;
 };
