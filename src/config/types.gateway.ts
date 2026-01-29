@@ -191,6 +191,19 @@ export type GatewayHttpConfig = {
   endpoints?: GatewayHttpEndpointsConfig;
 };
 
+/**
+ * Health endpoint configuration for container orchestration.
+ * Provides K8s-style liveness/readiness probes.
+ */
+export type GatewayHealthConfig = {
+  /** Enable health endpoints (default: true). */
+  enabled?: boolean;
+  /** Base path for health endpoints (default: ""). */
+  basePath?: string;
+  /** Require auth for /health/deep (default: true). */
+  deepAuthRequired?: boolean;
+};
+
 export type GatewayNodesConfig = {
   /** Browser routing policy for node-hosted browser proxies. */
   browser?: {
@@ -233,6 +246,8 @@ export type GatewayConfig = {
   tls?: GatewayTlsConfig;
   http?: GatewayHttpConfig;
   nodes?: GatewayNodesConfig;
+  /** Health endpoint configuration for K8s/container probes. */
+  health?: GatewayHealthConfig;
   /**
    * IPs of trusted reverse proxies (e.g. Traefik, nginx). When a connection
    * arrives from one of these IPs, the Gateway trusts `x-forwarded-for` (or

@@ -10,6 +10,8 @@ import type { WebSocketServer } from "ws";
 import { handleA2uiHttpRequest } from "../canvas-host/a2ui.js";
 import type { CanvasHostHandler } from "../canvas-host/server.js";
 import { loadConfig } from "../config/config.js";
+import type { GatewayHealthConfig } from "../config/types.gateway.js";
+import { createHealthEndpointsHandler, type HealthEndpointsHandler } from "./http-health.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { handleSlackHttpRequest } from "../slack/http/index.js";
 import { resolveAgentAvatar } from "../agents/identity-avatar.js";
@@ -211,6 +213,7 @@ export function createGatewayHttpServer(opts: {
   handlePluginRequest?: HooksRequestHandler;
   resolvedAuth: import("./auth.js").ResolvedGatewayAuth;
   tlsOptions?: TlsOptions;
+  healthConfig?: GatewayHealthConfig;
 }): HttpServer {
   const {
     canvasHost,
@@ -222,7 +225,14 @@ export function createGatewayHttpServer(opts: {
     handleHooksRequest,
     handlePluginRequest,
     resolvedAuth,
+    healthConfig,
   } = opts;
+
+  // Create health endpoints handler
+  const handleHealthRequest: HealthEndpointsHandler = createHealthEndpointsHandler({
+    config: healthConfig,
+    resolvedAuth,
+  });
   const httpServer: HttpServer = opts.tlsOptions
     ? createHttpsServer(opts.tlsOptions, (req, res) => {
         void handleRequest(req, res);
@@ -238,6 +248,10 @@ export function createGatewayHttpServer(opts: {
     try {
       const configSnapshot = loadConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
+
+      // Health endpoints for container orchestration (early, minimal auth)
+      if (await handleHealthRequest(req, res)) return;
+
       if (await handleHooksRequest(req, res)) return;
       if (
         await handleToolsInvokeHttpRequest(req, res, {
