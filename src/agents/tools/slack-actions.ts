@@ -214,13 +214,22 @@ export async function handleSlackAction(
           typeof limitRaw === "number" && Number.isFinite(limitRaw) ? limitRaw : undefined;
         const before = readStringParam(params, "before");
         const after = readStringParam(params, "after");
-        const threadId = readStringParam(params, "threadId");
+        const explicitThreadId = readStringParam(params, "threadId");
+        // Auto-inject threadId from context when reading from current channel in a thread.
+        // For reads, always inject if we're in a thread context and reading from the same channel.
+        let threadId = explicitThreadId ?? undefined;
+        if (!threadId && context?.currentThreadTs && context?.currentChannelId) {
+          const parsedTarget = parseSlackTarget(channelId, { defaultKind: "channel" });
+          if (parsedTarget?.kind === "channel" && parsedTarget.id === context.currentChannelId) {
+            threadId = context.currentThreadTs;
+          }
+        }
         const result = await readSlackMessages(channelId, {
           ...readOpts,
           limit,
           before: before ?? undefined,
           after: after ?? undefined,
-          threadId: threadId ?? undefined,
+          threadId,
         });
         const messages = result.messages.map((message) =>
           withNormalizedTimestamp(

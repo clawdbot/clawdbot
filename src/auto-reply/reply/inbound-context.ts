@@ -29,6 +29,7 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
   normalized.CommandBody = normalizeTextField(normalized.CommandBody);
   normalized.Transcript = normalizeTextField(normalized.Transcript);
   normalized.ThreadStarterBody = normalizeTextField(normalized.ThreadStarterBody);
+  normalized.ThreadRepliesBody = normalizeTextField(normalized.ThreadRepliesBody);
 
   const chatType = normalizeChatType(normalized.ChatType);
   if (chatType && (opts.forceChatType || normalized.ChatType !== chatType)) {

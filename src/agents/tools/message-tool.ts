@@ -112,6 +112,12 @@ function buildFetchSchema() {
     around: Type.Optional(Type.String()),
     fromMe: Type.Optional(Type.Boolean()),
     includeArchived: Type.Optional(Type.Boolean()),
+    threadId: Type.Optional(
+      Type.String({
+        description:
+          "Thread ID (ts) to read replies from. Required for reading Slack thread messages.",
+      }),
+    ),
   };
 }
 
