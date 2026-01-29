@@ -20,7 +20,7 @@ const PROVIDER_FILTER_THRESHOLD = 30;
 // Models that are internal routing features and should not be shown in selection lists.
 // These may be valid as defaults (e.g., set automatically during auth flow) but are not
 // directly callable via API and would cause "Unknown model" errors if selected manually.
-const HIDDEN_ROUTER_MODELS = new Set(["openrouter/auto"]);
+const HIDDEN_ROUTER_MODELS = new Set(["openrouter/auto", "openrouter/openrouter/auto"]);
 
 type PromptDefaultModelParams = {
   config: MoltbotConfig;
