@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { agentCommand } from "../../commands/agent.js";
 import { listAgentIds } from "../../agents/agent-scope.js";
 import { loadConfig } from "../../config/config.js";
+import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveExplicitAgentSessionKey,
@@ -138,6 +139,13 @@ export const agentHandlers: GatewayRequestHandlers = {
         return;
       }
     }
+
+    // Inject timestamp into messages that don't already have one.
+    // Channel messages (Discord, Telegram, etc.) get timestamps via envelope
+    // formatting in a separate code path — they never reach this handler.
+    // See: https://github.com/moltbot/moltbot/issues/3658
+    message = injectTimestamp(message, timestampOptsFromConfig(cfg));
+
     const isKnownGatewayChannel = (value: string): boolean => isGatewayMessageChannel(value);
     const channelHints = [request.channel, request.replyChannel]
       .filter((value): value is string => typeof value === "string")

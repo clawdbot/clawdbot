@@ -5,6 +5,7 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig, resolveIdentityName } from "../../agents/identity.js";
+import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
@@ -443,9 +444,14 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       const commandBody = injectThinking ? `/think ${p.thinking} ${parsedMessage}` : parsedMessage;
       const clientInfo = client?.connect?.client;
+      // Inject timestamp so agents know the current date/time.
+      // Only BodyForAgent gets the timestamp — Body stays raw for UI display.
+      // See: https://github.com/moltbot/moltbot/issues/3658
+      const stampedMessage = injectTimestamp(parsedMessage, timestampOptsFromConfig(cfg));
+
       const ctx: MsgContext = {
         Body: parsedMessage,
-        BodyForAgent: parsedMessage,
+        BodyForAgent: stampedMessage,
         BodyForCommands: commandBody,
         RawBody: parsedMessage,
         CommandBody: commandBody,

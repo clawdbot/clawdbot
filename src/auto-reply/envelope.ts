@@ -97,7 +97,7 @@ function formatUtcTimestamp(date: Date): string {
   return `${yyyy}-${mm}-${dd}T${hh}:${min}Z`;
 }
 
-function formatZonedTimestamp(date: Date, timeZone?: string): string | undefined {
+export function formatZonedTimestamp(date: Date, timeZone?: string): string | undefined {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone,
     year: "numeric",
