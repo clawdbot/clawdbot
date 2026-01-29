@@ -46,6 +46,7 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
   program.configureHelp({
     optionTerm: (option) => theme.option(option.flags),
     subcommandTerm: (cmd) => theme.command(cmd.name()),
+    sortSubcommands: true,
   });
 
   program.configureOutput({
