@@ -5,6 +5,7 @@ import {
   type SkillStatusEntry,
   type SkillStatusReport,
 } from "../agents/skills-status.js";
+import { installSkill } from "../agents/skills-install.js";
 import { loadConfig } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -385,6 +386,56 @@ export function registerSkillsCli(program: Command) {
         const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
         const report = buildWorkspaceSkillStatus(workspaceDir, { config });
         defaultRuntime.log(formatSkillsCheck(report, opts));
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  skills
+    .command("install")
+    .description("Install skill dependencies")
+    .argument("<name>", "Skill name")
+    .action(async (name) => {
+      try {
+        const config = loadConfig();
+        const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+        const report = buildWorkspaceSkillStatus(workspaceDir, { config });
+
+        const skill = report.skills.find(
+          (s) => s.name === name || s.skillKey === name,
+        );
+        if (!skill) {
+          defaultRuntime.error(`Skill not found: ${name}`);
+          defaultRuntime.exit(1);
+          return;
+        }
+
+        if (skill.install.length === 0) {
+          defaultRuntime.log(`No installers available for ${name}`);
+          return;
+        }
+
+        // Use the first (preferred) installer
+        const installId = skill.install[0].id;
+        const kind = skill.install[0].kind;
+
+        defaultRuntime.log(`Installing ${name} (${kind})...`);
+
+        const result = await installSkill({
+          workspaceDir,
+          skillName: skill.name,
+          installId,
+          config,
+        });
+
+        if (result.ok) {
+          defaultRuntime.log(theme.success(`Successfully installed ${name}`));
+        } else {
+          defaultRuntime.error(`Installation failed: ${result.message}`);
+          if (result.stderr) defaultRuntime.error(result.stderr);
+          defaultRuntime.exit(1);
+        }
       } catch (err) {
         defaultRuntime.error(String(err));
         defaultRuntime.exit(1);
