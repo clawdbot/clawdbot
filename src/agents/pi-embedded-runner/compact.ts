@@ -69,6 +69,7 @@ import type { EmbeddedPiCompactResult } from "./types.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { describeUnknownError, mapThinkingLevel, resolveExecToolDefaults } from "./utils.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 
 export type CompactEmbeddedPiSessionParams = {
   sessionId: string;
@@ -424,6 +425,22 @@ export async function compactEmbeddedPiSessionDirect(
         if (limited.length > 0) {
           session.agent.replaceMessages(limited);
         }
+
+        // Run before_compaction hooks
+        const hookRunner = getGlobalHookRunner();
+        const messageCountBefore = session.messages.length;
+        if (hookRunner?.hasHooks("before_compaction")) {
+          await hookRunner.runBeforeCompaction(
+            { messageCount: messageCountBefore, tokenCount: undefined },
+            {
+              agentId: sessionAgentId,
+              sessionKey: params.sessionKey,
+              workspaceDir: effectiveWorkspace,
+              messageProvider: runtimeChannel,
+            },
+          );
+        }
+
         const result = await session.compact(params.customInstructions);
         // Estimate tokens after compaction by summing token estimates for remaining messages
         let tokensAfter: number | undefined;
@@ -440,6 +457,27 @@ export async function compactEmbeddedPiSessionDirect(
           // If estimation fails, leave tokensAfter undefined
           tokensAfter = undefined;
         }
+
+        // Run after_compaction hooks (fire-and-forget)
+        if (hookRunner?.hasHooks("after_compaction")) {
+          void hookRunner.runAfterCompaction(
+            {
+              messageCount: session.messages.length,
+              tokenCount: tokensAfter,
+              compactedCount: messageCountBefore - session.messages.length,
+              summary: result.summary,
+              sessionId: params.sessionId,
+              sessionKey: params.sessionKey,
+            },
+            {
+              agentId: sessionAgentId,
+              sessionKey: params.sessionKey,
+              workspaceDir: effectiveWorkspace,
+              messageProvider: runtimeChannel,
+            },
+          );
+        }
+
         return {
           ok: true,
           compacted: true,

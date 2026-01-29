@@ -339,6 +339,12 @@ export type PluginHookAfterCompactionEvent = {
   messageCount: number;
   tokenCount?: number;
   compactedCount: number;
+  /** Compacted summary text - essential for memory plugins */
+  summary: string;
+  /** Session identifier */
+  sessionId?: string;
+  /** Session key for context */
+  sessionKey?: string;
 };
 
 // Message context
