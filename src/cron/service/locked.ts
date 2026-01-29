@@ -1,4 +1,11 @@
-import type { CronServiceState } from "./state.js";
+/**
+ * Minimal interface for locking operations.
+ * Both CronServiceState and BullMQCronServiceState satisfy this.
+ */
+export type LockableState = {
+  deps: { storePath: string };
+  op: Promise<unknown>;
+};
 
 const storeLocks = new Map<string, Promise<void>>();
 
@@ -8,7 +15,7 @@ const resolveChain = (promise: Promise<unknown>) =>
     () => undefined,
   );
 
-export async function locked<T>(state: CronServiceState, fn: () => Promise<T>): Promise<T> {
+export async function locked<T>(state: LockableState, fn: () => Promise<T>): Promise<T> {
   const storePath = state.deps.storePath;
   const storeOp = storeLocks.get(storePath) ?? Promise.resolve();
   const next = Promise.all([resolveChain(state.op), resolveChain(storeOp)]).then(fn);

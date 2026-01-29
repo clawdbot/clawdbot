@@ -1,6 +1,7 @@
 import * as ops from "./service/ops.js";
 import { type CronServiceDeps, createCronServiceState } from "./service/state.js";
 import type { CronJobCreate, CronJobPatch } from "./types.js";
+import { readCronRunLogEntries, resolveCronRunLogPath } from "./run-log.js";
 
 export type { CronEvent, CronServiceDeps } from "./service/state.js";
 
@@ -44,5 +45,16 @@ export class CronService {
 
   wake(opts: { mode: "now" | "next-heartbeat"; text: string }) {
     return ops.wakeNow(this.state, opts);
+  }
+
+  async getJobRuns(jobId: string, limit: number) {
+    const logPath = resolveCronRunLogPath({
+      storePath: this.state.deps.storePath,
+      jobId,
+    });
+    return await readCronRunLogEntries(logPath, {
+      limit,
+      jobId,
+    });
   }
 }

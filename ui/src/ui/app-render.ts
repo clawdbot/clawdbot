@@ -320,6 +320,7 @@ export function renderApp(state: AppViewState) {
               channelMeta: state.channelsSnapshot?.channelMeta ?? [],
               runsJobId: state.cronRunsJobId,
               runs: state.cronRuns,
+              expandedRuns: state.cronExpandedRuns,
               onFormChange: (patch) => (state.cronForm = { ...state.cronForm, ...patch }),
               onRefresh: () => state.loadCron(),
               onAdd: () => addCronJob(state),
@@ -327,6 +328,14 @@ export function renderApp(state: AppViewState) {
               onRun: (job) => runCronJob(state, job),
               onRemove: (job) => removeCronJob(state, job),
               onLoadRuns: (jobId) => loadCronRuns(state, jobId),
+              onToggleRunExpand: (runKey) => {
+                if (state.cronExpandedRuns.has(runKey)) {
+                  state.cronExpandedRuns.delete(runKey);
+                } else {
+                  state.cronExpandedRuns.add(runKey);
+                }
+                state.cronExpandedRuns = new Set(state.cronExpandedRuns);
+              },
             })
           : nothing}
 

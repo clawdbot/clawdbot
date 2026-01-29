@@ -212,6 +212,7 @@ export class MoltbotApp extends LitElement {
   @state() cronRunsJobId: string | null = null;
   @state() cronRuns: CronRunLogEntry[] = [];
   @state() cronBusy = false;
+  @state() cronExpandedRuns = new Set<string>();
 
   @state() skillsLoading = false;
   @state() skillsReport: SkillStatusReport | null = null;

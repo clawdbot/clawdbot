@@ -1,12 +1,26 @@
 import { migrateLegacyCronPayload } from "../payload-migration.js";
 import { loadCronStore, saveCronStore } from "../store.js";
-import type { CronJob } from "../types.js";
+import type { CronJob, CronStoreFile } from "../types.js";
 import { inferLegacyName, normalizeOptionalText } from "./normalize.js";
-import type { CronServiceState } from "./state.js";
+import type { Logger } from "./state.js";
+
+/**
+ * Minimal interface for store operations.
+ * Both CronServiceState and BullMQCronServiceState satisfy this.
+ */
+export type StoreState = {
+  deps: {
+    storePath: string;
+    cronEnabled: boolean;
+    log: Logger;
+  };
+  store: CronStoreFile | null;
+  warnedDisabled: boolean;
+};
 
 const storeCache = new Map<string, { version: 1; jobs: CronJob[] }>();
 
-export async function ensureLoaded(state: CronServiceState) {
+export async function ensureLoaded(state: StoreState) {
   if (state.store) return;
   const cached = storeCache.get(state.deps.storePath);
   if (cached) {
@@ -46,7 +60,7 @@ export async function ensureLoaded(state: CronServiceState) {
   if (mutated) await persist(state);
 }
 
-export function warnIfDisabled(state: CronServiceState, action: string) {
+export function warnIfDisabled(state: StoreState, action: string) {
   if (state.deps.cronEnabled) return;
   if (state.warnedDisabled) return;
   state.warnedDisabled = true;
@@ -56,7 +70,7 @@ export function warnIfDisabled(state: CronServiceState, action: string) {
   );
 }
 
-export async function persist(state: CronServiceState) {
+export async function persist(state: StoreState) {
   if (!state.store) return;
   await saveCronStore(state.deps.storePath, state.store);
 }

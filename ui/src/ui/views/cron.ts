@@ -22,6 +22,7 @@ export type CronProps = {
   channelMeta?: ChannelUiMetaEntry[];
   runsJobId: string | null;
   runs: CronRunLogEntry[];
+  expandedRuns: Set<string>;
   onFormChange: (patch: Partial<CronFormState>) => void;
   onRefresh: () => void;
   onAdd: () => void;
@@ -29,6 +30,7 @@ export type CronProps = {
   onRun: (job: CronJob) => void;
   onRemove: (job: CronJob) => void;
   onLoadRuns: (jobId: string) => void;
+  onToggleRunExpand: (runKey: string) => void;
 };
 
 function buildChannelOptions(props: CronProps): string[] {
@@ -293,7 +295,7 @@ export function renderCron(props: CronProps) {
           ? html`<div class="muted" style="margin-top: 12px;">No runs yet.</div>`
           : html`
               <div class="list" style="margin-top: 12px;">
-                ${props.runs.map((entry) => renderRun(entry))}
+                ${props.runs.map((entry) => renderRun(entry, props))}
               </div>
             `}
     </section>
@@ -434,18 +436,103 @@ function renderJob(job: CronJob, props: CronProps) {
   `;
 }
 
-function renderRun(entry: CronRunLogEntry) {
+function renderRun(entry: CronRunLogEntry, props: CronProps) {
+  const runKey = `${entry.jobId}-${entry.ts}`;
+  const isExpanded = props.expandedRuns.has(runKey);
+  const hasOutput = Boolean(entry.outputText && entry.outputText.trim());
+  const hasError = Boolean(entry.error && entry.error.trim());
+  const hasSummary = Boolean(entry.summary && entry.summary.trim());
+
+  // Try to parse outputText as JSON for better formatting
+  let formattedOutput = entry.outputText || entry.summary || "";
+  let isJson = false;
+  if (formattedOutput) {
+    try {
+      const parsed = JSON.parse(formattedOutput);
+      formattedOutput = JSON.stringify(parsed, null, 2);
+      isJson = true;
+    } catch {
+      // Not JSON, use as-is
+    }
+  }
+
   return html`
-    <div class="list-item">
-      <div class="list-main">
-        <div class="list-title">${entry.status}</div>
-        <div class="list-sub">${entry.summary ?? ""}</div>
+    <div class="list-item" style="display: block;">
+      <div style="display: flex; align-items: start; gap: 16px;">
+        <div class="list-main" style="flex: 1;">
+          <div class="list-title">${entry.status}</div>
+          <div class="list-sub">${entry.summary ?? ""}</div>
+        </div>
+        <div class="list-meta">
+          <div>${formatMs(entry.ts)}</div>
+          <div class="muted">${entry.durationMs ?? 0}ms</div>
+          ${hasError && !isExpanded ? html`<div class="muted">${entry.error}</div>` : nothing}
+        </div>
       </div>
-      <div class="list-meta">
-        <div>${formatMs(entry.ts)}</div>
-        <div class="muted">${entry.durationMs ?? 0}ms</div>
-        ${entry.error ? html`<div class="muted">${entry.error}</div>` : nothing}
-      </div>
+      ${hasOutput || hasError || hasSummary
+        ? html`
+            <div style="margin-top: 8px;">
+              <button
+                class="btn"
+                style="font-size: 0.75rem; padding: 4px 8px;"
+                @click=${() => props.onToggleRunExpand(runKey)}
+              >
+                ${isExpanded ? "▼ Hide full log" : "▶ Show full log"}
+              </button>
+            </div>
+            ${isExpanded
+              ? html`
+                  <div
+                    style="margin-top: 8px; background: var(--bg-secondary, #18181b); border: 1px solid var(--border-color, #27272a); border-radius: 4px; padding: 12px; font-family: monospace; font-size: 0.75rem; white-space: pre-wrap; word-break: break-word; max-height: 600px; overflow-y: auto; line-height: 1.4;"
+                  >
+                    ${formattedOutput}
+                  </div>
+                  <div
+                    style="display: grid; grid-template-columns: auto 1fr; gap: 8px; margin-top: 8px; padding: 12px; background: var(--bg-secondary, #18181b); border: 1px solid var(--border-color, #27272a); border-radius: 4px; font-size: 0.75rem;"
+                  >
+                    <div style="color: var(--text-muted, #71717a); font-weight: 500;">Job ID:</div>
+                    <div style="font-family: monospace; word-break: break-all;">${entry.jobId}</div>
+                    <div style="color: var(--text-muted, #71717a); font-weight: 500;">Timestamp:</div>
+                    <div style="font-family: monospace;">${new Date(entry.ts).toISOString()}</div>
+                    ${entry.runAtMs
+                      ? html`
+                          <div style="color: var(--text-muted, #71717a); font-weight: 500;">
+                            Run At:
+                          </div>
+                          <div style="font-family: monospace;">
+                            ${new Date(entry.runAtMs).toISOString()}
+                          </div>
+                        `
+                      : nothing}
+                    <div style="color: var(--text-muted, #71717a); font-weight: 500;">Duration:</div>
+                    <div style="font-family: monospace;">
+                      ${entry.durationMs != null ? `${entry.durationMs}ms` : "—"}
+                    </div>
+                    <div style="color: var(--text-muted, #71717a); font-weight: 500;">Status:</div>
+                    <div style="font-family: monospace;">${entry.status || "—"}</div>
+                    ${hasError
+                      ? html`
+                          <div style="color: var(--text-muted, #71717a); font-weight: 500;">
+                            Error:
+                          </div>
+                          <div style="font-family: monospace; color: var(--text-error, #fca5a5);">
+                            ${entry.error}
+                          </div>
+                        `
+                      : nothing}
+                    ${isJson
+                      ? html`
+                          <div style="color: var(--text-muted, #71717a); font-weight: 500;">
+                            Format:
+                          </div>
+                          <div style="font-family: monospace;">JSON (auto-formatted)</div>
+                        `
+                      : nothing}
+                  </div>
+                `
+              : nothing}
+          `
+        : nothing}
     </div>
   `;
 }

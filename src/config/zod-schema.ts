@@ -228,6 +228,14 @@ export const MoltbotSchema = z
         enabled: z.boolean().optional(),
         store: z.string().optional(),
         maxConcurrentRuns: z.number().int().positive().optional(),
+        redisUrl: z.string().optional(),
+        workerConcurrency: z.number().int().positive().optional(),
+        jobRetryAttempts: z.number().int().nonnegative().optional(),
+        jobRetryDelayMs: z.number().int().positive().optional(),
+        stalledIntervalMs: z.number().int().positive().optional(),
+        maxStalledCount: z.number().int().positive().optional(),
+        completedJobsRetention: z.number().int().nonnegative().optional(),
+        failedJobsRetention: z.number().int().nonnegative().optional(),
       })
       .strict()
       .optional(),

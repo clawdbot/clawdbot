@@ -9,6 +9,7 @@ export type CronEvent = {
   status?: "ok" | "error" | "skipped";
   error?: string;
   summary?: string;
+  outputText?: string;
   nextRunAtMs?: number;
 };
 

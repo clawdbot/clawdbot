@@ -14,6 +14,7 @@ import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { handleSlackHttpRequest } from "../slack/http/index.js";
 import { resolveAgentAvatar } from "../agents/identity-avatar.js";
 import { handleControlUiAvatarRequest, handleControlUiHttpRequest } from "./control-ui.js";
+import { handleCronUiHttpRequest } from "./cron-ui.js";
 import {
   extractHookToken,
   getHookChannelError,
@@ -271,6 +272,9 @@ export function createGatewayHttpServer(opts: {
         if (await handleA2uiHttpRequest(req, res)) return;
         if (await canvasHost.handleHttpRequest(req, res)) return;
       }
+      // Cron UI - served at /ui/cron/
+      if (handleCronUiHttpRequest(req, res)) return;
+
       if (controlUiEnabled) {
         if (
           handleControlUiAvatarRequest(req, res, {

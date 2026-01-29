@@ -459,6 +459,9 @@ export type CronRunLogEntry = {
   durationMs?: number;
   error?: string;
   summary?: string;
+  outputText?: string;
+  runAtMs?: number;
+  action?: string;
 };
 
 export type SkillsStatusConfigCheck = {

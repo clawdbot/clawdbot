@@ -7,6 +7,7 @@ import type {
   CronJobPatch,
   CronPayload,
   CronPayloadPatch,
+  CronStoreFile,
 } from "../types.js";
 import {
   normalizeOptionalAgentId,
@@ -14,7 +15,19 @@ import {
   normalizePayloadToSystemText,
   normalizeRequiredName,
 } from "./normalize.js";
-import type { CronServiceState } from "./state.js";
+import type { Logger } from "./state.js";
+
+/**
+ * Minimal interface for job operations.
+ * Both CronServiceState and BullMQCronServiceState satisfy this.
+ */
+export type JobsState = {
+  deps: {
+    nowMs: () => number;
+    log: Logger;
+  };
+  store: CronStoreFile | null;
+};
 
 const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
 
@@ -27,7 +40,7 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
   }
 }
 
-export function findJobOrThrow(state: CronServiceState, id: string) {
+export function findJobOrThrow(state: JobsState, id: string) {
   const job = state.store?.jobs.find((j) => j.id === id);
   if (!job) throw new Error(`unknown cron job id: ${id}`);
   return job;
@@ -43,7 +56,7 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
   return computeNextRunAtMs(job.schedule, nowMs);
 }
 
-export function recomputeNextRuns(state: CronServiceState) {
+export function recomputeNextRuns(state: JobsState) {
   if (!state.store) return;
   const now = state.deps.nowMs();
   for (const job of state.store.jobs) {
@@ -65,7 +78,7 @@ export function recomputeNextRuns(state: CronServiceState) {
   }
 }
 
-export function nextWakeAtMs(state: CronServiceState) {
+export function nextWakeAtMs(state: JobsState) {
   const jobs = state.store?.jobs ?? [];
   const enabled = jobs.filter((j) => j.enabled && typeof j.state.nextRunAtMs === "number");
   if (enabled.length === 0) return undefined;
@@ -75,7 +88,7 @@ export function nextWakeAtMs(state: CronServiceState) {
   );
 }
 
-export function createJob(state: CronServiceState, input: CronJobCreate): CronJob {
+export function createJob(state: JobsState, input: CronJobCreate): CronJob {
   const now = state.deps.nowMs();
   const id = crypto.randomUUID();
   const job: CronJob = {

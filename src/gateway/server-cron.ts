@@ -2,6 +2,7 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { CliDeps } from "../cli/deps.js";
 import { loadConfig } from "../config/config.js";
 import { resolveAgentMainSessionKey } from "../config/sessions.js";
+import { BullMQCronService } from "../cron/bullmq/index.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { appendCronRunLog, resolveCronRunLogPath } from "../cron/run-log.js";
 import { CronService } from "../cron/service.js";
@@ -14,7 +15,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 
 export type GatewayCronState = {
-  cron: CronService;
+  cron: CronService | BullMQCronService;
   storePath: string;
   cronEnabled: boolean;
 };
@@ -43,10 +44,27 @@ export function buildGatewayCronService(params: {
     return { agentId, cfg: runtimeConfig };
   };
 
-  const cron = new CronService({
+  // Use BullMQ backend by default, or fall back to setTimeout-based if disabled
+  const useBullMQ = process.env.CLAWDBOT_CRON_BACKEND !== "timer";
+  const redisUrl = process.env.REDIS_URL || params.cfg.cron?.redisUrl;
+
+  // BullMQ queue configuration
+  const queueConfig = {
+    workerConcurrency: params.cfg.cron?.workerConcurrency,
+    jobRetryAttempts: params.cfg.cron?.jobRetryAttempts,
+    jobRetryDelayMs: params.cfg.cron?.jobRetryDelayMs,
+    stalledIntervalMs: params.cfg.cron?.stalledIntervalMs,
+    maxStalledCount: params.cfg.cron?.maxStalledCount,
+    completedJobsRetention: params.cfg.cron?.completedJobsRetention,
+    failedJobsRetention: params.cfg.cron?.failedJobsRetention,
+  };
+
+  const cronDeps = {
     storePath,
     cronEnabled,
-    enqueueSystemEvent: (text, opts) => {
+    redisUrl,
+    queueConfig,
+    enqueueSystemEvent: (text: string, opts?: { agentId?: string }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(opts?.agentId);
       const sessionKey = resolveAgentMainSessionKey({
         cfg: runtimeConfig,
@@ -55,7 +73,7 @@ export function buildGatewayCronService(params: {
       enqueueSystemEvent(text, { sessionKey });
     },
     requestHeartbeatNow,
-    runHeartbeatOnce: async (opts) => {
+    runHeartbeatOnce: async (opts?: { reason?: string }) => {
       const runtimeConfig = loadConfig();
       return await runHeartbeatOnce({
         cfg: runtimeConfig,
@@ -63,12 +81,18 @@ export function buildGatewayCronService(params: {
         deps: { ...params.deps, runtime: defaultRuntime },
       });
     },
-    runIsolatedAgentJob: async ({ job, message }) => {
+    runIsolatedAgentJob: async ({
+      job,
+      message,
+    }: {
+      job: { id: string; agentId?: string };
+      message: string;
+    }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
       return await runCronIsolatedAgentTurn({
         cfg: runtimeConfig,
         deps: params.deps,
-        job,
+        job: job as any,
         message,
         agentId,
         sessionKey: `cron:${job.id}`,
@@ -76,9 +100,9 @@ export function buildGatewayCronService(params: {
       });
     },
     log: getChildLogger({ module: "cron", storePath }),
-    onEvent: (evt) => {
+    onEvent: (evt: any) => {
       params.broadcast("cron", evt, { dropIfSlow: true });
-      if (evt.action === "finished") {
+      if (!useBullMQ && evt.action === "finished") {
         const logPath = resolveCronRunLogPath({
           storePath,
           jobId: evt.jobId,
@@ -90,6 +114,7 @@ export function buildGatewayCronService(params: {
           status: evt.status,
           error: evt.error,
           summary: evt.summary,
+          outputText: evt.outputText,
           runAtMs: evt.runAtMs,
           durationMs: evt.durationMs,
           nextRunAtMs: evt.nextRunAtMs,
@@ -98,7 +123,9 @@ export function buildGatewayCronService(params: {
         });
       }
     },
-  });
+  };
+
+  const cron = useBullMQ ? new BullMQCronService(cronDeps) : new CronService(cronDeps);
 
   return { cron, storePath, cronEnabled };
 }

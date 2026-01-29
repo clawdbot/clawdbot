@@ -33,6 +33,11 @@ export function pickLastNonEmptyTextFromPayloads(payloads: Array<{ text?: string
   return undefined;
 }
 
+export function collectFullOutput(payloads: Array<{ text?: string | undefined }>) {
+  const parts = payloads.map((p) => (p.text ?? "").trim()).filter(Boolean);
+  return parts.length > 0 ? parts.join("\n\n") : undefined;
+}
+
 /**
  * Check if all payloads are just heartbeat ack responses (HEARTBEAT_OK).
  * Returns true if delivery should be skipped because there's no real content.

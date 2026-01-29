@@ -1,5 +1,4 @@
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
-import { readCronRunLogEntries, resolveCronRunLogPath } from "../../cron/run-log.js";
 import type { CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import {
   ErrorCodes,
@@ -191,14 +190,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const logPath = resolveCronRunLogPath({
-      storePath: context.cronStorePath,
-      jobId,
-    });
-    const entries = await readCronRunLogEntries(logPath, {
-      limit: p.limit,
-      jobId,
-    });
+    const entries = await context.cron.getJobRuns(jobId, p.limit ?? 20);
     respond(true, { entries }, undefined);
   },
 };

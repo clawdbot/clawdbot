@@ -14,6 +14,7 @@ export type CronState = {
   cronRunsJobId: string | null;
   cronRuns: CronRunLogEntry[];
   cronBusy: boolean;
+  cronExpandedRuns: Set<string>;
 };
 
 export async function loadCronStatus(state: CronState) {

@@ -8,6 +8,7 @@ export type CronRunLogEntry = {
   status?: "ok" | "error" | "skipped";
   error?: string;
   summary?: string;
+  outputText?: string;
   runAtMs?: number;
   durationMs?: number;
   nextRunAtMs?: number;
