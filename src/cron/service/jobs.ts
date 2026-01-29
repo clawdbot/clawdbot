@@ -40,6 +40,12 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
     if (job.state.lastStatus === "ok" && job.state.lastRunAtMs) return undefined;
     return job.schedule.atMs;
   }
+  // For "every" jobs, anchor to lastRunAtMs to prevent drift on updates/restarts
+  if (job.schedule.kind === "every") {
+    const anchor = job.state.lastRunAtMs ?? job.schedule.anchorMs ?? nowMs;
+    return computeNextRunAtMs({ ...job.schedule, anchorMs: anchor }, nowMs);
+  }
+  // "cron" expressions are clock-based
   return computeNextRunAtMs(job.schedule, nowMs);
 }
 
