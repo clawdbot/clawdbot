@@ -20,7 +20,8 @@ export type AuthChoiceGroupId =
   | "minimax"
   | "synthetic"
   | "venice"
-  | "qwen";
+  | "qwen"
+  | "zenmux";
 
 export type AuthChoiceGroup = {
   value: AuthChoiceGroupId;
@@ -113,6 +114,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     hint: "API key",
     choices: ["opencode-zen"],
   },
+  {
+    value: "zenmux",
+    label: "ZenMux",
+    hint: "API key",
+    choices: ["zenmux-api-key"],
+  },
 ];
 
 export function buildAuthChoiceOptions(params: {
@@ -183,6 +190,7 @@ export function buildAuthChoiceOptions(params: {
     label: "MiniMax M2.1 Lightning",
     hint: "Faster, higher output cost",
   });
+  options.push({ value: "zenmux-api-key", label: "ZenMux API key" });
   if (params.includeSkip) {
     options.push({ value: "skip", label: "Skip for now" });
   }

@@ -18,6 +18,8 @@ export {
   applyVercelAiGatewayConfig,
   applyVercelAiGatewayProviderConfig,
   applyZaiConfig,
+  applyZenmuxConfig,
+  applyZenmuxProviderConfig,
 } from "./onboard-auth.config-core.js";
 export {
   applyMinimaxApiConfig,
@@ -45,9 +47,11 @@ export {
   setVeniceApiKey,
   setVercelAiGatewayApiKey,
   setZaiApiKey,
+  setZenmuxApiKey,
   writeOAuthCredentials,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
   ZAI_DEFAULT_MODEL_REF,
+  ZENMUX_DEFAULT_MODEL_REF,
 } from "./onboard-auth.credentials.js";
 export {
   buildKimiCodeModelDefinition,
