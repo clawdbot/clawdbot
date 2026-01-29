@@ -69,6 +69,7 @@ import type { EmbeddedPiCompactResult } from "./types.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { describeUnknownError, mapThinkingLevel, resolveExecToolDefaults } from "./utils.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 
 export type CompactEmbeddedPiSessionParams = {
   sessionId: string;
@@ -424,7 +425,63 @@ export async function compactEmbeddedPiSessionDirect(
         if (limited.length > 0) {
           session.agent.replaceMessages(limited);
         }
+
+        // Run before_compaction plugin hooks
+        const hookRunner = getGlobalHookRunner();
+        const messageCountBefore = session.messages.length;
+        let tokenCountBefore: number | undefined;
+        try {
+          tokenCountBefore = 0;
+          for (const message of session.messages) {
+            tokenCountBefore += estimateTokens(message);
+          }
+        } catch {
+          tokenCountBefore = undefined;
+        }
+        if (hookRunner?.hasHooks("before_compaction")) {
+          try {
+            await hookRunner.runBeforeCompaction(
+              {
+                messageCount: messageCountBefore,
+                tokenCount: tokenCountBefore,
+              },
+              {
+                agentId: sessionAgentId,
+                sessionKey: params.sessionKey,
+                workspaceDir: effectiveWorkspace,
+                messageProvider: runtimeChannel ?? undefined,
+              },
+            );
+          } catch (hookErr) {
+            log.warn(`before_compaction hook failed: ${String(hookErr)}`);
+          }
+        }
+
         const result = await session.compact(params.customInstructions);
+
+        // Run after_compaction plugin hooks
+        const messageCountAfter = session.messages.length;
+        const compactedCount = messageCountBefore - messageCountAfter;
+        if (hookRunner?.hasHooks("after_compaction")) {
+          try {
+            await hookRunner.runAfterCompaction(
+              {
+                messageCount: messageCountAfter,
+                tokenCount: result.tokensBefore, // Tokens before this specific compaction operation
+                compactedCount,
+              },
+              {
+                agentId: sessionAgentId,
+                sessionKey: params.sessionKey,
+                workspaceDir: effectiveWorkspace,
+                messageProvider: runtimeChannel ?? undefined,
+              },
+            );
+          } catch (hookErr) {
+            log.warn(`after_compaction hook failed: ${String(hookErr)}`);
+          }
+        }
+
         // Estimate tokens after compaction by summing token estimates for remaining messages
         let tokensAfter: number | undefined;
         try {
