@@ -11,6 +11,7 @@ import type { InlineDirectives } from "./directive-handling.js";
 import { isDirectiveOnly } from "./directive-handling.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { extractInlineSimpleCommand } from "./reply-inline.js";
+import { stripStructuralPrefixes } from "./mentions.js";
 import type { TypingController } from "./typing.js";
 import { listSkillCommandsForWorkspace, resolveSkillCommandInvocation } from "../skill-commands.js";
 import { logVerbose } from "../../globals.js";
@@ -297,7 +298,8 @@ export async function handleInlineActions(params: {
       skillCommands,
     });
     if (inlineResult.reply) {
-      if (!inlineCommand.cleaned) {
+      const cleanedAfterStrip = stripStructuralPrefixes(inlineCommand.cleaned);
+      if (!cleanedAfterStrip) {
         typing.cleanup();
         return { kind: "reply", reply: inlineResult.reply };
       }

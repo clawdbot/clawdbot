@@ -160,6 +160,35 @@ describe("trigger handling", () => {
       expect(text).toBe("ok");
     });
   });
+  it("returns a single reply for envelope-prefixed /help", async () => {
+    await withTempHome(async (home) => {
+      const blockReplies: Array<{ text?: string }> = [];
+      const res = await getReplyFromConfig(
+        {
+          Body: "[Signal] T: /help",
+          RawBody: "/help",
+          CommandBody: "/help",
+          From: "+1002",
+          To: "+2000",
+          Provider: "signal",
+          Surface: "signal",
+          SenderName: "T",
+          SenderId: "signal:+1002",
+          CommandAuthorized: true,
+        },
+        {
+          onBlockReply: async (payload) => {
+            blockReplies.push(payload);
+          },
+        },
+        makeCfg(home),
+      );
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(blockReplies.length).toBe(0);
+      expect(text).toContain("Help");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
   it("drops /status for unauthorized senders", async () => {
     await withTempHome(async (home) => {
       const cfg = {
