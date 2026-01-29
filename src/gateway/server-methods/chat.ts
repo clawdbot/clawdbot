@@ -506,12 +506,13 @@ export const chatHandlers: GatewayRequestHandlers = {
       })
         .then(() => {
           if (!agentRunStarted) {
+            // No agent was started, meaning this was handled as a command
             const combinedReply = finalReplyParts
               .map((part) => part.trim())
               .filter(Boolean)
               .join("\n\n")
               .trim();
-            let message: Record<string, unknown> | undefined;
+            let message: Record<string, unknown> = { command: true };
             if (combinedReply) {
               const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(
                 p.sessionKey,
@@ -525,7 +526,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                 createIfMissing: true,
               });
               if (appended.ok) {
-                message = appended.message;
+                message = { ...appended.message, command: true };
               } else {
                 context.logGateway.warn(
                   `webchat transcript append failed: ${appended.error ?? "unknown error"}`,
@@ -537,6 +538,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                   timestamp: now,
                   stopReason: "injected",
                   usage: { input: 0, output: 0, totalTokens: 0 },
+                  command: true,
                 };
               }
             }

@@ -83,6 +83,10 @@ import {
   ExecApprovalRequestParamsSchema,
   type ExecApprovalResolveParams,
   ExecApprovalResolveParamsSchema,
+  type MessageApprovalRequestParams,
+  MessageApprovalRequestParamsSchema,
+  type MessageApprovalResolveParams,
+  MessageApprovalResolveParamsSchema,
   ErrorCodes,
   type ErrorShape,
   ErrorShapeSchema,
@@ -303,6 +307,12 @@ export const validateExecApprovalRequestParams = ajv.compile<ExecApprovalRequest
 export const validateExecApprovalResolveParams = ajv.compile<ExecApprovalResolveParams>(
   ExecApprovalResolveParamsSchema,
 );
+export const validateMessageApprovalRequestParams = ajv.compile<MessageApprovalRequestParams>(
+  MessageApprovalRequestParamsSchema,
+);
+export const validateMessageApprovalResolveParams = ajv.compile<MessageApprovalResolveParams>(
+  MessageApprovalResolveParamsSchema,
+);
 export const validateExecApprovalsNodeGetParams = ajv.compile<ExecApprovalsNodeGetParams>(
   ExecApprovalsNodeGetParamsSchema,
 );
@@ -512,6 +522,8 @@ export type {
   ExecApprovalsGetParams,
   ExecApprovalsSetParams,
   ExecApprovalsSnapshot,
+  MessageApprovalRequestParams,
+  MessageApprovalResolveParams,
   LogsTailParams,
   LogsTailResult,
   PollParams,

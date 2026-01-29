@@ -2068,6 +2068,68 @@ public struct ExecApprovalResolveParams: Codable, Sendable {
     }
 }
 
+public struct MessageApprovalRequestParams: Codable, Sendable {
+    public let id: String?
+    public let action: String
+    public let channel: String
+    public let to: String
+    public let message: AnyCodable?
+    public let mediaurl: AnyCodable?
+    public let agentid: AnyCodable?
+    public let sessionkey: AnyCodable?
+    public let timeoutms: Int?
+
+    public init(
+        id: String?,
+        action: String,
+        channel: String,
+        to: String,
+        message: AnyCodable?,
+        mediaurl: AnyCodable?,
+        agentid: AnyCodable?,
+        sessionkey: AnyCodable?,
+        timeoutms: Int?
+    ) {
+        self.id = id
+        self.action = action
+        self.channel = channel
+        self.to = to
+        self.message = message
+        self.mediaurl = mediaurl
+        self.agentid = agentid
+        self.sessionkey = sessionkey
+        self.timeoutms = timeoutms
+    }
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case action
+        case channel
+        case to
+        case message
+        case mediaurl = "mediaUrl"
+        case agentid = "agentId"
+        case sessionkey = "sessionKey"
+        case timeoutms = "timeoutMs"
+    }
+}
+
+public struct MessageApprovalResolveParams: Codable, Sendable {
+    public let id: String
+    public let decision: String
+
+    public init(
+        id: String,
+        decision: String
+    ) {
+        self.id = id
+        self.decision = decision
+    }
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case decision
+    }
+}
+
 public struct DevicePairListParams: Codable, Sendable {
 }
 

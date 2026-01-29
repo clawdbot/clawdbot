@@ -45,6 +45,9 @@ import { startGatewayDiscovery } from "./server-discovery-runtime.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import { createExecApprovalHandlers } from "./server-methods/exec-approval.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
+import { MessageApprovalManager } from "./message-approval-manager.js";
+import { createMessageApprovalHandlers } from "./server-methods/message-approval.js";
+import { createMessageApprovalForwarder } from "../infra/message-approval-forwarder.js";
 import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { createChannelManager } from "./server-channels.js";
 import { createAgentEventHandler } from "./server-chat.js";
@@ -416,6 +419,12 @@ export async function startGatewayServer(
     forwarder: execApprovalForwarder,
   });
 
+  const messageApprovalManager = new MessageApprovalManager();
+  const messageApprovalForwarder = createMessageApprovalForwarder();
+  const messageApprovalHandlers = createMessageApprovalHandlers(messageApprovalManager, {
+    forwarder: messageApprovalForwarder,
+  });
+
   const canvasHostServerPort = (canvasHostServer as CanvasHostServer | null)?.port;
 
   attachGatewayWsHandlers({
@@ -434,6 +443,7 @@ export async function startGatewayServer(
     extraHandlers: {
       ...pluginRegistry.gatewayHandlers,
       ...execApprovalHandlers,
+      ...messageApprovalHandlers,
     },
     broadcast,
     context: {

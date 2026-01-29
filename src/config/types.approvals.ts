@@ -24,6 +24,28 @@ export type ExecApprovalForwardingConfig = {
   targets?: ExecApprovalForwardTarget[];
 };
 
+export type MessageApprovalForwardingMode = "session" | "targets" | "both";
+
+export type MessageApprovalForwardingConfig = {
+  /** Enable requiring human approval for outbound messages. Default: false. */
+  enabled?: boolean;
+  /** Delivery mode (session=origin chat, targets=config targets, both=both). Default: session. */
+  mode?: MessageApprovalForwardingMode;
+  /** Only require approval for these actions (e.g. ["send", "broadcast"]). Omit = all actions. */
+  actions?: string[];
+  /** Only require approval for these channels. Omit or ["*"] = all channels. */
+  channels?: string[];
+  /** Only require approval for these agent IDs. Omit = all agents. */
+  agentFilter?: string[];
+  /** Only require approval matching these session key patterns (substring or regex). */
+  sessionFilter?: string[];
+  /** Explicit delivery targets (used when mode includes targets). */
+  targets?: ExecApprovalForwardTarget[];
+  /** Approval timeout in seconds. Default: 120. */
+  timeout?: number;
+};
+
 export type ApprovalsConfig = {
   exec?: ExecApprovalForwardingConfig;
+  message?: MessageApprovalForwardingConfig;
 };

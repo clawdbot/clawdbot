@@ -43,6 +43,8 @@ import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-res
 import { loadWebMedia } from "../../web/media.js";
 import { extensionForMime } from "../../media/mime.js";
 import { parseSlackTarget } from "../../slack/targets.js";
+import type { GatewayClient } from "../../gateway/client.js";
+import { requestMessageApproval, shouldRequireMessageApproval } from "./message-approval-check.js";
 
 export type MessageActionRunnerGateway = {
   url?: string;
@@ -60,11 +62,15 @@ export type RunMessageActionParams = {
   defaultAccountId?: string;
   toolContext?: ChannelThreadingToolContext;
   gateway?: MessageActionRunnerGateway;
+  /** Connected gateway client for RPC calls (e.g., message approval requests). */
+  gatewayClient?: GatewayClient;
   deps?: OutboundSendDeps;
   sessionKey?: string;
   agentId?: string;
   dryRun?: boolean;
   abortSignal?: AbortSignal;
+  /** Skip message approval check (used for internal/already-approved calls). */
+  skipApproval?: boolean;
 };
 
 export type MessageActionRunResult =
@@ -114,6 +120,14 @@ export type MessageActionRunResult =
       payload: unknown;
       toolResult?: AgentToolResult<unknown>;
       dryRun: boolean;
+    }
+  | {
+      kind: "approval-denied";
+      channel: ChannelId;
+      action: ChannelMessageActionName;
+      handledBy: "approval-denied";
+      payload: { denied: true; reason: "timeout" | "user-denied" | "error"; error?: string };
+      dryRun: false;
     };
 
 export function getToolResult(
@@ -949,6 +963,51 @@ export async function runMessageAction(
   });
 
   const gateway = resolveGateway(input);
+
+  // Check if message approval is required
+  if (!input.skipApproval && input.gatewayClient) {
+    const targetTo = resolvedTarget?.to ?? readStringParam(params, "to") ?? "";
+    if (
+      shouldRequireMessageApproval({
+        cfg,
+        action,
+        channel,
+        agentId: resolvedAgentId,
+        sessionKey: input.sessionKey,
+      })
+    ) {
+      const message = readStringParam(params, "message") ?? readStringParam(params, "text") ?? null;
+      const mediaUrl =
+        readStringParam(params, "mediaUrl") ?? readStringParam(params, "url") ?? null;
+      const approvalResult = await requestMessageApproval({
+        cfg,
+        gateway: input.gatewayClient,
+        action,
+        channel,
+        to: targetTo,
+        message,
+        mediaUrl,
+        agentId: resolvedAgentId,
+        sessionKey: input.sessionKey,
+      });
+      if (approvalResult.decision !== "allow") {
+        // Distinguish between timeout (null decision, no error), denial (deny decision), and error (null decision with error)
+        const reason = approvalResult.error
+          ? "error"
+          : approvalResult.decision === null
+            ? "timeout"
+            : "user-denied";
+        return {
+          kind: "approval-denied",
+          channel: channel as ChannelId,
+          action,
+          handledBy: "approval-denied",
+          payload: { denied: true, reason, error: approvalResult.error },
+          dryRun: false,
+        };
+      }
+    }
+  }
 
   if (action === "send") {
     return handleSendAction({
