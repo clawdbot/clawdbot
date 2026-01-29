@@ -22,7 +22,7 @@ import {
   resolveReconnectPolicy,
   sleepWithAbort,
 } from "../reconnect.js";
-import { formatError, getWebAuthAgeMs, readWebSelfId } from "../session.js";
+import { formatError, getWebAuthAgeMs, readWebSelfId, webAuthExists } from "../session.js";
 import { DEFAULT_WEB_MEDIA_BYTES } from "./constants.js";
 import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
 import { buildMentionConfig } from "./mentions.js";
@@ -385,6 +385,12 @@ export async function monitorWebChannel(
     reconnectAttempts += 1;
     status.reconnectAttempts = reconnectAttempts;
     emitStatus();
+
+    // Recovery mode: when max attempts is reached, don't exit completely.
+    // Instead, wait longer and periodically check if auth has been refreshed
+    // (e.g., via manual `clawdbot channels login`). This enables self-healing
+    // without requiring a gateway restart.
+    const RECOVERY_CHECK_INTERVAL_MS = 30_000; // Check every 30 seconds in recovery mode
     if (reconnectPolicy.maxAttempts > 0 && reconnectAttempts >= reconnectPolicy.maxAttempts) {
       reconnectLogger.warn(
         {
@@ -393,13 +399,45 @@ export async function monitorWebChannel(
           reconnectAttempts,
           maxAttempts: reconnectPolicy.maxAttempts,
         },
-        "web reconnect: max attempts reached; continuing in degraded mode",
+        "web reconnect: max attempts reached; entering recovery mode",
       );
       runtime.error(
-        `WhatsApp Web reconnect: max attempts reached (${reconnectAttempts}/${reconnectPolicy.maxAttempts}). Stopping web monitoring.`,
+        `WhatsApp Web reconnect: max attempts reached (${reconnectAttempts}/${reconnectPolicy.maxAttempts}). ` +
+          `Entering recovery mode - will auto-resume when auth is refreshed via 'clawdbot channels login'.`,
       );
       await closeListener();
-      break;
+
+      // Recovery loop: wait and check for valid auth periodically
+      while (!stopRequested() && !sigintStop) {
+        try {
+          await sleep(RECOVERY_CHECK_INTERVAL_MS, abortSignal);
+        } catch {
+          break;
+        }
+        if (stopRequested() || sigintStop) break;
+
+        // Check if auth has been refreshed (e.g., user ran `clawdbot channels login`)
+        const authValid = await webAuthExists(account.authDir);
+        if (authValid) {
+          reconnectLogger.info(
+            { connectionId, reconnectAttempts },
+            "web reconnect: auth detected in recovery mode; resetting attempts and resuming",
+          );
+          runtime.error(
+            `WhatsApp Web: Valid auth detected. Resetting reconnect attempts and resuming monitoring.`,
+          );
+          // Reset attempts and continue the main loop to reconnect
+          reconnectAttempts = 0;
+          status.reconnectAttempts = 0;
+          status.lastError = null;
+          emitStatus();
+          break;
+        }
+      }
+      // If we exited recovery due to stop request, break out of main loop
+      if (stopRequested() || sigintStop) break;
+      // Otherwise, continue to the next iteration of the main loop to reconnect
+      continue;
     }
 
     const delay = computeBackoff(reconnectPolicy, reconnectAttempts);
