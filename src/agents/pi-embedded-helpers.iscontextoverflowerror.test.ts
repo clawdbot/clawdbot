@@ -40,6 +40,20 @@ describe("isContextOverflowError", () => {
     }
   });
 
+  it("matches 'context_overflow' with underscore format", () => {
+    // Issue #3154: Some providers return "context_overflow" (underscore) instead of
+    // "context overflow" (space). Without this fix, auto-compaction is NOT triggered.
+    // The user sees the error instead of automatic compaction + retry.
+    const samples = [
+      "context_overflow: prompt too large for the model",
+      "Context_Overflow: request exceeds limit",
+      "ERROR: context_overflow detected",
+    ];
+    for (const sample of samples) {
+      expect(isContextOverflowError(sample)).toBe(true);
+    }
+  });
+
   it("ignores unrelated errors", () => {
     expect(isContextOverflowError("rate limit exceeded")).toBe(false);
     expect(isContextOverflowError("request size exceeds upload limit")).toBe(false);
