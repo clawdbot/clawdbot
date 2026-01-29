@@ -43,9 +43,13 @@ export function buildGatewayCronService(params: {
     return { agentId, cfg: runtimeConfig };
   };
 
+  // Use userTimezone from config as default for cron schedules
+  const defaultTimezone = params.cfg.agents?.defaults?.userTimezone;
+
   const cron = new CronService({
     storePath,
     cronEnabled,
+    defaultTimezone,
     enqueueSystemEvent: (text, opts) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(opts?.agentId);
       const sessionKey = resolveAgentMainSessionKey({

@@ -24,6 +24,8 @@ export type CronServiceDeps = {
   log: Logger;
   storePath: string;
   cronEnabled: boolean;
+  /** Default timezone (IANA) for cron schedules that don't specify their own. */
+  defaultTimezone?: string;
   enqueueSystemEvent: (text: string, opts?: { agentId?: string }) => void;
   requestHeartbeatNow: (opts?: { reason?: string }) => void;
   runHeartbeatOnce?: (opts?: { reason?: string }) => Promise<HeartbeatRunResult>;

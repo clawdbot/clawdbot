@@ -33,19 +33,24 @@ export function findJobOrThrow(state: CronServiceState, id: string) {
   return job;
 }
 
-export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | undefined {
+export function computeJobNextRunAtMs(
+  job: CronJob,
+  nowMs: number,
+  opts?: { defaultTimezone?: string },
+): number | undefined {
   if (!job.enabled) return undefined;
   if (job.schedule.kind === "at") {
     // One-shot jobs stay due until they successfully finish.
     if (job.state.lastStatus === "ok" && job.state.lastRunAtMs) return undefined;
     return job.schedule.atMs;
   }
-  return computeNextRunAtMs(job.schedule, nowMs);
+  return computeNextRunAtMs(job.schedule, nowMs, { defaultTimezone: opts?.defaultTimezone });
 }
 
 export function recomputeNextRuns(state: CronServiceState) {
   if (!state.store) return;
   const now = state.deps.nowMs();
+  const defaultTimezone = state.deps.defaultTimezone;
   for (const job of state.store.jobs) {
     if (!job.state) job.state = {};
     if (!job.enabled) {
@@ -61,7 +66,7 @@ export function recomputeNextRuns(state: CronServiceState) {
       );
       job.state.runningAtMs = undefined;
     }
-    job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
+    job.state.nextRunAtMs = computeJobNextRunAtMs(job, now, { defaultTimezone });
   }
 }
 
@@ -77,6 +82,7 @@ export function nextWakeAtMs(state: CronServiceState) {
 
 export function createJob(state: CronServiceState, input: CronJobCreate): CronJob {
   const now = state.deps.nowMs();
+  const defaultTimezone = state.deps.defaultTimezone;
   const id = crypto.randomUUID();
   const job: CronJob = {
     id,
@@ -97,7 +103,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     },
   };
   assertSupportedJobSpec(job);
-  job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
+  job.state.nextRunAtMs = computeJobNextRunAtMs(job, now, { defaultTimezone });
   return job;
 }
 

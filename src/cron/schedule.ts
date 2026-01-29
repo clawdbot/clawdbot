@@ -1,7 +1,16 @@
 import { Cron } from "croner";
 import type { CronSchedule } from "./types.js";
 
-export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): number | undefined {
+export type ComputeNextRunOpts = {
+  /** Default timezone to use when schedule.tz is not specified. */
+  defaultTimezone?: string;
+};
+
+export function computeNextRunAtMs(
+  schedule: CronSchedule,
+  nowMs: number,
+  opts?: ComputeNextRunOpts,
+): number | undefined {
   if (schedule.kind === "at") {
     return schedule.atMs > nowMs ? schedule.atMs : undefined;
   }
@@ -17,8 +26,10 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
 
   const expr = schedule.expr.trim();
   if (!expr) return undefined;
+  // Use schedule.tz if specified, otherwise fall back to default timezone
+  const timezone = schedule.tz?.trim() || opts?.defaultTimezone?.trim() || undefined;
   const cron = new Cron(expr, {
-    timezone: schedule.tz?.trim() || undefined,
+    timezone,
     catch: false,
   });
   const next = cron.nextRun(new Date(nowMs));
