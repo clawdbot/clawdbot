@@ -63,8 +63,8 @@ export async function onboardCommand(opts: OnboardOptions, runtime: RuntimeEnv =
   if (process.platform === "win32") {
     runtime.log(
       [
-        "Windows detected.",
-        "WSL2 is strongly recommended; native Windows is untested and more problematic.",
+        "Windows detected — Clawdbot runs great on WSL2!",
+        "Quick setup: wsl --install (one command, one reboot)",
         "Guide: https://docs.molt.bot/windows",
       ].join("\n"),
     );
