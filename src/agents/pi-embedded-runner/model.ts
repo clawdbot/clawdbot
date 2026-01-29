@@ -68,7 +68,13 @@ export function resolveModel(
       (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
     );
     if (inlineMatch) {
-      const normalized = normalizeModelCompat(inlineMatch as Model<Api>);
+      // Ensure the api field is set from the provider config if not specified in the model
+      const providerCfg = providers[inlineMatch.provider];
+      const modelWithApi = {
+        ...inlineMatch,
+        api: inlineMatch.api ?? providerCfg?.api ?? "openai-responses",
+      } as Model<Api>;
+      const normalized = normalizeModelCompat(modelWithApi);
       return {
         model: normalized,
         authStorage,
