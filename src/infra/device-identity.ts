@@ -17,7 +17,7 @@ type StoredIdentity = {
   createdAtMs: number;
 };
 
-const DEFAULT_DIR = path.join(os.homedir(), ".clawdbot", "identity");
+const DEFAULT_DIR = path.join(os.homedir(), ".moltbot", "identity");
 const DEFAULT_FILE = path.join(DEFAULT_DIR, "device.json");
 
 function ensureDir(filePath: string) {
