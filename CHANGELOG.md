@@ -117,6 +117,7 @@ Status: beta.
 - Gateway: default auth now fail-closed (token/password required; Tailscale Serve identity remains allowed).
 - Gateway: treat loopback + non-local Host connections as remote unless trusted proxy headers are present.
 - Onboarding: remove unsupported gateway auth "off" choice from onboarding/configure flows and CLI flags.
+- Gateway: improve auth error message for native apps (macOS/iOS/Android) to clarify gateway.remote.token setup. (#2268)
 
 ## 2026.1.24-3
 
