@@ -54,6 +54,13 @@ describe("media server", () => {
     await new Promise((r) => server.close(r));
   });
 
+  it("binds to loopback by default", async () => {
+    const server = await startMediaServer(0, 5_000);
+    const addr = server.address() as AddressInfo;
+    expect(["127.0.0.1", "::1"]).toContain(addr.address);
+    await new Promise((r) => server.close(r));
+  });
+
   it("expires old media", async () => {
     const file = path.join(MEDIA_DIR, "old");
     await fs.writeFile(file, "stale");
