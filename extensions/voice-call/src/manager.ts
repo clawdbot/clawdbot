@@ -386,7 +386,10 @@ export class CallManager {
     }
 
     try {
-      await this.speak(callId, prompt);
+      const speakResult = await this.speak(callId, prompt);
+      if (!speakResult.success) {
+        return { success: false, error: speakResult.error || "Failed to speak prompt" };
+      }
 
       call.state = "listening";
       this.persistCallRecord(call);

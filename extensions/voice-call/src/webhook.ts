@@ -352,7 +352,10 @@ export class VoiceCallWebhookServer {
 
       if (result.text) {
         console.log(`[voice-call] AI response: "${result.text}"`);
-        await this.manager.speak(callId, result.text);
+        const speakResult = await this.manager.speak(callId, result.text);
+        if (!speakResult.success) {
+          console.error(`[voice-call] Failed to speak: ${speakResult.error}`);
+        }
       }
     } catch (err) {
       console.error(`[voice-call] Auto-response error:`, err);
