@@ -39,10 +39,17 @@ apps/ios/build
 **/*.trace
 
 # large app trees not needed for CLI build
-apps/
+apps/*
+!apps/shared/
+!apps/shared/ClawdbotKit/
+!apps/shared/ClawdbotKit/Tools/
+!apps/shared/ClawdbotKit/Tools/CanvasA2UI/**
 assets/
 Peekaboo/
 Swabble/
 Core/
 Users/
-vendor/
+vendor/*
+!vendor/a2ui/
+!vendor/a2ui/renderers/
+!vendor/a2ui/renderers/lit/**
