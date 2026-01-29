@@ -223,6 +223,21 @@ Suggested `.gitignore` starter:
 4. If you need sessions, copy `~/.clawdbot/agents/<agentId>/sessions/` from the
    old machine separately.
 
+## Cloud sync (remote Gateways)
+
+If your Gateway runs on a remote server (Fly.io, Hetzner, VPS), you can sync a
+workspace subfolder with your local machine using cloud storage (Dropbox, Google
+Drive, OneDrive, S3, etc.):
+
+```
+Local Machine              Cloud Provider              Remote Gateway
+~/Dropbox/clawd/    ←→    Dropbox/GDrive/etc    ←→    <workspace>/shared/
+```
+
+This lets you drop files locally and have them appear on the remote Gateway.
+
+See [Workspace cloud sync](/gateway/workspace-sync) for setup instructions.
+
 ## Advanced notes
 
 - Multi-agent routing can use different workspaces per agent. See

@@ -527,6 +527,57 @@ export const MoltbotSchema = z
       })
       .strict()
       .optional(),
+    workspace: z
+      .object({
+        sync: z
+          .object({
+            provider: z
+              .union([
+                z.literal("off"),
+                z.literal("dropbox"),
+                z.literal("gdrive"),
+                z.literal("onedrive"),
+                z.literal("s3"),
+                z.literal("custom"),
+              ])
+              .optional(),
+            remotePath: z.string().optional(),
+            localPath: z.string().optional(),
+            interval: z.number().int().nonnegative().optional(),
+            onSessionStart: z.boolean().optional(),
+            onSessionEnd: z.boolean().optional(),
+            remoteName: z.string().optional(),
+            configPath: z.string().optional(),
+            conflictResolve: z
+              .union([z.literal("newer"), z.literal("local"), z.literal("remote")])
+              .optional(),
+            exclude: z.array(z.string()).optional(),
+            copySymlinks: z.boolean().optional(),
+            s3: z
+              .object({
+                endpoint: z.string().optional(),
+                bucket: z.string().optional(),
+                region: z.string().optional(),
+                accessKeyId: z.string().optional(),
+                secretAccessKey: z.string().optional(),
+              })
+              .strict()
+              .optional(),
+            dropbox: z
+              .object({
+                appFolder: z.boolean().optional(),
+                appKey: z.string().optional(),
+                appSecret: z.string().optional(),
+                token: z.string().optional(),
+              })
+              .strict()
+              .optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((cfg, ctx) => {

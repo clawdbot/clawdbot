@@ -965,7 +965,8 @@
           "gateway/remote-gateway-readme",
           "gateway/discovery",
           "gateway/bonjour",
-          "gateway/tailscale"
+          "gateway/tailscale",
+          "gateway/workspace-sync"
         ]
       },
       {

@@ -22,6 +22,7 @@ import {
   scheduleRestartSentinelWake,
   shouldWakeFromRestartSentinel,
 } from "./server-restart-sentinel.js";
+import { startWorkspaceSyncManager } from "./workspace-sync-manager.js";
 
 export async function startGatewaySidecars(params: {
   cfg: ReturnType<typeof loadConfig>;
@@ -137,6 +138,17 @@ export async function startGatewaySidecars(params: {
       });
       void triggerInternalHook(hookEvent);
     }, 250);
+  }
+
+  // Start workspace sync manager (runs rclone in background - no LLM cost).
+  try {
+    startWorkspaceSyncManager(params.cfg, {
+      info: (msg) => params.logHooks.info(msg),
+      warn: (msg) => params.logHooks.warn(msg),
+      error: (msg) => params.logHooks.error(msg),
+    });
+  } catch (err) {
+    params.logHooks.warn(`workspace sync manager failed to start: ${String(err)}`);
   }
 
   let pluginServices: PluginServicesHandle | null = null;
