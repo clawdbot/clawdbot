@@ -69,7 +69,7 @@ export function renderOverview(props: OverviewProps) {
             class="session-link"
             href="https://docs.molt.bot/web/dashboard"
             target="_blank"
-            rel="noreferrer"
+            rel="noopener noreferrer"
             title="Control UI auth docs (opens in new tab)"
             >Docs: Control UI auth</a
           >
@@ -98,7 +98,7 @@ export function renderOverview(props: OverviewProps) {
             class="session-link"
             href="https://docs.molt.bot/gateway/tailscale"
             target="_blank"
-            rel="noreferrer"
+            rel="noopener noreferrer"
             title="Tailscale Serve docs (opens in new tab)"
             >Docs: Tailscale Serve</a
           >
@@ -107,7 +107,7 @@ export function renderOverview(props: OverviewProps) {
             class="session-link"
             href="https://docs.molt.bot/web/control-ui#insecure-http"
             target="_blank"
-            rel="noreferrer"
+            rel="noopener noreferrer"
             title="Insecure HTTP docs (opens in new tab)"
             >Docs: Insecure HTTP</a
           >
@@ -127,9 +127,9 @@ export function renderOverview(props: OverviewProps) {
             <input
               .value=${props.settings.gatewayUrl}
               @input=${(e: Event) => {
-                const v = (e.target as HTMLInputElement).value;
-                props.onSettingsChange({ ...props.settings, gatewayUrl: v });
-              }}
+      const v = (e.target as HTMLInputElement).value;
+      props.onSettingsChange({ ...props.settings, gatewayUrl: v });
+    }}
               placeholder="ws://100.x.y.z:18789"
             />
           </label>
@@ -138,9 +138,9 @@ export function renderOverview(props: OverviewProps) {
             <input
               .value=${props.settings.token}
               @input=${(e: Event) => {
-                const v = (e.target as HTMLInputElement).value;
-                props.onSettingsChange({ ...props.settings, token: v });
-              }}
+      const v = (e.target as HTMLInputElement).value;
+      props.onSettingsChange({ ...props.settings, token: v });
+    }}
               placeholder="CLAWDBOT_GATEWAY_TOKEN"
             />
           </label>
@@ -150,9 +150,9 @@ export function renderOverview(props: OverviewProps) {
               type="password"
               .value=${props.password}
               @input=${(e: Event) => {
-                const v = (e.target as HTMLInputElement).value;
-                props.onPasswordChange(v);
-              }}
+      const v = (e.target as HTMLInputElement).value;
+      props.onPasswordChange(v);
+    }}
               placeholder="system or shared password"
             />
           </label>
@@ -161,9 +161,9 @@ export function renderOverview(props: OverviewProps) {
             <input
               .value=${props.settings.sessionKey}
               @input=${(e: Event) => {
-                const v = (e.target as HTMLInputElement).value;
-                props.onSessionKeyChange(v);
-              }}
+      const v = (e.target as HTMLInputElement).value;
+      props.onSessionKeyChange(v);
+    }}
             />
           </label>
         </div>
@@ -196,18 +196,18 @@ export function renderOverview(props: OverviewProps) {
             <div class="stat-label">Last Channels Refresh</div>
             <div class="stat-value">
               ${props.lastChannelsRefresh
-                ? formatAgo(props.lastChannelsRefresh)
-                : "n/a"}
+      ? formatAgo(props.lastChannelsRefresh)
+      : "n/a"}
             </div>
           </div>
         </div>
         ${props.lastError
-          ? html`<div class="callout danger" style="margin-top: 14px;">
+      ? html`<div class="callout danger" style="margin-top: 14px;">
               <div>${props.lastError}</div>
               ${authHint ?? ""}
               ${insecureContextHint ?? ""}
             </div>`
-          : html`<div class="callout" style="margin-top: 14px;">
+      : html`<div class="callout" style="margin-top: 14px;">
               Use Channels to link WhatsApp, Telegram, Discord, Signal, or iMessage.
             </div>`}
       </div>
@@ -228,10 +228,10 @@ export function renderOverview(props: OverviewProps) {
         <div class="stat-label">Cron</div>
         <div class="stat-value">
           ${props.cronEnabled == null
-            ? "n/a"
-            : props.cronEnabled
-              ? "Enabled"
-              : "Disabled"}
+      ? "n/a"
+      : props.cronEnabled
+        ? "Enabled"
+        : "Disabled"}
         </div>
         <div class="muted">Next wake ${formatNextRun(props.cronNext)}</div>
       </div>
