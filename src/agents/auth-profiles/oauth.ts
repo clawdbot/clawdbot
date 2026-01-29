@@ -4,6 +4,8 @@ import lockfile from "proper-lockfile";
 import type { MoltbotConfig } from "../../config/config.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
 import { refreshQwenPortalCredentials } from "../../providers/qwen-portal-oauth.js";
+import { readClaudeCliCredentials, writeClaudeCliCredentials } from "../cli-credentials.js";
+import { AUTH_STORE_LOCK_OPTIONS, CLAUDE_CLI_PROFILE_ID, log } from "./constants.js";
 import { AUTH_STORE_LOCK_OPTIONS, log } from "./constants.js";
 import { formatAuthDoctorHint } from "./doctor.js";
 import { ensureAuthStoreFile, resolveAuthStorePath } from "./paths.js";
@@ -43,6 +45,37 @@ async function refreshOAuthTokenWithLock(params: {
         apiKey: buildOAuthApiKey(cred.provider, cred),
         newCredentials: cred,
       };
+    }
+
+    // Fix for OAuth race condition (#2036): Before attempting refresh with potentially
+    // stale credentials, check if Claude Code CLI keychain has fresher tokens.
+    // This prevents failures when Claude Code CLI has already refreshed the token
+    // (invalidating the old refresh token) but Clawdbot hasn't synced yet.
+    if (params.profileId === CLAUDE_CLI_PROFILE_ID && cred.provider === "anthropic") {
+      const keychainCreds = readClaudeCliCredentials({ allowKeychainPrompt: true });
+      if (keychainCreds?.type === "oauth" && keychainCreds.expires > Date.now()) {
+        log.info("using fresher credentials from claude cli keychain instead of refreshing", {
+          profileId: params.profileId,
+          keychainExpires: new Date(keychainCreds.expires).toISOString(),
+          storedExpires: new Date(cred.expires).toISOString(),
+        });
+        const newCredentials: OAuthCredentials = {
+          access: keychainCreds.access,
+          refresh: keychainCreds.refresh,
+          expires: keychainCreds.expires,
+        };
+        // Update store with keychain credentials
+        store.profiles[params.profileId] = {
+          ...cred,
+          ...newCredentials,
+          type: "oauth",
+        };
+        saveAuthProfileStore(store, params.agentDir);
+        return {
+          apiKey: buildOAuthApiKey(cred.provider, newCredentials),
+          newCredentials,
+        };
+      }
     }
 
     const oauthCreds: Record<string, OAuthCredentials> = {
@@ -177,6 +210,35 @@ export async function resolveApiKeyForProfile(params: {
         email: refreshed.email ?? cred.email,
       };
     }
+
+    // Fix for OAuth race condition (#2036): When refresh fails, try one more time
+    // to read fresher credentials from Claude Code CLI keychain. This handles the case
+    // where Claude Code refreshed its tokens (invalidating our refresh token) between
+    // when we checked and when we tried to refresh.
+    if (profileId === CLAUDE_CLI_PROFILE_ID && cred.provider === "anthropic") {
+      const keychainCreds = readClaudeCliCredentials({ allowKeychainPrompt: true });
+      if (keychainCreds?.type === "oauth" && keychainCreds.expires > Date.now()) {
+        log.info("refresh failed but found valid credentials in claude cli keychain", {
+          profileId,
+          keychainExpires: new Date(keychainCreds.expires).toISOString(),
+        });
+        // Update store with keychain credentials for future use
+        refreshedStore.profiles[profileId] = {
+          ...cred,
+          access: keychainCreds.access,
+          refresh: keychainCreds.refresh,
+          expires: keychainCreds.expires,
+          type: "oauth",
+        };
+        saveAuthProfileStore(refreshedStore, params.agentDir);
+        return {
+          apiKey: keychainCreds.access,
+          provider: cred.provider,
+          email: cred.email,
+        };
+      }
+    }
+
     const fallbackProfileId = suggestOAuthProfileIdForLegacyDefault({
       cfg,
       store: refreshedStore,
