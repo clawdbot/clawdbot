@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import type { Skill } from "@mariozechner/pi-coding-agent";
 import type { NormalizedChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
+import type { EngagementState } from "../engagement.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import type { TtsAutoMode } from "../types.tts.js";
 
@@ -54,8 +55,9 @@ export type SessionEntry = {
   authProfileOverride?: string;
   authProfileOverrideSource?: "auto" | "user";
   authProfileOverrideCompactionCount?: number;
-  groupActivation?: "mention" | "always";
+  groupActivation?: "mention" | "always" | "engagement";
   groupActivationNeedsSystemIntro?: boolean;
+  engagementState?: EngagementState;
   sendPolicy?: "allow" | "deny";
   queueMode?:
     | "steer"

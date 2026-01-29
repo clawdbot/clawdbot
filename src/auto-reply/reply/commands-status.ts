@@ -111,7 +111,7 @@ export async function buildStatusReply(params: {
   resolvedElevatedLevel?: ElevatedLevel;
   resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
   isGroup: boolean;
-  defaultGroupActivation: () => "always" | "mention";
+  defaultGroupActivation: () => "always" | "mention" | "engagement";
   mediaDecisions?: MediaUnderstandingDecision[];
 }): Promise<ReplyPayload | undefined> {
   const {

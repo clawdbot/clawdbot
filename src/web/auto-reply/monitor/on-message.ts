@@ -14,6 +14,19 @@ import { applyGroupGating } from "./group-gating.js";
 import { updateLastRouteInBackground } from "./last-route.js";
 import { resolvePeerId } from "./peer.js";
 import { processMessage } from "./process-message.js";
+import {
+  createEngagementDebouncer,
+  DEFAULT_ENGAGEMENT_DEBOUNCE,
+  type DebounceBatch,
+} from "../../../channels/engagement-debounce.js";
+
+/** Info needed to process a debounced message */
+type DebouncedMessageInfo = {
+  msg: WebInboundMsg;
+  route: ReturnType<typeof resolveAgentRoute>;
+  groupHistoryKey: string;
+  historyEntry: GroupHistoryEntry;
+};
 
 export function createWebOnMessageHandler(params: {
   cfg: ReturnType<typeof loadConfig>;
@@ -30,6 +43,11 @@ export function createWebOnMessageHandler(params: {
   baseMentionConfig: MentionConfig;
   account: { authDir?: string; accountId?: string };
 }) {
+  // Debouncer for engagement mode - collects message bursts
+  const engagementDebouncer = createEngagementDebouncer<DebouncedMessageInfo>(
+    DEFAULT_ENGAGEMENT_DEBOUNCE,
+  );
+
   const processForRoute = async (
     msg: WebInboundMsg,
     route: ReturnType<typeof resolveAgentRoute>,
@@ -59,6 +77,48 @@ export function createWebOnMessageHandler(params: {
       groupHistory: opts?.groupHistory,
       suppressGroupHistoryClear: opts?.suppressGroupHistoryClear,
     });
+
+  // Set up debounce callback - fires when message burst settles
+  engagementDebouncer.onFlush(
+    async (groupKey: string, batch: DebounceBatch<DebouncedMessageInfo>) => {
+      if (batch.messages.length === 0) return;
+
+      // Check if any message in the batch triggered engagement
+      const hasTriggered = batch.messages.some((m) => m.triggered);
+      if (!hasTriggered) {
+        // No triggers in batch - just add all to history for future context
+        for (const pending of batch.messages) {
+          const existing = params.groupHistories.get(groupKey) ?? [];
+          existing.push(pending.message.historyEntry);
+          while (existing.length > params.groupHistoryLimit) existing.shift();
+          params.groupHistories.set(groupKey, existing);
+        }
+        logVerbose(
+          `[engagement-debounce] batch for ${groupKey} had no triggers, added ${batch.messages.length} to history`,
+        );
+        return;
+      }
+
+      // Build history from all messages except the last one (which is "current")
+      const historyMessages = batch.messages.slice(0, -1).map((m) => m.message.historyEntry);
+      const lastMessage = batch.messages[batch.messages.length - 1];
+
+      logVerbose(
+        `[engagement-debounce] processing batch for ${groupKey}: ${batch.messages.length} messages, ${historyMessages.length} as history`,
+      );
+
+      // Process with the batched history
+      await processForRoute(
+        lastMessage.message.msg,
+        lastMessage.message.route,
+        lastMessage.message.groupHistoryKey,
+        {
+          groupHistory: historyMessages,
+          suppressGroupHistoryClear: true,
+        },
+      );
+    },
+  );
 
   return async (msg: WebInboundMsg) => {
     const conversationId = msg.conversationId ?? msg.from;
@@ -138,6 +198,34 @@ export function createWebOnMessageHandler(params: {
         logVerbose,
         replyLogger: params.replyLogger,
       });
+      // In engagement mode, use debouncing to collect message bursts
+      if (gating.mode === "engagement") {
+        const sender =
+          msg.senderName && msg.senderE164
+            ? `${msg.senderName} (${msg.senderE164})`
+            : (msg.senderName ?? msg.senderE164 ?? "Unknown");
+
+        const historyEntry: GroupHistoryEntry = {
+          sender,
+          body: msg.body,
+          timestamp: msg.timestamp,
+          id: msg.id,
+          senderJid: msg.senderJid,
+        };
+
+        // Add to debouncer - it will fire callback after quiet period
+        engagementDebouncer.addMessage(groupHistoryKey, {
+          message: { msg, route, groupHistoryKey, historyEntry },
+          timestamp: msg.timestamp ?? Date.now(),
+          triggered: gating.shouldProcess,
+        });
+
+        logVerbose(
+          `[engagement-debounce] added message to batch for ${conversationId}, triggered=${gating.shouldProcess}`,
+        );
+        return;
+      }
+
       if (!gating.shouldProcess) return;
     } else {
       // Ensure `peerId` for DMs is stable and stored as E.164 when possible.

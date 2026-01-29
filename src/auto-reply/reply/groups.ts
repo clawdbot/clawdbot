@@ -49,7 +49,9 @@ export function resolveGroupRequireMention(params: {
   return true;
 }
 
-export function defaultGroupActivation(requireMention: boolean): "always" | "mention" {
+export function defaultGroupActivation(
+  requireMention: boolean,
+): "always" | "mention" | "engagement" {
   return requireMention === false ? "always" : "mention";
 }
 
@@ -57,7 +59,7 @@ export function buildGroupIntro(params: {
   cfg: MoltbotConfig;
   sessionCtx: TemplateContext;
   sessionEntry?: SessionEntry;
-  defaultActivation: "always" | "mention";
+  defaultActivation: "always" | "mention" | "engagement";
   silentToken: string;
 }): string {
   const activation =

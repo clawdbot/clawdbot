@@ -3,6 +3,11 @@ import { parseActivationCommand } from "../../../auto-reply/group-activation.js"
 import type { loadConfig } from "../../../config/config.js";
 import { normalizeE164 } from "../../../utils.js";
 import { resolveMentionGating } from "../../../channels/mention-gating.js";
+import {
+  applyEngagementGating,
+  persistEngagementState,
+} from "../../../channels/engagement-gating.js";
+import { resolveGroupSessionKey, resolveStorePath } from "../../../config/sessions.js";
 import type { MentionConfig } from "../mentions.js";
 import { buildMentionConfig, debugMention, resolveOwnerList } from "../mentions.js";
 import type { WebInboundMsg } from "../types.js";
@@ -40,7 +45,7 @@ export function applyGroupGating(params: {
   groupMemberNames: Map<string, Map<string, string>>;
   logVerbose: (msg: string) => void;
   replyLogger: { debug: (obj: unknown, msg: string) => void };
-}) {
+}): { shouldProcess: boolean; mode?: "engagement" | "mention" | "always" } {
   const groupPolicy = resolveGroupPolicyFor(params.cfg, params.conversationId);
   if (groupPolicy.allowlistEnabled && !groupPolicy.allowed) {
     params.logVerbose(`Skipping group message ${params.conversationId} (not in allowlist)`);
@@ -101,6 +106,109 @@ export function applyGroupGating(params: {
     sessionKey: params.sessionKey,
     conversationId: params.conversationId,
   });
+
+  // Handle engagement mode separately
+  if (activation === "engagement") {
+    const groupId = resolveGroupSessionKey({
+      From: params.conversationId,
+      ChatType: "group",
+      Provider: "whatsapp",
+    })?.id;
+    const storePath = resolveStorePath(params.cfg.session?.store, {
+      agentId: params.agentId,
+    });
+
+    const selfJid = params.msg.selfJid?.replace(/:\\d+/, "");
+    const replySenderJid = params.msg.replyToSenderJid?.replace(/:\\d+/, "");
+    const selfE164 = params.msg.selfE164 ? normalizeE164(params.msg.selfE164) : null;
+    const replySenderE164 = params.msg.replyToSenderE164
+      ? normalizeE164(params.msg.replyToSenderE164)
+      : null;
+    const implicitMention = Boolean(
+      (selfJid && replySenderJid && selfJid === replySenderJid) ||
+      (selfE164 && replySenderE164 && selfE164 === replySenderE164),
+    );
+    const effectiveMentioned = wasMentioned || implicitMention || shouldBypassMention;
+
+    params.logVerbose(
+      `[engagement] group=${groupId ?? params.conversationId} mode=engagement msg="${params.msg.body.slice(0, 50)}" mentioned=${effectiveMentioned}`,
+    );
+
+    const engagementResult = applyEngagementGating({
+      cfg: params.cfg,
+      channel: "whatsapp",
+      groupId: groupId ?? params.conversationId,
+      sessionKey: params.sessionKey,
+      storePath,
+      messageText: params.msg.body,
+      wasMentioned: effectiveMentioned,
+    });
+
+    params.logVerbose(
+      `[engagement] result: shouldProcess=${engagementResult.shouldProcess} triggered=${engagementResult.engagementTriggered} mode=${engagementResult.mode}`,
+    );
+
+    params.msg.wasMentioned = effectiveMentioned && engagementResult.shouldProcess;
+
+    if (!engagementResult.shouldProcess) {
+      params.logVerbose(
+        `Group message stored for context (engagement mode, not triggered) in ${params.conversationId}: ${params.msg.body}`,
+      );
+      const sender =
+        params.msg.senderName && params.msg.senderE164
+          ? `${params.msg.senderName} (${params.msg.senderE164})`
+          : (params.msg.senderName ?? params.msg.senderE164 ?? "Unknown");
+      recordPendingHistoryEntryIfEnabled({
+        historyMap: params.groupHistories,
+        historyKey: params.groupHistoryKey,
+        limit: params.groupHistoryLimit,
+        entry: {
+          sender,
+          body: params.msg.body,
+          timestamp: params.msg.timestamp,
+          id: params.msg.id,
+          senderJid: params.msg.senderJid,
+        },
+      });
+      // Still persist state update even if we don't respond
+      if (engagementResult.nextState) {
+        persistEngagementState({
+          storePath,
+          sessionKey: params.sessionKey,
+          state: engagementResult.nextState,
+        }).catch(() => {
+          // Ignore persistence errors for non-responses
+        });
+      }
+      return { shouldProcess: false };
+    }
+
+    // Persist engagement state for responses
+    if (engagementResult.nextState) {
+      persistEngagementState({
+        storePath,
+        sessionKey: params.sessionKey,
+        state: engagementResult.nextState,
+      }).catch((err) => {
+        params.logVerbose(`Failed to persist engagement state: ${String(err)}`);
+      });
+    }
+
+    params.replyLogger.debug(
+      {
+        conversationId: params.conversationId,
+        mode: "engagement",
+        triggered: engagementResult.engagementTriggered,
+        wasMentioned: effectiveMentioned,
+      },
+      "engagement mode triggered",
+    );
+
+    // Return mode so caller can suppress history clearing for engagement
+    return { shouldProcess: true, mode: "engagement" };
+  }
+
+  // Standard mention/always mode handling
   const requireMention = activation !== "always";
   const selfJid = params.msg.selfJid?.replace(/:\\d+/, "");
   const replySenderJid = params.msg.replyToSenderJid?.replace(/:\\d+/, "");

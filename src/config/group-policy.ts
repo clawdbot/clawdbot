@@ -1,12 +1,15 @@
 import type { ChannelId } from "../channels/plugins/types.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import type { MoltbotConfig } from "./config.js";
+import type { EngagementConfig } from "./engagement.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type GroupPolicyChannel = ChannelId;
 
 export type ChannelGroupConfig = {
   requireMention?: boolean;
+  mode?: "mention" | "always" | "engagement";
+  engagement?: EngagementConfig;
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
 };
@@ -152,6 +155,31 @@ export function resolveChannelGroupRequireMention(params: {
     return requireMentionOverride;
   }
   return true;
+}
+
+export function resolveChannelGroupMode(params: {
+  cfg: MoltbotConfig;
+  channel: GroupPolicyChannel;
+  groupId?: string | null;
+  accountId?: string | null;
+}): "mention" | "always" | "engagement" {
+  const { groupConfig, defaultConfig } = resolveChannelGroupPolicy(params);
+  // Explicit mode takes precedence
+  if (groupConfig?.mode) return groupConfig.mode;
+  if (defaultConfig?.mode) return defaultConfig.mode;
+  // Fall back to legacy requireMention behavior
+  const requireMention = resolveChannelGroupRequireMention(params);
+  return requireMention ? "mention" : "always";
+}
+
+export function resolveChannelGroupEngagement(params: {
+  cfg: MoltbotConfig;
+  channel: GroupPolicyChannel;
+  groupId?: string | null;
+  accountId?: string | null;
+}): EngagementConfig | undefined {
+  const { groupConfig, defaultConfig } = resolveChannelGroupPolicy(params);
+  return groupConfig?.engagement ?? defaultConfig?.engagement;
 }
 
 export function resolveChannelGroupToolsPolicy(
