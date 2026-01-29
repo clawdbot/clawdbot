@@ -328,7 +328,13 @@ export async function runReplyAgent(params: {
       return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
     }
 
-    const { runResult, fallbackProvider, fallbackModel, directlySentBlockKeys } = runOutcome;
+    const {
+      runResult,
+      fallbackProvider,
+      fallbackModel,
+      directlySentBlockKeys,
+      executedToolCallIds,
+    } = runOutcome;
     let { didLogHeartbeatStrip, autoCompactionCompleted } = runOutcome;
 
     if (
@@ -391,8 +397,33 @@ export async function runReplyAgent(params: {
     // Drain any late tool/block deliveries before deciding there's "nothing to send".
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
     // keep the typing indicator stuck.
-    if (payloadArray.length === 0)
+    if (payloadArray.length === 0) {
+      // If tools were executed but no final response was generated, send a confirmation.
+      // Skip if verbose is enabled (onToolResult already sent notifications via tool callbacks)
+      // or if it's a heartbeat (which should be silent).
+      const hasExecutedTools =
+        executedToolCallIds && executedToolCallIds.size > 0;
+      const verboseEnabled = shouldEmitToolResult();
+      // Only send confirmation if:
+      // 1. Tools were executed successfully
+      // 2. Verbose is disabled (onToolResult wasn't called, so no notifications were sent)
+      // 3. Not a heartbeat (heartbeats should be silent)
+      // 4. All pending tool tasks completed (to avoid race conditions)
+      if (
+        hasExecutedTools &&
+        !verboseEnabled &&
+        !isHeartbeat &&
+        pendingToolTasks.size === 0
+      ) {
+        const confirmationPayload: ReplyPayload = {
+          text: "✅ Concluído",
+        };
+        const taggedConfirmation = applyReplyToMode(confirmationPayload);
+        await signalTypingIfNeeded([taggedConfirmation], typingSignals);
+        return finalizeWithFollowup(taggedConfirmation, queueKey, runFollowupTurn);
+      }
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
+    }
 
     const payloadResult = buildReplyPayloads({
       payloads: payloadArray,

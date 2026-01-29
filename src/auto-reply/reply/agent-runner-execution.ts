@@ -48,6 +48,8 @@ export type AgentRunLoopResult =
       autoCompactionCompleted: boolean;
       /** Payload keys sent directly (not via pipeline) during tool flush. */
       directlySentBlockKeys?: Set<string>;
+      /** Tool call IDs that were executed successfully (phase === "result" without error). */
+      executedToolCallIds?: Set<string>;
     }
   | { kind: "final"; payload: ReplyPayload };
 
@@ -82,6 +84,8 @@ export async function runAgentTurnWithFallback(params: {
   let autoCompactionCompleted = false;
   // Track payloads sent directly (not via pipeline) during tool flush to avoid duplicates.
   const directlySentBlockKeys = new Set<string>();
+  // Track tool calls that were executed successfully (completed with result phase).
+  const executedToolCallIds = new Set<string>();
 
   const runId = params.opts?.runId ?? crypto.randomUUID();
   params.opts?.onAgentRunStart?.(runId);
@@ -306,6 +310,14 @@ export async function runAgentTurnWithFallback(params: {
                 const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
                 if (phase === "start" || phase === "update") {
                   await params.typingSignals.signalToolStart();
+                }
+                // Track successful tool execution (result phase without error).
+                if (phase === "result") {
+                  const toolCallId = typeof evt.data.toolCallId === "string" ? evt.data.toolCallId : "";
+                  const isError = Boolean(evt.data.isError);
+                  if (toolCallId && !isError) {
+                    executedToolCallIds.add(toolCallId);
+                  }
                 }
               }
               // Track auto-compaction completion
@@ -554,5 +566,6 @@ export async function runAgentTurnWithFallback(params: {
     didLogHeartbeatStrip,
     autoCompactionCompleted,
     directlySentBlockKeys: directlySentBlockKeys.size > 0 ? directlySentBlockKeys : undefined,
+    executedToolCallIds: executedToolCallIds.size > 0 ? executedToolCallIds : undefined,
   };
 }
