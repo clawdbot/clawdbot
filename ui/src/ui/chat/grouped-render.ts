@@ -282,7 +282,14 @@ function renderGroupedMessage(
           )}</div>`
         : nothing}
       ${markdown
-        ? html`<div class="chat-text">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
+        ? html`
+            <div class="chat-text">
+              ${unsafeHTML(toSanitizedMarkdownHtml(
+                // Ensure horizontal rules (---) are padded with newlines 
+                // so the markdown parser recognizes them correctly.
+                markdown.replace(/^(---|\*\*\*|___)$/gm, '\n$1\n')
+              ))}
+            </div>`
         : nothing}
       ${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}
     </div>
