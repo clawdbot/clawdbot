@@ -276,8 +276,12 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         await openSessionSelector();
         break;
       case "model":
-        if (!args) {
+        if (!args || args === "list") {
           await openModelSelector();
+        } else if (args === "status") {
+          const provider = state.sessionInfo?.modelProvider || "unknown";
+          const model = state.sessionInfo?.model || "unknown";
+          chatLog.addSystem(`Current model: ${provider}/${model}`);
         } else {
           try {
             await client.patchSession({
