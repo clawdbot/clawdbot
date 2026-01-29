@@ -62,7 +62,7 @@
 
     <key>NSAppTransportSecurity</key>
     <dict>
-        <key>NSAllowsArbitraryLoadsInWebContent</key>
+        <key>NSAllowsLocalNetworking</key>
         <true/>
         <key>NSExceptionDomains</key>
         <dict>
