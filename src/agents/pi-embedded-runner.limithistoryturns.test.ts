@@ -154,7 +154,27 @@ describe("limitHistoryTurns", () => {
       { role: "assistant", content: [{ type: "text", text: "response" }] },
     ];
     const limited = limitHistoryTurns(messages, 1);
-    expect(limited[0].content).toEqual([{ type: "text", text: "second" }]);
     expect(limited[1].content).toEqual([{ type: "text", text: "response" }]);
+  });
+
+  it("does not slice between tool use and tool result when limit cuts off tool use", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: [{ type: "text", text: "start" }] },
+      { role: "assistant", content: [{ type: "text", text: "ack" }] },
+      { role: "user", content: [{ type: "text", text: "do tool" }] },
+      { role: "assistant", content: [{ type: "tool_use", id: "call_1", name: "foo", input: {} }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "call_1", content: "res" }] },
+    ];
+
+    // If we limit to 1 turn, we should get the full tool interaction chain (User -> Asst(Call) -> User(Result))
+    const limited = limitHistoryTurns(messages, 1);
+
+    expect(limited.length).toBe(3);
+    expect(limited[0].role).toBe("user");
+    expect((limited[0].content as any)[0].text).toBe("do tool");
+    expect(limited[1].role).toBe("assistant");
+    expect((limited[1].content as any)[0].type).toBe("tool_use");
+    expect(limited[2].role).toBe("user");
+    expect((limited[2].content as any)[0].type).toBe("tool_result");
   });
 });

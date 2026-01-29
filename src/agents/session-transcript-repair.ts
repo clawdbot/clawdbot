@@ -5,6 +5,28 @@ type ToolCallLike = {
   name?: string;
 };
 
+export type ToolUseRepairReport = {
+  messages: AgentMessage[];
+  added: Array<Extract<AgentMessage, { role: "toolResult" }>>;
+  droppedDuplicateCount: number;
+  droppedOrphanCount: number;
+  moved: boolean;
+};
+
+export type SessionDiagnostics = {
+  totalMessages: number;
+  assistantMessages: number;
+  userMessages: number;
+  toolResultMessages: number;
+  toolCalls: Array<{ id: string; name?: string; messageIndex: number }>;
+  toolResults: Array<{ id: string | null; messageIndex: number }>;
+  orphanedToolResults: Array<{ id: string | null; messageIndex: number }>;
+  unmatchedToolCallIds: string[];
+  duplicateToolResultIds: string[];
+  isHealthy: boolean;
+  issues: string[];
+};
+
 function extractToolCallsFromAssistant(
   msg: Extract<AgentMessage, { role: "assistant" }>,
 ): ToolCallLike[] {
@@ -35,6 +57,119 @@ function extractToolResultId(msg: Extract<AgentMessage, { role: "toolResult" }>)
   return null;
 }
 
+export function diagnoseSessionHealth(
+  messages: AgentMessage[],
+  _sessionId?: string,
+): SessionDiagnostics {
+  const toolCalls: Array<{ id: string; name?: string; messageIndex: number }> = [];
+  const toolResults: Array<{ id: string | null; messageIndex: number }> = [];
+  const seenToolResultIds = new Set<string>();
+  const seenToolCallIds = new Set<string>();
+  const duplicateToolResultIds: string[] = [];
+
+  let assistantMessages = 0;
+  let userMessages = 0;
+  let toolResultMessages = 0;
+
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i] as AgentMessage;
+    if (!msg || typeof msg !== "object") continue;
+
+    const role = (msg as { role?: unknown }).role;
+
+    if (role === "assistant") {
+      assistantMessages++;
+      const calls = extractToolCallsFromAssistant(
+        msg as Extract<AgentMessage, { role: "assistant" }>,
+      );
+      for (const call of calls) {
+        toolCalls.push({ id: call.id, name: call.name, messageIndex: i });
+        seenToolCallIds.add(call.id);
+      }
+    } else if (role === "user") {
+      userMessages++;
+    } else if (role === "toolResult") {
+      toolResultMessages++;
+      const id = extractToolResultId(msg as Extract<AgentMessage, { role: "toolResult" }>);
+      toolResults.push({ id, messageIndex: i });
+      if (id && seenToolResultIds.has(id)) {
+        duplicateToolResultIds.push(id);
+      } else if (id) {
+        seenToolResultIds.add(id);
+      }
+    }
+  }
+
+  const orphanedToolResults = toolResults.filter(
+    (r) => r.id === null || !seenToolCallIds.has(r.id),
+  );
+  const unmatchedToolCallIds = Array.from(seenToolCallIds).filter((id) => {
+    return !toolResults.some((r) => r.id === id);
+  });
+
+  const issues: string[] = [];
+  if (orphanedToolResults.length > 0) {
+    issues.push(
+      `Found ${orphanedToolResults.length} orphaned tool result(s) without matching tool call`,
+    );
+  }
+  if (unmatchedToolCallIds.length > 0) {
+    issues.push(
+      `Found ${unmatchedToolCallIds.length} tool call(s) without matching result: ${unmatchedToolCallIds.join(", ")}`,
+    );
+  }
+  if (duplicateToolResultIds.length > 0) {
+    issues.push(
+      `Found ${duplicateToolResultIds.length} duplicate tool result(s): ${duplicateToolResultIds.join(", ")}`,
+    );
+  }
+
+  return {
+    totalMessages: messages.length,
+    assistantMessages,
+    userMessages,
+    toolResultMessages,
+    toolCalls,
+    toolResults,
+    orphanedToolResults,
+    unmatchedToolCallIds,
+    duplicateToolResultIds,
+    isHealthy: issues.length === 0,
+    issues,
+  };
+}
+
+export function logSessionDiagnostics(diagnostics: SessionDiagnostics, sessionId?: string): void {
+  const prefix = sessionId ? `[session=${sessionId}]` : "[session]";
+  console.log(`${prefix} Session Diagnostics:`);
+  console.log(
+    `${prefix}   Messages: ${diagnostics.totalMessages} (${diagnostics.assistantMessages} assistant, ${diagnostics.userMessages} user, ${diagnostics.toolResultMessages} toolResult)`,
+  );
+  console.log(`${prefix}   Tool calls: ${diagnostics.toolCalls.length}`);
+  console.log(`${prefix}   Tool results: ${diagnostics.toolResults.length}`);
+
+  if (diagnostics.isHealthy) {
+    console.log(`${prefix}   Status: HEALTHY ✅`);
+  } else {
+    console.log(`${prefix}   Status: UNHEALTHY ❌`);
+    for (const issue of diagnostics.issues) {
+      console.log(`${prefix}   - ${issue}`);
+    }
+    if (diagnostics.orphanedToolResults.length > 0) {
+      const examples = diagnostics.orphanedToolResults.slice(0, 3).map((r) => r.id ?? "(null)");
+      console.log(
+        `${prefix}   Orphaned IDs: ${examples.join(", ")}${diagnostics.orphanedToolResults.length > 3 ? " ..." : ""}`,
+      );
+    }
+    if (diagnostics.unmatchedToolCallIds.length > 0) {
+      const examples = diagnostics.unmatchedToolCallIds.slice(0, 3);
+      console.log(
+        `${prefix}   Unmatched IDs: ${examples.join(", ")}${diagnostics.unmatchedToolCallIds.length > 3 ? " ..." : ""}`,
+      );
+    }
+  }
+}
+
 function makeMissingToolResult(params: {
   toolCallId: string;
   toolName?: string;
@@ -59,14 +194,6 @@ export { makeMissingToolResult };
 export function sanitizeToolUseResultPairing(messages: AgentMessage[]): AgentMessage[] {
   return repairToolUseResultPairing(messages).messages;
 }
-
-export type ToolUseRepairReport = {
-  messages: AgentMessage[];
-  added: Array<Extract<AgentMessage, { role: "toolResult" }>>;
-  droppedDuplicateCount: number;
-  droppedOrphanCount: number;
-  moved: boolean;
-};
 
 export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRepairReport {
   // Anthropic (and Cloud Code Assist) reject transcripts where assistant tool calls are not

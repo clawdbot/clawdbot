@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import { healthCommand } from "../../commands/health.js";
-import { sessionsCommand } from "../../commands/sessions.js";
+import { sessionsCommand, sessionsHealthCommand } from "../../commands/sessions.js";
 import { statusCommand } from "../../commands/status.js";
 import { setVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -139,6 +139,38 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           json: Boolean(opts.json),
           store: opts.store as string | undefined,
           active: opts.active as string | undefined,
+        },
+        defaultRuntime,
+      );
+    });
+
+  program
+    .command("sessions health")
+    .description("Check session health for tool call/result pairing issues")
+    .option("--verbose", "Show diagnostics for all sessions", false)
+    .option("--session-id <id>", "Check a specific session by ID")
+    .option("--store <path>", "Path to session store (default: resolved from config)")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          ["moltbot sessions health", "Check all sessions for tool pairing issues."],
+          ["moltbot sessions health --verbose", "Show detailed diagnostics."],
+          ["moltbot sessions health --session-id abc123", "Check specific session."],
+        ])}`,
+    )
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/sessions-health", "docs.molt.bot/cli/sessions-health")}\n`,
+    )
+    .action(async (opts) => {
+      setVerbose(Boolean(opts.verbose));
+      await sessionsHealthCommand(
+        {
+          sessionId: opts.sessionId as string | undefined,
+          verbose: Boolean(opts.verbose),
+          store: opts.store as string | undefined,
         },
         defaultRuntime,
       );

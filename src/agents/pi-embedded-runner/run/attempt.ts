@@ -42,6 +42,7 @@ import { createMoltbotCodingTools } from "../../pi-tools.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
+import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
 import { acquireSessionWriteLock } from "../../session-write-lock.js";
 import {
   applySkillEnvOverrides,
@@ -531,8 +532,11 @@ export async function runEmbeddedAttempt(
         const validated = transcriptPolicy.validateAnthropicTurns
           ? validateAnthropicTurns(validatedGemini)
           : validatedGemini;
+        const repaired = transcriptPolicy.repairToolUseResultPairing
+          ? sanitizeToolUseResultPairing(validated)
+          : validated;
         const limited = limitHistoryTurns(
-          validated,
+          repaired,
           getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
         );
         cacheTrace?.recordStage("session:limited", { messages: limited });

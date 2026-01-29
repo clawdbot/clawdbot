@@ -1,11 +1,17 @@
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import {
+  diagnoseSessionHealth,
+  logSessionDiagnostics,
+} from "../agents/session-transcript-repair.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import { loadConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath, type SessionEntry } from "../config/sessions.js";
 import { info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { isRich, theme } from "../terminal/theme.js";
+import fs from "node:fs/promises";
 
 type SessionRow = {
   key: string;
@@ -245,5 +251,82 @@ export async function sessionsCommand(
     ].join(" ");
 
     runtime.log(line.trimEnd());
+  }
+}
+
+export async function sessionsHealthCommand(
+  opts: { store?: string; sessionId?: string; verbose?: boolean },
+  runtime: RuntimeEnv,
+) {
+  const cfg = loadConfig();
+  const storePath = resolveStorePath(opts.store ?? cfg.session?.store);
+  const store = loadSessionStore(storePath);
+
+  let sessionsToCheck: Array<{ key: string; entry: SessionEntry }> = [];
+
+  if (opts.sessionId) {
+    const found = Object.entries(store).find(([, entry]) => entry?.sessionId === opts.sessionId);
+    if (found) {
+      sessionsToCheck = [{ key: found[0], entry: found[1]! }];
+    } else {
+      runtime.error(`Session not found: ${opts.sessionId}`);
+      runtime.exit(1);
+      return;
+    }
+  } else {
+    sessionsToCheck = Object.entries(store).map(([key, entry]) => ({
+      key,
+      entry: entry!,
+    }));
+  }
+
+  let unhealthyCount = 0;
+  const allDiagnostics: Array<{
+    key: string;
+    diagnostics: Awaited<ReturnType<typeof diagnoseSessionHealth>>;
+  }> = [];
+
+  for (const { key, entry } of sessionsToCheck) {
+    const sessionFilePath = entry?.sessionFile;
+    if (!sessionFilePath) {
+      runtime.log(`[${key}] No session file`);
+      continue;
+    }
+
+    let messages: unknown[];
+    try {
+      const content = await fs.readFile(sessionFilePath, "utf-8");
+      messages = content
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line));
+    } catch {
+      runtime.error(`[${key}] Failed to read session file: ${sessionFilePath}`);
+      continue;
+    }
+
+    const diagnostics = diagnoseSessionHealth(messages as AgentMessage[], key);
+    allDiagnostics.push({ key, diagnostics });
+
+    if (!diagnostics.isHealthy) {
+      unhealthyCount++;
+    }
+
+    if (opts.verbose || !diagnostics.isHealthy) {
+      logSessionDiagnostics(diagnostics, key);
+    } else {
+      runtime.log(`[${key}] ✅ HEALTHY (${diagnostics.totalMessages} messages)`);
+    }
+  }
+
+  if (unhealthyCount > 0) {
+    runtime.log(
+      info(
+        `\nFound ${unhealthyCount} unhealthy session(s) out of ${allDiagnostics.length} checked`,
+      ),
+    );
+    runtime.exit(1);
+  } else {
+    runtime.log(info(`\nAll ${allDiagnostics.length} session(s) are healthy`));
   }
 }
