@@ -435,3 +435,6 @@ const antigravityPlugin = {
 };
 
 export default antigravityPlugin;
+
+// Re-export refresh function
+export { refreshGoogleAntigravityCredentials } from "./refresh.js";

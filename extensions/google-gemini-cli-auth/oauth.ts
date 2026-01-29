@@ -508,6 +508,9 @@ async function pollOperation(
   throw new Error("Operation polling timeout");
 }
 
+// Re-export refresh function
+export { refreshGoogleGeminiCliCredentials } from "./refresh.js";
+
 export async function loginGeminiCliOAuth(ctx: GeminiCliOAuthContext): Promise<GeminiCliOAuthCredentials> {
   const needsManual = shouldUseManualOAuthFlow(ctx.isRemote);
   await ctx.note(
