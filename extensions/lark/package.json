@@ -1,0 +1,46 @@
+{
+  "name": "@clawdbot/lark",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Clawdbot Feishu/Lark channel plugin",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
+  "clawdbot": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "lark",
+      "label": "Feishu / Lark",
+      "selectionLabel": "Feishu / Lark (Open Platform)",
+      "docsPath": "/channels/lark",
+      "docsLabel": "lark",
+      "blurb": "Feishu Open Platform bot integration.",
+      "aliases": [
+        "feishu"
+      ],
+      "order": 70
+    },
+    "install": {
+      "npmSpec": "@clawdbot/lark",
+      "localPath": "extensions/lark",
+      "defaultChoice": "npm"
+    }
+  },
+  "dependencies": {
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "clawdbot": "workspace:*",
+    "typescript": "^5.7.3"
+  },
+  "peerDependencies": {
+    "clawdbot": "*"
+  }
+}
