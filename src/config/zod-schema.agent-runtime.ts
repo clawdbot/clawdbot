@@ -414,6 +414,17 @@ export const AgentModelSchema = z.union([
     })
     .strict(),
 ]);
+export const ThinkingDefaultSchema = z
+  .union([
+    z.literal("off"),
+    z.literal("minimal"),
+    z.literal("low"),
+    z.literal("medium"),
+    z.literal("high"),
+    z.literal("xhigh"),
+  ])
+  .optional();
+
 export const AgentEntrySchema = z
   .object({
     id: z.string(),
@@ -422,6 +433,7 @@ export const AgentEntrySchema = z
     workspace: z.string().optional(),
     agentDir: z.string().optional(),
     model: AgentModelSchema.optional(),
+    thinkingDefault: ThinkingDefaultSchema,
     memorySearch: MemorySearchSchema,
     humanDelay: HumanDelaySchema.optional(),
     heartbeat: HeartbeatSchema,

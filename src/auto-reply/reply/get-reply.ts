@@ -1,4 +1,5 @@
 import {
+  resolveAgentConfig,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
@@ -10,6 +11,7 @@ import { type MoltbotConfig, loadConfig } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext } from "../templating.js";
+import type { ThinkLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
@@ -39,6 +41,8 @@ export async function getReplyFromConfig(
     config: cfg,
   });
   const agentCfg = cfg.agents?.defaults;
+  const perAgentConfig = resolveAgentConfig(cfg, agentId);
+  const agentThinkingDefault = perAgentConfig?.thinkingDefault as ThinkLevel | undefined;
   const sessionCfg = cfg.session;
   const { defaultProvider, defaultModel, aliasIndex } = resolveDefaultModel({
     cfg,
@@ -148,6 +152,7 @@ export async function getReplyFromConfig(
     agentDir,
     workspaceDir,
     agentCfg,
+    agentThinkingDefault,
     sessionCtx,
     sessionEntry,
     sessionStore,

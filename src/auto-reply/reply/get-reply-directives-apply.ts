@@ -39,6 +39,7 @@ export async function applyInlineDirectiveOverrides(params: {
   agentId: string;
   agentDir: string;
   agentCfg: AgentDefaults;
+  agentThinkingDefault?: ThinkLevel;
   sessionEntry: SessionEntry;
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
@@ -74,6 +75,7 @@ export async function applyInlineDirectiveOverrides(params: {
     agentId,
     agentDir,
     agentCfg,
+    agentThinkingDefault,
     sessionEntry,
     sessionStore,
     sessionKey,
@@ -147,6 +149,7 @@ export async function applyInlineDirectiveOverrides(params: {
     }
     const resolvedDefaultThinkLevel =
       (sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
+      agentThinkingDefault ??
       (agentCfg?.thinkingDefault as ThinkLevel | undefined) ??
       (await modelState.resolveDefaultThinkingLevel());
     const currentThinkLevel = resolvedDefaultThinkLevel;
