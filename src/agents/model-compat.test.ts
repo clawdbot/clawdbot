@@ -24,6 +24,15 @@ describe("normalizeModelCompat", () => {
     expect(normalized.compat?.supportsDeveloperRole).toBe(false);
   });
 
+  it("forces supportsStore off for ovhcloud models", () => {
+    const model = baseModel();
+    model.provider = "ovhcloud";
+    model.baseUrl = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1";
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(normalized.compat?.supportsStore).toBe(false);
+  });
+
   it("leaves non-zai models untouched", () => {
     const model = {
       ...baseModel(),

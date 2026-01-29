@@ -230,6 +230,27 @@ Synthetic provides Anthropic-compatible models behind the `synthetic` provider:
 }
 ```
 
+### OVHcloud AI Endpoints
+
+OVHcloud AI Endpoints provides OpenAI-compatible inference APIs for open-source models. All inferences run in Europe, offering GDPR compliance and data privacy.
+
+- Provider: `ovhcloud`
+- Auth: `OVHCLOUD_API_KEY`
+- Example model: `ovhcloud/gpt-oss-120b`
+- CLI: `clawdbot onboard --auth-choice ovhcloud-api-key`
+
+Models are auto-discovered from the OVHcloud catalog. The recommended model is `gpt-oss-120b`, a 120 billion parameter model.
+
+```json5
+{
+  agents: {
+    defaults: { model: { primary: "ovhcloud/gpt-oss-120b" } }
+  }
+}
+```
+
+The provider is automatically configured when `OVHCLOUD_API_KEY` is set. See [/providers/ovhcloud](/providers/ovhcloud) for setup details and troubleshooting.
+
 ### MiniMax
 
 MiniMax is configured via `models.providers` because it uses custom endpoints:
