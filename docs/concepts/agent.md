@@ -1,11 +1,11 @@
 ---
-summary: "Agent runtime (embedded p-mono), workspace contract, and session bootstrap"
+summary: "Agent runtime (embedded pi-mono), workspace contract, and session bootstrap"
 read_when:
   - Changing agent runtime, workspace bootstrap, or session behavior
 ---
 # Agent Runtime 🤖
 
-Moltbot runs a single embedded agent runtime derived from **p-mono**.
+Moltbot runs a single embedded agent runtime derived from [**pi-mono**](https://github.com/badlogic/pi-mono).
 
 ## Workspace (required)
 
@@ -59,11 +59,11 @@ Moltbot loads skills from three locations (workspace wins on name conflict):
 
 Skills can be gated by config/env (see `skills` in [Gateway configuration](/gateway/configuration)).
 
-## p-mono integration
+## pi-mono integration
 
-Moltbot reuses pieces of the p-mono codebase (models/tools), but **session management, discovery, and tool wiring are Moltbot-owned**.
+Moltbot reuses pieces of the [pi-mono](https://github.com/badlogic/pi-mono) codebase (models/tools), but **session management, discovery, and tool wiring are Moltbot-owned**.
 
-- No p-coding agent runtime.
+- No pi-coding agent runtime.
 - No `~/.pi/agent` or `<workspace>/.pi` settings are consulted.
 
 ## Sessions
