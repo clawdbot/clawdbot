@@ -310,7 +310,14 @@ export async function resolveMedia(
         fetchImpl,
         filePathHint: file.file_path,
       });
-      const saved = await saveMediaBuffer(fetched.buffer, fetched.contentType, "inbound", maxBytes);
+      const originalName = fetched.fileName ?? file.file_path;
+      const saved = await saveMediaBuffer(
+        fetched.buffer,
+        fetched.contentType,
+        "inbound",
+        maxBytes,
+        originalName,
+      );
 
       // Check sticker cache for existing description
       const cached = sticker.file_unique_id ? getCachedSticker(sticker.file_unique_id) : null;
@@ -377,7 +384,14 @@ export async function resolveMedia(
     fetchImpl,
     filePathHint: file.file_path,
   });
-  const saved = await saveMediaBuffer(fetched.buffer, fetched.contentType, "inbound", maxBytes);
+  const originalName = fetched.fileName ?? file.file_path;
+  const saved = await saveMediaBuffer(
+    fetched.buffer,
+    fetched.contentType,
+    "inbound",
+    maxBytes,
+    originalName,
+  );
   let placeholder = "<media:document>";
   if (msg.photo) placeholder = "<media:image>";
   else if (msg.video) placeholder = "<media:video>";

@@ -40,7 +40,7 @@ export async function downloadTelegramFile(
     filePath: info.file_path,
   });
   // save with inbound subdir
-  const saved = await saveMediaBuffer(array, mime, "inbound", maxBytes);
+  const saved = await saveMediaBuffer(array, mime, "inbound", maxBytes, info.file_path);
   // Ensure extension matches mime if possible
   if (!saved.contentType && mime) saved.contentType = mime;
   return saved;
