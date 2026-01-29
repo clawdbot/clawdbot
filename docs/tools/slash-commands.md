@@ -131,16 +131,19 @@ Examples:
 
 ```
 /model
-/model list
-/model 3
-/model openai/gpt-5.2
-/model opus@anthropic:default
 /model status
+/model openai/gpt-5.2
+/model opus
+/models
+/models openai
 ```
 
 Notes:
-- `/model` and `/model list` show a compact, numbered picker (model family + available providers).
-- `/model <#>` selects from that picker (and prefers the current provider when possible).
+- `/model` shows a summary of the current model plus usage instructions.
+- `/model <provider/model>` switches to that exact model.
+- `/model <alias>` switches using a configured alias (for example, `/model opus`).
+- `/models` lists available providers, and `/models <provider>` lists that provider's models.
+- Numeric selection like `/model 3` is not supported.
 - `/model status` shows the detailed view, including configured provider endpoint (`baseUrl`) and API mode (`api`) when available.
 
 ## Debug overrides

@@ -92,15 +92,19 @@ You can switch models for the current session without restarting:
 
 ```
 /model
-/model list
-/model 3
-/model openai/gpt-5.2
 /model status
+/model openai/gpt-5.2
+/model opus
+/models
+/models openai
 ```
 
 Notes:
-- `/model` (and `/model list`) is a compact, numbered picker (model family + available providers).
-- `/model <#>` selects from that picker.
+- `/model` shows a summary of the current model and brief usage instructions.
+- `/model <provider/model>` switches to that exact model.
+- `/model <alias>` switches using a configured alias (for example, `/model opus`).
+- `/models` lists available providers, and `/models <provider>` lists that provider's models.
+- Numeric selection like `/model 3` is not supported.
 - `/model status` is the detailed view (auth candidates and, when configured, provider endpoint `baseUrl` + `api` mode).
 - Model refs are parsed by splitting on the **first** `/`. Use `provider/model` when typing `/model <ref>`.
 - If the model ID itself contains `/` (OpenRouter-style), you must include the provider prefix (example: `/model openrouter/moonshotai/kimi-k2`).

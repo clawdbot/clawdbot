@@ -1925,13 +1925,9 @@ Use the `/model` command as a standalone message:
 /model gemini-flash
 ```
 
-You can list available models with `/model`, `/model list`, or `/model status`.
+You can view providers with `/models`, list a provider's models with `/models <provider>`, and switch models with `/model <provider/model>` or `/model <alias>`.
 
-`/model` (and `/model list`) shows a compact, numbered picker. Select by number:
-
-```
-/model 3
-```
+Use `/model status` for a detailed view of your current model and auth configuration.
 
 You can also force a specific auth profile for the provider (per session):
 
