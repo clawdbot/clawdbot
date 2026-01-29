@@ -7,6 +7,7 @@ import { loadDotEnv } from "../infra/dotenv.js";
 import { normalizeEnv } from "../infra/env.js";
 import { isMainModule } from "../infra/is-main.js";
 import { ensureMoltbotCliOnPath } from "../infra/path-env.js";
+import { configureGlobalProxy } from "../infra/proxy.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { formatUncaughtError } from "../infra/errors.js";
 import { installUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
@@ -27,6 +28,7 @@ export async function runCli(argv: string[] = process.argv) {
   const normalizedArgv = stripWindowsNodeExec(argv);
   loadDotEnv({ quiet: true });
   normalizeEnv();
+  configureGlobalProxy();
   ensureMoltbotCliOnPath();
 
   // Enforce the minimum supported runtime before doing any work.
