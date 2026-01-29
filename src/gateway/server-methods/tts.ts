@@ -1,5 +1,6 @@
 import { loadConfig } from "../../config/config.js";
 import {
+  GEMINI_TTS_MODELS,
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
   getTtsProvider,
@@ -38,6 +39,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
         prefsPath,
         hasOpenAIKey: Boolean(resolveTtsApiKey(config, "openai")),
         hasElevenLabsKey: Boolean(resolveTtsApiKey(config, "elevenlabs")),
+        hasGeminiKey: Boolean(resolveTtsApiKey(config, "gemini")),
         edgeEnabled: isTtsProviderConfigured(config, "edge"),
       });
     } catch (err) {
@@ -100,13 +102,18 @@ export const ttsHandlers: GatewayRequestHandlers = {
   },
   "tts.setProvider": async ({ params, respond }) => {
     const provider = typeof params.provider === "string" ? params.provider.trim() : "";
-    if (provider !== "openai" && provider !== "elevenlabs" && provider !== "edge") {
+    if (
+      provider !== "openai" &&
+      provider !== "elevenlabs" &&
+      provider !== "edge" &&
+      provider !== "gemini"
+    ) {
       respond(
         false,
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          "Invalid provider. Use openai, elevenlabs, or edge.",
+          "Invalid provider. Use openai, elevenlabs, edge, or gemini.",
         ),
       );
       return;
@@ -146,6 +153,12 @@ export const ttsHandlers: GatewayRequestHandlers = {
             name: "Edge TTS",
             configured: isTtsProviderConfigured(config, "edge"),
             models: [],
+          },
+          {
+            id: "gemini",
+            name: "Gemini",
+            configured: Boolean(resolveTtsApiKey(config, "gemini")),
+            models: [...GEMINI_TTS_MODELS],
           },
         ],
         active: getTtsProvider(config, prefsPath),

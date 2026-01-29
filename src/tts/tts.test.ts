@@ -45,11 +45,13 @@ const {
   isValidOpenAIModel,
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
+  GEMINI_TTS_MODELS,
   parseTtsDirectives,
   resolveModelOverridePolicy,
   summarizeText,
   resolveOutputFormat,
   resolveEdgeOutputFormat,
+  normalizeGeminiBaseUrl,
 } = _test;
 
 describe("tts", () => {
@@ -136,10 +138,18 @@ describe("tts", () => {
     });
   });
 
+  describe("GEMINI_TTS_MODELS", () => {
+    it("includes Gemini TTS preview models", () => {
+      expect(GEMINI_TTS_MODELS).toContain("gemini-2.5-flash-preview-tts");
+      expect(GEMINI_TTS_MODELS).toContain("gemini-2.5-pro-preview-tts");
+    });
+  });
+
   describe("resolveOutputFormat", () => {
     it("uses Opus for Telegram", () => {
       const output = resolveOutputFormat("telegram");
       expect(output.openai).toBe("opus");
+      expect(output.gemini).toBe("opus");
       expect(output.elevenlabs).toBe("opus_48000_64");
       expect(output.extension).toBe(".opus");
       expect(output.voiceCompatible).toBe(true);
@@ -148,6 +158,7 @@ describe("tts", () => {
     it("uses MP3 for other channels", () => {
       const output = resolveOutputFormat("discord");
       expect(output.openai).toBe("mp3");
+      expect(output.gemini).toBe("mp3");
       expect(output.elevenlabs).toBe("mp3_44100_128");
       expect(output.extension).toBe(".mp3");
       expect(output.voiceCompatible).toBe(false);
@@ -178,6 +189,24 @@ describe("tts", () => {
     });
   });
 
+  describe("normalizeGeminiBaseUrl", () => {
+    it("adds scheme and v1beta", () => {
+      expect(normalizeGeminiBaseUrl("example.com")).toBe("https://example.com/v1beta");
+    });
+
+    it("preserves v1beta when provided", () => {
+      expect(normalizeGeminiBaseUrl("https://example.com/v1beta")).toBe(
+        "https://example.com/v1beta",
+      );
+    });
+
+    it("appends v1beta to custom paths", () => {
+      expect(normalizeGeminiBaseUrl("https://example.com/foo")).toBe(
+        "https://example.com/foo/v1beta",
+      );
+    });
+  });
+
   describe("parseTtsDirectives", () => {
     it("extracts overrides and strips directives when enabled", () => {
       const policy = resolveModelOverridePolicy({ enabled: true });
@@ -200,6 +229,17 @@ describe("tts", () => {
       const result = parseTtsDirectives(input, policy);
 
       expect(result.overrides.provider).toBe("edge");
+    });
+
+    it("accepts Gemini provider overrides", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true });
+      const input =
+        "Hello [[tts:provider=gemini voiceName=Kore model=gemini-2.5-flash-preview-tts]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.provider).toBe("gemini");
+      expect(result.overrides.gemini?.voiceName).toBe("Kore");
+      expect(result.overrides.gemini?.model).toBe("gemini-2.5-flash-preview-tts");
     });
 
     it("keeps text intact when overrides are disabled", () => {

@@ -51,6 +51,7 @@ function ttsUsage(): ReplyPayload {
       `• edge — Free, fast (default)\n` +
       `• openai — High quality (requires API key)\n` +
       `• elevenlabs — Premium voices (requires API key)\n\n` +
+      `• gemini — High quality, offordable (requires API key)\n\n` +
       `**Text Limit (default: 1500, max: 4096):**\n` +
       `When text exceeds the limit:\n` +
       `• Summary ON: AI summarizes, then generates audio\n` +
@@ -152,6 +153,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
       const hasOpenAI = Boolean(resolveTtsApiKey(config, "openai"));
       const hasElevenLabs = Boolean(resolveTtsApiKey(config, "elevenlabs"));
       const hasEdge = isTtsProviderConfigured(config, "edge");
+      const hasGemini = Boolean(resolveTtsApiKey(config, "gemini"));
       return {
         shouldContinue: false,
         reply: {
@@ -161,13 +163,19 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
             `OpenAI key: ${hasOpenAI ? "✅" : "❌"}\n` +
             `ElevenLabs key: ${hasElevenLabs ? "✅" : "❌"}\n` +
             `Edge enabled: ${hasEdge ? "✅" : "❌"}\n` +
-            `Usage: /tts provider openai | elevenlabs | edge`,
+            `Gemini key: ${hasGemini ? "✅" : "❌"}\n` +
+            `Usage: /tts provider openai | elevenlabs | edge | gemini`,
         },
       };
     }
 
     const requested = args.trim().toLowerCase();
-    if (requested !== "openai" && requested !== "elevenlabs" && requested !== "edge") {
+    if (
+      requested !== "openai" &&
+      requested !== "elevenlabs" &&
+      requested !== "edge" &&
+      requested !== "gemini"
+    ) {
       return { shouldContinue: false, reply: ttsUsage() };
     }
 

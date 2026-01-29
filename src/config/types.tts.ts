@@ -1,4 +1,4 @@
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "gemini";
 
 export type TtsMode = "final" | "all";
 
@@ -72,6 +72,13 @@ export type TtsConfig = {
     saveSubtitles?: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  /** Gemini configuration. */
+  gemini?: {
+    apiKey?: string;
+    model?: string;
+    voiceName?: string;
+    baseUrl?: string;
   };
   /** Optional path for local TTS user preferences JSON. */
   prefsPath?: string;

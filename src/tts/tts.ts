@@ -8,6 +8,7 @@ import {
   renameSync,
   unlinkSync,
 } from "node:fs";
+import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -51,6 +52,9 @@ const DEFAULT_OPENAI_VOICE = "alloy";
 const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
+const DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
+const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash-preview-tts";
+const DEFAULT_GEMINI_VOICE = "Kore";
 
 const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
   stability: 0.5,
@@ -62,6 +66,7 @@ const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
 
 const TELEGRAM_OUTPUT = {
   openai: "opus" as const,
+  gemini: "opus" as const,
   // ElevenLabs output formats use codec_sample_rate_bitrate naming.
   // Opus @ 48kHz/64kbps is a good voice-note tradeoff for Telegram.
   elevenlabs: "opus_48000_64",
@@ -71,6 +76,7 @@ const TELEGRAM_OUTPUT = {
 
 const DEFAULT_OUTPUT = {
   openai: "mp3" as const,
+  gemini: "mp3" as const,
   elevenlabs: "mp3_44100_128",
   extension: ".mp3",
   voiceCompatible: false,
@@ -124,6 +130,12 @@ export type ResolvedTtsConfig = {
     proxy?: string;
     timeoutMs?: number;
   };
+  gemini: {
+    apiKey?: string;
+    model: string;
+    voiceName: string;
+    baseUrl: string;
+  };
   prefsPath?: string;
   maxTextLength: number;
   timeoutMs: number;
@@ -155,6 +167,10 @@ type TtsDirectiveOverrides = {
   provider?: TtsProvider;
   openai?: {
     voice?: string;
+    model?: string;
+  };
+  gemini?: {
+    voiceName?: string;
     model?: string;
   };
   elevenlabs?: {
@@ -295,6 +311,12 @@ export function resolveTtsConfig(cfg: MoltbotConfig): ResolvedTtsConfig {
       saveSubtitles: raw.edge?.saveSubtitles ?? false,
       proxy: raw.edge?.proxy?.trim() || undefined,
       timeoutMs: raw.edge?.timeoutMs,
+    },
+    gemini: {
+      apiKey: raw.gemini?.apiKey,
+      model: normalizeGeminiModel(raw.gemini?.model),
+      voiceName: normalizeGeminiVoiceName(raw.gemini?.voiceName),
+      baseUrl: normalizeGeminiBaseUrl(raw.gemini?.baseUrl),
     },
     prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
@@ -474,12 +496,18 @@ export function resolveTtsApiKey(
   if (provider === "openai") {
     return config.openai.apiKey || process.env.OPENAI_API_KEY;
   }
+  if (provider === "gemini") {
+    return config.gemini.apiKey || process.env.GEMINI_API_KEY;
+  }
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge", "gemini"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
+  if (primary === "gemini") {
+    return ["gemini", "elevenlabs", "openai", "edge"];
+  }
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
 }
 
@@ -496,6 +524,45 @@ function normalizeElevenLabsBaseUrl(baseUrl: string): string {
   const trimmed = baseUrl.trim();
   if (!trimmed) return DEFAULT_ELEVENLABS_BASE_URL;
   return trimmed.replace(/\/+$/, "");
+}
+
+function isSafeGeminiValue(value: string): boolean {
+  return /^[a-zA-Z0-9._-]+$/.test(value);
+}
+
+function normalizeGeminiBaseUrl(baseUrl?: string): string {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) return DEFAULT_GEMINI_BASE_URL;
+  const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  const url = new URL(withScheme);
+  let pathname = url.pathname.replace(/\/+$/, "");
+  if (!pathname || pathname === "/") {
+    pathname = "/v1beta";
+  } else if (!pathname.endsWith("/v1beta")) {
+    pathname = `${pathname}/v1beta`;
+  }
+  url.pathname = pathname;
+  url.search = "";
+  url.hash = "";
+  return url.toString().replace(/\/+$/, "");
+}
+
+function normalizeGeminiModel(model?: string): string {
+  const trimmed = model?.trim();
+  if (!trimmed) return DEFAULT_GEMINI_MODEL;
+  if (!isSafeGeminiValue(trimmed)) {
+    throw new Error("Gemini model contains invalid characters");
+  }
+  return trimmed;
+}
+
+function normalizeGeminiVoiceName(voiceName?: string): string {
+  const trimmed = voiceName?.trim();
+  if (!trimmed) return DEFAULT_GEMINI_VOICE;
+  if (!isSafeGeminiValue(trimmed)) {
+    throw new Error("Gemini voiceName contains invalid characters");
+  }
+  return trimmed;
 }
 
 function requireInRange(value: number, min: number, max: number, label: string): void {
@@ -576,6 +643,24 @@ function parseTtsDirectives(
   cleanedText = cleanedText.replace(directiveRegex, (_match, body: string) => {
     hasDirective = true;
     const tokens = body.split(/\s+/).filter(Boolean);
+    const providerOverrideFromTokens = (() => {
+      for (const token of tokens) {
+        const eqIndex = token.indexOf("=");
+        if (eqIndex === -1) continue;
+        const rawKey = token.slice(0, eqIndex).trim().toLowerCase();
+        if (rawKey !== "provider") continue;
+        const rawValue = token.slice(eqIndex + 1).trim();
+        if (
+          rawValue === "openai" ||
+          rawValue === "elevenlabs" ||
+          rawValue === "edge" ||
+          rawValue === "gemini"
+        ) {
+          return rawValue;
+        }
+      }
+      return undefined;
+    })();
     for (const token of tokens) {
       const eqIndex = token.indexOf("=");
       if (eqIndex === -1) continue;
@@ -587,7 +672,12 @@ function parseTtsDirectives(
         switch (key) {
           case "provider":
             if (!policy.allowProvider) break;
-            if (rawValue === "openai" || rawValue === "elevenlabs" || rawValue === "edge") {
+            if (
+              rawValue === "openai" ||
+              rawValue === "elevenlabs" ||
+              rawValue === "edge" ||
+              rawValue === "gemini"
+            ) {
               overrides.provider = rawValue;
             } else {
               warnings.push(`unsupported provider "${rawValue}"`);
@@ -624,8 +714,36 @@ function parseTtsDirectives(
             if (!policy.allowModelId) break;
             if (isValidOpenAIModel(rawValue)) {
               overrides.openai = { ...overrides.openai, model: rawValue };
+            } else if (providerOverrideFromTokens === "gemini") {
+              if (isSafeGeminiValue(rawValue)) {
+                overrides.gemini = { ...overrides.gemini, model: rawValue };
+              } else {
+                warnings.push(`invalid Gemini model "${rawValue}"`);
+              }
+            } else if (isGeminiModelToken(rawValue)) {
+              overrides.gemini = { ...overrides.gemini, model: rawValue };
             } else {
               overrides.elevenlabs = { ...overrides.elevenlabs, modelId: rawValue };
+            }
+            break;
+          case "gemini_model":
+          case "geminimodel":
+            if (!policy.allowModelId) break;
+            if (isSafeGeminiValue(rawValue)) {
+              overrides.gemini = { ...overrides.gemini, model: rawValue };
+            } else {
+              warnings.push(`invalid Gemini model "${rawValue}"`);
+            }
+            break;
+          case "voicename":
+          case "voice_name":
+          case "gemini_voice":
+          case "geminivoice":
+            if (!policy.allowVoice) break;
+            if (isSafeGeminiValue(rawValue)) {
+              overrides.gemini = { ...overrides.gemini, voiceName: rawValue };
+            } else {
+              warnings.push(`invalid Gemini voiceName "${rawValue}"`);
             }
             break;
           case "stability":
@@ -782,12 +900,21 @@ export const OPENAI_TTS_VOICES = [
   "shimmer",
 ] as const;
 
+export const GEMINI_TTS_MODELS = [
+  "gemini-2.5-flash-preview-tts",
+  "gemini-2.5-pro-preview-tts",
+] as const;
+
 type OpenAiTtsVoice = (typeof OPENAI_TTS_VOICES)[number];
 
 function isValidOpenAIModel(model: string): boolean {
   // Allow any model when using custom endpoint (e.g., Kokoro, LocalAI)
   if (isCustomOpenAIEndpoint()) return true;
   return OPENAI_TTS_MODELS.includes(model as (typeof OPENAI_TTS_MODELS)[number]);
+}
+
+function isGeminiModelToken(model: string): boolean {
+  return model.startsWith("gemini-") && isSafeGeminiValue(model);
 }
 
 function isValidOpenAIVoice(voice: string): voice is OpenAiTtsVoice {
@@ -1076,6 +1203,143 @@ async function edgeTTS(params: {
   await tts.ttsPromise(text, outputPath);
 }
 
+async function geminiTTS(params: {
+  text: string;
+  apiKey: string;
+  model: string;
+  voiceName: string;
+  baseUrl: string;
+  timeoutMs: number;
+}): Promise<Buffer> {
+  const { text, apiKey, model, voiceName, baseUrl, timeoutMs } = params;
+
+  if (!isSafeGeminiValue(model)) {
+    throw new Error(`Gemini model contains invalid characters: ${model}`);
+  }
+  if (!isSafeGeminiValue(voiceName)) {
+    throw new Error(`Gemini voiceName contains invalid characters: ${voiceName}`);
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const url = new URL(
+      `${normalizeGeminiBaseUrl(baseUrl)}/models/${encodeURIComponent(model)}:generateContent`,
+    );
+    const response = await fetch(url.toString(), {
+      method: "POST",
+      headers: {
+        "x-goog-api-key": apiKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        contents: [{ parts: [{ text }] }],
+        generationConfig: {
+          responseModalities: ["AUDIO"],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName },
+            },
+          },
+        },
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Gemini TTS API error (${response.status})`);
+    }
+
+    const payload = (await response.json()) as {
+      candidates?: Array<{
+        content?: {
+          parts?: Array<{ inlineData?: { data?: string } }>;
+        };
+      }>;
+    };
+    const data = payload?.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data?.trim();
+    if (!data) {
+      throw new Error("Gemini TTS response missing audio data");
+    }
+    return Buffer.from(data, "base64");
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function transcodePcmWithFfmpeg(params: {
+  pcm: Buffer;
+  format: "mp3" | "opus";
+  timeoutMs: number;
+}): Promise<Buffer> {
+  const { pcm, format, timeoutMs } = params;
+  const args = [
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-f",
+    "s16le",
+    "-ar",
+    "24000",
+    "-ac",
+    "1",
+    "-i",
+    "pipe:0",
+  ];
+
+  if (format === "opus") {
+    args.push("-f", "opus", "-c:a", "libopus", "-b:a", "64k", "-ar", "48000", "-ac", "1");
+  } else {
+    args.push("-f", "mp3", "-b:a", "128k", "-ar", "44100", "-ac", "1");
+  }
+
+  args.push("pipe:1");
+
+  return await new Promise((resolve, reject) => {
+    const child = spawn("ffmpeg", args, {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    const stdoutChunks: Buffer[] = [];
+    let stderr = "";
+    let settled = false;
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+    }, timeoutMs);
+
+    child.on("error", (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(err);
+    });
+
+    child.stdout?.on("data", (chunk) => {
+      stdoutChunks.push(Buffer.from(chunk));
+    });
+
+    child.stderr?.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (code !== 0) {
+        reject(new Error(stderr.trim() || `ffmpeg exited with code ${code ?? "unknown"}`));
+        return;
+      }
+      resolve(Buffer.concat(stdoutChunks));
+    });
+
+    child.stdin?.write(pcm);
+    child.stdin?.end();
+  });
+}
+
 export async function textToSpeech(params: {
   text: string;
   cfg: MoltbotConfig;
@@ -1180,7 +1444,31 @@ export async function textToSpeech(params: {
       }
 
       let audioBuffer: Buffer;
-      if (provider === "elevenlabs") {
+      if (provider === "gemini") {
+        const geminiModelOverride = params.overrides?.gemini?.model;
+        const geminiVoiceOverride = params.overrides?.gemini?.voiceName;
+        const pcmBuffer = await geminiTTS({
+          text: params.text,
+          apiKey,
+          model: geminiModelOverride ?? config.gemini.model,
+          voiceName: geminiVoiceOverride ?? config.gemini.voiceName,
+          baseUrl: config.gemini.baseUrl,
+          timeoutMs: config.timeoutMs,
+        });
+        try {
+          audioBuffer = await transcodePcmWithFfmpeg({
+            pcm: pcmBuffer,
+            format: output.gemini,
+            timeoutMs: config.timeoutMs,
+          });
+        } catch (err) {
+          const error = err as NodeJS.ErrnoException;
+          if (error.code === "ENOENT") {
+            throw new Error("ffmpeg not found; Gemini TTS requires ffmpeg");
+          }
+          throw err;
+        }
+      } else if (provider === "elevenlabs") {
         const voiceIdOverride = params.overrides?.elevenlabs?.voiceId;
         const modelIdOverride = params.overrides?.elevenlabs?.modelId;
         const voiceSettings = {
@@ -1228,7 +1516,12 @@ export async function textToSpeech(params: {
         audioPath,
         latencyMs,
         provider,
-        outputFormat: provider === "openai" ? output.openai : output.elevenlabs,
+        outputFormat:
+          provider === "openai"
+            ? output.openai
+            : provider === "gemini"
+              ? output.gemini
+              : output.elevenlabs,
         voiceCompatible: output.voiceCompatible,
       };
     } catch (err) {
@@ -1473,9 +1766,11 @@ export const _test = {
   isValidOpenAIModel,
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
+  GEMINI_TTS_MODELS,
   parseTtsDirectives,
   resolveModelOverridePolicy,
   summarizeText,
   resolveOutputFormat,
   resolveEdgeOutputFormat,
+  normalizeGeminiBaseUrl,
 };

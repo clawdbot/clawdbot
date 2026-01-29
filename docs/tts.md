@@ -8,7 +8,7 @@ read_when:
 
 # Text-to-speech (TTS)
 
-Moltbot can convert outbound replies into audio using ElevenLabs, OpenAI, or Edge TTS.
+Moltbot can convert outbound replies into audio using ElevenLabs, OpenAI, Edge TTS, or Gemini.
 It works anywhere Moltbot can send audio; Telegram gets a round voice-note bubble.
 
 ## Supported services
@@ -16,29 +16,32 @@ It works anywhere Moltbot can send audio; Telegram gets a round voice-note bubbl
 - **ElevenLabs** (primary or fallback provider)
 - **OpenAI** (primary or fallback provider; also used for summaries)
 - **Edge TTS** (primary or fallback provider; uses `node-edge-tts`, default when no API keys)
+- **Gemini** (primary provider with fallback to ElevenLabs, then OpenAI)
 
 ### Edge TTS notes
 
 Edge TTS uses Microsoft Edge's online neural TTS service via the `node-edge-tts`
 library. It's a hosted service (not local), uses Microsoft’s endpoints, and does
 not require an API key. `node-edge-tts` exposes speech configuration options and
-output formats, but not all options are supported by the Edge service. citeturn2search0
+ output formats, but not all options are supported by the Edge service.
 
 Because Edge TTS is a public web service without a published SLA or quota, treat it
 as best-effort. If you need guaranteed limits and support, use OpenAI or ElevenLabs.
 Microsoft's Speech REST API documents a 10‑minute audio limit per request; Edge TTS
-does not publish limits, so assume similar or lower limits. citeturn0search3
+ does not publish limits, so assume similar or lower limits.
 
 ## Optional keys
 
-If you want OpenAI or ElevenLabs:
+If you want OpenAI, ElevenLabs, or Gemini:
 - `ELEVENLABS_API_KEY` (or `XI_API_KEY`)
 - `OPENAI_API_KEY`
+- `GEMINI_API_KEY`
 
 Edge TTS does **not** require an API key. If no API keys are found, Moltbot defaults
 to Edge TTS (unless disabled via `messages.tts.edge.enabled=false`).
 
 If multiple providers are configured, the selected provider is used first and the others are fallback options.
+Gemini falls back to ElevenLabs, then OpenAI, then Edge (if enabled).
 Auto-summary uses the configured `summaryModel` (or `agents.defaults.model.primary`),
 so that provider must also be authenticated if you enable summaries.
 
@@ -50,6 +53,9 @@ so that provider must also be authenticated if you enable summaries.
 - [ElevenLabs Authentication](https://elevenlabs.io/docs/api-reference/authentication)
 - [node-edge-tts](https://github.com/SchneeHertz/node-edge-tts)
 - [Microsoft Speech output formats](https://learn.microsoft.com/azure/ai-services/speech-service/rest-text-to-speech#audio-outputs)
+- [Gemini speech generation](https://ai.google.dev/gemini-api/docs/speech-generation)
+- [Gemini TTS voices](https://ai.google.dev/gemini-api/docs/speech-generation#voices)
+- [Gemini TTS models](https://ai.google.dev/gemini-api/docs/speech-generation#supported-models)
 
 ## Is it enabled by default?
 
@@ -136,6 +142,25 @@ Full schema is in [Gateway configuration](/gateway/configuration).
 }
 ```
 
+### Gemini primary
+
+```json5
+{
+  messages: {
+    tts: {
+      enabled: true,
+      provider: "gemini",
+      gemini: {
+        apiKey: "gemini_api_key",
+        model: "gemini-2.5-flash-preview-tts",
+        voiceName: "Kore",
+        baseUrl: "generativelanguage.googleapis.com"
+      }
+    }
+  }
+}
+```
+
 ### Disable Edge TTS
 
 ```json5
@@ -202,17 +227,20 @@ Then run:
   - `tagged` only sends audio when the reply includes `[[tts]]` tags.
 - `enabled`: legacy toggle (doctor migrates this to `auto`).
 - `mode`: `"final"` (default) or `"all"` (includes tool/block replies).
-- `provider`: `"elevenlabs"`, `"openai"`, or `"edge"` (fallback is automatic).
-- If `provider` is **unset**, Moltbot prefers `openai` (if key), then `elevenlabs` (if key),
-  otherwise `edge`.
+- `provider`: `"elevenlabs"`, `"openai"`, `"edge"`, or `"gemini"`.
+  - If `provider` is **unset**, Moltbot picks OpenAI when configured, then ElevenLabs, then Edge.
+  - Gemini falls back to ElevenLabs, then OpenAI, then Edge (if enabled).
 - `summaryModel`: optional cheap model for auto-summary; defaults to `agents.defaults.model.primary`.
   - Accepts `provider/model` or a configured model alias.
 - `modelOverrides`: allow the model to emit TTS directives (on by default).
 - `maxTextLength`: hard cap for TTS input (chars). `/tts audio` fails if exceeded.
 - `timeoutMs`: request timeout (ms).
-- `prefsPath`: override the local prefs JSON path (provider/limit/summary).
-- `apiKey` values fall back to env vars (`ELEVENLABS_API_KEY`/`XI_API_KEY`, `OPENAI_API_KEY`).
+- `prefsPath`: override the local prefs JSON path.
+- `apiKey` values fall back to env vars (`ELEVENLABS_API_KEY`/`XI_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`).
 - `elevenlabs.baseUrl`: override ElevenLabs API base URL.
+- `gemini.baseUrl`: base URL for the Gemini API; if it doesn't end in `/v1beta`, Clawdbot appends it.
+- `gemini.voiceName`: prebuilt Gemini voice name (free-form; see Gemini docs for the list).
+- `gemini.model`: Gemini TTS model name (free-form).
 - `elevenlabs.voiceSettings`:
   - `stability`, `similarityBoost`, `style`: `0..1`
   - `useSpeakerBoost`: `true|false`
@@ -250,9 +278,9 @@ Here you go.
 ```
 
 Available directive keys (when enabled):
-- `provider` (`openai` | `elevenlabs` | `edge`)
-- `voice` (OpenAI voice) or `voiceId` (ElevenLabs)
-- `model` (OpenAI TTS model or ElevenLabs model id)
+- `provider` (`openai` | `elevenlabs` | `edge` | `gemini`)
+- `voice` (OpenAI voice), `voiceId` (ElevenLabs), or `voiceName` (Gemini)
+- `model` (OpenAI TTS model, ElevenLabs model id, or Gemini model name)
 - `stability`, `similarityBoost`, `style`, `speed`, `useSpeakerBoost`
 - `applyTextNormalization` (`auto|on|off`)
 - `languageCode` (ISO 639-1)
@@ -304,17 +332,19 @@ These override `messages.tts.*` for that host.
 
 ## Output formats (fixed)
 
-- **Telegram**: Opus voice note (`opus_48000_64` from ElevenLabs, `opus` from OpenAI).
+- **Telegram**: Opus voice note (`opus_48000_64` from ElevenLabs, `opus` from OpenAI/Gemini).
   - 48kHz / 64kbps is a good voice-note tradeoff and required for the round bubble.
-- **Other channels**: MP3 (`mp3_44100_128` from ElevenLabs, `mp3` from OpenAI).
+- **Other channels**: MP3 (`mp3_44100_128` from ElevenLabs, `mp3` from OpenAI/Gemini).
   - 44.1kHz / 128kbps is the default balance for speech clarity.
 - **Edge TTS**: uses `edge.outputFormat` (default `audio-24khz-48kbitrate-mono-mp3`).
   - `node-edge-tts` accepts an `outputFormat`, but not all formats are available
-    from the Edge service. citeturn2search0
-  - Output format values follow Microsoft Speech output formats (including Ogg/WebM Opus). citeturn1search0
+    from the Edge service.
+  - Output format values follow Microsoft Speech output formats (including Ogg/WebM Opus).
   - Telegram `sendVoice` accepts OGG/MP3/M4A; use OpenAI/ElevenLabs if you need
-    guaranteed Opus voice notes. citeturn1search1
+    guaranteed Opus voice notes.
   - If the configured Edge output format fails, Moltbot retries with MP3.
+
+Gemini returns raw PCM audio and requires `ffmpeg` to transcode into MP3/Opus.
 
 OpenAI/ElevenLabs formats are fixed; Telegram expects Opus for voice-note UX.
 
@@ -359,7 +389,7 @@ Discord note: `/tts` is a built-in Discord command, so Moltbot registers
 /tts inbound
 /tts tagged
 /tts status
-/tts provider openai
+/tts provider gemini
 /tts limit 2000
 /tts summary off
 /tts audio Hello from Moltbot
