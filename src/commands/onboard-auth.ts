@@ -3,12 +3,15 @@ export {
   SYNTHETIC_DEFAULT_MODEL_REF,
 } from "../agents/synthetic-models.js";
 export { VENICE_DEFAULT_MODEL_ID, VENICE_DEFAULT_MODEL_REF } from "../agents/venice-models.js";
+export { NILLION_DEFAULT_MODEL_ID, NILLION_DEFAULT_MODEL_REF } from "../agents/nillion-models.js";
 export {
   applyAuthProfileConfig,
   applyKimiCodeConfig,
   applyKimiCodeProviderConfig,
   applyMoonshotConfig,
   applyMoonshotProviderConfig,
+  applyNillionConfig,
+  applyNillionProviderConfig,
   applyOpenrouterConfig,
   applyOpenrouterProviderConfig,
   applySyntheticConfig,
@@ -33,12 +36,14 @@ export {
   applyOpencodeZenProviderConfig,
 } from "./onboard-auth.config-opencode.js";
 export {
+  NILLION_DEFAULT_MODEL_REF as NILLION_CREDENTIALS_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   setAnthropicApiKey,
   setGeminiApiKey,
   setKimiCodeApiKey,
   setMinimaxApiKey,
   setMoonshotApiKey,
+  setNillionApiKey,
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
   setSyntheticApiKey,

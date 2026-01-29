@@ -13,6 +13,11 @@ import {
   SYNTHETIC_MODEL_CATALOG,
 } from "./synthetic-models.js";
 import { discoverVeniceModels, VENICE_BASE_URL } from "./venice-models.js";
+import {
+  buildNillionModelDefinition,
+  NILLION_BASE_URL,
+  NILLION_MODEL_CATALOG,
+} from "./nillion-models.js";
 
 type ModelsConfig = NonNullable<MoltbotConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
@@ -350,6 +355,14 @@ async function buildVeniceProvider(): Promise<ProviderConfig> {
   };
 }
 
+function buildNillionProvider(): ProviderConfig {
+  return {
+    baseUrl: NILLION_BASE_URL,
+    api: "openai-responses",
+    models: NILLION_MODEL_CATALOG.map(buildNillionModelDefinition),
+  };
+}
+
 async function buildOllamaProvider(): Promise<ProviderConfig> {
   const models = await discoverOllamaModels();
   return {
@@ -400,6 +413,13 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "venice", store: authStore });
   if (veniceKey) {
     providers.venice = { ...(await buildVeniceProvider()), apiKey: veniceKey };
+  }
+
+  const nillionKey =
+    resolveEnvApiKeyVarName("nillion") ??
+    resolveApiKeyFromProfiles({ provider: "nillion", store: authStore });
+  if (nillionKey) {
+    providers.nillion = { ...buildNillionProvider(), apiKey: nillionKey };
   }
 
   const qwenProfiles = listProfilesForProvider(authStore, "qwen-portal");

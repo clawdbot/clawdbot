@@ -10,6 +10,12 @@ import {
   VENICE_DEFAULT_MODEL_REF,
   VENICE_MODEL_CATALOG,
 } from "../agents/venice-models.js";
+import {
+  buildNillionModelDefinition,
+  NILLION_BASE_URL,
+  NILLION_MODEL_CATALOG,
+} from "../agents/nillion-models.js";
+import { NILLION_DEFAULT_MODEL_REF } from "./onboard-auth.credentials.js";
 import type { MoltbotConfig } from "../config/config.js";
 import {
   OPENROUTER_DEFAULT_MODEL_REF,
@@ -405,6 +411,83 @@ export function applyVeniceConfig(cfg: MoltbotConfig): MoltbotConfig {
               }
             : undefined),
           primary: VENICE_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
+}
+
+/**
+ * Apply Nillion provider configuration without changing the default model.
+ * Registers Nillion models and sets up the provider, but preserves existing model selection.
+ */
+export function applyNillionProviderConfig(cfg: MoltbotConfig): MoltbotConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[NILLION_DEFAULT_MODEL_REF] = {
+    ...models[NILLION_DEFAULT_MODEL_REF],
+    alias: models[NILLION_DEFAULT_MODEL_REF]?.alias ?? "nilAI Private 20B",
+  };
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.nillion;
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+  const nillionModels = NILLION_MODEL_CATALOG.map(buildNillionModelDefinition);
+  const mergedModels = [
+    ...existingModels,
+    ...nillionModels.filter(
+      (model) => !existingModels.some((existing) => existing.id === model.id),
+    ),
+  ];
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > as { apiKey?: string };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+  providers.nillion = {
+    ...existingProviderRest,
+    baseUrl: NILLION_BASE_URL,
+    api: "openai-responses",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : nillionModels,
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
+/**
+ * Apply Nillion provider configuration AND set Nillion as the default model.
+ * Use this when Nillion is the primary provider choice during onboarding.
+ */
+export function applyNillionConfig(cfg: MoltbotConfig): MoltbotConfig {
+  const next = applyNillionProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: NILLION_DEFAULT_MODEL_REF,
         },
       },
     },

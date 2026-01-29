@@ -17,6 +17,8 @@ import {
   applyKimiCodeProviderConfig,
   applyMoonshotConfig,
   applyMoonshotProviderConfig,
+  applyNillionConfig,
+  applyNillionProviderConfig,
   applyOpencodeZenConfig,
   applyOpencodeZenProviderConfig,
   applyOpenrouterConfig,
@@ -30,6 +32,7 @@ import {
   applyZaiConfig,
   KIMI_CODE_MODEL_REF,
   MOONSHOT_DEFAULT_MODEL_REF,
+  NILLION_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   SYNTHETIC_DEFAULT_MODEL_REF,
   VENICE_DEFAULT_MODEL_REF,
@@ -37,6 +40,7 @@ import {
   setGeminiApiKey,
   setKimiCodeApiKey,
   setMoonshotApiKey,
+  setNillionApiKey,
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
   setSyntheticApiKey,
@@ -83,6 +87,8 @@ export async function applyAuthChoiceApiProviders(
       authChoice = "synthetic-api-key";
     } else if (params.opts.tokenProvider === "venice") {
       authChoice = "venice-api-key";
+    } else if (params.opts.tokenProvider === "nillion") {
+      authChoice = "nillion-api-key";
     } else if (params.opts.tokenProvider === "opencode") {
       authChoice = "opencode-zen";
     }
@@ -513,6 +519,64 @@ export async function applyAuthChoiceApiProviders(
         applyDefaultConfig: applyVeniceConfig,
         applyProviderConfig: applyVeniceProviderConfig,
         noteDefault: VENICE_DEFAULT_MODEL_REF,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "nillion-api-key") {
+    let hasCredential = false;
+
+    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "nillion") {
+      await setNillionApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      hasCredential = true;
+    }
+
+    if (!hasCredential) {
+      await params.prompter.note(
+        [
+          "Nillion nilAI provides privacy-preserving AI inference.",
+          "Get your API key at: https://nilai.nillion.com",
+        ].join("\n"),
+        "Nillion nilAI",
+      );
+    }
+
+    const envKey = resolveEnvApiKey("nillion");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing NILLION_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setNillionApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter Nillion API key",
+        validate: validateApiKeyInput,
+      });
+      await setNillionApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "nillion:default",
+      provider: "nillion",
+      mode: "api_key",
+    });
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: NILLION_DEFAULT_MODEL_REF,
+        applyDefaultConfig: applyNillionConfig,
+        applyProviderConfig: applyNillionProviderConfig,
+        noteDefault: NILLION_DEFAULT_MODEL_REF,
         noteAgentModel,
         prompter: params.prompter,
       });
