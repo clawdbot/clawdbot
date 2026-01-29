@@ -305,4 +305,32 @@ describe("deliverReplies", () => {
     expect(sendVoice).toHaveBeenCalledTimes(1);
     expect(sendMessage).not.toHaveBeenCalled();
   });
+
+  it("skips empty chunks from thematic breaks without crashing (#3011)", async () => {
+    // A horizontal rule (---) in markdown produces empty HTML after conversion.
+    // This must not cause a Telegram "message text is empty" 400 error or
+    // abort delivery of subsequent chunks.
+    const runtime = { error: vi.fn(), log: vi.fn() };
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 1, chat: { id: "c" } });
+    const bot = { api: { sendMessage } } as unknown as Bot;
+
+    await deliverReplies({
+      replies: [{ text: "Before\n\n---\n\nAfter" }],
+      chatId: "c",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4000,
+    });
+
+    // All sendMessage calls should have non-empty text
+    for (const call of sendMessage.mock.calls) {
+      const text = call[1] as string;
+      expect(text.trim().length).toBeGreaterThan(0);
+    }
+    // "After" should not be silently dropped
+    const allTexts = sendMessage.mock.calls.map((c: unknown[]) => c[1] as string).join(" ");
+    expect(allTexts).toContain("After");
+  });
 });

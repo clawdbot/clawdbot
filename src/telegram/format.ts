@@ -81,10 +81,18 @@ export function markdownToTelegramChunks(
     tableMode: options.tableMode,
   });
   const chunks = chunkMarkdownIR(ir, limit);
-  return chunks.map((chunk) => ({
-    html: renderTelegramHtml(chunk),
-    text: chunk.text,
-  }));
+  return (
+    chunks
+      .map((chunk) => ({
+        html: renderTelegramHtml(chunk),
+        text: chunk.text,
+      }))
+      // Filter out empty chunks produced by thematic breaks (---/***/___),
+      // empty blockquotes, or headings without text.  These render to empty
+      // HTML and would cause Telegram API "message text is empty" errors.
+      // See #3011.
+      .filter((chunk) => chunk.html.trim().length > 0)
+  );
 }
 
 export function markdownToTelegramHtmlChunks(markdown: string, limit: number): string[] {

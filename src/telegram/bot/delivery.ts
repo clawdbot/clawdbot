@@ -490,6 +490,15 @@ async function sendTelegramText(
   const linkPreviewOptions = linkPreviewEnabled ? undefined : { is_disabled: true };
   const textMode = opts?.textMode ?? "markdown";
   const htmlText = textMode === "html" ? text : markdownToTelegramHtml(text);
+  // Skip empty HTML chunks — thematic breaks (---/***/___)  and empty
+  // block-level elements produce zero visible output after markdown→HTML
+  // conversion.  Sending an empty string to the Telegram API triggers a
+  // "400: message text is empty" error which aborts the entire delivery
+  // loop, silently dropping all subsequent chunks.  See #3011.
+  if (!htmlText || !htmlText.trim()) {
+    logVerbose("telegram sendTelegramText: skipping empty HTML chunk");
+    return undefined;
+  }
   try {
     const res = await withTelegramApiErrorLogging({
       operation: "sendMessage",
