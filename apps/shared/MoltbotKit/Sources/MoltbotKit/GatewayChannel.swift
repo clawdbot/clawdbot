@@ -109,7 +109,7 @@ private enum ConnectChallengeError: Error {
 }
 
 public actor GatewayChannelActor {
-    private let logger = Logger(subsystem: "bot.molt", category: "gateway")
+    private let logger: Logger
     private var task: WebSocketTaskBox?
     private var pending: [String: CheckedContinuation<GatewayFrame, Error>] = [:]
     private var connected = false
@@ -143,8 +143,10 @@ public actor GatewayChannelActor {
         session: WebSocketSessionBox? = nil,
         pushHandler: (@Sendable (GatewayPush) async -> Void)? = nil,
         connectOptions: GatewayConnectOptions? = nil,
+        loggerCategory: String = "gateway",
         disconnectHandler: (@Sendable (String) async -> Void)? = nil)
     {
+        self.logger = Logger(subsystem: "bot.molt", category: loggerCategory)
         self.url = url
         self.token = token
         self.password = password
@@ -211,7 +213,22 @@ public actor GatewayChannelActor {
     }
 
     public func connect() async throws {
-        if self.connected, self.task?.state == .running { return }
+        if self.connected, self.task?.state == .running {
+            let staleStatus = self.staleConnectionStatus()
+            if staleStatus.isStale {
+                if let deltaMs = staleStatus.deltaMs {
+                    self.logger.error(
+                        "gateway ws stale; reconnecting deltaMs=\(Int(deltaMs)) thresholdMs=\(Int(staleStatus.thresholdMs))")
+                } else {
+                    self.logger.error(
+                        "gateway ws stale; reconnecting lastTick=missing thresholdMs=\(Int(staleStatus.thresholdMs))")
+                }
+                self.connected = false
+                self.task?.cancel(with: .goingAway, reason: nil)
+            } else {
+                return
+            }
+        }
         if self.isConnecting {
             try await withCheckedThrowingContinuation { cont in
                 self.connectWaiters.append(cont)
@@ -328,8 +345,8 @@ public actor GatewayChannelActor {
         } else if let password = self.password {
             params["auth"] = ProtoAnyCodable(["password": ProtoAnyCodable(password)])
         }
-        let signedAtMs = Int(Date().timeIntervalSince1970 * 1000)
         let connectNonce = try await self.waitForConnectChallenge()
+        let signedAtMs = Int(Date().timeIntervalSince1970 * 1000)
         let scopesValue = scopes.joined(separator: ",")
         var payloadParts = [
             connectNonce == nil ? "v1" : "v2",
@@ -552,6 +569,15 @@ public actor GatewayChannelActor {
                 }
             }
         }
+    }
+
+    private func staleConnectionStatus() -> (isStale: Bool, deltaMs: Double?, thresholdMs: Double) {
+        let thresholdMs = self.tickIntervalMs * 2
+        guard let lastTick else {
+            return (true, nil, thresholdMs)
+        }
+        let deltaMs = Date().timeIntervalSince(lastTick) * 1000
+        return (deltaMs > thresholdMs, deltaMs, thresholdMs)
     }
 
     private func scheduleReconnect() async {

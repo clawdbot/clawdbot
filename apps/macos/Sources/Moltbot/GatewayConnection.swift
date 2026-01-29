@@ -367,7 +367,8 @@ actor GatewayConnection {
             session: self.sessionBox,
             pushHandler: { [weak self] push in
                 await self?.handle(push: push)
-            })
+            },
+            loggerCategory: "gateway.control")
         self.configuredURL = url
         self.configuredToken = token
         self.configuredPassword = password

@@ -90,6 +90,7 @@ public actor GatewayNodeSession {
                     await self?.handlePush(push)
                 },
                 connectOptions: connectOptions,
+                loggerCategory: "gateway.node",
                 disconnectHandler: { [weak self] reason in
                     await self?.onDisconnected?(reason)
                 })
@@ -107,7 +108,6 @@ public actor GatewayNodeSession {
 
         do {
             try await channel.connect()
-            await onConnected()
         } catch {
             await onDisconnected(error.localizedDescription)
             throw error
