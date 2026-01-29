@@ -61,6 +61,11 @@ export async function withTimeout<T>(
   }
 }
 
+function isPathWithinBase(basePath: string, targetPath: string): boolean {
+  const rel = path.relative(basePath, targetPath);
+  return !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
 async function extractZip(params: { archivePath: string; destDir: string }): Promise<void> {
   const buffer = await fs.readFile(params.archivePath);
   const zip = await JSZip.loadAsync(buffer);
@@ -70,7 +75,7 @@ async function extractZip(params: { archivePath: string; destDir: string }): Pro
     const entryPath = entry.name.replaceAll("\\", "/");
     if (!entryPath || entryPath.endsWith("/")) {
       const dirPath = path.resolve(params.destDir, entryPath);
-      if (!dirPath.startsWith(params.destDir)) {
+      if (!isPathWithinBase(params.destDir, dirPath)) {
         throw new Error(`zip entry escapes destination: ${entry.name}`);
       }
       await fs.mkdir(dirPath, { recursive: true });
@@ -78,7 +83,7 @@ async function extractZip(params: { archivePath: string; destDir: string }): Pro
     }
 
     const outPath = path.resolve(params.destDir, entryPath);
-    if (!outPath.startsWith(params.destDir)) {
+    if (!isPathWithinBase(params.destDir, outPath)) {
       throw new Error(`zip entry escapes destination: ${entry.name}`);
     }
     await fs.mkdir(path.dirname(outPath), { recursive: true });
@@ -101,7 +106,14 @@ export async function extractArchive(params: {
   const label = kind === "zip" ? "extract zip" : "extract tar";
   if (kind === "tar") {
     await withTimeout(
-      tar.x({ file: params.archivePath, cwd: params.destDir }),
+      tar.x({
+        file: params.archivePath,
+        cwd: params.destDir,
+        filter: (entryPath) => {
+          const absPath = path.resolve(params.destDir, entryPath);
+          return isPathWithinBase(params.destDir, absPath);
+        },
+      }),
       params.timeoutMs,
       label,
     );
