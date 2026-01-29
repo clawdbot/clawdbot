@@ -5,7 +5,7 @@ export type WizardFlow = "quickstart" | "advanced";
 export type QuickstartGatewayDefaults = {
   hasExisting: boolean;
   port: number;
-  bind: "loopback" | "lan" | "auto" | "custom" | "tailnet";
+  bind: "loopback" | "lan" | "auto" | "custom" | "tailnet" | "wireguard";
   authMode: GatewayAuthChoice;
   tailscaleMode: "off" | "serve" | "funnel";
   token?: string;
@@ -16,7 +16,7 @@ export type QuickstartGatewayDefaults = {
 
 export type GatewayWizardSettings = {
   port: number;
-  bind: "loopback" | "lan" | "auto" | "custom" | "tailnet";
+  bind: "loopback" | "lan" | "auto" | "custom" | "tailnet" | "wireguard";
   customBindHost?: string;
   authMode: GatewayAuthChoice;
   gatewayToken?: string;

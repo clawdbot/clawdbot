@@ -34,7 +34,7 @@ export type AuthChoice =
   | "skip";
 export type GatewayAuthChoice = "token" | "password";
 export type ResetScope = "config" | "config+creds+sessions" | "full";
-export type GatewayBind = "loopback" | "lan" | "auto" | "custom" | "tailnet";
+export type GatewayBind = "loopback" | "lan" | "auto" | "custom" | "tailnet" | "wireguard";
 export type TailscaleMode = "off" | "serve" | "funnel";
 export type NodeManagerChoice = "npm" | "pnpm" | "bun";
 export type ChannelChoice = ChannelId;

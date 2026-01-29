@@ -12,6 +12,7 @@ import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
+import { pickPrimaryWireguardIPv4 } from "../infra/wireguard.js";
 import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import { isWSL } from "../infra/wsl.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -393,7 +394,7 @@ export const DEFAULT_WORKSPACE = DEFAULT_AGENT_WORKSPACE_DIR;
 
 export function resolveControlUiLinks(params: {
   port: number;
-  bind?: "auto" | "lan" | "loopback" | "custom" | "tailnet";
+  bind?: "auto" | "lan" | "loopback" | "custom" | "tailnet" | "wireguard";
   customBindHost?: string;
   basePath?: string;
 }): { httpUrl: string; wsUrl: string } {
@@ -401,11 +402,13 @@ export function resolveControlUiLinks(params: {
   const bind = params.bind ?? "loopback";
   const customBindHost = params.customBindHost?.trim();
   const tailnetIPv4 = pickPrimaryTailnetIPv4();
+  const wireguardIPv4 = pickPrimaryWireguardIPv4();
   const host = (() => {
     if (bind === "custom" && customBindHost && isValidIPv4(customBindHost)) {
       return customBindHost;
     }
     if (bind === "tailnet" && tailnetIPv4) return tailnetIPv4 ?? "127.0.0.1";
+    if (bind === "wireguard" && wireguardIPv4) return wireguardIPv4 ?? "127.0.0.1";
     return "127.0.0.1";
   })();
   const basePath = normalizeControlUiBasePath(params.basePath);

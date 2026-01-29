@@ -212,7 +212,7 @@ export const testState = {
   allowFrom: undefined as string[] | undefined,
   cronStorePath: undefined as string | undefined,
   cronEnabled: false as boolean | undefined,
-  gatewayBind: undefined as "auto" | "lan" | "tailnet" | "loopback" | undefined,
+  gatewayBind: undefined as "auto" | "lan" | "tailnet" | "wireguard" | "loopback" | undefined,
   gatewayAuth: undefined as Record<string, unknown> | undefined,
   gatewayControlUi: undefined as Record<string, unknown> | undefined,
   hooksConfig: undefined as HooksConfig | undefined,

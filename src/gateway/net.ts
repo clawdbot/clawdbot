@@ -1,5 +1,6 @@
 import net from "node:net";
 
+import { pickPrimaryWireguardIPv4 } from "../infra/wireguard.js";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
 
 export function isLoopbackAddress(ip: string | undefined): boolean {
@@ -74,6 +75,8 @@ export function isLocalGatewayAddress(ip: string | undefined): boolean {
   if (tailnetIPv4 && normalized === tailnetIPv4.toLowerCase()) return true;
   const tailnetIPv6 = pickPrimaryTailnetIPv6();
   if (tailnetIPv6 && ip.trim().toLowerCase() === tailnetIPv6.toLowerCase()) return true;
+  const wireguardIPv4 = pickPrimaryWireguardIPv4();
+  if (wireguardIPv4 && normalized === wireguardIPv4.toLowerCase()) return true;
   return false;
 }
 
@@ -83,7 +86,8 @@ export function isLocalGatewayAddress(ip: string | undefined): boolean {
  * Modes:
  * - loopback: 127.0.0.1 (rarely fails, but handled gracefully)
  * - lan: always 0.0.0.0 (no fallback)
- * - tailnet: Tailnet IPv4 if available, else loopback
+ * - tailnet: Tailnet IPv4 if available (100.64.0.0/10), else loopback
+ * - wireguard: WireGuard IPv4 if available (wg0/wt0 interface), else loopback
  * - auto: Loopback if available, else 0.0.0.0
  * - custom: User-specified IP, fallback to 0.0.0.0 if unavailable
  *
@@ -94,17 +98,24 @@ export async function resolveGatewayBindHost(
   customHost?: string,
 ): Promise<string> {
   const mode = bind ?? "loopback";
-
+  const localhost = "127.0.0.1";
   if (mode === "loopback") {
     // 127.0.0.1 rarely fails, but handle gracefully
-    if (await canBindToHost("127.0.0.1")) return "127.0.0.1";
+    if (await canBindToHost(localhost)) return localhost;
     return "0.0.0.0"; // extreme fallback
   }
 
   if (mode === "tailnet") {
     const tailnetIP = pickPrimaryTailnetIPv4();
     if (tailnetIP && (await canBindToHost(tailnetIP))) return tailnetIP;
-    if (await canBindToHost("127.0.0.1")) return "127.0.0.1";
+    if (await canBindToHost(localhost)) return localhost;
+    return "0.0.0.0";
+  }
+
+  if (mode === "wireguard") {
+    const wgIP = pickPrimaryWireguardIPv4();
+    if (wgIP && (await canBindToHost(wgIP))) return wgIP;
+    if (await canBindToHost(localhost)) return localhost;
     return "0.0.0.0";
   }
 
@@ -122,7 +133,7 @@ export async function resolveGatewayBindHost(
   }
 
   if (mode === "auto") {
-    if (await canBindToHost("127.0.0.1")) return "127.0.0.1";
+    if (await canBindToHost(localhost)) return localhost;
     return "0.0.0.0";
   }
 
