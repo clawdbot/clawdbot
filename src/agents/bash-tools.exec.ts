@@ -190,6 +190,12 @@ const execSchema = Type.Object({
       description: "Node id/name for host=node.",
     }),
   ),
+  autoEnter: Type.Optional(
+    Type.Boolean({
+      description:
+        "Auto-append Enter to tmux send-keys commands that are missing it. Default false.",
+    }),
+  ),
 });
 
 export type ExecToolDetails =
@@ -749,10 +755,19 @@ export function createExecTool(
         security?: string;
         ask?: string;
         node?: string;
+        autoEnter?: boolean;
       };
 
       if (!params.command) {
         throw new Error("Provide a command to start.");
+      }
+
+      // Auto-append Enter to tmux send-keys commands if autoEnter is enabled and missing.
+      if (params.autoEnter && /tmux\s+.*send-keys/i.test(params.command)) {
+        // Check if the command already ends with Enter (possibly followed by whitespace or quotes).
+        if (!/\bEnter['"]?\s*$/.test(params.command)) {
+          params.command = `${params.command} Enter`;
+        }
       }
 
       const maxOutput = DEFAULT_MAX_OUTPUT;
