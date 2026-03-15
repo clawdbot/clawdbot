@@ -386,12 +386,36 @@ describe("hasAlreadyFlushedForCurrentCompaction", () => {
     ).toBe(false);
   });
 
-  it("treats missing compactionCount as 0", () => {
+  it("returns false when both counts are 0 (initial state)", () => {
+    // When both counts are 0, this represents the initial state (never flushed).
+    // We should return false to allow the first memory flush to proceed.
+    expect(
+      hasAlreadyFlushedForCurrentCompaction({
+        compactionCount: 0,
+        memoryFlushCompactionCount: 0,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false when memoryFlushCompactionCount is 0 but compactionCount is missing (treated as 0)", () => {
+    // Same as above - initial state, should allow flush
     expect(
       hasAlreadyFlushedForCurrentCompaction({
         memoryFlushCompactionCount: 0,
       }),
-    ).toBe(true);
+    ).toBe(false);
+  });
+
+  it("returns false when memoryFlushCompactionCount is 0 but compactionCount has advanced", () => {
+    // This means a flush happened before any compaction (at count 0),
+    // and now we've compacted at least once. The flush is "behind" current cycle.
+    // We should return false to allow a new flush for the current cycle.
+    expect(
+      hasAlreadyFlushedForCurrentCompaction({
+        compactionCount: 1,
+        memoryFlushCompactionCount: 0,
+      }),
+    ).toBe(false);
   });
 });
 

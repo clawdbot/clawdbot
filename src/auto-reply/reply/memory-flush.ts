@@ -224,5 +224,15 @@ export function hasAlreadyFlushedForCurrentCompaction(
 ): boolean {
   const compactionCount = entry.compactionCount ?? 0;
   const lastFlushAt = entry.memoryFlushCompactionCount;
-  return typeof lastFlushAt === "number" && lastFlushAt === compactionCount;
+  // If lastFlushAt is undefined, never flushed
+  if (typeof lastFlushAt !== "number") {
+    return false;
+  }
+  // If both are 0, this is the initial state (never flushed for real).
+  // This handles the case where memoryFlushCompactionCount was set to 0
+  // during the first flush but compactionCount hasn't changed yet.
+  if (lastFlushAt === 0 && compactionCount === 0) {
+    return false;
+  }
+  return lastFlushAt === compactionCount;
 }
