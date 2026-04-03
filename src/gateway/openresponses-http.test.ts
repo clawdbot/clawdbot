@@ -455,8 +455,35 @@ describe("OpenResponses HTTP API (e2e)", () => {
       });
       expect(resUsage.status).toBe(200);
       const usageJson = (await resUsage.json()) as Record<string, unknown>;
-      expect(usageJson.usage).toEqual({ input_tokens: 3, output_tokens: 5, total_tokens: 10 });
+      expect(usageJson.usage).toEqual({
+        input_tokens: 3,
+        output_tokens: 5,
+        total_tokens: 10,
+        cache_read_tokens: 1,
+        cache_write_tokens: 1,
+      });
       await ensureResponseConsumed(resUsage);
+
+      // No cache — fields should be absent (not zero)
+      mockAgentOnce([{ text: "ok" }], {
+        agentMeta: {
+          usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0 },
+        },
+      });
+      const resNoCache = await postResponses(port, {
+        stream: false,
+        model: "openclaw",
+        input: "hi",
+      });
+      expect(resNoCache.status).toBe(200);
+      const noCacheJson = (await resNoCache.json()) as Record<string, unknown>;
+      const noCacheUsage = noCacheJson.usage as Record<string, unknown>;
+      expect(noCacheUsage.input_tokens).toBe(10);
+      expect(noCacheUsage.output_tokens).toBe(5);
+      expect(noCacheUsage.total_tokens).toBe(15);
+      expect(noCacheUsage.cache_read_tokens).toBeUndefined();
+      expect(noCacheUsage.cache_write_tokens).toBeUndefined();
+      await ensureResponseConsumed(resNoCache);
 
       mockAgentOnce([{ text: "hello" }]);
       const resShape = await postResponses(port, {

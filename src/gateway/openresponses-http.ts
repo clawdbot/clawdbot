@@ -167,11 +167,18 @@ function toUsage(
   const cacheRead = value.cacheRead ?? 0;
   const cacheWrite = value.cacheWrite ?? 0;
   const total = value.total ?? input + output + cacheRead + cacheWrite;
-  return {
+  const result: Usage = {
     input_tokens: Math.max(0, input),
     output_tokens: Math.max(0, output),
     total_tokens: Math.max(0, total),
   };
+  if (cacheRead > 0) {
+    result.cache_read_tokens = cacheRead;
+  }
+  if (cacheWrite > 0) {
+    result.cache_write_tokens = cacheWrite;
+  }
+  return result;
 }
 
 function extractUsageFromResult(result: unknown): Usage {

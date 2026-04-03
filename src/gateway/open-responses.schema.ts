@@ -257,6 +257,8 @@ export const UsageSchema = z.object({
   input_tokens: z.number().int().nonnegative(),
   output_tokens: z.number().int().nonnegative(),
   total_tokens: z.number().int().nonnegative(),
+  cache_read_tokens: z.number().int().nonnegative().optional(),
+  cache_write_tokens: z.number().int().nonnegative().optional(),
 });
 
 export type Usage = z.infer<typeof UsageSchema>;

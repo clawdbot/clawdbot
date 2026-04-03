@@ -126,6 +126,7 @@ import { collectAllowedToolNames } from "../tool-name-allowlist.js";
 import { installToolResultContextGuard } from "../tool-result-context-guard.js";
 import { splitSdkTools } from "../tool-split.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
+import { normalizeUsage, type UsageLike } from "../../usage.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { waitForCompactionRetryWithAggregateTimeout } from "./compaction-retry-aggregate-timeout.js";
 import {
@@ -2674,6 +2675,11 @@ export async function runEmbeddedAttempt(
         // This is fire-and-forget, so we don't await
         // Run even on compaction timeout so plugins can log/cleanup
         if (hookRunner?.hasHooks("agent_end")) {
+          const lastMsg = messagesSnapshot
+            .slice()
+            .toReversed()
+            .find((m) => m.role === "assistant");
+          const endUsage = normalizeUsage(lastMsg?.usage as UsageLike);
           hookRunner
             .runAgentEnd(
               {
@@ -2681,6 +2687,7 @@ export async function runEmbeddedAttempt(
                 success: !aborted && !promptError,
                 error: promptError ? describeUnknownError(promptError) : undefined,
                 durationMs: Date.now() - promptStartedAt,
+                usage: endUsage,
               },
               {
                 agentId: hookAgentId,
