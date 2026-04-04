@@ -88,6 +88,14 @@ RUN pnpm canvas:a2ui:bundle || \
      echo "/* A2UI bundle unavailable in this build */" > src/canvas-host/a2ui/a2ui.bundle.js && \
      echo "stub" > src/canvas-host/a2ui/.bundle.hash && \
      rm -rf vendor/a2ui apps/shared/OpenClawKit/Tools/CanvasA2UI)
+# Append short git SHA to package.json version when OPENCLAW_VERSION_SUFFIX is set.
+# CI passes the full commit SHA; we take the first 7 characters.
+# Result: "version": "2026.3.14-04aadd0" in the built dist/package.json.
+ARG OPENCLAW_VERSION_SUFFIX=""
+RUN if [ -n "$OPENCLAW_VERSION_SUFFIX" ]; then \
+      short_sha="$(printf '%.7s' "$OPENCLAW_VERSION_SUFFIX")" && \
+      node -e "const p=require('./package.json'); p.version+='-'+process.argv[1]; require('fs').writeFileSync('package.json',JSON.stringify(p,null,2)+'\\n')" "$short_sha"; \
+    fi
 RUN pnpm build:docker
 # Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
 ENV OPENCLAW_PREFER_PNPM=1
