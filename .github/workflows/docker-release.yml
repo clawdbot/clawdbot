@@ -25,9 +25,9 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  # Build amd64 images (default + slim share the build stage cache)
+  # Build amd64 images (default + slim)
   build-amd64:
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     permissions:
       packages: write
       contents: read
@@ -118,7 +118,7 @@ jobs:
 
       - name: Build and push amd64 image
         id: build
-        uses: useblacksmith/build-push-action@v2
+        uses: docker/build-push-action@v5
         with:
           context: .
           platforms: linux/amd64
@@ -129,7 +129,7 @@ jobs:
 
       - name: Build and push amd64 slim image
         id: build-slim
-        uses: useblacksmith/build-push-action@v2
+        uses: docker/build-push-action@v5
         with:
           context: .
           platforms: linux/amd64
@@ -140,128 +140,13 @@ jobs:
           provenance: false
           push: true
 
-  # Build arm64 images (default + slim share the build stage cache)
-  build-arm64:
-    runs-on: blacksmith-16vcpu-ubuntu-2404-arm
-    permissions:
-      packages: write
-      contents: read
-    outputs:
-      digest: ${{ steps.build.outputs.digest }}
-      slim-digest: ${{ steps.build-slim.outputs.digest }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Set up Docker Builder
-        uses: docker/setup-buildx-action@v4
-
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Resolve image tags (arm64)
-        id: tags
-        shell: bash
-        env:
-          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-        run: |
-          set -euo pipefail
-          tags=()
-          slim_tags=()
-          if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
-            tags+=("${IMAGE}:main-arm64")
-            slim_tags+=("${IMAGE}:main-slim-arm64")
-          fi
-          if [[ "${GITHUB_REF}" == "refs/heads/clawboss" ]]; then
-            tags+=("${IMAGE}:stable-arm64")
-            slim_tags+=("${IMAGE}:stable-slim-arm64")
-          fi
-          if [[ "${GITHUB_REF}" == "refs/heads/clawboss-dev" ]]; then
-            tags+=("${IMAGE}:dev-arm64")
-            slim_tags+=("${IMAGE}:dev-slim-arm64")
-          fi
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            version="${GITHUB_REF#refs/tags/v}"
-            tags+=("${IMAGE}:${version}-arm64")
-            slim_tags+=("${IMAGE}:${version}-slim-arm64")
-          fi
-          if [[ ${#tags[@]} -eq 0 ]]; then
-            echo "::error::No arm64 tags resolved for ref ${GITHUB_REF}"
-            exit 1
-          fi
-          {
-            echo "value<<EOF"
-            printf "%s\n" "${tags[@]}"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-          {
-            echo "slim<<EOF"
-            printf "%s\n" "${slim_tags[@]}"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Resolve OCI labels (arm64)
-        id: labels
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="${GITHUB_SHA}"
-          if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
-            version="main"
-          fi
-          if [[ "${GITHUB_REF}" == "refs/heads/clawboss" ]]; then
-            version="stable"
-          fi
-          if [[ "${GITHUB_REF}" == "refs/heads/clawboss-dev" ]]; then
-            version="dev"
-          fi
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            version="${GITHUB_REF#refs/tags/v}"
-          fi
-          created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          {
-            echo "value<<EOF"
-            echo "org.opencontainers.image.revision=${GITHUB_SHA}"
-            echo "org.opencontainers.image.version=${version}"
-            echo "org.opencontainers.image.created=${created}"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Build and push arm64 image
-        id: build
-        uses: useblacksmith/build-push-action@v2
-        with:
-          context: .
-          platforms: linux/arm64
-          tags: ${{ steps.tags.outputs.value }}
-          labels: ${{ steps.labels.outputs.value }}
-          provenance: false
-          push: true
-
-      - name: Build and push arm64 slim image
-        id: build-slim
-        uses: useblacksmith/build-push-action@v2
-        with:
-          context: .
-          platforms: linux/arm64
-          build-args: |
-            OPENCLAW_VARIANT=slim
-          tags: ${{ steps.tags.outputs.slim }}
-          labels: ${{ steps.labels.outputs.value }}
-          provenance: false
-          push: true
-
-  # Create multi-platform manifests
+  # Create manifest tags (aliases for the amd64 images)
   create-manifest:
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     permissions:
       packages: write
       contents: read
-    needs: [build-amd64, build-arm64]
+    needs: [build-amd64]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -329,8 +214,7 @@ jobs:
             args+=("-t" "$tag")
           done
           docker buildx imagetools create "${args[@]}" \
-            ${{ needs.build-amd64.outputs.digest }} \
-            ${{ needs.build-arm64.outputs.digest }}
+            ${{ needs.build-amd64.outputs.digest }}
 
       - name: Create and push slim manifest
         shell: bash
@@ -343,5 +227,4 @@ jobs:
             args+=("-t" "$tag")
           done
           docker buildx imagetools create "${args[@]}" \
-            ${{ needs.build-amd64.outputs.slim-digest }} \
-            ${{ needs.build-arm64.outputs.slim-digest }}
+            ${{ needs.build-amd64.outputs.slim-digest }}
