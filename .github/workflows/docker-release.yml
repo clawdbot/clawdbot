@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+      - clawboss
+      - clawboss-dev
     tags:
       - "v*"
     paths-ignore:
@@ -59,6 +61,14 @@ jobs:
             tags+=("${IMAGE}:main-amd64")
             slim_tags+=("${IMAGE}:main-slim-amd64")
           fi
+          if [[ "${GITHUB_REF}" == "refs/heads/clawboss" ]]; then
+            tags+=("${IMAGE}:stable-amd64")
+            slim_tags+=("${IMAGE}:stable-slim-amd64")
+          fi
+          if [[ "${GITHUB_REF}" == "refs/heads/clawboss-dev" ]]; then
+            tags+=("${IMAGE}:dev-amd64")
+            slim_tags+=("${IMAGE}:dev-slim-amd64")
+          fi
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             version="${GITHUB_REF#refs/tags/v}"
             tags+=("${IMAGE}:${version}-amd64")
@@ -87,6 +97,12 @@ jobs:
           version="${GITHUB_SHA}"
           if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
             version="main"
+          fi
+          if [[ "${GITHUB_REF}" == "refs/heads/clawboss" ]]; then
+            version="stable"
+          fi
+          if [[ "${GITHUB_REF}" == "refs/heads/clawboss-dev" ]]; then
+            version="dev"
           fi
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             version="${GITHUB_REF#refs/tags/v}"
@@ -160,6 +176,14 @@ jobs:
             tags+=("${IMAGE}:main-arm64")
             slim_tags+=("${IMAGE}:main-slim-arm64")
           fi
+          if [[ "${GITHUB_REF}" == "refs/heads/clawboss" ]]; then
+            tags+=("${IMAGE}:stable-arm64")
+            slim_tags+=("${IMAGE}:stable-slim-arm64")
+          fi
+          if [[ "${GITHUB_REF}" == "refs/heads/clawboss-dev" ]]; then
+            tags+=("${IMAGE}:dev-arm64")
+            slim_tags+=("${IMAGE}:dev-slim-arm64")
+          fi
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             version="${GITHUB_REF#refs/tags/v}"
             tags+=("${IMAGE}:${version}-arm64")
@@ -188,6 +212,12 @@ jobs:
           version="${GITHUB_SHA}"
           if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
             version="main"
+          fi
+          if [[ "${GITHUB_REF}" == "refs/heads/clawboss" ]]; then
+            version="stable"
+          fi
+          if [[ "${GITHUB_REF}" == "refs/heads/clawboss-dev" ]]; then
+            version="dev"
           fi
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             version="${GITHUB_REF#refs/tags/v}"
@@ -255,6 +285,14 @@ jobs:
           if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
             tags+=("${IMAGE}:main")
             slim_tags+=("${IMAGE}:main-slim")
+          fi
+          if [[ "${GITHUB_REF}" == "refs/heads/clawboss" ]]; then
+            tags+=("${IMAGE}:stable")
+            slim_tags+=("${IMAGE}:stable-slim")
+          fi
+          if [[ "${GITHUB_REF}" == "refs/heads/clawboss-dev" ]]; then
+            tags+=("${IMAGE}:dev")
+            slim_tags+=("${IMAGE}:dev-slim")
           fi
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             version="${GITHUB_REF#refs/tags/v}"
