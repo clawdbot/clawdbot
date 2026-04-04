@@ -22,7 +22,7 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: das-xr-labs/openclaw
 
 jobs:
   # Build amd64 images (default + slim)
