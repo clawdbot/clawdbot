@@ -625,6 +625,10 @@ export type PluginHookAgentEndEvent = {
   success: boolean;
   error?: string;
   durationMs?: number;
+  /** Model identifier used for this run (e.g. "gpt-4o", "claude-sonnet-4-20250514"). */
+  model?: string;
+  /** Provider identifier used for this run (e.g. "openai", "anthropic"). */
+  provider?: string;
   usage?: {
     input?: number;
     output?: number;

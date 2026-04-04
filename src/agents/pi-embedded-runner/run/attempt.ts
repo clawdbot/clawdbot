@@ -2689,6 +2689,8 @@ export async function runEmbeddedAttempt(
                 success: !aborted && !promptError,
                 error: promptError ? describeUnknownError(promptError) : undefined,
                 durationMs: Date.now() - promptStartedAt,
+                model: params.modelId ?? undefined,
+                provider: params.provider ?? undefined,
                 usage: endUsage,
               },
               {
