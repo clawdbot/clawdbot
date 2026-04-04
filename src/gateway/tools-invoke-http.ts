@@ -328,6 +328,7 @@ export async function handleToolsInvokeHttpRequest(
         agentId,
         sessionKey,
         loopDetection: resolveToolLoopDetectionConfig({ cfg, agentId }),
+        channelId: messageChannel ?? undefined,
       },
     });
     if (hookResult.blocked) {

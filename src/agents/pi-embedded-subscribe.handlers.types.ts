@@ -140,6 +140,7 @@ export type ToolHandlerParams = Pick<
   | "sessionKey"
   | "sessionId"
   | "agentId"
+  | "channelId"
 >;
 
 export type ToolHandlerState = Pick<

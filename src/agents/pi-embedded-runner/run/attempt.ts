@@ -1816,6 +1816,7 @@ export async function runEmbeddedAttempt(
               sessionId: params.sessionId,
               runId: params.runId,
               loopDetection: clientToolLoopDetection,
+              channelId: params.messageChannel ?? params.messageProvider ?? undefined,
             },
           )
         : [];
@@ -2209,6 +2210,7 @@ export async function runEmbeddedAttempt(
         sessionKey: sandboxSessionKey,
         sessionId: params.sessionId,
         agentId: sessionAgentId,
+        channelId: params.messageChannel ?? params.messageProvider ?? undefined,
       });
 
       const {

@@ -711,6 +711,8 @@ export type PluginHookToolContext = {
   toolName: string;
   /** Provider-specific tool call ID when available. */
   toolCallId?: string;
+  /** Channel identifier (e.g. "telegram", "discord", "slack"). */
+  channelId?: string;
 };
 
 // before_tool_call hook

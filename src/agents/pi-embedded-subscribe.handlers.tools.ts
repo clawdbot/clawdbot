@@ -568,6 +568,7 @@ export async function handleToolExecutionEnd(
         sessionId: ctx.params.sessionId,
         runId,
         toolCallId,
+        channelId: ctx.params.channelId,
       })
       .catch((err) => {
         ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);
