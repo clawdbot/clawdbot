@@ -9,6 +9,49 @@ import {
 } from "./provider-openai-codex-oauth-tls.js";
 
 const manualInputPromptMessage = "Paste the authorization code (or full redirect URL):";
+const openAICodexOAuthOriginator = "openclaw";
+const OPENAI_CODEX_OAUTH_REQUIRED_SCOPES = [
+  "openid",
+  "profile",
+  "email",
+  "offline_access",
+  "model.request",
+  "api.responses.write",
+] as const;
+
+function normalizeOpenAICodexAuthorizeUrl(rawUrl: string): string {
+  const trimmed = rawUrl.trim();
+  if (!trimmed) {
+    return rawUrl;
+  }
+  try {
+    const url = new URL(trimmed);
+    if (
+      !/(?:^|\.)openai\.com$/i.test(url.hostname) ||
+      !/\/oauth\/authorize\/?$/i.test(url.pathname)
+    ) {
+      return rawUrl;
+    }
+
+    const existing = new Set(
+      (url.searchParams.get("scope") ?? "")
+        .split(/\s+/)
+        .map((scope) => scope.trim())
+        .filter(Boolean),
+    );
+    for (const scope of OPENAI_CODEX_OAUTH_REQUIRED_SCOPES) {
+      existing.add(scope);
+    }
+    url.searchParams.set("scope", Array.from(existing).join(" "));
+    return url.toString();
+  } catch {
+    return rawUrl;
+  }
+}
+
+export const __testing = {
+  normalizeOpenAICodexAuthorizeUrl,
+};
 
 export async function loginOpenAICodexOAuth(params: {
   prompter: WizardPrompter;
@@ -59,8 +102,13 @@ export async function loginOpenAICodexOAuth(params: {
     });
 
     const creds = await loginOpenAICodex({
-      onAuth: baseOnAuth,
+      onAuth: async (event) =>
+        await baseOnAuth({
+          ...event,
+          url: normalizeOpenAICodexAuthorizeUrl(event.url),
+        }),
       onPrompt,
+      originator: openAICodexOAuthOriginator,
       onManualCodeInput: isRemote
         ? async () =>
             await onPrompt({

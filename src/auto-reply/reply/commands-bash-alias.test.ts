@@ -3,9 +3,14 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { handleBashCommand } from "./commands-bash.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
+const resolveSessionAgentIdMock = vi.hoisted(() => vi.fn(() => "main"));
 const handleBashChatCommandMock = vi.hoisted(() =>
   vi.fn(async () => ({ text: "No active bash job" })),
 );
+
+vi.mock("../../agents/agent-scope.js", () => ({
+  resolveSessionAgentId: resolveSessionAgentIdMock,
+}));
 
 vi.mock("./bash-command.js", () => ({
   handleBashChatCommand: handleBashChatCommandMock,
@@ -44,6 +49,7 @@ function buildBashParams(commandBodyNormalized: string): HandleCommandsParams {
 describe("handleBashCommand alias routing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resolveSessionAgentIdMock.mockReturnValue("target");
   });
 
   it("routes !poll and !stop through the bash chat handler", async () => {
@@ -53,5 +59,21 @@ describe("handleBashCommand alias routing", () => {
       expect(result?.reply?.text).toContain("No active bash job");
     }
     expect(handleBashChatCommandMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses the canonical target session agent for /bash routing", async () => {
+    const params = buildBashParams("/bash pwd");
+    params.agentId = "main";
+    params.sessionKey = "agent:target:whatsapp:direct:test-user";
+
+    const result = await handleBashCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(handleBashChatCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "target",
+        sessionKey: "agent:target:whatsapp:direct:test-user",
+      }),
+    );
   });
 });

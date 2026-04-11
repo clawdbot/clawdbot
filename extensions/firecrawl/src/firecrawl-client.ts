@@ -141,7 +141,7 @@ async function postFirecrawlJson<T>(
             detail = errorBody.text;
           }
         }
-        const safeDetail = wrapWebContent(String(detail).slice(0, 1_000), "web_fetch");
+        const safeDetail = wrapWebContent(detail.slice(0, 1_000), "web_fetch");
         throw new Error(`${params.errorLabel} API error (${response.status}): ${safeDetail}`);
       }
       return await parse(response);

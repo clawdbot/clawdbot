@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   findLatestTaskFlowForOwner,
   getTaskFlowByIdForOwner,
@@ -6,10 +6,24 @@ import {
   resolveTaskFlowForLookupTokenForOwner,
 } from "./task-flow-owner-access.js";
 import { createManagedTaskFlow, resetTaskFlowRegistryForTests } from "./task-flow-registry.js";
+import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
 
 beforeEach(() => {
-  resetTaskFlowRegistryForTests();
+  resetTaskFlowRegistryForTests({ persist: false });
+  configureTaskFlowRegistryRuntime({
+    store: {
+      loadSnapshot: () => ({ flows: new Map() }),
+      saveSnapshot: () => {},
+      upsertFlow: () => {},
+      deleteFlow: () => {},
+    },
+  });
 });
+
+afterEach(() => {
+  resetTaskFlowRegistryForTests({ persist: false });
+});
+
 describe("task flow owner access", () => {
   it("returns owner-scoped flows for direct and owner-key lookups", () => {
     const older = createManagedTaskFlow({

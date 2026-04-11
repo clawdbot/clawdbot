@@ -90,6 +90,7 @@ function createDiscordOriginTargetResolver(configOverride?: DiscordExecApprovalC
       const sessionConversation = resolveApprovalRequestSessionConversation({
         request,
         channel: "discord",
+        bundledFallback: false,
       });
       const sessionKind = extractDiscordSessionKind(
         normalizeOptionalString(request.request.sessionKey) ?? null,
@@ -113,6 +114,7 @@ function createDiscordOriginTargetResolver(configOverride?: DiscordExecApprovalC
       const sessionConversation = resolveApprovalRequestSessionConversation({
         request,
         channel: "discord",
+        bundledFallback: false,
       });
       const sessionKind = extractDiscordSessionKind(request.request.sessionKey?.trim() || null);
       if (sessionKind === "dm") {
@@ -134,6 +136,7 @@ function createDiscordOriginTargetResolver(configOverride?: DiscordExecApprovalC
       const sessionConversation = resolveApprovalRequestSessionConversation({
         request,
         channel: "discord",
+        bundledFallback: false,
       });
       const sessionKind = extractDiscordSessionKind(request.request.sessionKey?.trim() || null);
       if (sessionKind === "dm") {
@@ -161,7 +164,7 @@ function createDiscordApproverDmTargetResolver(configOverride?: DiscordExecAppro
       }),
     resolveApprovers: ({ cfg, accountId }) =>
       getDiscordExecApprovalApprovers({ cfg, accountId, configOverride }),
-    mapApprover: (approver) => ({ to: String(approver) }),
+    mapApprover: (approver) => ({ to: approver }),
   });
 }
 

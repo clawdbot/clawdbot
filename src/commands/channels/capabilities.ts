@@ -190,7 +190,7 @@ async function resolveChannelReports(params: {
       includeActions: true,
     }).actions;
     const actions = Array.from(
-      new Set<string>(["send", "broadcast", ...discoveredActions.map((action) => String(action))]),
+      new Set<string>(["send", "broadcast", ...discoveredActions.map((action) => action)]),
     );
 
     reports.push({

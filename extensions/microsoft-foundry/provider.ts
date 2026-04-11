@@ -89,7 +89,7 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
       applyFoundryProviderConfig(ctx.config, nextProviderConfig);
     },
     normalizeResolvedModel: ({ modelId, model }: ProviderNormalizeResolvedModelContext) => {
-      const endpoint = extractFoundryEndpoint(String(model.baseUrl ?? ""));
+      const endpoint = extractFoundryEndpoint(model.baseUrl ?? "");
       if (!endpoint) {
         return model;
       }

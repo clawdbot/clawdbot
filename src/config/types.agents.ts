@@ -1,5 +1,5 @@
 import type { ChatType } from "../channels/chat-type.js";
-import type { AgentDefaultsConfig } from "./types.agent-defaults.js";
+import type { AgentDefaultsConfig, EmbeddedPiExecutionContract } from "./types.agent-defaults.js";
 import type {
   AgentEmbeddedHarnessConfig,
   AgentModelConfig,
@@ -97,6 +97,11 @@ export type AgentConfig = {
     model?: AgentModelConfig;
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). */
     requireAgentId?: boolean;
+  };
+  /** Optional per-agent embedded Pi overrides. */
+  embeddedPi?: {
+    /** Optional per-agent execution contract override. */
+    executionContract?: EmbeddedPiExecutionContract;
   };
   /** Optional per-agent sandbox overrides. */
   sandbox?: AgentSandboxConfig;

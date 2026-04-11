@@ -1,4 +1,3 @@
-import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   applyPluginAutoEnable,
@@ -8,11 +7,9 @@ import {
 import {
   makeIsolatedEnv,
   makeRegistry,
-  makeTempDir,
   resetPluginAutoEnableTestState,
-  writePluginManifestFixture,
 } from "./plugin-auto-enable.test-helpers.js";
-import { validateConfigObject } from "./validation.js";
+import { WhatsAppConfigSchema } from "./zod-schema.providers-whatsapp.js";
 
 afterEach(() => {
   resetPluginAutoEnableTestState();
@@ -57,7 +54,7 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.autoEnabledReasons).toEqual({});
   });
 
-  it("auto-enables built-in channels without appending to plugins.allow", () => {
+  it("auto-enables built-in channels and preserves them in restrictive plugins.allow", () => {
     const result = applyPluginAutoEnable({
       config: {
         channels: { slack: { botToken: "x" } },
@@ -68,7 +65,7 @@ describe("applyPluginAutoEnable core", () => {
 
     expect(result.config.channels?.slack?.enabled).toBe(true);
     expect(result.config.plugins?.entries?.slack).toBeUndefined();
-    expect(result.config.plugins?.allow).toEqual(["telegram"]);
+    expect(result.config.plugins?.allow).toEqual(["telegram", "slack"]);
     expect(result.autoEnabledReasons).toEqual({
       slack: ["slack configured"],
     });
@@ -282,10 +279,10 @@ describe("applyPluginAutoEnable core", () => {
     });
 
     expect(result.config.channels?.whatsapp?.enabled).toBe(true);
-    expect(validateConfigObject(result.config).ok).toBe(true);
+    expect(WhatsAppConfigSchema.safeParse(result.config.channels?.whatsapp).success).toBe(true);
   });
 
-  it("does not append built-in WhatsApp to plugins.allow during auto-enable", () => {
+  it("appends built-in WhatsApp to restrictive plugins.allow during auto-enable", () => {
     const result = applyPluginAutoEnable({
       config: {
         channels: {
@@ -301,8 +298,50 @@ describe("applyPluginAutoEnable core", () => {
     });
 
     expect(result.config.channels?.whatsapp?.enabled).toBe(true);
-    expect(result.config.plugins?.allow).toEqual(["telegram"]);
-    expect(validateConfigObject(result.config).ok).toBe(true);
+    expect(result.config.plugins?.allow).toEqual(["telegram", "whatsapp"]);
+    expect(WhatsAppConfigSchema.safeParse(result.config.channels?.whatsapp).success).toBe(true);
+  });
+
+  it("preserves configured plugin entries in restrictive plugins.allow", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        plugins: {
+          allow: ["glueclaw"],
+          entries: {
+            discord: {
+              config: {
+                token: "x",
+              },
+            },
+          },
+        },
+      },
+      env: makeIsolatedEnv(),
+    });
+
+    expect(result.config.plugins?.allow).toEqual(["glueclaw", "discord"]);
+    expect(result.changes).toContain("discord plugin config present, added to plugin allowlist.");
+  });
+
+  it("does not preserve stale configured plugin entries in restrictive plugins.allow", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        plugins: {
+          allow: ["glueclaw"],
+          entries: {
+            "missing-plugin": {
+              config: {
+                token: "x",
+              },
+            },
+          },
+        },
+      },
+      env: makeIsolatedEnv(),
+    });
+
+    expect(result.config.plugins?.allow).toEqual(["glueclaw"]);
+    expect(result.changes).toEqual([]);
   });
 
   it("does not re-emit built-in auto-enable changes when rerun with plugins.allow set", () => {
@@ -383,25 +422,13 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.changes.join("\n")).toContain("IRC configured, enabled automatically.");
   });
 
-  it("uses the provided env when loading plugin manifests automatically", () => {
-    const stateDir = makeTempDir();
-    const pluginDir = path.join(stateDir, "extensions", "apn-channel");
-    writePluginManifestFixture({
-      rootDir: pluginDir,
-      id: "apn-channel",
-      channels: ["apn"],
-    });
-
+  it("uses the provided manifest registry for plugin channel ids", () => {
     const result = applyPluginAutoEnable({
       config: {
         channels: { apn: { someKey: "value" } },
       },
-      env: {
-        ...makeIsolatedEnv(),
-        OPENCLAW_HOME: undefined,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
-      },
+      env: makeIsolatedEnv(),
+      manifestRegistry: makeRegistry([{ id: "apn-channel", channels: ["apn"] }]),
     });
 
     expect(result.config.plugins?.entries?.["apn-channel"]?.enabled).toBe(true);

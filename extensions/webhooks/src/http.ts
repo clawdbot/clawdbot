@@ -308,15 +308,13 @@ function writeJson(res: ServerResponse, statusCode: number, body: unknown): void
 
 function extractSharedSecret(req: IncomingMessage): string {
   const authHeader = Array.isArray(req.headers.authorization)
-    ? String(req.headers.authorization[0] ?? "")
-    : String(req.headers.authorization ?? "");
+    ? (req.headers.authorization[0] ?? "")
+    : (req.headers.authorization ?? "");
   if (normalizeLowercaseStringOrEmpty(authHeader).startsWith("bearer ")) {
     return authHeader.slice("bearer ".length).trim();
   }
   const sharedHeader = req.headers["x-openclaw-webhook-secret"];
-  return Array.isArray(sharedHeader)
-    ? String(sharedHeader[0] ?? "").trim()
-    : String(sharedHeader ?? "").trim();
+  return Array.isArray(sharedHeader) ? (sharedHeader[0] ?? "").trim() : (sharedHeader ?? "").trim();
 }
 
 function timingSafeEquals(left: string, right: string): boolean {

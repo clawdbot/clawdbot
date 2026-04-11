@@ -2,9 +2,8 @@ type InstallScanLogger = {
   warn?: (message: string) => void;
 };
 
-export type InstallSafetyOverrides = {
-  dangerouslyForceUnsafeInstall?: boolean;
-};
+export type { InstallSafetyOverrides } from "./install-security-scan.types.js";
+import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
 
 export type InstallSecurityScanResult = {
   blocked?: {

@@ -245,7 +245,7 @@ async function resolveDiscordModelPickerRouteState(params: {
     channelType === ChannelType.AnnouncementThread;
   const rawChannelId = channel?.id ?? "unknown";
   const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
-    ? interaction.rawData.member.roles.map((roleId: string) => String(roleId))
+    ? interaction.rawData.member.roles.map((roleId: string) => roleId)
     : [];
   let threadParentId: string | undefined;
   if (interaction.guild && channel && isThreadChannel && rawChannelId) {

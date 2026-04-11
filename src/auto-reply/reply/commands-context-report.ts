@@ -2,7 +2,7 @@ import { analyzeBootstrapBudget } from "../../agents/bootstrap-budget.js";
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
-} from "../../agents/pi-embedded-helpers.js";
+} from "../../agents/pi-embedded-helpers/bootstrap.js";
 import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
 import {
   resolveFreshSessionTotalTokens,
@@ -11,7 +11,6 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { estimateTokensFromChars } from "../../utils/cjk-chars.js";
 import type { ReplyPayload } from "../types.js";
-import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 function formatInt(n: number): string {
@@ -46,20 +45,22 @@ function formatListTop(
 async function resolveContextReport(
   params: HandleCommandsParams,
 ): Promise<SessionSystemPromptReport> {
-  const existing = params.sessionEntry?.systemPromptReport;
+  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+  const existing = targetSessionEntry?.systemPromptReport;
   if (existing && existing.source === "run") {
     return existing;
   }
 
   const bootstrapMaxChars = resolveBootstrapMaxChars(params.cfg);
   const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.cfg);
+  const { resolveCommandsSystemPromptBundle } = await import("./commands-system-prompt.js");
   const { systemPrompt, tools, skillsPrompt, bootstrapFiles, injectedFiles, sandboxRuntime } =
     await resolveCommandsSystemPromptBundle(params);
 
   return buildSystemPromptReport({
     source: "estimate",
     generatedAt: Date.now(),
-    sessionId: params.sessionEntry?.sessionId,
+    sessionId: targetSessionEntry?.sessionId,
     sessionKey: params.sessionKey,
     provider: params.provider,
     model: params.model,
@@ -76,8 +77,9 @@ async function resolveContextReport(
 }
 
 export async function buildContextReply(params: HandleCommandsParams): Promise<ReplyPayload> {
+  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
   const args = parseContextArgs(params.command.commandBodyNormalized);
-  const sub = normalizeLowercaseStringOrEmpty(args.split(/\s+/).filter(Boolean)[0]);
+  const sub = normalizeLowercaseStringOrEmpty(args.split(/\s+/).find(Boolean));
 
   if (!sub || sub === "help") {
     return {
@@ -97,12 +99,12 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   }
 
   const report = await resolveContextReport(params);
-  const cachedContextUsageTokens = resolveFreshSessionTotalTokens(params.sessionEntry);
+  const cachedContextUsageTokens = resolveFreshSessionTotalTokens(targetSessionEntry);
   const session = {
-    totalTokens: params.sessionEntry?.totalTokens ?? null,
-    totalTokensFresh: params.sessionEntry?.totalTokensFresh ?? null,
-    inputTokens: params.sessionEntry?.inputTokens ?? null,
-    outputTokens: params.sessionEntry?.outputTokens ?? null,
+    totalTokens: targetSessionEntry?.totalTokens ?? null,
+    totalTokensFresh: targetSessionEntry?.totalTokensFresh ?? null,
+    inputTokens: targetSessionEntry?.inputTokens ?? null,
+    outputTokens: targetSessionEntry?.outputTokens ?? null,
     contextTokens: params.contextTokens ?? null,
   } as const;
 

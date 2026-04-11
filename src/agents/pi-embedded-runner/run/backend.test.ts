@@ -10,12 +10,11 @@ describe("resolveEmbeddedAgentRuntime", () => {
     expect(resolveEmbeddedAgentRuntime({ OPENCLAW_AGENT_RUNTIME: "pi" })).toBe("pi");
   });
 
-  it("accepts codex app-server aliases", () => {
-    expect(resolveEmbeddedAgentRuntime({ OPENCLAW_AGENT_RUNTIME: "codex-app-server" })).toBe(
-      "codex",
-    );
+  it("preserves plugin harness ids without core-owned aliases", () => {
     expect(resolveEmbeddedAgentRuntime({ OPENCLAW_AGENT_RUNTIME: "codex" })).toBe("codex");
-    expect(resolveEmbeddedAgentRuntime({ OPENCLAW_AGENT_RUNTIME: "app-server" })).toBe("codex");
+    expect(resolveEmbeddedAgentRuntime({ OPENCLAW_AGENT_RUNTIME: "codex-app-server" })).toBe(
+      "codex-app-server",
+    );
   });
 
   it("accepts auto mode", () => {

@@ -852,7 +852,7 @@ Subcommands:
 Notes:
 
 - `devices list` and `devices approve` can fall back to local pairing files on local loopback when direct pairing scope is unavailable.
-- `devices approve` auto-selects the newest pending request when no `requestId` is passed or `--latest` is set.
+- `devices approve` requires an explicit request ID before minting tokens; omitting `requestId` or passing `--latest` only previews the newest pending request.
 - Stored-token reconnects reuse the token's cached approved scopes; explicit
   `devices rotate --scope ...` updates that stored scope set for future
   cached-token reconnects.

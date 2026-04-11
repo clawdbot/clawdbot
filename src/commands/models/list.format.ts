@@ -2,7 +2,7 @@ import { colorize, isRich as isRichTerminal, theme } from "../../terminal/theme.
 export { maskApiKey } from "../../utils/mask-api-key.js";
 
 export const isRich = (opts?: { json?: boolean; plain?: boolean }) =>
-  Boolean(isRichTerminal() && !opts?.json && !opts?.plain);
+  isRichTerminal() && !opts?.json && !opts?.plain;
 
 export const pad = (value: string, size: number) => value.padEnd(size);
 

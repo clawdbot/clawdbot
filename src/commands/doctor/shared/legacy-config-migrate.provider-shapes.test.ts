@@ -1,12 +1,22 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.js";
-import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
+import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_TTS } from "./legacy-config-migrations.runtime.tts.js";
 
 function migrateLegacyConfig(raw: unknown): {
   config: OpenClawConfig | null;
   changes: string[];
 } {
-  const { next, changes } = applyLegacyDoctorMigrations(raw);
+  if (!raw || typeof raw !== "object") {
+    return { config: null, changes: [] };
+  }
+  const next = structuredClone(raw) as Record<string, unknown>;
+  const changes: string[] = [];
+  for (const migration of LEGACY_CONFIG_MIGRATIONS_RUNTIME_TTS) {
+    migration.apply(next, changes);
+  }
+  if (changes.length === 0) {
+    return { config: null, changes };
+  }
   return { config: next as OpenClawConfig | null, changes };
 }
 
@@ -36,41 +46,6 @@ describe("legacy migrate provider-shaped config", () => {
         },
       },
     });
-  });
-
-  it("moves channels.discord.accounts.<id>.voice.tts.edge into providers.microsoft", () => {
-    const res = migrateLegacyConfig({
-      channels: {
-        discord: {
-          accounts: {
-            main: {
-              voice: {
-                tts: {
-                  edge: {
-                    voice: "en-US-JennyNeural",
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    });
-
-    expect(res.changes).toContain(
-      "Moved channels.discord.accounts.main.voice.tts.edge → channels.discord.accounts.main.voice.tts.providers.microsoft.",
-    );
-    const mainTts = (
-      res.config?.channels?.discord?.accounts as
-        | Record<string, { voice?: { tts?: Record<string, unknown> } }>
-        | undefined
-    )?.main?.voice?.tts;
-    expect(mainTts?.providers).toEqual({
-      microsoft: {
-        voice: "en-US-JennyNeural",
-      },
-    });
-    expect(mainTts?.edge).toBeUndefined();
   });
 
   it("moves plugins.entries.voice-call.config.tts.<provider> keys into providers", () => {

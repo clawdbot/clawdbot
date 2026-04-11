@@ -179,7 +179,7 @@ function mergeStringList(...values: Array<string[] | undefined>): string[] | und
       continue;
     }
     for (const item of list) {
-      const trimmed = normalizeOptionalString(String(item)) ?? "";
+      const trimmed = normalizeOptionalString(item) ?? "";
       if (trimmed) {
         out.add(trimmed);
       }

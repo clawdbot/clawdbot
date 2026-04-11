@@ -1388,7 +1388,7 @@ describe("onboard (non-interactive): provider auth", () => {
             thrown = error as Error;
           }
           expect(thrown).toBeDefined();
-          const message = String(thrown?.message ?? "");
+          const message = thrown?.message ?? "";
           expect(message).toContain(
             `${flagName} cannot be used with --secret-input-mode ref unless ${envVar} is set in env.`,
           );
@@ -1631,7 +1631,7 @@ describe("onboard (non-interactive): provider auth", () => {
           thrown = error as Error;
         }
         expect(thrown).toBeDefined();
-        const message = String(thrown?.message ?? "");
+        const message = thrown?.message ?? "";
         expect(message).toContain(
           "--custom-api-key cannot be used with --secret-input-mode ref unless CUSTOM_API_KEY is set in env.",
         );

@@ -56,8 +56,8 @@ function fingerprintPublicKey(publicKeyPem: string): string {
 
 function generateIdentity(): DeviceIdentity {
   const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
-  const publicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
-  const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+  const publicKeyPem = publicKey.export({ type: "spki", format: "pem" });
+  const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" });
   const deviceId = fingerprintPublicKey(publicKeyPem);
   return { deviceId, publicKeyPem, privateKeyPem };
 }

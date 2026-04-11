@@ -43,6 +43,8 @@ together`, and similar hints) and no descendant subagent run is still
   responsible for the final answer, OpenClaw re-prompts once for the actual
   result before delivery.
 
+<a id="maintenance"></a>
+
 Task reconciliation for cron is runtime-owned: an active cron task stays live while the
 cron runtime still tracks that job as running, even if an old child session row still exists.
 Once the runtime stops owning the job and the 5-minute grace window expires, maintenance can

@@ -58,7 +58,7 @@ function createMockQaRuntime(): PluginRuntime {
           dispatcherOptions: { deliver: (payload: { text: string }) => Promise<void> };
         }) {
           await dispatcherOptions.deliver({
-            text: `qa-echo: ${String(ctx.BodyForAgent ?? ctx.Body ?? "")}`,
+            text: `qa-echo: ${ctx.BodyForAgent ?? ctx.Body ?? ""}`,
           });
         },
       },
@@ -217,6 +217,59 @@ describe("qa-channel plugin", () => {
         },
       });
       expect(state.readMessage({ messageId: outbound.id }).deleted).toBe(true);
+    } finally {
+      await bus.stop();
+    }
+  });
+
+  it("routes the advertised send action to the qa bus", async () => {
+    const state = createQaBusState();
+    const bus = await startQaBusServer({ state });
+
+    try {
+      const cfg = {
+        channels: {
+          "qa-channel": {
+            baseUrl: bus.baseUrl,
+            botUserId: "openclaw",
+            botDisplayName: "OpenClaw QA",
+          },
+        },
+      };
+
+      const sendTarget = qaChannelPlugin.actions?.extractToolSend?.({
+        args: {
+          action: "send",
+          target: "qa-room",
+          message: "hello",
+        },
+      });
+      expect(sendTarget).toEqual({ to: "channel:qa-room", threadId: undefined });
+
+      const result = await qaChannelPlugin.actions?.handleAction?.({
+        channel: "qa-channel",
+        action: "send",
+        cfg,
+        accountId: "default",
+        params: {
+          target: "qa-room",
+          message: "hello from action",
+        },
+      });
+      const payload = extractToolPayload(result);
+      expect(payload).toMatchObject({ message: { text: "hello from action" } });
+
+      const outbound = await state.waitFor({
+        kind: "message-text",
+        direction: "outbound",
+        textIncludes: "hello from action",
+        timeoutMs: 5_000,
+      });
+      expect("conversation" in outbound).toBe(true);
+      if (!("conversation" in outbound)) {
+        throw new Error("expected outbound message match");
+      }
+      expect(outbound.conversation).toMatchObject({ id: "qa-room", kind: "channel" });
     } finally {
       await bus.stop();
     }

@@ -104,7 +104,7 @@ export function buildThreadingToolContext(params: {
 }
 
 export const isBunFetchSocketError = (message?: string) =>
-  Boolean(message && BUN_FETCH_SOCKET_ERROR_RE.test(message));
+  message ? BUN_FETCH_SOCKET_ERROR_RE.test(message) : false;
 
 export const formatBunFetchSocketError = (message: string) => {
   const trimmed = message.trim();
@@ -121,15 +121,13 @@ export const resolveEnforceFinalTag = (
   provider: string,
   model = run.model,
 ) =>
-  Boolean(
-    (run.skipProviderRuntimeHints ? false : undefined) ??
-    (run.enforceFinalTag ||
-      isReasoningTagProvider(provider, {
-        config: run.config,
-        workspaceDir: run.workspaceDir,
-        modelId: model,
-      })),
-  );
+  (run.skipProviderRuntimeHints ? false : undefined) ??
+  (run.enforceFinalTag ||
+    isReasoningTagProvider(provider, {
+      config: run.config,
+      workspaceDir: run.workspaceDir,
+      modelId: model,
+    }));
 
 export function resolveModelFallbackOptions(run: FollowupRun["run"]) {
   const config = run.config;

@@ -45,7 +45,7 @@ export function isSenderAllowed(
   const normalizedSenderId = normalizeUserId(senderId);
   const normalizedEmail = normalizeLowercaseStringOrEmpty(senderEmail ?? "");
   return allowFrom.some((entry) => {
-    const normalized = normalizeLowercaseStringOrEmpty(String(entry));
+    const normalized = normalizeLowercaseStringOrEmpty(entry);
     if (!normalized) {
       return false;
     }

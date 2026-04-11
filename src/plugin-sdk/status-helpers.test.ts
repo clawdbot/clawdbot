@@ -318,6 +318,34 @@ describe("buildRuntimeAccountStatusSnapshot", () => {
         port: 3978,
       },
     },
+    {
+      name: "preserves runtime connectivity metadata",
+      input: {
+        runtime: {
+          connected: true,
+          restartPending: true,
+          reconnectAttempts: 3,
+          lastConnectedAt: 11,
+          lastDisconnect: { at: 12, error: "boom" },
+          lastEventAt: 13,
+          healthState: "healthy",
+          running: true,
+        },
+      },
+      extra: undefined,
+      expected: {
+        ...defaultRuntimeState,
+        running: true,
+        connected: true,
+        restartPending: true,
+        reconnectAttempts: 3,
+        lastConnectedAt: 11,
+        lastDisconnect: { at: 12, error: "boom" },
+        lastEventAt: 13,
+        healthState: "healthy",
+        probe: undefined,
+      },
+    },
   ])("$name", ({ input, extra, expected }) => {
     expect(buildRuntimeAccountStatusSnapshot(input, extra)).toEqual(expected);
   });

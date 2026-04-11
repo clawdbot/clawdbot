@@ -1,4 +1,4 @@
-import type { ChannelApprovalKind } from "../channels/plugins/types.adapters.js";
+import type { ChannelApprovalKind } from "./approval-types.js";
 import { resolveExecApprovalCommandDisplay } from "./exec-approval-command-display.js";
 import {
   buildExecApprovalActionDescriptors,

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { clearSessionStoreCacheForTest } from "../../../src/config/sessions.js";
+import { clearSessionStoreCacheForTest } from "../../../src/config/sessions/store.js";
 import {
   createDiscordNativeApprovalAdapter,
   getDiscordApprovalCapability,

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mockPinnedHostnameResolution } from "../../../src/test-helpers/ssrf.js";
 import type { PluginRuntime } from "../runtime-api.js";
 import { downloadMSTeamsGraphMedia } from "./attachments/graph.js";
 import { resolveRequestUrl } from "./attachments/shared.js";
@@ -249,7 +250,11 @@ const GRAPH_MEDIA_SUCCESS_CASES: GraphMediaSuccessCase[] = [
 ];
 
 describe("msteams graph attachments", () => {
+  let ssrfMock: { mockRestore: () => void } | undefined;
+
   beforeEach(() => {
+    ssrfMock?.mockRestore();
+    ssrfMock = mockPinnedHostnameResolution();
     detectMimeMock.mockClear();
     fetchRemoteMediaMock.mockClear();
     saveMediaBufferMock.mockClear();
@@ -321,7 +326,7 @@ describe("msteams graph attachments", () => {
     );
 
     expectAttachmentMediaLength(media.media, 0);
-    const calledUrls = fetchMock.mock.calls.map((call) => String(call[0]));
+    const calledUrls = fetchMock.mock.calls.map((call) => call[0]);
     expect(calledUrls.some((url) => url.startsWith(GRAPH_SHARES_URL_PREFIX))).toBe(true);
     expect(calledUrls).not.toContain(escapedUrl);
   });

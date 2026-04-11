@@ -26,7 +26,7 @@ describe("plugin-sdk qa-lab", () => {
     module.registerQaLabCli({} as never);
     expect(loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
       dirName: "qa-lab",
-      artifactBasename: "api.js",
+      artifactBasename: "cli.js",
     });
   });
 

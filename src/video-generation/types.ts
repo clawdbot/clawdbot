@@ -1,5 +1,5 @@
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 import type { MediaNormalizationEntry } from "../media-generation/runtime-shared.js";
 
 export type GeneratedVideoAsset = {

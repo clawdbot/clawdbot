@@ -27,7 +27,7 @@ export type SignalDaemonExitEvent = {
 };
 
 export function formatSignalDaemonExit(exit: SignalDaemonExitEvent): string {
-  return `signal daemon exited (source=${exit.source} code=${String(exit.code ?? "null")} signal=${String(exit.signal ?? "null")})`;
+  return `signal daemon exited (source=${exit.source} code=${exit.code ?? "null"} signal=${exit.signal ?? "null"})`;
 }
 
 export function classifySignalCliLogLine(line: string): "log" | "error" | null {

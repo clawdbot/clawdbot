@@ -124,7 +124,7 @@ export async function loadLogs(state: LogsState, opts?: { reset?: boolean; quiet
       ? payload.lines.filter((line) => typeof line === "string")
       : [];
     const entries = lines.map(parseLogLine);
-    const shouldReset = Boolean(opts?.reset || payload.reset || state.logsCursor == null);
+    const shouldReset = opts?.reset || payload.reset || state.logsCursor == null;
     state.logsEntries = shouldReset
       ? entries
       : [...state.logsEntries, ...entries].slice(-LOG_BUFFER_LIMIT);

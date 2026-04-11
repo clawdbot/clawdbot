@@ -1370,7 +1370,7 @@ describe("BlueBubbles webhook monitor", () => {
       mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
         await params.dispatcherOptions.onReplyStart?.();
         await params.dispatcherOptions.deliver({ text: "replying now" }, { kind: "final" });
-        await params.dispatcherOptions.onIdle?.();
+        params.dispatcherOptions.onIdle?.();
         return EMPTY_DISPATCH_RESULT;
       });
 

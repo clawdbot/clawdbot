@@ -3,6 +3,24 @@ import { createQaBusState } from "./bus-state.js";
 import { qaSuiteTesting } from "./suite.js";
 
 describe("qa suite failure reply handling", () => {
+  const makeScenario = (
+    id: string,
+    config?: Record<string, unknown>,
+  ): Parameters<typeof qaSuiteTesting.selectQaSuiteScenarios>[0]["scenarios"][number] =>
+    ({
+      id,
+      title: id,
+      surface: "test",
+      objective: "test",
+      successCriteria: ["test"],
+      sourcePath: `qa/scenarios/${id}.md`,
+      execution: {
+        kind: "flow",
+        config,
+        flow: { steps: [{ name: "noop", actions: [{ assert: "true" }] }] },
+      },
+    }) as Parameters<typeof qaSuiteTesting.selectQaSuiteScenarios>[0]["scenarios"][number];
+
   it("normalizes suite concurrency to a bounded integer", () => {
     const previous = process.env.OPENCLAW_QA_SUITE_CONCURRENCY;
     delete process.env.OPENCLAW_QA_SUITE_CONCURRENCY;
@@ -34,6 +52,63 @@ describe("qa suite failure reply handling", () => {
 
     expect(maxActive).toBe(2);
     expect(result).toEqual([10, 20, 30, 40]);
+  });
+
+  it("keeps explicitly requested provider-specific scenarios", () => {
+    const scenarios = [
+      makeScenario("generic"),
+      makeScenario("anthropic-only", {
+        requiredProvider: "anthropic",
+        requiredModel: "claude-opus-4-6",
+      }),
+    ];
+
+    expect(
+      qaSuiteTesting
+        .selectQaSuiteScenarios({
+          scenarios,
+          scenarioIds: ["anthropic-only"],
+          providerMode: "live-frontier",
+          primaryModel: "openai/gpt-5.4",
+        })
+        .map((scenario) => scenario.id),
+    ).toEqual(["anthropic-only"]);
+  });
+
+  it("filters provider-specific scenarios from an implicit live lane", () => {
+    const scenarios = [
+      makeScenario("generic"),
+      makeScenario("openai-only", { requiredProvider: "openai", requiredModel: "gpt-5.4" }),
+      makeScenario("anthropic-only", {
+        requiredProvider: "anthropic",
+        requiredModel: "claude-opus-4-6",
+      }),
+      makeScenario("claude-subscription", {
+        requiredProvider: "claude-cli",
+        authMode: "subscription",
+      }),
+    ];
+
+    expect(
+      qaSuiteTesting
+        .selectQaSuiteScenarios({
+          scenarios,
+          providerMode: "live-frontier",
+          primaryModel: "openai/gpt-5.4",
+        })
+        .map((scenario) => scenario.id),
+    ).toEqual(["generic", "openai-only"]);
+
+    expect(
+      qaSuiteTesting
+        .selectQaSuiteScenarios({
+          scenarios,
+          providerMode: "live-frontier",
+          primaryModel: "claude-cli/claude-sonnet-4-6",
+          claudeCliAuthMode: "subscription",
+        })
+        .map((scenario) => scenario.id),
+    ).toEqual(["generic", "claude-subscription"]);
   });
 
   it("reads retry-after from the primary gateway error before appended logs", () => {
@@ -87,6 +162,24 @@ describe("qa suite failure reply handling", () => {
     await expect(pending).rejects.toThrow('No API key found for provider "openai".');
   });
 
+  it("treats QA channel message delivery failures as failure replies", async () => {
+    const state = createQaBusState();
+    const pending = qaSuiteTesting.waitForOutboundMessage(
+      state,
+      (candidate) => candidate.text.includes("QA-RESTART"),
+      5_000,
+    );
+
+    state.addOutboundMessage({
+      to: "channel:qa-room",
+      text: "⚠️ ✉️ Message failed",
+      senderId: "openclaw",
+      senderName: "OpenClaw QA",
+    });
+
+    await expect(pending).rejects.toThrow("Message failed");
+  });
+
   it("fails raw scenario waitForCondition calls when a classified failure reply arrives", async () => {
     const state = createQaBusState();
     const waitForCondition = qaSuiteTesting.createScenarioWaitForCondition(state);
@@ -95,13 +188,12 @@ describe("qa suite failure reply handling", () => {
       () =>
         state
           .getSnapshot()
-          .messages.filter(
+          .messages.findLast(
             (message) =>
               message.direction === "outbound" &&
               message.conversation.id === "qa-operator" &&
               message.text.includes("ALPHA-7"),
-          )
-          .at(-1),
+          ),
       5_000,
       10,
     );
@@ -143,13 +235,12 @@ describe("qa suite failure reply handling", () => {
         state
           .getSnapshot()
           .messages.slice(3)
-          .filter(
+          .findLast(
             (message) =>
               message.direction === "outbound" &&
               message.conversation.id === "qa-operator" &&
               message.text.includes("mission"),
-          )
-          .at(-1),
+          ),
       150,
       10,
     );

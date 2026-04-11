@@ -344,6 +344,18 @@ describe("applyReplyThreading auto-threading", () => {
     expect(result[0].text).toBe("threaded reply");
   });
 
+  it("prefers explicit reply_to over reply_to_current when both tags are present", () => {
+    const result = applyReplyThreading({
+      payloads: [{ text: "hi [[reply_to_current]] [[reply_to:mm-post-xyz789]]" }],
+      replyToMode: "all",
+      currentMessageId: "mm-post-abc123",
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].replyToId).toBe("mm-post-xyz789");
+    expect(result[0].text).toBe("hi");
+  });
+
   it("sets replyToId via implicit threading when replyToMode is 'all'", () => {
     // Even without explicit tags, replyToMode "all" should set replyToId
     // to currentMessageId for threading.

@@ -119,4 +119,74 @@ describe("mixed inline directives", () => {
     expect(persisted.provider).toBe("anthropic");
     expect(persisted.model).toBe("claude-opus-4-6");
   });
+
+  it("persists reasoning off and emits the disabled ack", async () => {
+    const directives = parseInlineDirectives("please reply\n/reasoning off");
+    const cfg = createConfig();
+    const sessionEntry = createSessionEntry({ reasoningLevel: "on" });
+    const sessionStore = { "agent:main:discord:user": sessionEntry };
+
+    const fastLane = await applyInlineDirectivesFastLane({
+      directives,
+      commandAuthorized: true,
+      ctx: { Surface: "discord" } as never,
+      cfg,
+      agentId: "main",
+      isGroup: false,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "agent:main:discord:user",
+      storePath: undefined,
+      elevatedEnabled: false,
+      elevatedAllowed: false,
+      elevatedFailures: [],
+      messageProviderKey: "discord",
+      defaultProvider: "openrouter",
+      defaultModel: "x-ai/grok-4.1-fast",
+      aliasIndex: { byAlias: new Map(), byKey: new Map() },
+      allowedModelKeys: new Set(),
+      allowedModelCatalog: [],
+      resetModelOverride: false,
+      provider: "openrouter",
+      model: "x-ai/grok-4.1-fast",
+      initialModelLabel: "openrouter/x-ai/grok-4.1-fast",
+      formatModelSwitchEvent: (label) => label,
+      agentCfg: cfg.agents?.defaults,
+      modelState: {
+        resolveDefaultThinkingLevel: async () => "off",
+        allowedModelKeys: new Set(),
+        allowedModelCatalog: [],
+        resetModelOverride: false,
+      },
+    });
+
+    expect(fastLane.directiveAck).toEqual({
+      text: "⚙️ Reasoning visibility disabled.",
+    });
+
+    await persistInlineDirectives({
+      directives,
+      cfg,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "agent:main:discord:user",
+      storePath: undefined,
+      elevatedEnabled: false,
+      elevatedAllowed: false,
+      defaultProvider: "openrouter",
+      defaultModel: "x-ai/grok-4.1-fast",
+      aliasIndex: { byAlias: new Map(), byKey: new Map() },
+      allowedModelKeys: new Set(),
+      provider: "openrouter",
+      model: "x-ai/grok-4.1-fast",
+      initialModelLabel: "openrouter/x-ai/grok-4.1-fast",
+      formatModelSwitchEvent: (label) => label,
+      agentCfg: cfg.agents?.defaults,
+      messageProvider: "discord",
+      surface: "discord",
+      gatewayClientScopes: [],
+    });
+
+    expect(sessionEntry.reasoningLevel).toBe("off");
+  });
 });

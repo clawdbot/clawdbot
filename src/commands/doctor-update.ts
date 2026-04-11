@@ -38,7 +38,7 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
     params.options.nonInteractive !== true &&
     params.options.yes !== true &&
     params.options.repair !== true &&
-    Boolean(process.stdin.isTTY);
+    process.stdin.isTTY;
   if (!canOfferUpdate || !params.root) {
     return { updated: false };
   }

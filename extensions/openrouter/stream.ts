@@ -16,7 +16,7 @@ function injectOpenRouterRouting(
       baseStreamFn ??
       ((nextModel) => {
         throw new Error(
-          `OpenRouter routing wrapper requires an underlying streamFn for ${String(nextModel.id)}.`,
+          `OpenRouter routing wrapper requires an underlying streamFn for ${nextModel.id}.`,
         );
       })
     )(

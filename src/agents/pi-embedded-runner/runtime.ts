@@ -9,9 +9,6 @@ export function normalizeEmbeddedAgentRuntime(raw: string | undefined): Embedded
   if (value === "pi") {
     return "pi";
   }
-  if (value === "codex" || value === "codex-app-server" || value === "app-server") {
-    return "codex";
-  }
   if (value === "auto") {
     return "auto";
   }

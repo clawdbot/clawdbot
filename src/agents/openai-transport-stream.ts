@@ -298,7 +298,10 @@ function convertResponsesMessages(
             id: itemId,
             call_id: callId,
             name: block.name,
-            arguments: JSON.stringify(block.arguments),
+            arguments:
+              typeof block.arguments === "string"
+                ? block.arguments
+                : JSON.stringify(block.arguments ?? {}),
           });
         }
       }
@@ -439,7 +442,12 @@ async function processResponsesStream(
       const item = event.item as Record<string, unknown>;
       if (item.type === "reasoning" && currentBlock?.type === "thinking") {
         const summary = Array.isArray(item.summary)
-          ? item.summary.map((part) => String((part as { text?: string }).text ?? "")).join("\n\n")
+          ? item.summary
+              .map((part) => {
+                const summaryPart = part as { text?: string };
+                return summaryPart.text ?? "";
+              })
+              .join("\n\n")
           : "";
         currentBlock.thinking = summary;
         currentBlock.thinkingSignature = JSON.stringify(item);
@@ -453,11 +461,12 @@ async function processResponsesStream(
       } else if (item.type === "message" && currentBlock?.type === "text") {
         const content = Array.isArray(item.content) ? item.content : [];
         currentBlock.text = content
-          .map((part) =>
-            (part as { type?: string; text?: string; refusal?: string }).type === "output_text"
-              ? String((part as { text?: string }).text ?? "")
-              : String((part as { refusal?: string }).refusal ?? ""),
-          )
+          .map((part) => {
+            const contentPart = part as { type?: string; text?: string; refusal?: string };
+            return contentPart.type === "output_text"
+              ? (contentPart.text ?? "")
+              : (contentPart.refusal ?? "");
+          })
           .join("");
         currentBlock.textSignature = encodeTextSignatureV1(
           stringifyUnknown(item.id),
@@ -1084,7 +1093,7 @@ async function processOpenAICompletionsStream(
       });
       continue;
     }
-    if (choice.delta.tool_calls) {
+    if (choice.delta.tool_calls && choice.delta.tool_calls.length > 0) {
       for (const toolCall of choice.delta.tool_calls) {
         if (
           !currentBlock ||
@@ -1125,6 +1134,10 @@ async function processOpenAICompletionsStream(
     }
   }
   finishCurrentBlock();
+  const hasToolCalls = output.content.some((block) => block.type === "toolCall");
+  if (output.stopReason === "toolUse" && !hasToolCalls) {
+    output.stopReason = "stop";
+  }
 }
 
 function detectCompat(model: OpenAIModeModel) {
@@ -1303,11 +1316,11 @@ export function buildOpenAICompletionsParams(
   }
   if (context.tools) {
     params.tools = convertTools(context.tools, compat, model);
+    if (options?.toolChoice) {
+      params.tool_choice = options.toolChoice;
+    }
   } else if (hasToolHistory(context.messages)) {
     params.tools = [];
-  }
-  if (options?.toolChoice) {
-    params.tool_choice = options.toolChoice;
   }
   const completionsReasoningEffort = resolveOpenAICompletionsReasoningEffort(options);
   if (compat.thinkingFormat === "openrouter" && model.reasoning && completionsReasoningEffort) {
@@ -1367,3 +1380,7 @@ function mapStopReason(reason: string | null) {
       };
   }
 }
+
+export const __testing = {
+  processOpenAICompletionsStream,
+};

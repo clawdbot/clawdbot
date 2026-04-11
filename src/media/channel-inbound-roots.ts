@@ -1,6 +1,6 @@
 import type { MsgContext } from "../auto-reply/templating.js";
 import { getBootstrapChannelPlugin } from "../channels/plugins/bootstrap-registry.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 function findChannelMessagingAdapter(channelId?: string | null) {

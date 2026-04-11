@@ -47,6 +47,7 @@ export {
   queueEmbeddedPiMessage as queueAgentHarnessMessage,
   setActiveEmbeddedRun,
 } from "../agents/pi-embedded-runner/runs.js";
+export { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 export { normalizeProviderToolSchemas } from "../agents/pi-embedded-runner/tool-schema-runtime.js";
 export { createOpenClawCodingTools } from "../agents/pi-tools.js";
 export { resolveSandboxContext } from "../agents/sandbox.js";

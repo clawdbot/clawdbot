@@ -12,21 +12,21 @@ import type { ChannelChoice } from "./onboard-types.js";
 function bindingMatchKey(match: AgentRouteBinding["match"]) {
   const accountId = normalizeOptionalString(match.accountId) || DEFAULT_ACCOUNT_ID;
   const identityKey = bindingMatchIdentityKey(match);
-  return [identityKey, accountId].join("|");
+  return JSON.stringify([identityKey, accountId]);
 }
 
 function bindingMatchIdentityKey(match: AgentRouteBinding["match"]) {
   const roles = Array.isArray(match.roles)
     ? Array.from(new Set(normalizeStringEntries(match.roles).toSorted()))
     : [];
-  return [
+  return JSON.stringify([
     match.channel,
     match.peer?.kind ?? "",
     match.peer?.id ?? "",
     match.guildId ?? "",
     match.teamId ?? "",
     roles.join(","),
-  ].join("|");
+  ]);
 }
 
 function canUpgradeBindingAccountScope(params: {

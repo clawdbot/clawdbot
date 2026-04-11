@@ -73,6 +73,12 @@ type SettingsHost = {
   dreamDiaryError: string | null;
   dreamDiaryPath: string | null;
   dreamDiaryContent: string | null;
+  wikiImportInsightsLoading: boolean;
+  wikiImportInsightsError: string | null;
+  wikiImportInsights: null;
+  wikiMemoryPalaceLoading: boolean;
+  wikiMemoryPalaceError: string | null;
+  wikiMemoryPalace: null;
 };
 
 function setTestWindowUrl(urlString: string) {
@@ -162,6 +168,12 @@ const createHost = (tab: Tab): SettingsHost => ({
   dreamDiaryError: null,
   dreamDiaryPath: null,
   dreamDiaryContent: null,
+  wikiImportInsightsLoading: false,
+  wikiImportInsightsError: null,
+  wikiImportInsights: null,
+  wikiMemoryPalaceLoading: false,
+  wikiMemoryPalaceError: null,
+  wikiMemoryPalace: null,
 });
 
 describe("setTabFromRoute", () => {

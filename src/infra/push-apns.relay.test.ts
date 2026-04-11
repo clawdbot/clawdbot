@@ -9,7 +9,7 @@ import { resolveApnsRelayConfigFromEnv, sendApnsRelayPush } from "./push-apns.re
 
 const relayGatewayIdentity = (() => {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
-  const publicKeyPem = publicKey.export({ format: "pem", type: "spki" }).toString();
+  const publicKeyPem = publicKey.export({ format: "pem", type: "spki" });
   const publicKeyRaw = publicKeyRawBase64UrlFromPem(publicKeyPem);
   const deviceId = deriveDeviceIdFromPublicKey(publicKeyRaw);
   if (!deviceId) {
@@ -18,7 +18,7 @@ const relayGatewayIdentity = (() => {
   return {
     deviceId,
     publicKey: publicKeyRaw,
-    privateKeyPem: privateKey.export({ format: "pem", type: "pkcs8" }).toString(),
+    privateKeyPem: privateKey.export({ format: "pem", type: "pkcs8" }),
   };
 })();
 

@@ -539,10 +539,10 @@ describe("spawnAcpDirect", () => {
     expect(accepted.childSessionKey).toMatch(/^agent:codex:acp:/);
     expect(accepted.runId).toBe("run-1");
     expect(accepted.mode).toBe("session");
-    const patchCalls = hoisted.callGatewayMock.mock.calls
+    const patchCall = hoisted.callGatewayMock.mock.calls
       .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
-      .filter((request) => request.method === "sessions.patch");
-    expect(patchCalls[0]?.params).toMatchObject({
+      .find((request) => request.method === "sessions.patch");
+    expect(patchCall?.params).toMatchObject({
       key: accepted.childSessionKey,
       spawnedBy: "agent:main:main",
     });

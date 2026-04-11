@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
-import { validateConfigObjectWithPlugins } from "./config.js";
+import { validateConfigObjectWithPlugins } from "./validation.js";
 
 vi.unmock("../version.js");
 

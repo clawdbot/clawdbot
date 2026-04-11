@@ -690,7 +690,7 @@
   position: sticky;
   top: 0;
   z-index: 3;
-  width: min(100%, 680px);
+  width: min(100%, 920px);
   max-width: 100%;
   min-width: 0;
   padding-bottom: 14px;
@@ -709,6 +709,7 @@
   gap: 16px;
   margin-bottom: 14px;
   flex-shrink: 0;
+  flex-wrap: wrap;
 }
 
 .dreams-diary__title {
@@ -721,13 +722,45 @@
   flex: 1;
 }
 
+.dreams-diary__subtabs {
+  display: inline-flex;
+  gap: 6px;
+  padding: 2px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--panel) 82%, transparent);
+  border: 1px solid color-mix(in oklab, var(--border) 72%, transparent);
+}
+
+.dreams-diary__subtab {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.dreams-diary__subtab--active {
+  color: var(--text);
+  background: color-mix(in oklab, var(--accent-subtle) 88%, transparent);
+}
+
+.dreams-diary__explainer {
+  width: min(100%, 920px);
+  margin: 0 0 16px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
 /* ---- Diary entry ---- */
 
 .dreams-diary__entry {
   position: relative;
   z-index: 1;
-  max-width: 680px;
-  width: min(100%, 680px);
+  max-width: 920px;
+  width: min(100%, 920px);
   min-width: 0;
   padding: 0 0 0 16px;
   flex-shrink: 0;
@@ -789,7 +822,7 @@
   display: flex;
   gap: 6px;
   margin: 0;
-  width: min(100%, 680px);
+  width: min(100%, 920px);
   max-width: 100%;
   min-width: 0;
   overflow-x: auto;
@@ -836,6 +869,198 @@
   max-width: 100%;
   min-width: 0;
   overflow-x: clip;
+}
+
+.dreams-diary__insights {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.dreams-diary__insight-card {
+  border: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+  background: color-mix(in oklab, var(--panel) 86%, transparent);
+  border-radius: 14px;
+  padding: 14px;
+}
+
+.dreams-diary__insight-card--clickable {
+  cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    background 140ms ease,
+    transform 140ms ease;
+}
+
+.dreams-diary__insight-card--clickable:hover {
+  border-color: color-mix(in oklab, var(--accent) 24%, var(--border));
+  background: color-mix(in oklab, var(--panel) 92%, transparent);
+  transform: translateY(-1px);
+}
+
+.dreams-diary__insight-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.dreams-diary__insight-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.dreams-diary__insight-meta {
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+
+.dreams-diary__insight-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  border: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+}
+
+.dreams-diary__insight-badge--high {
+  color: color-mix(in oklab, var(--danger) 82%, white);
+  background: color-mix(in oklab, var(--danger) 10%, transparent);
+}
+
+.dreams-diary__insight-badge--low,
+.dreams-diary__insight-badge--medium,
+.dreams-diary__insight-badge--unknown {
+  color: var(--muted);
+}
+
+.dreams-diary__insight-badge--palace {
+  color: var(--accent);
+  background: color-mix(in oklab, var(--accent-subtle) 72%, transparent);
+  border-color: color-mix(in oklab, var(--accent) 24%, transparent);
+}
+
+.dreams-diary__insight-line {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.dreams-diary__insight-list {
+  margin-top: 10px;
+}
+
+.dreams-diary__insight-list strong {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.dreams-diary__insight-signals {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.dreams-diary__insight-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.dreams-diary__insight-signal {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--text);
+  background: color-mix(in oklab, var(--accent-subtle) 84%, transparent);
+  border: 1px solid color-mix(in oklab, var(--accent) 24%, transparent);
+}
+
+.dreams-diary__preview-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  padding: 32px;
+  background: color-mix(in oklab, var(--bg) 72%, black 28%);
+  backdrop-filter: blur(10px);
+}
+
+.dreams-diary__preview-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(1120px, 100%);
+  min-height: 0;
+  border-radius: 18px;
+  border: 1px solid color-mix(in oklab, var(--border) 72%, transparent);
+  background: color-mix(in oklab, var(--panel) 96%, transparent);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.22);
+  overflow: hidden;
+}
+
+.dreams-diary__preview-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px;
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 62%, transparent);
+}
+
+.dreams-diary__preview-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.dreams-diary__preview-meta {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.dreams-diary__preview-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 20px;
+}
+
+.dreams-diary__preview-hint {
+  margin-bottom: 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.dreams-diary__preview-pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--text);
 }
 
 .dreams-diary__para {
@@ -925,5 +1150,13 @@
 
   .dreams-diary {
     padding: 20px 16px 48px;
+  }
+
+  .dreams-diary__preview-backdrop {
+    padding: 12px;
+  }
+
+  .dreams-diary__preview-header {
+    flex-direction: column;
   }
 }

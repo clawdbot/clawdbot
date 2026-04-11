@@ -335,18 +335,18 @@ export function createCodexNativeWebSearchWrapper(
     if (activation.state !== "native_active") {
       if (activation.codexNativeEnabled) {
         log.debug(
-          `skipping Codex native web search (${activation.inactiveReason ?? "inactive"}) for ${String(
-            model.provider ?? "unknown",
-          )}/${String(model.id ?? "unknown")}`,
+          `skipping Codex native web search (${activation.inactiveReason ?? "inactive"}) for ${
+            model.provider ?? "unknown"
+          }/${model.id ?? "unknown"}`,
         );
       }
       return underlying(model, context, options);
     }
 
     log.debug(
-      `activating Codex native web search (${activation.codexMode}) for ${String(
-        model.provider ?? "unknown",
-      )}/${String(model.id ?? "unknown")}`,
+      `activating Codex native web search (${activation.codexMode}) for ${
+        model.provider ?? "unknown"
+      }/${model.id ?? "unknown"}`,
     );
 
     const originalOnPayload = options?.onPayload;

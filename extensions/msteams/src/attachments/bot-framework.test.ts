@@ -7,6 +7,23 @@ import {
 } from "./bot-framework.js";
 import type { MSTeamsAccessTokenProvider } from "./types.js";
 
+vi.mock("../../runtime-api.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../runtime-api.js")>("../../runtime-api.js");
+  return {
+    ...actual,
+    fetchWithSsrFGuard: async (params: {
+      url: string;
+      init?: RequestInit;
+      fetchImpl?: typeof fetch;
+    }) => ({
+      response: await (params.fetchImpl ?? fetch)(params.url, params.init),
+      finalUrl: params.url,
+      release: async () => {},
+    }),
+  };
+});
+
 type SavedCall = {
   buffer: Buffer;
   contentType?: string;

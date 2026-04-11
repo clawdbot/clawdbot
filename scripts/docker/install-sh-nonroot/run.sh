@@ -41,7 +41,7 @@ EXPECTED_VERSION="${OPENCLAW_INSTALL_EXPECT_VERSION:-}"
 if [[ -n "$EXPECTED_VERSION" ]]; then
   LATEST_VERSION="$EXPECTED_VERSION"
 else
-  LATEST_VERSION="$(npm view "$PACKAGE_NAME" version)"
+  LATEST_VERSION="$(quiet_npm view "$PACKAGE_NAME" version)"
 fi
 echo "==> Verify CLI installed"
 verify_installed_cli "$PACKAGE_NAME" "$LATEST_VERSION"

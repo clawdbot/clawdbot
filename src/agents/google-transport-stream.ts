@@ -14,6 +14,7 @@ import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 import {
+  coerceTransportToolCallArguments,
   createEmptyTransportUsage,
   createWritableTransportEventStream,
   failTransportStream,
@@ -342,7 +343,7 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
           parts.push({
             functionCall: {
               name: block.name,
-              args: block.arguments ?? {},
+              args: coerceTransportToolCallArguments(block.arguments),
               ...(requiresToolCallId(model.id) ? { id: block.id } : {}),
             },
             ...(isSameProviderAndModel && block.thoughtSignature

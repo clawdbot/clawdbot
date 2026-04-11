@@ -319,7 +319,7 @@ vi.mock("./auto-reply/monitor/runtime-api.js", () => ({
   },
   logVerbose: (_msg: string) => undefined,
   normalizeE164: (value: string) => {
-    const digits = String(value).replace(/\D+/g, "");
+    const digits = value.replace(/\D+/g, "");
     return digits ? `+${digits}` : null;
   },
   readStoreAllowFromForDmPolicy: async () => [] as string[],
@@ -363,7 +363,7 @@ vi.mock("./auto-reply/monitor/group-gating.runtime.js", () => ({
   hasControlCommand: (body: string) => body.trim().startsWith("/"),
   implicitMentionKindWhen: (kind: string, enabled: boolean) => (enabled ? [kind] : []),
   normalizeE164: (value: string) => {
-    const digits = String(value).replace(/\D+/g, "");
+    const digits = value.replace(/\D+/g, "");
     return digits ? `+${digits}` : null;
   },
   parseActivationCommand: (body: string) => ({

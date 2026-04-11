@@ -338,9 +338,9 @@ export function ensurePageState(page: Page): PageState {
     });
     page.on("pageerror", (err: Error) => {
       state.errors.push({
-        message: err?.message ? String(err.message) : String(err),
-        name: err?.name ? String(err.name) : undefined,
-        stack: err?.stack ? String(err.stack) : undefined,
+        message: err.message || String(err),
+        name: err.name || undefined,
+        stack: err.stack || undefined,
         timestamp: new Date().toISOString(),
       });
       if (state.errors.length > MAX_PAGE_ERRORS) {

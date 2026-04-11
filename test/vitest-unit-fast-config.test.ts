@@ -19,8 +19,12 @@ describe("unit-fast vitest lane", () => {
     expect(config.test?.isolate).toBe(false);
     expect(config.test?.runner).toBeUndefined();
     expect(config.test?.setupFiles).toEqual([]);
-    expect(config.test?.include).toContain("src/plugin-sdk/provider-entry.test.ts");
+    expect(config.test?.include).toContain(
+      "src/agents/pi-tools.deferred-followup-guidance.test.ts",
+    );
     expect(config.test?.include).toContain("src/commands/status-overview-values.test.ts");
+    expect(config.test?.include).toContain("src/plugins/config-policy.test.ts");
+    expect(config.test?.include).toContain("src/plugin-sdk/provider-entry.test.ts");
   });
 
   it("does not treat moved config paths as CLI include filters", () => {
@@ -37,6 +41,7 @@ describe("unit-fast vitest lane", () => {
 
   it("keeps obvious stateful files out of the unit-fast lane", () => {
     expect(isUnitFastTestFile("src/plugin-sdk/temp-path.test.ts")).toBe(false);
+    expect(isUnitFastTestFile("src/agents/sandbox.resolveSandboxContext.test.ts")).toBe(false);
     expect(resolveUnitFastTestIncludePattern("src/plugin-sdk/temp-path.ts")).toBeNull();
     expect(classifyUnitFastTestFileContent("vi.resetModules(); await import('./x.js')")).toEqual([
       "module-mocking",

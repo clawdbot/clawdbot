@@ -158,7 +158,7 @@ async function promptZalouserAllowFrom(params: {
       placeholder: ZALOUSER_ALLOW_FROM_PLACEHOLDER,
       initialValue: existingAllowFrom.length > 0 ? existingAllowFrom.join(", ") : undefined,
     });
-    const parts = parseZalouserEntries(String(entry));
+    const parts = parseZalouserEntries(entry);
     if (parts.length === 0) {
       await prompter.note(
         [

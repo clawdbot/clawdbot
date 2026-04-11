@@ -49,8 +49,10 @@ openclaw devices clear --yes --pending --json
 
 ### `openclaw devices approve [requestId] [--latest]`
 
-Approve a pending device pairing request. If `requestId` is omitted, OpenClaw
-automatically approves the most recent pending request.
+Approve a pending device pairing request by exact `requestId`. If `requestId`
+is omitted or `--latest` is passed, OpenClaw only prints the selected pending
+request and exits; rerun approval with the exact request ID after verifying
+the details.
 
 Note: if a device retries pairing with changed auth details (role/scopes/public
 key), OpenClaw supersedes the previous pending entry and issues a new
@@ -126,7 +128,7 @@ Pass `--token` or `--password` explicitly. Missing explicit credentials is an er
   `operator.admin`.
 - `devices clear` is intentionally gated by `--yes`.
 - If pairing scope is unavailable on local loopback (and no explicit `--url` is passed), list/approve can use a local pairing fallback.
-- `devices approve` picks the newest pending request automatically when you omit `requestId` or pass `--latest`.
+- `devices approve` requires an explicit request ID before minting tokens; omitting `requestId` or passing `--latest` only previews the newest pending request.
 
 ## Token drift recovery checklist
 

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/twitch",
-  "version": "2026.4.10",
+  "version": "2026.4.11",
   "description": "OpenClaw Twitch channel plugin",
   "type": "module",
   "dependencies": {
@@ -16,7 +16,7 @@
       "./index.ts"
     ],
     "install": {
-      "minHostVersion": ">=2026.4.10"
+      "minHostVersion": ">=2026.4.11"
     },
     "channel": {
       "id": "twitch",

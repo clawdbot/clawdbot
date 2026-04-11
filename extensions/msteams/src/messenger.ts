@@ -490,28 +490,31 @@ export async function sendMSTeamsMessages(params: {
     messageIndex: number,
   ): Promise<string> => {
     let pendingUploadId: string | undefined;
-    const response = await sendWithRetry(async () => {
-      const activity = await buildActivity(
-        message,
-        params.conversationRef,
-        params.tokenProvider,
-        params.sharePointSiteId,
-        params.mediaMaxBytes,
-        { feedbackLoopEnabled: params.feedbackLoopEnabled },
-      );
+    const response = await sendWithRetry(
+      async () => {
+        const activity = await buildActivity(
+          message,
+          params.conversationRef,
+          params.tokenProvider,
+          params.sharePointSiteId,
+          params.mediaMaxBytes,
+          { feedbackLoopEnabled: params.feedbackLoopEnabled },
+        );
 
-      // Extract and strip the internal-only pending upload tag before sending.
-      pendingUploadId =
-        typeof activity._pendingUploadId === "string" ? activity._pendingUploadId : undefined;
-      if (pendingUploadId) {
-        delete activity._pendingUploadId;
-      }
+        // Extract and strip the internal-only pending upload tag before sending.
+        pendingUploadId =
+          typeof activity._pendingUploadId === "string" ? activity._pendingUploadId : undefined;
+        if (pendingUploadId) {
+          delete activity._pendingUploadId;
+        }
 
-      return await ctx.sendActivity(activity);
-    }, {
-      messageIndex,
-      messageCount: messages.length,
-    });
+        return await ctx.sendActivity(activity);
+      },
+      {
+        messageIndex,
+        messageCount: messages.length,
+      },
+    );
     const messageId = extractMessageId(response) ?? "unknown";
 
     // Store the activity ID so the accept handler can replace the consent card in-place

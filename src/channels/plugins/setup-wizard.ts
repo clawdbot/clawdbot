@@ -438,25 +438,23 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
               credentialValues,
             })) ?? currentValue,
           );
-          const rawValue = String(
-            await prompter.text({
-              message: textInput.message,
-              initialValue,
-              placeholder: textInput.placeholder,
-              validate: (value) => {
-                const trimmed = normalizeOptionalString(value) ?? "";
-                if (!trimmed && textInput.required !== false) {
-                  return "Required";
-                }
-                return textInput.validate?.({
-                  value: trimmed,
-                  cfg: next,
-                  accountId,
-                  credentialValues,
-                });
-              },
-            }),
-          );
+          const rawValue = await prompter.text({
+            message: textInput.message,
+            initialValue,
+            placeholder: textInput.placeholder,
+            validate: (value) => {
+              const trimmed = normalizeOptionalString(value) ?? "";
+              if (!trimmed && textInput.required !== false) {
+                return "Required";
+              }
+              return textInput.validate?.({
+                value: trimmed,
+                cfg: next,
+                accountId,
+                credentialValues,
+              });
+            },
+          });
           const trimmedValue = rawValue.trim();
           if (!trimmedValue && textInput.required === false) {
             if (textInput.applyEmptyValue) {

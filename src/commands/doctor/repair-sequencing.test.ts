@@ -1,6 +1,121 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { runDoctorRepairSequence } from "./repair-sequencing.js";
+
+vi.mock("./shared/channel-doctor.js", () => ({
+  collectChannelDoctorRepairMutations: ({ cfg }: { cfg: OpenClawConfig }) => {
+    const allowFrom = cfg.channels?.discord?.allowFrom as unknown[] | undefined;
+    if (allowFrom?.[0] === 123) {
+      return [
+        {
+          config: {
+            ...cfg,
+            channels: {
+              ...cfg.channels,
+              discord: {
+                ...cfg.channels?.discord,
+                allowFrom: ["123"],
+              },
+            },
+          },
+          changes: ["channels.discord.allowFrom: converted 1 numeric ID to strings"],
+        },
+      ];
+    }
+    if (allowFrom?.[0] === 106232522769186816) {
+      return [
+        {
+          config: cfg,
+          changes: [],
+          warnings: [
+            "channels.discord.allowFrom[0] cannot be auto-repaired because it is not a safe integer",
+          ],
+        },
+      ];
+    }
+    return [];
+  },
+  collectChannelDoctorEmptyAllowlistExtraWarnings: () => [],
+}));
+
+vi.mock("./shared/empty-allowlist-scan.js", () => ({
+  scanEmptyAllowlistPolicyWarnings: (cfg: OpenClawConfig) =>
+    cfg.channels?.signal
+      ? ["channels.signal.accounts.ops\u001B[31m-team\u001B[0m\r\nnext.dmPolicy warning"]
+      : [],
+}));
+
+vi.mock("./shared/allowlist-policy-repair.js", () => ({
+  maybeRepairAllowlistPolicyAllowFrom: async (cfg: OpenClawConfig) => ({
+    config: cfg,
+    changes: [],
+  }),
+}));
+
+vi.mock("./shared/bundled-plugin-load-paths.js", () => ({
+  maybeRepairBundledPluginLoadPaths: (cfg: OpenClawConfig) => ({
+    config: cfg,
+    changes: [],
+  }),
+}));
+
+vi.mock("./shared/open-policy-allowfrom.js", () => ({
+  maybeRepairOpenPolicyAllowFrom: (cfg: OpenClawConfig) => ({
+    config: cfg,
+    changes: [],
+  }),
+}));
+
+vi.mock("./shared/stale-plugin-config.js", () => ({
+  maybeRepairStalePluginConfig: (cfg: OpenClawConfig) => ({
+    config: cfg,
+    changes: [],
+  }),
+}));
+
+vi.mock("./shared/legacy-tools-by-sender.js", () => ({
+  maybeRepairLegacyToolsBySenderKeys: (cfg: OpenClawConfig) => {
+    const channels = cfg.channels as Record<string, unknown> | undefined;
+    const tools = channels?.tools as
+      | { exec?: { toolsBySender?: Record<string, unknown> } }
+      | undefined;
+    const bySender = tools?.exec?.toolsBySender;
+    const rawKey = bySender
+      ? Object.keys(bySender).find((key) => !key.startsWith("id:"))
+      : undefined;
+    if (!bySender || !rawKey) {
+      return { config: cfg, changes: [] };
+    }
+    const targetKey = `id:${rawKey.trim()}`;
+    return {
+      config: {
+        ...cfg,
+        channels: {
+          ...cfg.channels,
+          tools: {
+            ...(channels?.tools as Record<string, unknown> | undefined),
+            exec: {
+              ...tools?.exec,
+              toolsBySender: {
+                [targetKey]: bySender[rawKey],
+              },
+            },
+          },
+        },
+      },
+      changes: [
+        `channels.tools.exec.toolsBySender: migrated 1 legacy key to typed id: entries (${rawKey} -> ${targetKey})`,
+      ],
+    };
+  },
+}));
+
+vi.mock("./shared/exec-safe-bins.js", () => ({
+  maybeRepairExecSafeBinProfiles: (cfg: OpenClawConfig) => ({
+    config: cfg,
+    changes: [],
+  }),
+}));
 
 describe("doctor repair sequencing", () => {
   it("applies ordered repairs and sanitizes empty-allowlist warnings", async () => {

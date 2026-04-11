@@ -118,7 +118,7 @@ const createStubChannelPlugin = (params: {
       }
       const first = allowFrom?.[0];
       if (first) {
-        return { ok: true, to: String(first) };
+        return { ok: true, to: first };
       }
       return {
         ok: false,

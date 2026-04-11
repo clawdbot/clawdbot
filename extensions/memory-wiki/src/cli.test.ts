@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { registerWikiCli } from "./cli.js";
+import { registerWikiCli, runWikiChatGptImport, runWikiChatGptRollback } from "./cli.js";
 import type { MemoryWikiPluginConfig } from "./config.js";
 import { parseWikiMarkdown, renderWikiMarkdown } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
@@ -45,6 +45,47 @@ describe("memory-wiki cli", () => {
       initialize: options?.initialize,
       config: options?.config,
     });
+  }
+
+  async function createChatGptExport(rootDir: string) {
+    const exportDir = path.join(rootDir, "chatgpt-export");
+    await fs.mkdir(exportDir, { recursive: true });
+    const conversations = [
+      {
+        conversation_id: "12345678-1234-1234-1234-1234567890ab",
+        title: "Travel preference check",
+        create_time: 1_712_363_200,
+        update_time: 1_712_366_800,
+        current_node: "assistant-1",
+        mapping: {
+          root: {},
+          "user-1": {
+            parent: "root",
+            message: {
+              author: { role: "user" },
+              content: {
+                parts: ["I prefer aisle seats and I don't want a hotel far from the airport."],
+              },
+            },
+          },
+          "assistant-1": {
+            parent: "user-1",
+            message: {
+              author: { role: "assistant" },
+              content: {
+                parts: ["Noted. I will keep travel options close to the airport."],
+              },
+            },
+          },
+        },
+      },
+    ];
+    await fs.writeFile(
+      path.join(exportDir, "conversations.json"),
+      `${JSON.stringify(conversations, null, 2)}\n`,
+      "utf8",
+    );
+    return exportDir;
   }
 
   it("registers apply synthesis and writes a synthesis page", async () => {
@@ -152,5 +193,58 @@ cli note
     await program.parseAsync(["wiki", "doctor", "--json"], { from: "user" });
 
     expect(process.exitCode).toBe(1);
+  });
+
+  it("imports ChatGPT exports with dry-run, apply, and rollback", async () => {
+    const { rootDir, config } = await createCliVault({ initialize: true });
+    const exportDir = await createChatGptExport(rootDir);
+
+    const dryRun = await runWikiChatGptImport({
+      config,
+      exportPath: exportDir,
+      dryRun: true,
+      json: true,
+    });
+    expect(dryRun.dryRun).toBe(true);
+    expect(dryRun.createdCount).toBe(1);
+    await expect(fs.readdir(path.join(rootDir, "sources"))).resolves.toEqual([]);
+
+    const applied = await runWikiChatGptImport({
+      config,
+      exportPath: exportDir,
+      json: true,
+    });
+    expect(applied.runId).toBeTruthy();
+    expect(applied.createdCount).toBe(1);
+    const sourceFiles = (await fs.readdir(path.join(rootDir, "sources"))).filter(
+      (entry) => entry !== "index.md",
+    );
+    expect(sourceFiles).toHaveLength(1);
+    const pageContent = await fs.readFile(path.join(rootDir, "sources", sourceFiles[0]), "utf8");
+    expect(pageContent).toContain("ChatGPT Export: Travel preference check");
+    expect(pageContent).toContain("I prefer aisle seats");
+    expect(pageContent).toContain("Preference signals:");
+
+    const secondDryRun = await runWikiChatGptImport({
+      config,
+      exportPath: exportDir,
+      dryRun: true,
+      json: true,
+    });
+    expect(secondDryRun.createdCount).toBe(0);
+    expect(secondDryRun.updatedCount).toBe(0);
+    expect(secondDryRun.skippedCount).toBe(1);
+
+    const rollback = await runWikiChatGptRollback({
+      config,
+      runId: applied.runId!,
+      json: true,
+    });
+    expect(rollback.alreadyRolledBack).toBe(false);
+    await expect(
+      fs
+        .readdir(path.join(rootDir, "sources"))
+        .then((entries) => entries.filter((entry) => entry !== "index.md")),
+    ).resolves.toEqual([]);
   });
 });

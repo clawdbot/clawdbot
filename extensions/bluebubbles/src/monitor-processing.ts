@@ -1169,7 +1169,7 @@ export async function processMessage(
         isDirect: !isGroup,
         isGroup,
         isMentionableGroup: isGroup,
-        requireMention: Boolean(requireMention),
+        requireMention,
         canDetectMention,
         effectiveWasMentioned,
         shouldBypassMention,

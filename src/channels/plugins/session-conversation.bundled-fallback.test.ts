@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 
 const fallbackState = vi.hoisted(() => ({
@@ -27,7 +27,7 @@ vi.mock("../../plugin-sdk/facade-runtime.js", async () => {
   };
 });
 
-import { resolveSessionConversationRef } from "./session-conversation.js";
+import { resolveSessionConversationRef, resolveSessionThreadInfo } from "./session-conversation.js";
 
 describe("session conversation bundled fallback", () => {
   beforeEach(() => {
@@ -70,6 +70,51 @@ describe("session conversation bundled fallback", () => {
       baseSessionKey: "agent:main:mock-threaded:group:room",
       baseConversationId: "room",
       parentConversationCandidates: ["room"],
+    });
+  });
+
+  it("can skip bundled fallback probing for hot generic-only callers", () => {
+    fallbackState.activeDirName = "mock-threaded";
+    fallbackState.resolveSessionConversation = ({ rawId }) => {
+      const [conversationId, threadId] = rawId.split(":topic:");
+      return {
+        id: conversationId,
+        threadId,
+        baseConversationId: conversationId,
+        parentConversationCandidates: [conversationId],
+      };
+    };
+    setRuntimeConfigSnapshot({
+      plugins: {
+        entries: {
+          "mock-threaded": {
+            enabled: true,
+          },
+        },
+      },
+    });
+
+    expect(
+      resolveSessionConversationRef("agent:main:mock-threaded:group:room:topic:42", {
+        bundledFallback: false,
+      }),
+    ).toEqual({
+      channel: "mock-threaded",
+      kind: "group",
+      rawId: "room:topic:42",
+      id: "room:topic:42",
+      threadId: undefined,
+      baseSessionKey: "agent:main:mock-threaded:group:room:topic:42",
+      baseConversationId: "room:topic:42",
+      parentConversationCandidates: [],
+    });
+    expect(
+      resolveSessionThreadInfo("agent:main:mock-threaded:group:room:topic:42", {
+        bundledFallback: false,
+      }),
+    ).toEqual({
+      baseSessionKey: "agent:main:mock-threaded:group:room:topic:42",
+      threadId: undefined,
     });
   });
 

@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { ResolvedTelegramAccount } from "./accounts.js";
-import { isNumericTelegramUserId, normalizeTelegramAllowFromEntry } from "./allow-from.js";
+import { isNumericTelegramSenderUserId, normalizeTelegramAllowFromEntry } from "./allow-from.js";
 
 function collectInvalidTelegramAllowFromEntries(params: { entries: unknown; target: Set<string> }) {
   if (!Array.isArray(params.entries)) {
@@ -14,7 +14,7 @@ function collectInvalidTelegramAllowFromEntries(params: { entries: unknown; targ
     if (!normalized || normalized === "*") {
       continue;
     }
-    if (!isNumericTelegramUserId(normalized)) {
+    if (!isNumericTelegramSenderUserId(normalized)) {
       params.target.add(normalized);
     }
   }
@@ -54,7 +54,7 @@ export async function collectTelegramSecurityAuditFindings(params: {
     () => [],
   );
   const storeHasWildcard = storeAllowFrom.some(
-    (value) => (normalizeOptionalString(String(value)) ?? "") === "*",
+    (value) => (normalizeOptionalString(value) ?? "") === "*",
   );
   const invalidTelegramAllowFromEntries = new Set<string>();
   collectInvalidTelegramAllowFromEntries({

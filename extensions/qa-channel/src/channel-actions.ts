@@ -3,6 +3,7 @@ import { jsonResult, readStringParam } from "openclaw/plugin-sdk/channel-actions
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { resolveQaChannelAccount } from "./accounts.js";
 import {
+  buildQaTarget,
   createQaBusThread,
   deleteQaBusMessage,
   editQaBusMessage,
@@ -43,6 +44,33 @@ function listQaChannelActions(
   return Array.from(actions);
 }
 
+function readQaSendText(params: Record<string, unknown>) {
+  return (
+    readStringParam(params, "message", { allowEmpty: true }) ??
+    readStringParam(params, "text", { allowEmpty: true }) ??
+    readStringParam(params, "content", { allowEmpty: true })
+  );
+}
+
+function readQaSendTarget(params: Record<string, unknown>) {
+  const explicitTo = readStringParam(params, "to");
+  if (explicitTo) {
+    return explicitTo;
+  }
+  const channelId = readStringParam(params, "channelId");
+  if (channelId) {
+    return buildQaTarget({ chatType: "channel", conversationId: channelId });
+  }
+  const target = readStringParam(params, "target");
+  if (!target) {
+    return undefined;
+  }
+  if (/^(dm|channel):|^thread:[^/]+\/.+/i.test(target)) {
+    return target;
+  }
+  return buildQaTarget({ chatType: "channel", conversationId: target });
+}
+
 export const qaChannelMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: (context) => ({
     actions: listQaChannelActions(context.cfg as CoreConfig, context.accountId),
@@ -60,8 +88,13 @@ export const qaChannelMessageActions: ChannelMessageActionAdapter = {
   }),
   extractToolSend: ({ args }: { args: Record<string, unknown> }) => {
     const action = typeof args.action === "string" ? args.action.trim() : "";
+    if (action === "send") {
+      const to = readQaSendTarget(args);
+      const threadId = readStringParam(args, "threadId");
+      return to ? { to, threadId } : null;
+    }
     if (action === "sendMessage") {
-      return extractToolSend(args, "sendMessage");
+      return extractToolSend(args, "sendMessage") ?? null;
     }
     if (action === "threadReply") {
       const channelId = typeof args.channelId === "string" ? args.channelId.trim() : "";
@@ -76,6 +109,30 @@ export const qaChannelMessageActions: ChannelMessageActionAdapter = {
     const baseUrl = account.baseUrl;
 
     switch (action) {
+      case "send": {
+        const to = readQaSendTarget(params);
+        const text = readQaSendText(params);
+        if (!to || text === undefined) {
+          throw new Error("qa-channel send requires to/target and message/text");
+        }
+        const parsed = parseQaTarget(to);
+        const threadId = readStringParam(params, "threadId") ?? parsed.threadId;
+        const { message } = await sendQaBusMessage({
+          baseUrl,
+          accountId: account.accountId,
+          to: buildQaTarget({
+            chatType: parsed.chatType,
+            conversationId: parsed.conversationId,
+            threadId,
+          }),
+          text,
+          senderId: account.botUserId,
+          senderName: account.botDisplayName,
+          threadId,
+          replyToId: readStringParam(params, "replyTo") ?? readStringParam(params, "replyToId"),
+        });
+        return jsonResult({ message });
+      }
       case "thread-create": {
         const channelId =
           readStringParam(params, "channelId") ??

@@ -465,7 +465,7 @@ export async function startCanvasHost(opts: CanvasHostServerOpts): Promise<Canva
 
   const bindHost = normalizeOptionalString(opts.listenHost) || "127.0.0.1";
   const server: Server = http.createServer((req, res) => {
-    if (lowercasePreservingWhitespace(String(req.headers.upgrade ?? "")) === "websocket") {
+    if (lowercasePreservingWhitespace(req.headers.upgrade ?? "") === "websocket") {
       return;
     }
     void (async () => {

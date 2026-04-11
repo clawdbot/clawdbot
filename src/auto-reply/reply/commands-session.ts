@@ -1,3 +1,4 @@
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import {
   setChannelConversationBindingIdleTimeoutBySessionKey,
@@ -264,12 +265,16 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
   const rawArgs = normalized === "/usage" ? "" : normalized.slice("/usage".length).trim();
   const requested = rawArgs ? normalizeUsageDisplay(rawArgs) : undefined;
   if (normalizeLowercaseStringOrEmpty(rawArgs).startsWith("cost")) {
+    const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+    const sessionAgentId = params.sessionKey
+      ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
+      : params.agentId;
     const sessionSummary = await loadSessionCostSummary({
-      sessionId: params.sessionEntry?.sessionId,
-      sessionEntry: params.sessionEntry,
-      sessionFile: params.sessionEntry?.sessionFile,
+      sessionId: targetSessionEntry?.sessionId,
+      sessionEntry: targetSessionEntry,
+      sessionFile: targetSessionEntry?.sessionFile,
       config: params.cfg,
-      agentId: params.agentId,
+      agentId: sessionAgentId,
     });
     const summary = await loadCostUsageSummary({ days: 30, config: params.cfg });
 
@@ -309,9 +314,8 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
     };
   }
 
-  const currentRaw =
-    params.sessionEntry?.responseUsage ??
-    (params.sessionKey ? params.sessionStore?.[params.sessionKey]?.responseUsage : undefined);
+  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+  const currentRaw = targetSessionEntry?.responseUsage;
   const current = resolveResponseUsageMode(currentRaw);
   const next = requested ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
 
@@ -350,12 +354,16 @@ export const handleFastCommand: CommandHandler = async (params, allowTextCommand
   const rawArgs = normalized === "/fast" ? "" : normalized.slice("/fast".length).trim();
   const rawMode = normalizeLowercaseStringOrEmpty(rawArgs);
   if (!rawMode || rawMode === "status") {
+    const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+    const sessionAgentId = params.sessionKey
+      ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
+      : params.agentId;
     const state = resolveFastModeState({
       cfg: params.cfg,
       provider: params.provider,
       model: params.model,
-      agentId: params.agentId,
-      sessionEntry: params.sessionEntry,
+      agentId: sessionAgentId,
+      sessionEntry: targetSessionEntry,
     });
     const suffix =
       state.source === "agent"

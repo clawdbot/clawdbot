@@ -92,4 +92,5 @@ export type ResolveQueueSettingsParams = {
   sessionEntry?: SessionEntry;
   inlineMode?: QueueMode;
   inlineOptions?: Partial<QueueSettings>;
+  pluginDebounceMs?: number;
 };

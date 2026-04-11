@@ -31,12 +31,16 @@ export type EmbeddedPiAgentMeta = {
   };
 };
 
+export type EmbeddedRunLivenessState = "working" | "paused" | "blocked" | "abandoned";
+
 export type EmbeddedPiRunMeta = {
   durationMs: number;
   agentMeta?: EmbeddedPiAgentMeta;
   aborted?: boolean;
   systemPromptReport?: SessionSystemPromptReport;
   finalAssistantVisibleText?: string;
+  replayInvalid?: boolean;
+  livenessState?: EmbeddedRunLivenessState;
   error?: {
     kind:
       | "context_overflow"
@@ -93,6 +97,8 @@ export type EmbeddedPiCompactResult = {
   };
 };
 
+export type EmbeddedFullAccessBlockedReason = "sandbox" | "host-policy" | "channel" | "runtime";
+
 export type EmbeddedSandboxInfo = {
   enabled: boolean;
   workspaceDir?: string;
@@ -104,5 +110,7 @@ export type EmbeddedSandboxInfo = {
   elevated?: {
     allowed: boolean;
     defaultLevel: "on" | "off" | "ask" | "full";
+    fullAccessAvailable: boolean;
+    fullAccessBlockedReason?: EmbeddedFullAccessBlockedReason;
   };
 };

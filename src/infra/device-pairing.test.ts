@@ -161,6 +161,37 @@ describe("device pairing tokens", () => {
     expect(second.request.requestId).toBe(first.request.requestId);
   });
 
+  test("re-requesting with identical params preserves the original ts to prevent queue-jumping", async () => {
+    // Regression: refreshPendingDevicePairingRequest must not bump ts to Date.now().
+    // An attacker who reconnects with the same key/role/scopes could otherwise
+    // silently move their request to the top of the implicit --latest approval queue.
+    const baseDir = await makeDevicePairingDir();
+    const first = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        role: "operator",
+        scopes: ["operator.read"],
+      },
+      baseDir,
+    );
+    const originalTs = first.request.ts;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const second = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        role: "operator",
+        scopes: ["operator.read"],
+      },
+      baseDir,
+    );
+
+    expect(second.created).toBe(false);
+    expect(second.request.requestId).toBe(first.request.requestId);
+    expect(second.request.ts).toBe(originalTs);
+  });
+
   test("supersedes pending requests when requested roles/scopes change", async () => {
     const baseDir = await makeDevicePairingDir();
     const first = await requestDevicePairing(

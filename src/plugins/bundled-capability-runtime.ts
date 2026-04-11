@@ -341,6 +341,15 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
           rootDir: record.rootDir,
         })),
       );
+      registry.textTransforms.push(
+        ...captured.textTransforms.map((transforms) => ({
+          pluginId: record.id,
+          pluginName: record.name,
+          transforms,
+          source: record.source,
+          rootDir: record.rootDir,
+        })),
+      );
       registry.providers.push(
         ...captured.providers.map((provider) => ({
           pluginId: record.id,

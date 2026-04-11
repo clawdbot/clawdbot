@@ -53,10 +53,10 @@ async function promptMSTeamsAllowFrom(params: {
     const entry = await params.prompter.text({
       message: "MS Teams allowFrom (usernames or ids)",
       placeholder: "alex@example.com, Alex Johnson",
-      initialValue: existing[0] ? String(existing[0]) : undefined,
-      validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+      initialValue: existing[0] ? existing[0] : undefined,
+      validate: (value) => (value.trim() ? undefined : "Required"),
     });
-    const parts = splitSetupEntries(String(entry));
+    const parts = splitSetupEntries(entry);
     if (parts.length === 0) {
       await params.prompter.note("Enter at least one user.", "MS Teams allowlist");
       continue;

@@ -256,7 +256,7 @@ export async function downloadViaPlaywright(opts: {
   const timeout = normalizeTimeoutMs(opts.timeoutMs, 120_000);
 
   const ref = requireRef(opts.ref);
-  const outPath = String(opts.path ?? "").trim();
+  const outPath = opts.path?.trim() ?? "";
   if (!outPath) {
     throw new Error("path is required");
   }

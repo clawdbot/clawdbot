@@ -375,7 +375,7 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
     });
 
     expect(result).toBe("sk-minimax-redacted-value");
-    const noteMessages = note.mock.calls.map((call) => String(call.at(0) ?? "")).join("\n");
+    const noteMessages = note.mock.calls.map((call) => call.at(0) ?? "").join("\n");
     expect(noteMessages).toContain("Validated environment variable MINIMAX_API_KEY.");
     expect(noteMessages).not.toContain("sk-minimax-redacted-value");
   });

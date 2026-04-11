@@ -262,13 +262,13 @@ describe("extractGeminiCliCredentials", () => {
     });
     mockRealpathSync.mockReturnValue(resolvedPath);
     mockReaddirSync.mockImplementation((p: string) => {
-      if (normalizePath(String(p)) === normalizePath(bundleDir)) {
+      if (normalizePath(p) === normalizePath(bundleDir)) {
         return [dirent("chunk-ABC123.js", false)];
       }
       return [];
     });
     mockReadFileSync.mockImplementation((p: string) => {
-      if (normalizePath(String(p)) === normalizePath(chunkPath)) {
+      if (normalizePath(p) === normalizePath(chunkPath)) {
         return params.bundleContent;
       }
       throw new Error(`Unexpected read for ${p}`);

@@ -13,7 +13,7 @@ async function tryScutil(key: "ComputerName" | "LocalHostName") {
       timeout: 1000,
       windowsHide: true,
     });
-    const value = normalizeOptionalString(String(stdout ?? "")) ?? "";
+    const value = normalizeOptionalString(stdout ?? "") ?? "";
     return value.length > 0 ? value : null;
   } catch {
     return null;

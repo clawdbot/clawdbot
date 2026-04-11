@@ -1,6 +1,21 @@
 import fs from "node:fs";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserServerState } from "./server-context.js";
+
+vi.mock("openclaw/plugin-sdk/browser-security-runtime", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/browser-security-runtime")
+  >("openclaw/plugin-sdk/browser-security-runtime");
+  const lookupFn = async (_hostname: string, options?: { all?: boolean }) => {
+    const result = { address: "93.184.216.34", family: 4 };
+    return options?.all === true ? [result] : result;
+  };
+  return {
+    ...actual,
+    resolvePinnedHostnameWithPolicy: (hostname: string, params: object = {}) =>
+      actual.resolvePinnedHostnameWithPolicy(hostname, { ...params, lookupFn: lookupFn as never }),
+  };
+});
 
 vi.mock("./chrome-mcp.js", () => ({
   closeChromeMcpSession: vi.fn(async () => true),
@@ -59,7 +74,21 @@ function makeState(): BrowserServerState {
 }
 
 beforeEach(() => {
+  for (const key of [
+    "ALL_PROXY",
+    "all_proxy",
+    "HTTP_PROXY",
+    "http_proxy",
+    "HTTPS_PROXY",
+    "https_proxy",
+  ]) {
+    vi.stubEnv(key, "");
+  }
   vi.clearAllMocks();
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe("browser server-context existing-session profile", () => {

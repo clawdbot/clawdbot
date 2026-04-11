@@ -163,7 +163,7 @@ describe("createMSTeamsReplyDispatcher", () => {
     if (!lastCreatedDispatcher) {
       throw new Error("createDispatcher must be called first");
     }
-    await lastCreatedDispatcher.replyOptions.onPartialReply?.({ text });
+    lastCreatedDispatcher.replyOptions.onPartialReply?.({ text });
   }
 
   it("sends an informative status update on reply start for personal chats", async () => {
@@ -327,7 +327,7 @@ describe("createMSTeamsReplyDispatcher", () => {
   it("forwards partial replies into the Teams stream", async () => {
     const dispatcher = createDispatcher("personal");
 
-    await dispatcher.replyOptions.onPartialReply?.({ text: "partial response" });
+    dispatcher.replyOptions.onPartialReply?.({ text: "partial response" });
 
     expect(streamInstances[0]?.update).toHaveBeenCalledWith("partial response");
   });

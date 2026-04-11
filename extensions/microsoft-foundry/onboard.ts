@@ -1,5 +1,6 @@
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
@@ -246,7 +247,7 @@ async function promptEndpointAndModelBase(
     modelInitialValue?: string;
   },
 ): Promise<FoundrySelection> {
-  const endpoint = String(
+  const endpoint = (
     await ctx.prompter.text({
       message: "Microsoft Foundry endpoint URL",
       placeholder: "https://xxx.openai.azure.com or https://xxx.services.ai.azure.com",
@@ -256,16 +257,11 @@ async function promptEndpointAndModelBase(
         if (!val) {
           return "Endpoint URL is required";
         }
-        try {
-          new URL(val);
-        } catch {
-          return "Invalid URL";
-        }
-        return undefined;
+        return URL.canParse(val) ? undefined : "Invalid URL";
       },
-    }),
+    })
   ).trim();
-  const modelId = String(
+  const modelId = (
     await ctx.prompter.text({
       message: "Default model/deployment name",
       ...(options?.modelInitialValue ? { initialValue: options.modelInitialValue } : {}),
@@ -277,7 +273,7 @@ async function promptEndpointAndModelBase(
         }
         return undefined;
       },
-    }),
+    })
   ).trim();
   const familyChoice = await promptFoundryModelFamily(ctx);
   const resolvedModelName =
@@ -403,7 +399,7 @@ export async function promptTenantId(
       "Azure Tenant",
     );
   }
-  const tenantId = String(
+  const tenantId = (
     await ctx.prompter.text({
       message: params?.required ? "Azure tenant ID" : "Azure tenant ID (optional)",
       placeholder: params?.suggestions?.[0]?.id ?? "00000000-0000-0000-0000-000000000000",
@@ -416,7 +412,7 @@ export async function promptTenantId(
           ? undefined
           : "Enter a valid tenant ID or tenant domain";
       },
-    }),
+    })
   ).trim();
   return tenantId || undefined;
 }
@@ -474,31 +470,36 @@ export async function testFoundryConnection(params: {
       modelNameHint: params.modelNameHint,
       api: params.api,
     });
-    const signal =
-      typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(15_000) : undefined;
-    const res = await fetch(testRequest.url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+    const { response: res, release } = await fetchWithSsrFGuard({
+      url: testRequest.url,
+      init: {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(testRequest.body),
       },
-      body: JSON.stringify(testRequest.body),
-      ...(signal ? { signal } : {}),
+      timeoutMs: 15_000,
     });
-    if (res.status === 400) {
-      const body = await res.text().catch(() => "");
-      await params.ctx.prompter.note(
-        `Endpoint is reachable but returned 400 Bad Request - check your deployment name and API version.\n${body.slice(0, 200)}`,
-        "Connection Test",
-      );
-    } else if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      await params.ctx.prompter.note(
-        `Warning: test request returned ${res.status}. ${body.slice(0, 200)}\nProceeding anyway - you can fix the endpoint later.`,
-        "Connection Test",
-      );
-    } else {
-      await params.ctx.prompter.note("Connection test successful!", "✓");
+    try {
+      if (res.status === 400) {
+        const body = await res.text().catch(() => "");
+        await params.ctx.prompter.note(
+          `Endpoint is reachable but returned 400 Bad Request - check your deployment name and API version.\n${body.slice(0, 200)}`,
+          "Connection Test",
+        );
+      } else if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        await params.ctx.prompter.note(
+          `Warning: test request returned ${res.status}. ${body.slice(0, 200)}\nProceeding anyway - you can fix the endpoint later.`,
+          "Connection Test",
+        );
+      } else {
+        await params.ctx.prompter.note("Connection test successful!", "✓");
+      }
+    } finally {
+      await release();
     }
   } catch (err) {
     await params.ctx.prompter.note(

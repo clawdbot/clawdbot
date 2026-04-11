@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { isStrictAgenticExecutionContractActive } from "./execution-contract.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 export function collectPresentOpenClawTools(
@@ -8,18 +8,22 @@ export function collectPresentOpenClawTools(
   return candidates.filter((tool): tool is AnyAgentTool => tool !== null && tool !== undefined);
 }
 
-function isOpenAIProvider(provider?: string): boolean {
-  const normalized = normalizeOptionalLowercaseString(provider);
-  return normalized === "openai" || normalized === "openai-codex";
-}
-
-export function isUpdatePlanToolEnabledForOpenClawTools(
-  config: OpenClawConfig | undefined,
-  provider?: string,
-): boolean {
-  const configured = config?.tools?.experimental?.planTool;
+export function isUpdatePlanToolEnabledForOpenClawTools(params: {
+  config?: OpenClawConfig;
+  agentSessionKey?: string;
+  agentId?: string | null;
+  modelProvider?: string;
+  modelId?: string;
+}): boolean {
+  const configured = params.config?.tools?.experimental?.planTool;
   if (configured !== undefined) {
     return configured;
   }
-  return isOpenAIProvider(provider);
+  return isStrictAgenticExecutionContractActive({
+    config: params.config,
+    sessionKey: params.agentSessionKey,
+    agentId: params.agentId,
+    provider: params.modelProvider,
+    modelId: params.modelId,
+  });
 }

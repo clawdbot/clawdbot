@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { readConfigFileSnapshot, validateConfigObject } from "./config.js";
+import { readConfigFileSnapshot } from "./config.js";
 import { withTempHome, writeOpenClawConfig } from "./test-helpers.js";
+import { validateConfigObject } from "./validation.js";
 
 describe("legacy provider-shaped config snapshots", () => {
   it("accepts a string map of voice aliases while still flagging legacy talk config", async () => {

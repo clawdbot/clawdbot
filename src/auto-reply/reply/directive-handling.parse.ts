@@ -1,7 +1,5 @@
-import type { OpenClawConfig } from "../../config/config.js";
 import type { ExecAsk, ExecSecurity, ExecTarget } from "../../infra/exec-approvals.js";
 import { extractModelDirective } from "../model.js";
-import type { MsgContext } from "../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./directives.js";
 import {
   extractElevatedDirective,
@@ -12,7 +10,6 @@ import {
   extractThinkDirective,
   extractVerboseDirective,
 } from "./directives.js";
-import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { extractQueueDirective } from "./queue/directive.js";
 import type { QueueDropPolicy, QueueMode } from "./queue/types.js";
 
@@ -200,30 +197,4 @@ export function parseInlineDirectives(
     rawDrop,
     hasQueueOptions,
   };
-}
-
-export function isDirectiveOnly(params: {
-  directives: InlineDirectives;
-  cleanedBody: string;
-  ctx: MsgContext;
-  cfg: OpenClawConfig;
-  agentId?: string;
-  isGroup: boolean;
-}): boolean {
-  const { directives, cleanedBody, ctx, cfg, agentId, isGroup } = params;
-  if (
-    !directives.hasThinkDirective &&
-    !directives.hasVerboseDirective &&
-    !directives.hasFastDirective &&
-    !directives.hasReasoningDirective &&
-    !directives.hasElevatedDirective &&
-    !directives.hasExecDirective &&
-    !directives.hasModelDirective &&
-    !directives.hasQueueDirective
-  ) {
-    return false;
-  }
-  const stripped = stripStructuralPrefixes(cleanedBody ?? "");
-  const noMentions = isGroup ? stripMentions(stripped, ctx, cfg, agentId) : stripped;
-  return noMentions.length === 0;
 }

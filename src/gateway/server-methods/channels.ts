@@ -55,7 +55,7 @@ export async function logoutChannelAccount(params: {
   if (!result) {
     throw new Error(`Channel ${params.channelId} does not support logout`);
   }
-  const cleared = Boolean(result.cleared);
+  const cleared = result.cleared;
   const loggedOut = typeof result.loggedOut === "boolean" ? result.loggedOut : cleared;
   if (loggedOut) {
     params.context.markChannelLoggedOut(params.channelId, true, resolvedAccountId);

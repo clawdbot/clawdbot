@@ -379,6 +379,83 @@ describe("runMessageAction plugin dispatch", () => {
       expect(pluginCall?.mediaAccess?.readFile).toBeUndefined();
     });
 
+    it("uses requester username policy for host-media reads", async () => {
+      const handlePolicyCheckedAction = vi.fn(async ({ mediaAccess }) =>
+        jsonResult({
+          ok: true,
+          hasHostReadCapability: typeof mediaAccess?.readFile === "function",
+        }),
+      );
+      const policyPlugin: ChannelPlugin = {
+        id: "feishu",
+        meta: {
+          id: "feishu",
+          label: "Feishu",
+          selectionLabel: "Feishu",
+          docsPath: "/channels/feishu",
+          blurb: "Feishu username policy test plugin.",
+        },
+        capabilities: { chatTypes: ["direct", "channel"], media: true },
+        config: createAlwaysConfiguredPluginConfig(),
+        messaging: {
+          targetResolver: {
+            looksLikeId: () => true,
+          },
+        },
+        actions: {
+          describeMessageTool: () => ({ actions: ["send"] }),
+          supportsAction: ({ action }) => action === "send",
+          handleAction: handlePolicyCheckedAction,
+        },
+      };
+
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "feishu",
+            source: "test",
+            plugin: policyPlugin,
+          },
+        ]),
+      );
+
+      await runMessageAction({
+        cfg: {
+          tools: { allow: ["read"] },
+          channels: {
+            feishu: {
+              enabled: true,
+            },
+            whatsapp: {
+              groups: {
+                ops: {
+                  toolsBySender: {
+                    "username:alice_u": {
+                      deny: ["read"],
+                    },
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "feishu",
+          target: "oc_123",
+          message: "hello",
+          media: "/tmp/host.png",
+        },
+        requesterSenderUsername: "alice_u",
+        sessionKey: "agent:alpha:whatsapp:group:ops",
+        dryRun: false,
+      });
+
+      const pluginCall = handlePolicyCheckedAction.mock.calls[0]?.[0];
+      expect(pluginCall?.mediaAccess).toBeDefined();
+      expect(pluginCall?.mediaAccess?.readFile).toBeUndefined();
+    });
+
     it("uses requester account policy for host-media reads when destination account differs", async () => {
       const handlePolicyCheckedAction = vi.fn(async ({ mediaAccess }) =>
         jsonResult({

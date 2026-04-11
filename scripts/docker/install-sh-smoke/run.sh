@@ -13,14 +13,14 @@ source "$SCRIPT_DIR/../install-sh-common/cli-verify.sh"
 
 echo "==> Resolve npm versions"
 if [[ "$SKIP_PREVIOUS" == "1" ]]; then
-  LATEST_VERSION="$(npm view "$PACKAGE_NAME" version)"
+  LATEST_VERSION="$(quiet_npm view "$PACKAGE_NAME" version)"
   PREVIOUS_VERSION="$LATEST_VERSION"
 elif [[ -n "$SMOKE_PREVIOUS_VERSION" ]]; then
-  LATEST_VERSION="$(npm view "$PACKAGE_NAME" version)"
+  LATEST_VERSION="$(quiet_npm view "$PACKAGE_NAME" version)"
   PREVIOUS_VERSION="$SMOKE_PREVIOUS_VERSION"
 else
-  LATEST_VERSION="$(npm view "$PACKAGE_NAME" dist-tags.latest)"
-  VERSIONS_JSON="$(npm view "$PACKAGE_NAME" versions --json)"
+  LATEST_VERSION="$(quiet_npm view "$PACKAGE_NAME" dist-tags.latest)"
+  VERSIONS_JSON="$(quiet_npm view "$PACKAGE_NAME" versions --json)"
   PREVIOUS_VERSION="$(LATEST_VERSION="$LATEST_VERSION" VERSIONS_JSON="$VERSIONS_JSON" node - <<'NODE'
 const latest = String(process.env.LATEST_VERSION || "");
 const raw = process.env.VERSIONS_JSON || "[]";
@@ -52,7 +52,7 @@ if [[ "$SKIP_PREVIOUS" == "1" ]]; then
   echo "==> Skip preinstall previous (OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS=1)"
 else
   echo "==> Preinstall previous (forces installer upgrade path)"
-  npm install -g "${PACKAGE_NAME}@${PREVIOUS_VERSION}"
+  quiet_npm install -g "${PACKAGE_NAME}@${PREVIOUS_VERSION}"
 fi
 
 echo "==> Run official installer one-liner"

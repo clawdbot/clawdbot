@@ -31,6 +31,12 @@ import {
   formatPermissionRemediation,
   inspectPathPermissions,
 } from "./audit-fs.js";
+import type {
+  SecurityAuditFinding,
+  SecurityAuditReport,
+  SecurityAuditSeverity,
+  SecurityAuditSummary,
+} from "./audit.types.js";
 import { collectEnabledInsecureOrDangerousFlags } from "./dangerous-config-flags.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "./dangerous-tools.js";
 import type { ExecFn } from "./windows-acl.js";
@@ -38,36 +44,12 @@ import type { ExecFn } from "./windows-acl.js";
 type ExecDockerRawFn = typeof import("../agents/sandbox/docker.js").execDockerRaw;
 type ProbeGatewayFn = typeof import("../gateway/probe.js").probeGateway;
 
-export type SecurityAuditSeverity = "info" | "warn" | "critical";
-
-export type SecurityAuditFinding = {
-  checkId: string;
-  severity: SecurityAuditSeverity;
-  title: string;
-  detail: string;
-  remediation?: string;
-};
-
-export type SecurityAuditSummary = {
-  critical: number;
-  warn: number;
-  info: number;
-};
-
-export type SecurityAuditReport = {
-  ts: number;
-  summary: SecurityAuditSummary;
-  findings: SecurityAuditFinding[];
-  deep?: {
-    gateway?: {
-      attempted: boolean;
-      url: string | null;
-      ok: boolean;
-      error: string | null;
-      close?: { code: number; reason: string } | null;
-    };
-  };
-};
+export type {
+  SecurityAuditFinding,
+  SecurityAuditReport,
+  SecurityAuditSeverity,
+  SecurityAuditSummary,
+} from "./audit.types.js";
 
 export type SecurityAuditOptions = {
   config: OpenClawConfig;

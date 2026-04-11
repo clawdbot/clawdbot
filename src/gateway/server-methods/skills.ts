@@ -55,7 +55,7 @@ function collectSkillBins(entries: SkillEntry[]): string[] {
     for (const spec of install) {
       const specBins = spec?.bins ?? [];
       for (const bin of specBins) {
-        const trimmed = normalizeOptionalString(String(bin)) ?? "";
+        const trimmed = normalizeOptionalString(bin) ?? "";
         if (trimmed) {
           bins.add(trimmed);
         }

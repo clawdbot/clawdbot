@@ -386,6 +386,9 @@ describe("scripts/test-extension.mjs", () => {
     });
 
     expect(shards).toHaveLength(DEFAULT_EXTENSION_TEST_SHARD_COUNT);
+    expect(shards.map((shard) => shard.checkName)).toEqual(
+      shards.map((shard, index) => `checks-node-extensions-shard-${index + 1}`),
+    );
 
     const assigned = shards.flatMap((shard) => shard.extensionIds);
     const uniqueAssigned = [...new Set(assigned)];

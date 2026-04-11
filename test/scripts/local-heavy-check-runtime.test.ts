@@ -197,4 +197,34 @@ describe("local-heavy-check-runtime", () => {
     release();
     expect(fs.existsSync(lockDir)).toBe(false);
   });
+
+  it("cleans up stale legacy test locks when acquiring the shared heavy-check lock", () => {
+    const cwd = createTempDir("openclaw-local-heavy-check-legacy-");
+    const commonDir = path.join(cwd, ".git");
+    const locksDir = path.join(commonDir, "openclaw-local-checks");
+    const legacyLockDir = path.join(locksDir, "test.lock");
+    const heavyCheckLockDir = path.join(locksDir, "heavy-check.lock");
+    fs.mkdirSync(legacyLockDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(legacyLockDir, "owner.json"),
+      `${JSON.stringify({
+        pid: 999_999_999,
+        tool: "test",
+        cwd,
+      })}\n`,
+      "utf8",
+    );
+
+    const release = acquireLocalHeavyCheckLockSync({
+      cwd,
+      env: makeEnv(),
+      toolName: "oxlint",
+    });
+
+    expect(fs.existsSync(legacyLockDir)).toBe(false);
+    expect(fs.existsSync(heavyCheckLockDir)).toBe(true);
+
+    release();
+    expect(fs.existsSync(heavyCheckLockDir)).toBe(false);
+  });
 });

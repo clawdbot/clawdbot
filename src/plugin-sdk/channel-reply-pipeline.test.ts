@@ -78,4 +78,16 @@ describe("createChannelReplyPipeline", () => {
     expect(onReplyStart).toHaveBeenCalledTimes(1);
     expect(onIdle).toHaveBeenCalledTimes(1);
   });
+
+  it("uses an explicit reply transform without resolving the channel plugin", () => {
+    const transformReplyPayload = vi.fn((payload) => payload);
+    const pipeline = createChannelReplyPipeline({
+      cfg: {},
+      agentId: "main",
+      channel: "slack",
+      transformReplyPayload,
+    });
+
+    expect(pipeline.transformReplyPayload).toBe(transformReplyPayload);
+  });
 });

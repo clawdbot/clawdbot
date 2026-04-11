@@ -81,6 +81,7 @@ describe("CodexAppServerEventProjector", () => {
     expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
     expect(onPartialReply).toHaveBeenLastCalledWith({ text: "hello" });
     expect(result.assistantTexts).toEqual(["hello"]);
+    expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["user", "assistant"]);
     expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "hello" }]);
     expect(result.attemptUsage).toMatchObject({ input: 5, output: 7, cacheRead: 2, total: 12 });
     expect(result.replayMetadata.replaySafe).toBe(true);
@@ -212,6 +213,13 @@ describe("CodexAppServerEventProjector", () => {
       }),
     );
     expect(result.toolMetas).toEqual([{ toolName: "sessions_send", meta: "completed" }]);
+    expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "assistant",
+    ]);
+    expect(JSON.stringify(result.messagesSnapshot[1])).toContain("Codex reasoning");
+    expect(JSON.stringify(result.messagesSnapshot[2])).toContain("Codex plan");
     expect(result.itemLifecycle).toMatchObject({ compactionCount: 1 });
   });
 });

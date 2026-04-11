@@ -24,8 +24,7 @@ export function schemaType(schema: JsonSchema): string | undefined {
     return undefined;
   }
   if (Array.isArray(schema.type)) {
-    const filtered = schema.type.filter((t) => t !== "null");
-    return filtered[0] ?? schema.type[0];
+    return schema.type.find((t) => t !== "null") ?? schema.type[0];
   }
   return schema.type;
 }

@@ -1,10 +1,16 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 type MoonshotThinkingType = "enabled" | "disabled";
+let piAiRuntimePromise: Promise<typeof import("@mariozechner/pi-ai")> | undefined;
+
+async function loadDefaultStreamFn(): Promise<StreamFn> {
+  piAiRuntimePromise ??= import("@mariozechner/pi-ai");
+  const runtime = await piAiRuntimePromise;
+  return runtime.streamSimple;
+}
 
 function normalizeMoonshotThinkingType(value: unknown): MoonshotThinkingType | undefined {
   if (typeof value === "boolean") {
@@ -66,9 +72,9 @@ export function createMoonshotThinkingWrapper(
   baseStreamFn: StreamFn | undefined,
   thinkingType?: MoonshotThinkingType,
 ): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) =>
-    streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+  return async (model, context, options) => {
+    const underlying = baseStreamFn ?? (await loadDefaultStreamFn());
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
       let effectiveThinkingType = normalizeMoonshotThinkingType(payloadObj.thinking);
 
       if (thinkingType) {
@@ -87,4 +93,5 @@ export function createMoonshotThinkingWrapper(
         }
       }
     });
+  };
 }

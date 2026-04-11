@@ -201,22 +201,50 @@ entries.
 }
 ```
 
+HeyGen video-agent on fal can be pinned with:
+
+```json5
+{
+  agents: {
+    defaults: {
+      videoGenerationModel: {
+        primary: "fal/fal-ai/heygen/v2/video-agent",
+      },
+    },
+  },
+}
+```
+
+Seedance 2.0 on fal can be pinned with:
+
+```json5
+{
+  agents: {
+    defaults: {
+      videoGenerationModel: {
+        primary: "fal/bytedance/seedance-2.0/fast/text-to-video",
+      },
+    },
+  },
+}
+```
+
 ## Provider notes
 
-| Provider | Notes                                                                                                                                                       |
-| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Alibaba  | Uses DashScope/Model Studio async endpoint. Reference images and videos must be remote `http(s)` URLs.                                                      |
-| BytePlus | Single image reference only.                                                                                                                                |
-| ComfyUI  | Workflow-driven local or cloud execution. Supports text-to-video and image-to-video through the configured graph.                                           |
-| fal      | Uses queue-backed flow for long-running jobs. Single image reference only.                                                                                  |
-| Google   | Uses Gemini/Veo. Supports one image or one video reference.                                                                                                 |
-| MiniMax  | Single image reference only.                                                                                                                                |
-| OpenAI   | Only `size` override is forwarded. Other style overrides (`aspectRatio`, `resolution`, `audio`, `watermark`) are ignored with a warning.                    |
-| Qwen     | Same DashScope backend as Alibaba. Reference inputs must be remote `http(s)` URLs; local files are rejected upfront.                                        |
-| Runway   | Supports local files via data URIs. Video-to-video requires `runway/gen4_aleph`. Text-only runs expose `16:9` and `9:16` aspect ratios.                     |
-| Together | Single image reference only.                                                                                                                                |
-| Vydra    | Uses `https://www.vydra.ai/api/v1` directly to avoid auth-dropping redirects. `veo3` is bundled as text-to-video only; `kling` requires a remote image URL. |
-| xAI      | Supports text-to-video, image-to-video, and remote video edit/extend flows.                                                                                 |
+| Provider | Notes                                                                                                                                                                |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Alibaba  | Uses DashScope/Model Studio async endpoint. Reference images and videos must be remote `http(s)` URLs.                                                               |
+| BytePlus | Single image reference only.                                                                                                                                         |
+| ComfyUI  | Workflow-driven local or cloud execution. Supports text-to-video and image-to-video through the configured graph.                                                    |
+| fal      | Uses queue-backed flow for long-running jobs. Single image reference only. Includes HeyGen video-agent and Seedance 2.0 text-to-video and image-to-video model refs. |
+| Google   | Uses Gemini/Veo. Supports one image or one video reference.                                                                                                          |
+| MiniMax  | Single image reference only.                                                                                                                                         |
+| OpenAI   | Only `size` override is forwarded. Other style overrides (`aspectRatio`, `resolution`, `audio`, `watermark`) are ignored with a warning.                             |
+| Qwen     | Same DashScope backend as Alibaba. Reference inputs must be remote `http(s)` URLs; local files are rejected upfront.                                                 |
+| Runway   | Supports local files via data URIs. Video-to-video requires `runway/gen4_aleph`. Text-only runs expose `16:9` and `9:16` aspect ratios.                              |
+| Together | Single image reference only.                                                                                                                                         |
+| Vydra    | Uses `https://www.vydra.ai/api/v1` directly to avoid auth-dropping redirects. `veo3` is bundled as text-to-video only; `kling` requires a remote image URL.          |
+| xAI      | Supports text-to-video, image-to-video, and remote video edit/extend flows.                                                                                          |
 
 ## Provider capability modes
 

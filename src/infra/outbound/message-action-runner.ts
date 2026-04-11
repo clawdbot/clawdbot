@@ -80,6 +80,9 @@ export type RunMessageActionParams = {
   defaultAccountId?: string;
   requesterAccountId?: string | null;
   requesterSenderId?: string | null;
+  requesterSenderName?: string | null;
+  requesterSenderUsername?: string | null;
+  requesterSenderE164?: string | null;
   senderIsOwner?: boolean;
   sessionId?: string;
   toolContext?: ChannelThreadingToolContext;
@@ -547,6 +550,9 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       sessionKey: input.sessionKey,
       requesterAccountId: input.requesterAccountId ?? undefined,
       requesterSenderId: input.requesterSenderId ?? undefined,
+      requesterSenderName: input.requesterSenderName ?? undefined,
+      requesterSenderUsername: input.requesterSenderUsername ?? undefined,
+      requesterSenderE164: input.requesterSenderE164 ?? undefined,
       mediaAccess: ctx.mediaAccess,
       accountId: accountId ?? undefined,
       gateway,
@@ -785,6 +791,9 @@ export async function runMessageAction(
     messageProvider: input.sessionKey ? undefined : channel,
     accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,
     requesterSenderId: input.requesterSenderId,
+    requesterSenderName: input.requesterSenderName,
+    requesterSenderUsername: input.requesterSenderUsername,
+    requesterSenderE164: input.requesterSenderE164,
   });
   const mediaPolicy = resolveAttachmentMediaPolicy({
     sandboxRoot: input.sandboxRoot,

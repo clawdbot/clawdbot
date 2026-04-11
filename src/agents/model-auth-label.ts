@@ -11,7 +11,7 @@ import { normalizeProviderId } from "./model-selection.js";
 export function resolveModelAuthLabel(params: {
   provider?: string;
   cfg?: OpenClawConfig;
-  sessionEntry?: SessionEntry;
+  sessionEntry?: Partial<Pick<SessionEntry, "authProfileOverride">>;
   agentDir?: string;
 }): string | undefined {
   const resolvedProvider = params.provider?.trim();

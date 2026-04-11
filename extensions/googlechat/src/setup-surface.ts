@@ -149,7 +149,7 @@ export const googlechatSetupWizard: ChannelSetupWizard = {
       credentialValues: {
         ...credentialValues,
         [USE_ENV_FLAG]: "0",
-        [AUTH_METHOD_FLAG]: String(method),
+        [AUTH_METHOD_FLAG]: method,
       },
     };
   },

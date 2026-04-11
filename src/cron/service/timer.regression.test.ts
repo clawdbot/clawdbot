@@ -25,7 +25,7 @@ import {
   runMissedJobs,
 } from "./timer.js";
 
-const FAST_TIMEOUT_SECONDS = 0.0025;
+const FAST_TIMEOUT_SECONDS = 1;
 const timerRegressionFixtures = setupCronRegressionFixtures({
   prefix: "cron-service-timer-regressions-",
 });
@@ -957,7 +957,7 @@ describe("cron service timer regressions", () => {
     try {
       const store = timerRegressionFixtures.makeStorePath();
       const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
-      const timeoutSeconds = 0.03;
+      const timeoutSeconds = 1;
       const cronJob = createIsolatedRegressionJob({
         id: "timeout-fraction-29774",
         name: "timeout fraction regression",
@@ -1010,10 +1010,10 @@ describe("cron service timer regressions", () => {
       const timerPromise = onTimer(state);
       await started.promise;
 
-      await vi.advanceTimersByTimeAsync(15);
+      await vi.advanceTimersByTimeAsync(500);
       expect(abortWallMs).toBeUndefined();
 
-      await vi.advanceTimersByTimeAsync(20);
+      await vi.advanceTimersByTimeAsync(600);
       await timerPromise;
 
       const elapsedMs = (abortWallMs ?? Date.now()) - wallStart;

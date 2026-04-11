@@ -60,7 +60,7 @@ export async function extractPdfContent(params: {
     const page = await pdf.getPage(pageNum);
     const textContent = await page.getTextContent();
     const pageText = textContent.items
-      .map((item) => ("str" in item ? String(item.str) : ""))
+      .map((item) => ("str" in item ? item.str : ""))
       .filter(Boolean)
       .join(" ");
     if (pageText) {

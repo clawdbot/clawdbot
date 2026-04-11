@@ -22,8 +22,8 @@ describe("browser screenshot normalization", () => {
 
     expect(normalized.buffer.byteLength).toBeLessThanOrEqual(5 * 1024 * 1024);
     const meta = await sharp(normalized.buffer).metadata();
-    expect(Number(meta.width)).toBeLessThanOrEqual(2000);
-    expect(Number(meta.height)).toBeLessThanOrEqual(2000);
+    expect(meta.width).toBeLessThanOrEqual(2000);
+    expect(meta.height).toBeLessThanOrEqual(2000);
     expect(normalized.buffer[0]).toBe(0xff);
     expect(normalized.buffer[1]).toBe(0xd8);
   }, 120_000);

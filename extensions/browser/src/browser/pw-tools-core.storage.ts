@@ -99,7 +99,7 @@ export async function storageSetViaPlaywright(opts: {
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
-  const key = String(opts.key ?? "");
+  const key = opts.key;
   if (!key) {
     throw new Error("key is required");
   }
@@ -108,7 +108,7 @@ export async function storageSetViaPlaywright(opts: {
       const store = kind === "session" ? window.sessionStorage : window.localStorage;
       store.setItem(k, value);
     },
-    { kind: opts.kind, key, value: String(opts.value ?? "") },
+    { kind: opts.kind, key, value: opts.value },
   );
 }
 

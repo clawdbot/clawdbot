@@ -1,4 +1,4 @@
-import type { CompactEmbeddedPiSessionParams } from "../pi-embedded-runner/compact.js";
+import type { CompactEmbeddedPiSessionParams } from "../pi-embedded-runner/compact.types.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,

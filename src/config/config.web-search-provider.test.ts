@@ -225,12 +225,12 @@ vi.mock("../plugins/manifest-registry.js", () => {
   };
 });
 
-let validateConfigObjectWithPlugins: typeof import("./config.js").validateConfigObjectWithPlugins;
+let validateConfigObjectWithPlugins: typeof import("./validation.js").validateConfigObjectWithPlugins;
 let resolveSearchProvider: typeof import("../agents/tools/web-search.js").__testing.resolveSearchProvider;
 
 beforeAll(async () => {
   vi.resetModules();
-  ({ validateConfigObjectWithPlugins } = await import("./config.js"));
+  ({ validateConfigObjectWithPlugins } = await import("./validation.js"));
   ({
     __testing: { resolveSearchProvider },
   } = await import("../agents/tools/web-search.js"));

@@ -42,7 +42,6 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
       roundOneReply: "Worker completed successfully",
     });
 
-    // Find the gateway send call (not the waitForAgentRun call)
     const sendCall = gatewayCalls.find((call) => call.method === "send");
     expect(sendCall).toBeDefined();
     const sendParams = sendCall?.params as Record<string, unknown>;

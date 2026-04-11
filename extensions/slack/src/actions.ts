@@ -65,10 +65,11 @@ function normalizeEmoji(raw: string) {
 }
 
 async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write" = "read") {
+  if (opts.client) {
+    return opts.client;
+  }
   const token = resolveToken(opts.token, opts.accountId);
-  return (
-    opts.client ?? (mode === "write" ? createSlackWriteClient(token) : createSlackWebClient(token))
-  );
+  return mode === "write" ? createSlackWriteClient(token) : createSlackWebClient(token);
 }
 
 async function resolveBotUserId(client: WebClient) {

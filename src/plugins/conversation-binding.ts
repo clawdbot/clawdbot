@@ -341,8 +341,9 @@ function loadApprovalsFromDisk(): PluginBindingApprovalsFile {
     return {
       version: 1,
       approvals: parsed.approvals
-        .filter((entry): entry is PluginBindingApprovalEntry =>
-          Boolean(entry && typeof entry === "object"),
+        .filter(
+          (entry): entry is PluginBindingApprovalEntry =>
+            entry !== null && typeof entry === "object",
         )
         .map((entry) => ({
           pluginRoot: typeof entry.pluginRoot === "string" ? entry.pluginRoot : "",

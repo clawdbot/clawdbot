@@ -393,8 +393,8 @@ export function extractLocationData(
     const latitudeRaw = live.degreesLatitude;
     const longitudeRaw = live.degreesLongitude;
     if (latitudeRaw != null && longitudeRaw != null) {
-      const latitude = Number(latitudeRaw);
-      const longitude = Number(longitudeRaw);
+      const latitude = latitudeRaw;
+      const longitude = longitudeRaw;
       if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
         return {
           latitude,
@@ -413,8 +413,8 @@ export function extractLocationData(
     const latitudeRaw = location.degreesLatitude;
     const longitudeRaw = location.degreesLongitude;
     if (latitudeRaw != null && longitudeRaw != null) {
-      const latitude = Number(latitudeRaw);
-      const longitude = Number(longitudeRaw);
+      const latitude = latitudeRaw;
+      const longitude = longitudeRaw;
       if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
         const isLive = Boolean(location.isLive);
         return {
@@ -466,7 +466,7 @@ export function describeReplyContext(
     label: senderJid ? (jidToE164(senderJid) ?? senderJid) : "unknown sender",
   });
   return {
-    id: contextInfo?.stanzaId ? String(contextInfo.stanzaId) : undefined,
+    id: contextInfo?.stanzaId || undefined,
     body,
     sender,
   };

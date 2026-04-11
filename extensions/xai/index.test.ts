@@ -42,7 +42,7 @@ describe("xai provider plugin", () => {
     let capturedModelId = "";
     let capturedPayload: Record<string, unknown> | undefined;
     const baseStreamFn: StreamFn = (model, _context, options) => {
-      capturedModelId = String(model.id);
+      capturedModelId = model.id;
       const payload: Record<string, unknown> = {
         reasoning: { effort: "high" },
         tools: [

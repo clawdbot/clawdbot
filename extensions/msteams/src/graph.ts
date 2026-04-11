@@ -1,4 +1,4 @@
-import type { MSTeamsConfig } from "../runtime-api.js";
+import { fetchWithSsrFGuard, type MSTeamsConfig } from "../runtime-api.js";
 import { GRAPH_ROOT } from "./attachments/shared.js";
 
 const GRAPH_BETA = "https://graph.microsoft.com/beta";
@@ -81,6 +81,42 @@ export async function fetchGraphJson<T>(params: {
     headers: params.headers,
   });
   return (await res.json()) as T;
+}
+
+/**
+ * Fetch JSON from an absolute Graph API URL (e.g. @odata.nextLink pagination URLs).
+ * Unlike {@link fetchGraphJson}, this does not prepend GRAPH_ROOT.
+ *
+ * Routed through `fetchWithSsrFGuard` so absolute-URL pagination follow-ups
+ * honor the same SSRF policy as other Graph calls.
+ */
+export async function fetchGraphAbsoluteUrl<T>(params: {
+  token: string;
+  url: string;
+  headers?: Record<string, string>;
+}): Promise<T> {
+  const { response, release } = await fetchWithSsrFGuard({
+    url: params.url,
+    init: {
+      headers: {
+        "User-Agent": buildUserAgent(),
+        Authorization: `Bearer ${params.token}`,
+        ...params.headers,
+      },
+    },
+    auditContext: "msteams.graph.absolute",
+  });
+  try {
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(
+        `Graph ${params.url} failed (${response.status}): ${text || "unknown error"}`,
+      );
+    }
+    return (await response.json()) as T;
+  } finally {
+    await release();
+  }
 }
 
 export async function resolveGraphToken(cfg: unknown): Promise<string> {

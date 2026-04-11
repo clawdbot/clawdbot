@@ -9,7 +9,7 @@ import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 export function resolveGatewayDevMode(argv: string[] = process.argv): boolean {
   const entry = argv[1];
   const normalizedEntry = entry?.replaceAll("\\", "/");
-  return Boolean(normalizedEntry?.includes("/src/") && normalizedEntry.endsWith(".ts"));
+  return normalizedEntry?.includes("/src/") && normalizedEntry.endsWith(".ts");
 }
 
 export async function resolveDaemonInstallRuntimeInputs(params: {

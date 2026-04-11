@@ -23,8 +23,8 @@ export function registerNodesLocationCommands(nodes: Command) {
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 20000)", "20000")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("location get", async () => {
-          const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
-          const maxAgeMs = opts.maxAge ? Number.parseInt(String(opts.maxAge), 10) : undefined;
+          const nodeId = await resolveNodeId(opts, opts.node ?? "");
+          const maxAgeMs = opts.maxAge ? Number.parseInt(opts.maxAge, 10) : undefined;
           const desiredAccuracyRaw = normalizeOptionalLowercaseString(opts.accuracy);
           const desiredAccuracy =
             desiredAccuracyRaw === "coarse" ||
@@ -33,10 +33,10 @@ export function registerNodesLocationCommands(nodes: Command) {
               ? desiredAccuracyRaw
               : undefined;
           const timeoutMs = opts.locationTimeout
-            ? Number.parseInt(String(opts.locationTimeout), 10)
+            ? Number.parseInt(opts.locationTimeout, 10)
             : undefined;
           const invokeTimeoutMs = opts.invokeTimeout
-            ? Number.parseInt(String(opts.invokeTimeout), 10)
+            ? Number.parseInt(opts.invokeTimeout, 10)
             : undefined;
 
           const invokeParams: Record<string, unknown> = {

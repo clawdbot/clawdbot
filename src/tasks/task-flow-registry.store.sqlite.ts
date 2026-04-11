@@ -6,7 +6,7 @@ import {
   resolveTaskFlowRegistryDir,
   resolveTaskFlowRegistrySqlitePath,
 } from "./task-flow-registry.paths.js";
-import type { TaskFlowRegistryStoreSnapshot } from "./task-flow-registry.store.js";
+import type { TaskFlowRegistryStoreSnapshot } from "./task-flow-registry.store.types.js";
 import type { TaskFlowRecord, TaskFlowSyncMode, JsonValue } from "./task-flow-registry.types.js";
 
 type FlowRegistryRow = {

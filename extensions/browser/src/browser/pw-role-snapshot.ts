@@ -340,7 +340,7 @@ export function buildRoleSnapshotFromAiSnapshot(
   aiSnapshot: string,
   options: RoleSnapshotOptions = {},
 ): { snapshot: string; refs: RoleRefMap } {
-  const lines = String(aiSnapshot ?? "").split("\n");
+  const lines = aiSnapshot.split("\n");
   const refs: RoleRefMap = {};
 
   if (options.interactive) {

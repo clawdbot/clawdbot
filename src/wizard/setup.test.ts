@@ -83,7 +83,7 @@ const writeConfigFile = vi.hoisted(() => vi.fn(async () => {}));
 const resolveGatewayPort = vi.hoisted(() =>
   vi.fn((_cfg?: unknown, env?: NodeJS.ProcessEnv) => {
     const raw = env?.OPENCLAW_GATEWAY_PORT ?? process.env.OPENCLAW_GATEWAY_PORT;
-    const port = raw ? Number.parseInt(String(raw), 10) : Number.NaN;
+    const port = raw ? Number.parseInt(raw, 10) : Number.NaN;
     return Number.isFinite(port) && port > 0 ? port : 18789;
   }),
 );

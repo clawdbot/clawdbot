@@ -14,7 +14,7 @@ import tls from "node:tls";
 import { fileURLToPath } from "node:url";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
-import { handleQaBusRequest, writeError, writeJson } from "./bus-server.js";
+import { closeQaHttpServer, handleQaBusRequest, writeError, writeJson } from "./bus-server.js";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
 import { createQaRunnerRuntime } from "./harness-runtime.js";
 import type {
@@ -465,22 +465,27 @@ export async function startQaLabServer(
 
   let publicBaseUrl = "";
   let runnerModelCatalogPromise: Promise<void> | null = null;
+  let runnerModelCatalogAbort: AbortController | null = null;
   const ensureRunnerModelCatalog = () => {
     if (runnerModelCatalogPromise) {
       return runnerModelCatalogPromise;
     }
+    runnerModelCatalogAbort = new AbortController();
     runnerModelCatalogPromise = (async () => {
       try {
         const { loadQaRunnerModelOptions } = await import("./model-catalog.runtime.js");
         runnerModelOptions = await loadQaRunnerModelOptions({
           repoRoot,
+          signal: runnerModelCatalogAbort?.signal,
         });
         runnerModelCatalogStatus = "ready";
       } catch {
         runnerModelOptions = [];
         runnerModelCatalogStatus = "failed";
       }
-    })();
+    })().finally(() => {
+      runnerModelCatalogAbort = null;
+    });
     return runnerModelCatalogPromise;
   };
 
@@ -802,10 +807,10 @@ export async function startQaLabServer(
     },
     runSelfCheck,
     async stop() {
+      runnerModelCatalogAbort?.abort();
+      await runnerModelCatalogPromise?.catch(() => undefined);
       await gateway?.stop();
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
+      await closeQaHttpServer(server);
     },
   };
   labHandle = lab;

@@ -41,12 +41,13 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
     }
   }
 
+  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
   const sendPolicy = resolveSendPolicy({
     cfg: params.cfg,
-    entry: params.sessionEntry,
+    entry: targetSessionEntry,
     sessionKey: params.sessionKey,
-    channel: params.sessionEntry?.channel ?? params.command.channel,
-    chatType: params.sessionEntry?.chatType,
+    channel: targetSessionEntry?.channel ?? params.command.channel,
+    chatType: targetSessionEntry?.chatType,
   });
   if (sendPolicy === "deny") {
     logVerbose(`Send blocked by policy for session ${params.sessionKey ?? "unknown"}`);

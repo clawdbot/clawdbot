@@ -44,7 +44,7 @@ vi.mock("./controllers/sessions.ts", () => ({
   subscribeSessions: vi.fn(),
 }));
 vi.mock("./gateway.ts", () => ({
-  GatewayBrowserClient: class {},
+  GatewayBrowserClient: function GatewayBrowserClient() {},
   resolveGatewayErrorDetailCode: () => null,
 }));
 

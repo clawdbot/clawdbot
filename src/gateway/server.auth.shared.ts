@@ -203,7 +203,7 @@ function resolveGatewayTokenOrEnv(): string {
       ? ((testState.gatewayAuth as { token?: string }).token ?? undefined)
       : process.env.OPENCLAW_GATEWAY_TOKEN;
   expect(typeof token).toBe("string");
-  return String(token ?? "");
+  return token ?? "";
 }
 
 async function approvePendingPairingIfNeeded() {
@@ -318,7 +318,7 @@ async function resolvePairedTokenForDeviceIdentityPath(deviceIdentityPath: strin
   const deviceToken = paired?.tokens?.operator?.token;
   expect(paired?.deviceId).toBe(identity.deviceId);
   expect(deviceToken).toBeDefined();
-  return { identity: { deviceId: identity.deviceId }, deviceToken: String(deviceToken ?? "") };
+  return { identity: { deviceId: identity.deviceId }, deviceToken: deviceToken ?? "" };
 }
 
 async function startRateLimitedTokenServerWithPairedDeviceToken() {
@@ -340,7 +340,7 @@ async function startRateLimitedTokenServerWithPairedDeviceToken() {
     const { deviceToken } = await resolvePairedTokenForDeviceIdentityPath(deviceIdentityPath);
 
     ws.close();
-    return { server, port, prevToken, deviceToken: String(deviceToken ?? ""), deviceIdentityPath };
+    return { server, port, prevToken, deviceToken: deviceToken ?? "", deviceIdentityPath };
   } catch (err) {
     ws.close();
     await server.close();

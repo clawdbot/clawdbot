@@ -5,6 +5,7 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { disposeRegisteredAgentHarnesses } from "openclaw/plugin-sdk/agent-harness";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -85,11 +86,13 @@ export type QaSuiteRunParams = {
   concurrency?: number;
 };
 
-async function startQaLabServerRuntime(
-  params?: QaLabServerStartParams,
-): Promise<QaLabServerHandle> {
-  const { startQaLabServer } = await import("./lab-server.js");
-  return await startQaLabServer(params);
+function requireQaSuiteStartLab(startLab: QaSuiteStartLabFn | undefined): QaSuiteStartLabFn {
+  if (startLab) {
+    return startLab;
+  }
+  throw new Error(
+    "QA suite requires startLab when no lab handle is provided; use the runtime launcher or pass startLab explicitly.",
+  );
 }
 
 const _QA_IMAGE_UNDERSTANDING_PNG_BASE64 =
@@ -177,6 +180,68 @@ function splitModelRef(ref: string) {
     provider: ref.slice(0, slash),
     model: ref.slice(slash + 1),
   };
+}
+
+function normalizeQaConfigString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function scenarioMatchesLiveLane(params: {
+  scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number];
+  primaryModel: string;
+  providerMode: "mock-openai" | "live-frontier";
+  claudeCliAuthMode?: QaCliBackendAuthMode;
+}) {
+  if (params.providerMode !== "live-frontier") {
+    return true;
+  }
+  const selected = splitModelRef(params.primaryModel);
+  const config = params.scenario.execution.config ?? {};
+  const requiredProvider = normalizeQaConfigString(config.requiredProvider);
+  if (requiredProvider && selected?.provider !== requiredProvider) {
+    return false;
+  }
+  const requiredModel = normalizeQaConfigString(config.requiredModel);
+  if (requiredModel && selected?.model !== requiredModel) {
+    return false;
+  }
+  const requiredAuthMode = normalizeQaConfigString(config.authMode);
+  if (requiredAuthMode && params.claudeCliAuthMode !== requiredAuthMode) {
+    return false;
+  }
+  return true;
+}
+
+function selectQaSuiteScenarios(params: {
+  scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
+  scenarioIds?: string[];
+  providerMode: "mock-openai" | "live-frontier";
+  primaryModel: string;
+  claudeCliAuthMode?: QaCliBackendAuthMode;
+}) {
+  const requestedScenarioIds =
+    params.scenarioIds && params.scenarioIds.length > 0 ? new Set(params.scenarioIds) : null;
+  const requestedScenarios = requestedScenarioIds
+    ? params.scenarios.filter((scenario) => requestedScenarioIds.has(scenario.id))
+    : params.scenarios;
+  if (requestedScenarioIds) {
+    const foundScenarioIds = new Set(requestedScenarios.map((scenario) => scenario.id));
+    const missingScenarioIds = [...requestedScenarioIds].filter(
+      (scenarioId) => !foundScenarioIds.has(scenarioId),
+    );
+    if (missingScenarioIds.length > 0) {
+      throw new Error(`unknown QA scenario id(s): ${missingScenarioIds.join(", ")}`);
+    }
+    return requestedScenarios;
+  }
+  return requestedScenarios.filter((scenario) =>
+    scenarioMatchesLiveLane({
+      scenario,
+      providerMode: params.providerMode,
+      primaryModel: params.primaryModel,
+      claudeCliAuthMode: params.claudeCliAuthMode,
+    }),
+  );
 }
 
 function liveTurnTimeoutMs(env: QaSuiteEnvironment, fallbackMs: number) {
@@ -524,6 +589,12 @@ async function runConfigMutation(params: {
   action: "config.patch" | "config.apply";
   raw: string;
   sessionKey?: string;
+  deliveryContext?: {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+    threadId?: string | number;
+  };
   note?: string;
   restartDelayMs?: number;
 }) {
@@ -538,10 +609,11 @@ async function runConfigMutation(params: {
           raw: params.raw,
           baseHash: snapshot.hash,
           ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+          ...(params.deliveryContext ? { deliveryContext: params.deliveryContext } : {}),
           ...(params.note ? { note: params.note } : {}),
           restartDelayMs,
         },
-        { timeoutMs: 45_000 },
+        { timeoutMs: 45_000, retryOnRestart: false },
       );
       await waitForConfigRestartSettle(params.env, restartDelayMs);
       return result;
@@ -575,6 +647,12 @@ async function patchConfig(params: {
   env: QaSuiteEnvironment;
   patch: Record<string, unknown>;
   sessionKey?: string;
+  deliveryContext?: {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+    threadId?: string | number;
+  };
   note?: string;
   restartDelayMs?: number;
 }) {
@@ -583,6 +661,7 @@ async function patchConfig(params: {
     action: "config.patch",
     raw: JSON.stringify(params.patch, null, 2),
     sessionKey: params.sessionKey,
+    deliveryContext: params.deliveryContext,
     note: params.note,
     restartDelayMs: params.restartDelayMs,
   });
@@ -592,6 +671,12 @@ async function applyConfig(params: {
   env: QaSuiteEnvironment;
   nextConfig: Record<string, unknown>;
   sessionKey?: string;
+  deliveryContext?: {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+    threadId?: string | number;
+  };
   note?: string;
   restartDelayMs?: number;
 }) {
@@ -600,6 +685,7 @@ async function applyConfig(params: {
     action: "config.apply",
     raw: JSON.stringify(params.nextConfig, null, 2),
     sessionKey: params.sessionKey,
+    deliveryContext: params.deliveryContext,
     note: params.note,
     restartDelayMs: params.restartDelayMs,
   });
@@ -743,7 +829,7 @@ async function resolveGeneratedImagePath(params: {
         );
         for (let index = requests.length - 1; index >= 0; index -= 1) {
           const request = requests[index];
-          if (!String(request.allInputText ?? "").includes(params.promptSnippet)) {
+          if (!(request.allInputText ?? "").includes(params.promptSnippet)) {
             continue;
           }
           const mediaPath = extractMediaPathFromText(request.toolOutput);
@@ -971,7 +1057,7 @@ async function runAgentPrompt(
   const waited = await waitForAgentRun(env, started.runId!, params.timeoutMs ?? 30_000);
   if (waited.status !== "ok") {
     throw new Error(
-      `agent.wait returned ${String(waited.status ?? "unknown")}: ${waited.error ?? "no error"}`,
+      `agent.wait returned ${waited.status ?? "unknown"}: ${waited.error ?? "no error"}`,
     );
   }
   return {
@@ -1204,6 +1290,8 @@ export const qaSuiteTesting = {
   isConfigHashConflict,
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
+  scenarioMatchesLiveLane,
+  selectQaSuiteScenarios,
   waitForOutboundMessage,
 };
 
@@ -1302,20 +1390,13 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     path.join(repoRoot, ".artifacts", "qa-e2e", `suite-${Date.now().toString(36)}`);
   await fs.mkdir(outputDir, { recursive: true });
   const catalog = readQaBootstrapScenarioCatalog();
-  const requestedScenarioIds =
-    params?.scenarioIds && params.scenarioIds.length > 0 ? new Set(params.scenarioIds) : null;
-  const selectedCatalogScenarios = requestedScenarioIds
-    ? catalog.scenarios.filter((scenario) => requestedScenarioIds.has(scenario.id))
-    : catalog.scenarios;
-  if (requestedScenarioIds) {
-    const foundScenarioIds = new Set(selectedCatalogScenarios.map((scenario) => scenario.id));
-    const missingScenarioIds = [...requestedScenarioIds].filter(
-      (scenarioId) => !foundScenarioIds.has(scenarioId),
-    );
-    if (missingScenarioIds.length > 0) {
-      throw new Error(`unknown QA scenario id(s): ${missingScenarioIds.join(", ")}`);
-    }
-  }
+  const selectedCatalogScenarios = selectQaSuiteScenarios({
+    scenarios: catalog.scenarios,
+    scenarioIds: params?.scenarioIds,
+    providerMode,
+    primaryModel,
+    claudeCliAuthMode: params?.claudeCliAuthMode,
+  });
   const concurrency = normalizeQaSuiteConcurrency(
     params?.concurrency,
     selectedCatalogScenarios.length,
@@ -1323,7 +1404,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
 
   if (concurrency > 1 && selectedCatalogScenarios.length > 1) {
     const ownsLab = !params?.lab;
-    const startLab = params?.startLab ?? startQaLabServerRuntime;
+    const startLab = requireQaSuiteStartLab(params?.startLab);
     const lab =
       params?.lab ??
       (await startLab({
@@ -1373,6 +1454,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
               claudeCliAuthMode: params?.claudeCliAuthMode,
               scenarioIds: [scenario.id],
               concurrency: 1,
+              startLab,
             });
             const scenarioResult: QaSuiteScenarioResult =
               result.scenarios[0] ??
@@ -1460,6 +1542,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
         watchUrl: lab.baseUrl,
       } satisfies QaSuiteResult;
     } finally {
+      await disposeRegisteredAgentHarnesses();
       if (ownsLab) {
         await lab.stop();
       }
@@ -1467,10 +1550,10 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
   }
 
   const ownsLab = !params?.lab;
-  const startLab = params?.startLab ?? startQaLabServerRuntime;
+  const startLab = params?.startLab;
   const lab =
     params?.lab ??
-    (await startLab({
+    (await requireQaSuiteStartLab(startLab)({
       repoRoot,
       host: "127.0.0.1",
       port: 0,
@@ -1608,6 +1691,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     await gateway.stop({
       keepTemp,
     });
+    await disposeRegisteredAgentHarnesses();
     await mock?.stop();
     if (ownsLab) {
       await lab.stop();

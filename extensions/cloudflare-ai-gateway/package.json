@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/cloudflare-ai-gateway-provider",
-  "version": "2026.4.10",
+  "version": "2026.4.11",
   "private": true,
   "description": "OpenClaw Cloudflare AI Gateway provider plugin",
   "type": "module",

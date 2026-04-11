@@ -26,8 +26,8 @@ const CONNECT_REQ_TIMEOUT_MS = 2_000;
 
 function createDeviceIdentity(): DeviceIdentity {
   const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
-  const publicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
-  const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+  const publicKeyPem = publicKey.export({ type: "spki", format: "pem" });
+  const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" });
   const publicKeyRaw = publicKeyRawBase64UrlFromPem(publicKeyPem);
   const deviceId = deriveDeviceIdFromPublicKey(publicKeyRaw);
   if (!deviceId) {
@@ -173,8 +173,8 @@ describe("node.invoke approval bypass", () => {
 
   const connectOperatorWithNewDevice = async (scopes: string[]) => {
     const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
-    const publicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
-    const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+    const publicKeyPem = publicKey.export({ type: "spki", format: "pem" });
+    const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" });
     const publicKeyRaw = publicKeyRawBase64UrlFromPem(publicKeyPem);
     const deviceId = deriveDeviceIdFromPublicKey(publicKeyRaw);
     expect(deviceId).toBeTruthy();
@@ -389,7 +389,10 @@ describe("node.invoke approval bypass", () => {
         idempotencyKey: crypto.randomUUID(),
       });
       expect(invoke.ok).toBe(true);
-      for (let i = 0; i < 100 && !lastInvokeParams; i += 1) {
+      for (let i = 0; i < 100; i += 1) {
+        if (lastInvokeParams) {
+          break;
+        }
         await sleep(50);
       }
       expect(lastInvokeParams).toBeTruthy();

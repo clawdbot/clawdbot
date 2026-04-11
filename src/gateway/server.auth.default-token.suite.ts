@@ -218,7 +218,7 @@ export function registerDefaultAuthTokenSuite(): void {
           expect(res.ok, scenario.name).toBe(scenario.expectConnectOk);
           if (!scenario.expectConnectOk) {
             expect(res.error?.message ?? "", scenario.name).toContain(
-              String(scenario.expectConnectError ?? ""),
+              scenario.expectConnectError ?? "",
             );
             continue;
           }
@@ -439,7 +439,7 @@ export function registerDefaultAuthTokenSuite(): void {
         (o) => (o as { type?: string }).type === "res" && (o as { id?: string }).id === "h-bad",
       );
       expect(res.ok).toBe(false);
-      expect(String(res.error?.message ?? "")).toContain("invalid connect params");
+      expect(res.error?.message ?? "").toContain("invalid connect params");
 
       const closeInfo = await closeInfoPromise;
       expect(closeInfo.code).toBe(1008);

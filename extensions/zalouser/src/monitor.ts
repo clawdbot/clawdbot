@@ -112,7 +112,7 @@ function resolveUserAllowlistEntries(
     }
     const matches = byName.get(normalizeLowercaseStringOrEmpty(entry)) ?? [];
     const match = matches[0];
-    const id = match?.userId ? String(match.userId) : undefined;
+    const id = match?.userId;
     if (id) {
       additions.push(id);
       mapping.push(`${entry}->${id}`);
@@ -846,7 +846,7 @@ export async function monitorZalouserProvider(
         }
         const matches = byName.get(normalizeLowercaseStringOrEmpty(cleaned)) ?? [];
         const match = matches[0];
-        const id = match?.groupId ? String(match.groupId) : undefined;
+        const id = match?.groupId;
         if (id) {
           if (!nextGroups[id]) {
             nextGroups[id] = groupsConfig[entry];

@@ -195,7 +195,7 @@ export async function channelsAddCommand(
     return;
   }
 
-  const rawChannel = String(opts.channel ?? "");
+  const rawChannel = opts.channel ?? "";
   let channel = normalizeChannelId(rawChannel);
   let catalogEntry = channel ? undefined : resolveCatalogChannelEntry(rawChannel, nextConfig);
   const resolveWorkspaceDir = () =>
@@ -258,7 +258,7 @@ export async function channelsAddCommand(
   if (!channel) {
     const hint = catalogEntry
       ? `Plugin ${catalogEntry.meta.label} could not be loaded after install.`
-      : `Unknown channel: ${String(opts.channel ?? "")}`;
+      : `Unknown channel: ${rawChannel}`;
     runtime.error(hint);
     runtime.exit(1);
     return;

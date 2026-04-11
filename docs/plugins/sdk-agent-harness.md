@@ -91,15 +91,17 @@ OpenClaw chooses a harness after provider/model resolution:
 2. `OPENCLAW_AGENT_RUNTIME=pi` forces the built-in PI harness.
 3. `OPENCLAW_AGENT_RUNTIME=auto` asks registered harnesses if they support the
    resolved provider/model.
-4. If no registered harness matches, OpenClaw uses PI.
+4. If no registered harness matches, OpenClaw uses PI unless PI fallback is
+   disabled.
 
 Forced plugin harness failures surface as run failures. In `auto` mode,
 OpenClaw may fall back to PI when the selected plugin harness fails before a
-turn has produced side effects.
+turn has produced side effects. Set `OPENCLAW_AGENT_HARNESS_FALLBACK=none` or
+`embeddedHarness.fallback: "none"` to make that fallback a hard failure instead.
 
-The bundled Codex plugin registers `codex` as its harness id. For compatibility,
-`codex-app-server` and `app-server` also resolve to that same harness when you
-set `OPENCLAW_AGENT_RUNTIME` manually.
+The bundled Codex plugin registers `codex` as its harness id. Core treats that
+as an ordinary plugin harness id; Codex-specific aliases belong in the plugin
+or operator config, not in the shared runtime selector.
 
 ## Provider plus harness pairing
 
@@ -124,11 +126,14 @@ when you want Codex-managed auth, Codex model discovery, native threads, and
 Codex app-server execution. `/model` can switch among the Codex models returned
 by the Codex app server without requiring OpenAI provider credentials.
 
+For operator setup, model prefix examples, and Codex-only configs, see
+[Codex Harness](/plugins/codex-harness).
+
 OpenClaw requires Codex app-server `0.118.0` or newer. The Codex plugin checks
 the app-server initialize handshake and blocks older or unversioned servers so
 OpenClaw only runs against the protocol surface it has been tested with.
 
-## Harness selection policy
+## Disable PI fallback
 
 By default, OpenClaw runs embedded agents with `agents.defaults.embeddedHarness`
 set to `{ runtime: "auto", fallback: "pi" }`. In `auto` mode, registered plugin
@@ -136,7 +141,10 @@ harnesses can claim a provider/model pair. If none match, or if an auto-selected
 plugin harness fails before producing output, OpenClaw falls back to PI.
 
 Set `fallback: "none"` when you need to prove that a plugin harness is the only
-runtime being exercised:
+runtime being exercised. This disables automatic PI fallback; it does not block
+an explicit `runtime: "pi"` or `OPENCLAW_AGENT_RUNTIME=pi`.
+
+For Codex-only embedded runs:
 
 ```json
 {
@@ -145,6 +153,23 @@ runtime being exercised:
       "model": "codex/gpt-5.4",
       "embeddedHarness": {
         "runtime": "codex",
+        "fallback": "none"
+      }
+    }
+  }
+}
+```
+
+If you want any registered plugin harness to claim matching models but never
+want OpenClaw to silently fall back to PI, keep `runtime: "auto"` and disable
+the fallback:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "embeddedHarness": {
+        "runtime": "auto",
         "fallback": "none"
       }
     }
@@ -180,6 +205,20 @@ Per-agent overrides use the same shape:
 `OPENCLAW_AGENT_RUNTIME` still overrides the configured runtime. Use
 `OPENCLAW_AGENT_HARNESS_FALLBACK=none` to disable PI fallback from the
 environment.
+
+```bash
+OPENCLAW_AGENT_RUNTIME=codex \
+OPENCLAW_AGENT_HARNESS_FALLBACK=none \
+openclaw gateway run
+```
+
+With fallback disabled, a session fails early when the requested harness is not
+registered, does not support the resolved provider/model, or fails before
+producing turn side effects. That is intentional for Codex-only deployments and
+for live tests that must prove the Codex app-server path is actually in use.
+
+This setting only controls the embedded agent harness. It does not disable
+image, video, music, TTS, PDF, or other provider-specific model routing.
 
 ## Native sessions and transcript mirror
 
@@ -221,4 +260,5 @@ on the same delivery path as PI-backed runs.
 - [SDK Overview](/plugins/sdk-overview)
 - [Runtime Helpers](/plugins/sdk-runtime)
 - [Provider Plugins](/plugins/sdk-provider-plugins)
+- [Codex Harness](/plugins/codex-harness)
 - [Model Providers](/concepts/model-providers)

@@ -3,7 +3,7 @@ import * as sessions from "../config/sessions.js";
 import * as gateway from "../gateway/call.js";
 import * as sessionUtils from "../gateway/session-utils.fs.js";
 import { recoverOrphanedSubagentSessions } from "./subagent-orphan-recovery.js";
-import * as subagentRegistryRuntime from "./subagent-registry-runtime.js";
+import * as subagentRegistrySteerRuntime from "./subagent-registry-steer-runtime.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 // Mock dependencies before importing the module under test
@@ -28,7 +28,7 @@ vi.mock("../gateway/session-utils.fs.js", () => ({
   readSessionMessages: vi.fn(() => []),
 }));
 
-vi.mock("./subagent-registry-runtime.js", () => ({
+vi.mock("./subagent-registry-steer-runtime.js", () => ({
   replaceSubagentRunAfterSteer: vi.fn(() => true),
 }));
 
@@ -103,7 +103,7 @@ describe("subagent-orphan-recovery", () => {
     expect(params.sessionKey).toBe("agent:main:subagent:test-session-1");
     expect(params.message).toContain("gateway reload");
     expect(params.message).toContain("Test task: implement feature X");
-    expect(subagentRegistryRuntime.replaceSubagentRunAfterSteer).toHaveBeenCalledWith(
+    expect(subagentRegistrySteerRuntime.replaceSubagentRunAfterSteer).toHaveBeenCalledWith(
       expect.objectContaining({
         previousRunId: "run-1",
         nextRunId: "test-run-id",
@@ -408,7 +408,7 @@ describe("subagent-orphan-recovery", () => {
 
   it("does not retry a session after the gateway accepted resume but run remap failed", async () => {
     vi.mocked(gateway.callGateway).mockResolvedValue({ runId: "new-run" } as never);
-    vi.mocked(subagentRegistryRuntime.replaceSubagentRunAfterSteer).mockReturnValue(false);
+    vi.mocked(subagentRegistrySteerRuntime.replaceSubagentRunAfterSteer).mockReturnValue(false);
 
     vi.mocked(sessions.loadSessionStore).mockReturnValue({
       "agent:main:subagent:test-session-1": {

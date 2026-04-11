@@ -10,12 +10,24 @@ import {
 } from "./targets.js";
 
 const mocks = vi.hoisted(() => ({
+  fetchWithSsrFGuard: vi.fn(async (params: { url: string; init?: RequestInit }) => ({
+    response: await fetch(params.url, params.init),
+    release: async () => {},
+  })),
   verifyIdToken: vi.fn(),
   getGoogleChatAccessToken: vi.fn().mockResolvedValue("token"),
 }));
 
+vi.mock("../runtime-api.js", async () => {
+  const actual = await vi.importActual<typeof import("../runtime-api.js")>("../runtime-api.js");
+  return {
+    ...actual,
+    fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
+  };
+});
+
 vi.mock("google-auth-library", () => ({
-  GoogleAuth: class {},
+  GoogleAuth: function GoogleAuth() {},
   OAuth2Client: class {
     verifyIdToken = mocks.verifyIdToken;
   },
@@ -126,6 +138,7 @@ describe("isSenderAllowed", () => {
 
 describe("downloadGoogleChatMedia", () => {
   afterEach(() => {
+    mocks.fetchWithSsrFGuard.mockClear();
     vi.unstubAllGlobals();
   });
 
@@ -165,6 +178,7 @@ describe("downloadGoogleChatMedia", () => {
 
 describe("sendGoogleChatMessage", () => {
   afterEach(() => {
+    mocks.fetchWithSsrFGuard.mockClear();
     vi.unstubAllGlobals();
   });
 

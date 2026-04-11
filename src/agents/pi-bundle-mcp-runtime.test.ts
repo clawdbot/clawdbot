@@ -57,7 +57,7 @@ describe("session MCP runtime", () => {
           })),
         }),
         callTool: async (_serverName, toolName) => ({
-          content: [{ type: "text", text: String(toolName) }],
+          content: [{ type: "text", text: toolName }],
           isError: false,
         }),
         dispose: async () => {},

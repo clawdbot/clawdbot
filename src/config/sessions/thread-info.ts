@@ -10,3 +10,10 @@ export function parseSessionThreadInfo(sessionKey: string | undefined): {
 } {
   return resolveSessionThreadInfo(sessionKey);
 }
+
+export function parseSessionThreadInfoFast(sessionKey: string | undefined): {
+  baseSessionKey: string | undefined;
+  threadId: string | undefined;
+} {
+  return resolveSessionThreadInfo(sessionKey, { bundledFallback: false });
+}

@@ -1,319 +1,260 @@
 import "./reply.directive.directive-behavior.e2e-mocks.js";
-import { beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
+import type { ModelAliasIndex } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadSessionStore } from "../config/sessions.js";
-import {
-  AUTHORIZED_WHATSAPP_COMMAND,
-  installDirectiveBehaviorE2EHooks,
-  makeElevatedDirectiveConfig,
-  makeRestrictedElevatedDisabledConfig,
-  makeWhatsAppDirectiveConfig,
-  replyText,
-  sessionStorePath,
-  withTempHome,
-} from "./reply.directive.directive-behavior.e2e-harness.js";
+import type { SessionEntry } from "../config/sessions.js";
+import { installDirectiveBehaviorE2EHooks } from "./reply.directive.directive-behavior.e2e-harness.js";
 import { runEmbeddedPiAgentMock } from "./reply.directive.directive-behavior.e2e-mocks.js";
-import { withFullRuntimeReplyConfig } from "./reply/get-reply-fast-path.js";
+import { handleDirectiveOnly } from "./reply/directive-handling.impl.js";
+import type { HandleDirectiveOnlyParams } from "./reply/directive-handling.params.js";
+import { parseInlineDirectives } from "./reply/directive-handling.parse.js";
 
-let getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
+const emptyAliasIndex: ModelAliasIndex = {
+  byAlias: new Map(),
+  byKey: new Map(),
+};
 
-const COMMAND_MESSAGE_BASE = {
-  From: "+1222",
-  To: "+1222",
-  CommandAuthorized: true,
-} as const;
-
-async function runCommand(
-  home: string,
+async function runDirectiveStatus(
   body: string,
-  options: { defaults?: Record<string, unknown>; extra?: Record<string, unknown> } = {},
-) {
-  const res = await getReplyFromConfig(
-    { ...COMMAND_MESSAGE_BASE, Body: body },
-    {},
-    makeWhatsAppDirectiveConfig(
-      home,
-      {
-        model: "anthropic/claude-opus-4-6",
-        ...options.defaults,
-      },
-      options.extra ?? {},
-    ),
-  );
-  return replyText(res);
-}
-
-async function runElevatedCommand(home: string, body: string) {
-  return getReplyFromConfig(
-    { ...AUTHORIZED_WHATSAPP_COMMAND, Body: body },
-    {},
-    makeElevatedDirectiveConfig(home),
-  );
-}
-
-async function runQueueDirective(home: string, body: string) {
-  return runCommand(home, body);
-}
-
-function makeWorkElevatedAllowlistConfig(home: string) {
-  const base = makeWhatsAppDirectiveConfig(
-    home,
-    {
-      model: "anthropic/claude-opus-4-6",
-    },
-    {
-      tools: {
-        elevated: {
-          allowFrom: { whatsapp: ["+1222", "+1333"] },
-        },
-      },
-      channels: { whatsapp: { allowFrom: ["+1222", "+1333"] } },
-    },
-  );
-  return withFullRuntimeReplyConfig({
-    ...base,
+  overrides: Partial<HandleDirectiveOnlyParams> = {},
+): Promise<{ text?: string; sessionEntry: SessionEntry }> {
+  const sessionKey = "agent:main:whatsapp:+1222";
+  const sessionEntry: SessionEntry = {
+    sessionId: "status",
+    updatedAt: Date.now(),
+  };
+  const cfg = {
+    commands: { text: true },
     agents: {
-      ...base.agents,
-      list: [
-        {
-          id: "work",
-          tools: {
-            elevated: {
-              allowFrom: { whatsapp: ["+1333"] },
-            },
-          },
-        },
-      ],
-    },
-  });
-}
-
-function makeAllowlistedElevatedConfig(
-  home: string,
-  defaults: Record<string, unknown> = {},
-  extra: Record<string, unknown> = {},
-) {
-  return makeWhatsAppDirectiveConfig(
-    home,
-    {
-      model: "anthropic/claude-opus-4-6",
-      ...defaults,
-    },
-    {
-      tools: {
-        elevated: {
-          allowFrom: { whatsapp: ["+1222"] },
-        },
+      defaults: {
+        model: "anthropic/claude-opus-4-6",
+        workspace: "/tmp/openclaw",
       },
-      channels: { whatsapp: { allowFrom: ["+1222"] } },
-      ...extra,
     },
-  );
-}
-
-function makeCommandMessage(body: string, from = "+1222") {
-  return {
-    Body: body,
-    From: from,
-    To: from,
-    Provider: "whatsapp",
-    SenderE164: from,
-    CommandAuthorized: true,
-  } as const;
+  } as OpenClawConfig;
+  const effectiveSessionKey = overrides.sessionKey ?? sessionKey;
+  const effectiveSessionEntry = overrides.sessionEntry ?? sessionEntry;
+  const effectiveSessionStore = overrides.sessionStore ?? {
+    [effectiveSessionKey]: effectiveSessionEntry,
+  };
+  const {
+    sessionKey: _ignoredSessionKey,
+    sessionEntry: _ignoredSessionEntry,
+    sessionStore: _ignoredSessionStore,
+    ...restOverrides
+  } = overrides;
+  const result = await handleDirectiveOnly({
+    cfg,
+    directives: parseInlineDirectives(body),
+    sessionEntry: effectiveSessionEntry,
+    sessionStore: effectiveSessionStore,
+    sessionKey: effectiveSessionKey,
+    elevatedEnabled: false,
+    elevatedAllowed: false,
+    defaultProvider: "anthropic",
+    defaultModel: "claude-opus-4-6",
+    aliasIndex: emptyAliasIndex,
+    allowedModelKeys: new Set(["anthropic/claude-opus-4-6"]),
+    allowedModelCatalog: [],
+    resetModelOverride: false,
+    provider: "anthropic",
+    model: "claude-opus-4-6",
+    initialModelLabel: "anthropic/claude-opus-4-6",
+    formatModelSwitchEvent: (label) => `Switched to ${label}`,
+    ...restOverrides,
+  });
+  return { text: result?.text, sessionEntry: effectiveSessionEntry };
 }
 
 describe("directive behavior", () => {
   installDirectiveBehaviorE2EHooks();
 
-  beforeAll(async () => {
-    ({ getReplyFromConfig } = await import("./reply.js"));
-  });
-
   it("reports current directive defaults when no arguments are provided", async () => {
-    await withTempHome(async (home) => {
-      const fastText = await runCommand(home, "/fast", {
-        defaults: {
-          models: {
-            "anthropic/claude-opus-4-6": {
-              params: { fastMode: true },
+    const { text: fastText } = await runDirectiveStatus("/fast", {
+      cfg: {
+        commands: { text: true },
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-6",
+            workspace: "/tmp/openclaw",
+            models: {
+              "anthropic/claude-opus-4-6": {
+                params: { fastMode: true },
+              },
             },
           },
         },
-      });
-      expect(fastText).toContain("Current fast mode: on (config)");
-      expect(fastText).toContain("Options: status, on, off.");
-
-      const verboseText = await runCommand(home, "/verbose", {
-        defaults: { verboseDefault: "on" },
-      });
-      expect(verboseText).toContain("Current verbose level: on");
-      expect(verboseText).toContain("Options: on, full, off.");
-
-      const reasoningText = await runCommand(home, "/reasoning");
-      expect(reasoningText).toContain("Current reasoning level: off");
-      expect(reasoningText).toContain("Options: on, off, stream.");
-
-      const elevatedText = replyText(await runElevatedCommand(home, "/elevated"));
-      expect(elevatedText).toContain("Current elevated level: on");
-      expect(elevatedText).toContain("Options: on, off, ask, full.");
-
-      const execText = await runCommand(home, "/exec", {
-        extra: {
-          tools: {
-            exec: {
-              host: "gateway",
-              security: "allowlist",
-              ask: "always",
-              node: "mac-1",
-            },
-          },
-        },
-      });
-      expect(execText).toContain(
-        "Current exec defaults: host=gateway, effective=gateway, security=allowlist, ask=always, node=mac-1.",
-      );
-      expect(execText).toContain(
-        "Options: host=auto|sandbox|gateway|node, security=deny|allowlist|full, ask=off|on-miss|always, node=<id>.",
-      );
-      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+      } as OpenClawConfig,
     });
+    expect(fastText).toContain("Current fast mode: on (config)");
+    expect(fastText).toContain("Options: status, on, off.");
+
+    const { text: verboseText } = await runDirectiveStatus("/verbose", {
+      currentVerboseLevel: "on",
+    });
+    expect(verboseText).toContain("Current verbose level: on");
+    expect(verboseText).toContain("Options: on, full, off.");
+
+    const { text: reasoningText } = await runDirectiveStatus("/reasoning");
+    expect(reasoningText).toContain("Current reasoning level: off");
+    expect(reasoningText).toContain("Options: on, off, stream.");
+
+    const { text: elevatedText } = await runDirectiveStatus("/elevated", {
+      elevatedAllowed: true,
+      elevatedEnabled: true,
+      currentElevatedLevel: "on",
+    });
+    expect(elevatedText).toContain("Current elevated level: on");
+    expect(elevatedText).toContain("Options: on, off, ask, full.");
+
+    const { text: execText } = await runDirectiveStatus("/exec", {
+      cfg: {
+        commands: { text: true },
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-6",
+            workspace: "/tmp/openclaw",
+          },
+        },
+        tools: {
+          exec: {
+            host: "gateway",
+            security: "allowlist",
+            ask: "always",
+            node: "mac-1",
+          },
+        },
+      } as OpenClawConfig,
+    });
+    expect(execText).toContain(
+      "Current exec defaults: host=gateway, effective=gateway, security=allowlist, ask=always, node=mac-1.",
+    );
+    expect(execText).toContain(
+      "Options: host=auto|sandbox|gateway|node, security=deny|allowlist|full, ask=off|on-miss|always, node=<id>.",
+    );
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });
   it("treats /fast status like the no-argument status query", async () => {
-    await withTempHome(async (home) => {
-      const statusText = await runCommand(home, "/fast status", {
-        defaults: {
-          models: {
-            "anthropic/claude-opus-4-6": {
-              params: { fastMode: true },
+    const { text: statusText } = await runDirectiveStatus("/fast status", {
+      cfg: {
+        commands: { text: true },
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-6",
+            workspace: "/tmp/openclaw",
+            models: {
+              "anthropic/claude-opus-4-6": {
+                params: { fastMode: true },
+              },
             },
           },
         },
-      });
-
-      expect(statusText).toContain("Current fast mode: on (config)");
-      expect(statusText).toContain("Options: status, on, off.");
-      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+      } as OpenClawConfig,
     });
+
+    expect(statusText).toContain("Current fast mode: on (config)");
+    expect(statusText).toContain("Options: status, on, off.");
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });
   it("enforces per-agent elevated restrictions and status visibility", async () => {
-    await withTempHome(async (home) => {
-      const deniedRes = await getReplyFromConfig(
+    const { text: deniedText } = await runDirectiveStatus("/elevated on", {
+      sessionKey: "agent:restricted:main",
+      elevatedEnabled: false,
+      elevatedAllowed: false,
+      elevatedFailures: [
         {
-          Body: "/elevated on",
-          From: "+1222",
-          To: "+1222",
-          Provider: "whatsapp",
-          SenderE164: "+1222",
-          SessionKey: "agent:restricted:main",
-          CommandAuthorized: true,
+          gate: "agents.list[].tools.elevated.enabled",
+          key: "agents.list.restricted.tools.elevated.enabled",
         },
-        {},
-        makeRestrictedElevatedDisabledConfig(home) as unknown as OpenClawConfig,
-      );
-      const deniedText = replyText(deniedRes);
-      expect(deniedText).toContain("agents.list[].tools.elevated.enabled");
-
-      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+      ],
     });
+    expect(deniedText).toContain("agents.list[].tools.elevated.enabled");
+
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });
   it("applies per-agent allowlist requirements before allowing elevated", async () => {
-    await withTempHome(async (home) => {
-      const deniedRes = await getReplyFromConfig(
+    const { text: deniedText } = await runDirectiveStatus("/elevated on", {
+      sessionKey: "agent:work:main",
+      elevatedEnabled: true,
+      elevatedAllowed: false,
+      elevatedFailures: [
         {
-          ...makeCommandMessage("/elevated on", "+1222"),
-          SessionKey: "agent:work:main",
+          gate: "agents.list[].tools.elevated.allowFrom.whatsapp",
+          key: "agents.list.work.tools.elevated.allowFrom.whatsapp",
         },
-        {},
-        makeWorkElevatedAllowlistConfig(home),
-      );
-
-      const deniedText = replyText(deniedRes);
-      expect(deniedText).toContain("agents.list[].tools.elevated.allowFrom.whatsapp");
-
-      const allowedRes = await getReplyFromConfig(
-        {
-          ...makeCommandMessage("/elevated on", "+1333"),
-          SessionKey: "agent:work:main",
-        },
-        {},
-        makeWorkElevatedAllowlistConfig(home),
-      );
-
-      const allowedText = replyText(allowedRes);
-      expect(allowedText).toContain("Elevated mode set to ask");
-      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+      ],
     });
+    expect(deniedText).toContain("agents.list[].tools.elevated.allowFrom.whatsapp");
+
+    const { text: allowedText } = await runDirectiveStatus("/elevated on", {
+      sessionKey: "agent:work:main",
+      elevatedEnabled: true,
+      elevatedAllowed: true,
+    });
+    expect(allowedText).toContain("Elevated mode set to ask");
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });
   it("handles runtime warning, invalid level, and multi-directive elevated inputs", async () => {
-    await withTempHome(async (home) => {
-      for (const scenario of [
-        {
-          body: "/elevated off",
-          config: makeAllowlistedElevatedConfig(home, { sandbox: { mode: "off" } }),
-          expectedSnippets: [
-            "Elevated mode disabled.",
-            "Runtime is direct; sandboxing does not apply.",
-          ],
-        },
-        {
-          body: "/elevated maybe",
-          config: makeAllowlistedElevatedConfig(home),
-          expectedSnippets: ["Unrecognized elevated level"],
-        },
-        {
-          body: "/elevated off\n/verbose on",
-          config: makeAllowlistedElevatedConfig(home),
-          expectedSnippets: ["Elevated mode disabled.", "Verbose logging enabled."],
-        },
-      ]) {
-        const res = await getReplyFromConfig(
-          makeCommandMessage(scenario.body),
-          {},
-          scenario.config,
-        );
-        const text = replyText(res);
-        for (const snippet of scenario.expectedSnippets) {
-          expect(text).toContain(snippet);
-        }
+    for (const scenario of [
+      {
+        body: "/elevated off",
+        expectedSnippets: [
+          "Elevated mode disabled.",
+          "Runtime is direct; sandboxing does not apply.",
+        ],
+      },
+      {
+        body: "/elevated maybe",
+        expectedSnippets: ["Unrecognized elevated level"],
+      },
+      {
+        body: "/elevated off\n/verbose on",
+        expectedSnippets: ["Elevated mode disabled.", "Verbose logging enabled."],
+      },
+    ]) {
+      const { text } = await runDirectiveStatus(scenario.body, {
+        elevatedEnabled: true,
+        elevatedAllowed: true,
+      });
+      for (const snippet of scenario.expectedSnippets) {
+        expect(text).toContain(snippet);
       }
-      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
-    });
+    }
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });
   it("persists queue overrides and reset behavior", async () => {
-    await withTempHome(async (home) => {
-      const storePath = sessionStorePath(home);
+    const interrupt = await runDirectiveStatus("/queue interrupt");
+    expect(interrupt.text).toMatch(/^⚙️ Queue mode set to interrupt\./);
+    expect(interrupt.sessionEntry.queueMode).toBe("interrupt");
 
-      const interruptText = await runQueueDirective(home, "/queue interrupt");
-      expect(interruptText).toMatch(/^⚙️ Queue mode set to interrupt\./);
-      let store = loadSessionStore(storePath);
-      let entry = Object.values(store)[0];
-      expect(entry?.queueMode).toBe("interrupt");
+    const collect = await runDirectiveStatus("/queue collect debounce:2s cap:5 drop:old");
 
-      const collectText = await runQueueDirective(
-        home,
-        "/queue collect debounce:2s cap:5 drop:old",
-      );
+    expect(collect.text).toMatch(/^⚙️ Queue mode set to collect\./);
+    expect(collect.text).toMatch(/Queue debounce set to 2000ms/);
+    expect(collect.text).toMatch(/Queue cap set to 5/);
+    expect(collect.text).toMatch(/Queue drop set to old/);
+    expect(collect.sessionEntry.queueMode).toBe("collect");
+    expect(collect.sessionEntry.queueDebounceMs).toBe(2000);
+    expect(collect.sessionEntry.queueCap).toBe(5);
+    expect(collect.sessionEntry.queueDrop).toBe("old");
 
-      expect(collectText).toMatch(/^⚙️ Queue mode set to collect\./);
-      expect(collectText).toMatch(/Queue debounce set to 2000ms/);
-      expect(collectText).toMatch(/Queue cap set to 5/);
-      expect(collectText).toMatch(/Queue drop set to old/);
-      store = loadSessionStore(storePath);
-      entry = Object.values(store)[0];
-      expect(entry?.queueMode).toBe("collect");
-      expect(entry?.queueDebounceMs).toBe(2000);
-      expect(entry?.queueCap).toBe(5);
-      expect(entry?.queueDrop).toBe("old");
-
-      const resetText = await runQueueDirective(home, "/queue reset");
-      expect(resetText).toMatch(/^⚙️ Queue mode reset to default\./);
-      store = loadSessionStore(storePath);
-      entry = Object.values(store)[0];
-      expect(entry?.queueMode).toBeUndefined();
-      expect(entry?.queueDebounceMs).toBeUndefined();
-      expect(entry?.queueCap).toBeUndefined();
-      expect(entry?.queueDrop).toBeUndefined();
-      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    const resetEntry: SessionEntry = {
+      sessionId: "queue",
+      updatedAt: Date.now(),
+      queueMode: "collect",
+      queueDebounceMs: 2000,
+      queueCap: 5,
+      queueDrop: "old",
+    };
+    const reset = await runDirectiveStatus("/queue reset", {
+      sessionEntry: resetEntry,
+      sessionStore: { "agent:main:whatsapp:+1222": resetEntry },
     });
+    expect(reset.text).toMatch(/^⚙️ Queue mode reset to default\./);
+    expect(reset.sessionEntry.queueMode).toBeUndefined();
+    expect(reset.sessionEntry.queueDebounceMs).toBeUndefined();
+    expect(reset.sessionEntry.queueCap).toBeUndefined();
+    expect(reset.sessionEntry.queueDrop).toBeUndefined();
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });
 });

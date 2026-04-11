@@ -58,7 +58,7 @@ function buildWorkspaceSkillCommandSpecs(
 ) {
   const used = new Set<string>();
   for (const reserved of opts?.reservedNames ?? []) {
-    used.add(String(reserved).toLowerCase());
+    used.add(reserved.toLowerCase());
   }
   const agentSkills = opts?.config?.agents?.list?.find((entry) => entry.id === opts?.agentId);
   const filter =

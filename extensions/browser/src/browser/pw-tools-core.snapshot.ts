@@ -89,7 +89,7 @@ export async function snapshotAiViaPlaywright(opts: {
     timeout: Math.max(500, Math.min(60_000, Math.floor(opts.timeoutMs ?? 5000))),
     track: "response",
   });
-  let snapshot = String(result?.full ?? "");
+  let snapshot = result?.full ?? "";
   const maxChars = opts.maxChars;
   const limit =
     typeof maxChars === "number" && Number.isFinite(maxChars) && maxChars > 0
@@ -152,7 +152,7 @@ export async function snapshotRoleViaPlaywright(opts: {
       timeout: 5000,
       track: "response",
     });
-    const built = buildRoleSnapshotFromAiSnapshot(String(result?.full ?? ""), opts.options);
+    const built = buildRoleSnapshotFromAiSnapshot(result?.full ?? "", opts.options);
     storeRoleRefsForTarget({
       page,
       cdpUrl: opts.cdpUrl,
@@ -178,7 +178,7 @@ export async function snapshotRoleViaPlaywright(opts: {
       : page.locator(":root");
 
   const ariaSnapshot = await locator.ariaSnapshot();
-  const built = buildRoleSnapshotFromAriaSnapshot(String(ariaSnapshot ?? ""), opts.options);
+  const built = buildRoleSnapshotFromAriaSnapshot(ariaSnapshot ?? "", opts.options);
   storeRoleRefsForTarget({
     page,
     cdpUrl: opts.cdpUrl,

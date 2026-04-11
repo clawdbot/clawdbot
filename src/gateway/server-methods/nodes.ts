@@ -727,7 +727,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       return;
     }
     const { nodeId } = params as { nodeId: string };
-    const id = normalizeOptionalString(String(nodeId ?? "")) ?? "";
+    const id = normalizeOptionalString(nodeId) ?? "";
     if (!id) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
       return;
@@ -805,7 +805,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       return;
     }
     const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id;
-    const trimmedNodeId = normalizeOptionalString(String(nodeId ?? "")) ?? "";
+    const trimmedNodeId = normalizeOptionalString(nodeId) ?? "";
     if (!trimmedNodeId) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
       return;
@@ -836,16 +836,14 @@ export const nodeHandlers: GatewayRequestHandlers = {
       return;
     }
     const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id;
-    const trimmedNodeId = normalizeOptionalString(String(nodeId ?? "")) ?? "";
+    const trimmedNodeId = normalizeOptionalString(nodeId) ?? "";
     if (!trimmedNodeId) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
       return;
     }
     const ackIds = Array.from(
       new Set(
-        (params.ids ?? [])
-          .map((value) => normalizeOptionalString(String(value ?? "")) ?? "")
-          .filter(Boolean),
+        (params.ids ?? []).map((value) => normalizeOptionalString(value) ?? "").filter(Boolean),
       ),
     );
     const remaining = ackPendingNodeActions(trimmedNodeId, ackIds);
@@ -875,8 +873,8 @@ export const nodeHandlers: GatewayRequestHandlers = {
       timeoutMs?: number;
       idempotencyKey: string;
     };
-    const nodeId = normalizeOptionalString(String(p.nodeId ?? "")) ?? "";
-    const command = normalizeOptionalString(String(p.command ?? "")) ?? "";
+    const nodeId = normalizeOptionalString(p.nodeId) ?? "";
+    const command = normalizeOptionalString(p.command) ?? "";
     if (!nodeId || !command) {
       respond(
         false,

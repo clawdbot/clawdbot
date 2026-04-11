@@ -1,15 +1,48 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
 import { handleContextCommand } from "./commands-context-command.js";
+import { handleStatusCommand } from "./commands-info.js";
+import { buildStatusReply } from "./commands-status.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { handleWhoamiCommand } from "./commands-whoami.js";
 
 const buildContextReplyMock = vi.hoisted(() => vi.fn());
+const listSkillCommandsForAgentsMock = vi.hoisted(() => vi.fn(() => []));
+const buildCommandsMessagePaginatedMock = vi.hoisted(() =>
+  vi.fn(() => ({ text: "/commands", currentPage: 1, totalPages: 1 })),
+);
 
 vi.mock("./commands-context-report.js", () => ({
   buildContextReply: buildContextReplyMock,
 }));
+
+vi.mock("./commands-status.js", () => ({
+  buildStatusReply: vi.fn(async () => ({ text: "status reply" })),
+}));
+
+vi.mock("../../agents/agent-scope.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/agent-scope.js")>(
+    "../../agents/agent-scope.js",
+  );
+  return {
+    ...actual,
+    resolveSessionAgentId: vi.fn(actual.resolveSessionAgentId),
+  };
+});
+
+vi.mock("../skill-commands.js", () => ({
+  listSkillCommandsForAgents: listSkillCommandsForAgentsMock,
+}));
+
+vi.mock("../status.js", async () => {
+  const actual = await vi.importActual<typeof import("../status.js")>("../status.js");
+  return {
+    ...actual,
+    buildCommandsMessagePaginated: buildCommandsMessagePaginatedMock,
+  };
+});
 
 function buildInfoParams(
   commandBodyNormalized: string,
@@ -64,6 +97,11 @@ describe("info command handlers", () => {
       }
       return { text: "/context\n- /context list\nInline shortcut" };
     });
+    buildCommandsMessagePaginatedMock.mockReturnValue({
+      text: "/commands",
+      currentPage: 1,
+      totalPages: 1,
+    });
   });
 
   it("returns sender details for /whoami", async () => {
@@ -89,6 +127,29 @@ describe("info command handlers", () => {
     expect(result?.reply?.text).toContain("AllowFrom: 12345");
   });
 
+  it("uses the canonical command sender identity for /whoami AllowFrom", async () => {
+    const params = buildInfoParams(
+      "/whoami",
+      {
+        commands: { text: true },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+      {
+        SenderId: "123@lid",
+        SenderUsername: "TestUser",
+        SenderE164: "+15551234567",
+        ChatType: "direct",
+      },
+    );
+    params.command.senderId = "+15551234567";
+
+    const result = await handleWhoamiCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("User id: 123@lid");
+    expect(result?.reply?.text).toContain("AllowFrom: +15551234567");
+  });
+
   it("returns expected details for /context commands", async () => {
     const cfg = {
       commands: { text: true },
@@ -110,5 +171,102 @@ describe("info command handlers", () => {
         expect(result?.reply?.text).toContain(expectedText);
       }
     }
+  });
+
+  it("prefers the persisted session parent when routing /status context", async () => {
+    const params = buildInfoParams(
+      "/status",
+      {
+        commands: { text: true },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+      {
+        ParentSessionKey: undefined,
+      },
+    );
+    params.sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      parentSessionKey: "discord:group:parent-room",
+    } as HandleCommandsParams["sessionEntry"];
+
+    const statusResult = await handleStatusCommand(params, true);
+
+    expect(statusResult?.shouldContinue).toBe(false);
+
+    expect(vi.mocked(buildStatusReply)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        parentSessionKey: "discord:group:parent-room",
+      }),
+    );
+  });
+
+  it("preserves the shared session store path when routing /status", async () => {
+    const params = buildInfoParams("/status", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+    params.storePath = "/tmp/target-session-store.json";
+
+    const statusResult = await handleStatusCommand(params, true);
+
+    expect(statusResult?.shouldContinue).toBe(false);
+    expect(vi.mocked(buildStatusReply)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storePath: "/tmp/target-session-store.json",
+      }),
+    );
+  });
+
+  it("prefers the target session entry when routing /status", async () => {
+    const params = buildInfoParams("/status", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+    params.sessionEntry = {
+      sessionId: "wrapper-session",
+      updatedAt: Date.now(),
+      parentSessionKey: "wrapper-parent",
+    } as HandleCommandsParams["sessionEntry"];
+    params.sessionStore = {
+      "agent:main:whatsapp:direct:12345": {
+        sessionId: "target-session",
+        updatedAt: Date.now(),
+        parentSessionKey: "target-parent",
+      },
+    };
+
+    const statusResult = await handleStatusCommand(params, true);
+
+    expect(statusResult?.shouldContinue).toBe(false);
+    expect(vi.mocked(buildStatusReply)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionEntry: expect.objectContaining({
+          sessionId: "target-session",
+          parentSessionKey: "target-parent",
+        }),
+        parentSessionKey: "target-parent",
+      }),
+    );
+  });
+
+  it("uses the canonical target session agent when listing /commands", async () => {
+    const { handleCommandsListCommand } = await import("./commands-info.js");
+    const params = buildInfoParams("/commands", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+    params.agentId = "main";
+    params.sessionKey = "agent:target:whatsapp:direct:12345";
+    vi.mocked(resolveSessionAgentId).mockReturnValue("target");
+
+    const result = await handleCommandsListCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(listSkillCommandsForAgentsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentIds: ["target"],
+      }),
+    );
   });
 });

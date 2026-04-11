@@ -1,4 +1,5 @@
 import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
+import type { EmbeddedRunLivenessState } from "../types.js";
 import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "../types.js";
 import type { RetryLimitFailoverDecision } from "./failover-policy.js";
 
@@ -10,6 +11,8 @@ export function handleRetryLimitExhaustion(params: {
   profileId?: string;
   durationMs: number;
   agentMeta: EmbeddedPiAgentMeta;
+  replayInvalid?: boolean;
+  livenessState?: EmbeddedRunLivenessState;
 }): EmbeddedPiRunResult {
   if (params.decision.action === "fallback_model") {
     throw new FailoverError(params.message, {
@@ -33,6 +36,8 @@ export function handleRetryLimitExhaustion(params: {
     meta: {
       durationMs: params.durationMs,
       agentMeta: params.agentMeta,
+      ...(params.replayInvalid ? { replayInvalid: true } : {}),
+      ...(params.livenessState ? { livenessState: params.livenessState } : {}),
       error: { kind: "retry_limit", message: params.message },
     },
   };

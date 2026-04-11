@@ -2,12 +2,17 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { callGateway } from "../gateway/call.js";
 
 const noop = () => {};
 let currentConfig = {
   agents: { defaults: { subagents: { archiveAfterMinutes: 60 } } },
 };
 const loadConfigMock = vi.fn(() => currentConfig);
+const flushSweepMicrotasks = async () => {
+  await Promise.resolve();
+  await Promise.resolve();
+};
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(async (request: unknown) => {
@@ -58,6 +63,15 @@ describe("subagent registry archive behavior", () => {
     currentConfig = {
       agents: { defaults: { subagents: { archiveAfterMinutes: 60 } } },
     };
+    vi.mocked(callGateway).mockReset();
+    vi.mocked(callGateway).mockImplementation(async (request: unknown) => {
+      const method = (request as { method?: string }).method;
+      if (method === "agent.wait") {
+        // Keep lifecycle unsettled so register/replace assertions can inspect stored state.
+        return { status: "pending" };
+      }
+      return {};
+    });
     loadConfigMock.mockClear();
     mod.__testing.setDepsForTest();
     mod.resetSubagentRegistryForTests({ persist: false });
@@ -105,6 +119,120 @@ describe("subagent registry archive behavior", () => {
     await vi.advanceTimersByTimeAsync(60_000);
 
     expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
+  });
+
+  it("keeps archived delete-mode runs for retry when sessions.delete fails", async () => {
+    currentConfig = {
+      agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
+    };
+    const onSubagentEnded = vi.fn(async () => undefined);
+    const attachmentsRootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sweep-retry-"));
+    const attachmentsDir = path.join(attachmentsRootDir, "child");
+    await fs.mkdir(attachmentsDir, { recursive: true });
+    await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact", "utf8");
+    let deleteAttempts = 0;
+    vi.mocked(callGateway).mockImplementation(async (request: unknown) => {
+      const method = (request as { method?: string }).method;
+      if (method === "agent.wait") {
+        return { status: "pending" };
+      }
+      if (method === "sessions.delete") {
+        deleteAttempts += 1;
+        if (deleteAttempts === 1) {
+          throw new Error("delete failed");
+        }
+      }
+      return {};
+    });
+    mod.__testing.setDepsForTest({
+      ensureContextEnginesInitialized: vi.fn(),
+      ensureRuntimePluginsLoaded: vi.fn(),
+      resolveContextEngine: vi.fn(async () => ({ onSubagentEnded }) as never),
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-delete-retry",
+      childSessionKey: "agent:main:subagent:delete-retry",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "retry delete",
+      cleanup: "delete",
+      attachmentsDir,
+      attachmentsRootDir,
+    });
+
+    vi.advanceTimersByTime(60_000);
+    await flushSweepMicrotasks();
+
+    expect(deleteAttempts).toBe(1);
+    expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(1);
+    expect(onSubagentEnded).not.toHaveBeenCalled();
+    await expect(fs.access(attachmentsDir)).resolves.toBeUndefined();
+
+    vi.advanceTimersByTime(60_000);
+    await flushSweepMicrotasks();
+
+    expect(deleteAttempts).toBe(2);
+    expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
+  });
+
+  it("does not overlap archive sweep retries while sessions.delete is still in flight", async () => {
+    currentConfig = {
+      agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
+    };
+    let resolveDelete: (() => void) | undefined;
+    const deletePromise = new Promise<void>((resolve) => {
+      resolveDelete = resolve;
+    });
+    vi.mocked(callGateway).mockImplementation(async (request: unknown) => {
+      const method = (request as { method?: string }).method;
+      if (method === "agent.wait") {
+        return { status: "pending" };
+      }
+      if (method === "sessions.delete") {
+        await deletePromise;
+      }
+      return {};
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-delete-inflight",
+      childSessionKey: "agent:main:subagent:delete-inflight",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "inflight delete",
+      cleanup: "delete",
+    });
+
+    vi.advanceTimersByTime(60_000);
+    await flushSweepMicrotasks();
+    expect(
+      vi
+        .mocked(callGateway)
+        .mock.calls.filter(
+          ([request]) => (request as { method?: string } | undefined)?.method === "sessions.delete",
+        ),
+    ).toHaveLength(1);
+
+    vi.advanceTimersByTime(60_000);
+    await flushSweepMicrotasks();
+    expect(
+      vi
+        .mocked(callGateway)
+        .mock.calls.filter(
+          ([request]) => (request as { method?: string } | undefined)?.method === "sessions.delete",
+        ),
+    ).toHaveLength(1);
+    expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(1);
+
+    if (!resolveDelete) {
+      throw new Error("expected delete resolver");
+    }
+    resolveDelete();
+    await flushSweepMicrotasks();
+    await vi.waitFor(() => {
+      expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
+    });
   });
 
   it("does not set archiveAtMs for persistent session-mode runs", () => {

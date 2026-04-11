@@ -54,7 +54,7 @@ export function resolveHeartbeatIntervalMs(
   if (!raw) {
     return null;
   }
-  const trimmed = normalizeOptionalString(String(raw)) ?? "";
+  const trimmed = normalizeOptionalString(raw) ?? "";
   if (!trimmed) {
     return null;
   }

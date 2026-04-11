@@ -508,7 +508,7 @@ export async function prepareSlackMessage(params: {
     },
     policy: {
       isGroup: isRoom,
-      requireMention: Boolean(shouldRequireMention),
+      requireMention: shouldRequireMention,
       allowedImplicitMentionKinds: ctx.threadRequireExplicitMention ? [] : undefined,
       allowTextCommands,
       hasControlCommand: hasControlCommandInMessage,
@@ -576,7 +576,7 @@ export async function prepareSlackMessage(params: {
         isDirect: isDirectMessage,
         isGroup: isRoomish,
         isMentionableGroup: isRoom,
-        requireMention: Boolean(shouldRequireMention),
+        requireMention: shouldRequireMention,
         canDetectMention,
         effectiveWasMentioned,
         shouldBypassMention: mentionDecision.shouldBypassMention,

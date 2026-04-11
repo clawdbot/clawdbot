@@ -89,20 +89,16 @@ function createSearchProviderEntry(id: string): PluginWebSearchProviderEntry {
   };
   if (id === "kimi") {
     entry.runSetup = async ({ config, prompter }) => {
-      const baseUrl = String(
-        await prompter.select({
-          message: "Moonshot endpoint",
-          options: [{ value: "https://api.moonshot.ai/v1", label: "Moonshot" }],
-          initialValue: "https://api.moonshot.ai/v1",
-        }),
-      );
-      const modelChoice = String(
-        await prompter.select({
-          message: "Moonshot web-search model",
-          options: [{ value: "__keep__", label: "Keep default" }],
-          initialValue: "__keep__",
-        }),
-      );
+      const baseUrl = await prompter.select({
+        message: "Moonshot endpoint",
+        options: [{ value: "https://api.moonshot.ai/v1", label: "Moonshot" }],
+        initialValue: "https://api.moonshot.ai/v1",
+      });
+      const modelChoice = await prompter.select({
+        message: "Moonshot web-search model",
+        options: [{ value: "__keep__", label: "Keep default" }],
+        initialValue: "__keep__",
+      });
       const webSearch = ensureWebSearchConfig(config, metadata.pluginId);
       webSearch.baseUrl = baseUrl;
       webSearch.model = modelChoice === "__keep__" ? "kimi-k2.5" : modelChoice;

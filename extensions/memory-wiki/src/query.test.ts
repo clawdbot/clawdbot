@@ -448,6 +448,8 @@ describe("getMemoryWikiPage", () => {
     expect(result?.content).toContain("line one");
     expect(result?.content).toContain("line two");
     expect(result?.content).not.toContain("line three");
+    expect(result?.totalLines).toBe(7);
+    expect(result?.truncated).toBe(true);
   });
 
   it("resolves compiled claim ids back to the owning page", async () => {

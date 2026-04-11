@@ -16,8 +16,6 @@ import { createApplyPatchTool } from "./apply-patch.js";
 import {
   createExecTool,
   createProcessTool,
-  describeExecTool,
-  describeProcessTool,
   type ExecToolDefaults,
   type ProcessToolDefaults,
 } from "./bash-tools.js";
@@ -28,6 +26,7 @@ import type { ModelAuthMode } from "./model-auth.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { wrapToolWithAbortSignal } from "./pi-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
+import { applyDeferredFollowupToolDescriptions } from "./pi-tools.deferred-followup.js";
 import { filterToolsByMessageProvider } from "./pi-tools.message-provider-policy.js";
 import {
   isToolAllowedByPolicies,
@@ -95,28 +94,6 @@ function applyModelProviderToolPolicy(
   }
 
   return tools;
-}
-
-function applyDeferredFollowupToolDescriptions(
-  tools: AnyAgentTool[],
-  params?: { agentId?: string },
-): AnyAgentTool[] {
-  const hasCronTool = tools.some((tool) => tool.name === "cron");
-  return tools.map((tool) => {
-    if (tool.name === "exec") {
-      return {
-        ...tool,
-        description: describeExecTool({ agentId: params?.agentId, hasCronTool }),
-      };
-    }
-    if (tool.name === "process") {
-      return {
-        ...tool,
-        description: describeProcessTool({ hasCronTool }),
-      };
-    }
-    return tool;
-  });
 }
 
 function isApplyPatchAllowedForModel(params: {
@@ -556,6 +533,7 @@ export function createOpenClawCodingTools(options?: {
       currentThreadTs: options?.currentThreadTs,
       currentMessageId: options?.currentMessageId,
       modelProvider: options?.modelProvider,
+      modelId: options?.modelId,
       replyToMode: options?.replyToMode,
       hasRepliedRef: options?.hasRepliedRef,
       modelHasVision: options?.modelHasVision,

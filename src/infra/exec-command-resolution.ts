@@ -341,9 +341,7 @@ export function matchAllowlist(
   // Use the caller-supplied target platform rather than process.platform so that
   // a Linux gateway evaluating a Windows node command applies argPattern correctly.
   const effectivePlatform = platform ?? process.platform;
-  const useArgPattern = normalizeLowercaseStringOrEmpty(String(effectivePlatform)).startsWith(
-    "win",
-  );
+  const useArgPattern = normalizeLowercaseStringOrEmpty(effectivePlatform).startsWith("win");
   let pathOnlyMatch: ExecAllowlistEntry | null = null;
   for (const entry of entries) {
     const pattern = entry.pattern?.trim();

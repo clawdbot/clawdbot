@@ -26,6 +26,24 @@ export function sanitizeTransportPayloadText(text: string): string {
   );
 }
 
+export function coerceTransportToolCallArguments(argumentsValue: unknown): Record<string, unknown> {
+  if (argumentsValue && typeof argumentsValue === "object" && !Array.isArray(argumentsValue)) {
+    return argumentsValue as Record<string, unknown>;
+  }
+  if (typeof argumentsValue === "string") {
+    try {
+      const parsed = JSON.parse(argumentsValue);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Preserve malformed strings in stored history, but send object-shaped payloads to
+      // providers that require structured tool-call arguments.
+    }
+  }
+  return {};
+}
+
 export function mergeTransportHeaders(
   ...headerSources: Array<Record<string, string> | undefined>
 ): Record<string, string> | undefined {

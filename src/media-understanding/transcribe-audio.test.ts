@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 
 const { transcribeAudioFileFromRuntime } = vi.hoisted(() => {
   const transcribeAudioFileFromRuntime = vi.fn();

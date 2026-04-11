@@ -1,8 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   collectOpenPolicyAllowFromWarnings,
   maybeRepairOpenPolicyAllowFrom,
 } from "./open-policy-allowfrom.js";
+
+vi.mock("../channel-capabilities.js", () => ({
+  getDoctorChannelCapabilities: (channelName?: string) => ({
+    dmAllowFromMode:
+      channelName === "googlechat" || channelName === "matrix" ? "nestedOnly" : "topOrNested",
+    groupModel: "sender",
+    groupAllowFromFallbackToAllowFrom: true,
+    warnOnEmptyGroupSenderAllowlist: true,
+  }),
+}));
 
 describe("doctor open-policy allowFrom repair", () => {
   it('adds top-level wildcard when dmPolicy="open" has no allowFrom', () => {

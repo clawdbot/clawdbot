@@ -33,15 +33,20 @@ type SerializedComponent = {
   components?: SerializedComponent[];
 };
 
+const DISCORD_CONTAINER_COMPONENT_TYPE: SerializedComponent["type"] = ComponentType.Container;
+const DISCORD_ACTION_ROW_COMPONENT_TYPE: SerializedComponent["type"] = ComponentType.ActionRow;
+const DISCORD_STRING_SELECT_COMPONENT_TYPE: SerializedComponent["type"] =
+  ComponentType.StringSelect;
+
 function extractContainerRows(components?: SerializedComponent[]): SerializedComponent[] {
   const container = components?.find(
-    (component) => component.type === Number(ComponentType.Container),
+    (component) => component.type === DISCORD_CONTAINER_COMPONENT_TYPE,
   );
   if (!container) {
     return [];
   }
   return (container.components ?? []).filter(
-    (component) => component.type === Number(ComponentType.ActionRow),
+    (component) => component.type === DISCORD_ACTION_ROW_COMPONENT_TYPE,
   );
 }
 
@@ -484,7 +489,7 @@ describe("Discord model picker rendering", () => {
     expect(rows).toHaveLength(3);
 
     const providerSelect = rows[0]?.components?.find(
-      (component) => component.type === Number(ComponentType.StringSelect),
+      (component) => component.type === DISCORD_STRING_SELECT_COMPONENT_TYPE,
     );
     if (!providerSelect) {
       throw new Error("models view did not render a provider select");
@@ -495,7 +500,7 @@ describe("Discord model picker rendering", () => {
     expect(parsedProviderState?.action).toBe("provider");
 
     const modelSelect = rows[1]?.components?.find(
-      (component) => component.type === Number(ComponentType.StringSelect),
+      (component) => component.type === DISCORD_STRING_SELECT_COMPONENT_TYPE,
     );
     if (!modelSelect) {
       throw new Error("models view did not render a model select");

@@ -12,14 +12,14 @@ export function isChannelConfigured(
   channelId: string,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
+  if (hasMeaningfulChannelConfigShallow(resolveChannelConfigRecord(cfg, channelId))) {
+    return true;
+  }
   if (hasBundledChannelConfiguredState({ channelId, cfg, env })) {
     return true;
   }
   const pluginPersistedAuthState = hasBundledChannelPersistedAuthState({ channelId, cfg, env });
   if (pluginPersistedAuthState) {
-    return true;
-  }
-  if (hasMeaningfulChannelConfigShallow(resolveChannelConfigRecord(cfg, channelId))) {
     return true;
   }
   const plugin = getBootstrapChannelPlugin(channelId);

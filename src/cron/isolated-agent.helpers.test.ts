@@ -57,7 +57,7 @@ describe("resolveCronPayloadOutcome", () => {
       payloads: [{ text: "a".repeat(2001) }],
     });
 
-    expect(String(result.summary ?? "")).toMatch(/…$/);
+    expect(result.summary ?? "").toMatch(/…$/);
   });
 
   it("preserves all successful deliverable payloads when no final assistant text is available", () => {

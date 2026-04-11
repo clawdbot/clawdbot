@@ -119,8 +119,8 @@ function hasGatewayTokenCandidate(params: {
 }
 
 function hasGatewayTokenOverrideCandidate(params: { authOverride?: GatewayAuthConfig }): boolean {
-  return Boolean(
-    typeof params.authOverride?.token === "string" && params.authOverride.token.trim().length > 0,
+  return (
+    typeof params.authOverride?.token === "string" && params.authOverride.token.trim().length > 0
   );
 }
 
@@ -131,9 +131,9 @@ function hasGatewayPasswordOverrideCandidate(params: {
   if (hasGatewayPasswordEnvCandidate(params.env)) {
     return true;
   }
-  return Boolean(
+  return (
     typeof params.authOverride?.password === "string" &&
-    params.authOverride.password.trim().length > 0,
+    params.authOverride.password.trim().length > 0
   );
 }
 

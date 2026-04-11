@@ -36,15 +36,44 @@ export function estimateBase64DecodedBytes(base64: string): number {
   return Math.max(0, estimated);
 }
 
-const BASE64_CHARS_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+function isBase64DataChar(code: number): boolean {
+  return (
+    (code >= 0x41 && code <= 0x5a) ||
+    (code >= 0x61 && code <= 0x7a) ||
+    (code >= 0x30 && code <= 0x39) ||
+    code === 0x2b ||
+    code === 0x2f
+  );
+}
 
 /**
  * Normalize and validate a base64 string.
  * Returns canonical base64 (no whitespace) or undefined when invalid.
  */
 export function canonicalizeBase64(base64: string): string | undefined {
-  const cleaned = base64.replace(/\s+/g, "");
-  if (!cleaned || cleaned.length % 4 !== 0 || !BASE64_CHARS_RE.test(cleaned)) {
+  let cleaned = "";
+  let padding = 0;
+  let sawPadding = false;
+  for (let i = 0; i < base64.length; i += 1) {
+    const code = base64.charCodeAt(i);
+    if (code <= 0x20) {
+      continue;
+    }
+    if (code === 0x3d) {
+      padding += 1;
+      if (padding > 2) {
+        return undefined;
+      }
+      sawPadding = true;
+      cleaned += "=";
+      continue;
+    }
+    if (sawPadding || !isBase64DataChar(code)) {
+      return undefined;
+    }
+    cleaned += base64[i];
+  }
+  if (!cleaned || cleaned.length % 4 !== 0) {
     return undefined;
   }
   return cleaned;

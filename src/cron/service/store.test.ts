@@ -133,4 +133,60 @@ describe("cron service store seam coverage", () => {
     expect(raw.jobs[0]?.jobId).toBe("repro-stable-id");
     expect(raw.jobs[0]?.id).toBeUndefined();
   });
+
+  it("preserves disabled jobs when persisted booleans roundtrip through string values", async () => {
+    const { storePath } = await makeStorePath();
+
+    await writeSingleJobStore(storePath, {
+      id: "disabled-string-job",
+      name: "disabled string job",
+      enabled: "false",
+      createdAtMs: STORE_TEST_NOW - 60_000,
+      updatedAtMs: STORE_TEST_NOW - 60_000,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: {},
+    });
+
+    const before = await fs.readFile(storePath, "utf8");
+    const state = createStoreTestState(storePath);
+
+    await ensureLoaded(state);
+
+    const job = findJobOrThrow(state, "disabled-string-job");
+    expect(job.enabled).toBe(false);
+
+    const after = await fs.readFile(storePath, "utf8");
+    expect(after).toBe(before);
+  });
+
+  it("loads persisted jobs with unsafe custom session ids so run paths can fail closed", async () => {
+    const { storePath } = await makeStorePath();
+
+    await writeSingleJobStore(storePath, {
+      id: "unsafe-session-target-job",
+      name: "unsafe session target job",
+      enabled: true,
+      createdAtMs: STORE_TEST_NOW - 60_000,
+      updatedAtMs: STORE_TEST_NOW - 60_000,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "session:../../outside",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "ping" },
+      state: {},
+    });
+
+    const state = createStoreTestState(storePath);
+
+    await ensureLoaded(state, { skipRecompute: true });
+
+    const job = findJobOrThrow(state, "unsafe-session-target-job");
+    expect(job.sessionTarget).toBe("session:../../outside");
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ storePath, jobId: "unsafe-session-target-job" }),
+      expect.stringContaining("invalid persisted sessionTarget"),
+    );
+  });
 });

@@ -14,7 +14,7 @@ export function normalizeUrbitHostname(hostname: string | undefined): string {
 }
 
 export function validateUrbitBaseUrl(raw: string): UrbitBaseUrlValidation {
-  const trimmed = String(raw ?? "").trim();
+  const trimmed = raw.trim();
   if (!trimmed) {
     return { ok: false, error: "Required" };
   }

@@ -122,7 +122,7 @@ export async function removeFallbackCommand(
     const existing = getFallbacks(cfg, params.key);
     const filtered = existing.filter((entry) => {
       const resolvedEntry = resolveModelRefFromString({
-        raw: String(entry ?? ""),
+        raw: entry ?? "",
         defaultProvider: DEFAULT_PROVIDER,
         aliasIndex,
       });

@@ -67,12 +67,11 @@ export async function removeChannelConfigWizard(
 
     const nextChannels: Record<string, unknown> = { ...next.channels };
     delete nextChannels[channel];
-    next = {
-      ...next,
-      channels: Object.keys(nextChannels).length
-        ? (nextChannels as OpenClawConfig["channels"])
-        : undefined,
-    };
+    if (Object.keys(nextChannels).length) {
+      next.channels = nextChannels as OpenClawConfig["channels"];
+    } else {
+      delete next.channels;
+    }
 
     note(
       [`${label} removed from config.`, "Note: credentials/sessions on disk are unchanged."].join(

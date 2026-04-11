@@ -532,7 +532,7 @@ export function buildAssistantMessageFromResponse(
           try {
             return JSON.parse(item.arguments) as Record<string, unknown>;
           } catch {
-            return {} as Record<string, unknown>;
+            return item.arguments as unknown as Record<string, unknown>;
           }
         })(),
       });

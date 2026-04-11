@@ -63,6 +63,7 @@ const EXPECTED_SHARED_FAMILY_CONTRACTS: Record<string, ExpectedSharedFamilyContr
   },
   openai: {
     streamFamilies: ["openai-responses-defaults"],
+    toolCompatFamilies: ["openai"],
   },
   opencode: {
     replayFamilies: ["passthrough-gemini"],

@@ -42,7 +42,7 @@ export function resolveFeishuAllowlistMatch(params: {
 
   // Feishu allowlists are ID-based; mutable display names must never grant access.
   const senderCandidates = [params.senderId, ...(params.senderIds ?? [])]
-    .map((entry) => normalizeFeishuAllowEntry(String(entry ?? "")))
+    .map((entry) => normalizeFeishuAllowEntry(entry ?? ""))
     .filter(Boolean);
 
   for (const senderId of senderCandidates) {

@@ -1,8 +1,11 @@
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
+import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildVydraVideoGenerationProvider } from "./video-generation-provider.js";
 
 describe("vydra video-generation provider", () => {
+  installPinnedHostnameTestHooks();
+
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();

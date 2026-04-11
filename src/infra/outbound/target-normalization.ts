@@ -1,5 +1,6 @@
-import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelDirectoryEntryKind, ChannelId } from "../../channels/plugins/types.js";
+import { normalizeAnyChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getActivePluginChannelRegistryVersion } from "../../plugins/runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -47,7 +48,7 @@ export function normalizeTargetForProvider(provider: string, raw?: string): stri
   if (!fallback) {
     return undefined;
   }
-  const providerId = normalizeChannelId(provider);
+  const providerId = normalizeAnyChannelId(provider);
   const normalizer = providerId ? resolveTargetNormalizer(providerId) : undefined;
   return normalizeOptionalString(normalizer?.(raw) ?? fallback);
 }

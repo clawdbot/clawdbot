@@ -1,5 +1,5 @@
-import { normalizeChannelId as normalizePluginChannelId } from "../../channels/plugins/index.js";
 import type { ChannelThreadingAdapter } from "../../channels/plugins/types.core.js";
+import { normalizeAnyChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ReplyToMode } from "../../config/types.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
@@ -28,7 +28,7 @@ export function resolveConfiguredReplyToMode(
   channel?: OriginatingChannelType,
   chatType?: string | null,
 ): ReplyToMode {
-  const provider = normalizePluginChannelId(channel) ?? normalizeOptionalLowercaseString(channel);
+  const provider = normalizeAnyChannelId(channel) ?? normalizeOptionalLowercaseString(channel);
   if (!provider) {
     return "all";
   }

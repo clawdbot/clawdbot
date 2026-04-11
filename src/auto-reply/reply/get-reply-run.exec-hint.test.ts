@@ -38,4 +38,17 @@ describe("buildExecOverridePromptHint", () => {
     );
     expect(result).toContain("Current elevated level: full.");
   });
+
+  it("warns when auto-approved full access is unavailable", () => {
+    const result = buildExecOverridePromptHint({
+      elevatedLevel: "full",
+      fullAccessAvailable: false,
+      fullAccessBlockedReason: "runtime",
+    });
+
+    expect(result).toContain("Current elevated level: full.");
+    expect(result).toContain(
+      "Auto-approved /elevated full is unavailable here (runtime). Do not ask the user to switch to /elevated full.",
+    );
+  });
 });

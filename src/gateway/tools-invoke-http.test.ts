@@ -35,13 +35,8 @@ vi.mock("../config/sessions.js", () => ({
     }
     const agents = params?.agents?.list ?? [];
     const rawDefault = agents.find((agent) => agent?.default)?.id ?? agents[0]?.id ?? "main";
-    const agentId =
-      String(rawDefault ?? "main")
-        .trim()
-        .toLowerCase() || "main";
-    const mainKeyRaw = String(params?.session?.mainKey ?? "main")
-      .trim()
-      .toLowerCase();
+    const agentId = rawDefault.trim().toLowerCase() || "main";
+    const mainKeyRaw = (params?.session?.mainKey ?? "main").trim().toLowerCase();
     const mainKey = mainKeyRaw || "main";
     return `agent:${agentId}:${mainKey}`;
   },

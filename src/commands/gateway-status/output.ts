@@ -43,7 +43,7 @@ export function buildGatewayStatusWarnings(params: {
     warnings.push({
       code: "ssh_tunnel_failed",
       message: params.sshTunnelError
-        ? `SSH tunnel failed: ${String(params.sshTunnelError)}`
+        ? `SSH tunnel failed: ${params.sshTunnelError}`
         : "SSH tunnel failed to start; falling back to direct probes.",
     });
   }

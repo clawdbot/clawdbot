@@ -15,8 +15,11 @@ let resolveNormalizedTargetInput: TargetNormalizationModule["resolveNormalizedTa
 let normalizeTargetForProvider: TargetNormalizationModule["normalizeTargetForProvider"];
 let resetTargetNormalizerCacheForTests: TargetNormalizationModule["__testing"]["resetTargetNormalizerCacheForTests"];
 
+vi.mock("../../channels/registry.js", () => ({
+  normalizeAnyChannelId: (...args: unknown[]) => normalizeChannelIdMock(...args),
+}));
+
 vi.mock("../../channels/plugins/index.js", () => ({
-  normalizeChannelId: (...args: unknown[]) => normalizeChannelIdMock(...args),
   getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
 }));
 

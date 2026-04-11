@@ -134,9 +134,10 @@ export function resolveWebProviderDefinition<
   });
   const providerId =
     params.providerId ??
-    params.runtimeMetadata?.selectedProvider ??
-    params.runtimeMetadata?.providerConfigured ??
-    autoProviderId;
+    (params.runtimeMetadata ? params.runtimeMetadata.selectedProvider : autoProviderId);
+  if (!providerId) {
+    return null;
+  }
   const provider =
     providers.find((entry) => entry.id === providerId) ??
     providers.find(

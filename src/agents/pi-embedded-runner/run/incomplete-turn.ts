@@ -1,5 +1,7 @@
+import type { EmbeddedPiExecutionContract } from "../../../config/types.agent-defaults.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
+import type { EmbeddedRunLivenessState } from "../types.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 type ReplayMetadataAttempt = Pick<
@@ -15,6 +17,8 @@ type IncompleteTurnAttempt = Pick<
   | "lastToolError"
   | "lastAssistant"
   | "replayMetadata"
+  | "promptErrorSource"
+  | "timedOutDuringCompaction"
 >;
 
 type PlanningOnlyAttempt = Pick<
@@ -31,10 +35,26 @@ type PlanningOnlyAttempt = Pick<
   | "toolMetas"
 >;
 
+type RunLivenessAttempt = Pick<
+  EmbeddedRunAttemptResult,
+  "lastAssistant" | "promptErrorSource" | "replayMetadata" | "timedOutDuringCompaction"
+>;
+
+export function isIncompleteTerminalAssistantTurn(params: {
+  hasAssistantVisibleText: boolean;
+  lastAssistant?: { stopReason?: string } | null;
+}): boolean {
+  return !params.hasAssistantVisibleText && params.lastAssistant?.stopReason === "toolUse";
+}
+
 const PLANNING_ONLY_PROMISE_RE =
   /\b(?:i(?:'ll| will)|let me|going to|first[, ]+i(?:'ll| will)|next[, ]+i(?:'ll| will)|i can do that)\b/i;
 const PLANNING_ONLY_COMPLETION_RE =
   /\b(?:done|finished|implemented|updated|fixed|changed|ran|verified|found|here(?:'s| is) what|blocked by|the blocker is)\b/i;
+const PLANNING_ONLY_HEADING_RE = /^(?:plan|steps?|next steps?)\s*:/i;
+const PLANNING_ONLY_BULLET_RE = /^(?:[-*•]\s+|\d+[.)]\s+)/u;
+const DEFAULT_PLANNING_ONLY_RETRY_LIMIT = 1;
+const STRICT_AGENTIC_PLANNING_ONLY_RETRY_LIMIT = 2;
 const ACK_EXECUTION_NORMALIZED_SET = new Set([
   "ok",
   "okay",
@@ -81,6 +101,8 @@ export const PLANNING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn only described the plan. Do not restate the plan. Act now: take the first concrete tool action you can. If a real blocker prevents action, reply with the exact blocker in one sentence.";
 export const ACK_EXECUTION_FAST_PATH_INSTRUCTION =
   "The latest user message is a short approval to proceed. Do not recap or restate the plan. Start with the first concrete tool action immediately. Keep any user-facing follow-up brief and natural.";
+export const STRICT_AGENTIC_BLOCKED_TEXT =
+  "Agent stopped after repeated plan-only turns without taking a concrete action. No concrete tool action or external side effect advanced the task.";
 
 export type PlanningOnlyPlanDetails = {
   explanation: string;
@@ -118,7 +140,11 @@ export function resolveIncompleteTurnPayloadText(params: {
   }
 
   const stopReason = params.attempt.lastAssistant?.stopReason;
-  if (stopReason !== "toolUse" && stopReason !== "error") {
+  const incompleteTerminalAssistant = isIncompleteTerminalAssistantTurn({
+    hasAssistantVisibleText: params.payloadCount > 0,
+    lastAssistant: params.attempt.lastAssistant,
+  });
+  if (!incompleteTerminalAssistant && stopReason !== "error") {
     return null;
   }
 
@@ -127,11 +153,49 @@ export function resolveIncompleteTurnPayloadText(params: {
     : "⚠️ Agent couldn't generate a response. Please try again.";
 }
 
+export function resolveReplayInvalidFlag(params: {
+  attempt: RunLivenessAttempt;
+  incompleteTurnText?: string | null;
+}): boolean {
+  return (
+    !params.attempt.replayMetadata.replaySafe ||
+    params.attempt.promptErrorSource === "compaction" ||
+    params.attempt.timedOutDuringCompaction ||
+    Boolean(params.incompleteTurnText)
+  );
+}
+
+export function resolveRunLivenessState(params: {
+  payloadCount: number;
+  aborted: boolean;
+  timedOut: boolean;
+  attempt: RunLivenessAttempt;
+  incompleteTurnText?: string | null;
+}): EmbeddedRunLivenessState {
+  if (params.incompleteTurnText) {
+    return "abandoned";
+  }
+  if (
+    params.attempt.promptErrorSource === "compaction" ||
+    params.attempt.timedOutDuringCompaction
+  ) {
+    return "paused";
+  }
+  if ((params.aborted || params.timedOut) && params.payloadCount === 0) {
+    return "blocked";
+  }
+  if (params.attempt.lastAssistant?.stopReason === "error") {
+    return "blocked";
+  }
+  return "working";
+}
+
 function shouldApplyPlanningOnlyRetryGuard(params: {
   provider?: string;
   modelId?: string;
 }): boolean {
-  if (params.provider !== "openai" && params.provider !== "openai-codex") {
+  const provider = normalizeLowercaseStringOrEmpty(params.provider);
+  if (provider !== "openai" && provider !== "openai-codex") {
     return false;
   }
   return /^gpt-5(?:[.-]|$)/i.test(params.modelId ?? "");
@@ -190,6 +254,20 @@ function extractPlanningOnlySteps(text: string): string[] {
     .slice(0, 4);
 }
 
+function hasStructuredPlanningOnlyFormat(text: string): boolean {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0) {
+    return false;
+  }
+  const bulletLineCount = lines.filter((line) => PLANNING_ONLY_BULLET_RE.test(line)).length;
+  const hasPlanningCueLine = lines.some((line) => PLANNING_ONLY_PROMISE_RE.test(line));
+  const hasPlanningHeading = PLANNING_ONLY_HEADING_RE.test(lines[0] ?? "");
+  return (hasPlanningHeading && hasPlanningCueLine) || (bulletLineCount >= 2 && hasPlanningCueLine);
+}
+
 export function extractPlanningOnlyPlanDetails(text: string): PlanningOnlyPlanDetails | null {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -202,6 +280,22 @@ export function extractPlanningOnlyPlanDetails(text: string): PlanningOnlyPlanDe
   };
 }
 
+function countPlanOnlyToolMetas(toolMetas: PlanningOnlyAttempt["toolMetas"]): number {
+  return toolMetas.filter((entry) => entry.toolName === "update_plan").length;
+}
+
+function hasNonPlanToolActivity(toolMetas: PlanningOnlyAttempt["toolMetas"]): boolean {
+  return toolMetas.some((entry) => entry.toolName !== "update_plan");
+}
+
+export function resolvePlanningOnlyRetryLimit(
+  executionContract?: EmbeddedPiExecutionContract,
+): number {
+  return executionContract === "strict-agentic"
+    ? STRICT_AGENTIC_PLANNING_ONLY_RETRY_LIMIT
+    : DEFAULT_PLANNING_ONLY_RETRY_LIMIT;
+}
+
 export function resolvePlanningOnlyRetryInstruction(params: {
   provider?: string;
   modelId?: string;
@@ -209,6 +303,7 @@ export function resolvePlanningOnlyRetryInstruction(params: {
   timedOut: boolean;
   attempt: PlanningOnlyAttempt;
 }): string | null {
+  const planOnlyToolMetaCount = countPlanOnlyToolMetas(params.attempt.toolMetas);
   if (
     !shouldApplyPlanningOnlyRetryGuard({
       provider: params.provider,
@@ -221,7 +316,8 @@ export function resolvePlanningOnlyRetryInstruction(params: {
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.didSendViaMessagingTool ||
     params.attempt.lastToolError ||
-    params.attempt.itemLifecycle.startedCount > 0 ||
+    hasNonPlanToolActivity(params.attempt.toolMetas) ||
+    params.attempt.itemLifecycle.startedCount > planOnlyToolMetaCount ||
     params.attempt.replayMetadata.hadPotentialSideEffects
   ) {
     return null;
@@ -236,7 +332,7 @@ export function resolvePlanningOnlyRetryInstruction(params: {
   if (!text || text.length > 700 || text.includes("```")) {
     return null;
   }
-  if (!PLANNING_ONLY_PROMISE_RE.test(text)) {
+  if (!PLANNING_ONLY_PROMISE_RE.test(text) && !hasStructuredPlanningOnlyFormat(text)) {
     return null;
   }
   if (PLANNING_ONLY_COMPLETION_RE.test(text)) {

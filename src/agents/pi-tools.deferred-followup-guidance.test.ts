@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
-import "./test-helpers/fast-openclaw-tools.js";
-import { createOpenClawCodingTools } from "./pi-tools.js";
+import { applyDeferredFollowupToolDescriptions } from "./pi-tools.deferred-followup.js";
+import type { AnyAgentTool } from "./pi-tools.types.js";
 
 function findToolDescription(toolName: string, senderIsOwner: boolean) {
-  const tools = createOpenClawCodingTools({ senderIsOwner });
+  const tools = applyDeferredFollowupToolDescriptions([
+    { name: "exec", description: "exec base" },
+    { name: "process", description: "process base" },
+    ...(senderIsOwner ? [{ name: "cron", description: "cron base" }] : []),
+  ] as AnyAgentTool[]);
   const tool = tools.find((entry) => entry.name === toolName);
   return {
     toolNames: tools.map((entry) => entry.name),

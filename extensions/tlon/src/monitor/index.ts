@@ -536,7 +536,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       OriginatingChannel: "tlon",
       OriginatingTo: `tlon:${isGroup ? groupChannel : botShipName}`,
       // Include thread context for automatic reply routing
-      ...(parentId && { ThreadId: String(parentId), ReplyToId: String(parentId) }),
+      ...(parentId && { ThreadId: parentId, ReplyToId: parentId }),
     });
 
     const dispatchStartTime = Date.now();
@@ -589,7 +589,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
             });
             // Track thread participation for future replies without mention
             if (parentId) {
-              participatedThreads.add(String(parentId));
+              participatedThreads.add(parentId);
               runtime.log?.(`[tlon] Now tracking thread for future replies: ${parentId}`);
             }
           } else {
@@ -757,8 +757,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       // 1. Direct mention always triggers response
       // 2. Thread replies where we've participated - respond if relevant (let agent decide)
       const mentioned = isBotMentioned(rawText, botShipName, botNickname ?? undefined);
-      const inParticipatedThread =
-        isThreadReply && parentId && participatedThreads.has(String(parentId));
+      const inParticipatedThread = isThreadReply && parentId && participatedThreads.has(parentId);
 
       if (!mentioned && !inParticipatedThread) {
         return;

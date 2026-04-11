@@ -190,7 +190,7 @@ export default defineBundledChannelEntry({
             } catch {
               // File send failed; the text summary is still returned below.
             }
-            return { text: String(result.text) };
+            return { text: result.text };
           }
 
           return {

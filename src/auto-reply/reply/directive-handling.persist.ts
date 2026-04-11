@@ -76,7 +76,7 @@ export async function persistInlineDirectives(params: {
   const activeAgentId = sessionKey
     ? resolveSessionAgentId({ sessionKey, config: cfg })
     : resolveDefaultAgentId(cfg);
-  const agentDir = params.agentDir ?? resolveAgentDir(cfg, activeAgentId);
+  const agentDir = resolveAgentDir(cfg, activeAgentId) ?? params.agentDir;
 
   if (sessionEntry && sessionStore && sessionKey) {
     const prevElevatedLevel =

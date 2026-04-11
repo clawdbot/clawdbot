@@ -27,7 +27,7 @@ export function registerNodesNotifyCommand(nodes: Command) {
             throw new Error("missing --title or --body");
           }
           const invokeTimeout = opts.invokeTimeout
-            ? Number.parseInt(String(opts.invokeTimeout), 10)
+            ? Number.parseInt(opts.invokeTimeout, 10)
             : undefined;
           const invokeParams: Record<string, unknown> = {
             nodeId,
@@ -39,7 +39,7 @@ export function registerNodesNotifyCommand(nodes: Command) {
               priority: opts.priority,
               delivery: opts.delivery,
             },
-            idempotencyKey: String(opts.idempotencyKey ?? randomIdempotencyKey()),
+            idempotencyKey: opts.idempotencyKey ?? randomIdempotencyKey(),
           };
           if (typeof invokeTimeout === "number" && Number.isFinite(invokeTimeout)) {
             invokeParams.timeoutMs = invokeTimeout;

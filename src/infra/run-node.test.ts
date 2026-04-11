@@ -399,7 +399,7 @@ describe("run-node script", () => {
         }
       >(() => ({
         kill: (signal) => {
-          child.kill(String(signal ?? "SIGTERM"));
+          child.kill(signal ?? "SIGTERM");
           return true;
         },
         on: (event, cb) => {

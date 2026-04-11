@@ -15,7 +15,11 @@ export function registerMessagePinCommands(message: Command, helpers: MessageCli
       .withMessageBase(
         helpers.withRequiredMessageTarget(message.command("unpin").description("Unpin a message")),
       )
-      .requiredOption("--message-id <id>", "Message id")
+      .requiredOption("--message-id <id>", "Message id (or pinned message resource id for MSTeams)")
+      .option(
+        "--pinned-message-id <id>",
+        "Pinned message resource id (MSTeams: from pin or list-pins, not the chat message id)",
+      )
       .action(async (opts) => {
         await helpers.runMessageAction("unpin", opts);
       }),

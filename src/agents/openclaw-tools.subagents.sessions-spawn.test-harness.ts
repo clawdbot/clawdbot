@@ -1,8 +1,6 @@
 import { vi, type Mock } from "vitest";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
-import { __testing as subagentRegistryTesting } from "./subagent-registry.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
-import { __testing as subagentSpawnTesting } from "./subagent-spawn.js";
 
 type SessionsSpawnTestConfig = ReturnType<(typeof import("../config/config.js"))["loadConfig"]>;
 type SessionsSpawnHookRunner = SubagentLifecycleHookRunner | null;
@@ -143,6 +141,8 @@ export function setSessionsSpawnAnnounceFlowOverride(next: RunSubagentAnnounceFl
 }
 
 export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
+  const [{ __testing: subagentSpawnTesting }, { __testing: subagentRegistryTesting }] =
+    await Promise.all([import("./subagent-spawn.js"), import("./subagent-registry.js")]);
   subagentSpawnTesting.setDepsForTest({
     callGateway: (optsUnknown) => hoisted.callGatewayMock(optsUnknown),
     getGlobalHookRunner: () => hoisted.state.hookRunnerOverride,

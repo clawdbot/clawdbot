@@ -55,6 +55,12 @@ type MessageSendParams = {
   requesterAccountId?: string;
   /** Originating sender id used for sender-scoped outbound media policy. */
   requesterSenderId?: string;
+  /** Originating sender display name for name-keyed sender policy matching. */
+  requesterSenderName?: string;
+  /** Originating sender username for username-keyed sender policy matching. */
+  requesterSenderUsername?: string;
+  /** Originating sender E.164 phone number for e164-keyed sender policy matching. */
+  requesterSenderE164?: string;
   channel?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
@@ -274,6 +280,9 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       sessionKey: params.requesterSessionKey ?? params.mirror?.sessionKey,
       requesterAccountId: params.requesterAccountId ?? params.accountId,
       requesterSenderId: params.requesterSenderId,
+      requesterSenderName: params.requesterSenderName,
+      requesterSenderUsername: params.requesterSenderUsername,
+      requesterSenderE164: params.requesterSenderE164,
     });
     const results = await deliverOutboundPayloads({
       cfg,

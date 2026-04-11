@@ -4,7 +4,7 @@ import {
   resolveSandboxBrowserConfig,
   resolveSandboxDockerConfig,
 } from "../agents/sandbox/config.js";
-import { validateConfigObject } from "./config.js";
+import { validateConfigObject } from "./validation.js";
 
 describe("sandbox docker config", () => {
   it("joins setupCommand arrays with newlines", () => {

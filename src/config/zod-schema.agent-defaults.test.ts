@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { AgentDefaultsSchema } from "./zod-schema.agent-defaults.js";
+import { AgentEntrySchema } from "./zod-schema.agent-runtime.js";
 
 describe("agent defaults schema", () => {
   it("accepts subagent archiveAfterMinutes=0 to disable archiving", () => {
@@ -43,5 +44,32 @@ describe("agent defaults schema", () => {
 
   it("rejects invalid contextInjection values", () => {
     expect(() => AgentDefaultsSchema.parse({ contextInjection: "never" })).toThrow();
+  });
+
+  it("accepts embeddedPi.executionContract", () => {
+    const result = AgentDefaultsSchema.parse({
+      embeddedPi: {
+        executionContract: "strict-agentic",
+      },
+    })!;
+    expect(result.embeddedPi?.executionContract).toBe("strict-agentic");
+  });
+
+  it("accepts positive heartbeat timeoutSeconds on defaults and agent entries", () => {
+    const defaults = AgentDefaultsSchema.parse({
+      heartbeat: { timeoutSeconds: 45 },
+    })!;
+    const agent = AgentEntrySchema.parse({
+      id: "ops",
+      heartbeat: { timeoutSeconds: 45 },
+    });
+
+    expect(defaults.heartbeat?.timeoutSeconds).toBe(45);
+    expect(agent.heartbeat?.timeoutSeconds).toBe(45);
+  });
+
+  it("rejects zero heartbeat timeoutSeconds", () => {
+    expect(() => AgentDefaultsSchema.parse({ heartbeat: { timeoutSeconds: 0 } })).toThrow();
+    expect(() => AgentEntrySchema.parse({ id: "ops", heartbeat: { timeoutSeconds: 0 } })).toThrow();
   });
 });

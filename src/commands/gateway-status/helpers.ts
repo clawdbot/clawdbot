@@ -215,13 +215,15 @@ export function extractConfigSummary(snapshotUnknown: unknown): GatewayConfigSum
     exists,
     valid,
     issues: issuesRaw
-      .filter((i): i is { path: string; message: string } =>
-        Boolean(i && typeof i.path === "string" && typeof i.message === "string"),
+      .filter(
+        (i): i is { path: string; message: string } =>
+          i && typeof i.path === "string" && typeof i.message === "string",
       )
       .map((i) => ({ path: i.path, message: i.message })),
     legacyIssues: legacyRaw
-      .filter((i): i is { path: string; message: string } =>
-        Boolean(i && typeof i.path === "string" && typeof i.message === "string"),
+      .filter(
+        (i): i is { path: string; message: string } =>
+          i && typeof i.path === "string" && typeof i.message === "string",
       )
       .map((i) => ({ path: i.path, message: i.message })),
     gateway: {

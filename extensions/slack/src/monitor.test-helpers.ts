@@ -244,6 +244,7 @@ vi.mock("./monitor/conversation.runtime.js", async () => {
     ...actual,
     readChannelAllowFromStore: (...args: unknown[]) =>
       slackTestState.readAllowFromStoreMock(...args),
+    recordInboundSession: vi.fn().mockResolvedValue(undefined),
     upsertChannelPairingRequest: (...args: unknown[]) =>
       slackTestState.upsertPairingRequestMock(...args),
   };

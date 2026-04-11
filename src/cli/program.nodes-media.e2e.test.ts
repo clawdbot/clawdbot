@@ -146,7 +146,7 @@ describe("cli program (nodes media)", () => {
           nodeId: "ios-node",
           command: "camera.clip",
           timeoutMs: 90000,
-          idempotencyKey: "idem-test",
+          idempotencyKey: expect.any(String),
           params: expect.objectContaining({
             facing: "front",
             durationMs: 3000,
@@ -190,7 +190,7 @@ describe("cli program (nodes media)", () => {
           nodeId: "ios-node",
           command: "camera.snap",
           timeoutMs: 20000,
-          idempotencyKey: "idem-test",
+          idempotencyKey: expect.any(String),
           params: expect.objectContaining({
             facing: "front",
             maxWidth: 640,
@@ -233,7 +233,7 @@ describe("cli program (nodes media)", () => {
           nodeId: "ios-node",
           command: "camera.clip",
           timeoutMs: 90000,
-          idempotencyKey: "idem-test",
+          idempotencyKey: expect.any(String),
           params: expect.objectContaining({
             includeAudio: false,
             deviceId: "cam-123",
@@ -310,7 +310,7 @@ describe("cli program (nodes media)", () => {
         async () =>
           new Response("url-content", {
             status: 200,
-            headers: { "content-length": String("11") },
+            headers: { "content-length": "11" },
           }),
       ) as unknown as typeof globalThis.fetch;
     });

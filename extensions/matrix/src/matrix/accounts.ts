@@ -179,7 +179,7 @@ export function resolveMatrixAccount(params: {
           userId: authView.userId || "",
         })
       : false;
-  const configured = hasHomeserver && (hasAccessToken || hasPasswordAuth || Boolean(hasStored));
+  const configured = hasHomeserver && (hasAccessToken || hasPasswordAuth || hasStored);
   return {
     accountId,
     enabled,

@@ -1,5 +1,5 @@
 import { resolveProviderAuthAliasMap } from "../agents/provider-auth-aliases.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 
 const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
@@ -51,7 +51,7 @@ function resolveManifestProviderAuthEnvVarCandidates(
     workspaceDir: params?.workspaceDir,
     env: params?.env,
   });
-  const candidates: Record<string, string[]> = Object.create(null) as Record<string, string[]>;
+  const candidates: Record<string, string[]> = {};
   for (const plugin of registry.plugins) {
     if (!plugin.providerAuthEnvVars) {
       continue;

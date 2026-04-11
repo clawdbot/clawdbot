@@ -188,7 +188,7 @@ export function describeAccountSnapshot<
   extra?: Record<string, unknown> | undefined;
 }): ChannelAccountSnapshot {
   return {
-    accountId: String(params.account.accountId ?? DEFAULT_ACCOUNT_ID),
+    accountId: params.account.accountId ?? DEFAULT_ACCOUNT_ID,
     name: normalizeOptionalString(params.account.name),
     enabled: params.account.enabled !== false,
     configured: params.configured,

@@ -25,7 +25,7 @@ describe("mirrorCodexAppServerTranscript", () => {
         { role: "user", content: "hello", timestamp: 1 },
         {
           role: "assistant",
-          content: [{ type: "text", text: "hi" }],
+          content: [{ type: "text", text: "Codex plan:\ninspect" }],
           api: "openai-codex-responses",
           provider: "openai-codex",
           model: "gpt-5.4-codex",
@@ -40,6 +40,23 @@ describe("mirrorCodexAppServerTranscript", () => {
           stopReason: "stop",
           timestamp: 2,
         },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "hi" }],
+          api: "openai-codex-responses",
+          provider: "openai-codex",
+          model: "gpt-5.4-codex",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "stop",
+          timestamp: 3,
+        },
       ],
     });
 
@@ -48,7 +65,11 @@ describe("mirrorCodexAppServerTranscript", () => {
       .split("\n")
       .map((line) => JSON.parse(line) as { type?: string; message?: { role?: string } });
     expect(records[0]?.type).toBe("session");
-    expect(records.slice(1).map((record) => record.message?.role)).toEqual(["user", "assistant"]);
+    expect(records.slice(1).map((record) => record.message?.role)).toEqual([
+      "user",
+      "assistant",
+      "assistant",
+    ]);
   });
 
   it("deduplicates app-server turn mirrors by idempotency scope", async () => {

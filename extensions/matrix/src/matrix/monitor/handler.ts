@@ -1245,7 +1245,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             isDirect: isDirectMessage,
             isGroup: isRoom,
             isMentionableGroup: isRoom,
-            requireMention: Boolean(shouldRequireMention),
+            requireMention: shouldRequireMention,
             canDetectMention,
             effectiveWasMentioned: wasMentioned || shouldBypassMention,
             shouldBypassMention,

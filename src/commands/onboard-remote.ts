@@ -93,7 +93,7 @@ export async function promptRemoteGatewayConfig(
         ],
       });
       if (selection !== "manual") {
-        const idx = Number.parseInt(String(selection), 10);
+        const idx = Number.parseInt(selection, 10);
         selectedBeacon = Number.isFinite(idx) ? (beacons[idx] ?? null) : null;
       }
     }
@@ -153,9 +153,9 @@ export async function promptRemoteGatewayConfig(
   const urlInput = await prompter.text({
     message: "Gateway WebSocket URL",
     initialValue: suggestedUrl,
-    validate: (value) => validateGatewayWebSocketUrl(String(value)),
+    validate: (value) => validateGatewayWebSocketUrl(value),
   });
-  const url = ensureWsUrl(String(urlInput));
+  const url = ensureWsUrl(urlInput);
   const pinnedDiscoveryFingerprint =
     discoveryTlsFingerprint && url === trustedDiscoveryUrl ? discoveryTlsFingerprint : undefined;
 
@@ -193,12 +193,12 @@ export async function promptRemoteGatewayConfig(
       });
       token = resolved.ref;
     } else {
-      token = String(
+      token = (
         await prompter.text({
           message: "Gateway token",
           initialValue: typeof token === "string" ? token : undefined,
           validate: (value) => (value?.trim() ? undefined : "Required"),
-        }),
+        })
       ).trim();
     }
     password = undefined;
@@ -225,12 +225,12 @@ export async function promptRemoteGatewayConfig(
       });
       password = resolved.ref;
     } else {
-      password = String(
+      password = (
         await prompter.text({
           message: "Gateway password",
           initialValue: typeof password === "string" ? password : undefined,
           validate: (value) => (value?.trim() ? undefined : "Required"),
-        }),
+        })
       ).trim();
     }
     token = undefined;

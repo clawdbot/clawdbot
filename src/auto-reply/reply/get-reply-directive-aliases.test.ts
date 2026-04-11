@@ -55,4 +55,19 @@ describe("reply directive aliases", () => {
       }),
     ).toEqual(expect.objectContaining({ hasModelDirective: false, cleaned: "/demo_skill" }));
   });
+
+  it("does not expose chat command names as inline model aliases", () => {
+    const cfg = configWithModelAlias(" help ");
+    const reservedCommands = new Set(["help"]);
+
+    expect(
+      parseInlineDirectives("/help", {
+        modelAliases: resolveConfiguredDirectiveAliases({
+          cfg,
+          commandTextHasSlash: true,
+          reservedCommands,
+        }),
+      }),
+    ).toEqual(expect.objectContaining({ hasModelDirective: false, cleaned: "/help" }));
+  });
 });

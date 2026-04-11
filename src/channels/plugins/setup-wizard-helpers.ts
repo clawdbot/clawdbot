@@ -51,7 +51,7 @@ export const promptAccountId: PromptAccountId = async (params: PromptAccountIdPa
     message: `New ${params.label} account id`,
     validate: (value) => (normalizeOptionalString(value) ? undefined : "Required"),
   });
-  const normalized = normalizeAccountId(String(entered));
+  const normalized = normalizeAccountId(entered);
   if ((normalizeOptionalString(entered) ?? "") !== normalized) {
     await params.prompter.note(
       `Normalized account id to "${normalized}".`,
@@ -90,7 +90,7 @@ export function parseSetupEntriesWithParser(
   raw: string,
   parseEntry: (entry: string) => ParsedSetupEntry,
 ): { entries: string[]; error?: string } {
-  const parts = splitSetupEntries(String(raw ?? ""));
+  const parts = splitSetupEntries(raw);
   const entries: string[] = [];
   for (const part of parts) {
     const parsed = parseEntry(part);
@@ -986,11 +986,11 @@ export async function promptSingleChannelToken(params: {
   inputPrompt: string;
 }): Promise<{ useEnv: boolean; token: string | null }> {
   const promptToken = async (): Promise<string> =>
-    String(
+    (
       await params.prompter.text({
         message: params.inputPrompt,
         validate: (value) => (value?.trim() ? undefined : "Required"),
-      }),
+      })
     ).trim();
 
   if (params.canUseEnv) {
@@ -1218,7 +1218,7 @@ export async function promptParsedAllowFromForAccount<TConfig extends OpenClawCo
       return params.parseEntries(raw).error;
     },
   });
-  const parsed = params.parseEntries(String(entry));
+  const parsed = params.parseEntries(entry);
   const unique =
     params.mergeEntries?.({
       existing,
@@ -1377,9 +1377,9 @@ export function createNestedChannelParsedAllowFromPrompt(params: {
     getExistingAllowFrom: ({ cfg }: { cfg: OpenClawConfig }) =>
       params.getExistingAllowFrom?.(cfg) ??
       (
-        (cfg.channels?.[params.channel] as Record<string, unknown> | undefined)?.[
-          params.section
-        ] as { allowFrom?: Array<string | number> } | undefined
+        (cfg.channels?.[params.channel] as Record<string, unknown> | undefined)?.[params.section] as
+          | { allowFrom?: Array<string | number> }
+          | undefined
       )?.allowFrom ??
       [],
     ...(params.mergeEntries ? { mergeEntries: params.mergeEntries } : {}),
@@ -1515,7 +1515,7 @@ export async function promptResolvedAllowFrom(params: {
       initialValue: params.existing[0] ? String(params.existing[0]) : undefined,
       validate: (value) => (normalizeOptionalString(value) ? undefined : "Required"),
     });
-    const parts = params.parseInputs(String(entry));
+    const parts = params.parseInputs(entry);
     if (!params.token) {
       const ids = parts.map(params.parseId).filter(Boolean) as string[];
       if (ids.length !== parts.length) {

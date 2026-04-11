@@ -210,13 +210,13 @@ export async function handleBashChatCommand(params: {
   if (!params.elevated.enabled || !params.elevated.allowed) {
     const runtimeSandboxed = resolveSandboxRuntimeStatus({
       cfg: params.cfg,
-      sessionKey: params.ctx.SessionKey,
+      sessionKey: params.sessionKey,
     }).sandboxed;
     return {
       text: formatElevatedUnavailableMessage({
         runtimeSandboxed,
         failures: params.elevated.failures,
-        sessionKey: params.ctx.SessionKey,
+        sessionKey: params.sessionKey,
       }),
     };
   }

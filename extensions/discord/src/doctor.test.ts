@@ -96,6 +96,47 @@ describe("discord doctor", () => {
     ).toEqual(["Moved channels.discord.streamMode → channels.discord.streaming.mode (block)."]);
   });
 
+  it("moves account voice.tts.edge into providers.microsoft", () => {
+    const normalize = discordDoctor.normalizeCompatibilityConfig;
+    expect(normalize).toBeDefined();
+    if (!normalize) {
+      return;
+    }
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          discord: {
+            accounts: {
+              main: {
+                voice: {
+                  tts: {
+                    edge: {
+                      voice: "en-US-JennyNeural",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.changes).toContain(
+      "Moved channels.discord.accounts.main.voice.tts.edge → channels.discord.accounts.main.voice.tts.providers.microsoft.",
+    );
+    const mainTts = result.config.channels?.discord?.accounts?.main?.voice?.tts as
+      | Record<string, unknown>
+      | undefined;
+    expect(mainTts?.providers).toEqual({
+      microsoft: {
+        voice: "en-US-JennyNeural",
+      },
+    });
+    expect(mainTts?.edge).toBeUndefined();
+  });
+
   it("finds numeric id entries across discord scopes", () => {
     const cfg = {
       channels: {

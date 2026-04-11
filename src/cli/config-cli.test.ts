@@ -273,6 +273,28 @@ describe("config cli", () => {
       });
     });
 
+    it("writes agents.defaults.llm.idleTimeoutSeconds without disturbing sibling defaults", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.4",
+            timeoutSeconds: 300,
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "set", "agents.defaults.llm.idleTimeoutSeconds", "900"]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      expect(written.agents?.defaults?.model).toBe("openai/gpt-5.4");
+      expect(written.agents?.defaults?.timeoutSeconds).toBe(300);
+      expect(written.agents?.defaults?.llm).toEqual({
+        idleTimeoutSeconds: 900,
+      });
+    });
+
     it("drops gateway.auth.password when switching mode to token", async () => {
       const resolved: OpenClawConfig = {
         gateway: {

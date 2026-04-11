@@ -1,59 +1,26 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { withEnvAsync } from "../test-utils/env.js";
-import { loadConfig, resetConfigRuntimeState } from "./config.js";
-import { withTempHome } from "./test-helpers.js";
+import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "./config.js";
+import { applyProviderConfigDefaultsForConfig } from "./provider-policy.js";
 
-async function writeConfigForTest(home: string, config: unknown): Promise<void> {
-  const configDir = path.join(home, ".openclaw");
-  await fs.mkdir(configDir, { recursive: true });
-  await fs.writeFile(
-    path.join(configDir, "openclaw.json"),
-    JSON.stringify(config, null, 2),
-    "utf-8",
-  );
-}
-
-async function loadConfigForHome(config: unknown) {
-  return await withTempHome(async (home) => {
-    await writeConfigForTest(home, config);
-    return loadConfig();
-  });
-}
-
-function expectAnthropicPruningDefaults(
-  cfg: ReturnType<typeof loadConfig>,
-  heartbeatEvery = "30m",
-) {
+function expectAnthropicPruningDefaults(cfg: OpenClawConfig, heartbeatEvery = "30m") {
   expect(cfg.agents?.defaults?.contextPruning?.mode).toBe("cache-ttl");
   expect(cfg.agents?.defaults?.contextPruning?.ttl).toBe("1h");
   expect(cfg.agents?.defaults?.heartbeat?.every).toBe(heartbeatEvery);
 }
 
+function applyAnthropicDefaultsForTest(config: OpenClawConfig) {
+  return applyProviderConfigDefaultsForConfig({ provider: "anthropic", config, env: {} });
+}
+
 describe("config pruning defaults", () => {
-  beforeEach(() => {
-    resetConfigRuntimeState();
-  });
+  it("does not enable contextPruning by default", () => {
+    const cfg = applyAnthropicDefaultsForTest({ agents: { defaults: {} } });
 
-  afterEach(() => {
-    resetConfigRuntimeState();
-  });
-
-  it("does not enable contextPruning by default", async () => {
-    await withEnvAsync({ ANTHROPIC_API_KEY: "", ANTHROPIC_OAUTH_TOKEN: "" }, async () => {
-      await withTempHome(async (home) => {
-        await writeConfigForTest(home, { agents: { defaults: {} } });
-
-        const cfg = loadConfig();
-
-        expect(cfg.agents?.defaults?.contextPruning?.mode).toBeUndefined();
-      });
-    });
+    expect(cfg.agents?.defaults?.contextPruning?.mode).toBeUndefined();
   });
 
   it("enables cache-ttl pruning + 1h heartbeat for Anthropic OAuth", async () => {
-    const cfg = await loadConfigForHome({
+    const cfg = applyAnthropicDefaultsForTest({
       auth: {
         profiles: {
           "anthropic:me": { provider: "anthropic", mode: "oauth", email: "me@example.com" },
@@ -66,7 +33,7 @@ describe("config pruning defaults", () => {
   });
 
   it("enables cache-ttl pruning + 1h cache TTL for Anthropic API keys", async () => {
-    const cfg = await loadConfigForHome({
+    const cfg = applyAnthropicDefaultsForTest({
       auth: {
         profiles: {
           "anthropic:api": { provider: "anthropic", mode: "api_key" },
@@ -86,7 +53,7 @@ describe("config pruning defaults", () => {
   });
 
   it("adds cacheRetention defaults for dated Anthropic primary model refs", async () => {
-    const cfg = await loadConfigForHome({
+    const cfg = applyAnthropicDefaultsForTest({
       auth: {
         profiles: {
           "anthropic:api": { provider: "anthropic", mode: "api_key" },
@@ -106,7 +73,7 @@ describe("config pruning defaults", () => {
   });
 
   it("adds default cacheRetention for Anthropic Claude models on Bedrock", async () => {
-    const cfg = await loadConfigForHome({
+    const cfg = applyAnthropicDefaultsForTest({
       auth: {
         profiles: {
           "anthropic:api": { provider: "anthropic", mode: "api_key" },
@@ -126,7 +93,7 @@ describe("config pruning defaults", () => {
   });
 
   it("does not add default cacheRetention for non-Anthropic Bedrock models", async () => {
-    const cfg = await loadConfigForHome({
+    const cfg = applyAnthropicDefaultsForTest({
       auth: {
         profiles: {
           "anthropic:api": { provider: "anthropic", mode: "api_key" },
@@ -146,7 +113,12 @@ describe("config pruning defaults", () => {
   });
 
   it("does not override explicit contextPruning mode", async () => {
-    const cfg = await loadConfigForHome({
+    const cfg = applyAnthropicDefaultsForTest({
+      auth: {
+        profiles: {
+          "anthropic:api": { provider: "anthropic", mode: "api_key" },
+        },
+      },
       agents: { defaults: { contextPruning: { mode: "off" } } },
     });
 

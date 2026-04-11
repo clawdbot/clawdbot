@@ -92,22 +92,17 @@ vi.mock("https-proxy-agent", () => ({
 }));
 
 vi.mock("undici", () => ({
-  ProxyAgent: class {
-    proxyUrl: string;
-    constructor(proxyUrl: string) {
-      this.proxyUrl = proxyUrl;
-      undiciProxyAgentSpy(proxyUrl);
-      restProxyAgentSpy(proxyUrl);
-    }
+  ProxyAgent: function ProxyAgent(this: { proxyUrl: string }, proxyUrl: string) {
+    this.proxyUrl = proxyUrl;
+    undiciProxyAgentSpy(proxyUrl);
+    restProxyAgentSpy(proxyUrl);
   },
   fetch: undiciFetchMock,
 }));
 
 vi.mock("ws", () => ({
-  default: class MockWebSocket {
-    constructor(url: string, options?: { agent?: unknown }) {
-      webSocketSpy(url, options);
-    }
+  default: function MockWebSocket(url: string, options?: { agent?: unknown }) {
+    webSocketSpy(url, options);
   },
 }));
 
@@ -132,19 +127,14 @@ describe("createDiscordGatewayPlugin", () => {
     return {
       HttpsProxyAgentCtor:
         HttpsProxyAgent as unknown as typeof import("https-proxy-agent").HttpsProxyAgent,
-      ProxyAgentCtor: class {
-        proxyUrl: string;
-        constructor(proxyUrl: string) {
-          this.proxyUrl = proxyUrl;
-          undiciProxyAgentSpy(proxyUrl);
-          restProxyAgentSpy(proxyUrl);
-        }
+      ProxyAgentCtor: function ProxyAgentCtor(this: { proxyUrl: string }, proxyUrl: string) {
+        this.proxyUrl = proxyUrl;
+        undiciProxyAgentSpy(proxyUrl);
+        restProxyAgentSpy(proxyUrl);
       } as unknown as typeof import("undici").ProxyAgent,
       undiciFetch: undiciFetchMock,
-      webSocketCtor: class {
-        constructor(url: string, options?: { agent?: unknown }) {
-          webSocketSpy(url, options);
-        }
+      webSocketCtor: function WebSocketCtor(url: string, options?: { agent?: unknown }) {
+        webSocketSpy(url, options);
       } as unknown as new (url: string, options?: { agent?: unknown }) => import("ws").WebSocket,
       registerClient: async (_plugin: unknown, client: unknown) => {
         baseRegisterClientSpy(client);

@@ -15,6 +15,7 @@ type UsageSnapshot = {
 };
 
 export type RuntimeAuthState = {
+  generation: number;
   sourceApiKey: string;
   authMode: string;
   profileId?: string;

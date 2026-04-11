@@ -15,6 +15,7 @@ import {
 } from "../cli-output.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { classifyFailoverReason } from "../pi-embedded-helpers.js";
+import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { applySkillEnvOverridesFromSnapshot } from "../skills.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import {
@@ -192,9 +193,12 @@ export async function executePreparedCliRun(
         })
       : undefined;
 
-  let prompt = prependBootstrapPromptWarning(params.prompt, context.bootstrapPromptWarningLines, {
-    preserveExactPrompt: context.heartbeatPrompt,
-  });
+  let prompt = applyPluginTextReplacements(
+    prependBootstrapPromptWarning(params.prompt, context.bootstrapPromptWarningLines, {
+      preserveExactPrompt: context.heartbeatPrompt,
+    }),
+    context.backendResolved.textTransforms?.input,
+  );
   const {
     prompt: promptWithImages,
     imagePaths,
@@ -317,8 +321,14 @@ export async function executePreparedCliRun(
                     runId: params.runId,
                     stream: "assistant",
                     data: {
-                      text,
-                      delta,
+                      text: applyPluginTextReplacements(
+                        text,
+                        context.backendResolved.textTransforms?.output,
+                      ),
+                      delta: applyPluginTextReplacements(
+                        delta,
+                        context.backendResolved.textTransforms?.output,
+                      ),
                     },
                   });
                 },
@@ -445,13 +455,20 @@ export async function executePreparedCliRun(
           });
         }
 
-        return parseCliOutput({
+        const parsed = parseCliOutput({
           raw: stdout,
           backend,
           providerId: context.backendResolved.id,
           outputMode: useResume ? (backend.resumeOutput ?? backend.output) : backend.output,
           fallbackSessionId: resolvedSessionId,
         });
+        return {
+          ...parsed,
+          text: applyPluginTextReplacements(
+            parsed.text,
+            context.backendResolved.textTransforms?.output,
+          ),
+        };
       } finally {
         restoreSkillEnv?.();
       }

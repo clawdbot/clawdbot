@@ -1,5 +1,5 @@
 import { formatCliCommand } from "../cli/command-format.js";
-import type { SecurityAuditFinding, SecurityAuditReport } from "./audit.js";
+import type { SecurityAuditFinding, SecurityAuditReport } from "./audit.types.js";
 
 export function collectDeepProbeFindings(params: {
   deep?: SecurityAuditReport["deep"];

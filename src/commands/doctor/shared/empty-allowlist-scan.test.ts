@@ -1,5 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { scanEmptyAllowlistPolicyWarnings } from "./empty-allowlist-scan.js";
+
+vi.mock("../channel-capabilities.js", () => ({
+  getDoctorChannelCapabilities: (channelName?: string) => ({
+    dmAllowFromMode: "topOnly",
+    groupModel: "sender",
+    groupAllowFromFallbackToAllowFrom: channelName !== "imessage",
+    warnOnEmptyGroupSenderAllowlist: channelName !== "discord",
+  }),
+}));
+
+vi.mock("./channel-doctor.js", () => ({
+  shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning: () => false,
+}));
 
 describe("doctor empty allowlist policy scan", () => {
   it("scans top-level and account-scoped channel warnings", () => {

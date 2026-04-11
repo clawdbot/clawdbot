@@ -182,9 +182,7 @@ describe("subagent spawn allowlist + sandbox guards", () => {
     });
     const result = await spawn({ agentId: "research" });
     expect(result).toMatchObject({ status: "forbidden" });
-    expect(String(result.error ?? "")).toContain(
-      "Sandboxed sessions cannot spawn unsandboxed subagents.",
-    );
+    expect(result.error ?? "").toContain("Sandboxed sessions cannot spawn unsandboxed subagents.");
     expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -199,7 +197,7 @@ describe("subagent spawn allowlist + sandbox guards", () => {
     });
     const result = await spawn({ agentId: "research", sandbox: "require" });
     expect(result).toMatchObject({ status: "forbidden" });
-    expect(String(result.error ?? "")).toContain('sandbox="require"');
+    expect(result.error ?? "").toContain('sandbox="require"');
     expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -212,7 +210,7 @@ describe("subagent spawn allowlist + sandbox guards", () => {
     });
     const result = await spawn({});
     expect(result).toMatchObject({ status: "forbidden" });
-    expect(String(result.error ?? "")).toContain("sessions_spawn requires explicit agentId");
+    expect(result.error ?? "").toContain("sessions_spawn requires explicit agentId");
     expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -248,8 +246,8 @@ describe("subagent spawn allowlist + sandbox guards", () => {
     });
     const result = await spawn({ agentId: "Agent not found: xyz" });
     expect(result).toMatchObject({ status: "error" });
-    expect(String(result.error ?? "")).toContain("Invalid agentId");
-    expect(String(result.error ?? "")).toContain("agents_list");
+    expect(result.error ?? "").toContain("Invalid agentId");
+    expect(result.error ?? "").toContain("agents_list");
     expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -261,7 +259,7 @@ describe("subagent spawn allowlist + sandbox guards", () => {
     });
     const result = await spawn({ agentId: "../../../etc/passwd" });
     expect(result).toMatchObject({ status: "error" });
-    expect(String(result.error ?? "")).toContain("Invalid agentId");
+    expect(result.error ?? "").toContain("Invalid agentId");
     expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -273,7 +271,7 @@ describe("subagent spawn allowlist + sandbox guards", () => {
     });
     const result = await spawn({ agentId: "a".repeat(65) });
     expect(result).toMatchObject({ status: "error" });
-    expect(String(result.error ?? "")).toContain("Invalid agentId");
+    expect(result.error ?? "").toContain("Invalid agentId");
     expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
   });
 

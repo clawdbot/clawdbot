@@ -1,6 +1,6 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 import type { PluginSlotsConfig } from "../config/types.plugins.js";
-import type { PluginKind } from "./types.js";
+import type { PluginKind } from "./plugin-kind.types.js";
 
 export type PluginSlotKey = keyof PluginSlotsConfig;
 
@@ -85,14 +85,14 @@ export function applyExclusiveSlotSelection(params: {
   }
 
   const warnings: string[] = [];
-  let pluginsConfig = params.config.plugins ?? {};
+  const pluginsConfig = params.config.plugins ?? {};
   let anyChanged = false;
-  let entries = { ...pluginsConfig.entries };
-  let slots = { ...pluginsConfig.slots };
+  const entries = { ...pluginsConfig.entries };
+  const slots = { ...pluginsConfig.slots };
 
   for (const slotKey of slotKeys) {
     const prevSlot = slots[slotKey];
-    slots = { ...slots, [slotKey]: params.selectedId };
+    slots[slotKey] = params.selectedId;
 
     const inferredPrevSlot = prevSlot ?? defaultSlotIdForKey(slotKey);
     if (inferredPrevSlot && inferredPrevSlot !== params.selectedId) {
@@ -123,10 +123,7 @@ export function applyExclusiveSlotSelection(params: {
         }
         const entry = entries[plugin.id];
         if (!entry || entry.enabled !== false) {
-          entries = {
-            ...entries,
-            [plugin.id]: { ...entry, enabled: false },
-          };
+          entries[plugin.id] = { ...entry, enabled: false };
           disabledIds.push(plugin.id);
         }
       }

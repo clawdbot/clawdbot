@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "../config/config.js";
 import type { TalkProviderConfig } from "../config/types.gateway.js";
+import type { OpenClawConfig } from "../config/types.js";
 
 export type SpeechProviderId = string;
 

@@ -103,9 +103,8 @@ export async function monitorMSTeamsProvider(
 
   try {
     const allowEntries =
-      allowFrom
-        ?.map((entry) => cleanAllowEntry(String(entry)))
-        .filter((entry) => entry && entry !== "*") ?? [];
+      allowFrom?.map((entry) => cleanAllowEntry(entry)).filter((entry) => entry && entry !== "*") ??
+      [];
     if (allowEntries.length > 0) {
       const { additions } = await resolveAllowlistUsers("msteams users", allowEntries);
       allowFrom = mergeAllowlist({ existing: allowFrom, additions });
@@ -113,7 +112,7 @@ export async function monitorMSTeamsProvider(
 
     if (Array.isArray(groupAllowFrom) && groupAllowFrom.length > 0) {
       const groupEntries = groupAllowFrom
-        .map((entry) => cleanAllowEntry(String(entry)))
+        .map((entry) => cleanAllowEntry(entry))
         .filter((entry) => entry && entry !== "*");
       if (groupEntries.length > 0) {
         const { additions } = await resolveAllowlistUsers("msteams group users", groupEntries);

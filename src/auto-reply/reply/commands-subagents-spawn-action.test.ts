@@ -234,6 +234,76 @@ describe("subagents spawn action", () => {
     );
   });
 
+  it("prefers the requester-key session entry for group metadata", async () => {
+    spawnSubagentDirectMock.mockResolvedValue(acceptedResult());
+    await handleSubagentsSpawnAction(
+      buildContext({
+        requesterKey: "agent:main:target",
+        sessionEntry: {
+          sessionId: "wrapper-session",
+          updatedAt: Date.now(),
+          groupId: "wrapper-group",
+          groupChannel: "#wrapper",
+          space: "wrapper-space",
+        },
+      }),
+    );
+    const call = spawnSubagentDirectMock.mock.calls.at(-1);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        agentSessionKey: "agent:main:target",
+        agentGroupId: "wrapper-group",
+        agentGroupChannel: "#wrapper",
+        agentGroupSpace: "wrapper-space",
+      }),
+    );
+
+    spawnSubagentDirectMock.mockClear();
+    await handleSubagentsSpawnAction({
+      ...buildContext({
+        requesterKey: "agent:main:target",
+        sessionEntry: {
+          sessionId: "wrapper-session",
+          updatedAt: Date.now(),
+          groupId: "wrapper-group",
+          groupChannel: "#wrapper",
+          space: "wrapper-space",
+        },
+      }),
+      params: {
+        ...buildContext({
+          requesterKey: "agent:main:target",
+          sessionEntry: {
+            sessionId: "wrapper-session",
+            updatedAt: Date.now(),
+            groupId: "wrapper-group",
+            groupChannel: "#wrapper",
+            space: "wrapper-space",
+          },
+        }).params,
+        sessionStore: {
+          "agent:main:target": {
+            sessionId: "target-session",
+            updatedAt: Date.now(),
+            groupId: "target-group",
+            groupChannel: "#target",
+            space: "target-space",
+          },
+        },
+      },
+    });
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        agentSessionKey: "agent:main:target",
+        agentGroupId: "target-group",
+        agentGroupChannel: "#target",
+        agentGroupSpace: "target-space",
+      }),
+    );
+  });
+
   it("falls back to OriginatingTo when command.to is missing", async () => {
     spawnSubagentDirectMock.mockResolvedValue(acceptedResult());
     await handleSubagentsSpawnAction(

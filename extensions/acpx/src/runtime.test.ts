@@ -1,11 +1,15 @@
-import type { AcpSessionStore } from "acpx/runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcpRuntime } from "../runtime-api.js";
 import { AcpxRuntime } from "./runtime.js";
 
-function makeRuntime(baseStore: AcpSessionStore): {
+type TestSessionStore = {
+  load(sessionId: string): Promise<Record<string, unknown> | undefined>;
+  save(record: Record<string, unknown>): Promise<void>;
+};
+
+function makeRuntime(baseStore: TestSessionStore): {
   runtime: AcpxRuntime;
-  wrappedStore: AcpSessionStore & { markFresh: (sessionKey: string) => void };
+  wrappedStore: TestSessionStore & { markFresh: (sessionKey: string) => void };
   delegate: { close: AcpRuntime["close"] };
 } {
   const runtime = new AcpxRuntime({
@@ -22,7 +26,7 @@ function makeRuntime(baseStore: AcpSessionStore): {
     runtime,
     wrappedStore: (
       runtime as unknown as {
-        sessionStore: AcpSessionStore & { markFresh: (sessionKey: string) => void };
+        sessionStore: TestSessionStore & { markFresh: (sessionKey: string) => void };
       }
     ).sessionStore,
     delegate: (runtime as unknown as { delegate: { close: AcpRuntime["close"] } }).delegate,
@@ -35,7 +39,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("keeps stale persistent loads hidden until a fresh record is saved", async () => {
-    const baseStore: AcpSessionStore = {
+    const baseStore: TestSessionStore = {
       load: vi.fn(async () => ({ acpxRecordId: "stale" }) as never),
       save: vi.fn(async () => {}),
     };
@@ -68,7 +72,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("marks the session fresh after discardPersistentState close", async () => {
-    const baseStore: AcpSessionStore = {
+    const baseStore: TestSessionStore = {
       load: vi.fn(async () => ({ acpxRecordId: "stale" }) as never),
       save: vi.fn(async () => {}),
     };

@@ -215,6 +215,77 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
+  it("returns an explicit re-authentication message for OAuth refresh failures", () => {
+    const msg = makeAssistantError(
+      "OAuth token refresh failed for openai-codex: invalid_grant. Please try again or re-authenticate.",
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "Authentication refresh failed. Re-authenticate this provider and try again.",
+    );
+  });
+
+  it("returns a missing-scope message for OpenAI Codex scope failures", () => {
+    const msg = makeAssistantError(
+      '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write model.request"}}',
+    );
+    expect(formatAssistantErrorText(msg, { provider: "openai-codex" })).toBe(
+      "Authentication is missing the required OpenAI Codex scopes. Re-run OpenAI/Codex login and try again.",
+    );
+  });
+
+  it("returns a missing-scope message for raw OpenAI Codex scope payloads without an HTTP prefix", () => {
+    const msg = makeAssistantError(
+      '{"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write model.request"},"code":401}',
+    );
+    expect(formatAssistantErrorText(msg, { provider: "openai-codex" })).toBe(
+      "Authentication is missing the required OpenAI Codex scopes. Re-run OpenAI/Codex login and try again.",
+    );
+  });
+
+  it("does not misdiagnose non-Codex permission errors as missing-scope failures", () => {
+    const msg = makeAssistantError(
+      '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write model.request"}}',
+    );
+    expect(formatAssistantErrorText(msg, { provider: "openai" })).not.toContain(
+      "required OpenAI Codex scopes",
+    );
+  });
+
+  it("does not misdiagnose generic Codex permission failures as missing-scope failures", () => {
+    const msg = makeAssistantError(
+      '403 {"type":"error","error":{"type":"permission_error","message":"Insufficient permissions for this organization"}}',
+    );
+    expect(formatAssistantErrorText(msg, { provider: "openai-codex" })).not.toContain(
+      "required OpenAI Codex scopes",
+    );
+  });
+
+  it("returns an HTML-403 auth message for HTML provider auth failures", () => {
+    const msg = makeAssistantError("403 <!DOCTYPE html><html><body>Access denied</body></html>");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "Authentication failed with an HTML 403 response from the provider. Re-authenticate and verify your provider account access.",
+    );
+  });
+
+  it("returns a proxy-specific message for proxy misroutes", () => {
+    const msg = makeAssistantError("407 Proxy Authentication Required");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "LLM request failed: proxy or tunnel configuration blocked the provider request.",
+    );
+  });
+
+  it("keeps non-transport config errors that mention proxy settings actionable", () => {
+    const msg = makeAssistantError(
+      'Model-provider request.proxy/request.tls is not yet supported for api "ollama"',
+    );
+    expect(formatAssistantErrorText(msg)).toContain(
+      'Model-provider request.proxy/request.tls is not yet supported for api "ollama"',
+    );
+    expect(formatAssistantErrorText(msg)).not.toBe(
+      "LLM request failed: proxy or tunnel configuration blocked the provider request.",
+    );
+  });
+
   it("sanitizes invalid streaming event order errors", () => {
     const msg = makeAssistantError(
       'Unexpected event order, got message_start before receiving "message_stop"',

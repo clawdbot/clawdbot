@@ -47,7 +47,7 @@ vi.mock("@twurple/chat", () => ({
 }));
 
 vi.mock("@twurple/auth", () => ({
-  StaticAuthProvider: class {},
+  StaticAuthProvider: function StaticAuthProvider() {},
 }));
 
 describe("probeTwitch", () => {

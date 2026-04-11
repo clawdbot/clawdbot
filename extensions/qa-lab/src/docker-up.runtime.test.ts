@@ -49,7 +49,7 @@ describe("runQaDockerUp", () => {
           async runCommand(command, args, cwd) {
             calls.push([command, ...args, `@${cwd}`].join(" "));
             if (args.join(" ").includes("ps --format json openclaw-qa-gateway")) {
-              return { stdout: '{"Health":"healthy","State":"running"}\n', stderr: "" };
+              return { stdout: '[{"Health":"healthy","State":"running"}]\n', stderr: "" };
             }
             return { stdout: "", stderr: "" };
           },

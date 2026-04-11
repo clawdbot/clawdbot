@@ -1,5 +1,8 @@
+import { createEmbeddedRunReplayState } from "./pi-embedded-runner/replay-state.js";
+
 export function createBaseToolHandlerState() {
   return {
+    replayState: createEmbeddedRunReplayState(),
     toolMetaById: new Map<string, unknown>(),
     toolMetas: [] as Array<{ toolName?: string; meta?: string }>,
     toolSummaryById: new Set<string>(),

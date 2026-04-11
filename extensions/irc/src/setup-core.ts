@@ -117,7 +117,7 @@ export const ircSetupAdapter: ChannelSetupAdapter = {
       name: setupInput.name,
     });
     const portInput =
-      typeof setupInput.port === "number" ? String(setupInput.port) : String(setupInput.port ?? "");
+      typeof setupInput.port === "number" ? String(setupInput.port) : (setupInput.port ?? "");
     const patch: Partial<IrcAccountConfig> = {
       enabled: true,
       host: setupInput.host?.trim(),

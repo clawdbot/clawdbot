@@ -231,9 +231,7 @@ export function registerGatewayCli(program: Command) {
         );
 
         const deduped = dedupeBeacons(beacons).toSorted((a, b) =>
-          String(a.displayName || a.instanceName).localeCompare(
-            String(b.displayName || b.instanceName),
-          ),
+          (a.displayName || a.instanceName).localeCompare(b.displayName || b.instanceName),
         );
 
         if (opts.json) {

@@ -4,9 +4,7 @@ import { buildArceeModelDefinition, ARCEE_BASE_URL, ARCEE_MODEL_CATALOG } from "
 export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 
 function normalizeBaseUrl(baseUrl: string | undefined): string {
-  return String(baseUrl ?? "")
-    .trim()
-    .replace(/\/+$/, "");
+  return (baseUrl ?? "").trim().replace(/\/+$/, "");
 }
 
 export function isArceeOpenRouterBaseUrl(baseUrl: string | undefined): boolean {

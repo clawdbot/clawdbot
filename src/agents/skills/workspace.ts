@@ -5,7 +5,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
+import { CONFIG_DIR, resolveHomeDir, resolveUserPath } from "../../utils.js";
 import { resolveSandboxPath } from "../sandbox-paths.js";
 import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
@@ -36,14 +36,35 @@ const skillsLogger = createSubsystemLogger("skills");
  *
  * Saves ~5–6 tokens per skill path × N skills ≈ 400–600 tokens total.
  */
+function resolveUserHomeDir(): string | undefined {
+  try {
+    return path.resolve(os.homedir());
+  } catch {
+    return undefined;
+  }
+}
+
 function compactSkillPaths(skills: Skill[]): Skill[] {
-  const home = os.homedir();
-  if (!home) return skills;
-  const prefix = home.endsWith(path.sep) ? home : home + path.sep;
+  const homes = [resolveHomeDir(), resolveUserHomeDir()]
+    .filter((home): home is string => !!home)
+    .map((home) => path.resolve(home))
+    .filter((home, index, all) => all.indexOf(home) === index)
+    .sort((a, b) => b.length - a.length);
+  if (homes.length === 0) return skills;
   return skills.map((s) => ({
     ...s,
-    filePath: s.filePath.startsWith(prefix) ? "~/" + s.filePath.slice(prefix.length) : s.filePath,
+    filePath: compactHomePath(s.filePath, homes),
   }));
+}
+
+function compactHomePath(filePath: string, homes: readonly string[]): string {
+  for (const home of homes) {
+    const prefix = home.endsWith(path.sep) ? home : home + path.sep;
+    if (filePath.startsWith(prefix)) {
+      return "~/" + filePath.slice(prefix.length);
+    }
+  }
+  return filePath;
 }
 
 function isSkillVisibleInAvailableSkillsPrompt(entry: SkillEntry): boolean {
@@ -435,7 +456,10 @@ function loadSkillEntries(
     dir: managedSkillsDir,
     source: "openclaw-managed",
   });
-  const personalAgentsSkillsDir = path.resolve(os.homedir(), ".agents", "skills");
+  const osHomeDir = resolveUserHomeDir();
+  const personalAgentsSkillsDir = osHomeDir
+    ? path.resolve(osHomeDir, ".agents", "skills")
+    : path.resolve(".agents", "skills");
   const personalAgentsSkills = loadSkills({
     dir: personalAgentsSkillsDir,
     source: "agents-skills-personal",

@@ -319,10 +319,10 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
           const graph = teamsProbe?.graph;
           if (graph) {
             const roles = Array.isArray(graph.roles)
-              ? graph.roles.map((role) => String(role).trim()).filter(Boolean)
+              ? graph.roles.map((role) => role.trim()).filter(Boolean)
               : [];
             const scopes = Array.isArray(graph.scopes)
-              ? graph.scopes.map((scope) => String(scope).trim()).filter(Boolean)
+              ? graph.scopes.map((scope) => scope.trim()).filter(Boolean)
               : [];
             const formatPermission = (permission: string) => {
               const hint = TEAMS_GRAPH_PERMISSION_HINTS[permission];
@@ -387,11 +387,16 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
       },
     },
     threading: {
-      buildToolContext: ({ context, hasRepliedRef }) => ({
-        currentChannelId: normalizeOptionalString(context.To),
-        currentThreadTs: context.ReplyToId,
-        hasRepliedRef,
-      }),
+      buildToolContext: ({ context, hasRepliedRef }) => {
+        const nativeChannelId = context.NativeChannelId?.trim();
+        const hasChannelRoute = Boolean(nativeChannelId && nativeChannelId.includes("/"));
+        return {
+          currentChannelId: normalizeOptionalString(context.To),
+          currentGraphChannelId: hasChannelRoute ? nativeChannelId : undefined,
+          currentThreadTs: context.ReplyToId,
+          hasRepliedRef,
+        };
+      },
     },
     outbound: {
       deliveryMode: "direct",

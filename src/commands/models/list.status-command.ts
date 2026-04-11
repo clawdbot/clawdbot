@@ -133,13 +133,13 @@ export async function modelsStatusCommand(
   const providersFromModels = new Set<string>();
   const providersInUse = new Set<string>();
   for (const raw of [defaultLabel, ...fallbacks, imageModel, ...imageFallbacks, ...allowed]) {
-    const parsed = parseModelRef(String(raw ?? ""), DEFAULT_PROVIDER);
+    const parsed = parseModelRef(raw ?? "", DEFAULT_PROVIDER);
     if (parsed?.provider) {
       providersFromModels.add(normalizeProviderId(parsed.provider));
     }
   }
   for (const raw of [defaultLabel, ...fallbacks, imageModel, ...imageFallbacks]) {
-    const parsed = parseModelRef(String(raw ?? ""), DEFAULT_PROVIDER);
+    const parsed = parseModelRef(raw ?? "", DEFAULT_PROVIDER);
     if (parsed?.provider) {
       providersInUse.add(normalizeProviderId(parsed.provider));
     }
@@ -188,7 +188,7 @@ export async function modelsStatusCommand(
     }
     const raw = Array.isArray(opts.probeProfile) ? opts.probeProfile : [opts.probeProfile];
     return raw
-      .flatMap((value) => String(value ?? "").split(","))
+      .flatMap((value) => (value ?? "").split(","))
       .map((value) => value.trim())
       .filter(Boolean);
   })();
@@ -217,7 +217,7 @@ export async function modelsStatusCommand(
     .map(
       (raw) =>
         resolveModelRefFromString({
-          raw: String(raw ?? ""),
+          raw: raw ?? "",
           defaultProvider: DEFAULT_PROVIDER,
           aliasIndex,
         })?.ref,

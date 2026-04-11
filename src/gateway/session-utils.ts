@@ -494,7 +494,7 @@ export function pruneLegacyStoreKeys(params: {
 }) {
   const keysToDelete = new Set<string>();
   for (const candidate of params.candidates) {
-    const trimmed = normalizeOptionalString(String(candidate ?? "")) ?? "";
+    const trimmed = normalizeOptionalString(candidate ?? "") ?? "";
     if (!trimmed) {
       continue;
     }

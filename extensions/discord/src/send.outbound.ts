@@ -119,8 +119,8 @@ function toDiscordSendResult(
   fallbackChannelId: string,
 ): DiscordSendResult {
   return {
-    messageId: result.id ? String(result.id) : "unknown",
-    channelId: String(result.channel_id ?? fallbackChannelId),
+    messageId: result.id || "unknown",
+    channelId: result.channel_id ?? fallbackChannelId,
   };
 }
 
@@ -415,12 +415,8 @@ export async function sendWebhookMessageDiscord(
     // Best-effort telemetry only.
   }
   return {
-    messageId: payload.id ? String(payload.id) : "unknown",
-    channelId: payload.channel_id
-      ? String(payload.channel_id)
-      : opts.threadId
-        ? String(opts.threadId)
-        : "",
+    messageId: payload.id || "unknown",
+    channelId: payload.channel_id ? payload.channel_id : opts.threadId ? String(opts.threadId) : "",
   };
 }
 

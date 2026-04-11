@@ -78,8 +78,8 @@ export async function captureScreenshot(opts: {
         contentSize?: { width?: number; height?: number };
       };
       const size = metrics?.cssContentSize ?? metrics?.contentSize;
-      const contentWidth = Number(size?.width ?? 0);
-      const contentHeight = Number(size?.height ?? 0);
+      const contentWidth = size?.width ?? 0;
+      const contentHeight = size?.height ?? 0;
       if (contentWidth > 0 && contentHeight > 0) {
         const vpResult = (await send("Runtime.evaluate", {
           expression:
@@ -91,14 +91,14 @@ export async function captureScreenshot(opts: {
           };
         };
         const v = vpResult?.result?.value;
-        const currentW = Number(v?.w ?? 0);
-        const currentH = Number(v?.h ?? 0);
+        const currentW = v?.w ?? 0;
+        const currentH = v?.h ?? 0;
         savedVp = {
           w: currentW,
           h: currentH,
-          dpr: Number(v?.dpr ?? 1),
-          sw: Number(v?.sw ?? currentW),
-          sh: Number(v?.sh ?? currentH),
+          dpr: v?.dpr ?? 1,
+          sw: v?.sw ?? currentW,
+          sh: v?.sh ?? currentH,
         };
         // mobile: false is the safe default — CDP provides no way to query
         // the active mobile flag, and inferring from navigator.maxTouchPoints
@@ -148,11 +148,7 @@ export async function captureScreenshot(opts: {
             returnByValue: true,
           })) as { result?: { value?: { w?: number; h?: number; dpr?: number } } };
           const p = postResult?.result?.value;
-          if (
-            Number(p?.w) !== savedVp.w ||
-            Number(p?.h) !== savedVp.h ||
-            Number(p?.dpr) !== savedVp.dpr
-          ) {
+          if (p?.w !== savedVp.w || p?.h !== savedVp.h || p?.dpr !== savedVp.dpr) {
             await send("Emulation.setDeviceMetricsOverride", {
               width: savedVp.w,
               height: savedVp.h,
@@ -193,7 +189,7 @@ export async function createTargetViaCdp(opts: {
       undefined,
       opts.ssrfPolicy,
     );
-    const wsUrlRaw = String(version?.webSocketDebuggerUrl ?? "").trim();
+    const wsUrlRaw = version?.webSocketDebuggerUrl?.trim() ?? "";
     wsUrl = wsUrlRaw ? normalizeCdpWsUrl(wsUrlRaw, opts.cdpUrl) : "";
     if (!wsUrl) {
       throw new Error("CDP /json/version missing webSocketDebuggerUrl");
@@ -205,7 +201,7 @@ export async function createTargetViaCdp(opts: {
     const created = (await send("Target.createTarget", { url: opts.url })) as {
       targetId?: string;
     };
-    const targetId = String(created?.targetId ?? "").trim();
+    const targetId = created?.targetId?.trim() ?? "";
     if (!targetId) {
       throw new Error("CDP Target.createTarget returned no targetId");
     }

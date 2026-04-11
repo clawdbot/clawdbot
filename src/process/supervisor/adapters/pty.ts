@@ -126,7 +126,7 @@ export async function createPtyAdapter(params: {
   const onStdout = (listener: (chunk: string) => void) => {
     dataListener =
       pty.onData((chunk) => {
-        listener(chunk.toString());
+        listener(chunk);
       }) ?? null;
   };
 

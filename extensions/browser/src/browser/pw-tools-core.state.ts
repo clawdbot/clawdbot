@@ -10,7 +10,7 @@ export async function setOfflineViaPlaywright(opts: {
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
-  await page.context().setOffline(Boolean(opts.offline));
+  await page.context().setOffline(opts.offline);
 }
 
 export async function setExtraHTTPHeadersViaPlaywright(opts: {
@@ -36,8 +36,8 @@ export async function setHttpCredentialsViaPlaywright(opts: {
     await page.context().setHTTPCredentials(null);
     return;
   }
-  const username = String(opts.username ?? "");
-  const password = String(opts.password ?? "");
+  const username = opts.username ?? "";
+  const password = opts.password ?? "";
   if (!username) {
     throw new Error("username is required (or set clear=true)");
   }

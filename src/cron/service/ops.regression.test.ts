@@ -21,7 +21,7 @@ import type { CronEvent } from "./state.js";
 import { createCronServiceState } from "./state.js";
 import { onTimer } from "./timer.js";
 
-const FAST_TIMEOUT_SECONDS = 0.0025;
+const FAST_TIMEOUT_SECONDS = 1;
 const opsRegressionFixtures = setupCronRegressionFixtures({
   prefix: "cron-service-ops-regressions-",
 });
@@ -198,39 +198,44 @@ describe("cron service ops regressions", () => {
   });
 
   it("applies timeoutSeconds to manual cron.run isolated executions", async () => {
-    const store = opsRegressionFixtures.makeStorePath();
-    const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
-    const job = createIsolatedRegressionJob({
-      id: "manual-timeout",
-      name: "manual timeout",
-      scheduledAt,
-      schedule: { kind: "every", everyMs: 60_000, anchorMs: scheduledAt },
-      payload: { kind: "agentTurn", message: "work", timeoutSeconds: FAST_TIMEOUT_SECONDS },
-      state: { nextRunAtMs: scheduledAt },
-    });
-    await writeCronJobs(store.storePath, [job]);
+    vi.useFakeTimers();
+    try {
+      const store = opsRegressionFixtures.makeStorePath();
+      const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
+      const job = createIsolatedRegressionJob({
+        id: "manual-timeout",
+        name: "manual timeout",
+        scheduledAt,
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: scheduledAt },
+        payload: { kind: "agentTurn", message: "work", timeoutSeconds: FAST_TIMEOUT_SECONDS },
+        state: { nextRunAtMs: scheduledAt },
+      });
+      await writeCronJobs(store.storePath, [job]);
 
-    const abortAwareRunner = createAbortAwareIsolatedRunner();
-    const state = createCronServiceState({
-      cronEnabled: false,
-      storePath: store.storePath,
-      log: noopLogger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
-      runIsolatedAgentJob: abortAwareRunner.runIsolatedAgentJob,
-    });
+      const abortAwareRunner = createAbortAwareIsolatedRunner();
+      const state = createCronServiceState({
+        cronEnabled: false,
+        storePath: store.storePath,
+        log: noopLogger,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeatNow: vi.fn(),
+        runIsolatedAgentJob: abortAwareRunner.runIsolatedAgentJob,
+      });
 
-    const resultPromise = run(state, job.id, "force");
-    await abortAwareRunner.waitForStart();
-    await vi.advanceTimersByTimeAsync(10);
-    const result = await resultPromise;
-    expect(result).toEqual({ ok: true, ran: true });
-    expect(abortAwareRunner.getObservedAbortSignal()?.aborted).toBe(true);
+      const resultPromise = run(state, job.id, "force");
+      await abortAwareRunner.waitForStart();
+      await vi.advanceTimersByTimeAsync(Math.ceil(FAST_TIMEOUT_SECONDS * 1_000) + 10);
+      const result = await resultPromise;
+      expect(result).toEqual({ ok: true, ran: true });
+      expect(abortAwareRunner.getObservedAbortSignal()?.aborted).toBe(true);
 
-    const updated = state.store?.jobs.find((entry) => entry.id === job.id);
-    expect(updated?.state.lastStatus).toBe("error");
-    expect(updated?.state.lastError).toContain("timed out");
-    expect(updated?.state.runningAtMs).toBeUndefined();
+      const updated = state.store?.jobs.find((entry) => entry.id === job.id);
+      expect(updated?.state.lastStatus).toBe("error");
+      expect(updated?.state.lastError).toContain("timed out");
+      expect(updated?.state.runningAtMs).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("#17554: run() clears stale runningAtMs and executes the job", async () => {

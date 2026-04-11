@@ -1,4 +1,5 @@
 import { vi, type Mock } from "vitest";
+import { clearAgentHarnesses } from "../harness/registry.js";
 
 type MockResolvedModel = {
   model: { provider: string; api: string; id: string; input: unknown[] };
@@ -143,6 +144,7 @@ export function resetCompactSessionStateMocks(): void {
 }
 
 export function resetCompactHooksHarnessMocks(): void {
+  clearAgentHarnesses();
   hookRunner.hasHooks.mockReset();
   hookRunner.hasHooks.mockReturnValue(false);
   hookRunner.runBeforeCompaction.mockReset();
@@ -230,8 +232,8 @@ export async function loadCompactHooksHarness(): Promise<{
   });
 
   vi.doMock("@mariozechner/pi-coding-agent", () => ({
-    AuthStorage: class AuthStorage {},
-    ModelRegistry: class ModelRegistry {},
+    AuthStorage: function AuthStorage() {},
+    ModelRegistry: function ModelRegistry() {},
     createAgentSession: vi.fn(async () => {
       const session = {
         sessionId: "session-1",
@@ -261,7 +263,7 @@ export async function loadCompactHooksHarness(): Promise<{
       };
       return { session };
     }),
-    DefaultResourceLoader: class DefaultResourceLoader {},
+    DefaultResourceLoader: function DefaultResourceLoader() {},
     SessionManager: {
       open: vi.fn(() => ({})),
     },
@@ -307,8 +309,11 @@ export async function loadCompactHooksHarness(): Promise<{
     resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 0),
   }));
 
-  vi.doMock("../../context-engine/index.js", () => ({
+  vi.doMock("../../context-engine/init.js", () => ({
     ensureContextEnginesInitialized: vi.fn(),
+  }));
+
+  vi.doMock("../../context-engine/registry.js", () => ({
     resolveContextEngine: resolveContextEngineMock,
   }));
 

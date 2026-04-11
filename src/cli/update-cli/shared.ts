@@ -278,7 +278,7 @@ export async function tryWriteCompletionCache(root: string, jsonMode: boolean): 
   }
 
   if (result.status !== 0 && !jsonMode) {
-    const stderr = (result.stderr ?? "").toString().trim();
+    const stderr = (result.stderr ?? "").trim();
     const detail = stderr ? ` (${stderr})` : "";
     defaultRuntime.log(theme.warn(`Completion cache update failed${detail}.`));
   }

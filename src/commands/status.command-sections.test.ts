@@ -167,7 +167,7 @@ describe("status.command-sections", () => {
           { severity: "warn" as const, message: "extra" },
         ],
         limit: 2,
-        formatNotice: (notice) => String(notice.message),
+        formatNotice: (notice) => notice.message,
         warn: (value) => `warn(${value})`,
         muted: (value) => `muted(${value})`,
       }),

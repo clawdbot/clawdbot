@@ -214,8 +214,8 @@ export function maybeRunCliInContainer(
   const resolvedDeps: ContainerTargetDeps = {
     env: deps?.env ?? process.env,
     spawnSync: deps?.spawnSync ?? spawnSync,
-    stdinIsTTY: deps?.stdinIsTTY ?? Boolean(process.stdin.isTTY),
-    stdoutIsTTY: deps?.stdoutIsTTY ?? Boolean(process.stdout.isTTY),
+    stdinIsTTY: deps?.stdinIsTTY ?? process.stdin.isTTY,
+    stdoutIsTTY: deps?.stdoutIsTTY ?? process.stdout.isTTY,
   };
 
   if (resolvedDeps.env.OPENCLAW_CLI_CONTAINER_BYPASS === "1") {

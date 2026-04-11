@@ -58,4 +58,78 @@ describe("resolveConversationBindingContext", () => {
       conversationId: "U1234567890abcdef1234567890abcdef",
     });
   });
+
+  it("normalizes provider-resolved conversation ids before returning binding context", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "line",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({
+              id: "line",
+              label: "LINE",
+            }),
+            bindings: {
+              resolveCommandConversation: () => ({
+                conversationId: "  user:U1234567890abcdef1234567890abcdef  ",
+                parentConversationId: "  room:R1234567890abcdef1234567890abcd  ",
+              }),
+            },
+          },
+        },
+      ]),
+    );
+
+    expect(
+      resolveConversationBindingContext({
+        cfg: {} as OpenClawConfig,
+        channel: "line",
+        accountId: " default ",
+        originatingTo: "ignored",
+      }),
+    ).toEqual({
+      channel: "line",
+      accountId: "default",
+      conversationId: "user:U1234567890abcdef1234567890abcdef",
+      parentConversationId: "room:R1234567890abcdef1234567890abcd",
+    });
+  });
+
+  it("normalizes focused binding conversation ids before returning binding context", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "line",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({
+              id: "line",
+              label: "LINE",
+            }),
+            threading: {
+              resolveFocusedBinding: () => ({
+                conversationId: "  user:U99999999999999999999999999999999  ",
+                parentConversationId: "  room:R999999999999999999999999999999  ",
+              }),
+            },
+          },
+        },
+      ]),
+    );
+
+    expect(
+      resolveConversationBindingContext({
+        cfg: {} as OpenClawConfig,
+        channel: "line",
+        accountId: " default ",
+        originatingTo: "ignored",
+      }),
+    ).toEqual({
+      channel: "line",
+      accountId: "default",
+      conversationId: "user:U99999999999999999999999999999999",
+      parentConversationId: "room:R999999999999999999999999999999",
+    });
+  });
 });

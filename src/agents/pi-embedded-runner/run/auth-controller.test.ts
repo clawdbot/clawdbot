@@ -1,6 +1,7 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../auth-profiles.js";
+import type { RuntimeAuthState } from "./helpers.js";
 
 const mocks = vi.hoisted(() => ({
   prepareProviderRuntimeAuth: vi.fn(),
@@ -27,6 +28,16 @@ vi.mock("../../model-auth.js", async () => {
 
 import { createEmbeddedRunAuthController } from "./auth-controller.js";
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 function createTestModel(): Model<Api> {
   return {
     id: "test-model",
@@ -43,6 +54,12 @@ function createTestModel(): Model<Api> {
     contextWindow: 8_000,
     maxTokens: 4_000,
   } as Model<Api>;
+}
+
+function getRuntimeAuthSnapshot(
+  state: RuntimeAuthState | null,
+): Pick<RuntimeAuthState, "profileId" | "refreshInFlight"> | null {
+  return state ? { profileId: state.profileId, refreshInFlight: state.refreshInFlight } : null;
 }
 
 describe("createEmbeddedRunAuthController", () => {
@@ -210,5 +227,170 @@ describe("createEmbeddedRunAuthController", () => {
     await expect(controller.initializeAuthProfile()).rejects.toThrow(
       /runtime auth request overrides do not allow proxy or tls/i,
     );
+  });
+
+  it("ignores stale scheduled refresh results after auth profile rotation", async () => {
+    vi.useFakeTimers();
+    try {
+      let runtimeModel = createTestModel();
+      let effectiveModel = createTestModel();
+      let runtimeAuthState: RuntimeAuthState | null = null;
+      let apiKeyInfo: unknown = null;
+      let lastProfileId: string | undefined;
+      let profileIndex = 0;
+      const setRuntimeApiKey = vi.fn();
+      const staleRefresh = createDeferred<{
+        apiKey: string;
+        baseUrl: string;
+        request: {
+          auth: {
+            mode: "header";
+            headerName: string;
+            value: string;
+          };
+        };
+        expiresAt: number;
+      }>();
+
+      mocks.getApiKeyForModel.mockImplementation(async ({ profileId }) => {
+        if (profileId === "backup") {
+          return {
+            apiKey: "backup-source-api-key",
+            mode: "api-key",
+            profileId: "backup",
+            source: "env",
+          };
+        }
+        return {
+          apiKey: "default-source-api-key",
+          mode: "api-key",
+          profileId: "default",
+          source: "env",
+        };
+      });
+      mocks.prepareProviderRuntimeAuth.mockImplementation(async ({ context }) => {
+        if (context.apiKey === "default-source-api-key" && context.profileId === "default") {
+          if (runtimeAuthState?.refreshInFlight) {
+            return staleRefresh.promise;
+          }
+          return {
+            apiKey: "default-runtime-api-key",
+            baseUrl: "https://default-runtime.example.com/v1",
+            request: {
+              auth: {
+                mode: "header",
+                headerName: "api-key",
+                value: "default-runtime-header-token",
+              },
+            },
+            expiresAt: Date.now() + 60_000,
+          };
+        }
+        if (context.apiKey === "backup-source-api-key" && context.profileId === "backup") {
+          return {
+            apiKey: "backup-runtime-api-key",
+            baseUrl: "https://backup-runtime.example.com/v1",
+            request: {
+              auth: {
+                mode: "header",
+                headerName: "api-key",
+                value: "backup-runtime-header-token",
+              },
+            },
+            expiresAt: Date.now() + 120_000,
+          };
+        }
+        throw new Error(`Unexpected runtime auth request for ${String(context.profileId)}`);
+      });
+
+      const controller = createEmbeddedRunAuthController({
+        config: undefined,
+        agentDir: "/tmp/agent",
+        workspaceDir: "/tmp/workspace",
+        authStore: {
+          version: 1,
+          profiles: {},
+        } as AuthProfileStore,
+        authStorage: { setRuntimeApiKey },
+        profileCandidates: ["default", "backup"],
+        initialThinkLevel: "medium",
+        attemptedThinking: new Set(),
+        fallbackConfigured: false,
+        allowTransientCooldownProbe: false,
+        getProvider: () => "custom-openai",
+        getModelId: () => "test-model",
+        getRuntimeModel: () => runtimeModel,
+        setRuntimeModel: (next) => {
+          runtimeModel = next;
+        },
+        getEffectiveModel: () => effectiveModel,
+        setEffectiveModel: (next) => {
+          effectiveModel = next;
+        },
+        getApiKeyInfo: () => apiKeyInfo as never,
+        setApiKeyInfo: (next) => {
+          apiKeyInfo = next;
+        },
+        getLastProfileId: () => lastProfileId,
+        setLastProfileId: (next) => {
+          lastProfileId = next;
+        },
+        getRuntimeAuthState: () => runtimeAuthState as never,
+        setRuntimeAuthState: (next) => {
+          runtimeAuthState = next;
+        },
+        getRuntimeAuthRefreshCancelled: () => false,
+        setRuntimeAuthRefreshCancelled: () => undefined,
+        getProfileIndex: () => profileIndex,
+        setProfileIndex: (next) => {
+          profileIndex = next;
+        },
+        setThinkLevel: () => undefined,
+        log: {
+          debug: () => undefined,
+          info: () => undefined,
+          warn: () => undefined,
+        },
+      });
+
+      await controller.initializeAuthProfile();
+      expect(getRuntimeAuthSnapshot(runtimeAuthState)?.profileId).toBe("default");
+
+      vi.advanceTimersByTime(5_000);
+      await Promise.resolve();
+      expect(getRuntimeAuthSnapshot(runtimeAuthState)?.refreshInFlight).toBeTruthy();
+
+      await controller.advanceAuthProfile();
+      expect(getRuntimeAuthSnapshot(runtimeAuthState)?.profileId).toBe("backup");
+      expect(runtimeModel.baseUrl).toBe("https://backup-runtime.example.com/v1");
+      expect(runtimeModel.headers).toEqual({
+        "api-key": "backup-runtime-header-token",
+      });
+
+      staleRefresh.resolve({
+        apiKey: "default-runtime-api-key-refreshed",
+        baseUrl: "https://default-refresh.example.com/v1",
+        request: {
+          auth: {
+            mode: "header",
+            headerName: "api-key",
+            value: "default-refresh-header-token",
+          },
+        },
+        expiresAt: Date.now() + 30_000,
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(getRuntimeAuthSnapshot(runtimeAuthState)?.profileId).toBe("backup");
+      expect(runtimeModel.baseUrl).toBe("https://backup-runtime.example.com/v1");
+      expect(runtimeModel.headers).toEqual({
+        "api-key": "backup-runtime-header-token",
+      });
+      expect(setRuntimeApiKey).toHaveBeenLastCalledWith("custom-openai", "backup-runtime-api-key");
+      controller.stopRuntimeAuthRefreshTimer();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

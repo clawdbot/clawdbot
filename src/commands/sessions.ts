@@ -110,7 +110,7 @@ export async function sessionsCommand(
 
   let activeMinutes: number | undefined;
   if (opts.active !== undefined) {
-    const parsed = Number.parseInt(String(opts.active), 10);
+    const parsed = Number.parseInt(opts.active, 10);
     if (Number.isNaN(parsed) || parsed <= 0) {
       runtime.error("--active must be a positive integer (minutes)");
       runtime.exit(1);

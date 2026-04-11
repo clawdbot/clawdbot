@@ -1,5 +1,5 @@
 import { chromium } from "playwright-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import * as chromeModule from "./chrome.js";
 import { BrowserTabNotFoundError } from "./errors.js";
@@ -15,8 +15,32 @@ import {
   listPagesViaPlaywright,
 } from "./pw-session.js";
 
+vi.mock("openclaw/plugin-sdk/browser-security-runtime", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/browser-security-runtime")
+  >("openclaw/plugin-sdk/browser-security-runtime");
+  const lookupFn = async (_hostname: string, options?: { all?: boolean }) => {
+    const result = { address: "93.184.216.34", family: 4 };
+    return options?.all === true ? [result] : result;
+  };
+  return {
+    ...actual,
+    resolvePinnedHostnameWithPolicy: (hostname: string, params: object = {}) =>
+      actual.resolvePinnedHostnameWithPolicy(hostname, { ...params, lookupFn: lookupFn as never }),
+  };
+});
+
 const connectOverCdpSpy = vi.spyOn(chromium, "connectOverCDP");
 const getChromeWebSocketUrlSpy = vi.spyOn(chromeModule, "getChromeWebSocketUrl");
+
+const PROXY_ENV_KEYS = [
+  "ALL_PROXY",
+  "all_proxy",
+  "HTTP_PROXY",
+  "http_proxy",
+  "HTTPS_PROXY",
+  "https_proxy",
+] as const;
 
 type MockRoute = { continue: () => Promise<void>; abort: () => Promise<void> };
 type MockRequest = {
@@ -170,7 +194,14 @@ function mockBlockedRedirectNavigation(params: {
   });
 }
 
+beforeEach(() => {
+  for (const key of PROXY_ENV_KEYS) {
+    vi.stubEnv(key, "");
+  }
+});
+
 afterEach(async () => {
+  vi.unstubAllEnvs();
   connectOverCdpSpy.mockClear();
   getChromeWebSocketUrlSpy.mockClear();
   await closePlaywrightBrowserConnection().catch(() => {});

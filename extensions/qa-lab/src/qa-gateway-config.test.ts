@@ -31,8 +31,25 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.models?.providers?.["mock-openai"]?.baseUrl).toBe("http://127.0.0.1:44080/v1");
     expect(cfg.plugins?.allow).toEqual(["memory-core", "qa-channel"]);
     expect(cfg.plugins?.entries?.["memory-core"]).toEqual({ enabled: true });
+    expect(cfg.plugins?.entries?.["qa-channel"]).toEqual({ enabled: true });
     expect(cfg.plugins?.entries?.openai).toBeUndefined();
     expect(cfg.gateway?.reload?.deferralTimeoutMs).toBe(1_000);
+  });
+
+  it("can omit qa-channel for live transport gateway children", () => {
+    const cfg = buildQaGatewayConfig({
+      bind: "loopback",
+      gatewayPort: 18789,
+      gatewayToken: "token",
+      providerBaseUrl: "http://127.0.0.1:44080/v1",
+      qaBusBaseUrl: "http://127.0.0.1:43124",
+      includeQaChannel: false,
+      workspaceDir: "/tmp/qa-workspace",
+    });
+
+    expect(cfg.plugins?.allow).toEqual(["memory-core"]);
+    expect(cfg.plugins?.entries?.["qa-channel"]).toBeUndefined();
+    expect(cfg.channels?.["qa-channel"]).toBeUndefined();
   });
 
   it("uses built-in provider wiring in frontier live mode", () => {

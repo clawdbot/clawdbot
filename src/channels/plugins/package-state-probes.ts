@@ -127,5 +127,5 @@ export function hasBundledChannelPackageState(params: {
     entry,
     metadataKey: params.metadataKey,
   });
-  return checker ? Boolean(checker({ cfg: params.cfg, env: params.env })) : false;
+  return checker ? checker({ cfg: params.cfg, env: params.env }) : false;
 }

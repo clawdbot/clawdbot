@@ -48,10 +48,14 @@ vi.mock("../../process/command-queue.js", () => ({
   getQueueSize: vi.fn().mockReturnValue(0),
 }));
 
-vi.mock("../../routing/session-key.js", () => ({
-  normalizeMainKey: vi.fn().mockReturnValue("main"),
-  normalizeAgentId: vi.fn((id?: string) => id ?? "default"),
-}));
+vi.mock(import("../../routing/session-key.js"), async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../routing/session-key.js")>();
+  return {
+    ...actual,
+    normalizeMainKey: () => "main",
+    normalizeAgentId: (id: string | undefined | null) => id ?? "default",
+  };
+});
 
 vi.mock("../../utils/provider-utils.js", () => ({
   isReasoningTagProvider: vi.fn().mockReturnValue(false),
@@ -79,7 +83,7 @@ vi.mock("./inbound-meta.js", () => ({
   buildInboundUserContextPrefix: vi.fn().mockReturnValue(""),
 }));
 
-vi.mock("./queue/settings.js", () => ({
+vi.mock("./queue/settings-runtime.js", () => ({
   resolveQueueSettings: vi.fn().mockReturnValue({ mode: "followup" }),
 }));
 
@@ -225,6 +229,31 @@ describe("runPreparedReply media-only handling", () => {
     expect(storeRuntimeLoads).not.toHaveBeenCalled();
   });
 
+  it("passes approved elevated defaults to the runner", async () => {
+    await runPreparedReply(
+      baseParams({
+        resolvedElevatedLevel: "on",
+        elevatedEnabled: true,
+        elevatedAllowed: true,
+      }),
+    );
+
+    expect(runReplyAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        followupRun: expect.objectContaining({
+          run: expect.objectContaining({
+            bashElevated: {
+              enabled: true,
+              allowed: true,
+              defaultLevel: "on",
+              fullAccessAvailable: true,
+            },
+          }),
+        }),
+      }),
+    );
+  });
+
   it("allows media-only prompts and preserves thread context in queued followups", async () => {
     const result = await runPreparedReply(baseParams());
     expect(result).toEqual({ text: "ok" });
@@ -316,7 +345,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(getActiveReplyRunCount()).toBe(activeBefore);
   });
   it("waits for the previous active run to clear before registering a new reply operation", async () => {
-    const queueSettings = await import("./queue/settings.js");
+    const queueSettings = await import("./queue/settings-runtime.js");
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
 
     const result = await runPreparedReply(
@@ -330,7 +359,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
   });
   it("interrupts embedded-only active runs even without a reply operation", async () => {
-    const queueSettings = await import("./queue/settings.js");
+    const queueSettings = await import("./queue/settings-runtime.js");
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
     const embeddedAbort = vi.fn();
     const embeddedHandle = {
@@ -360,7 +389,7 @@ describe("runPreparedReply media-only handling", () => {
   it("rechecks same-session ownership after async prep before registering a new reply operation", async () => {
     const { resolveSessionAuthProfileOverride } =
       await import("../../agents/auth-profiles/session-override.js");
-    const queueSettings = await import("./queue/settings.js");
+    const queueSettings = await import("./queue/settings-runtime.js");
 
     let resolveAuth!: () => void;
     const authPromise = new Promise<void>((resolve) => {
@@ -401,7 +430,7 @@ describe("runPreparedReply media-only handling", () => {
   it("re-resolves auth profile after waiting for a prior run", async () => {
     const { resolveSessionAuthProfileOverride } =
       await import("../../agents/auth-profiles/session-override.js");
-    const queueSettings = await import("./queue/settings.js");
+    const queueSettings = await import("./queue/settings-runtime.js");
     const sessionStore: Record<string, SessionEntry> = {
       "session-key": {
         sessionId: "session-auth-profile",
@@ -448,7 +477,7 @@ describe("runPreparedReply media-only handling", () => {
   it("re-resolves same-session ownership after session-id rotation during async prep", async () => {
     const { resolveSessionAuthProfileOverride } =
       await import("../../agents/auth-profiles/session-override.js");
-    const queueSettings = await import("./queue/settings.js");
+    const queueSettings = await import("./queue/settings-runtime.js");
 
     let resolveAuth!: () => void;
     const authPromise = new Promise<void>((resolve) => {
@@ -503,7 +532,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.run.sessionId).toBe("session-after-rotation");
   });
   it("continues when the original owner clears before an unrelated run appears", async () => {
-    const queueSettings = await import("./queue/settings.js");
+    const queueSettings = await import("./queue/settings-runtime.js");
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
     const previousRun = createReplyOperation({
       sessionId: "session-before-wait",
@@ -536,7 +565,7 @@ describe("runPreparedReply media-only handling", () => {
     nextRun.complete();
   });
   it("re-drains system events after waiting behind an active run", async () => {
-    const queueSettings = await import("./queue/settings.js");
+    const queueSettings = await import("./queue/settings-runtime.js");
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
     vi.mocked(drainFormattedSystemEvents)
       .mockResolvedValueOnce("System: [t] Initial event.")

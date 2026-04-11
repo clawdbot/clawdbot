@@ -110,6 +110,17 @@ describe("web session", () => {
   });
 
   it("does not create a proxy agent when no env proxy is configured", async () => {
+    for (const key of [
+      "ALL_PROXY",
+      "all_proxy",
+      "HTTP_PROXY",
+      "http_proxy",
+      "HTTPS_PROXY",
+      "https_proxy",
+    ]) {
+      vi.stubEnv(key, "");
+    }
+
     await createWaSocket(false, false);
 
     const passed = (baileys.makeWASocket as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {

@@ -22,6 +22,9 @@ function buildParams(
     SessionKey: "agent:main:main",
     ...ctxOverrides,
   };
+  const surface = ctx.Surface ?? "whatsapp";
+  const sessionKey = ctx.SessionKey ?? "agent:main:main";
+  const provider = ctx.Provider ?? "whatsapp";
 
   return {
     cfg: {},
@@ -32,22 +35,22 @@ function buildParams(
       isAuthorizedSender: true,
       senderIsOwner: true,
       senderId: "owner",
-      channel: String(ctx.Surface ?? "whatsapp"),
-      channelId: String(ctx.Surface ?? "whatsapp"),
-      surface: String(ctx.Surface ?? "whatsapp"),
+      channel: surface,
+      channelId: surface,
+      surface,
       ownerList: [],
       from: "test-user",
       to: "test-bot",
     },
     directives: {} as HandleCommandsParams["directives"],
     elevated: { enabled: true, allowed: true, failures: [] },
-    sessionKey: String(ctx.SessionKey ?? "agent:main:main"),
+    sessionKey,
     workspaceDir: "/tmp/openclaw-commands-subagents",
     defaultGroupActivation: () => "mention",
     resolvedVerboseLevel: "off",
     resolvedReasoningLevel: "off",
     resolveDefaultThinkingLevel: async () => undefined,
-    provider: String(ctx.Provider ?? "whatsapp"),
+    provider,
     model: "test-model",
     contextTokens: 0,
     isGroup: false,

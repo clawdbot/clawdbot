@@ -268,9 +268,7 @@ describe("monitorSlackProvider tool results", () => {
   }
 
   function expectReactionNames(names: string[]) {
-    expect(reactMock.mock.calls.map(([args]) => String((args as { name: string }).name))).toEqual(
-      names,
-    );
+    expect(reactMock.mock.calls.map(([args]) => (args as { name: string }).name)).toEqual(names);
   }
 
   async function runDefaultMessageAndExpectSentText(expectedText: string) {

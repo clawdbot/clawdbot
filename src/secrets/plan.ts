@@ -90,7 +90,7 @@ export function resolveValidatedPlanTarget(candidate: {
   }
   const segments =
     Array.isArray(candidate.pathSegments) && candidate.pathSegments.length > 0
-      ? candidate.pathSegments.map((segment) => String(segment).trim()).filter(Boolean)
+      ? candidate.pathSegments.map((segment) => segment.trim()).filter(Boolean)
       : parseDotPath(path);
   if (segments.length === 0 || hasForbiddenPathSegment(segments) || path !== toDotPath(segments)) {
     return null;

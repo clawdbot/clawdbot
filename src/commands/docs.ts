@@ -75,11 +75,12 @@ function normalizeSnippet(raw: string | undefined, fallback: string): string {
 }
 
 function firstParagraph(text: string): string {
-  const parts = text
-    .split(/\n\s*\n/)
-    .map((chunk) => chunk.trim())
-    .filter(Boolean);
-  return parts[0] ?? "";
+  return (
+    text
+      .split(/\n\s*\n/)
+      .map((chunk) => chunk.trim())
+      .find(Boolean) ?? ""
+  );
 }
 
 function parseSearchOutput(raw: string): DocResult[] {

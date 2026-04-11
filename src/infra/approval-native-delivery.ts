@@ -1,11 +1,11 @@
 import type {
-  ChannelApprovalKind,
   ChannelApprovalNativeAdapter,
   ChannelApprovalNativeSurface,
   ChannelApprovalNativeTarget,
-} from "../channels/plugins/types.adapters.js";
-import type { OpenClawConfig } from "../config/config.js";
+} from "../channels/plugins/approval-native.types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildChannelApprovalNativeTargetKey } from "./approval-native-target-key.js";
+import type { ChannelApprovalKind } from "./approval-types.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
 

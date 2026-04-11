@@ -57,7 +57,7 @@ export function convertAuthProfileCredentialToPi(cred: AuthProfileCredential): P
 export function resolvePiCredentialMapFromStore(store: AuthProfileStore): PiCredentialMap {
   const credentials: PiCredentialMap = {};
   for (const credential of Object.values(store.profiles)) {
-    const provider = normalizeProviderId(String(credential.provider ?? ""));
+    const provider = normalizeProviderId(credential.provider ?? "");
     if (!provider || credentials[provider]) {
       continue;
     }

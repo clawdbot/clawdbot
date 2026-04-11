@@ -107,4 +107,37 @@ describe("CallManager verification on restore", () => {
     expect(activeCall.callId).toBe(call.callId);
     expect(activeCall.state).toBe(call.state);
   });
+
+  it("restores dedupe keys from terminal persisted calls so replayed webhooks stay ignored", async () => {
+    const storePath = createTestStorePath();
+    const persisted = makePersistedCall({
+      state: "completed",
+      endedAt: Date.now() - 5_000,
+      endReason: "completed",
+      processedEventIds: ["evt-terminal-init"],
+    });
+    writeCallsToStore(storePath, [persisted]);
+
+    const provider = new FakeProvider();
+    const config = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "plivo",
+      fromNumber: "+15550000000",
+    });
+    const manager = new CallManager(config, storePath);
+    await manager.initialize(provider, "https://example.com/voice/webhook");
+
+    manager.processEvent({
+      id: "evt-terminal-init",
+      type: "call.initiated",
+      callId: String(persisted.providerCallId),
+      providerCallId: String(persisted.providerCallId),
+      timestamp: Date.now(),
+      direction: "outbound",
+      from: "+15550000000",
+      to: "+15550000001",
+    });
+
+    expect(manager.getActiveCalls()).toHaveLength(0);
+  });
 });

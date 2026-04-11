@@ -1113,6 +1113,7 @@
                   "tools/plugin",
                   "plugins/community",
                   "plugins/bundles",
+                  "plugins/codex-harness",
                   "plugins/webhooks",
                   "plugins/voice-call",
                   {

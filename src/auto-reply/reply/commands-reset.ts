@@ -66,13 +66,15 @@ export async function maybeHandleResetCommand(
     };
   }
 
+  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+
   await emitResetCommandHooks({
     action: commandAction,
     ctx: params.ctx,
     cfg: params.cfg,
     command: params.command,
     sessionKey: params.sessionKey,
-    sessionEntry: params.sessionEntry,
+    sessionEntry: targetSessionEntry,
     previousSessionEntry: params.previousSessionEntry,
     workspaceDir: params.workspaceDir,
   });

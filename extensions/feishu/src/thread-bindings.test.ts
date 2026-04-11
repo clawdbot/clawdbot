@@ -91,4 +91,53 @@ describe("Feishu thread bindings", () => {
       }),
     ).toBeNull();
   });
+
+  it("preserves delivery routing metadata when rebinding the same conversation", async () => {
+    const manager = createFeishuThreadBindingManager({ cfg: baseCfg, accountId: "default" });
+
+    manager.bindConversation({
+      conversationId: "oc_group_chat:topic:om_topic_root:sender:ou_sender_1",
+      parentConversationId: "oc_group_chat",
+      targetKind: "subagent",
+      targetSessionKey: "agent:main:subagent:child",
+      metadata: {
+        agentId: "codex",
+        label: "child",
+        boundBy: "system",
+        deliveryTo: "user:ou_sender_1",
+        deliveryThreadId: "om_topic_root",
+      },
+    });
+
+    await getSessionBindingService().bind({
+      targetSessionKey: "agent:main:subagent:child",
+      targetKind: "subagent",
+      conversation: {
+        channel: "feishu",
+        accountId: "default",
+        conversationId: "oc_group_chat:topic:om_topic_root:sender:ou_sender_1",
+        parentConversationId: "oc_group_chat",
+      },
+      placement: "current",
+      metadata: {
+        label: "child",
+      },
+    });
+
+    expect(
+      getSessionBindingService().resolveByConversation({
+        channel: "feishu",
+        accountId: "default",
+        conversationId: "oc_group_chat:topic:om_topic_root:sender:ou_sender_1",
+      }),
+    ).toMatchObject({
+      metadata: expect.objectContaining({
+        agentId: "codex",
+        label: "child",
+        boundBy: "system",
+        deliveryTo: "user:ou_sender_1",
+        deliveryThreadId: "om_topic_root",
+      }),
+    });
+  });
 });

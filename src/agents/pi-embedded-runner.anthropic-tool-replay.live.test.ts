@@ -25,8 +25,7 @@ function buildLiveAnthropicModel(): {
   const modelId =
     (process.env.OPENCLAW_LIVE_ANTHROPIC_CACHE_MODEL || "claude-sonnet-4-6")
       .split(/[/:]/)
-      .filter(Boolean)
-      .pop() || "claude-sonnet-4-6";
+      .findLast(Boolean) || "claude-sonnet-4-6";
   return {
     apiKey,
     model: {

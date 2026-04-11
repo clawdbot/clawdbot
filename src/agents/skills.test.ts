@@ -6,6 +6,7 @@ import {
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../config/config.js";
+import { withPathResolutionEnv } from "../test-utils/env.js";
 import { createFixtureSuite } from "../test-utils/fixture-suite.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
@@ -29,6 +30,10 @@ const resolveTestSkillDirs = (workspaceDir: string) => ({
 
 const makeWorkspace = async () => await fixtureSuite.createCaseDir("workspace");
 const apiKeyField = ["api", "Key"].join("");
+
+function withWorkspaceHome<T>(workspaceDir: string, cb: () => T): T {
+  return withPathResolutionEnv(workspaceDir, { PATH: "" }, () => cb());
+}
 
 const withClearedEnv = <T>(
   keys: string[],
@@ -109,10 +114,12 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
       frontmatterExtra: "user-invocable: false",
     });
 
-    const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
-      ...resolveTestSkillDirs(workspaceDir),
-      reservedNames: new Set(["help"]),
-    });
+    const commands = withWorkspaceHome(workspaceDir, () =>
+      buildWorkspaceSkillCommandSpecs(workspaceDir, {
+        ...resolveTestSkillDirs(workspaceDir),
+        reservedNames: new Set(["help"]),
+      }),
+    );
 
     const names = commands.map((entry) => entry.name).toSorted();
     expect(names).toEqual(["hello_world", "hello_world_2", "help_2"]);
@@ -247,7 +254,9 @@ describe("buildWorkspaceSkillsPrompt", () => {
   it("returns empty prompt when skills dirs are missing", async () => {
     const workspaceDir = await makeWorkspace();
 
-    const prompt = buildWorkspaceSkillsPrompt(workspaceDir, resolveTestSkillDirs(workspaceDir));
+    const prompt = withWorkspaceHome(workspaceDir, () =>
+      buildWorkspaceSkillsPrompt(workspaceDir, resolveTestSkillDirs(workspaceDir)),
+    );
 
     expect(prompt).toBe("");
   });

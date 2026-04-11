@@ -232,6 +232,8 @@ describe("listReactionsMSTeams", () => {
     expect(result.reactions).toEqual([
       {
         reactionType: "like",
+        name: "like",
+        emoji: "\u{1F44D}",
         count: 2,
         users: [
           { id: "u1", displayName: "Alice" },
@@ -240,6 +242,8 @@ describe("listReactionsMSTeams", () => {
       },
       {
         reactionType: "heart",
+        name: "heart",
+        emoji: "\u2764\uFE0F",
         count: 1,
         users: [{ id: "u1", displayName: "Alice" }],
       },
@@ -275,7 +279,13 @@ describe("listReactionsMSTeams", () => {
     });
 
     expect(result.reactions).toEqual([
-      { reactionType: "surprised", count: 1, users: [{ id: "u3", displayName: "Carol" }] },
+      {
+        reactionType: "surprised",
+        name: "surprised",
+        emoji: "\u{1F62E}",
+        count: 1,
+        users: [{ id: "u3", displayName: "Carol" }],
+      },
     ]);
     expect(mockState.fetchGraphJson).toHaveBeenCalledWith({
       token: TOKEN,

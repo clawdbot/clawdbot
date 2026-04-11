@@ -5,6 +5,10 @@ function failOrUndefined(params: { onMissing: "throw" | "undefined"; message: st
   return undefined;
 }
 
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export function decodeJsonPointerToken(token: string): string {
   return token.replace(/~1/g, "/").replace(/~0/g, "~");
 }
@@ -45,20 +49,19 @@ export function readJsonPointer(
       current = current[index];
       continue;
     }
-    if (typeof current !== "object" || current === null || Array.isArray(current)) {
+    if (!isJsonObject(current)) {
       return failOrUndefined({
         onMissing,
         message: `JSON pointer segment "${token}" does not exist.`,
       });
     }
-    const record = current as Record<string, unknown>;
-    if (!Object.hasOwn(record, token)) {
+    if (!Object.hasOwn(current, token)) {
       return failOrUndefined({
         onMissing,
         message: `JSON pointer segment "${token}" does not exist.`,
       });
     }
-    current = record[token];
+    current = current[token];
   }
   return current;
 }
@@ -86,9 +89,10 @@ export function setJsonPointer(
       return;
     }
     const child = current[token];
-    if (typeof child !== "object" || child === null || Array.isArray(child)) {
-      current[token] = {};
+    const next: Record<string, unknown> = isJsonObject(child) ? child : {};
+    if (next !== child) {
+      current[token] = next;
     }
-    current = current[token] as Record<string, unknown>;
+    current = next;
   }
 }

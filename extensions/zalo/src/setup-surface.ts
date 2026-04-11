@@ -200,13 +200,13 @@ export const zaloSetupWizard: ChannelSetupWizard = {
       initialValue: Boolean(resolvedAccount.config.webhookUrl),
     });
     if (wantsWebhook) {
-      const webhookUrl = String(
+      const webhookUrl = (
         await prompter.text({
           message: "Webhook URL (https://...) ",
           initialValue: resolvedAccount.config.webhookUrl,
           validate: (value) =>
             value?.trim()?.startsWith("https://") ? undefined : "HTTPS URL required",
-        }),
+        })
       ).trim();
       const defaultPath = (() => {
         try {
@@ -259,11 +259,11 @@ export const zaloSetupWizard: ChannelSetupWizard = {
         webhookSecretResult.action === "set"
           ? webhookSecretResult.value
           : resolvedAccount.config.webhookSecret;
-      const webhookPath = String(
+      const webhookPath = (
         await prompter.text({
           message: "Webhook path (optional)",
           initialValue: resolvedAccount.config.webhookPath ?? defaultPath,
-        }),
+        })
       ).trim();
       next = setZaloUpdateMode(
         next,

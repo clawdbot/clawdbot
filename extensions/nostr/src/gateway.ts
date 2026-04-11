@@ -169,7 +169,7 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
         deliver: async (payload) => {
           const outboundText =
             payload && typeof payload === "object" && "text" in payload
-              ? String((payload as { text?: string }).text ?? "")
+              ? ((payload as { text?: string }).text ?? "")
               : "";
           if (!outboundText.trim()) {
             return;

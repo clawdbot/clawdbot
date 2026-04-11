@@ -38,6 +38,24 @@ export function writeError(res: ServerResponse, statusCode: number, error: unkno
   });
 }
 
+export async function closeQaHttpServer(server: Server): Promise<void> {
+  let forceCloseTimer: NodeJS.Timeout | undefined;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+      server.closeIdleConnections?.();
+      forceCloseTimer = setTimeout(() => {
+        server.closeAllConnections?.();
+      }, 250);
+      forceCloseTimer.unref();
+    });
+  } finally {
+    if (forceCloseTimer) {
+      clearTimeout(forceCloseTimer);
+    }
+  }
+}
+
 export async function handleQaBusRequest(params: {
   req: IncomingMessage;
   res: ServerResponse;
@@ -172,9 +190,7 @@ export async function startQaBusServer(params: { state: QaBusState; port?: numbe
     port: address.port,
     baseUrl: `http://127.0.0.1:${address.port}`,
     async stop() {
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
+      await closeQaHttpServer(server);
     },
   };
 }

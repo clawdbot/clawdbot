@@ -75,7 +75,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
         return;
       }
       try {
-        await session.answer(String(answer.stepId ?? ""), answer.value);
+        await session.answer(answer.stepId ?? "", answer.value);
       } catch (err) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
         return;

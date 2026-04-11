@@ -80,7 +80,7 @@ function resolveMessageId(result: Record<string, unknown> | null | undefined): s
     (typeof result.guid === "string" && result.guid.trim()) ||
     (typeof result.message_id === "number" ? String(result.message_id) : null) ||
     (typeof result.id === "number" ? String(result.id) : null);
-  return raw ? String(raw).trim() : null;
+  return raw ? raw.trim() : null;
 }
 
 function resolveDeliveredIMessageText(text: string, mediaContentType?: string): string {

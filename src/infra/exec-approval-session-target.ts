@@ -87,12 +87,15 @@ function normalizeOptionalChannel(value?: string | null): string | undefined {
 export function resolveApprovalRequestSessionConversation(params: {
   request: ApprovalRequestLike;
   channel?: string | null;
+  bundledFallback?: boolean;
 }): ApprovalRequestSessionConversation | null {
   const sessionKey = normalizeOptionalString(params.request.request.sessionKey);
   if (!sessionKey) {
     return null;
   }
-  const resolved = resolveSessionConversationRef(sessionKey);
+  const resolved = resolveSessionConversationRef(sessionKey, {
+    bundledFallback: params.bundledFallback,
+  });
   if (!resolved) {
     return null;
   }

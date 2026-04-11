@@ -1,5 +1,22 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { actionHasTarget, actionRequiresTarget } from "./message-action-spec.js";
+
+vi.mock("../../channels/plugins/bootstrap-registry.js", () => ({
+  getBootstrapChannelPlugin: (channel: string) =>
+    channel === "feishu"
+      ? {
+          actions: {
+            messageActionTargetAliases: {
+              read: { aliases: ["messageId"] },
+              pin: { aliases: ["messageId"] },
+              unpin: { aliases: ["messageId"] },
+              "list-pins": { aliases: ["chatId"] },
+              "channel-info": { aliases: ["chatId"] },
+            },
+          },
+        }
+      : undefined,
+}));
 
 describe("actionRequiresTarget", () => {
   it.each([

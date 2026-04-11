@@ -358,7 +358,7 @@ module.exports = {
           await prompter.note("write token");
           const token = await prompter.text({ message: "token" });
           await writeConfigFile({
-            gateway: { auth: { mode: "token", token: String(token) } },
+            gateway: { auth: { mode: "token", token } },
           });
           await prompter.outro("ok");
         },

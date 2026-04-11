@@ -58,10 +58,8 @@ const mockAuthProvider = {
 };
 
 vi.mock("@twurple/auth", () => ({
-  StaticAuthProvider: class {
-    constructor(...args: unknown[]) {
-      mockAuthProvider.constructor(...args);
-    }
+  StaticAuthProvider: function StaticAuthProvider(...args: unknown[]) {
+    mockAuthProvider.constructor(...args);
   },
   RefreshingAuthProvider: class {
     addUserForToken = mockAddUserForToken;

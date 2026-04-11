@@ -220,6 +220,78 @@ describe("anthropic transport stream", () => {
     );
   });
 
+  it("coerces replayed malformed tool-call args to an object for Anthropic payloads", async () => {
+    const model = attachModelProviderRequestTransport(
+      {
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+        api: "anthropic-messages",
+        provider: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"anthropic-messages">,
+      {
+        tls: {
+          ca: "ca-pem",
+        },
+      },
+    );
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        {
+          messages: [
+            {
+              role: "assistant",
+              provider: "openai",
+              api: "openai-responses",
+              model: "gpt-5.4",
+              stopReason: "toolUse",
+              timestamp: 0,
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call_1",
+                  name: "lookup",
+                  arguments: "{not valid json",
+                },
+              ],
+            },
+          ],
+        } as never,
+        {
+          apiKey: "sk-ant-api",
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    await stream.result();
+
+    const firstCallParams = anthropicMessagesStreamMock.mock.calls[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(firstCallParams.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "assistant",
+          content: expect.arrayContaining([
+            expect.objectContaining({
+              type: "tool_use",
+              name: "lookup",
+              input: {},
+            }),
+          ]),
+        }),
+      ]),
+    );
+  });
+
   it("maps adaptive thinking effort for Claude 4.6 transport runs", async () => {
     const model = attachModelProviderRequestTransport(
       {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateConfigObject } from "./config.js";
+import { validateConfigObject } from "./validation.js";
 
 describe("gateway tailscale bind validation", () => {
   it("accepts loopback bind when tailscale serve/funnel is enabled", () => {

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = {
   logWarn: vi.fn(),
+  disposeAgentHarnesses: vi.fn(async () => undefined),
 };
 const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
 const WEBSOCKET_CLOSE_FORCE_CONTINUE_MS = 250;
@@ -12,6 +13,10 @@ vi.mock("../channels/plugins/index.js", () => ({
 
 vi.mock("../hooks/gmail-watcher.js", () => ({
   stopGmailWatcher: vi.fn(async () => undefined),
+}));
+
+vi.mock("../agents/harness/registry.js", () => ({
+  disposeRegisteredAgentHarnesses: mocks.disposeAgentHarnesses,
 }));
 
 vi.mock("../logging/subsystem.js", () => ({
@@ -26,6 +31,7 @@ describe("createGatewayCloseHandler", () => {
   beforeEach(() => {
     vi.useRealTimers();
     mocks.logWarn.mockClear();
+    mocks.disposeAgentHarnesses.mockClear();
   });
 
   it("unsubscribes lifecycle listeners during shutdown", async () => {
@@ -66,6 +72,7 @@ describe("createGatewayCloseHandler", () => {
 
     expect(lifecycleUnsub).toHaveBeenCalledTimes(1);
     expect(stopTaskRegistryMaintenance).toHaveBeenCalledTimes(1);
+    expect(mocks.disposeAgentHarnesses).toHaveBeenCalledTimes(1);
   });
 
   it("terminates lingering websocket clients when websocket close exceeds the grace window", async () => {

@@ -10,7 +10,7 @@ export function logGatewayStartup(params: {
   bindHost: string;
   bindHosts?: string[];
   port: number;
-  pluginCount: number;
+  loadedPluginIds: readonly string[];
   startupStartedAt?: number;
   tlsEnabled?: boolean;
   log: { info: (msg: string, meta?: Record<string, unknown>) => void; warn: (msg: string) => void };
@@ -29,9 +29,7 @@ export function logGatewayStartup(params: {
     typeof params.startupStartedAt === "number" ? Date.now() - params.startupStartedAt : null;
   const startupDurationLabel =
     startupDurationMs == null ? null : `${(startupDurationMs / 1000).toFixed(1)}s`;
-  params.log.info(
-    `ready (${params.pluginCount} ${params.pluginCount === 1 ? "plugin" : "plugins"}${startupDurationLabel ? `, ${startupDurationLabel}` : ""})`,
-  );
+  params.log.info(`ready (${formatReadyDetails(params.loadedPluginIds, startupDurationLabel)})`);
   params.log.info(`log file: ${getResolvedLoggerSettings().file}`);
   if (params.isNixMode) {
     params.log.info("gateway: running in Nix mode (config managed externally)");
@@ -44,4 +42,24 @@ export function logGatewayStartup(params: {
       "Run `openclaw security audit`.";
     params.log.warn(warning);
   }
+}
+
+function formatReadyDetails(
+  loadedPluginIds: readonly string[],
+  startupDurationLabel: string | null,
+) {
+  const pluginIds = [...new Set(loadedPluginIds.map((id) => id.trim()).filter(Boolean))].toSorted(
+    (a, b) => a.localeCompare(b),
+  );
+  const pluginSummary =
+    pluginIds.length === 0
+      ? "0 plugins"
+      : `${pluginIds.length} ${pluginIds.length === 1 ? "plugin" : "plugins"}: ${pluginIds.join(", ")}`;
+
+  if (!startupDurationLabel) {
+    return pluginSummary;
+  }
+  return pluginIds.length === 0
+    ? `${pluginSummary}, ${startupDurationLabel}`
+    : `${pluginSummary}; ${startupDurationLabel}`;
 }

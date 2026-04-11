@@ -2,12 +2,13 @@ import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  __testing,
   CodexAppServerClient,
-  listCodexAppServerModels,
+  CodexAppServerRpcError,
   MIN_CODEX_APP_SERVER_VERSION,
   readCodexVersionFromUserAgent,
-  resetSharedCodexAppServerClientForTests,
 } from "./client.js";
+import { resetSharedCodexAppServerClientForTests } from "./shared-client.js";
 
 function createClientHarness() {
   const stdout = new PassThrough();
@@ -46,7 +47,9 @@ describe("CodexAppServerClient", () => {
 
   afterEach(() => {
     resetSharedCodexAppServerClientForTests();
+    vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.useRealTimers();
     for (const client of clients) {
       client.close();
     }
@@ -63,6 +66,52 @@ describe("CodexAppServerClient", () => {
 
     await expect(request).resolves.toEqual({ models: [] });
     expect(outbound.method).toBe("model/list");
+  });
+
+  it("preserves JSON-RPC error codes", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+
+    const request = harness.client.request("future/method", {});
+    const outbound = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
+    harness.send({ id: outbound.id, error: { code: -32601, message: "Method not found" } });
+
+    await expect(request).rejects.toMatchObject({
+      name: "CodexAppServerRpcError",
+      code: -32601,
+      message: "Method not found",
+    } satisfies Partial<CodexAppServerRpcError>);
+  });
+
+  it("rejects timed-out requests and ignores late responses", async () => {
+    vi.useFakeTimers();
+    const harness = createClientHarness();
+    clients.push(harness.client);
+
+    const request = harness.client.request("model/list", {}, { timeoutMs: 1 });
+    const outbound = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
+    const assertion = expect(request).rejects.toThrow("model/list timed out");
+
+    await vi.advanceTimersByTimeAsync(100);
+    await assertion;
+
+    harness.send({ id: outbound.id, result: { data: [] } });
+    expect(harness.writes).toHaveLength(1);
+  });
+
+  it("rejects aborted requests and ignores late responses", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const controller = new AbortController();
+
+    const request = harness.client.request("model/list", {}, { signal: controller.signal });
+    const outbound = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
+    const assertion = expect(request).rejects.toThrow("model/list aborted");
+    controller.abort();
+
+    await assertion;
+    harness.send({ id: outbound.id, result: { data: [] } });
+    expect(harness.writes).toHaveLength(1);
   });
 
   it("initializes with the required client version", async () => {
@@ -126,27 +175,30 @@ describe("CodexAppServerClient", () => {
     expect(harness.writes).toHaveLength(1);
   });
 
-  it("closes the shared app-server when the version gate fails", async () => {
-    const harness = createClientHarness();
-    clients.push(harness.client);
-    const startSpy = vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
-
-    // Model discovery goes through the shared-client startup path, where a
-    // failed version gate must also tear down the child process.
-    const listPromise = listCodexAppServerModels({ timeoutMs: 1000 });
-    const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
-    harness.send({
-      id: initialize.id,
-      result: { userAgent: "openclaw/0.117.9 (macOS; test)" },
+  it("force-stops app-server transports that ignore the graceful signal", async () => {
+    vi.useFakeTimers();
+    const process = Object.assign(new EventEmitter(), {
+      stdin: {
+        write: vi.fn(),
+        end: vi.fn(),
+        destroy: vi.fn(),
+        unref: vi.fn(),
+      },
+      stdout: Object.assign(new PassThrough(), { unref: vi.fn() }),
+      stderr: Object.assign(new PassThrough(), { unref: vi.fn() }),
+      exitCode: null,
+      signalCode: null,
+      kill: vi.fn(),
+      unref: vi.fn(),
     });
 
-    await expect(listPromise).rejects.toThrow(
-      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required`,
-    );
-    expect(harness.process.kill).toHaveBeenCalledTimes(1);
-    startSpy.mockRestore();
-  });
+    __testing.closeCodexAppServerTransport(process, { forceKillDelayMs: 25 });
 
+    expect(process.kill).toHaveBeenCalledWith("SIGTERM");
+    await vi.advanceTimersByTimeAsync(25);
+    expect(process.kill).toHaveBeenCalledWith("SIGKILL");
+    expect(process.unref).toHaveBeenCalledTimes(1);
+  });
   it("reads the Codex version from the app-server user agent", () => {
     expect(readCodexVersionFromUserAgent("openclaw/0.118.0 (macOS; test)")).toBe("0.118.0");
     expect(readCodexVersionFromUserAgent("codex_cli_rs/0.118.1-dev (linux; test)")).toBe(
@@ -189,57 +241,5 @@ describe("CodexAppServerClient", () => {
       id: "approval-1",
       result: { decision: "decline" },
     });
-  });
-
-  it("lists app-server models through the typed helper", async () => {
-    const harness = createClientHarness();
-    clients.push(harness.client);
-    const startSpy = vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
-
-    const listPromise = listCodexAppServerModels({ limit: 12, timeoutMs: 1000 });
-    const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
-    harness.send({
-      id: initialize.id,
-      result: { userAgent: "openclaw/0.118.0 (macOS; test)" },
-    });
-    await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(3));
-    const list = JSON.parse(harness.writes[2] ?? "{}") as { id?: number; method?: string };
-    expect(list.method).toBe("model/list");
-
-    harness.send({
-      id: list.id,
-      result: {
-        data: [
-          {
-            id: "gpt-5.4",
-            model: "gpt-5.4",
-            displayName: "gpt-5.4",
-            inputModalities: ["text", "image"],
-            supportedReasoningEfforts: [
-              { reasoningEffort: "low", description: "fast" },
-              { reasoningEffort: "xhigh", description: "deep" },
-            ],
-            defaultReasoningEffort: "medium",
-            isDefault: true,
-          },
-        ],
-        nextCursor: null,
-      },
-    });
-
-    await expect(listPromise).resolves.toEqual({
-      models: [
-        {
-          id: "gpt-5.4",
-          model: "gpt-5.4",
-          displayName: "gpt-5.4",
-          inputModalities: ["text", "image"],
-          supportedReasoningEfforts: ["low", "xhigh"],
-          defaultReasoningEffort: "medium",
-          isDefault: true,
-        },
-      ],
-    });
-    startSpy.mockRestore();
   });
 });

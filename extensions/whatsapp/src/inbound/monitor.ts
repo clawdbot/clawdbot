@@ -181,7 +181,7 @@ export async function monitorWebInbox(options: {
   const rememberOutboundMessage = (remoteJid: string, result: unknown) => {
     const messageId =
       typeof result === "object" && result && "key" in result
-        ? String((result as { key?: { id?: string } }).key?.id ?? "")
+        ? ((result as { key?: { id?: string } }).key?.id ?? "")
         : "";
     if (!messageId) {
       return;

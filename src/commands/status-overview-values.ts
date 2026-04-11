@@ -66,7 +66,7 @@ export function buildStatusPluginCompatibilityValue(params: {
     return params.ok("none");
   }
   const pluginCount = new Set(
-    params.notices.map((notice) => String(notice.pluginId ?? notice.plugin ?? "")),
+    params.notices.map((notice) => notice.pluginId ?? notice.plugin ?? ""),
   ).size;
   return params.warn(
     `${params.notices.length} notice${params.notices.length === 1 ? "" : "s"} · ${pluginCount} plugin${pluginCount === 1 ? "" : "s"}`,

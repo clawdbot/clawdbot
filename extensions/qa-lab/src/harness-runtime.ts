@@ -44,7 +44,7 @@ export function createQaRunnerRuntime(): PluginRuntime {
         }) {
           sessions.set(sessionKey, {
             sessionKey,
-            body: String(ctx.BodyForAgent ?? ctx.Body ?? ""),
+            body: ctx.BodyForAgent ?? ctx.Body ?? "",
           });
         },
       },
@@ -66,7 +66,7 @@ export function createQaRunnerRuntime(): PluginRuntime {
           dispatcherOptions: { deliver: (payload: { text: string }) => Promise<void> };
         }) {
           await dispatcherOptions.deliver({
-            text: `qa-echo: ${String(ctx.BodyForAgent ?? ctx.Body ?? "")}`,
+            text: `qa-echo: ${ctx.BodyForAgent ?? ctx.Body ?? ""}`,
           });
         },
       },

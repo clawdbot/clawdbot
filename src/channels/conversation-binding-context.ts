@@ -160,16 +160,23 @@ export function resolveConversationBindingContext(
     fallbackTo: params.fallbackTo ?? undefined,
   });
   if (resolvedByProvider?.conversationId) {
+    const providerConversationId = normalizeOptionalString(resolvedByProvider.conversationId);
+    if (!providerConversationId) {
+      return null;
+    }
+    const providerParentConversationId = normalizeOptionalString(
+      resolvedByProvider.parentConversationId,
+    );
     const resolvedParentConversationId =
       shouldDefaultParentConversationToSelf(loadedPlugin) &&
       !threadId &&
-      !resolvedByProvider.parentConversationId
-        ? resolvedByProvider.conversationId
-        : resolvedByProvider.parentConversationId;
+      !providerParentConversationId
+        ? providerConversationId
+        : providerParentConversationId;
     return {
       channel,
       accountId,
-      conversationId: resolvedByProvider.conversationId,
+      conversationId: providerConversationId,
       ...(resolvedParentConversationId
         ? { parentConversationId: resolvedParentConversationId }
         : {}),
@@ -190,13 +197,18 @@ export function resolveConversationBindingContext(
     }),
   });
   if (focusedBinding?.conversationId) {
+    const focusedConversationId = normalizeOptionalString(focusedBinding.conversationId);
+    if (!focusedConversationId) {
+      return null;
+    }
+    const focusedParentConversationId = normalizeOptionalString(
+      focusedBinding.parentConversationId,
+    );
     return {
       channel,
       accountId,
-      conversationId: focusedBinding.conversationId,
-      ...(focusedBinding.parentConversationId
-        ? { parentConversationId: focusedBinding.parentConversationId }
-        : {}),
+      conversationId: focusedConversationId,
+      ...(focusedParentConversationId ? { parentConversationId: focusedParentConversationId } : {}),
       ...(threadId ? { threadId } : {}),
     };
   }

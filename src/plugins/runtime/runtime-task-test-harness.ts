@@ -12,13 +12,10 @@ const runtimeTaskMocks = vi.hoisted(() => ({
   killSubagentRunAdminMock: vi.fn(),
 }));
 
-vi.mock("../../acp/control-plane/manager.js", () => ({
+vi.mock("../../tasks/task-registry-control.runtime.js", () => ({
   getAcpSessionManager: () => ({
     cancelSession: runtimeTaskMocks.cancelSessionMock,
   }),
-}));
-
-vi.mock("../../agents/subagent-control.js", () => ({
   killSubagentRunAdmin: (params: unknown) => runtimeTaskMocks.killSubagentRunAdminMock(params),
 }));
 

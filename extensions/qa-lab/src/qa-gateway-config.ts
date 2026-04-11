@@ -57,6 +57,7 @@ export function buildQaGatewayConfig(params: {
   gatewayToken: string;
   providerBaseUrl?: string;
   qaBusBaseUrl: string;
+  includeQaChannel?: boolean;
   workspaceDir: string;
   controlUiRoot?: string;
   controlUiAllowedOrigins?: string[];
@@ -71,6 +72,7 @@ export function buildQaGatewayConfig(params: {
   fastMode?: boolean;
   thinkingDefault?: QaThinkingLevel;
 }): OpenClawConfig {
+  const includeQaChannel = params.includeQaChannel !== false;
   const mockProviderBaseUrl = params.providerBaseUrl ?? "http://127.0.0.1:44080/v1";
   const mockOpenAiProvider: ModelProviderConfig = {
     baseUrl: mockProviderBaseUrl,
@@ -167,8 +169,8 @@ export function buildQaGatewayConfig(params: {
       : {};
   const allowedPlugins =
     providerMode === "live-frontier"
-      ? ["memory-core", ...selectedPluginIds, "qa-channel"]
-      : ["memory-core", "qa-channel"];
+      ? ["memory-core", ...selectedPluginIds, ...(includeQaChannel ? ["qa-channel"] : [])]
+      : ["memory-core", ...(includeQaChannel ? ["qa-channel"] : [])];
   const liveModelParams =
     providerMode === "live-frontier"
       ? (modelRef: string) => ({
@@ -197,6 +199,7 @@ export function buildQaGatewayConfig(params: {
           enabled: true,
         },
         ...pluginEntries,
+        ...(includeQaChannel ? { "qa-channel": { enabled: true } } : {}),
       },
     },
     agents: {
@@ -304,16 +307,20 @@ export function buildQaGatewayConfig(params: {
         mode: "off",
       },
     },
-    channels: {
-      "qa-channel": {
-        enabled: true,
-        baseUrl: params.qaBusBaseUrl,
-        botUserId: "openclaw",
-        botDisplayName: "OpenClaw QA",
-        allowFrom: ["*"],
-        pollTimeoutMs: 250,
-      },
-    },
+    ...(includeQaChannel
+      ? {
+          channels: {
+            "qa-channel": {
+              enabled: true,
+              baseUrl: params.qaBusBaseUrl,
+              botUserId: "openclaw",
+              botDisplayName: "OpenClaw QA",
+              allowFrom: ["*"],
+              pollTimeoutMs: 250,
+            },
+          },
+        }
+      : {}),
     messages: {
       groupChat: {
         mentionPatterns: ["\\b@?openclaw\\b"],

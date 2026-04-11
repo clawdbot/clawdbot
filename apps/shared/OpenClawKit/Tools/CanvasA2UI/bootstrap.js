@@ -466,8 +466,10 @@ class OpenClawA2UIHost extends LitElement {
       try {
         // WebKit message handlers support structured objects; Android's JS interface expects strings.
         if (handler === globalThis.openclawCanvasA2UIAction) {
+          // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Native app message handler, not Window.postMessage.
           handler.postMessage(JSON.stringify({ userAction }));
         } else {
+          // oxlint-disable-next-line unicorn/require-post-message-target-origin -- WebKit message handler, not Window.postMessage.
           handler.postMessage({ userAction });
         }
       } catch (e) {

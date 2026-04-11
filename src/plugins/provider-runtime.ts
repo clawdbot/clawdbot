@@ -1,14 +1,19 @@
 import type { AuthProfileCredential, OAuthCredential } from "../agents/auth-profiles/types.js";
+import {
+  applyPluginTextReplacements,
+  mergePluginTextTransforms,
+} from "../agents/plugin-text-transforms.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
-import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
 import { resolveCatalogHookProviderPluginIds } from "./providers.js";
 import { isPluginProvidersLoadInFlight, resolvePluginProviders } from "./providers.runtime.js";
 import { resolvePluginCacheInputs } from "./roots.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
+import { resolveRuntimeTextTransforms } from "./text-transforms.runtime.js";
 import type {
   ProviderAuthDoctorHintContext,
   ProviderAugmentModelCatalogContext,
@@ -49,12 +54,14 @@ import type {
   ProviderResolveTransportTurnStateContext,
   ProviderResolveWebSocketSessionPolicyContext,
   ProviderSystemPromptContributionContext,
+  ProviderTransformSystemPromptContext,
   ProviderRuntimeModel,
   ProviderThinkingPolicyContext,
   ProviderTransportTurnState,
   ProviderValidateReplayTurnsContext,
   ProviderWebSocketSessionPolicy,
   ProviderWrapStreamFnContext,
+  PluginTextTransforms,
 } from "./types.js";
 
 function matchesProviderId(provider: ProviderPlugin, providerId: string): boolean {
@@ -239,6 +246,35 @@ export function resolveProviderSystemPromptContribution(params: {
   return (
     resolveProviderRuntimePlugin(params)?.resolveSystemPromptContribution?.(params.context) ??
     undefined
+  );
+}
+
+export function transformProviderSystemPrompt(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderTransformSystemPromptContext;
+}): string {
+  const plugin = resolveProviderRuntimePlugin(params);
+  const textTransforms = mergePluginTextTransforms(
+    resolveRuntimeTextTransforms(),
+    plugin?.textTransforms,
+  );
+  const transformed =
+    plugin?.transformSystemPrompt?.(params.context) ?? params.context.systemPrompt;
+  return applyPluginTextReplacements(transformed, textTransforms?.input);
+}
+
+export function resolveProviderTextTransforms(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): PluginTextTransforms | undefined {
+  return mergePluginTextTransforms(
+    resolveRuntimeTextTransforms(),
+    resolveProviderRuntimePlugin(params)?.textTransforms,
   );
 }
 

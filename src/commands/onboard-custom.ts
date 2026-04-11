@@ -446,12 +446,7 @@ async function promptBaseUrlAndKey(params: {
     initialValue: params.initialBaseUrl ?? OLLAMA_DEFAULT_BASE_URL,
     placeholder: "https://api.example.com/v1",
     validate: (val) => {
-      try {
-        new URL(val);
-        return undefined;
-      } catch {
-        return "Please enter a valid URL (e.g. http://...)";
-      }
+      return URL.canParse(val) ? undefined : "Please enter a valid URL (e.g. http://...)";
     },
   });
   const baseUrl = baseUrlInput.trim();
@@ -608,9 +603,7 @@ export function parseNonInteractiveCustomApiFlags(
 
 export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): CustomApiResult {
   const baseUrl = normalizeOptionalString(params.baseUrl) ?? "";
-  try {
-    new URL(baseUrl);
-  } catch {
+  if (!URL.canParse(baseUrl)) {
     throw new CustomApiError("invalid_base_url", "Custom provider base URL must be a valid URL.");
   }
 

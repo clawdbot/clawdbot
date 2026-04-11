@@ -1,9 +1,10 @@
 import { listChannelCatalogEntries } from "../../plugins/channel-catalog-registry.js";
 
-export const BUNDLED_CHANNEL_PLUGIN_IDS = listChannelCatalogEntries({ origin: "bundled" })
-  .map((entry) => entry.pluginId)
-  .toSorted((left, right) => left.localeCompare(right));
+let bundledChannelPluginIds: string[] | null = null;
 
 export function listBundledChannelPluginIds(): string[] {
-  return [...BUNDLED_CHANNEL_PLUGIN_IDS];
+  bundledChannelPluginIds ??= listChannelCatalogEntries({ origin: "bundled" })
+    .map((entry) => entry.pluginId)
+    .toSorted((left, right) => left.localeCompare(right));
+  return [...bundledChannelPluginIds];
 }

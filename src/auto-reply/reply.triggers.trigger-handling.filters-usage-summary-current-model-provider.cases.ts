@@ -27,6 +27,10 @@ function getReplyFromConfigNow(getReplyFromConfig: () => GetReplyFromConfig): Ge
   return getReplyFromConfig();
 }
 
+function replyText(reply: Awaited<ReturnType<GetReplyFromConfig>>): string {
+  return (Array.isArray(reply) ? reply[0]?.text : reply?.text) ?? "";
+}
+
 function seedUsageSummary(): void {
   usageMocks.loadProviderUsageSummary.mockClear();
   usageMocks.loadProviderUsageSummary.mockResolvedValue({
@@ -96,9 +100,7 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
           undefined,
           cfg,
         );
-        expect(String((Array.isArray(r0) ? r0[0]?.text : r0?.text) ?? "")).toContain(
-          "Usage footer: tokens",
-        );
+        expect(replyText(r0)).toContain("Usage footer: tokens");
 
         const r1 = await getReplyFromConfig(
           {
@@ -112,9 +114,7 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
           undefined,
           cfg,
         );
-        expect(String((Array.isArray(r1) ? r1[0]?.text : r1?.text) ?? "")).toContain(
-          "Usage footer: full",
-        );
+        expect(replyText(r1)).toContain("Usage footer: full");
 
         const r2 = await getReplyFromConfig(
           {
@@ -128,9 +128,7 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
           undefined,
           cfg,
         );
-        expect(String((Array.isArray(r2) ? r2[0]?.text : r2?.text) ?? "")).toContain(
-          "Usage footer: off",
-        );
+        expect(replyText(r2)).toContain("Usage footer: off");
 
         const r3 = await getReplyFromConfig(
           {
@@ -144,9 +142,7 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
           undefined,
           cfg,
         );
-        expect(String((Array.isArray(r3) ? r3[0]?.text : r3?.text) ?? "")).toContain(
-          "Usage footer: tokens",
-        );
+        expect(replyText(r3)).toContain("Usage footer: tokens");
 
         const finalStore = await readSessionStore(usageStorePath);
         expect(pickFirstStoreEntry<{ responseUsage?: string }>(finalStore)?.responseUsage).toBe(

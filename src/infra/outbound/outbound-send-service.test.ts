@@ -23,6 +23,9 @@ const resolveAgentScopedOutboundMediaAccessMock = vi.hoisted(() =>
       mediaSources?: readonly string[];
       accountId?: string;
       requesterSenderId?: string;
+      requesterSenderName?: string;
+      requesterSenderUsername?: string;
+      requesterSenderE164?: string;
     }) => {
       localRoots: string[];
       readFile: (filePath: string) => Promise<Buffer>;
@@ -215,6 +218,39 @@ describe("executeSendAction", () => {
     );
   });
 
+  it("forwards non-id requester sender fields to sendMessage on core outbound path", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValue(null);
+    mocks.sendMessage.mockResolvedValue({
+      channel: "demo-outbound",
+      to: "channel:123",
+      via: "direct",
+      mediaUrl: null,
+    });
+
+    await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "demo-outbound",
+        params: {},
+        sessionKey: "agent:main:whatsapp:group:ops",
+        requesterSenderName: "Alice",
+        requesterSenderUsername: "alice_u",
+        requesterSenderE164: "+15551234567",
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "hello",
+    });
+
+    expect(mocks.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requesterSenderName: "Alice",
+        requesterSenderUsername: "alice_u",
+        requesterSenderE164: "+15551234567",
+      }),
+    );
+  });
+
   it("forwards requester session context to sendMessage on core outbound path", async () => {
     mocks.dispatchChannelMessageAction.mockResolvedValue(null);
     mocks.sendMessage.mockResolvedValue({
@@ -268,6 +304,33 @@ describe("executeSendAction", () => {
     expect(mocks.resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith(
       expect.objectContaining({
         requesterSenderId: "attacker",
+      }),
+    );
+  });
+
+  it("forwards non-id requester sender fields into outbound media access resolution", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
+
+    await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "demo-outbound",
+        params: { media: "/tmp/host.png" },
+        sessionKey: "agent:main:whatsapp:group:ops",
+        requesterSenderName: "Alice",
+        requesterSenderUsername: "alice_u",
+        requesterSenderE164: "+15551234567",
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "hello",
+    });
+
+    expect(mocks.resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requesterSenderName: "Alice",
+        requesterSenderUsername: "alice_u",
+        requesterSenderE164: "+15551234567",
       }),
     );
   });

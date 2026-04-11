@@ -225,6 +225,36 @@ describe("gateway send mirroring", () => {
     );
   });
 
+  it("passes outbound session context for gateway media sends", async () => {
+    mockDeliverySuccess("m-whatsapp-media");
+
+    await runSend({
+      to: "+15551234567",
+      message: "caption",
+      mediaUrl: "file:///tmp/workspace/photo.png",
+      channel: "whatsapp",
+      agentId: "work",
+      idempotencyKey: "idem-whatsapp-media",
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "whatsapp",
+        payloads: [
+          {
+            text: "caption",
+            mediaUrl: "file:///tmp/workspace/photo.png",
+            mediaUrls: undefined,
+          },
+        ],
+        session: expect.objectContaining({
+          agentId: "work",
+          key: "agent:work:whatsapp:resolved",
+        }),
+      }),
+    );
+  });
+
   it("forwards gateway client scopes into outbound delivery", async () => {
     mockDeliverySuccess("m-scope");
 

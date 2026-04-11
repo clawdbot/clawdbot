@@ -519,8 +519,8 @@ function buildZaloVoicePlaybackUrl(asset: { fileUrl: string; fileName?: string }
 
 function mapFriend(friend: User): ZcaFriend {
   return {
-    userId: String(friend.userId),
-    displayName: friend.displayName || friend.zaloName || friend.username || String(friend.userId),
+    userId: friend.userId,
+    displayName: friend.displayName || friend.zaloName || friend.username || friend.userId,
     avatar: friend.avatar || undefined,
   };
 }
@@ -531,8 +531,8 @@ function mapGroup(groupId: string, group: GroupInfo & Record<string, unknown>): 
       ? group.totalMember
       : undefined;
   return {
-    groupId: String(groupId),
-    name: group.name?.trim() || String(groupId),
+    groupId,
+    name: group.name?.trim() || groupId,
     memberCount: totalMember,
   };
 }
@@ -866,8 +866,8 @@ export async function getZaloUserInfo(profileInput?: string | null): Promise<Zca
     return null;
   }
   return {
-    userId: String(user.userId),
-    displayName: user.displayName || user.zaloName || String(user.userId),
+    userId: user.userId,
+    displayName: user.displayName || user.zaloName || user.userId,
     avatar: user.avatar || undefined,
   };
 }

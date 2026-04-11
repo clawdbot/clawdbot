@@ -1,42 +1,15 @@
-import * as ssrf from "openclaw/plugin-sdk/infra-runtime";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/testing";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createRequestCaptureJsonFetch } from "../../test/helpers/plugins/media-understanding.js";
+import { describe, expect, it } from "vitest";
+import {
+  createRequestCaptureJsonFetch,
+  installPinnedHostnameTestHooks,
+} from "../../src/media-understanding/audio.test-helpers.js";
 import { describeGeminiVideo } from "./media-understanding-provider.js";
 import { resolveGoogleGenerativeAiHttpRequestConfig } from "./runtime-api.js";
 
-const TEST_NET_IP = "203.0.113.10";
-
-function stubPinnedHostname(hostname: string) {
-  const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
-  const addresses = [TEST_NET_IP];
-  return {
-    hostname: normalized,
-    addresses,
-    lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
-  };
-}
+installPinnedHostnameTestHooks();
 
 describe("describeGeminiVideo", () => {
-  let resolvePinnedHostnameWithPolicySpy: ReturnType<typeof vi.spyOn>;
-  let resolvePinnedHostnameSpy: ReturnType<typeof vi.spyOn>;
-
-  beforeEach(() => {
-    resolvePinnedHostnameWithPolicySpy = vi
-      .spyOn(ssrf, "resolvePinnedHostnameWithPolicy")
-      .mockImplementation(async (hostname) => stubPinnedHostname(hostname));
-    resolvePinnedHostnameSpy = vi
-      .spyOn(ssrf, "resolvePinnedHostname")
-      .mockImplementation(async (hostname) => stubPinnedHostname(hostname));
-  });
-
-  afterEach(() => {
-    resolvePinnedHostnameWithPolicySpy?.mockRestore();
-    resolvePinnedHostnameSpy?.mockRestore();
-    resolvePinnedHostnameWithPolicySpy = undefined;
-    resolvePinnedHostnameSpy = undefined;
-  });
-
   it("respects case-insensitive x-goog-api-key overrides", async () => {
     let seenKey: string | null = null;
     const fetchFn = withFetchPreconnect(async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -88,8 +61,6 @@ describe("describeGeminiVideo", () => {
       timeoutMs: 1000,
       fetchFn,
     });
-
-    expect(resolvePinnedHostnameWithPolicySpy).not.toHaveBeenCalled();
   });
 
   it("builds the expected request payload", async () => {

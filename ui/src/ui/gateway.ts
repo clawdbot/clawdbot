@@ -319,7 +319,7 @@ export class GatewayBrowserClient {
     this.ws.addEventListener("open", () => this.queueConnect());
     this.ws.addEventListener("message", (ev) => this.handleMessage(String(ev.data ?? "")));
     this.ws.addEventListener("close", (ev) => {
-      const reason = String(ev.reason ?? "");
+      const reason = ev.reason ?? "";
       const connectError = this.pendingConnectError;
       this.pendingConnectError = undefined;
       this.ws = null;

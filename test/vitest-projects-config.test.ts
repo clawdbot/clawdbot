@@ -17,18 +17,19 @@ describe("projects vitest config", () => {
     expect(baseConfig.test?.projects).toEqual([...rootVitestProjects]);
   });
 
-  it("keeps root projects on the shared thread-first pool by default", () => {
+  it("keeps root projects on their expected pool defaults", () => {
     expect(createGatewayVitestConfig().test.pool).toBe("threads");
     expect(createAgentsVitestConfig().test.pool).toBe("threads");
     expect(createCommandsLightVitestConfig().test.pool).toBe("threads");
     expect(createCommandsVitestConfig().test.pool).toBe("threads");
     expect(createPluginSdkLightVitestConfig().test.pool).toBe("threads");
     expect(createUnitFastVitestConfig().test.pool).toBe("threads");
-    expect(createContractsVitestConfig().test.pool).toBe("threads");
+    expect(createContractsVitestConfig().test.pool).toBe("forks");
   });
 
-  it("keeps the contracts lane on the non-isolated runner by default", () => {
+  it("keeps the contracts lane on the non-isolated fork runner by default", () => {
     const config = createContractsVitestConfig();
+    expect(config.test.pool).toBe("forks");
     expect(config.test.isolate).toBe(false);
     expect(normalizeConfigPath(config.test.runner)).toBe("test/non-isolated-runner.ts");
   });

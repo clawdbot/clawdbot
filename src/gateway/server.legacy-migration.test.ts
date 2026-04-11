@@ -33,7 +33,7 @@ async function expectHeartbeatValidationError(legacyParsed: Record<string, unkno
   }
 
   expect(thrown).toBeInstanceOf(Error);
-  const message = String((thrown as Error).message);
+  const message = (thrown as Error).message;
   expect(message).toContain("Invalid config at");
   expect(message).toContain(
     "heartbeat: top-level heartbeat is not a valid config path; use agents.defaults.heartbeat (cadence/target/model settings) or channels.defaults.heartbeat (showOk/showAlerts/useIndicator).",

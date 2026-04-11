@@ -132,9 +132,7 @@ describe("zalouser setup wizard", () => {
     expect(result.cfg.channels?.zalouser?.dmPolicy).toBe("allowlist");
     expect(result.cfg.channels?.zalouser?.allowFrom).toEqual([]);
     expect(
-      note.mock.calls.some(([message]) =>
-        String(message).includes("No DM allowlist entries added yet."),
-      ),
+      note.mock.calls.some(([message]) => message.includes("No DM allowlist entries added yet.")),
     ).toBe(true);
   });
 
@@ -155,7 +153,7 @@ describe("zalouser setup wizard", () => {
     expect(result.cfg.channels?.zalouser?.groups).toEqual({});
     expect(
       note.mock.calls.some(([message]) =>
-        String(message).includes("No group allowlist entries added yet."),
+        message.includes("No group allowlist entries added yet."),
       ),
     ).toBe(true);
   });
@@ -208,9 +206,7 @@ describe("zalouser setup wizard", () => {
     expect(seen).not.toContain("Zalo Personal DM policy");
     expect(seen).toContain("Zalouser allowFrom (name or user id)");
     expect(
-      note.mock.calls.some(([message]) =>
-        String(message).includes("No DM allowlist entries added yet."),
-      ),
+      note.mock.calls.some(([message]) => message.includes("No DM allowlist entries added yet.")),
     ).toBe(true);
   });
 
@@ -354,7 +350,7 @@ describe("zalouser setup wizard", () => {
 
     expect(
       note.mock.calls.some(([message]) =>
-        String(message).includes("Current: dmPolicy=allowlist, allowFrom=123456789"),
+        message.includes("Current: dmPolicy=allowlist, allowFrom=123456789"),
       ),
     ).toBe(true);
   });

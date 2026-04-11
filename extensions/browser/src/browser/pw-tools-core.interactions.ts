@@ -668,7 +668,7 @@ export async function typeViaPlaywright(opts: {
   ssrfPolicy?: SsrFPolicy;
 }): Promise<void> {
   const resolved = requireRefOrSelector(opts.ref, opts.selector);
-  const text = String(opts.text ?? "");
+  const text = opts.text ?? "";
   const page = await getRestoredPageForTarget(opts);
   const label = resolved.ref ?? resolved.selector!;
   const locator = resolved.ref

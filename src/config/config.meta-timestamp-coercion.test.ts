@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateConfigObject } from "./config.js";
+import { validateConfigObject } from "./validation.js";
 
 describe("meta.lastTouchedAt numeric timestamp coercion", () => {
   it("accepts a numeric Unix timestamp and coerces it to an ISO string", () => {

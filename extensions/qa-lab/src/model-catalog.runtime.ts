@@ -59,7 +59,32 @@ export function selectQaRunnerModelOptions(rows: ModelRow[]): QaRunnerModelOptio
   });
 }
 
-export async function loadQaRunnerModelOptions(params: { repoRoot: string }) {
+const CATALOG_ABORT_ERROR_MESSAGE = "qa model catalog aborted";
+
+function createCatalogAbortError() {
+  return new Error(CATALOG_ABORT_ERROR_MESSAGE);
+}
+
+function killProcessTree(pid: number | undefined, signal: NodeJS.Signals) {
+  if (pid === undefined) {
+    return;
+  }
+  try {
+    if (process.platform === "win32") {
+      process.kill(pid, signal);
+      return;
+    }
+    process.kill(-pid, signal);
+  } catch {
+    try {
+      process.kill(pid, signal);
+    } catch {
+      // The process already exited.
+    }
+  }
+}
+
+export async function loadQaRunnerModelOptions(params: { repoRoot: string; signal?: AbortSignal }) {
   const tempRoot = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-qa-model-catalog-"),
   );
@@ -92,6 +117,8 @@ export async function loadQaRunnerModelOptions(params: { repoRoot: string }) {
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     await new Promise<void>((resolve, reject) => {
+      let aborted = params.signal?.aborted === true;
+      let forceKillTimer: NodeJS.Timeout | undefined;
       const child = spawn(
         process.execPath,
         ["dist/index.js", "models", "list", "--all", "--json"],
@@ -104,14 +131,43 @@ export async function loadQaRunnerModelOptions(params: { repoRoot: string }) {
             OPENCLAW_CONFIG_PATH: configPath,
             OPENCLAW_STATE_DIR: stateDir,
             OPENCLAW_OAUTH_DIR: path.join(stateDir, "credentials"),
+            OPENCLAW_CODEX_DISCOVERY_LIVE: "0",
           },
+          detached: process.platform !== "win32",
           stdio: ["ignore", "pipe", "pipe"],
         },
       );
+      const cleanup = () => {
+        params.signal?.removeEventListener("abort", abortCatalogLoad);
+        if (forceKillTimer) {
+          clearTimeout(forceKillTimer);
+        }
+      };
+      const abortCatalogLoad = () => {
+        aborted = true;
+        killProcessTree(child.pid, "SIGTERM");
+        forceKillTimer = setTimeout(() => {
+          killProcessTree(child.pid, "SIGKILL");
+        }, 1_000);
+        forceKillTimer.unref();
+      };
+      if (aborted) {
+        abortCatalogLoad();
+      } else {
+        params.signal?.addEventListener("abort", abortCatalogLoad, { once: true });
+      }
       child.stdout.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
       child.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
-      child.once("error", reject);
+      child.once("error", (error) => {
+        cleanup();
+        reject(aborted ? createCatalogAbortError() : error);
+      });
       child.once("exit", (code) => {
+        cleanup();
+        if (aborted) {
+          reject(createCatalogAbortError());
+          return;
+        }
         if (code === 0) {
           resolve();
           return;

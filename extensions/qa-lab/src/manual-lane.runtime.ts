@@ -108,11 +108,10 @@ export async function runQaManualLane(params: QaManualLaneParams) {
     const reply =
       lab.state
         .getSnapshot()
-        .messages.filter(
+        .messages.findLast(
           (candidate) =>
             candidate.direction === "outbound" && candidate.conversation.id === "qa-operator",
-        )
-        .at(-1)?.text ?? null;
+        )?.text ?? null;
 
     return {
       model: params.primaryModel,

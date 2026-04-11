@@ -40,9 +40,39 @@ type SsoStoreData = {
 };
 
 const STORE_FILENAME = "msteams-sso-tokens.json";
+const STORE_KEY_VERSION_PREFIX = "v2:";
 
 function makeKey(connectionName: string, userId: string): string {
-  return `${connectionName}::${userId}`;
+  return `${STORE_KEY_VERSION_PREFIX}${Buffer.from(
+    JSON.stringify([connectionName, userId]),
+    "utf8",
+  ).toString("base64url")}`;
+}
+
+function normalizeStoredToken(value: unknown): MSTeamsSsoStoredToken | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const token = value as Partial<MSTeamsSsoStoredToken>;
+  if (
+    typeof token.connectionName !== "string" ||
+    !token.connectionName ||
+    typeof token.userId !== "string" ||
+    !token.userId ||
+    typeof token.token !== "string" ||
+    !token.token ||
+    typeof token.updatedAt !== "string" ||
+    !token.updatedAt
+  ) {
+    return null;
+  }
+  return {
+    connectionName: token.connectionName,
+    userId: token.userId,
+    token: token.token,
+    ...(typeof token.expiresAt === "string" ? { expiresAt: token.expiresAt } : {}),
+    updatedAt: token.updatedAt,
+  };
 }
 
 function isSsoStoreData(value: unknown): value is SsoStoreData {
@@ -74,7 +104,18 @@ export function createMSTeamsSsoTokenStoreFs(params?: {
     if (!isSsoStoreData(value)) {
       return { version: 1, tokens: {} };
     }
-    return value;
+    const tokens: Record<string, MSTeamsSsoStoredToken> = {};
+    for (const stored of Object.values(value.tokens)) {
+      const normalized = normalizeStoredToken(stored);
+      if (!normalized) {
+        continue;
+      }
+      tokens[makeKey(normalized.connectionName, normalized.userId)] = normalized;
+    }
+    return {
+      version: 1,
+      tokens,
+    };
   };
 
   return {

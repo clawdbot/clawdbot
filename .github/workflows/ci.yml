@@ -37,9 +37,10 @@ jobs:
       run_build_artifacts: ${{ steps.manifest.outputs.run_build_artifacts }}
       run_checks_fast: ${{ steps.manifest.outputs.run_checks_fast }}
       checks_fast_core_matrix: ${{ steps.manifest.outputs.checks_fast_core_matrix }}
-      checks_fast_extensions_matrix: ${{ steps.manifest.outputs.checks_fast_extensions_matrix }}
+      checks_node_extensions_matrix: ${{ steps.manifest.outputs.checks_node_extensions_matrix }}
       run_checks: ${{ steps.manifest.outputs.run_checks }}
       checks_matrix: ${{ steps.manifest.outputs.checks_matrix }}
+      checks_node_core_test_matrix: ${{ steps.manifest.outputs.checks_node_core_test_matrix }}
       run_extension_fast: ${{ steps.manifest.outputs.run_extension_fast }}
       extension_fast_matrix: ${{ steps.manifest.outputs.extension_fast_matrix }}
       run_check: ${{ steps.manifest.outputs.run_check }}
@@ -136,6 +137,9 @@ jobs:
           node --input-type=module <<'EOF'
           import { appendFileSync } from "node:fs";
           import {
+            createNodeTestShards,
+          } from "./scripts/lib/ci-node-test-plan.mjs";
+          import {
             createExtensionTestShards,
             DEFAULT_EXTENSION_TEST_SHARD_COUNT,
           } from "./scripts/lib/extension-test-plan.mjs";
@@ -211,12 +215,11 @@ jobs:
                   ]
                 : [],
             ),
-            checks_fast_extensions_matrix: extensionShardMatrix,
+            checks_node_extensions_matrix: extensionShardMatrix,
             run_checks: runNode,
             checks_matrix: createMatrix(
               runNode
                 ? [
-                    { check_name: "checks-node-test", runtime: "node", task: "test" },
                     { check_name: "checks-node-channels", runtime: "node", task: "channels" },
                     ...(isPush
                       ? [
@@ -230,6 +233,17 @@ jobs:
                         ]
                       : []),
                   ]
+                : [],
+            ),
+            checks_node_core_test_matrix: createMatrix(
+              runNode
+                ? createNodeTestShards().map((shard) => ({
+                    check_name: shard.checkName,
+                    runtime: "node",
+                    task: "test-shard",
+                    shard_name: shard.shardName,
+                    configs: shard.configs,
+                  }))
                 : [],
             ),
             run_extension_fast: hasChangedExtensions,
@@ -470,7 +484,7 @@ jobs:
               ;;
           esac
 
-  checks-fast-extensions-shard:
+  checks-node-extensions-shard:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast == 'true'
@@ -478,7 +492,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      matrix: ${{ fromJson(needs.preflight.outputs.checks_fast_extensions_matrix) }}
+      matrix: ${{ fromJson(needs.preflight.outputs.checks_node_extensions_matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -497,16 +511,16 @@ jobs:
           OPENCLAW_EXTENSION_BATCH: ${{ matrix.extensions_csv }}
         run: pnpm test:extensions:batch -- "$OPENCLAW_EXTENSION_BATCH"
 
-  checks-fast-extensions:
-    name: checks-fast-extensions
-    needs: [preflight, checks-fast-extensions-shard]
+  checks-node-extensions:
+    name: checks-node-extensions
+    needs: [preflight, checks-node-extensions-shard]
     if: always() && needs.preflight.outputs.run_checks_fast == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - name: Verify extension shards
         env:
-          SHARD_RESULT: ${{ needs.checks-fast-extensions-shard.result }}
+          SHARD_RESULT: ${{ needs.checks-node-extensions-shard.result }}
         run: |
           if [ "$SHARD_RESULT" != "success" ]; then
             echo "Extension shard checks failed: $SHARD_RESULT" >&2
@@ -598,6 +612,102 @@ jobs:
               exit 1
               ;;
           esac
+
+  checks-node-core-test-shard:
+    name: ${{ matrix.check_name }}
+    needs: [preflight, build-artifacts]
+    if: always() && needs.preflight.outputs.run_checks == 'true' && needs.build-artifacts.result == 'success'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_test_matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "${{ matrix.node_version || '24.x' }}"
+          cache-key-suffix: "${{ matrix.cache_key_suffix || 'node24' }}"
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Configure Node test resources
+        run: echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
+
+      - name: Download dist artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-build
+          path: dist/
+
+      - name: Download A2UI bundle artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: canvas-a2ui-bundle
+          path: src/canvas-host/a2ui/
+
+      - name: Run Node test shard
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+          OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'EOF'
+          import { spawnSync } from "node:child_process";
+          import { resolveVitestCliEntry, resolveVitestNodeArgs } from "./scripts/run-vitest.mjs";
+
+          const configs = JSON.parse(process.env.OPENCLAW_NODE_TEST_CONFIGS_JSON ?? "[]");
+          if (!Array.isArray(configs) || configs.length === 0) {
+            console.error("Missing node test shard configs");
+            process.exit(1);
+          }
+
+          for (const config of configs) {
+            console.error(`[test] starting ${config}`);
+            const result = spawnSync(
+              "pnpm",
+              [
+                "exec",
+                "node",
+                ...resolveVitestNodeArgs(process.env),
+                resolveVitestCliEntry(),
+                "run",
+                "--config",
+                config,
+              ],
+              {
+                env: process.env,
+                stdio: "inherit",
+              },
+            );
+            if ((result.status ?? 1) !== 0) {
+              process.exit(result.status ?? 1);
+            }
+          }
+          EOF
+
+  checks-node-core-test:
+    name: checks-node-core-test
+    needs: [preflight, checks-node-core-test-shard]
+    if: always() && needs.preflight.outputs.run_checks == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 5
+    steps:
+      - name: Verify node test shards
+        env:
+          SHARD_RESULT: ${{ needs.checks-node-core-test-shard.result }}
+        run: |
+          if [ "$SHARD_RESULT" != "success" ]; then
+            echo "Node test shards failed: $SHARD_RESULT" >&2
+            exit 1
+          fi
 
   extension-fast:
     name: "extension-fast"

@@ -18,6 +18,7 @@ export {
   isCloudflareOrHtmlErrorPage,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
+import { classifyOAuthRefreshFailure } from "../auth-profiles/oauth-refresh-failure.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
 import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
 import { isModelNotFoundErrorMessage } from "../live-model-errors.js";
@@ -407,6 +408,19 @@ export type FailoverClassification =
       kind: "context_overflow";
     };
 
+export type ProviderRuntimeFailureKind =
+  | "auth_scope"
+  | "auth_refresh"
+  | "auth_html_403"
+  | "proxy"
+  | "rate_limit"
+  | "dns"
+  | "timeout"
+  | "schema"
+  | "sandbox_blocked"
+  | "replay_invalid"
+  | "unknown";
+
 const BILLING_402_HINTS = [
   "insufficient credits",
   "insufficient quota",
@@ -450,6 +464,122 @@ const TIMEOUT_ERROR_CODES = new Set([
   "EPIPE",
   "EAI_AGAIN",
 ]);
+const AUTH_SCOPE_HINT_RE =
+  /\b(?:missing|required|requires|insufficient)\s+(?:the\s+following\s+)?scopes?\b|\bmissing\s+scope\b/i;
+const AUTH_SCOPE_NAME_RE = /\b(?:api\.responses\.write|model\.request)\b/i;
+const HTML_BODY_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
+const HTML_CLOSE_RE = /<\/html>/i;
+const PROXY_ERROR_RE =
+  /\bproxyconnect\b|\bhttps?_proxy\b|\b407\b|\bproxy authentication required\b|\btunnel connection failed\b|\bconnect tunnel\b|\bsocks proxy\b|\bproxy error\b/i;
+const DNS_ERROR_RE = /\benotfound\b|\beai_again\b|\bgetaddrinfo\b|\bno such host\b|\bdns\b/i;
+const INTERRUPTED_NETWORK_ERROR_RE =
+  /\beconnrefused\b|\beconnreset\b|\beconnaborted\b|\benetreset\b|\behostunreach\b|\behostdown\b|\benetunreach\b|\bepipe\b|\bsocket hang up\b|\bconnection refused\b|\bconnection reset\b|\bconnection aborted\b|\bnetwork is unreachable\b|\bhost is unreachable\b|\bfetch failed\b|\bconnection error\b|\bnetwork request failed\b/i;
+const REPLAY_INVALID_RE =
+  /\bprevious_response_id\b.*\b(?:invalid|unknown|not found|does not exist|expired|mismatch)\b|\btool_(?:use|call)\.(?:input|arguments)\b.*\b(?:missing|required)\b|\bincorrect role information\b|\broles must alternate\b/i;
+const SANDBOX_BLOCKED_RE =
+  /\bapproval is required\b|\bapproval timed out\b|\bapproval was denied\b|\bblocked by sandbox\b|\bsandbox\b.*\b(?:blocked|denied|forbidden|disabled|not allowed)\b/i;
+
+function inferSignalStatus(signal: FailoverSignal): number | undefined {
+  if (typeof signal.status === "number" && Number.isFinite(signal.status)) {
+    return signal.status;
+  }
+  return extractLeadingHttpStatus(signal.message?.trim() ?? "")?.code;
+}
+
+function isHtmlErrorResponse(raw: string, status?: number): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return false;
+  }
+  const inferred =
+    typeof status === "number" && Number.isFinite(status)
+      ? status
+      : extractLeadingHttpStatus(trimmed)?.code;
+  if (typeof inferred !== "number" || inferred < 400) {
+    return false;
+  }
+  const rest = extractLeadingHttpStatus(trimmed)?.rest ?? trimmed;
+  return HTML_BODY_RE.test(rest) && HTML_CLOSE_RE.test(rest);
+}
+
+function isOpenAICodexScopeContext(raw: string, provider?: string): boolean {
+  const normalizedProvider = normalizeLowercaseStringOrEmpty(provider);
+  return (
+    normalizedProvider === "openai-codex" ||
+    /\bopenai\s+codex\b/i.test(raw) ||
+    /\bcodex\b.*\bscopes?\b/i.test(raw)
+  );
+}
+
+function isAuthScopeErrorMessage(raw: string, status?: number, provider?: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  if (!isOpenAICodexScopeContext(raw, provider)) {
+    return false;
+  }
+  const inferred =
+    typeof status === "number" && Number.isFinite(status)
+      ? status
+      : extractLeadingHttpStatus(raw.trim())?.code;
+  const hasScopeHint = AUTH_SCOPE_HINT_RE.test(raw);
+  const hasKnownScopeName = AUTH_SCOPE_NAME_RE.test(raw);
+  if (!hasScopeHint && !hasKnownScopeName) {
+    return false;
+  }
+  if (typeof inferred !== "number") {
+    return hasScopeHint;
+  }
+  if (inferred !== 401 && inferred !== 403) {
+    return false;
+  }
+  return true;
+}
+
+function isProxyErrorMessage(raw: string, status?: number): boolean {
+  if (!raw) {
+    return false;
+  }
+  if (status === 407) {
+    return true;
+  }
+  return PROXY_ERROR_RE.test(raw);
+}
+
+function isDnsTransportErrorMessage(raw: string): boolean {
+  return DNS_ERROR_RE.test(raw);
+}
+
+function isReplayInvalidErrorMessage(raw: string): boolean {
+  return REPLAY_INVALID_RE.test(raw);
+}
+
+function isSandboxBlockedErrorMessage(raw: string): boolean {
+  return Boolean(formatExecDeniedUserMessage(raw)) || SANDBOX_BLOCKED_RE.test(raw);
+}
+
+function isSchemaErrorMessage(raw: string): boolean {
+  if (!raw || isReplayInvalidErrorMessage(raw) || isContextOverflowError(raw)) {
+    return false;
+  }
+  return classifyFailoverReason(raw) === "format" || matchesFormatErrorPattern(raw);
+}
+
+function isTimeoutTransportErrorMessage(raw: string, status?: number): boolean {
+  if (!raw) {
+    return false;
+  }
+  if (isTimeoutErrorMessage(raw) || INTERRUPTED_NETWORK_ERROR_RE.test(raw)) {
+    return true;
+  }
+  if (
+    typeof status === "number" &&
+    [408, 499, 500, 502, 503, 504, 521, 522, 523, 524, 529].includes(status)
+  ) {
+    return true;
+  }
+  return false;
+}
 
 function includesAnyHint(text: string, hints: readonly string[]): boolean {
   return hints.some((hint) => text.includes(hint));
@@ -774,10 +904,7 @@ function classifyFailoverClassificationFromMessage(
 }
 
 export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassification | null {
-  const inferredStatus =
-    typeof signal.status === "number" && Number.isFinite(signal.status)
-      ? signal.status
-      : extractLeadingHttpStatus(signal.message?.trim() ?? "")?.code;
+  const inferredStatus = inferSignalStatus(signal);
   const messageClassification = signal.message
     ? classifyFailoverClassificationFromMessage(signal.message, signal.provider)
     : null;
@@ -794,6 +921,60 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
     return toReasonClassification(codeReason);
   }
   return messageClassification;
+}
+
+export function classifyProviderRuntimeFailureKind(
+  signal: FailoverSignal | string,
+): ProviderRuntimeFailureKind {
+  const normalizedSignal = typeof signal === "string" ? { message: signal } : signal;
+  const message = normalizedSignal.message?.trim() ?? "";
+  const status = inferSignalStatus(normalizedSignal);
+
+  if (!message && typeof status !== "number") {
+    return "unknown";
+  }
+  if (message && classifyOAuthRefreshFailure(message)) {
+    return "auth_refresh";
+  }
+  if (message && isAuthScopeErrorMessage(message, status, normalizedSignal.provider)) {
+    return "auth_scope";
+  }
+  if (message && status === 403 && isHtmlErrorResponse(message, status)) {
+    return "auth_html_403";
+  }
+  if (message && isProxyErrorMessage(message, status)) {
+    return "proxy";
+  }
+  const failoverClassification = classifyFailoverSignal({
+    ...normalizedSignal,
+    status,
+    message: message || undefined,
+  });
+  if (failoverClassification?.kind === "reason" && failoverClassification.reason === "rate_limit") {
+    return "rate_limit";
+  }
+  if (message && isDnsTransportErrorMessage(message)) {
+    return "dns";
+  }
+  if (message && isSandboxBlockedErrorMessage(message)) {
+    return "sandbox_blocked";
+  }
+  if (message && isReplayInvalidErrorMessage(message)) {
+    return "replay_invalid";
+  }
+  if (message && isSchemaErrorMessage(message)) {
+    return "schema";
+  }
+  if (
+    failoverClassification?.kind === "reason" &&
+    (failoverClassification.reason === "timeout" || failoverClassification.reason === "overloaded")
+  ) {
+    return "timeout";
+  }
+  if (message && isTimeoutTransportErrorMessage(message, status)) {
+    return "timeout";
+  }
+  return "unknown";
 }
 
 function coerceText(value: unknown): string {
@@ -947,6 +1128,12 @@ export function formatAssistantErrorText(
     return "LLM request failed with an unknown error.";
   }
 
+  const providerRuntimeFailureKind = classifyProviderRuntimeFailureKind({
+    status: extractLeadingHttpStatus(raw)?.code,
+    message: raw,
+    provider: opts?.provider ?? msg.provider,
+  });
+
   const unknownTool =
     raw.match(/unknown tool[:\s]+["']?([a-z0-9_-]+)["']?/i) ??
     raw.match(/tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i);
@@ -964,6 +1151,28 @@ export function formatAssistantErrorText(
   const diskSpaceCopy = formatDiskSpaceErrorCopy(raw);
   if (diskSpaceCopy) {
     return diskSpaceCopy;
+  }
+
+  if (providerRuntimeFailureKind === "auth_refresh") {
+    return "Authentication refresh failed. Re-authenticate this provider and try again.";
+  }
+
+  if (providerRuntimeFailureKind === "auth_scope") {
+    return (
+      "Authentication is missing the required OpenAI Codex scopes. " +
+      "Re-run OpenAI/Codex login and try again."
+    );
+  }
+
+  if (providerRuntimeFailureKind === "auth_html_403") {
+    return (
+      "Authentication failed with an HTML 403 response from the provider. " +
+      "Re-authenticate and verify your provider account access."
+    );
+  }
+
+  if (providerRuntimeFailureKind === "proxy") {
+    return "LLM request failed: proxy or tunnel configuration blocked the provider request.";
   }
 
   if (isContextOverflowError(raw)) {
@@ -1025,6 +1234,17 @@ export function formatAssistantErrorText(
 
   if (isBillingErrorMessage(raw)) {
     return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model);
+  }
+
+  if (providerRuntimeFailureKind === "schema") {
+    return "LLM request failed: provider rejected the request schema or tool payload.";
+  }
+
+  if (providerRuntimeFailureKind === "replay_invalid") {
+    return (
+      "Session history or replay state is invalid. " +
+      "Use /new to start a fresh session and try again."
+    );
   }
 
   if (isLikelyHttpErrorText(raw) || isRawApiErrorPayload(raw)) {

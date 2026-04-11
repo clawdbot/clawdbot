@@ -200,6 +200,7 @@ describe("timeout-triggered compaction", () => {
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("timed out");
+    expect(result.meta.livenessState).toBe("blocked");
   });
 
   it("does not attempt compaction when prompt token usage is low", async () => {

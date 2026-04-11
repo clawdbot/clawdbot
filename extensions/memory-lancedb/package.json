@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/memory-lancedb",
-  "version": "2026.4.10",
+  "version": "2026.4.11",
   "description": "OpenClaw LanceDB-backed long-term memory plugin with auto-recall/capture",
   "type": "module",
   "dependencies": {
@@ -18,13 +18,13 @@
     "install": {
       "npmSpec": "@openclaw/memory-lancedb",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.4.10"
+      "minHostVersion": ">=2026.4.11"
     },
     "compat": {
-      "pluginApi": ">=2026.4.10"
+      "pluginApi": ">=2026.4.11"
     },
     "build": {
-      "openclawVersion": "2026.4.10"
+      "openclawVersion": "2026.4.11"
     },
     "release": {
       "publishToClawHub": true,

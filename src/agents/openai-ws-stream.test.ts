@@ -1077,6 +1077,37 @@ describe("buildAssistantMessageFromResponse", () => {
     expect(tc.arguments).toEqual({ arg: "value" });
   });
 
+  it("preserves malformed function-call arguments as the raw string", () => {
+    const response: ResponseObject = {
+      id: "resp_malformed",
+      object: "response",
+      created_at: Date.now(),
+      status: "completed",
+      model: "gpt-5.4",
+      output: [
+        {
+          type: "function_call",
+          id: "item_bad_args",
+          call_id: "call_bad",
+          name: "exec",
+          arguments: "not valid json",
+        },
+      ],
+      usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+    };
+
+    const msg = buildAssistantMessageFromResponse(response, modelInfo);
+    const tc = msg.content.find((c) => c.type === "toolCall") as {
+      type: string;
+      name: string;
+      arguments: unknown;
+    };
+
+    expect(tc).toBeDefined();
+    expect(tc.name).toBe("exec");
+    expect(tc.arguments).toBe("not valid json");
+  });
+
   it("sets stopReason to 'toolUse' when tool calls are present", () => {
     const response = makeResponseObject("resp_3", undefined, "exec");
     const msg = buildAssistantMessageFromResponse(response, modelInfo);

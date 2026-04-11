@@ -6,6 +6,8 @@ export function hasModelSwitchContinuityEvidence(text: string) {
     lower.includes("handoff") || lower.includes("model switch") || lower.includes("switched");
   const mentionsKickoffTask =
     lower.includes("qa_kickoff_task") ||
+    lower.includes("qa/scenarios/index.md") ||
+    lower.includes("scenario pack") ||
     lower.includes("kickoff task") ||
     lower.includes("kickoff note") ||
     lower.includes("qa mission") ||

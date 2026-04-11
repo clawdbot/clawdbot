@@ -13,7 +13,7 @@ function recordWhatsAppOutbound(accountId: string) {
 
 function resolveOutboundMessageId(result: unknown): string {
   return typeof result === "object" && result && "key" in result
-    ? String((result as { key?: { id?: string } }).key?.id ?? "unknown")
+    ? ((result as { key?: { id?: string } }).key?.id ?? "unknown")
     : "unknown";
 }
 

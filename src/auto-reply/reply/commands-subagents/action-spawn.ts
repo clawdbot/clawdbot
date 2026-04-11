@@ -7,6 +7,7 @@ export async function handleSubagentsSpawnAction(
   ctx: SubagentsCommandContext,
 ): Promise<CommandHandlerResult> {
   const { params, requesterKey, restTokens } = ctx;
+  const requesterSessionEntry = params.sessionStore?.[requesterKey] ?? params.sessionEntry;
   const agentId = restTokens[0];
 
   const taskParts: string[] = [];
@@ -51,9 +52,9 @@ export async function handleSubagentsSpawnAction(
       agentAccountId: params.ctx.AccountId,
       agentTo: normalizedTo,
       agentThreadId: params.ctx.MessageThreadId,
-      agentGroupId: params.sessionEntry?.groupId ?? null,
-      agentGroupChannel: params.sessionEntry?.groupChannel ?? null,
-      agentGroupSpace: params.sessionEntry?.space ?? null,
+      agentGroupId: requesterSessionEntry?.groupId ?? null,
+      agentGroupChannel: requesterSessionEntry?.groupChannel ?? null,
+      agentGroupSpace: requesterSessionEntry?.space ?? null,
     },
   );
   if (result.status === "accepted") {

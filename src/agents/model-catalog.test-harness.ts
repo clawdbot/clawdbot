@@ -39,7 +39,7 @@ export function mockCatalogImportFailThenRecover() {
     }
     return {
       discoverAuthStorage: () => ({}),
-      AuthStorage: class {},
+      AuthStorage: function AuthStorage() {},
       ModelRegistry: class {
         getAll() {
           return [{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }];

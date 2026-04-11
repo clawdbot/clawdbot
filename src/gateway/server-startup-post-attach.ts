@@ -244,7 +244,6 @@ export async function startGatewayPostAttachRuntime(params: {
   bindHosts: string[];
   port: number;
   tlsEnabled: boolean;
-  pluginCount: number;
   log: {
     info: (msg: string) => void;
     warn: (msg: string) => void;
@@ -280,7 +279,9 @@ export async function startGatewayPostAttachRuntime(params: {
     bindHosts: params.bindHosts,
     port: params.port,
     tlsEnabled: params.tlsEnabled,
-    pluginCount: params.pluginCount,
+    loadedPluginIds: params.pluginRegistry.plugins
+      .filter((plugin) => plugin.status === "loaded")
+      .map((plugin) => plugin.id),
     log: params.log,
     isNixMode: params.isNixMode,
     startupStartedAt: params.startupStartedAt,

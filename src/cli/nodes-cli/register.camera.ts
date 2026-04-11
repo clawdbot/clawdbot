@@ -49,7 +49,7 @@ export function registerNodesCameraCommands(nodes: Command) {
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("camera list", async () => {
-          const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
+          const nodeId = await resolveNodeId(opts, opts.node ?? "");
           const raw = await callGatewayCli(
             "node.invoke",
             opts,
@@ -131,15 +131,15 @@ export function registerNodesCameraCommands(nodes: Command) {
                     );
                   })();
 
-          const maxWidth = opts.maxWidth ? Number.parseInt(String(opts.maxWidth), 10) : undefined;
-          const quality = opts.quality ? Number.parseFloat(String(opts.quality)) : undefined;
-          const delayMs = opts.delayMs ? Number.parseInt(String(opts.delayMs), 10) : undefined;
+          const maxWidth = opts.maxWidth ? Number.parseInt(opts.maxWidth, 10) : undefined;
+          const quality = opts.quality ? Number.parseFloat(opts.quality) : undefined;
+          const delayMs = opts.delayMs ? Number.parseInt(opts.delayMs, 10) : undefined;
           const deviceId = normalizeOptionalString(opts.deviceId);
           if (deviceId && facings.length > 1) {
             throw new Error("facing=both is not allowed when --device-id is set");
           }
           const timeoutMs = opts.invokeTimeout
-            ? Number.parseInt(String(opts.invokeTimeout), 10)
+            ? Number.parseInt(opts.invokeTimeout, 10)
             : undefined;
 
           const results: Array<{
@@ -213,11 +213,11 @@ export function registerNodesCameraCommands(nodes: Command) {
         await runNodesCommand("camera clip", async () => {
           const node = await resolveNode(opts, normalizeOptionalString(opts.node) ?? "");
           const nodeId = node.nodeId;
-          const facing = parseFacing(String(opts.facing ?? "front"));
-          const durationMs = parseDurationMs(String(opts.duration ?? "3000"));
+          const facing = parseFacing(opts.facing ?? "front");
+          const durationMs = parseDurationMs(opts.duration ?? "3000");
           const includeAudio = opts.audio !== false;
           const timeoutMs = opts.invokeTimeout
-            ? Number.parseInt(String(opts.invokeTimeout), 10)
+            ? Number.parseInt(opts.invokeTimeout, 10)
             : undefined;
           const deviceId = normalizeOptionalString(opts.deviceId);
 

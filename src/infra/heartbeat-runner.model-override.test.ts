@@ -79,6 +79,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
   async function runDefaultsHeartbeat(params: {
     model?: string;
     suppressToolErrorWarnings?: boolean;
+    timeoutSeconds?: number;
     lightContext?: boolean;
     isolatedSession?: boolean;
   }) {
@@ -92,6 +93,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
               target: "whatsapp",
               model: params.model,
               suppressToolErrorWarnings: params.suppressToolErrorWarnings,
+              timeoutSeconds: params.timeoutSeconds,
               lightContext: params.lightContext,
               isolatedSession: params.isolatedSession,
             },
@@ -128,6 +130,16 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
       expect.objectContaining({
         isHeartbeat: true,
         suppressToolErrorWarnings: true,
+      }),
+    );
+  });
+
+  it("passes heartbeat timeoutSeconds as a reply-run timeout override", async () => {
+    const replyOpts = await runDefaultsHeartbeat({ timeoutSeconds: 45 });
+    expect(replyOpts).toEqual(
+      expect.objectContaining({
+        isHeartbeat: true,
+        timeoutOverrideSeconds: 45,
       }),
     );
   });
@@ -284,6 +296,52 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
         expect.objectContaining({
           isHeartbeat: true,
           bootstrapContextMode: "lightweight",
+        }),
+        cfg,
+      );
+    });
+  });
+
+  it("passes per-agent heartbeat timeout override after merging defaults", async () => {
+    await withHeartbeatFixture(async ({ tmpDir, storePath, replySpy, seedSession }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            heartbeat: {
+              every: "30m",
+              timeoutSeconds: 120,
+            },
+          },
+          list: [
+            { id: "main", default: true },
+            {
+              id: "ops",
+              workspace: tmpDir,
+              heartbeat: {
+                every: "5m",
+                target: "whatsapp",
+                timeoutSeconds: 45,
+              },
+            },
+          ],
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveAgentMainSessionKey({ cfg, agentId: "ops" });
+      const result = await runHeartbeatWithSeed({
+        seedSession,
+        cfg,
+        agentId: "ops",
+        sessionKey,
+        replySpy,
+      });
+
+      expect(result.replySpy).toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.objectContaining({
+          isHeartbeat: true,
+          timeoutOverrideSeconds: 45,
         }),
         cfg,
       );

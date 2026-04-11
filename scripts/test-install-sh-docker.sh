@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SMOKE_IMAGE="${OPENCLAW_INSTALL_SMOKE_IMAGE:-openclaw-install-smoke:local}"
 NONROOT_IMAGE="${OPENCLAW_INSTALL_NONROOT_IMAGE:-openclaw-install-nonroot:local}"
+SMOKE_PLATFORM="${OPENCLAW_INSTALL_SMOKE_PLATFORM:-linux/amd64}"
+NONROOT_PLATFORM="${OPENCLAW_INSTALL_NONROOT_PLATFORM:-$SMOKE_PLATFORM}"
 INSTALL_URL="${OPENCLAW_INSTALL_URL:-https://openclaw.bot/install.sh}"
 CLI_INSTALL_URL="${OPENCLAW_INSTALL_CLI_URL:-https://openclaw.bot/install-cli.sh}"
 SKIP_NONROOT="${OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT:-0}"
@@ -17,6 +19,7 @@ if [[ "$SKIP_SMOKE_IMAGE_BUILD" == "1" ]]; then
 else
   echo "==> Build smoke image (upgrade, root): $SMOKE_IMAGE"
   docker build \
+    --platform "$SMOKE_PLATFORM" \
     -t "$SMOKE_IMAGE" \
     -f "$ROOT_DIR/scripts/docker/install-sh-smoke/Dockerfile" \
     "$ROOT_DIR/scripts/docker"
@@ -24,6 +27,7 @@ fi
 
 echo "==> Run installer smoke test (root): $INSTALL_URL"
 docker run --rm -t \
+  --platform "$SMOKE_PLATFORM" \
   -v "${LATEST_DIR}:/out" \
   -e OPENCLAW_INSTALL_URL="$INSTALL_URL" \
   -e OPENCLAW_INSTALL_METHOD=npm \
@@ -48,6 +52,7 @@ else
   else
     echo "==> Build non-root image: $NONROOT_IMAGE"
     docker build \
+      --platform "$NONROOT_PLATFORM" \
       -t "$NONROOT_IMAGE" \
       -f "$ROOT_DIR/scripts/docker/install-sh-nonroot/Dockerfile" \
       "$ROOT_DIR/scripts/docker"
@@ -55,6 +60,7 @@ else
 
   echo "==> Run installer non-root test: $INSTALL_URL"
   docker run --rm -t \
+    --platform "$NONROOT_PLATFORM" \
     -e OPENCLAW_INSTALL_URL="$INSTALL_URL" \
     -e OPENCLAW_INSTALL_METHOD=npm \
     -e OPENCLAW_INSTALL_EXPECT_VERSION="$LATEST_VERSION" \
@@ -76,6 +82,7 @@ fi
 
 echo "==> Run CLI installer non-root test (same image)"
 docker run --rm -t \
+  --platform "$NONROOT_PLATFORM" \
   --entrypoint /bin/bash \
   -e OPENCLAW_INSTALL_URL="$INSTALL_URL" \
   -e OPENCLAW_INSTALL_CLI_URL="$CLI_INSTALL_URL" \

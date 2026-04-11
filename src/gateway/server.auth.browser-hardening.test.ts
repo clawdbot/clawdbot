@@ -363,7 +363,7 @@ describe("gateway auth browser hardening", () => {
           clientId: TEST_OPERATOR_CLIENT.id,
           clientMode: TEST_OPERATOR_CLIENT.mode,
           identityPath: path.join(os.tmpdir(), `openclaw-browser-device-${randomUUID()}.json`),
-          nonce: String(nonce ?? ""),
+          nonce: nonce ?? "",
         });
         const res = await connectReq(browserWs, {
           token: "secret",

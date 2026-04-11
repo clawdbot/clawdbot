@@ -68,6 +68,7 @@ type ConsoleLogFn = (...args: unknown[]) => void;
 const WATCHDOG_INTERVAL_MS = 5_000;
 const REPAIR_DEBOUNCE_MS = 30_000;
 const STUCK_ANNOUNCING_MS = 8_000;
+const BONJOUR_ANNOUNCED_STATE = "announced" as BonjourServiceState;
 const CIAO_SELF_PROBE_RETRY_FRAGMENT =
   "failed probing with reason: Error: Can't probe for a service which is announced already.";
 
@@ -95,7 +96,7 @@ function serviceSummary(label: string, svc: BonjourService): string {
 }
 
 function isAnnouncedState(state: BonjourServiceState | "unknown") {
-  return String(state) === "announced";
+  return state === BONJOUR_ANNOUNCED_STATE;
 }
 
 function handleCiaoUnhandledRejection(reason: unknown): boolean {

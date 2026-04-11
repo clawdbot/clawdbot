@@ -67,7 +67,7 @@ export async function agentsAddCommand(
   const workspaceFlag = opts.workspace?.trim();
   const nameInput = opts.name?.trim();
   const hasFlags = params?.hasFlags === true;
-  const nonInteractive = Boolean(opts.nonInteractive || hasFlags);
+  const nonInteractive = opts.nonInteractive === true || hasFlags;
 
   if (nonInteractive && !workspaceFlag) {
     runtime.error(
@@ -204,7 +204,7 @@ export async function agentsAddCommand(
         },
       }));
 
-    const agentName = normalizeOptionalString(String(name ?? "")) ?? "";
+    const agentName = normalizeOptionalString(name) ?? "";
     const agentId = normalizeAgentId(agentName);
     if (agentName !== agentId) {
       await prompter.note(`Normalized id to "${agentId}".`, "Agent id");
@@ -231,7 +231,7 @@ export async function agentsAddCommand(
       validate: (value) => (value?.trim() ? undefined : "Required"),
     });
     const workspaceDir = resolveUserPath(
-      normalizeOptionalString(String(workspaceInput ?? "")) || workspaceDefault,
+      normalizeOptionalString(workspaceInput) || workspaceDefault,
     );
     const agentDir = resolveAgentDir(cfg, agentId);
 

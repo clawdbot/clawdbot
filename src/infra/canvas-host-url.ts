@@ -35,7 +35,7 @@ const parseHostHeader = (value: HostSource): ParsedHostHeader => {
     return { host: "" };
   }
   try {
-    const parsed = new URL(`http://${String(value).trim()}`);
+    const parsed = new URL(`http://${value.trim()}`);
     const portRaw = parsed.port.trim();
     const port = portRaw ? Number.parseInt(portRaw, 10) : undefined;
     return {

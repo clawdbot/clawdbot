@@ -375,8 +375,9 @@ export function resolveMemoryBackendConfig(params: {
   const mergedExtraCollections = [
     ...(params.cfg.agents?.defaults?.memorySearch?.qmd?.extraCollections ?? []),
     ...(agentEntry?.memorySearch?.qmd?.extraCollections ?? []),
-  ].filter((value): value is MemoryQmdIndexPath =>
-    Boolean(value && typeof value === "object" && typeof value.path === "string"),
+  ].filter(
+    (value): value is MemoryQmdIndexPath =>
+      value !== null && typeof value === "object" && typeof value.path === "string",
   );
 
   // Combine QMD-specific paths with extraPaths and per-agent cross-agent collections.

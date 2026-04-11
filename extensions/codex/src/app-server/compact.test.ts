@@ -7,23 +7,15 @@ import { maybeCompactCodexAppServerSession, __testing } from "./compact.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { writeCodexAppServerBinding } from "./session-binding.js";
 
-const OLD_RUNTIME = process.env.OPENCLAW_AGENT_RUNTIME;
-
 let tempDir: string;
 
 describe("maybeCompactCodexAppServerSession", () => {
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-compact-"));
-    process.env.OPENCLAW_AGENT_RUNTIME = "codex-app-server";
   });
 
   afterEach(async () => {
     __testing.resetCodexAppServerClientFactoryForTests();
-    if (OLD_RUNTIME === undefined) {
-      delete process.env.OPENCLAW_AGENT_RUNTIME;
-    } else {
-      process.env.OPENCLAW_AGENT_RUNTIME = OLD_RUNTIME;
-    }
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 

@@ -25,7 +25,7 @@ function mockCatalogImportFailThenRecover() {
     }
     return {
       discoverAuthStorage: () => ({}),
-      AuthStorage: class {},
+      AuthStorage: function AuthStorage() {},
       ModelRegistry: class {
         getAll() {
           return [{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }];
@@ -41,7 +41,7 @@ function mockPiDiscoveryModels(models: unknown[]) {
     async () =>
       ({
         discoverAuthStorage: () => ({}),
-        AuthStorage: class {},
+        AuthStorage: function AuthStorage() {},
         ModelRegistry: class {
           getAll() {
             return models;
@@ -118,7 +118,7 @@ describe("loadModelCatalog", () => {
         async () =>
           ({
             discoverAuthStorage: () => ({}),
-            AuthStorage: class {},
+            AuthStorage: function AuthStorage() {},
             ModelRegistry: class {
               getAll() {
                 return [

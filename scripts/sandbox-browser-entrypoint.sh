@@ -174,14 +174,16 @@ fi
 
 echo "[sandbox] CDP ready. Starting socat..."
 
-SOCAT_LISTEN_ADDR="TCP-LISTEN:${CDP_PORT},fork,reuseaddr,bind=0.0.0.0"
-if [[ -n "${CDP_SOURCE_RANGE}" ]]; then
+if [[ -z "${CDP_SOURCE_RANGE}" ]]; then
+  echo "[sandbox-browser] WARNING: CDP_SOURCE_RANGE unset; socat CDP relay will not start." >&2
+  echo "[sandbox-browser] Set OPENCLAW_BROWSER_CDP_SOURCE_RANGE to an explicit CIDR to enable CDP access." >&2
+else
+  SOCAT_LISTEN_ADDR="TCP-LISTEN:${CDP_PORT},fork,reuseaddr,bind=0.0.0.0"
   SOCAT_LISTEN_ADDR="${SOCAT_LISTEN_ADDR},range=${CDP_SOURCE_RANGE}"
+  socat "${SOCAT_LISTEN_ADDR}" "TCP:127.0.0.1:${CHROME_CDP_PORT}" &
+  SOCAT_PID=$!
+  echo "[sandbox] socat started (PID: ${SOCAT_PID})"
 fi
-
-socat "${SOCAT_LISTEN_ADDR}" "TCP:127.0.0.1:${CHROME_CDP_PORT}" &
-SOCAT_PID=$!
-echo "[sandbox] socat started (PID: ${SOCAT_PID})"
 
 if [[ "${ENABLE_NOVNC}" == "1" && "${HEADLESS}" != "1" ]]; then
   if [[ -z "${NOVNC_PASSWORD}" ]]; then

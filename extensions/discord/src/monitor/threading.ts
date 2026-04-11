@@ -334,7 +334,7 @@ function resolveDiscordThreadStarterAuthorTag(
 function resolveDiscordThreadStarterRoleIds(
   member: DiscordThreadStarterRestMember | null | undefined,
 ): string[] | undefined {
-  return Array.isArray(member?.roles) ? member.roles.map((roleId) => String(roleId)) : undefined;
+  return Array.isArray(member?.roles) ? member.roles : undefined;
 }
 
 export function resolveDiscordReplyTarget(opts: {
@@ -530,7 +530,7 @@ export async function maybeCreateDiscordAutoThread(
         },
       },
     )) as { id?: string };
-    const createdId = created?.id ? String(created.id) : "";
+    const createdId = created?.id || "";
     if (
       createdId &&
       params.channelConfig?.autoThreadName === "generated" &&
@@ -569,7 +569,7 @@ export async function maybeCreateDiscordAutoThread(
       const msg = (await params.client.rest.get(
         Routes.channelMessage(messageChannelId, params.message.id),
       )) as { thread?: { id?: string } };
-      const existingThreadId = msg?.thread?.id ? String(msg.thread.id) : "";
+      const existingThreadId = msg?.thread?.id || "";
       if (existingThreadId) {
         logVerbose(
           `discord: autoThread reusing existing thread ${existingThreadId} on ${messageChannelId}/${params.message.id}`,

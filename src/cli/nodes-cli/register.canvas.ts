@@ -54,8 +54,8 @@ export function registerNodesCanvasCommands(nodes: Command) {
             throw new Error(`invalid format: ${String(opts.format)} (expected png|jpg|jpeg)`);
           }
 
-          const maxWidth = opts.maxWidth ? Number.parseInt(String(opts.maxWidth), 10) : undefined;
-          const quality = opts.quality ? Number.parseFloat(String(opts.quality)) : undefined;
+          const maxWidth = opts.maxWidth ? Number.parseInt(opts.maxWidth, 10) : undefined;
+          const quality = opts.quality ? Number.parseFloat(opts.quality) : undefined;
           const raw = await invokeCanvas(opts, "canvas.snapshot", {
             format: formatForParams,
             maxWidth: Number.isFinite(maxWidth) ? maxWidth : undefined,
@@ -99,7 +99,7 @@ export function registerNodesCanvasCommands(nodes: Command) {
           };
           const params: Record<string, unknown> = {};
           if (opts.target) {
-            params.url = String(opts.target);
+            params.url = opts.target;
           }
           if (
             Number.isFinite(placement.x) ||
@@ -207,7 +207,7 @@ export function registerNodesCanvasCommands(nodes: Command) {
           }
 
           const jsonl = hasText
-            ? buildA2UITextJsonl(String(opts.text ?? ""))
+            ? buildA2UITextJsonl(opts.text ?? "")
             : await fs.readFile(String(opts.jsonl), "utf8");
           const { version, messageCount } = validateA2UIJsonl(jsonl);
           if (version === "v0.9") {

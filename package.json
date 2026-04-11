@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.4.10",
+  "version": "2026.4.11",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -228,6 +228,10 @@
     "./plugin-sdk/media-runtime": {
       "types": "./dist/plugin-sdk/media-runtime.d.ts",
       "default": "./dist/plugin-sdk/media-runtime.js"
+    },
+    "./plugin-sdk/media-mime": {
+      "types": "./dist/plugin-sdk/media-mime.d.ts",
+      "default": "./dist/plugin-sdk/media-mime.js"
     },
     "./plugin-sdk/media-generation-runtime": {
       "types": "./dist/plugin-sdk/media-generation-runtime.d.ts",
@@ -1451,7 +1455,7 @@
       "fast-xml-parser": "5.5.7",
       "request": "npm:@cypress/request@3.0.10",
       "request-promise": "npm:@cypress/request-promise@5.0.0",
-      "basic-ftp": "5.2.1",
+      "basic-ftp": "5.2.2",
       "file-type": "22.0.1",
       "form-data": "2.5.4",
       "minimatch": "10.2.4",

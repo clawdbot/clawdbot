@@ -62,7 +62,7 @@ describe("buildProviderStreamFamilyHooks", () => {
     let capturedHeaders: Record<string, string> | undefined;
 
     const baseStreamFn: StreamFn = (model, _context, options) => {
-      capturedModelId = String(model.id);
+      capturedModelId = model.id;
       const payload = { config: { thinkingConfig: { thinkingBudget: -1 } } } as Record<
         string,
         unknown

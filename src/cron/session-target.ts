@@ -1,4 +1,8 @@
-const INVALID_CRON_SESSION_TARGET_ID_ERROR = "invalid cron sessionTarget session id";
+export const INVALID_CRON_SESSION_TARGET_ID_ERROR = "invalid cron sessionTarget session id";
+
+export function isInvalidCronSessionTargetIdError(error: unknown): boolean {
+  return error instanceof Error && error.message === INVALID_CRON_SESSION_TARGET_ID_ERROR;
+}
 
 export function assertSafeCronSessionTargetId(sessionId: string): string {
   const trimmed = sessionId.trim();

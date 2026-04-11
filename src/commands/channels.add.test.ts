@@ -84,7 +84,7 @@ function createTelegramAddTestPlugin(): ChannelPlugin {
     const resolvedAccountId = accountId || DEFAULT_ACCOUNT_ID;
     const scoped = telegram?.accounts?.[resolvedAccountId];
     return {
-      token: String(scoped?.botToken ?? telegram?.botToken ?? ""),
+      token: scoped?.botToken ?? telegram?.botToken ?? "",
       enabled:
         typeof scoped?.enabled === "boolean"
           ? scoped.enabled

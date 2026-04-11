@@ -3,6 +3,8 @@ import {
   backfillDreamDiary,
   loadDreamDiary,
   loadDreamingStatus,
+  loadWikiImportInsights,
+  loadWikiMemoryPalace,
   resetGroundedShortTerm,
   resetDreamDiary,
   resolveConfiguredDreaming,
@@ -28,6 +30,12 @@ function createState(): { state: DreamingState; request: ReturnType<typeof vi.fn
     dreamDiaryError: null,
     dreamDiaryPath: null,
     dreamDiaryContent: null,
+    wikiImportInsightsLoading: false,
+    wikiImportInsightsError: null,
+    wikiImportInsights: null,
+    wikiMemoryPalaceLoading: false,
+    wikiMemoryPalaceError: null,
+    wikiMemoryPalace: null,
     lastError: null,
   };
   return { state, request };
@@ -210,6 +218,124 @@ describe("dreaming controller", () => {
     );
     expect(state.dreamingStatus?.phases).toBeUndefined();
     expect(state.dreamingStatusError).toBeNull();
+  });
+
+  it("loads and normalizes wiki import insights", async () => {
+    const { state, request } = createState();
+    request.mockResolvedValue({
+      sourceType: "chatgpt",
+      totalItems: 2,
+      totalClusters: 1,
+      clusters: [
+        {
+          key: "topic/travel",
+          label: "Travel",
+          itemCount: 2,
+          highRiskCount: 1,
+          withheldCount: 1,
+          preferenceSignalCount: 1,
+          items: [
+            {
+              pagePath: "sources/chatgpt-2026-04-10-alpha.md",
+              title: "BA flight receipts process",
+              riskLevel: "low",
+              riskReasons: [],
+              labels: ["topic/travel"],
+              topicKey: "topic/travel",
+              topicLabel: "Travel",
+              digestStatus: "available",
+              activeBranchMessages: 4,
+              userMessageCount: 2,
+              assistantMessageCount: 2,
+              firstUserLine: "how do i get receipts?",
+              lastUserLine: "that option does not exist",
+              assistantOpener: "Use the BA request-a-receipt flow first.",
+              summary: "Use the BA request-a-receipt flow first.",
+              candidateSignals: ["prefers airline receipts"],
+              correctionSignals: [],
+              preferenceSignals: ["prefers airline receipts"],
+            },
+          ],
+        },
+      ],
+    });
+
+    await loadWikiImportInsights(state);
+
+    expect(request).toHaveBeenCalledWith("wiki.importInsights", {});
+    expect(state.wikiImportInsights).toEqual(
+      expect.objectContaining({
+        totalItems: 2,
+        totalClusters: 1,
+        clusters: [
+          expect.objectContaining({
+            key: "topic/travel",
+            itemCount: 2,
+            withheldCount: 1,
+          }),
+        ],
+      }),
+    );
+    expect(state.wikiImportInsightsError).toBeNull();
+    expect(state.wikiImportInsightsLoading).toBe(false);
+  });
+
+  it("loads and normalizes the wiki memory palace", async () => {
+    const { state, request } = createState();
+    request.mockResolvedValue({
+      totalItems: 2,
+      totalClaims: 3,
+      totalQuestions: 1,
+      totalContradictions: 1,
+      clusters: [
+        {
+          key: "synthesis",
+          label: "Syntheses",
+          itemCount: 1,
+          claimCount: 2,
+          questionCount: 1,
+          contradictionCount: 0,
+          items: [
+            {
+              pagePath: "syntheses/travel-system.md",
+              title: "Travel system",
+              kind: "synthesis",
+              claimCount: 2,
+              questionCount: 1,
+              contradictionCount: 0,
+              claims: ["prefers direct receipts"],
+              questions: ["should this become a playbook?"],
+              contradictions: [],
+              snippet: "Recurring travel admin friction.",
+            },
+          ],
+        },
+      ],
+    });
+
+    await loadWikiMemoryPalace(state);
+
+    expect(request).toHaveBeenCalledWith("wiki.palace", {});
+    expect(state.wikiMemoryPalace).toEqual(
+      expect.objectContaining({
+        totalItems: 2,
+        totalClaims: 3,
+        clusters: [
+          expect.objectContaining({
+            key: "synthesis",
+            label: "Syntheses",
+            items: [
+              expect.objectContaining({
+                title: "Travel system",
+                claims: ["prefers direct receipts"],
+              }),
+            ],
+          }),
+        ],
+      }),
+    );
+    expect(state.wikiMemoryPalaceError).toBeNull();
+    expect(state.wikiMemoryPalaceLoading).toBe(false);
   });
 
   it("patches config to update global dreaming enablement", async () => {

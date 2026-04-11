@@ -1301,7 +1301,7 @@ export async function executeJob(
   } & CronRunOutcome &
     CronRunTelemetry;
   try {
-    coreResult = await executeJobCore(state, job);
+    coreResult = await executeJobCoreWithTimeout(state, job);
   } catch (err) {
     coreResult = { status: "error", error: String(err) };
   }

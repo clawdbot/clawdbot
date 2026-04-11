@@ -35,7 +35,7 @@ function findRegisteredChannelPluginEntry(
   normalizedKey: string,
 ): RegisteredChannelPluginEntry | undefined {
   return listRegisteredChannelPluginEntries().find((entry) => {
-    const id = normalizeOptionalLowercaseString(String(entry.plugin.id ?? "")) ?? "";
+    const id = normalizeOptionalLowercaseString(entry.plugin.id ?? "") ?? "";
     if (id && id === normalizedKey) {
       return true;
     }

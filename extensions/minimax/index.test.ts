@@ -92,7 +92,7 @@ describe("minimax provider hooks", () => {
 
     let resolvedApiModelId = "";
     const captureApiModel: StreamFn = (model) => {
-      resolvedApiModelId = String(model.id ?? "");
+      resolvedApiModelId = model.id ?? "";
       return {} as ReturnType<StreamFn>;
     };
     const wrappedApiStream = apiProvider.wrapStreamFn?.({
@@ -114,7 +114,7 @@ describe("minimax provider hooks", () => {
 
     let resolvedPortalModelId = "";
     const capturePortalModel: StreamFn = (model) => {
-      resolvedPortalModelId = String(model.id ?? "");
+      resolvedPortalModelId = model.id ?? "";
       return {} as ReturnType<StreamFn>;
     };
     const wrappedPortalStream = portalProvider.wrapStreamFn?.({

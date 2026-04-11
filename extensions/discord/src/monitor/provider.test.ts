@@ -77,8 +77,8 @@ function createConfigWithDiscordAccount(overrides: Record<string, unknown> = {})
 vi.mock("../voice/manager.runtime.js", () => {
   voiceRuntimeModuleLoadedMock();
   return {
-    DiscordVoiceManager: class DiscordVoiceManager {},
-    DiscordVoiceReadyListener: class DiscordVoiceReadyListener {},
+    DiscordVoiceManager: function DiscordVoiceManager() {},
+    DiscordVoiceReadyListener: function DiscordVoiceReadyListener() {},
   };
 });
 describe("monitorDiscordProvider", () => {
@@ -173,8 +173,8 @@ describe("monitorDiscordProvider", () => {
     providerTesting.setLoadDiscordVoiceRuntime(async () => {
       voiceRuntimeModuleLoadedMock();
       return {
-        DiscordVoiceManager: class DiscordVoiceManager {},
-        DiscordVoiceReadyListener: class DiscordVoiceReadyListener {},
+        DiscordVoiceManager: function DiscordVoiceManager() {},
+        DiscordVoiceReadyListener: function DiscordVoiceReadyListener() {},
       } as never;
     });
     providerTesting.setLoadDiscordProviderSessionRuntime(

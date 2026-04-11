@@ -254,7 +254,7 @@ export function createExtensionTestShards(params = {}) {
   return shards
     .map((shard, index) => ({
       index,
-      checkName: `checks-fast-extensions-shard-${index + 1}`,
+      checkName: `checks-node-extensions-shard-${index + 1}`,
       ...mergeTestPlans(shard.plans),
     }))
     .filter((shard) => shard.hasTests);

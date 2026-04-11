@@ -89,6 +89,13 @@ export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {
         accountId: readStringValue(typed.requesterAccountId),
       },
     );
+    const childSessionKey = readStringValue(typed.childSessionKey)?.trim() ?? "";
+    const requesterSessionKey = readStringValue(typed.requesterSessionKey)?.trim() ?? "";
+    const controllerSessionKey =
+      readStringValue(typed.controllerSessionKey)?.trim() || requesterSessionKey;
+    if (!childSessionKey || !requesterSessionKey) {
+      continue;
+    }
     const {
       announceCompletedAt: _announceCompletedAt,
       announceHandled: _announceHandled,
@@ -98,6 +105,9 @@ export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {
     } = typed;
     out.set(runId, {
       ...rest,
+      childSessionKey,
+      requesterSessionKey,
+      controllerSessionKey,
       requesterOrigin,
       cleanupCompletedAt,
       cleanupHandled,

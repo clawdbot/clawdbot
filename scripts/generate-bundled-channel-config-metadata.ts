@@ -157,7 +157,7 @@ export async function collectBundledChannelConfigMetadata(params?: { repoRoot?: 
       const label = resolveRootLabel(source, channelId);
       const description = resolveRootDescription(source, channelId);
       entries.push({
-        pluginId: String(source.manifest.id),
+        pluginId: source.manifest.id,
         channelId,
         ...(label ? { label } : {}),
         ...(description ? { description } : {}),

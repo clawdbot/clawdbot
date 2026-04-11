@@ -55,6 +55,7 @@ export type CodexThreadStartParams = {
   approvalPolicy?: "never" | "on-request" | "on-failure" | "untrusted";
   approvalsReviewer?: "user" | "guardian_subagent";
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
+  serviceTier?: string | null;
   config?: JsonObject | null;
   serviceName?: string | null;
   baseInstructions?: string | null;
@@ -67,6 +68,13 @@ export type CodexThreadStartParams = {
 
 export type CodexThreadResumeParams = {
   threadId: string;
+  model?: string | null;
+  modelProvider?: string | null;
+  approvalPolicy?: "never" | "on-request" | "on-failure" | "untrusted";
+  approvalsReviewer?: "user" | "guardian_subagent";
+  sandbox?: "read-only" | "workspace-write" | "danger-full-access";
+  serviceTier?: string | null;
+  persistExtendedHistory?: boolean;
 };
 
 export type CodexThreadStartResponse = {
@@ -84,6 +92,7 @@ export type CodexTurnStartParams = {
   approvalPolicy?: "never" | "on-request" | "on-failure" | "untrusted";
   approvalsReviewer?: "user" | "guardian_subagent";
   model?: string | null;
+  serviceTier?: string | null;
   effort?: "minimal" | "low" | "medium" | "high" | "xhigh" | null;
 };
 

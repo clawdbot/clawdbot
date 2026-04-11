@@ -216,7 +216,7 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
     message: params.promptMessage,
     validate: params.validate,
   });
-  const apiKey = params.normalize(String(key ?? ""));
+  const apiKey = params.normalize(key ?? "");
   await params.setCredential(apiKey, selectedMode);
   return apiKey;
 }

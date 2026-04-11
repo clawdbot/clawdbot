@@ -31,8 +31,8 @@ function cleanExpiredMentions(): void {
 
 function resolveOwnershipAgent(config: OpenClawConfig): { id: string; name: string } {
   const list = Array.isArray(config.agents?.list)
-    ? config.agents.list.filter((entry): entry is AgentEntry =>
-        Boolean(entry && typeof entry === "object"),
+    ? config.agents.list.filter(
+        (entry): entry is AgentEntry => entry !== null && typeof entry === "object",
       )
     : [];
   const selected = list.find((entry) => entry.default === true) ?? list[0];

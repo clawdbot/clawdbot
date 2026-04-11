@@ -61,7 +61,7 @@ if (options.field) {
   if (value === undefined) {
     throw new Error(`Unknown iOS version field '${options.field}'.`);
   }
-  process.stdout.write(`${String(value)}\n`);
+  process.stdout.write(`${value}\n`);
   process.exit(0);
 }
 

@@ -226,6 +226,53 @@ describe("task-registry store runtime", () => {
     });
   });
 
+  it("preserves requesterSessionKey when it differs from ownerKey across sqlite restore", () => {
+    const created = createTaskRecord({
+      runtime: "cli",
+      requesterSessionKey: "agent:main:slack:channel:C1234567890",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:main:slack:channel:C1234567890",
+      runId: "run-requester-session-restore",
+      task: "Reply to channel task",
+      status: "running",
+      deliveryStatus: "pending",
+      notifyPolicy: "done_only",
+    });
+
+    resetTaskRegistryForTests({ persist: false });
+
+    expect(findTaskByRunId("run-requester-session-restore")).toMatchObject({
+      taskId: created.taskId,
+      requesterSessionKey: "agent:main:slack:channel:C1234567890",
+      ownerKey: "agent:main:main",
+      childSessionKey: "agent:main:slack:channel:C1234567890",
+    });
+  });
+
+  it("preserves taskKind across sqlite restore", () => {
+    const created = createTaskRecord({
+      runtime: "acp",
+      taskKind: "video_generation",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:codex:acp:video",
+      runId: "run-task-kind-restore",
+      task: "Render a short clip",
+      status: "running",
+      deliveryStatus: "pending",
+      notifyPolicy: "done_only",
+    });
+
+    resetTaskRegistryForTests({ persist: false });
+
+    expect(findTaskByRunId("run-task-kind-restore")).toMatchObject({
+      taskId: created.taskId,
+      taskKind: "video_generation",
+      runId: "run-task-kind-restore",
+    });
+  });
+
   it("hardens the sqlite task store directory and file modes", () => {
     if (process.platform === "win32") {
       return;

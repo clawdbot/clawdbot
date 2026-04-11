@@ -30,7 +30,7 @@ try {
     throw result.error;
   }
 
-  process.exit(result.status ?? 1);
+  process.exitCode = result.status ?? 1;
 } finally {
   releaseLock();
 }

@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
+import { resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
+import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const { createOpenClawCodingToolsMock } = vi.hoisted(() => ({
@@ -54,12 +57,17 @@ function makeParams(): HandleCommandsParams {
   return {
     ctx: {
       SessionKey: "agent:main:default",
+      SenderId: "sender-1",
+      SenderName: "Alice",
+      SenderUsername: "alice_u",
+      SenderE164: "+15551234567",
     },
     cfg: {},
     command: {
       surface: "telegram",
       channel: "telegram",
       ownerList: [],
+      senderId: "sender-1",
       senderIsOwner: true,
       isAuthorizedSender: true,
       rawBodyNormalized: "/context",
@@ -74,6 +82,7 @@ function makeParams(): HandleCommandsParams {
     agentId: "main",
     sessionEntry: {
       sessionId: "session-1",
+      updatedAt: Date.now(),
       groupId: "group-1",
       groupChannel: "#general",
       space: "guild-1",
@@ -117,6 +126,118 @@ describe("resolveCommandsSystemPromptBundle", () => {
         sessionKey: "agent:main:default",
         workspaceDir: "/tmp/workspace",
         messageProvider: "telegram",
+        senderId: "sender-1",
+        senderName: "Alice",
+        senderUsername: "alice_u",
+        senderE164: "+15551234567",
+      }),
+    );
+  });
+
+  it("uses the canonical target session for sandbox runtime resolution", async () => {
+    const params = makeParams();
+    params.ctx.SessionKey = "agent:main:telegram:slash-session";
+    params.sessionKey = "agent:main:telegram:direct:target-session";
+
+    const { resolveCommandsSystemPromptBundle } = await import("./commands-system-prompt.js");
+    await resolveCommandsSystemPromptBundle(params);
+
+    expect(vi.mocked(resolveSandboxRuntimeStatus)).toHaveBeenCalledWith({
+      cfg: params.cfg,
+      sessionKey: "agent:main:telegram:direct:target-session",
+    });
+  });
+
+  it("uses the canonical target session agent for tool creation", async () => {
+    const params = makeParams();
+    params.agentId = "main";
+    params.sessionKey = "agent:target:telegram:direct:target-session";
+    vi.mocked(resolveSessionAgentIds).mockReturnValue({
+      sessionAgentId: "target",
+      defaultAgentId: "main",
+    });
+
+    const { resolveCommandsSystemPromptBundle } = await import("./commands-system-prompt.js");
+    await resolveCommandsSystemPromptBundle(params);
+
+    expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "target",
+        sessionKey: "agent:target:telegram:direct:target-session",
+      }),
+    );
+  });
+
+  it("prefers the target session entry for bootstrap and tool metadata", async () => {
+    const params = makeParams();
+    params.sessionEntry = {
+      sessionId: "wrapper-session",
+      updatedAt: Date.now(),
+      groupId: "wrapper-group",
+      groupChannel: "#wrapper",
+      space: "wrapper-space",
+      spawnedBy: "agent:wrapper",
+    };
+    params.sessionStore = {
+      "agent:target:telegram:direct:target-session": {
+        sessionId: "target-session",
+        updatedAt: Date.now(),
+        groupId: "target-group",
+        groupChannel: "#target",
+        space: "target-space",
+        spawnedBy: "agent:target-parent",
+      },
+    } as HandleCommandsParams["sessionStore"];
+    params.sessionKey = "agent:target:telegram:direct:target-session";
+
+    const { resolveCommandsSystemPromptBundle } = await import("./commands-system-prompt.js");
+    await resolveCommandsSystemPromptBundle(params);
+
+    expect(vi.mocked(resolveBootstrapContextForRun)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "target-session",
+      }),
+    );
+    expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        groupId: "target-group",
+        groupChannel: "#target",
+        groupSpace: "target-space",
+        spawnedBy: "agent:target-parent",
+      }),
+    );
+  });
+
+  it("uses the resolved session key and forwards full-access block reasons", async () => {
+    const { resolveCommandsSystemPromptBundle } = await import("./commands-system-prompt.js");
+    const sandboxRuntime = await import("../../agents/sandbox.js");
+    const systemPromptRuntime = await import("../../agents/system-prompt.js");
+
+    vi.mocked(sandboxRuntime.resolveSandboxRuntimeStatus).mockImplementation(({ sessionKey }) => {
+      expect(sessionKey).toBe("agent:target:default");
+      return { sandboxed: true, mode: "workspace-write" } as never;
+    });
+
+    const params = makeParams();
+    params.sessionKey = "agent:target:default";
+    params.ctx.SessionKey = "agent:source:default";
+    params.elevated = {
+      enabled: true,
+      allowed: false,
+      failures: [],
+    };
+
+    await resolveCommandsSystemPromptBundle(params);
+
+    expect(vi.mocked(systemPromptRuntime.buildAgentSystemPrompt)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sandboxInfo: expect.objectContaining({
+          enabled: true,
+          elevated: expect.objectContaining({
+            fullAccessAvailable: false,
+            fullAccessBlockedReason: "host-policy",
+          }),
+        }),
       }),
     );
   });

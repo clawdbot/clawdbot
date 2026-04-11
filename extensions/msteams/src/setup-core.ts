@@ -31,23 +31,23 @@ async function promptMSTeamsCredentials(prompter: WizardPrompter): Promise<{
   appPassword: string;
   tenantId: string;
 }> {
-  const appId = String(
+  const appId = (
     await prompter.text({
       message: "Enter MS Teams App ID",
       validate: (value) => (value?.trim() ? undefined : "Required"),
-    }),
+    })
   ).trim();
-  const appPassword = String(
+  const appPassword = (
     await prompter.text({
       message: "Enter MS Teams App Password",
       validate: (value) => (value?.trim() ? undefined : "Required"),
-    }),
+    })
   ).trim();
-  const tenantId = String(
+  const tenantId = (
     await prompter.text({
       message: "Enter MS Teams Tenant ID",
       validate: (value) => (value?.trim() ? undefined : "Required"),
-    }),
+    })
   ).trim();
   return { appId, appPassword, tenantId };
 }

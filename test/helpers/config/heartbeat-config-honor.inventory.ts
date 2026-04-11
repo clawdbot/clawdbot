@@ -76,6 +76,21 @@ export const HEARTBEAT_CONFIG_HONOR_INVENTORY: ConfigHonorInventoryRow[] = [
     testPaths: ["src/infra/heartbeat-runner.model-override.test.ts"],
   },
   {
+    key: "timeoutSeconds",
+    schemaPaths: [
+      "agents.defaults.heartbeat.timeoutSeconds",
+      "agents.list.*.heartbeat.timeoutSeconds",
+    ],
+    typePaths: ["src/config/types.agent-defaults.ts", "src/config/zod-schema.agent-runtime.ts"],
+    mergePaths: ["src/infra/heartbeat-runner.ts"],
+    consumerPaths: ["src/infra/heartbeat-runner.ts", "src/auto-reply/reply/get-reply.ts"],
+    reloadPaths: ["src/gateway/config-reload-plan.ts"],
+    testPaths: [
+      "src/config/zod-schema.agent-defaults.test.ts",
+      "src/infra/heartbeat-runner.model-override.test.ts",
+    ],
+  },
+  {
     key: "lightContext",
     schemaPaths: ["agents.defaults.heartbeat.lightContext", "agents.list.*.heartbeat.lightContext"],
     typePaths: ["src/config/types.agent-defaults.ts", "src/config/zod-schema.agent-runtime.ts"],

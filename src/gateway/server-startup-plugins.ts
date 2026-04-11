@@ -89,6 +89,7 @@ export async function prepareGatewayPluginBootstrap(params: {
       baseMethods,
       pluginIds: startupPluginIds,
       preferSetupRuntimeForChannelPlugins: deferredConfiguredChannelPluginIds.length > 0,
+      suppressPluginInfoLogs: deferredConfiguredChannelPluginIds.length > 0,
     }));
   } else {
     pluginRegistry = getActivePluginRegistry() ?? emptyPluginRegistry;

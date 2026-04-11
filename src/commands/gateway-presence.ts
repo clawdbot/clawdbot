@@ -15,7 +15,7 @@ export function pickGatewaySelfPresence(presence: unknown): GatewaySelfPresence 
   const self =
     entries.find((e) => e.mode === "gateway" && e.reason === "self") ??
     // Back-compat: older presence payloads only included a `text` line.
-    entries.find((e) => typeof e.text === "string" && String(e.text).startsWith("Gateway:")) ??
+    entries.find((e) => typeof e.text === "string" && e.text.startsWith("Gateway:")) ??
     null;
   if (!self) {
     return null;

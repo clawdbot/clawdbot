@@ -1,43 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
-  resolveApiKeyForProvider: vi.fn(),
-  findModelInCatalog: vi.fn(),
-  loadModelCatalog: vi.fn(async () => []),
-  modelSupportsVision: vi.fn(() => false),
-  resolveDefaultModelForAgent: vi.fn(() => ({ provider: "openai", model: "gpt-5.2" })),
-}));
-
-vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
-  resolveAutoImageModel: vi.fn(async () => null),
-  resolveAutoMediaKeyProviders: vi.fn(() => ["openai"]),
-  resolveDefaultMediaModel: vi.fn(() => "gpt-4.1-mini"),
-}));
-
-vi.mock("./runtime.js", () => ({
-  getTelegramRuntime: () => ({
-    mediaUnderstanding: {
-      describeImageFileWithModel: vi.fn(),
-    },
-  }),
-}));
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import * as stickerCache from "./sticker-cache-store.js";
 
 const TEST_CACHE_DIR = "/tmp/openclaw-test-sticker-cache/telegram";
 const TEST_CACHE_FILE = path.join(TEST_CACHE_DIR, "sticker-cache.json");
 
-type StickerCacheModule = typeof import("./sticker-cache.js");
-
-let stickerCache: StickerCacheModule;
-
 describe("sticker-cache", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-test-sticker-cache";
     fs.rmSync("/tmp/openclaw-test-sticker-cache", { recursive: true, force: true });
     fs.mkdirSync(TEST_CACHE_DIR, { recursive: true });
-    vi.resetModules();
-    stickerCache = await import("./sticker-cache.js");
   });
 
   afterEach(() => {

@@ -308,7 +308,7 @@ async function refreshOAuthTokenWithLock(params: {
 
     const oauthCreds: Record<string, OAuthCredentials> = { [cred.provider]: cred };
     const result =
-      String(cred.provider) === "chutes"
+      cred.provider === "chutes"
         ? await (async () => {
             const newCredentials = await refreshChutesTokens({
               credential: cred,

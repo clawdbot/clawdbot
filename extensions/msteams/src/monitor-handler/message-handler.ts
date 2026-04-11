@@ -513,7 +513,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       },
       policy: {
         isGroup: !isDirectMessage,
-        requireMention: Boolean(requireMention),
+        requireMention,
         allowTextCommands: false,
         hasControlCommand: false,
         commandAuthorized: false,
@@ -752,6 +752,13 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       ? `[Thread history]\n${threadContext}\n[/Thread history]\n\n${rawBody}`
       : rawBody;
 
+    // For Teams *channel* messages (not group chats / DMs), preserve the
+    // `teamId/channelId` pair on NativeChannelId so downstream action handlers
+    // can route through `/teams/{teamId}/channels/{channelId}` via Graph API.
+    // The bare conversation id (`19:...@thread.tacv2`) is insufficient on its
+    // own because channel Graph endpoints require the owning team id too.
+    const nativeChannelId = isChannel && teamId ? `${teamId}/${conversationId}` : undefined;
+
     const ctxPayload = core.channel.reply.finalizeInboundContext({
       Body: combinedBody,
       BodyForAgent: bodyForAgent,
@@ -776,6 +783,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       CommandAuthorized: commandAuthorized,
       OriginatingChannel: "msteams" as const,
       OriginatingTo: teamsTo,
+      NativeChannelId: nativeChannelId,
       ReplyToId: activity.replyToId ?? undefined,
       ReplyToBody: includeQuoteContext ? quoteInfo?.body : undefined,
       ReplyToSender: includeQuoteContext ? quoteInfo?.sender : undefined,

@@ -23,7 +23,7 @@ vi.mock("@microsoft/teams.apps", () => ({
 }));
 
 vi.mock("@microsoft/teams.api", () => ({
-  Client: class {},
+  Client: function Client() {},
 }));
 
 import { probeMSTeams } from "./probe.js";

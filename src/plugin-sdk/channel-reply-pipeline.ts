@@ -29,19 +29,26 @@ export function createChannelReplyPipeline(params: {
   accountId?: string;
   typing?: CreateTypingCallbacksParams;
   typingCallbacks?: TypingCallbacks;
+  transformReplyPayload?: (payload: ReplyPayload) => ReplyPayload | null;
 }): ChannelReplyPipeline {
   const channelId = params.channel
     ? (normalizeChannelId(params.channel) ?? params.channel)
     : undefined;
-  const plugin = channelId ? getChannelPlugin(channelId) : undefined;
-  const transformReplyPayload = plugin?.messaging?.transformReplyPayload
-    ? (payload: ReplyPayload) =>
-        plugin.messaging?.transformReplyPayload?.({
-          payload,
-          cfg: params.cfg,
-          accountId: params.accountId,
-        }) ?? payload
-    : undefined;
+  const plugin = params.transformReplyPayload
+    ? undefined
+    : channelId
+      ? getChannelPlugin(channelId)
+      : undefined;
+  const transformReplyPayload =
+    params.transformReplyPayload ??
+    (plugin?.messaging?.transformReplyPayload
+      ? (payload: ReplyPayload) =>
+          plugin.messaging?.transformReplyPayload?.({
+            payload,
+            cfg: params.cfg,
+            accountId: params.accountId,
+          }) ?? payload
+      : undefined);
   return {
     ...createReplyPrefixOptions({
       cfg: params.cfg,

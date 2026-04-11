@@ -235,7 +235,7 @@ function mergeAgentConfig(cfg: unknown, opts: unknown): MockConfig {
     identity?: MockIdentity;
   }) ?? { agentId: "" };
   const list = getAgentList(config);
-  const agentId = String(params.agentId ?? "");
+  const agentId = params.agentId ?? "";
   const index = list.findIndex((entry) => entry.id === agentId);
   const base = index >= 0 ? list[index] : { id: agentId };
   const nextEntry: MockAgentEntry = {

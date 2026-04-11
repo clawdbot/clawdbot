@@ -493,6 +493,7 @@ jobs:
           RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
         run: |
           set -euo pipefail
+          printf '//registry.npmjs.org/:_authToken=%s\n' "${NODE_AUTH_TOKEN}" > "${HOME}/.npmrc"
           npm whoami >/dev/null
           npm dist-tag add "openclaw@${RELEASE_VERSION}" latest
           promoted_latest="$(npm view openclaw dist-tags.latest)"

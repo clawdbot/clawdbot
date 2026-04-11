@@ -55,11 +55,26 @@ describe("resolveLlmIdleTimeoutMs", () => {
     expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(300_000);
   });
 
+  it("uses an explicit run timeout override when llm.idleTimeoutSeconds is not set", () => {
+    expect(resolveLlmIdleTimeoutMs({ runTimeoutMs: 900_000 })).toBe(900_000);
+  });
+
+  it("disables the idle watchdog when an explicit run timeout disables timeouts", () => {
+    expect(resolveLlmIdleTimeoutMs({ runTimeoutMs: 2_147_000_000 })).toBe(0);
+  });
+
   it("prefers llm.idleTimeoutSeconds over agents.defaults.timeoutSeconds", () => {
     const cfg = {
       agents: { defaults: { timeoutSeconds: 300, llm: { idleTimeoutSeconds: 120 } } },
     } as OpenClawConfig;
     expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(120_000);
+  });
+
+  it("prefers llm.idleTimeoutSeconds over an explicit run timeout override", () => {
+    const cfg = {
+      agents: { defaults: { llm: { idleTimeoutSeconds: 120 } } },
+    } as OpenClawConfig;
+    expect(resolveLlmIdleTimeoutMs({ cfg, runTimeoutMs: 900_000 })).toBe(120_000);
   });
 
   it("keeps idleTimeoutSeconds=0 disabled even when timeoutSeconds is set", () => {

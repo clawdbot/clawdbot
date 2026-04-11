@@ -5,10 +5,8 @@ import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { parseClawHubPluginSpec } from "../infra/clawhub.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import { listMarketplacePlugins } from "../plugins/marketplace.js";
-import type { PluginRecord } from "../plugins/registry.js";
 import { formatPluginSourceForTable, resolvePluginSourceRoots } from "../plugins/source-display.js";
 import {
   buildAllPluginInspectReports,
@@ -25,7 +23,6 @@ import {
 } from "../plugins/uninstall.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
-import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
@@ -36,6 +33,8 @@ import {
 } from "./plugins-command-helpers.js";
 import { setPluginEnabledInConfig } from "./plugins-config.js";
 import { runPluginInstallCommand } from "./plugins-install-command.js";
+import { formatPluginLine } from "./plugins-list-format.js";
+import { resolvePluginUninstallId } from "./plugins-uninstall-selection.js";
 import { runPluginUpdateCommand } from "./plugins-update-command.js";
 import { promptYesNo } from "./prompt.js";
 
@@ -66,109 +65,6 @@ export type PluginUninstallOptions = {
   force?: boolean;
   dryRun?: boolean;
 };
-
-function resolvePluginUninstallId(params: {
-  rawId: string;
-  config: OpenClawConfig;
-  plugins: PluginRecord[];
-}): { pluginId: string; plugin?: PluginRecord } {
-  const rawId = params.rawId.trim();
-  const plugin = params.plugins.find((entry) => entry.id === rawId || entry.name === rawId);
-  if (plugin) {
-    return { pluginId: plugin.id, plugin };
-  }
-
-  for (const [pluginId, install] of Object.entries(params.config.plugins?.installs ?? {})) {
-    if (
-      install.spec === rawId ||
-      install.resolvedSpec === rawId ||
-      install.resolvedName === rawId ||
-      install.marketplacePlugin === rawId
-    ) {
-      return { pluginId };
-    }
-  }
-
-  const requestedClawHub = parseClawHubPluginSpec(rawId);
-  if (requestedClawHub) {
-    for (const [pluginId, install] of Object.entries(params.config.plugins?.installs ?? {})) {
-      const installedClawHubName =
-        install.clawhubPackage ??
-        parseClawHubPluginSpec(install.spec ?? "")?.name ??
-        parseClawHubPluginSpec(install.resolvedSpec ?? "")?.name;
-      if (installedClawHubName === requestedClawHub.name) {
-        return { pluginId };
-      }
-    }
-  }
-
-  return { pluginId: rawId };
-}
-
-function formatPluginLine(plugin: PluginRecord, verbose = false): string {
-  const status =
-    plugin.status === "loaded"
-      ? theme.success("loaded")
-      : plugin.status === "disabled"
-        ? theme.warn("disabled")
-        : theme.error("error");
-  const name = theme.command(plugin.name || plugin.id);
-  const idSuffix = plugin.name && plugin.name !== plugin.id ? theme.muted(` (${plugin.id})`) : "";
-  const desc = plugin.description
-    ? theme.muted(
-        plugin.description.length > 60
-          ? `${plugin.description.slice(0, 57)}...`
-          : plugin.description,
-      )
-    : theme.muted("(no description)");
-  const format = plugin.format ?? "openclaw";
-
-  if (!verbose) {
-    return `${name}${idSuffix} ${status} ${theme.muted(`[${format}]`)} - ${desc}`;
-  }
-
-  const parts = [
-    `${name}${idSuffix} ${status}`,
-    `  format: ${format}`,
-    `  source: ${theme.muted(shortenHomeInString(plugin.source))}`,
-    `  origin: ${plugin.origin}`,
-  ];
-  if (plugin.bundleFormat) {
-    parts.push(`  bundle format: ${plugin.bundleFormat}`);
-  }
-  if (plugin.version) {
-    parts.push(`  version: ${plugin.version}`);
-  }
-  if (plugin.activated !== undefined) {
-    parts.push(`  activated: ${plugin.activated ? "yes" : "no"}`);
-  }
-  if (plugin.imported !== undefined) {
-    parts.push(`  imported: ${plugin.imported ? "yes" : "no"}`);
-  }
-  if (plugin.explicitlyEnabled !== undefined) {
-    parts.push(`  explicitly enabled: ${plugin.explicitlyEnabled ? "yes" : "no"}`);
-  }
-  if (plugin.activationSource) {
-    parts.push(`  activation source: ${plugin.activationSource}`);
-  }
-  if (plugin.activationReason) {
-    parts.push(`  activation reason: ${sanitizeTerminalText(plugin.activationReason)}`);
-  }
-  if (plugin.providerIds.length > 0) {
-    parts.push(`  providers: ${plugin.providerIds.join(", ")}`);
-  }
-  if (plugin.activated !== undefined || plugin.activationSource || plugin.activationReason) {
-    const activationSummary =
-      plugin.activated === false
-        ? "inactive"
-        : (plugin.activationSource ?? (plugin.activated ? "active" : "inactive"));
-    parts.push(`  activation: ${activationSummary}`);
-  }
-  if (plugin.error) {
-    parts.push(theme.error(`  error: ${plugin.error}`));
-  }
-  return parts.join("\n");
-}
 
 function formatInspectSection(title: string, lines: string[]): string[] {
   if (lines.length === 0) {

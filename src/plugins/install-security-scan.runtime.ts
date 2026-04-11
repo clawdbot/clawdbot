@@ -11,7 +11,7 @@ import {
 } from "./dependency-denylist.js";
 import { getGlobalHookRunner } from "./hook-runner-global.js";
 import { createBeforeInstallHookPayload } from "./install-policy-context.js";
-import type { InstallSafetyOverrides } from "./install-security-scan.js";
+import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
 
 type InstallScanLogger = {
   warn?: (message: string) => void;

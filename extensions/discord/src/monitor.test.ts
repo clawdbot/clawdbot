@@ -72,7 +72,9 @@ beforeEach(() => {
 });
 
 describe("registerDiscordListener", () => {
-  class FakeListener {}
+  class FakeListener {
+    readonly testListener = true;
+  }
 
   it("dedupes listeners by constructor", () => {
     const listeners: object[] = [];

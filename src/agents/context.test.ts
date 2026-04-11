@@ -7,6 +7,18 @@ import {
 } from "./context.js";
 import { createSessionManagerRuntimeRegistry } from "./pi-hooks/session-manager-runtime-registry.js";
 
+function testModelContextWindow(id: string, contextWindow: number) {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text" as const],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow,
+    maxTokens: 4096,
+  };
+}
+
 describe("applyDiscoveredContextWindows", () => {
   it("keeps the smallest context window when the same bare model id appears under multiple providers", () => {
     const cache = new Map<string, number>();
@@ -159,6 +171,14 @@ describe("resolveContextTokensForModel", () => {
   it("returns 1M context when anthropic context1m is enabled for opus/sonnet", () => {
     const result = resolveContextTokensForModel({
       cfg: {
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+              models: [testModelContextWindow("claude-opus-4-6", 200_000)],
+            },
+          },
+        },
         agents: {
           defaults: {
             models: {
@@ -172,6 +192,7 @@ describe("resolveContextTokensForModel", () => {
       provider: "anthropic",
       model: "claude-opus-4-6",
       fallbackContextTokens: 200_000,
+      allowAsyncLoad: false,
     });
 
     expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
@@ -180,6 +201,14 @@ describe("resolveContextTokensForModel", () => {
   it("does not force 1M context when context1m is not enabled", () => {
     const result = resolveContextTokensForModel({
       cfg: {
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+              models: [testModelContextWindow("claude-opus-4-6", 200_000)],
+            },
+          },
+        },
         agents: {
           defaults: {
             models: {
@@ -193,6 +222,7 @@ describe("resolveContextTokensForModel", () => {
       provider: "anthropic",
       model: "claude-opus-4-6",
       fallbackContextTokens: 200_000,
+      allowAsyncLoad: false,
     });
 
     expect(result).toBe(200_000);
@@ -201,6 +231,14 @@ describe("resolveContextTokensForModel", () => {
   it("does not force 1M context for non-opus/sonnet Anthropic models", () => {
     const result = resolveContextTokensForModel({
       cfg: {
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+              models: [testModelContextWindow("claude-haiku-3-5", 200_000)],
+            },
+          },
+        },
         agents: {
           defaults: {
             models: {
@@ -214,6 +252,7 @@ describe("resolveContextTokensForModel", () => {
       provider: "anthropic",
       model: "claude-haiku-3-5",
       fallbackContextTokens: 200_000,
+      allowAsyncLoad: false,
     });
 
     expect(result).toBe(200_000);

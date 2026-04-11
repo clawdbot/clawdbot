@@ -647,6 +647,26 @@ export async function runAgentTurnWithFallback(params: {
       return undefined;
     }
 
+    // Don't overwrite a user-initiated model override (e.g. from /models or
+    // /model) with the fallback model.  The user's explicit selection should
+    // survive transient primary-model failures so subsequent messages still
+    // target the model the user chose.  Fallback persistence is only
+    // appropriate when the override was itself set by a previous fallback
+    // ("auto") or when there is no override yet.
+    //
+    // `modelOverrideSource` was added later, so older persisted sessions can
+    // carry a user-selected override without the source field.  Treat any
+    // entry with a `modelOverride` but missing `modelOverrideSource` as legacy
+    // user state, matching the backward-compat treatment in
+    // session-reset-service.
+    const isUserModelOverride =
+      activeSessionEntry.modelOverrideSource === "user" ||
+      (activeSessionEntry.modelOverrideSource === undefined &&
+        Boolean(normalizeOptionalString(activeSessionEntry.modelOverride)));
+    if (isUserModelOverride) {
+      return undefined;
+    }
+
     const previousState = snapshotFallbackSelectionState(activeSessionEntry);
     const applied = applyFallbackCandidateSelectionToEntry({
       entry: activeSessionEntry,
@@ -1221,12 +1241,12 @@ export async function runAgentTurnWithFallback(params: {
       fallbackModel = fallbackResult.model;
       fallbackAttempts = Array.isArray(fallbackResult.attempts)
         ? fallbackResult.attempts.map((attempt) => ({
-            provider: String(attempt.provider ?? ""),
-            model: String(attempt.model ?? ""),
-            error: String(attempt.error ?? ""),
-            reason: attempt.reason ? String(attempt.reason) : undefined,
+            provider: attempt.provider,
+            model: attempt.model,
+            error: attempt.error,
+            reason: attempt.reason || undefined,
             status: typeof attempt.status === "number" ? attempt.status : undefined,
-            code: attempt.code ? String(attempt.code) : undefined,
+            code: attempt.code || undefined,
           }))
         : [];
 

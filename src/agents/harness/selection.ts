@@ -3,7 +3,7 @@ import type { AgentEmbeddedHarnessConfig } from "../../config/types.agents-share
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { listAgentEntries, resolveSessionAgentIds } from "../agent-scope.js";
-import type { CompactEmbeddedPiSessionParams } from "../pi-embedded-runner/compact.js";
+import type { CompactEmbeddedPiSessionParams } from "../pi-embedded-runner/compact.types.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,

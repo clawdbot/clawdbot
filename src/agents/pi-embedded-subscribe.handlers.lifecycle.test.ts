@@ -29,6 +29,7 @@ function createContext(
       pendingCompactionRetry: 0,
       pendingToolMediaUrls: [],
       pendingToolAudioAsVoice: false,
+      replayState: { replayInvalid: false, hadPotentialSideEffects: false },
       blockState: {
         thinking: true,
         final: true,
@@ -58,6 +59,7 @@ describe("handleAgentEnd", () => {
       },
       { onAgentEvent },
     );
+    ctx.state.livenessState = "working";
 
     await handleAgentEnd(ctx);
 
@@ -68,6 +70,7 @@ describe("handleAgentEnd", () => {
       event: "embedded_run_agent_end",
       runId: "run-1",
       error: "LLM request failed: connection refused by the provider endpoint.",
+      providerRuntimeFailureKind: "timeout",
       rawErrorPreview: "connection refused",
       consoleMessage:
         "embedded run agent end: runId=run-1 isError=true model=unknown provider=unknown error=LLM request failed: connection refused by the provider endpoint. rawError=connection refused",
@@ -77,6 +80,7 @@ describe("handleAgentEnd", () => {
       data: {
         phase: "error",
         error: "LLM request failed: connection refused by the provider endpoint.",
+        livenessState: "blocked",
       },
     });
   });
@@ -101,6 +105,7 @@ describe("handleAgentEnd", () => {
       runId: "run-1",
       error: "The AI service is temporarily overloaded. Please try again in a moment.",
       failoverReason: "overloaded",
+      providerRuntimeFailureKind: "timeout",
       providerErrorType: "overloaded_error",
       consoleMessage:
         'embedded run agent end: runId=run-1 isError=true model=claude-test provider=anthropic error=The AI service is temporarily overloaded. Please try again in a moment. rawError={"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
@@ -160,6 +165,26 @@ describe("handleAgentEnd", () => {
     });
   });
 
+  it("logs runtime failure kind for missing-scope auth errors", async () => {
+    const ctx = createContext({
+      role: "assistant",
+      stopReason: "error",
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      errorMessage:
+        '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write"}}',
+      content: [{ type: "text", text: "" }],
+    });
+
+    await handleAgentEnd(ctx);
+
+    expect(vi.mocked(ctx.log.warn).mock.calls[0]?.[1]).toMatchObject({
+      failoverReason: "auth",
+      providerRuntimeFailureKind: "auth_scope",
+      httpCode: "401",
+    });
+  });
+
   it("keeps non-error run-end logging on debug only", async () => {
     const ctx = createContext(undefined);
 
@@ -167,6 +192,91 @@ describe("handleAgentEnd", () => {
 
     expect(ctx.log.warn).not.toHaveBeenCalled();
     expect(ctx.log.debug).toHaveBeenCalledWith("embedded run agent end: runId=run-1 isError=false");
+  });
+
+  it("surfaces replay-invalid paused lifecycle end state when present", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
+    ctx.state.replayState = { ...ctx.state.replayState, replayInvalid: true };
+    ctx.state.livenessState = "paused";
+
+    await handleAgentEnd(ctx);
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        livenessState: "paused",
+        replayInvalid: true,
+      },
+    });
+  });
+
+  it("derives abandoned lifecycle end state when replay-invalid work finished without a reply", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
+    ctx.state.replayState = { ...ctx.state.replayState, replayInvalid: true };
+    ctx.state.livenessState = "working";
+    ctx.state.assistantTexts = [];
+    ctx.state.messagingToolSentTexts = [];
+    ctx.state.messagingToolSentMediaUrls = [];
+    ctx.state.successfulCronAdds = 0;
+
+    await handleAgentEnd(ctx);
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        livenessState: "abandoned",
+        replayInvalid: true,
+      },
+    });
+  });
+
+  it("marks incomplete tool-use lifecycle end state before runner finalization", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(
+      {
+        role: "assistant",
+        stopReason: "toolUse",
+        content: [],
+      },
+      { onAgentEvent },
+    );
+    ctx.state.livenessState = "working";
+    ctx.state.assistantTexts = [];
+
+    await handleAgentEnd(ctx);
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        livenessState: "abandoned",
+        replayInvalid: true,
+      },
+    });
+  });
+
+  it("keeps accumulated deterministic side effects from being marked abandoned", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
+    ctx.state.replayState = { ...ctx.state.replayState, replayInvalid: true };
+    ctx.state.livenessState = "working";
+    ctx.state.assistantTexts = [];
+    ctx.state.hadDeterministicSideEffect = true;
+
+    await handleAgentEnd(ctx);
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        livenessState: "working",
+        replayInvalid: true,
+      },
+    });
   });
 
   it("flushes orphaned tool media as a media-only block reply", async () => {
@@ -182,6 +292,26 @@ describe("handleAgentEnd", () => {
     });
     expect(ctx.state.pendingToolMediaUrls).toEqual([]);
     expect(ctx.state.pendingToolAudioAsVoice).toBe(false);
+  });
+
+  it("emits orphaned tool media before the lifecycle end event", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
+    ctx.state.pendingToolMediaUrls = ["/tmp/reply.opus"];
+    ctx.state.pendingToolAudioAsVoice = true;
+
+    await handleAgentEnd(ctx);
+
+    const blockReplyOrder =
+      (vi.mocked(ctx.emitBlockReply).mock.invocationCallOrder[0] as number | undefined) ?? 0;
+    const lifecycleOrder = onAgentEvent.mock.invocationCallOrder[0] as number | undefined;
+
+    expect(blockReplyOrder).toBeGreaterThan(0);
+    expect(lifecycleOrder).toBeGreaterThan(blockReplyOrder);
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
   });
 
   it("resolves compaction wait before awaiting an async block reply flush", async () => {

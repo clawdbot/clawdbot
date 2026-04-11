@@ -38,7 +38,7 @@ import { resolveAnnounceOrigin, type DeliveryContext } from "./subagent-announce
 import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
-import type { SpawnSubagentMode } from "./subagent-spawn.js";
+import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
 export { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
 

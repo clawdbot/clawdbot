@@ -21,8 +21,17 @@ export const updateHandlers: GatewayRequestHandlers = {
       return;
     }
     const actor = resolveControlPlaneActor(client);
-    const { sessionKey, note, restartDelayMs } = parseRestartRequestParams(params);
-    const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
+    const {
+      sessionKey,
+      deliveryContext: requestedDeliveryContext,
+      threadId: requestedThreadId,
+      note,
+      restartDelayMs,
+    } = parseRestartRequestParams(params);
+    const { deliveryContext: sessionDeliveryContext, threadId: sessionThreadId } =
+      extractDeliveryInfo(sessionKey);
+    const deliveryContext = requestedDeliveryContext ?? sessionDeliveryContext;
+    const threadId = requestedThreadId ?? sessionThreadId;
     const timeoutMsRaw = (params as { timeoutMs?: unknown }).timeoutMs;
     const timeoutMs =
       typeof timeoutMsRaw === "number" && Number.isFinite(timeoutMsRaw)

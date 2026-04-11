@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { resolveEntriesWithActiveFallback, resolveModelEntries } from "./resolve.js";
 import type { MediaUnderstandingCapability } from "./types.js";
 

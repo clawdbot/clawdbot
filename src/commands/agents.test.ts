@@ -200,6 +200,35 @@ describe("agents helpers", () => {
     expect(result.config.bindings).toHaveLength(2);
   });
 
+  it("applyAgentBindings keeps distinct bindings when persisted match fields contain pipes", () => {
+    const cfg: OpenClawConfig = {};
+
+    const result = applyAgentBindings(cfg, [
+      {
+        agentId: "main",
+        match: {
+          channel: "discord",
+          peer: { kind: "direct", id: "a|b" },
+          accountId: "default",
+        },
+      },
+      {
+        agentId: "main",
+        match: {
+          channel: "discord",
+          peer: { kind: "direct", id: "a" },
+          guildId: "b",
+          accountId: "|default",
+        },
+      },
+    ]);
+
+    expect(result.added).toHaveLength(2);
+    expect(result.skipped).toHaveLength(0);
+    expect(result.conflicts).toHaveLength(0);
+    expect(result.config.bindings).toHaveLength(2);
+  });
+
   it("removeAgentBindings does not remove role-based bindings when removing channel-level routes", () => {
     const cfg: OpenClawConfig = {
       bindings: [

@@ -99,8 +99,10 @@ export function formatError(err: unknown): string {
     typeof (err as { error?: { message?: unknown } })?.error?.message === "string"
       ? ((err as { error?: { message?: unknown } }).error?.message as string)
       : undefined,
-  ].filter((value): value is string => Boolean(value && value.trim().length > 0));
-  const message = messageCandidates[0];
+  ];
+  const message = messageCandidates.find((value): value is string =>
+    Boolean(value && value.trim().length > 0),
+  );
 
   const pieces: string[] = [];
   if (typeof status === "number") {

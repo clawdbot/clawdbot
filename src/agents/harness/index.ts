@@ -1,5 +1,6 @@
 export {
   clearAgentHarnesses,
+  disposeRegisteredAgentHarnesses,
   getAgentHarness,
   getRegisteredAgentHarness,
   listAgentHarnessIds,

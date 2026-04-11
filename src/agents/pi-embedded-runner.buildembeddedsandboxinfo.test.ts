@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildEmbeddedSandboxInfo } from "./pi-embedded-runner.js";
+import { resolveEmbeddedFullAccessState } from "./pi-embedded-runner/sandbox-info.js";
 import type { SandboxContext } from "./sandbox.js";
 
 function createSandboxContext(overrides?: Partial<SandboxContext>): SandboxContext {
@@ -77,7 +78,70 @@ describe("buildEmbeddedSandboxInfo", () => {
       workspaceAccess: "none",
       agentWorkspaceMount: undefined,
       hostBrowserAllowed: false,
-      elevated: { allowed: true, defaultLevel: "on" },
+      elevated: {
+        allowed: true,
+        defaultLevel: "on",
+        fullAccessAvailable: true,
+      },
+    });
+  });
+
+  it("keeps full-access unavailability truth when provided", () => {
+    const sandbox = createSandboxContext();
+
+    expect(
+      buildEmbeddedSandboxInfo(sandbox, {
+        enabled: true,
+        allowed: true,
+        defaultLevel: "full",
+        fullAccessAvailable: false,
+        fullAccessBlockedReason: "runtime",
+      }),
+    ).toEqual({
+      enabled: true,
+      workspaceDir: "/tmp/openclaw-sandbox",
+      containerWorkspaceDir: "/workspace",
+      workspaceAccess: "none",
+      agentWorkspaceMount: undefined,
+      browserBridgeUrl: "http://localhost:9222",
+      hostBrowserAllowed: true,
+      elevated: {
+        allowed: true,
+        defaultLevel: "full",
+        fullAccessAvailable: false,
+        fullAccessBlockedReason: "runtime",
+      },
+    });
+  });
+});
+
+describe("resolveEmbeddedFullAccessState", () => {
+  it("treats direct host runs with allowed elevation as full-access available", () => {
+    expect(
+      resolveEmbeddedFullAccessState({
+        execElevated: {
+          enabled: true,
+          allowed: true,
+          defaultLevel: "full",
+        },
+      }),
+    ).toEqual({ available: true });
+  });
+
+  it("keeps explicit runtime blocks even when host exec is allowed", () => {
+    expect(
+      resolveEmbeddedFullAccessState({
+        execElevated: {
+          enabled: true,
+          allowed: true,
+          defaultLevel: "full",
+          fullAccessAvailable: false,
+          fullAccessBlockedReason: "runtime",
+        },
+      }),
+    ).toEqual({
+      available: false,
+      blockedReason: "runtime",
     });
   });
 });

@@ -9,18 +9,20 @@ import {
 import { handleModelsCommand } from "./commands-models.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
+const modelCatalogMocks = vi.hoisted(() => ({
+  loadModelCatalog: vi.fn(),
+}));
+
+const modelAuthLabelMocks = vi.hoisted(() => ({
+  resolveModelAuthLabel: vi.fn<(params: unknown) => string | undefined>(() => undefined),
+}));
+
 vi.mock("../../agents/model-catalog.js", () => ({
-  loadModelCatalog: vi.fn(async () => [
-    { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
-    { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet" },
-    { provider: "openai", id: "gpt-4.1", name: "GPT-4.1" },
-    { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 Mini" },
-    { provider: "google", id: "gemini-2.0-flash", name: "Gemini Flash" },
-  ]),
+  loadModelCatalog: modelCatalogMocks.loadModelCatalog,
 }));
 
 vi.mock("../../agents/model-auth-label.js", () => ({
-  resolveModelAuthLabel: () => undefined,
+  resolveModelAuthLabel: modelAuthLabelMocks.resolveModelAuthLabel,
 }));
 
 const telegramModelsTestPlugin: ChannelPlugin = {
@@ -53,6 +55,16 @@ const telegramModelsTestPlugin: ChannelPlugin = {
 };
 
 beforeEach(() => {
+  modelCatalogMocks.loadModelCatalog.mockReset();
+  modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+    { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
+    { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet" },
+    { provider: "openai", id: "gpt-4.1", name: "GPT-4.1" },
+    { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 Mini" },
+    { provider: "google", id: "gemini-2.0-flash", name: "Gemini Flash" },
+  ]);
+  modelAuthLabelMocks.resolveModelAuthLabel.mockReset();
+  modelAuthLabelMocks.resolveModelAuthLabel.mockReturnValue(undefined);
   setActivePluginRegistry(
     createTestRegistry([
       {
@@ -196,7 +208,7 @@ describe("handleModelsCommand", () => {
           imageModel: "visionpro/studio-v1",
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     const providerList = await handleModelsCommand(
       buildModelsParams("/models", customCfg, "discord"),
@@ -215,6 +227,124 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).not.toContain("Unknown provider");
   });
 
+  it("uses the active agent context for model list replies", async () => {
+    const multiAgentCfg = {
+      commands: { text: true },
+      agents: {
+        defaults: { model: { primary: "anthropic/claude-opus-4-5" } },
+        list: [{ id: "support", model: "localai/ultra-chat" }],
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = await handleModelsCommand(
+      buildModelsParams("/models", multiAgentCfg, "discord", {
+        agentId: "support",
+        sessionKey: "agent:support:main",
+      }),
+      true,
+    );
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("Providers:");
+    expect(result?.reply?.text).toContain("localai");
+  });
+
+  it("prefers the target session entry for model auth labeling", async () => {
+    modelAuthLabelMocks.resolveModelAuthLabel.mockReturnValue("target-auth");
+    const params = buildModelsParams("/models anthropic", cfg, "discord", {
+      agentId: "main",
+      sessionKey: "agent:support:main",
+    });
+    params.sessionEntry = {
+      sessionId: "wrapper-session",
+      updatedAt: Date.now(),
+      providerOverride: "wrapper-provider",
+      modelOverride: "wrapper-model",
+    };
+    params.sessionStore = {
+      "agent:support:main": {
+        sessionId: "target-session",
+        updatedAt: Date.now(),
+        providerOverride: "target-provider",
+        modelOverride: "target-model",
+      },
+    };
+
+    const result = await handleModelsCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(modelAuthLabelMocks.resolveModelAuthLabel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionEntry: expect.objectContaining({
+          providerOverride: "target-provider",
+          modelOverride: "target-model",
+        }),
+      }),
+    );
+    expect(result?.reply?.text).toContain("target-auth");
+  });
+
+  it("honors model allowlists and config-only providers", async () => {
+    const allowlistedCfg = {
+      commands: { text: true },
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+          models: {
+            "anthropic/claude-opus-4-5": {},
+            "openai/gpt-4.1-mini": {},
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const providerList = await handleModelsCommand(
+      buildModelsParams("/models", allowlistedCfg, "discord"),
+      true,
+    );
+    expect(providerList?.reply?.text).toContain("- anthropic");
+    expect(providerList?.reply?.text).toContain("- openai");
+    expect(providerList?.reply?.text).not.toContain("- google");
+
+    modelCatalogMocks.loadModelCatalog.mockResolvedValueOnce([
+      { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
+      { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 Mini" },
+    ]);
+    const minimaxCfg = {
+      commands: { text: true },
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+          models: {
+            "anthropic/claude-opus-4-5": {},
+            "openai/gpt-4.1-mini": {},
+            "minimax/MiniMax-M2.7": { alias: "minimax" },
+          },
+        },
+      },
+      models: {
+        mode: "merge",
+        providers: {
+          minimax: {
+            baseUrl: "https://api.minimax.io/anthropic",
+            api: "anthropic-messages",
+            models: [
+              { id: "MiniMax-M2.7", name: "MiniMax M2.7" },
+              { id: "MiniMax-M2.7-highspeed", name: "MiniMax M2.7 Highspeed" },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = await handleModelsCommand(
+      buildModelsParams("/models minimax", minimaxCfg, "discord"),
+      true,
+    );
+    expect(result?.reply?.text).toContain("Models (minimax");
+    expect(result?.reply?.text).toContain("minimax/MiniMax-M2.7");
+  });
+
   it("threads the routed agent through /models replies", async () => {
     const scopedCfg = {
       commands: { text: true },
@@ -227,6 +357,26 @@ describe("handleModelsCommand", () => {
     const result = await handleModelsCommand(
       buildModelsParams("/models", scopedCfg, "discord", {
         agentId: "support",
+        sessionKey: "agent:support:main",
+      }),
+      true,
+    );
+
+    expect(result?.reply?.text).toContain("localai");
+  });
+
+  it("uses the canonical target session agent when wrapper agentId differs", async () => {
+    const scopedCfg = {
+      commands: { text: true },
+      agents: {
+        defaults: { model: { primary: "anthropic/claude-opus-4-5" } },
+        list: [{ id: "support", model: "localai/ultra-chat" }],
+      },
+    } as OpenClawConfig;
+
+    const result = await handleModelsCommand(
+      buildModelsParams("/models", scopedCfg, "discord", {
+        agentId: "main",
         sessionKey: "agent:support:main",
       }),
       true,

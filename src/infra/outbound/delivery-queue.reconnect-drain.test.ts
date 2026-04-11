@@ -225,8 +225,11 @@ describe("drainPendingDeliveries for WhatsApp reconnect", () => {
     // Fail it so it matches the "no listener" filter
     const pending = fs
       .readdirSync(path.join(tmpDir, "delivery-queue"))
-      .filter((f) => f.endsWith(".json"));
-    const entryPath = path.join(tmpDir, "delivery-queue", pending[0]);
+      .find((f) => f.endsWith(".json"));
+    if (!pending) {
+      throw new Error("Missing pending delivery entry");
+    }
+    const entryPath = path.join(tmpDir, "delivery-queue", pending);
     const entry = JSON.parse(fs.readFileSync(entryPath, "utf-8"));
     entry.lastError = "No active WhatsApp Web listener";
     entry.retryCount = 1;

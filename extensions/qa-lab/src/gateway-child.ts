@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createWriteStream, existsSync } from "node:fs";
 import fs from "node:fs/promises";
@@ -339,7 +339,56 @@ export const __testing = {
   resolveQaBundledPluginsSourceRoot,
   resolveQaRuntimeHostVersion,
   createQaBundledPluginsDir,
+  stopQaGatewayChildProcessTree,
 };
+
+function hasChildExited(child: ChildProcess) {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+function signalQaGatewayChildProcessTree(child: ChildProcess, signal: NodeJS.Signals) {
+  if (!child.pid) {
+    return;
+  }
+  try {
+    if (process.platform === "win32") {
+      child.kill(signal);
+      return;
+    }
+    process.kill(-child.pid, signal);
+  } catch {
+    try {
+      child.kill(signal);
+    } catch {
+      // The child already exited.
+    }
+  }
+}
+
+async function waitForQaGatewayChildExit(child: ChildProcess, timeoutMs: number) {
+  if (hasChildExited(child)) {
+    return true;
+  }
+  return await Promise.race([
+    new Promise<boolean>((resolve) => child.once("exit", () => resolve(true))),
+    sleep(timeoutMs).then(() => false),
+  ]);
+}
+
+async function stopQaGatewayChildProcessTree(
+  child: ChildProcess,
+  opts?: { gracefulTimeoutMs?: number; forceTimeoutMs?: number },
+) {
+  if (hasChildExited(child)) {
+    return;
+  }
+  signalQaGatewayChildProcessTree(child, "SIGTERM");
+  if (await waitForQaGatewayChildExit(child, opts?.gracefulTimeoutMs ?? 5_000)) {
+    return;
+  }
+  signalQaGatewayChildProcessTree(child, "SIGKILL");
+  await waitForQaGatewayChildExit(child, opts?.forceTimeoutMs ?? 2_000);
+}
 
 function resolveQaBundledPluginsSourceRoot(repoRoot: string) {
   const candidates = [
@@ -671,6 +720,7 @@ export async function startQaGatewayChild(params: {
   repoRoot: string;
   providerBaseUrl?: string;
   qaBusBaseUrl: string;
+  includeQaChannel?: boolean;
   controlUiAllowedOrigins?: string[];
   providerMode?: "mock-openai" | "live-frontier";
   primaryModel?: string;
@@ -731,6 +781,7 @@ export async function startQaGatewayChild(params: {
     gatewayToken,
     providerBaseUrl: params.providerBaseUrl,
     qaBusBaseUrl: params.qaBusBaseUrl,
+    includeQaChannel: params.includeQaChannel,
     workspaceDir,
     controlUiRoot: resolveQaControlUiRoot({
       repoRoot: params.repoRoot,
@@ -811,6 +862,7 @@ export async function startQaGatewayChild(params: {
     {
       cwd: runtimeCwd,
       env,
+      detached: process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
@@ -868,7 +920,7 @@ export async function startQaGatewayChild(params: {
   } catch (error) {
     stdoutLog.end();
     stderrLog.end();
-    child.kill("SIGTERM");
+    await stopQaGatewayChildProcessTree(child, { gracefulTimeoutMs: 1_000 }).catch(() => {});
     if (!keepTemp && stagedBundledPluginsRoot) {
       await fs.rm(stagedBundledPluginsRoot, { recursive: true, force: true }).catch(() => {});
     }
@@ -895,9 +947,10 @@ export async function startQaGatewayChild(params: {
     async call(
       method: string,
       rpcParams?: unknown,
-      opts?: { expectFinal?: boolean; timeoutMs?: number },
+      opts?: { expectFinal?: boolean; timeoutMs?: number; retryOnRestart?: boolean },
     ) {
       const timeoutMs = opts?.timeoutMs ?? 20_000;
+      const retryOnRestart = opts?.retryOnRestart !== false;
       let lastDetails = "";
       for (let attempt = 1; attempt <= 3; attempt += 1) {
         try {
@@ -908,7 +961,7 @@ export async function startQaGatewayChild(params: {
         } catch (error) {
           const details = formatErrorMessage(error);
           lastDetails = details;
-          if (attempt >= 3 || !isRetryableGatewayCallError(details)) {
+          if (attempt >= 3 || !retryOnRestart || !isRetryableGatewayCallError(details)) {
             throw new Error(`${details}\nGateway logs:\n${logs()}`, { cause: error });
           }
           await waitForGatewayReady({
@@ -925,17 +978,7 @@ export async function startQaGatewayChild(params: {
       await rpcClient.stop().catch(() => {});
       stdoutLog.end();
       stderrLog.end();
-      if (!child.killed) {
-        child.kill("SIGTERM");
-        await Promise.race([
-          new Promise<void>((resolve) => child.once("exit", () => resolve())),
-          sleep(5_000).then(() => {
-            if (!child.killed) {
-              child.kill("SIGKILL");
-            }
-          }),
-        ]);
-      }
+      await stopQaGatewayChildProcessTree(child);
       if (!(opts?.keepTemp ?? keepTemp)) {
         await fs.rm(tempRoot, { recursive: true, force: true });
         if (stagedBundledPluginsRoot) {

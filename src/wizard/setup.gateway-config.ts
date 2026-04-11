@@ -47,6 +47,10 @@ type ConfigureGatewayResult = {
   settings: GatewayWizardSettings;
 };
 
+function normalizeWizardTextInput(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
 export async function configureGatewayForSetup(
   opts: ConfigureGatewayOptions,
 ): Promise<ConfigureGatewayResult> {
@@ -57,7 +61,7 @@ export async function configureGatewayForSetup(
     flow === "quickstart"
       ? quickstartGateway.port
       : Number.parseInt(
-          String(
+          normalizeWizardTextInput(
             await prompter.text({
               message: "Gateway port",
               initialValue: String(localPort),
@@ -132,12 +136,10 @@ export async function configureGatewayForSetup(
   let tailscaleResetOnExit = flow === "quickstart" ? quickstartGateway.tailscaleResetOnExit : false;
   if (tailscaleMode !== "off" && flow !== "quickstart") {
     await prompter.note(TAILSCALE_DOCS_LINES.join("\n"), "Tailscale");
-    tailscaleResetOnExit = Boolean(
-      await prompter.confirm({
-        message: "Reset Tailscale serve/funnel on exit?",
-        initialValue: false,
-      }),
-    );
+    tailscaleResetOnExit = await prompter.confirm({
+      message: "Reset Tailscale serve/funnel on exit?",
+      initialValue: false,
+    });
   }
 
   // Safety + constraints:
@@ -246,12 +248,12 @@ export async function configureGatewayForSetup(
         });
         password = resolved.ref;
       } else {
-        password = String(
-          (await prompter.text({
+        password = normalizeWizardTextInput(
+          await prompter.text({
             message: "Gateway password",
             validate: validateGatewayPasswordInput,
-          })) ?? "",
-        ).trim();
+          }),
+        );
       }
     }
     nextConfig = {

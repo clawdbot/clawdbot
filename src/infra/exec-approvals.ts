@@ -709,7 +709,7 @@ export function resolveExecApprovalsFromFile(params: {
       defaults.askFallback ?? fallbackAskFallback,
       fallbackAskFallback,
     ),
-    autoAllowSkills: Boolean(defaults.autoAllowSkills ?? fallbackAutoAllowSkills),
+    autoAllowSkills: defaults.autoAllowSkills ?? fallbackAutoAllowSkills,
   };
   const resolvedAgentSecurity = resolveAgentSecurityField({
     field: "security",
@@ -744,9 +744,8 @@ export function resolveExecApprovalsFromFile(params: {
     security: resolvedAgentSecurity.value,
     ask: resolvedAgentAsk.value,
     askFallback: resolvedAgentAskFallback.value,
-    autoAllowSkills: Boolean(
+    autoAllowSkills:
       agent.autoAllowSkills ?? wildcard.autoAllowSkills ?? resolvedDefaults.autoAllowSkills,
-    ),
   };
   const allowlist = [
     ...(Array.isArray(wildcard.allowlist) ? wildcard.allowlist : []),

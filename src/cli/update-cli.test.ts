@@ -818,7 +818,7 @@ describe("update-cli", () => {
       );
 
     expect(installCall).toBeDefined();
-    const installCommand = String(installCall?.[0][0] ?? "");
+    const installCommand = installCall?.[0][0] ?? "";
     expect(installCommand).not.toBe("npm");
     expect(path.isAbsolute(installCommand)).toBe(true);
     expect(path.normalize(installCommand)).toContain(path.normalize(brewPrefix));

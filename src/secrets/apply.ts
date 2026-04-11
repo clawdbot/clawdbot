@@ -6,6 +6,7 @@ import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreForSecretsRuntime } from "../agents/auth-profiles.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
+import { coercePersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { resolveStateDir, type OpenClawConfig } from "../config/config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
@@ -308,7 +309,7 @@ function applyConfigTargetMutations(params: {
         scrubbedValues,
       });
       if (authStoreChanged) {
-        const agentId = String(target.agentId ?? "").trim();
+        const agentId = (target.agentId ?? "").trim();
         if (!agentId) {
           throw new Error(`Missing required agentId for auth-profiles target ${target.path}.`);
         }
@@ -384,11 +385,13 @@ function scrubAuthStoresForProviderTargets(params: {
     if (!parsed || !isRecord(parsed.profiles)) {
       continue;
     }
-    const nextStore = structuredClone(parsed) as Record<string, unknown> & {
-      profiles: Record<string, unknown>;
-    };
+    const nextStore = structuredClone(parsed);
+    const profiles = nextStore.profiles;
+    if (!isRecord(profiles)) {
+      continue;
+    }
     let mutated = false;
-    for (const profile of iterateAuthProfileCredentials(nextStore.profiles)) {
+    for (const profile of iterateAuthProfileCredentials(profiles)) {
       const provider = normalizeProviderId(profile.provider);
       if (!params.providerTargets.has(provider)) {
         continue;
@@ -426,13 +429,11 @@ function ensureMutableAuthStore(
   store: Record<string, unknown> | undefined,
 ): MutableAuthProfileStore {
   const next: Record<string, unknown> = store ? structuredClone(store) : {};
-  if (!isRecord(next.profiles)) {
-    next.profiles = {};
-  }
+  const profiles = isRecord(next.profiles) ? next.profiles : {};
   if (typeof next.version !== "number" || !Number.isFinite(next.version)) {
     next.version = AUTH_STORE_VERSION;
   }
-  return next as MutableAuthProfileStore;
+  return { ...next, profiles };
 }
 
 function resolveAuthStoreForTarget(params: {
@@ -441,7 +442,7 @@ function resolveAuthStoreForTarget(params: {
   stateDir: string;
   authStoreByPath: Map<string, Record<string, unknown>>;
 }): { path: string; store: MutableAuthProfileStore } {
-  const agentId = String(params.target.agentId ?? "").trim();
+  const agentId = (params.target.agentId ?? "").trim();
   if (!agentId) {
     throw new Error(`Missing required agentId for auth-profiles target ${params.target.path}.`);
   }
@@ -455,10 +456,6 @@ function resolveAuthStoreForTarget(params: {
   const store = ensureMutableAuthStore(isRecord(loaded) ? loaded : undefined);
   params.authStoreByPath.set(authStorePath, store);
   return { path: authStorePath, store };
-}
-
-function asConfigPathRoot(store: MutableAuthProfileStore): OpenClawConfig {
-  return store as unknown as OpenClawConfig;
 }
 
 function resolveAuthStorePathForAgent(params: {
@@ -507,7 +504,7 @@ function ensureAuthProfileContainer(params: {
       isNonEmptyString(params.target.authProfileProvider)
     ) {
       const wroteProvider = setPathCreateStrict(
-        asConfigPathRoot(params.store),
+        params.store,
         [...profilePathSegments, "provider"],
         params.target.authProfileProvider,
       );
@@ -520,13 +517,13 @@ function ensureAuthProfileContainer(params: {
       `Auth profile target ${params.target.path} is missing auth profile type metadata.`,
     );
   }
-  const provider = String(params.target.authProfileProvider ?? "").trim();
+  const provider = (params.target.authProfileProvider ?? "").trim();
   if (!provider) {
     throw new Error(
       `Cannot create auth profile "${profileId}" for ${params.target.path} without authProfileProvider.`,
     );
   }
-  const wroteProfile = setPathCreateStrict(asConfigPathRoot(params.store), profilePathSegments, {
+  const wroteProfile = setPathCreateStrict(params.store, profilePathSegments, {
     type: expectedType,
     provider,
   });
@@ -567,12 +564,8 @@ function applyAuthProfileTargetMutation(params: {
     if (!refPathSegments) {
       throw new Error(`Missing sibling ref path for auth-profiles target ${params.target.path}.`);
     }
-    const wroteRef = setPathCreateStrict(
-      asConfigPathRoot(store),
-      refPathSegments,
-      params.target.ref,
-    );
-    const deletedPlaintext = deletePathStrict(asConfigPathRoot(store), targetPathSegments);
+    const wroteRef = setPathCreateStrict(store, refPathSegments, params.target.ref);
+    const deletedPlaintext = deletePathStrict(store, targetPathSegments);
     changed = changed || wroteRef || deletedPlaintext;
     return changed;
   }
@@ -580,11 +573,7 @@ function applyAuthProfileTargetMutation(params: {
   if (isNonEmptyString(previous)) {
     params.scrubbedValues.add(previous.trim());
   }
-  const wroteRef = setPathCreateStrict(
-    asConfigPathRoot(store),
-    targetPathSegments,
-    params.target.ref,
-  );
+  const wroteRef = setPathCreateStrict(store, targetPathSegments, params.target.ref);
   changed = changed || wroteRef;
   return changed;
 }
@@ -706,9 +695,12 @@ async function validateProjectedSecretsState(params: {
         const storePath = resolveUserPath(resolveAuthStorePath(agentDir));
         const override = authStoreLookup.get(storePath);
         if (override) {
-          return structuredClone(override) as unknown as ReturnType<
-            typeof loadAuthProfileStoreForSecretsRuntime
-          >;
+          return (
+            coercePersistedAuthProfileStore(structuredClone(override)) ?? {
+              version: AUTH_STORE_VERSION,
+              profiles: {},
+            }
+          );
         }
         return loadAuthProfileStoreForSecretsRuntime(agentDir);
       },

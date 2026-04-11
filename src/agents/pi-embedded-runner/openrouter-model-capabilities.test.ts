@@ -7,6 +7,16 @@ import { importFreshModule } from "../../../test/helpers/import-fresh.js";
 async function withOpenRouterStateDir(run: (stateDir: string) => Promise<void>) {
   const stateDir = mkdtempSync(join(tmpdir(), "openclaw-openrouter-capabilities-"));
   process.env.OPENCLAW_STATE_DIR = stateDir;
+  for (const key of [
+    "ALL_PROXY",
+    "all_proxy",
+    "HTTP_PROXY",
+    "http_proxy",
+    "HTTPS_PROXY",
+    "https_proxy",
+  ]) {
+    vi.stubEnv(key, "");
+  }
   try {
     await run(stateDir);
   } finally {

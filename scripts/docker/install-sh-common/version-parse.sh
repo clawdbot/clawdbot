@@ -12,3 +12,13 @@ extract_openclaw_semver() {
   )"
   printf '%s' "${parsed#v}"
 }
+
+quiet_npm() {
+  npm \
+    --loglevel=error \
+    --no-update-notifier \
+    --no-fund \
+    --no-audit \
+    --no-progress \
+    "$@"
+}

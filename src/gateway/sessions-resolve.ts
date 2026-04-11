@@ -152,7 +152,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
         ),
       };
     }
-    return { ok: true, key: String(matches[0]?.key ?? "") };
+    return { ok: true, key: matches[0].key };
   }
 
   const parsedLabel = parseSessionLabel(p.label);
@@ -197,5 +197,5 @@ export async function resolveSessionKeyFromResolveParams(params: {
     };
   }
 
-  return { ok: true, key: String(list.sessions[0]?.key ?? "") };
+  return { ok: true, key: list.sessions[0].key };
 }

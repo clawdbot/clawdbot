@@ -1,7 +1,4 @@
-export function resolveMemorySearchPreflight(params: {
-  query: string;
-  hasIndexedContent: boolean;
-}):
+export function resolveMemorySearchPreflight(params: { query: string; hasIndexedContent: boolean }):
   | {
       normalizedQuery: string;
       shouldInitializeProvider: boolean;

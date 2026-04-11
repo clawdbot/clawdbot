@@ -1,5 +1,34 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { validateConfigObjectRaw } from "./validation.js";
+
+vi.mock("../secrets/unsupported-surface-policy.js", () => ({
+  collectUnsupportedSecretRefConfigCandidates: (raw: unknown) => {
+    const isRecord = (value: unknown): value is Record<string, unknown> =>
+      Boolean(value) && typeof value === "object" && !Array.isArray(value);
+    const candidates: Array<{ path: string; value: unknown }> = [];
+    if (!isRecord(raw)) {
+      return candidates;
+    }
+
+    const hooks = isRecord(raw.hooks) ? raw.hooks : null;
+    if (hooks) {
+      candidates.push({ path: "hooks.token", value: hooks.token });
+    }
+
+    const channels = isRecord(raw.channels) ? raw.channels : null;
+    const discord = channels && isRecord(channels.discord) ? channels.discord : null;
+    const threadBindings =
+      discord && isRecord(discord.threadBindings) ? discord.threadBindings : null;
+    if (threadBindings) {
+      candidates.push({
+        path: "channels.discord.threadBindings.webhookToken",
+        value: threadBindings.webhookToken,
+      });
+    }
+
+    return candidates;
+  },
+}));
 
 describe("config validation SecretRef policy guards", () => {
   it("surfaces a policy error for hooks.token SecretRef objects", () => {

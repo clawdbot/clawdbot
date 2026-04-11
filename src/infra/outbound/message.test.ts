@@ -111,6 +111,32 @@ describe("sendMessage", () => {
     );
   });
 
+  it("forwards non-id requester sender fields into the outbound delivery session", async () => {
+    await sendMessage({
+      cfg: {},
+      channel: "telegram",
+      to: "123456",
+      content: "hi",
+      requesterSenderName: "Alice",
+      requesterSenderUsername: "alice_u",
+      requesterSenderE164: "+15551234567",
+      mirror: {
+        sessionKey: "agent:main:telegram:group:ops",
+      },
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({
+          key: "agent:main:telegram:group:ops",
+          requesterSenderName: "Alice",
+          requesterSenderUsername: "alice_u",
+          requesterSenderE164: "+15551234567",
+        }),
+      }),
+    );
+  });
+
   it("uses requester session/account for outbound delivery policy context", async () => {
     await sendMessage({
       cfg: {},

@@ -171,7 +171,7 @@ function payloadToInboundMessage(
   const isGroupChat = true;
 
   return {
-    messageId: String(payload.object.id),
+    messageId: payload.object.id,
     roomToken: payload.target.id,
     roomName: payload.target.name,
     senderId: payload.actor.id,

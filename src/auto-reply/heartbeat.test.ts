@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   isHeartbeatContentEffectivelyEmpty,
+  parseHeartbeatTasks,
   stripHeartbeatToken,
 } from "./heartbeat.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
@@ -109,7 +110,6 @@ describe("stripHeartbeatToken", () => {
   });
 
   it("strips trailing punctuation only when directly after the token", () => {
-    // Token with trailing dot/exclamation/dashes → should still strip
     expect(stripHeartbeatToken(`${HEARTBEAT_TOKEN}.`, { mode: "heartbeat" })).toEqual({
       shouldSkip: true,
       text: "",
@@ -128,7 +128,6 @@ describe("stripHeartbeatToken", () => {
   });
 
   it("strips a sentence-ending token and keeps trailing punctuation", () => {
-    // Token appears at sentence end with trailing punctuation.
     expect(
       stripHeartbeatToken(`I should not respond ${HEARTBEAT_TOKEN}.`, {
         mode: "message",
@@ -156,7 +155,6 @@ describe("stripHeartbeatToken", () => {
   });
 
   it("preserves trailing punctuation on text before the token", () => {
-    // Token at end, preceding text has its own punctuation — only the token is stripped
     expect(stripHeartbeatToken(`All clear. ${HEARTBEAT_TOKEN}`, { mode: "message" })).toEqual({
       shouldSkip: false,
       text: "All clear.",
@@ -194,10 +192,6 @@ describe("isHeartbeatContentEffectivelyEmpty", () => {
   });
 
   it("returns false when a template includes plain instructional prose", () => {
-    // Regression: this test used to be named "returns true for default template
-    // content" while asserting `false`, which obscured the real behavior. The
-    // heuristic does NOT skip plain-text instructional sentences because they
-    // are indistinguishable from actionable content.
     const defaultTemplate = `# HEARTBEAT.md
 
 Keep this file empty unless you want a tiny checklist. Keep it small.
@@ -268,5 +262,23 @@ Check the server logs
 ### Subsection
 `;
     expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
+  });
+});
+
+describe("parseHeartbeatTasks", () => {
+  it("does not bleed top-level interval/prompt fields into task parsing", () => {
+    const content = `tasks:
+  - name: email-check
+    interval: 30m
+    prompt: Check for urgent emails
+interval: should-not-bleed
+`;
+    expect(parseHeartbeatTasks(content)).toEqual([
+      {
+        name: "email-check",
+        interval: "30m",
+        prompt: "Check for urgent emails",
+      },
+    ]);
   });
 });

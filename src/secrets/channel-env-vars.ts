@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 
 type ChannelEnvVarLookupParams = {
@@ -36,7 +36,7 @@ export function resolveChannelEnvVars(
     workspaceDir: params?.workspaceDir,
     env: params?.env,
   });
-  const candidates: Record<string, string[]> = Object.create(null) as Record<string, string[]>;
+  const candidates: Record<string, string[]> = {};
   for (const plugin of registry.plugins) {
     if (!plugin.channelEnvVars) {
       continue;

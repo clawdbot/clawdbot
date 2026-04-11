@@ -84,7 +84,7 @@ export async function buildStatusAllReportLines(params: {
         warn,
         muted,
         accentDim: theme.accentDim,
-        formatIssueMessage: (message) => String(message).slice(0, 90),
+        formatIssueMessage: (message) => message.slice(0, 90),
       }),
       ...buildStatusChannelDetailsSections({
         details: params.channels.details,

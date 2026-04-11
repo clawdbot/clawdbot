@@ -102,7 +102,7 @@ export async function checkInboundAccessControl(params: {
       }
       const normalizedEntrySet = new Set(
         allowEntries
-          .map((entry) => normalizeE164(String(entry)))
+          .map((entry) => normalizeE164(entry))
           .filter((entry): entry is string => Boolean(entry)),
       );
       if (!params.group && isSamePhone) {

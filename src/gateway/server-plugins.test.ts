@@ -13,6 +13,12 @@ const applyPluginAutoEnable = vi.hoisted(() =>
 const primeConfiguredBindingRegistry = vi.hoisted(() =>
   vi.fn(() => ({ bindingCount: 0, channelCount: 0 })),
 );
+const pluginRuntimeLoaderLogger = vi.hoisted(() => ({
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+  debug: vi.fn(),
+}));
 type HandleGatewayRequestOptions = GatewayRequestOptions & {
   extraHandlers?: Record<string, unknown>;
 };
@@ -22,6 +28,10 @@ const handleGatewayRequest = vi.hoisted(() =>
 
 vi.mock("../plugins/loader.js", () => ({
   loadOpenClawPlugins,
+}));
+
+vi.mock("../plugins/runtime/load-context.js", () => ({
+  createPluginRuntimeLoaderLogger: () => pluginRuntimeLoaderLogger,
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
@@ -78,6 +88,7 @@ const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
   webFetchProviders: [],
   webSearchProviders: [],
   memoryEmbeddingProviders: [],
+  textTransforms: [],
   agentHarnesses: [],
   gatewayHandlers: {},
   httpRoutes: [],
@@ -130,6 +141,28 @@ function getLastDispatchedClientScopes(): string[] {
   const call = handleGatewayRequest.mock.calls.at(-1)?.[0];
   const scopes = call?.client?.connect?.scopes;
   return Array.isArray(scopes) ? scopes : [];
+}
+
+function getLastPluginLoadLogger(): {
+  info: (message: string) => void;
+  warn: (message: string) => void;
+  error: (message: string) => void;
+  debug?: (message: string) => void;
+} {
+  const call = loadOpenClawPlugins.mock.calls.at(-1)?.[0] as
+    | {
+        logger?: {
+          info: (message: string) => void;
+          warn: (message: string) => void;
+          error: (message: string) => void;
+          debug?: (message: string) => void;
+        };
+      }
+    | undefined;
+  if (!call?.logger) {
+    throw new Error("Expected plugin loader to receive a logger");
+  }
+  return call.logger;
 }
 
 async function loadTestModules() {
@@ -212,6 +245,10 @@ beforeEach(() => {
     .mockReset()
     .mockImplementation(({ config }) => ({ config, changes: [], autoEnabledReasons: {} }));
   primeConfiguredBindingRegistry.mockClear().mockReturnValue({ bindingCount: 0, channelCount: 0 });
+  pluginRuntimeLoaderLogger.info.mockClear();
+  pluginRuntimeLoaderLogger.warn.mockClear();
+  pluginRuntimeLoaderLogger.error.mockClear();
+  pluginRuntimeLoaderLogger.debug.mockClear();
   handleGatewayRequest.mockReset();
   runtimeModule.clearGatewaySubagentRuntime();
   handleGatewayRequest.mockImplementation(async (opts: HandleGatewayRequestOptions) => {
@@ -277,6 +314,34 @@ describe("loadGatewayPlugins", () => {
         onlyPluginIds: ["discord", "telegram"],
       }),
     );
+  });
+
+  test("routes plugin registration logs through the plugin logger", async () => {
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+    const log = loadGatewayPluginsForTest();
+
+    const logger = getLastPluginLoadLogger();
+    logger.info("plugin ready");
+    logger.warn("plugin warning");
+
+    expect(pluginRuntimeLoaderLogger.info).toHaveBeenCalledWith("plugin ready");
+    expect(pluginRuntimeLoaderLogger.warn).toHaveBeenCalledWith("plugin warning");
+    expect(log.info).not.toHaveBeenCalled();
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  test("can suppress provisional plugin info logs while preserving warnings", async () => {
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+    loadGatewayPluginsForTest({
+      suppressPluginInfoLogs: true,
+    });
+
+    const logger = getLastPluginLoadLogger();
+    logger.info("plugin ready");
+    logger.warn("plugin warning");
+
+    expect(pluginRuntimeLoaderLogger.info).not.toHaveBeenCalled();
+    expect(pluginRuntimeLoaderLogger.warn).toHaveBeenCalledWith("plugin warning");
   });
 
   test("reuses the provided startup plugin scope without recomputing it", async () => {

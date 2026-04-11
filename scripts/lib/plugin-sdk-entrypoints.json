@@ -46,6 +46,7 @@
   "ssrf-policy",
   "ssrf-runtime",
   "media-runtime",
+  "media-mime",
   "media-generation-runtime",
   "conversation-binding-runtime",
   "conversation-runtime",

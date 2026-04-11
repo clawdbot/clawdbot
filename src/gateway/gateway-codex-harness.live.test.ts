@@ -232,6 +232,7 @@ async function writeLiveGatewayConfig(params: {
     agents: {
       defaults: {
         workspace: params.workspace,
+        embeddedHarness: { runtime: "codex", fallback: "none" },
         skipBootstrap: true,
         model: { primary: params.modelKey },
         models: { [params.modelKey]: {} },
@@ -265,6 +266,34 @@ async function requestAgentText(params: {
   }
   const text = extractPayloadText(payload.result);
   expect(text).toContain(params.expectedToken);
+  return text;
+}
+
+async function requestCodexCommandText(params: {
+  client: GatewayClient;
+  command: string;
+  expectedText: string;
+  sessionKey: string;
+}): Promise<string> {
+  const { extractPayloadText } = await import("./test-helpers.agent-results.js");
+  const payload = await params.client.request(
+    "agent",
+    {
+      sessionKey: params.sessionKey,
+      idempotencyKey: `idem-${randomUUID()}-codex-command`,
+      message: params.command,
+      deliver: false,
+      thinking: "low",
+    },
+    { expectFinal: true },
+  );
+  if (payload?.status !== "ok") {
+    throw new Error(
+      `codex command ${params.command} failed: status=${String(payload?.status)} payload=${JSON.stringify(payload)}`,
+    );
+  }
+  const text = extractPayloadText(payload.result);
+  expect(text).toContain(params.expectedText);
   return text;
 }
 
@@ -393,6 +422,7 @@ describeLive("gateway live (Codex harness)", () => {
 
       clearRuntimeConfigSnapshot();
       process.env.OPENCLAW_AGENT_RUNTIME = "codex";
+      process.env.OPENCLAW_AGENT_HARNESS_FALLBACK = "none";
       process.env.OPENCLAW_CONFIG_PATH = configPath;
       process.env.OPENCLAW_GATEWAY_TOKEN = token;
       process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
@@ -440,6 +470,22 @@ describeLive("gateway live (Codex harness)", () => {
           message: `Reply with exactly ${secondToken} and nothing else. Do not repeat ${firstToken}.`,
         });
         logCodexLiveStep("second-turn", { secondText });
+
+        const statusText = await requestCodexCommandText({
+          client,
+          sessionKey,
+          command: "/codex status",
+          expectedText: "Codex app-server:",
+        });
+        logCodexLiveStep("codex-status-command", { statusText });
+
+        const modelsText = await requestCodexCommandText({
+          client,
+          sessionKey,
+          command: "/codex models",
+          expectedText: "Codex models:",
+        });
+        logCodexLiveStep("codex-models-command", { modelsText });
 
         if (CODEX_HARNESS_IMAGE_PROBE) {
           logCodexLiveStep("image-probe:start", { sessionKey });

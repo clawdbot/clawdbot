@@ -20,7 +20,7 @@ function parseManualOAuthInput(
   input: string,
   expectedState: string,
 ): { code: string; state: string } {
-  const trimmed = normalizeOptionalString(String(input ?? "")) ?? "";
+  const trimmed = normalizeOptionalString(input ?? "") ?? "";
   if (!trimmed) {
     throw new Error("Missing OAuth redirect URL or authorization code.");
   }

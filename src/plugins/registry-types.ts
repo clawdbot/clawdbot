@@ -1,6 +1,6 @@
 import type { AgentHarness } from "../agents/harness/types.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
-import type { OperatorScope } from "../gateway/method-scopes.js";
+import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandlers } from "../gateway/server-methods/types.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { PluginActivationSource } from "./config-state.js";
@@ -33,6 +33,7 @@ import type {
   PluginKind,
   PluginLogger,
   PluginOrigin,
+  PluginTextTransformRegistration,
   ProviderPlugin,
   RealtimeTranscriptionProviderPlugin,
   RealtimeVoiceProviderPlugin,
@@ -101,6 +102,14 @@ export type PluginCliBackendRegistration = {
   pluginId: string;
   pluginName?: string;
   backend: CliBackendPlugin;
+  source: string;
+  rootDir?: string;
+};
+
+export type PluginTextTransformsRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  transforms: PluginTextTransformRegistration;
   source: string;
   rootDir?: string;
 };
@@ -259,6 +268,7 @@ export type PluginRegistry = {
   channelSetups: PluginChannelSetupRegistration[];
   providers: PluginProviderRegistration[];
   cliBackends?: PluginCliBackendRegistration[];
+  textTransforms: PluginTextTransformsRegistration[];
   speechProviders: PluginSpeechProviderRegistration[];
   realtimeTranscriptionProviders: PluginRealtimeTranscriptionProviderRegistration[];
   realtimeVoiceProviders: PluginRealtimeVoiceProviderRegistration[];

@@ -229,8 +229,8 @@ function pickMatchingIPv4(predicate: (address: string) => boolean): string | nul
     }
     for (const entry of entries) {
       const family = entry?.family;
-      // Check for IPv4 (string "IPv4" on Node 18+, number 4 on older)
-      const isIpv4 = family === "IPv4" || String(family) === "4";
+      // Keep the numeric check for older Node runtimes that reported family as 4.
+      const isIpv4 = family === "IPv4" || (family as unknown) === 4;
       if (!entry || entry.internal || !isIpv4) {
         continue;
       }
@@ -653,9 +653,7 @@ export default definePluginEntry({
               autoNotifyArmed = await armPairNotifyOnce({ api, ctx });
             } catch (err) {
               api.logger.warn?.(
-                `device-pair: failed to arm one-shot pairing notify (${String(
-                  (err as Error)?.message ?? err,
-                )})`,
+                `device-pair: failed to arm one-shot pairing notify (${(err as Error)?.message ?? err})`,
               );
             }
           }
@@ -693,9 +691,7 @@ export default definePluginEntry({
               }
             } catch (err) {
               api.logger.warn?.(
-                `device-pair: QR image send failed channel=${channel}, falling back (${String(
-                  (err as Error)?.message ?? err,
-                )})`,
+                `device-pair: QR image send failed channel=${channel}, falling back (${(err as Error)?.message ?? err})`,
               );
               await revokeDeviceBootstrapToken({ token: payload.bootstrapToken }).catch(() => {});
               payload = await issueSetupPayload(urlResult.url);
@@ -716,9 +712,7 @@ export default definePluginEntry({
               qrDataUrl = await renderQrDataUrl(setupCode);
             } catch (err) {
               api.logger.warn?.(
-                `device-pair: webchat QR render failed, falling back (${String(
-                  (err as Error)?.message ?? err,
-                )})`,
+                `device-pair: webchat QR render failed, falling back (${(err as Error)?.message ?? err})`,
               );
               await revokeDeviceBootstrapToken({ token: payload.bootstrapToken }).catch(() => {});
               payload = await issueSetupPayload(urlResult.url);
@@ -791,9 +785,7 @@ export default definePluginEntry({
             return { text: encodeSetupCode(payload) };
           } catch (err) {
             api.logger.warn?.(
-              `device-pair: telegram split send failed, falling back to single message (${String(
-                (err as Error)?.message ?? err,
-              )})`,
+              `device-pair: telegram split send failed, falling back to single message (${(err as Error)?.message ?? err})`,
             );
           }
         }

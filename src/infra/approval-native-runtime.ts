@@ -1,14 +1,12 @@
-import type {
-  ChannelApprovalKind,
-  ChannelApprovalNativeAdapter,
-} from "../channels/plugins/types.adapters.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ChannelApprovalNativeAdapter } from "../channels/plugins/approval-native.types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveChannelNativeApprovalDeliveryPlan,
   type ChannelApprovalNativePlannedTarget,
   type ChannelApprovalNativeDeliveryPlan,
 } from "./approval-native-delivery.js";
 import { createApprovalNativeRouteReporter } from "./approval-native-route-coordinator.js";
+import type { ChannelApprovalKind } from "./approval-types.js";
 import {
   createExecApprovalChannelRuntime,
   type ExecApprovalChannelRuntime,

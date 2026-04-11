@@ -16,6 +16,21 @@ export {
 
 type RuntimeLifecycleSnapshot = {
   running?: boolean | null;
+  connected?: boolean | null;
+  restartPending?: boolean | null;
+  reconnectAttempts?: number | null;
+  lastConnectedAt?: number | null;
+  lastDisconnect?:
+    | string
+    | {
+        at: number;
+        status?: number;
+        error?: string;
+        loggedOut?: boolean;
+      }
+    | null;
+  lastEventAt?: number | null;
+  healthState?: string | null;
   lastStartAt?: number | null;
   lastStopAt?: number | null;
   lastError?: string | null;
@@ -282,6 +297,19 @@ export function buildRuntimeAccountStatusSnapshot<TExtra extends StatusSnapshotE
     lastStopAt: runtime?.lastStopAt ?? null,
     lastError: runtime?.lastError ?? null,
     probe,
+    ...(typeof runtime?.connected === "boolean" ? { connected: runtime.connected } : {}),
+    ...(typeof runtime?.restartPending === "boolean"
+      ? { restartPending: runtime.restartPending }
+      : {}),
+    ...(typeof runtime?.reconnectAttempts === "number"
+      ? { reconnectAttempts: runtime.reconnectAttempts }
+      : {}),
+    ...(typeof runtime?.lastConnectedAt === "number"
+      ? { lastConnectedAt: runtime.lastConnectedAt }
+      : {}),
+    ...(runtime?.lastDisconnect ? { lastDisconnect: runtime.lastDisconnect } : {}),
+    ...(typeof runtime?.lastEventAt === "number" ? { lastEventAt: runtime.lastEventAt } : {}),
+    ...(typeof runtime?.healthState === "string" ? { healthState: runtime.healthState } : {}),
     ...(extra ?? ({} as TExtra)),
   };
 }

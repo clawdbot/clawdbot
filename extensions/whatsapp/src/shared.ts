@@ -74,7 +74,7 @@ export function createWhatsAppSetupWizardProxy(
       configuredScore: 5,
       unconfiguredScore: 4,
     },
-    resolveShouldPromptAccountIds: (params) => Boolean(params.shouldPromptAccountIds),
+    resolveShouldPromptAccountIds: (params) => params.shouldPromptAccountIds,
     credentials: [],
     delegateFinalize: true,
     disable: (cfg) => ({

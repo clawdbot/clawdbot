@@ -371,7 +371,7 @@ describe("installHooksFromNpmSpec", () => {
     const packedName = "test-hooks-0.0.1.tgz";
     run.mockImplementation(async (argv, opts) => {
       if (argv[0] === "npm" && argv[1] === "pack") {
-        packTmpDir = String(typeof opts === "number" ? "" : (opts.cwd ?? ""));
+        packTmpDir = typeof opts === "number" ? "" : (opts.cwd ?? "");
         fs.writeFileSync(path.join(packTmpDir, packedName), npmPackHooksBuffer);
         return {
           code: 0,

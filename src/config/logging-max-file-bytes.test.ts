@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateConfigObject } from "./config.js";
+import { validateConfigObject } from "./validation.js";
 
 describe("logging.maxFileBytes config", () => {
   it("accepts a positive maxFileBytes", () => {

@@ -81,11 +81,16 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
         assistantTexts: [] as string[],
         toolMetas: [] as Array<{ toolName: string; meta?: string }>,
         unsubscribe: () => {},
+        setTerminalLifecycleMeta: () => {},
         waitForCompactionRetry: async () => {},
         getMessagingToolSentTexts: () => [] as string[],
         getMessagingToolSentMediaUrls: () => [] as string[],
         getMessagingToolSentTargets: () => [] as MessagingToolSend[],
         getSuccessfulCronAdds: () => 0,
+        getReplayState: () => ({
+          replayInvalid: false,
+          hadPotentialSideEffects: false,
+        }),
         didSendViaMessagingTool: () => false,
         didSendDeterministicApprovalPrompt: () => false,
         getLastToolError: () => undefined,
@@ -156,11 +161,11 @@ vi.mock("@mariozechner/pi-coding-agent", async () => {
   const actual = await vi.importActual<typeof import("@mariozechner/pi-coding-agent")>(
     "@mariozechner/pi-coding-agent",
   );
-  class AuthStorage {}
+  function AuthStorage() {}
   class DefaultResourceLoader {
     async reload() {}
   }
-  class ModelRegistry {}
+  function ModelRegistry() {}
 
   return {
     ...actual,
@@ -620,11 +625,16 @@ export function createSubscriptionMock(): SubscriptionMock {
     assistantTexts: [] as string[],
     toolMetas: [] as Array<{ toolName: string; meta?: string }>,
     unsubscribe: () => {},
+    setTerminalLifecycleMeta: () => {},
     waitForCompactionRetry: async () => {},
     getMessagingToolSentTexts: () => [] as string[],
     getMessagingToolSentMediaUrls: () => [] as string[],
     getMessagingToolSentTargets: () => [] as MessagingToolSend[],
     getSuccessfulCronAdds: () => 0,
+    getReplayState: () => ({
+      replayInvalid: false,
+      hadPotentialSideEffects: false,
+    }),
     didSendViaMessagingTool: () => false,
     didSendDeterministicApprovalPrompt: () => false,
     getLastToolError: () => undefined,

@@ -465,7 +465,7 @@ export async function runConfigureWizard(
         runtime,
       );
       workspaceDir = resolveUserPath(
-        normalizeOptionalString(String(workspaceInput ?? "")) || DEFAULT_WORKSPACE,
+        normalizeOptionalString(workspaceInput ?? "") || DEFAULT_WORKSPACE,
       );
       if (!snapshot.exists) {
         const indicators = ["MEMORY.md", "memory", ".git"].map((name) =>
@@ -530,7 +530,7 @@ export async function runConfigureWizard(
         }),
         runtime,
       );
-      gatewayPort = Number.parseInt(String(portInput), 10);
+      gatewayPort = Number.parseInt(portInput, 10);
     };
 
     if (opts.sections) {

@@ -6,6 +6,7 @@ import {
   sanitizeForConsole,
 } from "./pi-embedded-error-observation.js";
 import { classifyFailoverReason, formatAssistantErrorText } from "./pi-embedded-helpers.js";
+import { isIncompleteTerminalAssistantTurn } from "./pi-embedded-runner/run/incomplete-turn.js";
 import {
   consumePendingToolMediaReply,
   hasAssistantVisibleReply,
@@ -39,6 +40,27 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
   const lastAssistant = ctx.state.lastAssistant;
   const isError = isAssistantMessage(lastAssistant) && lastAssistant.stopReason === "error";
   let lifecycleErrorText: string | undefined;
+  const hasAssistantVisibleText =
+    Array.isArray(ctx.state.assistantTexts) &&
+    ctx.state.assistantTexts.some((text) => hasAssistantVisibleReply({ text }));
+  const hadDeterministicSideEffect =
+    ctx.state.hadDeterministicSideEffect === true ||
+    (ctx.state.messagingToolSentTexts?.length ?? 0) > 0 ||
+    (ctx.state.messagingToolSentMediaUrls?.length ?? 0) > 0 ||
+    (ctx.state.successfulCronAdds ?? 0) > 0;
+  const incompleteTerminalAssistant = isIncompleteTerminalAssistantTurn({
+    hasAssistantVisibleText,
+    lastAssistant: isAssistantMessage(lastAssistant) ? lastAssistant : null,
+  });
+  const replayInvalid =
+    ctx.state.replayState.replayInvalid || incompleteTerminalAssistant ? true : undefined;
+  const derivedWorkingTerminalState = isError
+    ? "blocked"
+    : replayInvalid && !hasAssistantVisibleText && !hadDeterministicSideEffect
+      ? "abandoned"
+      : ctx.state.livenessState;
+  const livenessState =
+    ctx.state.livenessState === "working" ? derivedWorkingTerminalState : ctx.state.livenessState;
 
   if (isError && lastAssistant) {
     const friendlyError = formatAssistantErrorText(lastAssistant, {
@@ -52,9 +74,13 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
       provider: lastAssistant.provider,
     });
     const errorText = (friendlyError || lastAssistant.errorMessage || "LLM request failed.").trim();
-    const observedError = buildApiErrorObservationFields(rawError);
+    const observedError = buildApiErrorObservationFields(rawError, {
+      provider: lastAssistant.provider,
+    });
     const safeErrorText =
-      buildTextObservationFields(errorText).textPreview ?? "LLM request failed.";
+      buildTextObservationFields(errorText, {
+        provider: lastAssistant.provider,
+      }).textPreview ?? "LLM request failed.";
     lifecycleErrorText = safeErrorText;
     const safeRunId = sanitizeForConsole(ctx.params.runId) ?? "-";
     const safeModel = sanitizeForConsole(lastAssistant.model) ?? "unknown";
@@ -85,6 +111,8 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
         data: {
           phase: "error",
           error: lifecycleErrorText ?? "LLM request failed.",
+          ...(livenessState ? { livenessState } : {}),
+          ...(replayInvalid ? { replayInvalid } : {}),
           endedAt: Date.now(),
         },
       });
@@ -93,6 +121,8 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
         data: {
           phase: "error",
           error: lifecycleErrorText ?? "LLM request failed.",
+          ...(livenessState ? { livenessState } : {}),
+          ...(replayInvalid ? { replayInvalid } : {}),
         },
       });
       return;
@@ -102,12 +132,18 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
       stream: "lifecycle",
       data: {
         phase: "end",
+        ...(livenessState ? { livenessState } : {}),
+        ...(replayInvalid ? { replayInvalid } : {}),
         endedAt: Date.now(),
       },
     });
     void ctx.params.onAgentEvent?.({
       stream: "lifecycle",
-      data: { phase: "end" },
+      data: {
+        phase: "end",
+        ...(livenessState ? { livenessState } : {}),
+        ...(replayInvalid ? { replayInvalid } : {}),
+      },
     });
   };
 

@@ -268,7 +268,7 @@ export function registerLogsCli(program: Command) {
     let cursor: number | undefined;
     let first = true;
     const jsonMode = Boolean(opts.json);
-    const pretty = !jsonMode && Boolean(process.stdout.isTTY) && !opts.plain;
+    const pretty = !jsonMode && process.stdout.isTTY && !opts.plain;
     const rich = isRich() && opts.color !== false;
     const localTime =
       Boolean(opts.localTime) || (!!process.env.TZ && isValidTimeZone(process.env.TZ));

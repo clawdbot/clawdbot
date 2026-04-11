@@ -4,7 +4,7 @@ import {
   describeUpdatePlanTool,
   UPDATE_PLAN_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
-import { type AnyAgentTool, ToolInputError, textResult, readStringParam } from "./common.js";
+import { type AnyAgentTool, ToolInputError, readStringParam } from "./common.js";
 
 const PLAN_STEP_STATUSES = ["pending", "in_progress", "completed"] as const;
 
@@ -22,7 +22,7 @@ const UpdatePlanToolSchema = Type.Object({
           description: 'One of "pending", "in_progress", or "completed".',
         }),
       },
-      { additionalProperties: false },
+      { additionalProperties: true },
     ),
     {
       minItems: 1,
@@ -82,11 +82,16 @@ export function createUpdatePlanTool(): AnyAgentTool {
     parameters: UpdatePlanToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      readStringParam(params, "explanation");
-      readPlanSteps(params);
-      return textResult("Plan updated.", {
-        status: "updated" as const,
-      });
+      const explanation = readStringParam(params, "explanation");
+      const plan = readPlanSteps(params);
+      return {
+        content: [],
+        details: {
+          status: "updated" as const,
+          ...(explanation ? { explanation } : {}),
+          plan,
+        },
+      };
     },
   };
 }

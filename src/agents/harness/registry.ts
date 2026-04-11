@@ -80,3 +80,21 @@ export async function resetRegisteredAgentHarnessSessions(
     }),
   );
 }
+
+export async function disposeRegisteredAgentHarnesses(): Promise<void> {
+  await Promise.all(
+    listRegisteredAgentHarnesses().map(async (entry) => {
+      if (!entry.harness.dispose) {
+        return;
+      }
+      try {
+        await entry.harness.dispose();
+      } catch (error) {
+        log.warn(`${entry.harness.label} dispose hook failed`, {
+          harnessId: entry.harness.id,
+          error,
+        });
+      }
+    }),
+  );
+}

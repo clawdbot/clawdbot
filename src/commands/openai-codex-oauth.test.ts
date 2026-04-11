@@ -81,11 +81,14 @@ describe("loginOpenAICodexOAuth", () => {
 
     expect(result).toEqual(creds);
     expect(mocks.loginOpenAICodex).toHaveBeenCalledOnce();
+    expect(mocks.loginOpenAICodex).toHaveBeenCalledWith(
+      expect.objectContaining({ originator: "openclaw" }),
+    );
     expect(spin.stop).toHaveBeenCalledWith("OpenAI OAuth complete");
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
-  it("passes through Pi-provided OAuth authorize URL without mutation", async () => {
+  it("adds required Codex OAuth scopes to Pi-provided authorize URLs", async () => {
     const creds = {
       provider: "openai-codex" as const,
       access: "access-token",
@@ -106,10 +109,60 @@ describe("loginOpenAICodexOAuth", () => {
     const { runtime } = await runCodexOAuth({ isRemote: false, openUrl });
 
     expect(openUrl).toHaveBeenCalledWith(
-      "https://auth.openai.com/oauth/authorize?scope=openid+profile+email+offline_access&state=abc",
+      "https://auth.openai.com/oauth/authorize?scope=openid+profile+email+offline_access+model.request+api.responses.write&state=abc",
     );
     expect(runtime.log).toHaveBeenCalledWith(
-      "Open: https://auth.openai.com/oauth/authorize?scope=openid+profile+email+offline_access&state=abc",
+      "Open: https://auth.openai.com/oauth/authorize?scope=openid+profile+email+offline_access+model.request+api.responses.write&state=abc",
+    );
+  });
+
+  it("adds a scope parameter when the upstream authorize url omitted it", async () => {
+    const creds = {
+      provider: "openai-codex" as const,
+      access: "access-token",
+      refresh: "refresh-token",
+      expires: Date.now() + 60_000,
+      email: "user@example.com",
+    };
+    mocks.loginOpenAICodex.mockImplementation(
+      async (opts: { onAuth: (event: { url: string }) => Promise<void> }) => {
+        await opts.onAuth({
+          url: "https://auth.openai.com/oauth/authorize?state=abc",
+        });
+        return creds;
+      },
+    );
+
+    const openUrl = vi.fn(async () => {});
+    await runCodexOAuth({ isRemote: false, openUrl });
+
+    expect(openUrl).toHaveBeenCalledWith(
+      "https://auth.openai.com/oauth/authorize?state=abc&scope=openid+profile+email+offline_access+model.request+api.responses.write",
+    );
+  });
+
+  it("normalizes slash-terminated authorize paths too", async () => {
+    const creds = {
+      provider: "openai-codex" as const,
+      access: "access-token",
+      refresh: "refresh-token",
+      expires: Date.now() + 60_000,
+      email: "user@example.com",
+    };
+    mocks.loginOpenAICodex.mockImplementation(
+      async (opts: { onAuth: (event: { url: string }) => Promise<void> }) => {
+        await opts.onAuth({
+          url: "https://auth.openai.com/oauth/authorize/?state=abc",
+        });
+        return creds;
+      },
+    );
+
+    const openUrl = vi.fn(async () => {});
+    await runCodexOAuth({ isRemote: false, openUrl });
+
+    expect(openUrl).toHaveBeenCalledWith(
+      "https://auth.openai.com/oauth/authorize/?state=abc&scope=openid+profile+email+offline_access+model.request+api.responses.write",
     );
   });
 

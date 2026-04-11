@@ -1,10 +1,38 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   filterMessagingToolMediaDuplicates,
   shouldSuppressMessagingToolReplies,
 } from "./reply-payloads.js";
+
+function targetsMatchTelegramReplySuppression(params: {
+  originTarget: string;
+  targetKey: string;
+  targetThreadId?: string;
+}): boolean {
+  const baseTarget = (value: string) =>
+    value
+      .replace(/^telegram:(group|channel):/u, "")
+      .replace(/^telegram:/u, "")
+      .replace(/:topic:.*$/u, "");
+  const originTopic = params.originTarget.match(/:topic:([^:]+)$/u)?.[1];
+  return (
+    baseTarget(params.originTarget) === baseTarget(params.targetKey) &&
+    (originTopic === undefined || originTopic === params.targetThreadId)
+  );
+}
+
+vi.mock("../../channels/plugins/bundled.js", () => ({
+  getBundledChannelPlugin: (channel: string) =>
+    channel === "telegram"
+      ? {
+          outbound: {
+            targetsMatchForReplySuppression: targetsMatchTelegramReplySuppression,
+          },
+        }
+      : undefined,
+}));
 
 describe("filterMessagingToolMediaDuplicates", () => {
   it("strips mediaUrl when it matches sentMediaUrls", () => {
@@ -93,18 +121,7 @@ describe("shouldSuppressMessagingToolReplies", () => {
             id: "telegram",
             outbound: {
               deliveryMode: "direct",
-              targetsMatchForReplySuppression: ({ originTarget, targetKey, targetThreadId }) => {
-                const baseTarget = (value: string) =>
-                  value
-                    .replace(/^telegram:(group|channel):/u, "")
-                    .replace(/^telegram:/u, "")
-                    .replace(/:topic:.*$/u, "");
-                const originTopic = originTarget.match(/:topic:([^:]+)$/u)?.[1];
-                return (
-                  baseTarget(originTarget) === baseTarget(targetKey) &&
-                  (originTopic === undefined || originTopic === targetThreadId)
-                );
-              },
+              targetsMatchForReplySuppression: targetsMatchTelegramReplySuppression,
             },
           }),
         },

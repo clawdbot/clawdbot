@@ -217,6 +217,47 @@ describe("google transport stream", () => {
     );
   });
 
+  it("coerces replayed malformed tool-call args to an object for Google payloads", () => {
+    const model = {
+      id: "gemini-2.5-pro",
+      name: "Gemini 2.5 Pro",
+      api: "google-generative-ai",
+      provider: "google",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 8192,
+    } satisfies Model<"google-generative-ai">;
+
+    const params = buildGoogleGenerativeAiParams(model, {
+      messages: [
+        {
+          role: "assistant",
+          provider: "openai",
+          api: "openai-responses",
+          model: "gpt-5.4",
+          stopReason: "toolUse",
+          timestamp: 0,
+          content: [
+            {
+              type: "toolCall",
+              id: "call_1",
+              name: "lookup",
+              arguments: "{not valid json",
+            },
+          ],
+        },
+      ],
+    } as never);
+
+    expect(params.contents[0]).toMatchObject({
+      role: "model",
+      parts: [{ functionCall: { name: "lookup", args: {} } }],
+    });
+  });
+
   it("builds direct Gemini payloads without negative fallback thinking budgets", () => {
     const model = {
       id: "custom-gemini-model",

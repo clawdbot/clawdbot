@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   completeTaskRunByRunId,
@@ -10,6 +11,16 @@ import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import { configureTaskRegistryRuntime } from "../../tasks/task-registry.store.js";
 import { buildTasksReply, handleTasksCommand } from "./commands-tasks.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
+
+vi.mock("../../agents/agent-scope.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/agent-scope.js")>(
+    "../../agents/agent-scope.js",
+  );
+  return {
+    ...actual,
+    resolveSessionAgentId: vi.fn(actual.resolveSessionAgentId),
+  };
+});
 
 const baseCfg = {
   commands: { text: true },
@@ -46,6 +57,7 @@ function configureInMemoryTaskRegistryStoreForTests(): void {
 
 describe("buildTasksReply", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     resetTaskRegistryForTests({ persist: false });
     configureInMemoryTaskRegistryStoreForTests();
   });
@@ -189,6 +201,30 @@ describe("buildTasksReply", () => {
     expect(reply.text).toContain("Agent-local: 1 active · 1 total");
     expect(reply.text).not.toContain("hidden background task");
     expect(reply.text).not.toContain("hidden progress detail");
+  });
+
+  it("uses the canonical target session agent for agent-local fallback counts", async () => {
+    createRunningTaskRun({
+      runtime: "subagent",
+      requesterSessionKey: "agent:target:other-session",
+      childSessionKey: "agent:target:subagent:tasks-target-fallback",
+      runId: "run-tasks-target-fallback",
+      agentId: "target",
+      task: "target hidden background task",
+      progressSummary: "hidden target progress detail",
+    });
+    vi.mocked(resolveSessionAgentId).mockReturnValue("target");
+
+    const commandParams = buildCommandTestParams("/tasks", baseCfg);
+    const reply = await buildTasksReply({
+      ...commandParams,
+      agentId: "main",
+      sessionKey: "agent:target:empty-session",
+    });
+
+    expect(reply.text).toContain("All clear - nothing linked to this session right now.");
+    expect(reply.text).toContain("Agent-local: 1 active · 1 total");
+    expect(reply.text).not.toContain("target hidden background task");
   });
 });
 

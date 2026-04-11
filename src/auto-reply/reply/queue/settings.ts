@@ -1,4 +1,3 @@
-import { getChannelPlugin } from "../../../channels/plugins/index.js";
 import type { InboundDebounceByProvider } from "../../../config/types.messages.js";
 import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 import { normalizeQueueDropPolicy, normalizeQueueMode } from "./normalize.js";
@@ -21,15 +20,6 @@ function resolveChannelDebounce(
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : undefined;
 }
 
-function resolvePluginDebounce(channelKey: string | undefined): number | undefined {
-  if (!channelKey) {
-    return undefined;
-  }
-  const plugin = getChannelPlugin(channelKey);
-  const value = plugin?.defaults?.queue?.debounceMs;
-  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : undefined;
-}
-
 export function resolveQueueSettings(params: ResolveQueueSettingsParams): QueueSettings {
   const channelKey = normalizeOptionalLowercaseString(params.channel);
   const queueCfg = params.cfg.messages?.queue;
@@ -47,7 +37,7 @@ export function resolveQueueSettings(params: ResolveQueueSettingsParams): QueueS
     params.inlineOptions?.debounceMs ??
     params.sessionEntry?.queueDebounceMs ??
     resolveChannelDebounce(queueCfg?.debounceMsByChannel, channelKey) ??
-    resolvePluginDebounce(channelKey) ??
+    params.pluginDebounceMs ??
     queueCfg?.debounceMs ??
     DEFAULT_QUEUE_DEBOUNCE_MS;
   const capRaw =

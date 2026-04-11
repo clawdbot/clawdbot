@@ -312,7 +312,7 @@ describe("nodes camera_clip", () => {
       node: NODE_ID,
       facing: "front",
     });
-    const filePath = String((result.content?.[0] as { text?: string } | undefined)?.text ?? "")
+    const filePath = ((result.content?.[0] as { text?: string } | undefined)?.text ?? "")
       .replace(/^FILE:/, "")
       .trim();
     await expect(readFileUtf8AndCleanup(filePath)).resolves.toBe("url-clip");

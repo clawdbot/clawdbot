@@ -691,7 +691,7 @@ export function readBrowserVersion(executablePath: string): string | null {
 }
 
 export function parseBrowserMajorVersion(rawVersion: string | null | undefined): number | null {
-  const matches = [...String(rawVersion ?? "").matchAll(CHROME_VERSION_RE)];
+  const matches = [...(rawVersion ?? "").matchAll(CHROME_VERSION_RE)];
   const match = matches.at(-1);
   if (!match?.[1]) {
     return null;

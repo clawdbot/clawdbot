@@ -38,7 +38,7 @@ export async function noteMacLaunchAgentOverrides() {
 async function launchctlGetenv(name: string): Promise<string | undefined> {
   try {
     const result = await execFileAsync("/bin/launchctl", ["getenv", name], { encoding: "utf8" });
-    const value = normalizeOptionalString(String(result.stdout ?? "")) ?? "";
+    const value = normalizeOptionalString(result.stdout ?? "") ?? "";
     return value.length > 0 ? value : undefined;
   } catch {
     return undefined;
@@ -49,11 +49,11 @@ function hasConfigGatewayCreds(cfg: OpenClawConfig): boolean {
   const localPassword = cfg.gateway?.auth?.password;
   const remoteToken = cfg.gateway?.remote?.token;
   const remotePassword = cfg.gateway?.remote?.password;
-  return Boolean(
+  return (
     hasConfiguredSecretInput(cfg.gateway?.auth?.token, cfg.secrets?.defaults) ||
     hasConfiguredSecretInput(localPassword, cfg.secrets?.defaults) ||
     hasConfiguredSecretInput(remoteToken, cfg.secrets?.defaults) ||
-    hasConfiguredSecretInput(remotePassword, cfg.secrets?.defaults),
+    hasConfiguredSecretInput(remotePassword, cfg.secrets?.defaults)
   );
 }
 

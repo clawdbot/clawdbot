@@ -369,7 +369,7 @@ describe("verifyPlivoWebhook", () => {
 describe("verifyTelnyxWebhook", () => {
   it("marks replayed valid requests as replay without failing auth", () => {
     const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
-    const pemPublicKey = publicKey.export({ format: "pem", type: "spki" }).toString();
+    const pemPublicKey = publicKey.export({ format: "pem", type: "spki" });
     const timestamp = String(Math.floor(Date.now() / 1000));
     const rawBody = JSON.stringify({
       data: { event_type: "call.initiated", payload: { call_control_id: "call-1" } },
@@ -395,7 +395,7 @@ describe("verifyTelnyxWebhook", () => {
 
   it("treats Base64 and Base64URL signatures as the same replayed request", () => {
     const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
-    const pemPublicKey = publicKey.export({ format: "pem", type: "spki" }).toString();
+    const pemPublicKey = publicKey.export({ format: "pem", type: "spki" });
     const timestamp = String(Math.floor(Date.now() / 1000));
     const rawBody = JSON.stringify({
       data: { event_type: "call.initiated", payload: { call_control_id: "call-1" } },

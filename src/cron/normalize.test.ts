@@ -438,6 +438,17 @@ describe("normalizeCronJobCreate", () => {
     expect(payload.timeoutSeconds).toBe(0);
   });
 
+  it("preserves fractional timeoutSeconds for short agentTurn deadlines", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "fractional timeout",
+      schedule: { kind: "every", everyMs: 60_000 },
+      payload: { kind: "agentTurn", message: "hello", timeoutSeconds: 0.03 },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.timeoutSeconds).toBe(0.03);
+  });
+
   it("preserves empty toolsAllow lists for create jobs", () => {
     const normalized = normalizeCronJobCreate({
       name: "empty-tools",

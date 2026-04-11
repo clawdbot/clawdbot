@@ -107,6 +107,7 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
     global.fetch = withFetchPreconnect(fetchSpy);
 
     const tool = createWebFetchTool({
+      lookupFn: lookupMock as unknown as LookupFn,
       config: {
         plugins: {
           entries: {
@@ -160,7 +161,7 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
       expect.stringContaining("x-markdown-tokens: 1500 (https://example.com/...)"),
     );
     const tokenLogs = logSpy.mock.calls
-      .map(([message]) => String(message))
+      .map(([message]) => message)
       .filter((message) => message.includes("x-markdown-tokens"));
     expect(tokenLogs).toHaveLength(1);
     expect(tokenLogs[0]).not.toContain("token=secret");

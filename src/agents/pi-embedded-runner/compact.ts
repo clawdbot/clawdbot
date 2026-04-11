@@ -7,13 +7,11 @@ import {
   estimateTokens,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
-import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
+import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  ensureContextEnginesInitialized,
-  resolveContextEngine,
-} from "../../context-engine/index.js";
+import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
+import { resolveContextEngine } from "../../context-engine/registry.js";
 import {
   captureCompactionCheckpointSnapshot,
   cleanupCompactionCheckpointSnapshot,
@@ -29,9 +27,11 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
   prepareProviderRuntimeAuth,
   resolveProviderSystemPromptContribution,
+  resolveProviderTextTransforms,
+  transformProviderSystemPrompt,
 } from "../../plugins/provider-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/types.js";
-import { type enqueueCommand, enqueueCommandInLane } from "../../process/command-queue.js";
+import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
@@ -40,7 +40,6 @@ import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
-import type { ExecElevatedDefaults } from "../bash-tools.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
 import {
   listChannelSupportedActions,
@@ -77,6 +76,7 @@ import {
 } from "../pi-hooks/compaction-safeguard-runtime.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../pi-project-settings.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
+import { wrapStreamFnTextTransforms } from "../plugin-text-transforms.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { resolveSandboxContext } from "../sandbox.js";
@@ -92,11 +92,11 @@ import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
   resolveSkillsPromptForRun,
-  type SkillSnapshot,
 } from "../skills.js";
 import { resolveSystemPromptOverride } from "../system-prompt-override.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { classifyCompactionReason, resolveCompactionFailureReason } from "./compact-reasons.js";
+import type { CompactEmbeddedPiSessionParams, CompactionMessageMetrics } from "./compact.types.js";
 import {
   asCompactionHookRunner,
   buildBeforeCompactionHookMetrics,
@@ -148,65 +148,7 @@ import { splitSdkTools } from "./tool-split.js";
 import type { EmbeddedPiCompactResult } from "./types.js";
 import { mapThinkingLevel } from "./utils.js";
 import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.js";
-
-export type CompactEmbeddedPiSessionParams = {
-  sessionId: string;
-  runId?: string;
-  sessionKey?: string;
-  messageChannel?: string;
-  messageProvider?: string;
-  agentAccountId?: string;
-  currentChannelId?: string;
-  currentThreadTs?: string;
-  currentMessageId?: string | number;
-  /** Trusted sender id from inbound context for scoped message-tool discovery. */
-  senderId?: string;
-  authProfileId?: string;
-  /** Group id for channel-level tool policy resolution. */
-  groupId?: string | null;
-  /** Group channel label (e.g. #general) for channel-level tool policy resolution. */
-  groupChannel?: string | null;
-  /** Group space label (e.g. guild/team id) for channel-level tool policy resolution. */
-  groupSpace?: string | null;
-  /** Parent session key for subagent policy inheritance. */
-  spawnedBy?: string | null;
-  /** Whether the sender is an owner (required for owner-only tools). */
-  senderIsOwner?: boolean;
-  sessionFile: string;
-  /** Optional caller-observed live prompt tokens used for compaction diagnostics. */
-  currentTokenCount?: number;
-  workspaceDir: string;
-  agentDir?: string;
-  config?: OpenClawConfig;
-  skillsSnapshot?: SkillSnapshot;
-  provider?: string;
-  model?: string;
-  thinkLevel?: ThinkLevel;
-  reasoningLevel?: ReasoningLevel;
-  bashElevated?: ExecElevatedDefaults;
-  customInstructions?: string;
-  tokenBudget?: number;
-  force?: boolean;
-  trigger?: "budget" | "overflow" | "manual";
-  diagId?: string;
-  attempt?: number;
-  maxAttempts?: number;
-  lane?: string;
-  enqueue?: typeof enqueueCommand;
-  extraSystemPrompt?: string;
-  ownerNumbers?: string[];
-  abortSignal?: AbortSignal;
-  /** Allow runtime plugins for this compaction to late-bind the gateway subagent. */
-  allowGatewaySubagentBinding?: boolean;
-};
-
-type CompactionMessageMetrics = {
-  messages: number;
-  historyTextChars: number;
-  toolResultChars: number;
-  estTokens?: number;
-  contributors: Array<{ role: string; chars: number; tool?: string }>;
-};
+export type { CompactEmbeddedPiSessionParams } from "./compact.types.js";
 
 function hasRealConversationContent(
   msg: AgentMessage,
@@ -249,6 +191,19 @@ function prepareCompactionSessionAgent(params: {
     resolvedApiKey: params.resolvedApiKey,
     authStorage: params.authStorage as never,
   });
+  const providerTextTransforms = resolveProviderTextTransforms({
+    provider: params.provider,
+    config: params.config,
+    workspaceDir: params.effectiveWorkspace,
+  });
+  if (providerTextTransforms) {
+    params.session.agent.streamFn = wrapStreamFnTextTransforms({
+      streamFn: params.session.agent.streamFn as never,
+      input: providerTextTransforms.input,
+      output: providerTextTransforms.output,
+      transformSystemPrompt: false,
+    }) as never;
+  }
   return applyExtraParamsToAgent(
     params.session.agent as never,
     params.config,
@@ -562,6 +517,10 @@ export async function compactEmbeddedPiSessionDirect(
       groupChannel: params.groupChannel,
       groupSpace: params.groupSpace,
       spawnedBy: params.spawnedBy,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
       senderIsOwner: params.senderIsOwner,
       allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
       agentDir,
@@ -639,9 +598,7 @@ export async function compactEmbeddedPiSessionDirect(
     if (promptCapabilities.length > 0) {
       runtimeCapabilities ??= [];
       const seenCapabilities = new Set(
-        runtimeCapabilities
-          .map((cap) => normalizeOptionalLowercaseString(String(cap)))
-          .filter(Boolean),
+        runtimeCapabilities.map((cap) => normalizeOptionalLowercaseString(cap)).filter(Boolean),
       );
       for (const capability of promptCapabilities) {
         const normalizedCapability = normalizeOptionalLowercaseString(capability);
@@ -741,45 +698,64 @@ export async function compactEmbeddedPiSessionDirect(
         agentId: sessionAgentId,
       },
     });
-    const buildSystemPromptOverride = (defaultThinkLevel: ThinkLevel) =>
-      createSystemPromptOverride(
+    const buildSystemPromptOverride = (defaultThinkLevel: ThinkLevel) => {
+      const builtSystemPrompt =
         resolveSystemPromptOverride({
           config: params.config,
           agentId: sessionAgentId,
         }) ??
-          buildEmbeddedSystemPrompt({
-            workspaceDir: effectiveWorkspace,
-            defaultThinkLevel,
-            reasoningLevel: params.reasoningLevel ?? "off",
-            extraSystemPrompt: params.extraSystemPrompt,
-            ownerNumbers: params.ownerNumbers,
-            ownerDisplay: ownerDisplay.ownerDisplay,
-            ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
-            reasoningTagHint,
-            heartbeatPrompt: resolveHeartbeatPromptForSystemPrompt({
-              config: params.config,
-              agentId: sessionAgentId,
-              defaultAgentId,
-            }),
-            skillsPrompt,
-            docsPath: docsPath ?? undefined,
-            ttsHint,
-            promptMode,
-            acpEnabled: params.config?.acp?.enabled !== false,
-            runtimeInfo,
-            reactionGuidance,
-            messageToolHints,
-            sandboxInfo,
-            tools: effectiveTools,
-            modelAliasLines: buildModelAliasLines(params.config),
-            userTimezone,
-            userTime,
-            userTimeFormat,
-            contextFiles,
-            memoryCitationsMode: params.config?.memory?.citations,
-            promptContribution,
+        buildEmbeddedSystemPrompt({
+          workspaceDir: effectiveWorkspace,
+          defaultThinkLevel,
+          reasoningLevel: params.reasoningLevel ?? "off",
+          extraSystemPrompt: params.extraSystemPrompt,
+          ownerNumbers: params.ownerNumbers,
+          ownerDisplay: ownerDisplay.ownerDisplay,
+          ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
+          reasoningTagHint,
+          heartbeatPrompt: resolveHeartbeatPromptForSystemPrompt({
+            config: params.config,
+            agentId: sessionAgentId,
+            defaultAgentId,
           }),
+          skillsPrompt,
+          docsPath: docsPath ?? undefined,
+          ttsHint,
+          promptMode,
+          acpEnabled: params.config?.acp?.enabled !== false,
+          runtimeInfo,
+          reactionGuidance,
+          messageToolHints,
+          sandboxInfo,
+          tools: effectiveTools,
+          modelAliasLines: buildModelAliasLines(params.config),
+          userTimezone,
+          userTime,
+          userTimeFormat,
+          contextFiles,
+          memoryCitationsMode: params.config?.memory?.citations,
+          promptContribution,
+        });
+      return createSystemPromptOverride(
+        transformProviderSystemPrompt({
+          provider,
+          config: params.config,
+          workspaceDir: effectiveWorkspace,
+          context: {
+            config: params.config,
+            agentDir,
+            workspaceDir: effectiveWorkspace,
+            provider,
+            modelId,
+            promptMode,
+            runtimeChannel,
+            runtimeCapabilities,
+            agentId: sessionAgentId,
+            systemPrompt: builtSystemPrompt,
+          },
+        }),
       );
+    };
 
     const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
     const sessionLock = await acquireSessionWriteLock({

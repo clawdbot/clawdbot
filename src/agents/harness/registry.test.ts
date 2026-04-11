@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearAgentHarnesses,
+  disposeRegisteredAgentHarnesses,
   getAgentHarness,
   getRegisteredAgentHarness,
   listAgentHarnessIds,
@@ -94,6 +95,18 @@ describe("agent harness registry", () => {
         reason: "reset",
       },
     ]);
+  });
+
+  it("disposes registered harness runtime state", async () => {
+    const dispose = vi.fn(async () => undefined);
+    registerAgentHarness({
+      ...makeHarness("custom"),
+      dispose,
+    });
+
+    await disposeRegisteredAgentHarnesses();
+
+    expect(dispose).toHaveBeenCalledTimes(1);
   });
 
   it("keeps model-specific harnesses behind plugin registration in auto mode", () => {

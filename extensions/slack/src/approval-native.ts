@@ -96,6 +96,7 @@ function resolveSlackFallbackOriginTarget(request: ApprovalRequest): SlackOrigin
   const sessionTarget = resolveApprovalRequestSessionConversation({
     request,
     channel: "slack",
+    bundledFallback: false,
   });
   if (!sessionTarget) {
     return null;

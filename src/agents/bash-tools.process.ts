@@ -15,6 +15,7 @@ import {
   markExited,
   setJobTtlMs,
 } from "./bash-process-registry.js";
+import { describeProcessTool } from "./bash-tools.descriptions.js";
 import { deriveSessionName, pad, sliceLogLines, truncateMiddle } from "./bash-tools.shared.js";
 import { recordCommandPoll, resetCommandPollCount } from "./command-poll-backoff.js";
 import { encodeKeySequence, encodePaste, hasCursorModeSensitiveKeys } from "./pty-keys.js";
@@ -117,18 +118,6 @@ function resetPollRetrySuggestion(sessionId: string): void {
   } catch {
     // Ignore diagnostics state failures for process tool behavior.
   }
-}
-
-export function describeProcessTool(params?: { hasCronTool?: boolean }): string {
-  return [
-    "Manage running exec sessions for commands already started: list, poll, log, write, send-keys, submit, paste, kill.",
-    "Use poll/log when you need status, logs, quiet-success confirmation, or completion confirmation when automatic completion wake is unavailable. Use write/send-keys/submit/paste/kill for input or intervention.",
-    params?.hasCronTool
-      ? "Do not use process polling to emulate timers or reminders; use cron for scheduled follow-ups."
-      : undefined,
-  ]
-    .filter(Boolean)
-    .join(" ");
 }
 
 export function createProcessTool(

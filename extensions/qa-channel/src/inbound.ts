@@ -94,7 +94,7 @@ export async function handleQaInbound(params: {
     deliver: async (payload) => {
       const text =
         payload && typeof payload === "object" && "text" in payload
-          ? String((payload as { text?: string }).text ?? "")
+          ? ((payload as { text?: string }).text ?? "")
           : "";
       if (!text.trim()) {
         return;

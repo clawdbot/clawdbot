@@ -60,6 +60,8 @@ export {
   createLazyChannelApprovalNativeRuntimeAdapter,
 };
 export type {
+  ApprovalRequest,
+  ApprovalResolved,
   ChannelApprovalCapabilityHandlerContext,
   ChannelApprovalKind,
   ChannelApprovalNativeAvailabilityAdapter,

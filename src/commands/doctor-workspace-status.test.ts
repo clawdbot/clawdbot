@@ -116,7 +116,7 @@ describe("noteWorkspaceStatus", () => {
     try {
       const pluginCalls = noteSpy.mock.calls.filter(([, title]) => title === "Plugins");
       expect(pluginCalls).toHaveLength(1);
-      const body = String(pluginCalls[0]?.[0]);
+      const [[body]] = pluginCalls;
       expect(body).toContain("Bundle plugins: 1");
       expect(body).toContain("agents, commands, skills");
     } finally {
@@ -142,7 +142,8 @@ describe("noteWorkspaceStatus", () => {
     try {
       const pluginCalls = noteSpy.mock.calls.filter(([, title]) => title === "Plugins");
       expect(pluginCalls).toHaveLength(1);
-      expect(String(pluginCalls[0]?.[0])).toContain("Imported: 1");
+      const [[body]] = pluginCalls;
+      expect(body).toContain("Imported: 1");
     } finally {
       noteSpy.mockRestore();
     }
@@ -198,9 +199,8 @@ describe("noteWorkspaceStatus", () => {
         ([, title]) => title === "Plugin compatibility",
       );
       expect(compatibilityCalls).toHaveLength(1);
-      expect(String(compatibilityCalls[0]?.[0])).toContain(
-        "legacy-plugin still uses legacy before_agent_start",
-      );
+      const [[body]] = compatibilityCalls;
+      expect(body).toContain("legacy-plugin still uses legacy before_agent_start");
     } finally {
       noteSpy.mockRestore();
     }
@@ -227,8 +227,9 @@ describe("noteWorkspaceStatus", () => {
     try {
       const recoveryCalls = noteSpy.mock.calls.filter(([, title]) => title === "TaskFlow recovery");
       expect(recoveryCalls).toHaveLength(1);
-      expect(String(recoveryCalls[0]?.[0])).toContain("flow-123");
-      expect(String(recoveryCalls[0]?.[0])).toContain("openclaw tasks flow show <flow-id>");
+      const [[body]] = recoveryCalls;
+      expect(body).toContain("flow-123");
+      expect(body).toContain("openclaw tasks flow show <flow-id>");
     } finally {
       noteSpy.mockRestore();
     }

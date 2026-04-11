@@ -64,6 +64,21 @@ async function waitForRunnerCatalog(baseUrl: string, timeoutMs = 5_000) {
   throw new Error("runner catalog stayed loading");
 }
 
+async function waitForFile(filePath: string, timeoutMs = 5_000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      return await readFile(filePath, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+      await sleep(50);
+    }
+  }
+  throw new Error(`file did not appear: ${filePath}`);
+}
+
 describe("qa-lab server", () => {
   it("serves bootstrap state and writes a self-check report", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "qa-lab-test-"));
@@ -403,6 +418,56 @@ describe("qa-lab server", () => {
     const runnerCatalog = await waitForRunnerCatalog(lab.baseUrl);
     expect(runnerCatalog.status).toBe("ready");
     expect(await readFile(markerPath, "utf8")).toContain("models list --all --json");
+  });
+
+  it("aborts an in-flight runner model catalog when the lab stops", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-lab-abort-catalog-"));
+    cleanups.push(async () => {
+      await rm(repoRoot, { recursive: true, force: true });
+    });
+    const markerPath = path.join(repoRoot, "runner-catalog-started.txt");
+    const stoppedPath = path.join(repoRoot, "runner-catalog-stopped.txt");
+
+    await mkdir(path.join(repoRoot, "dist"), { recursive: true });
+    await mkdir(path.join(repoRoot, "extensions/qa-lab/web/dist"), { recursive: true });
+    await writeFile(
+      path.join(repoRoot, "dist/index.js"),
+      [
+        'const fs = require("node:fs");',
+        `fs.writeFileSync(${JSON.stringify(markerPath)}, process.env.OPENCLAW_CODEX_DISCOVERY_LIVE || "", "utf8");`,
+        "process.on('SIGTERM', () => {",
+        `  fs.writeFileSync(${JSON.stringify(stoppedPath)}, "terminated", "utf8");`,
+        "  process.exit(0);",
+        "});",
+        "setInterval(() => {}, 1000);",
+      ].join("\n"),
+      "utf8",
+    );
+    await writeFile(
+      path.join(repoRoot, "extensions/qa-lab/web/dist/index.html"),
+      "<!doctype html><html><body>abort catalog</body></html>",
+      "utf8",
+    );
+
+    const lab = await startQaLabServer({
+      host: "127.0.0.1",
+      port: 0,
+      repoRoot,
+    });
+    let stopped = false;
+    cleanups.push(async () => {
+      if (!stopped) {
+        await lab.stop();
+      }
+    });
+
+    const bootstrapResponse = await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`);
+    expect(bootstrapResponse.status).toBe(200);
+    expect(await waitForFile(markerPath)).toBe("0");
+
+    await lab.stop();
+    stopped = true;
+    expect(await waitForFile(stoppedPath)).toBe("terminated");
   });
 
   it("can disable the embedded echo gateway for real-suite runs", async () => {

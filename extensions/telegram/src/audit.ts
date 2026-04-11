@@ -21,7 +21,7 @@ export function collectTelegramUnmentionedGroupIds(
     };
   }
   const hasWildcardUnmentionedGroups =
-    Boolean(groups["*"]?.requireMention === false) && groups["*"]?.enabled !== false;
+    groups["*"]?.requireMention === false && groups["*"]?.enabled !== false;
   const groupIds: string[] = [];
   let unresolvedGroups = 0;
   for (const [key, value] of Object.entries(groups)) {
@@ -37,7 +37,7 @@ export function collectTelegramUnmentionedGroupIds(
     if (value.requireMention !== false) {
       continue;
     }
-    const id = normalizeOptionalString(String(key)) ?? "";
+    const id = normalizeOptionalString(key) ?? "";
     if (!id) {
       continue;
     }

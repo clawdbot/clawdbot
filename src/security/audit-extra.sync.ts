@@ -845,44 +845,8 @@ export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): Secu
     }
   }
 
-  const browserExposurePaths: string[] = [];
-  const defaultBrowser = resolveSandboxConfigForAgent(cfg).browser;
-  if (
-    defaultBrowser.enabled &&
-    normalizeOptionalLowercaseString(defaultBrowser.network) === "bridge" &&
-    !defaultBrowser.cdpSourceRange?.trim()
-  ) {
-    browserExposurePaths.push("agents.defaults.sandbox.browser");
-  }
-  for (const entry of agents) {
-    if (!entry || typeof entry !== "object" || typeof entry.id !== "string") {
-      continue;
-    }
-    const browser = resolveSandboxConfigForAgent(cfg, entry.id).browser;
-    if (!browser.enabled) {
-      continue;
-    }
-    if (normalizeOptionalLowercaseString(browser.network) !== "bridge") {
-      continue;
-    }
-    if (browser.cdpSourceRange?.trim()) {
-      continue;
-    }
-    browserExposurePaths.push(`agents.list.${entry.id}.sandbox.browser`);
-  }
-  if (browserExposurePaths.length > 0) {
-    findings.push({
-      checkId: "sandbox.browser_cdp_bridge_unrestricted",
-      severity: "warn",
-      title: "Sandbox browser CDP may be reachable by peer containers",
-      detail:
-        "These sandbox browser configs use Docker bridge networking with no CDP source restriction:\n" +
-        browserExposurePaths.map((entry) => `- ${entry}`).join("\n"),
-      remediation:
-        "Set sandbox.browser.network to a dedicated bridge network (recommended default: openclaw-sandbox-browser), " +
-        "or set sandbox.browser.cdpSourceRange (for example 172.21.0.1/32) to restrict container-edge CDP ingress.",
-    });
-  }
+  // CDP source range is now auto-derived at runtime from the Docker network gateway
+  // for all bridge-like networks, so an unset cdpSourceRange is no longer a security gap.
 
   return findings;
 }

@@ -2,6 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { storeSessionLearning } from "./feedback-reflection-store.js";
 import {
   buildFeedbackEvent,
   buildReflectionPrompt,
@@ -174,12 +175,63 @@ describe("loadSessionLearnings", () => {
 
   it("reads existing learnings", async () => {
     tmpDir = await mkdtemp(path.join(os.tmpdir(), "learnings-test-"));
-    // Colons are sanitized to underscores in filenames (Windows compat)
-    const safeKey = "msteams_user1";
+    const safeKey = Buffer.from("msteams:user1", "utf8").toString("base64url");
     const filePath = path.join(tmpDir, `${safeKey}.learnings.json`);
     await writeFile(filePath, JSON.stringify(["Be concise", "Use examples"]), "utf-8");
 
     const learnings = await loadSessionLearnings(tmpDir, "msteams:user1");
     expect(learnings).toEqual(["Be concise", "Use examples"]);
+  });
+
+  it("keeps distinct session keys isolated across the filename persistence boundary", async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), "learnings-test-"));
+
+    await storeSessionLearning({
+      storePath: tmpDir,
+      sessionKey: "msteams:user1",
+      learning: "Use bullets",
+    });
+    await storeSessionLearning({
+      storePath: tmpDir,
+      sessionKey: "msteams/user1",
+      learning: "Avoid bullets",
+    });
+
+    await expect(loadSessionLearnings(tmpDir, "msteams:user1")).resolves.toEqual(["Use bullets"]);
+    await expect(loadSessionLearnings(tmpDir, "msteams/user1")).resolves.toEqual(["Avoid bullets"]);
+  });
+
+  it("reads and migrates legacy sanitized session learning files", async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), "learnings-test-"));
+    const legacyFile = path.join(tmpDir, "msteams_user1.learnings.json");
+    await writeFile(legacyFile, JSON.stringify(["Legacy learning"]), "utf-8");
+
+    await expect(loadSessionLearnings(tmpDir, "msteams:user1")).resolves.toEqual([
+      "Legacy learning",
+    ]);
+
+    await storeSessionLearning({
+      storePath: tmpDir,
+      sessionKey: "msteams:user1",
+      learning: "New learning",
+    });
+
+    const migratedFile = path.join(
+      tmpDir,
+      `${Buffer.from("msteams:user1", "utf8").toString("base64url")}.learnings.json`,
+    );
+    await expect(loadSessionLearnings(tmpDir, "msteams:user1")).resolves.toEqual([
+      "Legacy learning",
+      "New learning",
+    ]);
+    await expect(rm(legacyFile, { force: false })).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(loadSessionLearnings(tmpDir, "msteams:user1")).resolves.toEqual([
+      "Legacy learning",
+      "New learning",
+    ]);
+    await expect(loadSessionLearnings(tmpDir, "msteams/user1")).resolves.toEqual([]);
+    await expect(
+      import("node:fs/promises").then((fs) => fs.readFile(migratedFile, "utf-8")),
+    ).resolves.toContain("Legacy learning");
   });
 });

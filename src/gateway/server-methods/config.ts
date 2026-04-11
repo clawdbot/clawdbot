@@ -328,18 +328,25 @@ function resolveConfigRestartRequest(params: unknown): {
   deliveryContext: ReturnType<typeof extractDeliveryInfo>["deliveryContext"];
   threadId: ReturnType<typeof extractDeliveryInfo>["threadId"];
 } {
-  const { sessionKey, note, restartDelayMs } = parseRestartRequestParams(params);
+  const {
+    sessionKey,
+    deliveryContext: requestedDeliveryContext,
+    threadId: requestedThreadId,
+    note,
+    restartDelayMs,
+  } = parseRestartRequestParams(params);
 
   // Extract deliveryContext + threadId for routing after restart.
   // Uses generic :thread: parsing plus plugin-owned session grammars.
-  const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
+  const { deliveryContext: sessionDeliveryContext, threadId: sessionThreadId } =
+    extractDeliveryInfo(sessionKey);
 
   return {
     sessionKey,
     note,
     restartDelayMs,
-    deliveryContext,
-    threadId,
+    deliveryContext: requestedDeliveryContext ?? sessionDeliveryContext,
+    threadId: requestedThreadId ?? sessionThreadId,
   };
 }
 

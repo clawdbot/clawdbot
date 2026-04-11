@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -23,6 +23,7 @@ export type PluginExplicitSelectionCause =
   | "enabled-in-config"
   | "bundled-channel-enabled-in-config"
   | "selected-memory-slot"
+  | "selected-context-engine-slot"
   | "selected-in-allowlist";
 
 export type PluginActivationCause =
@@ -104,6 +105,7 @@ const PLUGIN_ACTIVATION_REASON_BY_CAUSE: Record<PluginActivationCause, string> =
   "enabled-in-config": "enabled in config",
   "bundled-channel-enabled-in-config": "channel enabled in config",
   "selected-memory-slot": "selected memory slot",
+  "selected-context-engine-slot": "selected context engine slot",
   "selected-in-allowlist": "selected in allowlist",
   "plugins-disabled": "plugins disabled",
   "blocked-by-denylist": "blocked by denylist",
@@ -231,6 +233,9 @@ function resolveExplicitPluginSelection(params: {
   if (params.config.slots.memory === params.id) {
     return { explicitlyEnabled: true, cause: "selected-memory-slot" };
   }
+  if (params.config.slots.contextEngine === params.id) {
+    return { explicitlyEnabled: true, cause: "selected-context-engine-slot" };
+  }
   if (params.origin !== "bundled" && params.config.allow.includes(params.id)) {
     return { explicitlyEnabled: true, cause: "selected-in-allowlist" };
   }
@@ -288,7 +293,12 @@ export function resolvePluginActivationState(params: {
     });
   }
   const explicitlyAllowed = params.config.allow.includes(params.id);
-  if (params.origin === "workspace" && !explicitlyAllowed && entry?.enabled !== true) {
+  if (
+    params.origin === "workspace" &&
+    !explicitlyAllowed &&
+    entry?.enabled !== true &&
+    explicitSelection.cause !== "selected-context-engine-slot"
+  ) {
     return toPluginActivationState({
       enabled: false,
       activated: false,
@@ -304,6 +314,15 @@ export function resolvePluginActivationState(params: {
       explicitlyEnabled: true,
       source: "explicit",
       cause: "selected-memory-slot",
+    });
+  }
+  if (params.config.slots.contextEngine === params.id) {
+    return toPluginActivationState({
+      enabled: true,
+      activated: true,
+      explicitlyEnabled: true,
+      source: "explicit",
+      cause: "selected-context-engine-slot",
     });
   }
   if (explicitSelection.cause === "bundled-channel-enabled-in-config") {

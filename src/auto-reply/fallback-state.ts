@@ -15,9 +15,7 @@ export type FallbackNoticeState = Pick<
 >;
 
 function truncateFallbackReasonPart(value: string, max = FALLBACK_REASON_PART_MAX): string {
-  const text = String(value ?? "")
-    .replace(/\s+/g, " ")
-    .trim();
+  const text = value.replace(/\s+/g, " ").trim();
   if (text.length <= max) {
     return text;
   }

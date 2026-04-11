@@ -1,9 +1,39 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { withTempHome } from "../../config/home-env.test-harness.js";
 import { createCommandWorkspaceHarness } from "./commands-filesystem.test-support.js";
 import { handleMcpCommand } from "./commands-mcp.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
+
+const mcpServers = vi.hoisted(() => new Map<string, Record<string, unknown>>());
+
+vi.mock("../../config/mcp-config.js", () => ({
+  listConfiguredMcpServers: vi.fn(async () => ({
+    ok: true,
+    path: "/tmp/openclaw.json",
+    config: {},
+    mcpServers: Object.fromEntries(mcpServers),
+  })),
+  setConfiguredMcpServer: vi.fn(async ({ name, server }) => {
+    mcpServers.set(name, { ...(server as Record<string, unknown>) });
+    return {
+      ok: true,
+      path: "/tmp/openclaw.json",
+      config: {},
+      mcpServers: Object.fromEntries(mcpServers),
+    };
+  }),
+  unsetConfiguredMcpServer: vi.fn(async ({ name }) => {
+    const removed = mcpServers.delete(name);
+    return {
+      ok: true,
+      path: "/tmp/openclaw.json",
+      config: {},
+      mcpServers: Object.fromEntries(mcpServers),
+      removed,
+    };
+  }),
+}));
 
 const workspaceHarness = createCommandWorkspaceHarness("openclaw-command-mcp-");
 
@@ -26,6 +56,7 @@ function buildCfg(): OpenClawConfig {
 
 describe("handleCommands /mcp", () => {
   afterEach(async () => {
+    mcpServers.clear();
     await workspaceHarness.cleanupWorkspaces();
   });
 

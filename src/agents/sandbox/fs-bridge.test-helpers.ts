@@ -79,11 +79,11 @@ const DOCKER_SCRIPT_INDEX = 5;
 const DOCKER_FIRST_SCRIPT_ARG_INDEX = 7;
 
 export function getDockerScript(args: string[]): string {
-  return String(args[DOCKER_SCRIPT_INDEX] ?? "");
+  return args[DOCKER_SCRIPT_INDEX] ?? "";
 }
 
 export function getDockerArg(args: string[], position: number): string {
-  return String(args[DOCKER_FIRST_SCRIPT_ARG_INDEX + position - 1] ?? "");
+  return args[DOCKER_FIRST_SCRIPT_ARG_INDEX + position - 1] ?? "";
 }
 
 export function getDockerPathArg(args: string[]): string {

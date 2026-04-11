@@ -113,7 +113,7 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   const output = Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>;
   const stream = ndJsonStream(input, output);
 
-  new AgentSideConnection((conn: AgentSideConnection) => {
+  const _connection = new AgentSideConnection((conn: AgentSideConnection) => {
     agent = new AcpGatewayAgent(conn, gateway, opts);
     agent.start();
     return agent;

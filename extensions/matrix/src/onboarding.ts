@@ -131,7 +131,7 @@ async function promptMatrixAllowFrom(params: {
   const existingConfig = resolveMatrixAccountConfig({ cfg, accountId });
   const existingAllowFrom = existingConfig.dm?.allowFrom ?? [];
   const account = resolveMatrixAccount({ cfg, accountId });
-  const canResolve = Boolean(account.configured);
+  const canResolve = account.configured;
 
   const isFullUserId = (value: string) => value.startsWith("@") && value.includes(":");
 
@@ -142,7 +142,7 @@ async function promptMatrixAllowFrom(params: {
       initialValue: existingAllowFrom[0] ? String(existingAllowFrom[0]) : undefined,
       validate: (value) => (normalizeOptionalString(value) ? undefined : "Required"),
     });
-    const parts = splitSetupEntries(String(entry));
+    const parts = splitSetupEntries(entry);
     const resolvedIds: string[] = [];
     const pending: string[] = [];
     const unresolved: string[] = [];
@@ -287,17 +287,15 @@ async function configureMatrixInviteAutoJoin(params: {
   }
 
   while (true) {
-    const rawAllowlist = String(
-      await params.prompter.text({
-        message: "Matrix invite auto-join allowlist (comma-separated)",
-        placeholder: "!roomId:server, #alias:server, *",
-        initialValue: currentAllowlist[0] ? currentAllowlist.join(", ") : undefined,
-        validate: (value) => {
-          const entries = splitSetupEntries(String(value ?? ""));
-          return entries.length > 0 ? undefined : "Required";
-        },
-      }),
-    );
+    const rawAllowlist = await params.prompter.text({
+      message: "Matrix invite auto-join allowlist (comma-separated)",
+      placeholder: "!roomId:server, #alias:server, *",
+      initialValue: currentAllowlist[0] ? currentAllowlist.join(", ") : undefined,
+      validate: (value) => {
+        const entries = splitSetupEntries(value);
+        return entries.length > 0 ? undefined : "Required";
+      },
+    });
     const allowlist = normalizeMatrixInviteAutoJoinTargets(splitSetupEntries(rawAllowlist));
     const invalidEntries = allowlist.filter((entry) => !isMatrixInviteAutoJoinTarget(entry));
     if (allowlist.length === 0 || invalidEntries.length > 0) {
@@ -540,7 +538,7 @@ async function runMatrixConfigure(params: {
         initialValue: existing.homeserver ?? envHomeserver,
         validate: (value) => {
           try {
-            validateMatrixHomeserverUrl(String(value ?? ""), {
+            validateMatrixHomeserverUrl(value, {
               allowPrivateNetwork: true,
             });
             return undefined;

@@ -95,14 +95,14 @@ function fileNameFromPathLike(pathLike: string): string | undefined {
 
   try {
     const url = new URL(value);
-    const candidate = url.pathname.split("/").filter(Boolean).at(-1);
+    const candidate = url.pathname.split("/").findLast(Boolean);
     return candidate && candidate.length > 0 ? candidate : undefined;
   } catch {
     // Not a URL; continue with path-like parsing.
   }
 
   const normalized = value.replaceAll("\\", "/");
-  const candidate = normalized.split("/").filter(Boolean).at(-1);
+  const candidate = normalized.split("/").findLast(Boolean);
   return candidate && candidate.length > 0 ? candidate : undefined;
 }
 

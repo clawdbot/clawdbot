@@ -35,7 +35,7 @@ vi.mock("../plugins/provider-runtime.js", async () => {
       provider === "openrouter" || provider === "github-copilot"
         ? {
             buildReplayPolicy: (context?: { modelId?: string | null }) => {
-              const modelId = String(context?.modelId ?? "").toLowerCase();
+              const modelId = (context?.modelId ?? "").toLowerCase();
               if (provider === "openrouter") {
                 return {
                   applyAssistantFirstOrderingFix: false,

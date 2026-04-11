@@ -306,6 +306,6 @@ describe("bonjour-discovery", () => {
     });
 
     expect(calls.filter((c) => c[1] === "-B")).toHaveLength(1);
-    expect(calls.filter((c) => c[1] === "-B")[0]?.[3]).toBe("local.");
+    expect(calls.find((c) => c[1] === "-B")?.[3]).toBe("local.");
   });
 });

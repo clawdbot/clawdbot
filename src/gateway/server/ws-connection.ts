@@ -271,10 +271,8 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     });
 
     const isNoisySwiftPmHelperClose = (userAgent: string | undefined, remote: string | undefined) =>
-      Boolean(
-        normalizeLowercaseStringOrEmpty(userAgent).includes("swiftpm-testing-helper") &&
-        isLoopbackAddress(remote),
-      );
+      normalizeLowercaseStringOrEmpty(userAgent).includes("swiftpm-testing-helper") &&
+      isLoopbackAddress(remote);
 
     socket.once("close", (code, reason) => {
       const durationMs = Date.now() - openedAt;

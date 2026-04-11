@@ -7,6 +7,24 @@ import {
 } from "./sdk.js";
 import type { MSTeamsCredentials } from "./token.js";
 
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
+    "openclaw/plugin-sdk/ssrf-runtime",
+  );
+  return {
+    ...actual,
+    fetchWithSsrFGuard: async (params: {
+      url: string;
+      init?: RequestInit;
+      fetchImpl?: typeof fetch;
+    }) => ({
+      response: await (params.fetchImpl ?? fetch)(params.url, params.init),
+      finalUrl: params.url,
+      release: async () => {},
+    }),
+  };
+});
+
 const clientConstructorState = vi.hoisted(() => ({
   calls: [] as Array<{ serviceUrl: string; options: unknown }>,
 }));

@@ -19,6 +19,7 @@ const {
   ) => { ok: boolean; terminal: string; loop?: boolean };
   runDocsLinkAuditCli: (options?: {
     args?: string[];
+    nodeVersion?: string;
     spawnSyncImpl?: (
       command: string,
       args: string[],
@@ -146,7 +147,7 @@ describe("docs-link-audit", () => {
     }
   });
 
-  it("prefers a local mint binary for anchor validation", () => {
+  it("uses Mintlify through pnpm dlx for anchor validation", () => {
     let invocation:
       | {
           command: string;
@@ -159,6 +160,7 @@ describe("docs-link-audit", () => {
 
     const exitCode = runDocsLinkAuditCli({
       args: ["--anchors"],
+      nodeVersion: "22.21.1",
       prepareAnchorAuditDocsDirImpl() {
         return anchorDocsDir;
       },
@@ -173,14 +175,14 @@ describe("docs-link-audit", () => {
 
     expect(exitCode).toBe(0);
     expect(invocation).toBeDefined();
-    expect(invocation?.command).toBe("mint");
-    expect(invocation?.args).toEqual(["broken-links", "--check-anchors"]);
+    expect(invocation?.command).toBe("pnpm");
+    expect(invocation?.args).toEqual(["dlx", "mint", "broken-links", "--check-anchors"]);
     expect(invocation?.options.stdio).toBe("inherit");
     expect(invocation?.options.cwd).toBe(anchorDocsDir);
     expect(cleanedDir).toBe(anchorDocsDir);
   });
 
-  it("falls back to pnpm dlx when mint is not on PATH", () => {
+  it("wraps Mintlify with Node 22 when the current Node is too new", () => {
     const invocations: Array<{
       command: string;
       args: string[];
@@ -191,6 +193,7 @@ describe("docs-link-audit", () => {
 
     const exitCode = runDocsLinkAuditCli({
       args: ["--anchors"],
+      nodeVersion: "25.3.0",
       prepareAnchorAuditDocsDirImpl() {
         return anchorDocsDir;
       },
@@ -199,9 +202,6 @@ describe("docs-link-audit", () => {
       },
       spawnSyncImpl(command, args, options) {
         invocations.push({ command, args, options });
-        if (command === "mint") {
-          return { status: null, error: { code: "ENOENT" } };
-        }
         return { status: 0 };
       },
     });
@@ -209,13 +209,19 @@ describe("docs-link-audit", () => {
     expect(exitCode).toBe(0);
     expect(invocations).toHaveLength(2);
     expect(invocations[0]).toMatchObject({
-      command: "mint",
-      args: ["broken-links", "--check-anchors"],
-      options: { stdio: "inherit" },
+      command: "fnm",
+      args: [
+        "exec",
+        "--using=22",
+        "node",
+        "-e",
+        "process.exit(Number(process.versions.node.split('.')[0]) === 22 ? 0 : 1)",
+      ],
+      options: { stdio: "ignore" },
     });
     expect(invocations[1]).toMatchObject({
-      command: "pnpm",
-      args: ["dlx", "mint", "broken-links", "--check-anchors"],
+      command: "fnm",
+      args: ["exec", "--using=22", "pnpm", "dlx", "mint", "broken-links", "--check-anchors"],
       options: { stdio: "inherit" },
     });
     expect(invocations[0]?.options.cwd).toBe(anchorDocsDir);

@@ -121,6 +121,8 @@ export class CodexAppServerEventProjector {
     options?: { yieldDetected?: boolean },
   ): EmbeddedRunAttemptResult {
     const assistantTexts = this.collectAssistantTexts();
+    const reasoningText = collectTextValues(this.reasoningTextByItem).join("\n\n");
+    const planText = collectTextValues(this.planTextByItem).join("\n\n");
     const lastAssistant =
       assistantTexts.length > 0
         ? this.createAssistantMessage(assistantTexts.join("\n\n"))
@@ -132,6 +134,14 @@ export class CodexAppServerEventProjector {
         timestamp: Date.now(),
       },
     ];
+    // Codex owns the canonical thread. These mirror records keep enough local
+    // context for OpenClaw history, search, and future harness switching.
+    if (reasoningText) {
+      messagesSnapshot.push(this.createAssistantMirrorMessage("Codex reasoning", reasoningText));
+    }
+    if (planText) {
+      messagesSnapshot.push(this.createAssistantMirrorMessage("Codex plan", planText));
+    }
     if (lastAssistant) {
       messagesSnapshot.push(lastAssistant);
     }
@@ -447,6 +457,19 @@ export class CodexAppServerEventProjector {
     };
   }
 
+  private createAssistantMirrorMessage(title: string, text: string): AssistantMessage {
+    return {
+      role: "assistant",
+      content: [{ type: "text", text: `${title}:\n${text}` }],
+      api: this.params.model.api ?? "openai-codex-responses",
+      provider: this.params.provider,
+      model: this.params.modelId,
+      usage: ZERO_USAGE,
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+  }
+
   private isNotificationForTurn(params: JsonObject): boolean {
     const threadId = readString(params, "threadId");
     const turnId = readString(params, "turnId");
@@ -477,6 +500,10 @@ function splitPlanText(text: string): string[] {
     .split(/\r?\n/)
     .map((line) => line.trim().replace(/^[-*]\s+/, ""))
     .filter((line) => line.length > 0);
+}
+
+function collectTextValues(map: Map<string, string>): string[] {
+  return [...map.values()].filter((text) => text.trim().length > 0);
 }
 
 function itemKind(

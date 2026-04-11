@@ -79,6 +79,82 @@ export type DreamingStatus = {
   };
 };
 
+export type WikiImportInsightItem = {
+  pagePath: string;
+  title: string;
+  riskLevel: "low" | "medium" | "high" | "unknown";
+  riskReasons: string[];
+  labels: string[];
+  topicKey: string;
+  topicLabel: string;
+  digestStatus: "available" | "withheld";
+  activeBranchMessages: number;
+  userMessageCount: number;
+  assistantMessageCount: number;
+  firstUserLine?: string;
+  lastUserLine?: string;
+  assistantOpener?: string;
+  summary: string;
+  candidateSignals: string[];
+  correctionSignals: string[];
+  preferenceSignals: string[];
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type WikiImportInsightCluster = {
+  key: string;
+  label: string;
+  itemCount: number;
+  highRiskCount: number;
+  withheldCount: number;
+  preferenceSignalCount: number;
+  updatedAt?: string;
+  items: WikiImportInsightItem[];
+};
+
+export type WikiImportInsights = {
+  sourceType: "chatgpt";
+  totalItems: number;
+  totalClusters: number;
+  clusters: WikiImportInsightCluster[];
+};
+
+export type WikiMemoryPalaceItem = {
+  pagePath: string;
+  title: string;
+  kind: "entity" | "concept" | "source" | "synthesis" | "report";
+  id?: string;
+  updatedAt?: string;
+  sourceType?: string;
+  claimCount: number;
+  questionCount: number;
+  contradictionCount: number;
+  claims: string[];
+  questions: string[];
+  contradictions: string[];
+  snippet?: string;
+};
+
+export type WikiMemoryPalaceCluster = {
+  key: WikiMemoryPalaceItem["kind"];
+  label: string;
+  itemCount: number;
+  claimCount: number;
+  questionCount: number;
+  contradictionCount: number;
+  updatedAt?: string;
+  items: WikiMemoryPalaceItem[];
+};
+
+export type WikiMemoryPalace = {
+  totalItems: number;
+  totalClaims: number;
+  totalQuestions: number;
+  totalContradictions: number;
+  clusters: WikiMemoryPalaceCluster[];
+};
+
 type DoctorMemoryStatusPayload = {
   dreaming?: unknown;
 };
@@ -97,6 +173,21 @@ type DoctorMemoryDreamActionPayload = {
   removedShortTermEntries?: unknown;
 };
 
+type WikiImportInsightsPayload = {
+  sourceType?: unknown;
+  totalItems?: unknown;
+  totalClusters?: unknown;
+  clusters?: unknown;
+};
+
+type WikiMemoryPalacePayload = {
+  totalItems?: unknown;
+  totalClaims?: unknown;
+  totalQuestions?: unknown;
+  totalContradictions?: unknown;
+  clusters?: unknown;
+};
+
 export type DreamingState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
@@ -111,6 +202,12 @@ export type DreamingState = {
   dreamDiaryError: string | null;
   dreamDiaryPath: string | null;
   dreamDiaryContent: string | null;
+  wikiImportInsightsLoading: boolean;
+  wikiImportInsightsError: string | null;
+  wikiImportInsights: WikiImportInsights | null;
+  wikiMemoryPalaceLoading: boolean;
+  wikiMemoryPalaceError: string | null;
+  wikiMemoryPalace: WikiMemoryPalace | null;
   lastError: string | null;
 };
 
@@ -232,6 +329,230 @@ function normalizeDreamingEntries(raw: unknown): DreamingEntry[] {
     .map((entry) => normalizeDreamingEntry(entry))
     .filter((entry): entry is DreamingEntry => entry !== null);
 }
+
+function normalizeStringArray(raw: unknown): string[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw.filter(
+    (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
+  );
+}
+
+function normalizeWikiImportInsightItem(raw: unknown): WikiImportInsightItem | null {
+  const record = asRecord(raw);
+  const pagePath = normalizeTrimmedString(record?.pagePath);
+  const title = normalizeTrimmedString(record?.title);
+  const riskLevel = normalizeTrimmedString(record?.riskLevel);
+  const topicKey = normalizeTrimmedString(record?.topicKey);
+  const topicLabel = normalizeTrimmedString(record?.topicLabel);
+  const digestStatus = normalizeTrimmedString(record?.digestStatus);
+  const summary = normalizeTrimmedString(record?.summary);
+  if (
+    !pagePath ||
+    !title ||
+    !topicKey ||
+    !topicLabel ||
+    !summary ||
+    (riskLevel !== "low" &&
+      riskLevel !== "medium" &&
+      riskLevel !== "high" &&
+      riskLevel !== "unknown") ||
+    (digestStatus !== "available" && digestStatus !== "withheld")
+  ) {
+    return null;
+  }
+  return {
+    pagePath,
+    title,
+    riskLevel,
+    riskReasons: normalizeStringArray(record?.riskReasons),
+    labels: normalizeStringArray(record?.labels),
+    topicKey,
+    topicLabel,
+    digestStatus,
+    activeBranchMessages: normalizeFiniteInt(record?.activeBranchMessages, 0),
+    userMessageCount: normalizeFiniteInt(record?.userMessageCount, 0),
+    assistantMessageCount: normalizeFiniteInt(record?.assistantMessageCount, 0),
+    ...(normalizeTrimmedString(record?.firstUserLine)
+      ? { firstUserLine: normalizeTrimmedString(record?.firstUserLine) }
+      : {}),
+    ...(normalizeTrimmedString(record?.lastUserLine)
+      ? { lastUserLine: normalizeTrimmedString(record?.lastUserLine) }
+      : {}),
+    ...(normalizeTrimmedString(record?.assistantOpener)
+      ? { assistantOpener: normalizeTrimmedString(record?.assistantOpener) }
+      : {}),
+    summary,
+    candidateSignals: normalizeStringArray(record?.candidateSignals),
+    correctionSignals: normalizeStringArray(record?.correctionSignals),
+    preferenceSignals: normalizeStringArray(record?.preferenceSignals),
+    ...(normalizeTrimmedString(record?.createdAt)
+      ? { createdAt: normalizeTrimmedString(record?.createdAt) }
+      : {}),
+    ...(normalizeTrimmedString(record?.updatedAt)
+      ? { updatedAt: normalizeTrimmedString(record?.updatedAt) }
+      : {}),
+  };
+}
+
+function normalizeWikiImportInsightCluster(raw: unknown): WikiImportInsightCluster | null {
+  const record = asRecord(raw);
+  const key = normalizeTrimmedString(record?.key);
+  const label = normalizeTrimmedString(record?.label);
+  if (!key || !label) {
+    return null;
+  }
+  const items = Array.isArray(record?.items)
+    ? record.items
+        .map((entry) => normalizeWikiImportInsightItem(entry))
+        .filter((entry): entry is WikiImportInsightItem => entry !== null)
+    : [];
+  return {
+    key,
+    label,
+    itemCount: normalizeFiniteInt(record?.itemCount, items.length),
+    highRiskCount: normalizeFiniteInt(
+      record?.highRiskCount,
+      items.filter((entry) => entry.riskLevel === "high").length,
+    ),
+    withheldCount: normalizeFiniteInt(
+      record?.withheldCount,
+      items.filter((entry) => entry.digestStatus === "withheld").length,
+    ),
+    preferenceSignalCount: normalizeFiniteInt(
+      record?.preferenceSignalCount,
+      items.reduce((sum, entry) => sum + entry.preferenceSignals.length, 0),
+    ),
+    ...(normalizeTrimmedString(record?.updatedAt)
+      ? { updatedAt: normalizeTrimmedString(record?.updatedAt) }
+      : {}),
+    items,
+  };
+}
+
+function normalizeWikiImportInsights(raw: unknown): WikiImportInsights {
+  const record = asRecord(raw);
+  const clusters = Array.isArray(record?.clusters)
+    ? record.clusters
+        .map((entry) => normalizeWikiImportInsightCluster(entry))
+        .filter((entry): entry is WikiImportInsightCluster => entry !== null)
+    : [];
+  return {
+    sourceType: record?.sourceType === "chatgpt" ? "chatgpt" : "chatgpt",
+    totalItems: normalizeFiniteInt(
+      record?.totalItems,
+      clusters.reduce((sum, cluster) => sum + cluster.itemCount, 0),
+    ),
+    totalClusters: normalizeFiniteInt(record?.totalClusters, clusters.length),
+    clusters,
+  };
+}
+
+function normalizeWikiPageKind(value: unknown): WikiMemoryPalaceItem["kind"] | undefined {
+  return value === "entity" ||
+    value === "concept" ||
+    value === "source" ||
+    value === "synthesis" ||
+    value === "report"
+    ? value
+    : undefined;
+}
+
+function normalizeWikiMemoryPalaceItem(raw: unknown): WikiMemoryPalaceItem | null {
+  const record = asRecord(raw);
+  const pagePath = normalizeTrimmedString(record?.pagePath);
+  const title = normalizeTrimmedString(record?.title);
+  const kind = normalizeWikiPageKind(record?.kind);
+  if (!pagePath || !title || !kind) {
+    return null;
+  }
+  return {
+    pagePath,
+    title,
+    kind,
+    ...(normalizeTrimmedString(record?.id) ? { id: normalizeTrimmedString(record?.id) } : {}),
+    ...(normalizeTrimmedString(record?.updatedAt)
+      ? { updatedAt: normalizeTrimmedString(record?.updatedAt) }
+      : {}),
+    ...(normalizeTrimmedString(record?.sourceType)
+      ? { sourceType: normalizeTrimmedString(record?.sourceType) }
+      : {}),
+    claimCount: normalizeFiniteInt(record?.claimCount, 0),
+    questionCount: normalizeFiniteInt(record?.questionCount, 0),
+    contradictionCount: normalizeFiniteInt(record?.contradictionCount, 0),
+    claims: normalizeStringArray(record?.claims),
+    questions: normalizeStringArray(record?.questions),
+    contradictions: normalizeStringArray(record?.contradictions),
+    ...(normalizeTrimmedString(record?.snippet)
+      ? { snippet: normalizeTrimmedString(record?.snippet) }
+      : {}),
+  };
+}
+
+function normalizeWikiMemoryPalaceCluster(raw: unknown): WikiMemoryPalaceCluster | null {
+  const record = asRecord(raw);
+  const key = normalizeWikiPageKind(record?.key);
+  const label = normalizeTrimmedString(record?.label);
+  if (!key || !label) {
+    return null;
+  }
+  const items = Array.isArray(record?.items)
+    ? record.items
+        .map((entry) => normalizeWikiMemoryPalaceItem(entry))
+        .filter((entry): entry is WikiMemoryPalaceItem => entry !== null)
+    : [];
+  return {
+    key,
+    label,
+    itemCount: normalizeFiniteInt(record?.itemCount, items.length),
+    claimCount: normalizeFiniteInt(
+      record?.claimCount,
+      items.reduce((sum, item) => sum + item.claimCount, 0),
+    ),
+    questionCount: normalizeFiniteInt(
+      record?.questionCount,
+      items.reduce((sum, item) => sum + item.questionCount, 0),
+    ),
+    contradictionCount: normalizeFiniteInt(
+      record?.contradictionCount,
+      items.reduce((sum, item) => sum + item.contradictionCount, 0),
+    ),
+    ...(normalizeTrimmedString(record?.updatedAt)
+      ? { updatedAt: normalizeTrimmedString(record?.updatedAt) }
+      : {}),
+    items,
+  };
+}
+
+function normalizeWikiMemoryPalace(raw: unknown): WikiMemoryPalace {
+  const record = asRecord(raw);
+  const clusters = Array.isArray(record?.clusters)
+    ? record.clusters
+        .map((entry) => normalizeWikiMemoryPalaceCluster(entry))
+        .filter((entry): entry is WikiMemoryPalaceCluster => entry !== null)
+    : [];
+  return {
+    totalItems: normalizeFiniteInt(
+      record?.totalItems,
+      clusters.reduce((sum, cluster) => sum + cluster.itemCount, 0),
+    ),
+    totalClaims: normalizeFiniteInt(
+      record?.totalClaims,
+      clusters.reduce((sum, cluster) => sum + cluster.claimCount, 0),
+    ),
+    totalQuestions: normalizeFiniteInt(
+      record?.totalQuestions,
+      clusters.reduce((sum, cluster) => sum + cluster.questionCount, 0),
+    ),
+    totalContradictions: normalizeFiniteInt(
+      record?.totalContradictions,
+      clusters.reduce((sum, cluster) => sum + cluster.contradictionCount, 0),
+    ),
+    clusters,
+  };
+}
+
 function normalizeDreamingStatus(raw: unknown): DreamingStatus | null {
   const record = asRecord(raw);
   if (!record) {
@@ -344,6 +665,41 @@ export async function loadDreamDiary(state: DreamingState): Promise<void> {
     state.dreamDiaryError = String(err);
   } finally {
     state.dreamDiaryLoading = false;
+  }
+}
+
+export async function loadWikiImportInsights(state: DreamingState): Promise<void> {
+  if (!state.client || !state.connected || state.wikiImportInsightsLoading) {
+    return;
+  }
+  state.wikiImportInsightsLoading = true;
+  state.wikiImportInsightsError = null;
+  try {
+    const payload = await state.client.request<WikiImportInsightsPayload>(
+      "wiki.importInsights",
+      {},
+    );
+    state.wikiImportInsights = normalizeWikiImportInsights(payload);
+  } catch (err) {
+    state.wikiImportInsightsError = String(err);
+  } finally {
+    state.wikiImportInsightsLoading = false;
+  }
+}
+
+export async function loadWikiMemoryPalace(state: DreamingState): Promise<void> {
+  if (!state.client || !state.connected || state.wikiMemoryPalaceLoading) {
+    return;
+  }
+  state.wikiMemoryPalaceLoading = true;
+  state.wikiMemoryPalaceError = null;
+  try {
+    const payload = await state.client.request<WikiMemoryPalacePayload>("wiki.palace", {});
+    state.wikiMemoryPalace = normalizeWikiMemoryPalace(payload);
+  } catch (err) {
+    state.wikiMemoryPalaceError = String(err);
+  } finally {
+    state.wikiMemoryPalaceLoading = false;
   }
 }
 

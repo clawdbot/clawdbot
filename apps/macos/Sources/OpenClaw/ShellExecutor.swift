@@ -11,6 +11,40 @@ enum ShellExecutor {
         var errorMessage: String?
     }
 
+    private final class CompletionBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var finished = false
+        private let continuation: CheckedContinuation<ShellResult, Never>
+
+        init(continuation: CheckedContinuation<ShellResult, Never>) {
+            self.continuation = continuation
+        }
+
+        func finish(_ result: ShellResult) {
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            guard !self.finished else { return }
+            self.finished = true
+            self.continuation.resume(returning: result)
+        }
+    }
+
+    private static func completedResult(
+        status: Int,
+        outTask: Task<Data, Never>,
+        errTask: Task<Data, Never>) async -> ShellResult
+    {
+        let out = await outTask.value
+        let err = await errTask.value
+        return ShellResult(
+            stdout: String(bytes: out, encoding: .utf8) ?? "",
+            stderr: String(bytes: err, encoding: .utf8) ?? "",
+            exitCode: status,
+            timedOut: false,
+            success: status == 0,
+            errorMessage: status == 0 ? nil : "exit \(status)")
+    }
+
     static func runDetailed(
         command: [String],
         cwd: String?,
@@ -38,6 +72,53 @@ enum ShellExecutor {
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
 
+        let outTask = Task { stdoutPipe.fileHandleForReading.readToEndSafely() }
+        let errTask = Task { stderrPipe.fileHandleForReading.readToEndSafely() }
+
+        if let timeout, timeout > 0 {
+            return await withCheckedContinuation { continuation in
+                let completion = CompletionBox(continuation: continuation)
+
+                process.terminationHandler = { terminatedProcess in
+                    let status = Int(terminatedProcess.terminationStatus)
+                    Task {
+                        let result = await self.completedResult(
+                            status: status,
+                            outTask: outTask,
+                            errTask: errTask)
+                        completion.finish(result)
+                    }
+                }
+
+                do {
+                    try process.run()
+                } catch {
+                    completion.finish(
+                        ShellResult(
+                            stdout: "",
+                            stderr: "",
+                            exitCode: nil,
+                            timedOut: false,
+                            success: false,
+                            errorMessage: "failed to start: \(error.localizedDescription)"))
+                    return
+                }
+
+                DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeout) {
+                    guard process.isRunning else { return }
+                    process.terminate()
+                    completion.finish(
+                        ShellResult(
+                            stdout: "",
+                            stderr: "",
+                            exitCode: nil,
+                            timedOut: true,
+                            success: false,
+                            errorMessage: "timeout"))
+                }
+            }
+        }
+
         do {
             try process.run()
         } catch {
@@ -50,48 +131,11 @@ enum ShellExecutor {
                 errorMessage: "failed to start: \(error.localizedDescription)")
         }
 
-        let outTask = Task { stdoutPipe.fileHandleForReading.readToEndSafely() }
-        let errTask = Task { stderrPipe.fileHandleForReading.readToEndSafely() }
-
-        let waitTask = Task { () -> ShellResult in
-            process.waitUntilExit()
-            let out = await outTask.value
-            let err = await errTask.value
-            let status = Int(process.terminationStatus)
-            return ShellResult(
-                stdout: String(bytes: out, encoding: .utf8) ?? "",
-                stderr: String(bytes: err, encoding: .utf8) ?? "",
-                exitCode: status,
-                timedOut: false,
-                success: status == 0,
-                errorMessage: status == 0 ? nil : "exit \(status)")
-        }
-
-        if let timeout, timeout > 0 {
-            let nanos = UInt64(timeout * 1_000_000_000)
-            return await withTaskGroup(of: ShellResult.self) { group in
-                group.addTask { await waitTask.value }
-                group.addTask {
-                    try? await Task.sleep(nanoseconds: nanos)
-                    guard process.isRunning else {
-                        return await waitTask.value
-                    }
-                    process.terminate()
-                    return ShellResult(
-                        stdout: "",
-                        stderr: "",
-                        exitCode: nil,
-                        timedOut: true,
-                        success: false,
-                        errorMessage: "timeout")
-                }
-                let first = await group.next()!
-                group.cancelAll()
-                return first
-            }
-        }
-
-        return await waitTask.value
+        process.waitUntilExit()
+        return await self.completedResult(
+            status: Int(process.terminationStatus),
+            outTask: outTask,
+            errTask: errTask)
     }
 
     static func run(command: [String], cwd: String?, env: [String: String]?, timeout: Double?) async -> Response {

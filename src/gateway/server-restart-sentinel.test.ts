@@ -34,7 +34,10 @@ const mocks = vi.hoisted(() => ({
   })),
   getChannelPlugin: vi.fn(() => undefined),
   normalizeChannelId: vi.fn((channel: string) => channel),
-  resolveOutboundTarget: vi.fn(() => ({ ok: true as const, to: "+15550002" })),
+  resolveOutboundTarget: vi.fn((_params?: { to?: string }) => ({
+    ok: true as const,
+    to: "+15550002",
+  })),
   deliverOutboundPayloads: vi.fn(async () => [{ channel: "whatsapp", messageId: "msg-1" }]),
   enqueueDelivery: vi.fn(async () => "queue-1"),
   ackDelivery: vi.fn(async () => {}),
@@ -196,7 +199,7 @@ describe("scheduleRestartSentinelWake", () => {
     const wakePromise = scheduleRestartSentinelWake({ deps: {} as never });
     await Promise.resolve();
     await Promise.resolve();
-    await vi.advanceTimersByTimeAsync(750);
+    await vi.advanceTimersByTimeAsync(1_000);
     await wakePromise;
 
     expect(mocks.enqueueDelivery).toHaveBeenCalledTimes(1);
@@ -218,31 +221,31 @@ describe("scheduleRestartSentinelWake", () => {
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
     expect(mocks.requestHeartbeatNow).toHaveBeenCalledTimes(1);
     expect(mocks.logWarn).toHaveBeenCalledWith(
-      expect.stringContaining("retrying in 750ms"),
+      expect.stringContaining("retrying in 1000ms"),
       expect.objectContaining({
         channel: "whatsapp",
         to: "+15550002",
         sessionKey: "agent:main:main",
         attempt: 1,
-        maxAttempts: 2,
+        maxAttempts: 45,
       }),
     );
   });
 
   it("keeps one queued restart notice when outbound retries are exhausted", async () => {
     vi.useFakeTimers();
-    mocks.deliverOutboundPayloads
-      .mockRejectedValueOnce(new Error("transport not ready"))
-      .mockRejectedValueOnce(new Error("transport still not ready"));
+    mocks.deliverOutboundPayloads.mockRejectedValue(new Error("transport still not ready"));
 
     const wakePromise = scheduleRestartSentinelWake({ deps: {} as never });
     await Promise.resolve();
     await Promise.resolve();
-    await vi.advanceTimersByTimeAsync(750);
+    for (let attempt = 1; attempt < 45; attempt += 1) {
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
     await wakePromise;
 
     expect(mocks.enqueueDelivery).toHaveBeenCalledTimes(1);
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(2);
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(45);
     expect(mocks.ackDelivery).not.toHaveBeenCalled();
     expect(mocks.failDelivery).toHaveBeenCalledWith("queue-1", "transport still not ready");
   });
@@ -314,6 +317,48 @@ describe("scheduleRestartSentinelWake", () => {
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
     expect(mocks.enqueueDelivery).not.toHaveBeenCalled();
     expect(mocks.resolveOutboundTarget).not.toHaveBeenCalled();
+  });
+
+  it("resolves session routing before queueing the heartbeat wake", async () => {
+    mocks.consumeRestartSentinel.mockResolvedValue({
+      payload: {
+        sessionKey: "agent:main:qa-channel:channel:qa-room",
+      },
+    } as Awaited<ReturnType<typeof mocks.consumeRestartSentinel>>);
+    mocks.parseSessionThreadInfo.mockReturnValue({
+      baseSessionKey: "agent:main:qa-channel:channel:qa-room",
+      threadId: undefined,
+    });
+    mocks.deliveryContextFromSession.mockReturnValue({
+      channel: "qa-channel",
+      to: "channel:qa-room",
+    });
+    mocks.requestHeartbeatNow.mockImplementation(() => {
+      mocks.deliveryContextFromSession.mockReturnValue({
+        channel: "qa-channel",
+        to: "heartbeat",
+      });
+    });
+    mocks.resolveOutboundTarget.mockImplementation((params?: { to?: string }) => ({
+      ok: true as const,
+      to: params?.to ?? "missing",
+    }));
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.requestHeartbeatNow).toHaveBeenCalledTimes(1);
+    expect(mocks.resolveOutboundTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "qa-channel",
+        to: "channel:qa-room",
+      }),
+    );
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "qa-channel",
+        to: "channel:qa-room",
+      }),
+    );
   });
 
   it("merges base session routing into partial thread metadata", async () => {

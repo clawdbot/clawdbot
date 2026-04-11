@@ -5,7 +5,7 @@ import type {
   InputItem,
   ResponseCreateEvent,
   WarmUpEvent,
-} from "./openai-ws-connection.js";
+} from "./openai-ws-types.js";
 import { resolveOpenAITextVerbosity } from "./pi-embedded-runner/openai-stream-wrappers.js";
 import { resolveProviderRequestPolicyConfig } from "./provider-request-config.js";
 import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";

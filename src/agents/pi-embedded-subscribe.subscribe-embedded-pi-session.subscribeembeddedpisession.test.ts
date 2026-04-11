@@ -549,4 +549,76 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(lifecycleError).toBeDefined();
     expect(lifecycleError?.data?.error).toContain("API rate limit reached");
   });
+
+  it("preserves replay-invalid lifecycle truth across compaction retries after mutating tools", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+
+    const subscription = subscribeEmbeddedPiSession({
+      session,
+      runId: "run-replay-invalid-compaction",
+      onAgentEvent,
+      sessionKey: "test-session",
+    });
+
+    emitToolRun({
+      emit,
+      toolName: "edit",
+      toolCallId: "edit-1",
+      args: {
+        file_path: "/tmp/demo.txt",
+        old_string: "before",
+        new_string: "after",
+      },
+      isError: false,
+      result: { ok: true },
+    });
+    emit({ type: "auto_compaction_end", willRetry: true, result: { summary: "compacted" } });
+    emit({ type: "agent_end" });
+
+    expect(subscription.getReplayState()).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toContainEqual(
+      expect.objectContaining({
+        phase: "end",
+        livenessState: "abandoned",
+        replayInvalid: true,
+      }),
+    );
+  });
+
+  it("preserves deterministic side-effect liveness across compaction retries", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run-cron-side-effect-compaction",
+      onAgentEvent,
+      sessionKey: "test-session",
+    });
+
+    emitToolRun({
+      emit,
+      toolName: "cron",
+      toolCallId: "cron-1",
+      args: { action: "add", job: { name: "reminder" } },
+      isError: false,
+      result: { details: { status: "ok" } },
+    });
+    emit({ type: "auto_compaction_end", willRetry: true, result: { summary: "compacted" } });
+    emit({ type: "agent_end" });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toContainEqual(
+      expect.objectContaining({
+        phase: "end",
+        livenessState: "working",
+        replayInvalid: true,
+      }),
+    );
+  });
 });

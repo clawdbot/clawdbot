@@ -211,7 +211,8 @@ async function previewStoreCleanup(params: {
     missing > 0 ||
     pruned > 0 ||
     capped > 0 ||
-    Boolean((diskBudget?.removedEntries ?? 0) > 0 || (diskBudget?.removedFiles ?? 0) > 0);
+    (diskBudget?.removedEntries ?? 0) > 0 ||
+    (diskBudget?.removedFiles ?? 0) > 0;
 
   const summary: SessionCleanupSummary = {
     agentId: params.target.agentId,
@@ -418,10 +419,8 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
               missingApplied > 0 ||
               appliedReport.pruned > 0 ||
               appliedReport.capped > 0 ||
-              Boolean(
-                (appliedReport.diskBudget?.removedEntries ?? 0) > 0 ||
-                (appliedReport.diskBudget?.removedFiles ?? 0) > 0,
-              ),
+              (appliedReport.diskBudget?.removedEntries ?? 0) > 0 ||
+              (appliedReport.diskBudget?.removedFiles ?? 0) > 0,
             applied: true,
             appliedCount: Object.keys(afterStore).length,
           };

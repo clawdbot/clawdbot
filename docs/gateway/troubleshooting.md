@@ -111,7 +111,7 @@ Fix options:
 Related:
 
 - [/gateway/local-models](/gateway/local-models)
-- [/gateway/configuration#models](/gateway/configuration#models)
+- [/gateway/configuration](/gateway/configuration)
 - [/gateway/configuration-reference#openai-compatible-endpoints](/gateway/configuration-reference#openai-compatible-endpoints)
 
 ## No replies

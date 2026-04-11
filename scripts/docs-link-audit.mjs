@@ -9,6 +9,8 @@ import { pathToFileURL } from "node:url";
 const ROOT = process.cwd();
 const DOCS_DIR = path.join(ROOT, "docs");
 const DOCS_JSON_PATH = path.join(DOCS_DIR, "docs.json");
+const MINTLIFY_BROKEN_LINKS_ARGS = ["dlx", "mint", "broken-links", "--check-anchors"];
+const NODE_25_UNSUPPORTED_BY_MINTLIFY = 25;
 
 if (!fs.existsSync(DOCS_DIR) || !fs.statSync(DOCS_DIR).isDirectory()) {
   console.error("docs:check-links: missing docs directory; run from repo root.");
@@ -60,8 +62,8 @@ function stripInlineCode(text) {
 const docsConfig = JSON.parse(fs.readFileSync(DOCS_JSON_PATH, "utf8"));
 const redirects = new Map();
 for (const item of docsConfig.redirects || []) {
-  const source = normalizeRoute(String(item.source || ""));
-  const destination = normalizeRoute(String(item.destination || ""));
+  const source = normalizeRoute(item.source || "");
+  const destination = normalizeRoute(item.destination || "");
   redirects.set(source, destination);
 }
 
@@ -108,9 +110,7 @@ for (const abs of markdownFiles) {
   if (!match) {
     continue;
   }
-  const permalink = String(match[1])
-    .trim()
-    .replace(/^['"]|['"]$/g, "");
+  const permalink = match[1].trim().replace(/^['"]|['"]$/g, "");
   routes.add(normalizeRoute(permalink));
 }
 
@@ -263,6 +263,56 @@ export function prepareAnchorAuditDocsDir(sourceDir = DOCS_DIR) {
   return tempDir;
 }
 
+/** @param {string} version */
+function parseNodeMajor(version) {
+  const major = Number.parseInt(version.split(".")[0] ?? "", 10);
+  return Number.isFinite(major) ? major : 0;
+}
+
+/**
+ * Mintlify currently rejects Node 25+. If the repo script itself is running
+ * under a too-new experimental Node, probe common local version managers and
+ * use their Node 22 wrapper for only the Mintlify child process.
+ *
+ * @param {{
+ *   cwd: string;
+ *   nodeVersion?: string;
+ *   spawnSyncImpl: typeof spawnSync;
+ * }} params
+ */
+export function resolveMintlifyAnchorAuditInvocation(params) {
+  const nodeVersion = params.nodeVersion ?? process.versions.node;
+  if (parseNodeMajor(nodeVersion) < NODE_25_UNSUPPORTED_BY_MINTLIFY) {
+    return { command: "pnpm", args: MINTLIFY_BROKEN_LINKS_ARGS };
+  }
+
+  const node22Probe = "process.exit(Number(process.versions.node.split('.')[0]) === 22 ? 0 : 1)";
+  const candidates = [
+    {
+      command: "fnm",
+      probeArgs: ["exec", "--using=22", "node", "-e", node22Probe],
+      args: ["exec", "--using=22", "pnpm", ...MINTLIFY_BROKEN_LINKS_ARGS],
+    },
+    {
+      command: "mise",
+      probeArgs: ["exec", "node@22", "--", "node", "-e", node22Probe],
+      args: ["exec", "node@22", "--", "pnpm", ...MINTLIFY_BROKEN_LINKS_ARGS],
+    },
+  ];
+
+  for (const candidate of candidates) {
+    const probe = params.spawnSyncImpl(candidate.command, candidate.probeArgs, {
+      cwd: params.cwd,
+      stdio: "ignore",
+    });
+    if (probe.status === 0) {
+      return { command: candidate.command, args: candidate.args };
+    }
+  }
+
+  return { command: "pnpm", args: MINTLIFY_BROKEN_LINKS_ARGS };
+}
+
 export function auditDocsLinks() {
   /** @type {{file: string; line: number; link: string; reason: string}[]} */
   const broken = [];
@@ -362,7 +412,7 @@ export function auditDocsLinks() {
   }
 
   for (const page of collectNavPageEntries(docsConfig.navigation || [])) {
-    if (isGeneratedTranslatedDoc(String(page))) {
+    if (isGeneratedTranslatedDoc(page)) {
       continue;
     }
     checked++;
@@ -386,6 +436,7 @@ export function auditDocsLinks() {
 /**
  * @param {{
  *   args?: string[];
+ *   nodeVersion?: string;
  *   spawnSyncImpl?: typeof spawnSync;
  *   prepareAnchorAuditDocsDirImpl?: (sourceDir?: string) => string;
  *   cleanupAnchorAuditDocsDirImpl?: (dir: string) => void;
@@ -403,18 +454,18 @@ export function runDocsLinkAuditCli(options = {}) {
     const anchorDocsDir = prepareAnchorAuditDocsDirImpl(DOCS_DIR);
 
     try {
-      const result = spawnSyncImpl("mint", ["broken-links", "--check-anchors"], {
+      // Use the npm Mintlify package explicitly. Some developer machines also
+      // have the Swift Package Manager tool named `mint` on PATH, and that
+      // binary exits with "command 'broken-links' not found".
+      const invocation = resolveMintlifyAnchorAuditInvocation({
+        cwd: anchorDocsDir,
+        nodeVersion: options.nodeVersion,
+        spawnSyncImpl,
+      });
+      const result = spawnSyncImpl(invocation.command, invocation.args, {
         cwd: anchorDocsDir,
         stdio: "inherit",
       });
-
-      if (result.error?.code === "ENOENT") {
-        const fallback = spawnSyncImpl("pnpm", ["dlx", "mint", "broken-links", "--check-anchors"], {
-          cwd: anchorDocsDir,
-          stdio: "inherit",
-        });
-        return fallback.status ?? 1;
-      }
 
       return result.status ?? 1;
     } finally {

@@ -323,27 +323,27 @@ export function sanitizeConfiguredModelProviderRequest(
 export function mergeProviderRequestOverrides(
   ...overrides: Array<ProviderRequestTransportOverrides | undefined>
 ): ProviderRequestTransportOverrides | undefined {
-  let merged: ProviderRequestTransportOverrides | undefined;
+  const merged: ProviderRequestTransportOverrides = {};
+  let hasMerged = false;
   for (const current of overrides) {
     if (!current) {
       continue;
     }
-    merged = {
-      ...merged,
-      ...(current.headers
-        ? {
-            headers: {
-              ...merged?.headers,
-              ...current.headers,
-            },
-          }
-        : {}),
-      ...(current.auth ? { auth: current.auth } : {}),
-      ...(current.proxy ? { proxy: current.proxy } : {}),
-      ...(current.tls ? { tls: current.tls } : {}),
-    };
+    hasMerged = true;
+    if (current.headers) {
+      merged.headers = Object.assign({}, merged.headers, current.headers);
+    }
+    if (current.auth) {
+      merged.auth = current.auth;
+    }
+    if (current.proxy) {
+      merged.proxy = current.proxy;
+    }
+    if (current.tls) {
+      merged.tls = current.tls;
+    }
   }
-  return merged;
+  return hasMerged ? merged : undefined;
 }
 
 export function mergeModelProviderRequestOverrides(
@@ -354,10 +354,8 @@ export function mergeModelProviderRequestOverrides(
   );
   for (const current of overrides) {
     if (current?.allowPrivateNetwork !== undefined) {
-      merged = {
-        ...merged,
-        allowPrivateNetwork: current.allowPrivateNetwork,
-      };
+      merged ??= {};
+      merged.allowPrivateNetwork = current.allowPrivateNetwork;
     }
   }
   return merged;

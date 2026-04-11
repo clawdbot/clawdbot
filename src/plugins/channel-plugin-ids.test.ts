@@ -50,6 +50,14 @@ function createManifestRegistryFixture() {
         cliBackends: ["demo-cli"],
       },
       {
+        id: "voice-call",
+        channels: [],
+        origin: "bundled",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      },
+      {
         id: "memory-core",
         kind: "memory",
         channels: [],
@@ -61,14 +69,6 @@ function createManifestRegistryFixture() {
       {
         id: "memory-lancedb",
         kind: "memory",
-        channels: [],
-        origin: "bundled",
-        enabledByDefault: undefined,
-        providers: [],
-        cliBackends: [],
-      },
-      {
-        id: "voice-call",
         channels: [],
         origin: "bundled",
         enabledByDefault: undefined,
@@ -121,6 +121,7 @@ function createStartupConfig(params: {
   channelIds?: string[];
   allowPluginIds?: string[];
   noConfiguredChannels?: boolean;
+  memorySlot?: string;
 }) {
   return {
     ...(params.noConfiguredChannels
@@ -138,6 +139,7 @@ function createStartupConfig(params: {
       ? {
           plugins: {
             ...(params.allowPluginIds?.length ? { allow: params.allowPluginIds } : {}),
+            ...(params.memorySlot ? { slots: { memory: params.memorySlot } } : {}),
             entries: Object.fromEntries(
               params.enabledPluginIds.map((pluginId) => [pluginId, { enabled: true }]),
             ),
@@ -149,7 +151,15 @@ function createStartupConfig(params: {
               allow: params.allowPluginIds,
             },
           }
-        : {}),
+        : params.memorySlot
+          ? {
+              plugins: {
+                slots: {
+                  memory: params.memorySlot,
+                },
+              },
+            }
+          : {}),
     ...(params.providerIds?.length
       ? {
           models: {
@@ -250,6 +260,9 @@ describe("resolveGatewayStartupPluginIds", () => {
           "voice-call": {
             enabled: true,
           },
+          "memory-core": {
+            enabled: true,
+          },
         },
       },
     } as OpenClawConfig;
@@ -261,74 +274,32 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
   });
 
-  it("includes memory-core at startup when dreaming is enabled", () => {
+  it("includes the explicitly selected memory slot plugin in startup scope", () => {
     expectStartupPluginIdsCase({
-      config: {
-        channels: {},
-        plugins: {
-          entries: {
-            "memory-core": {
-              enabled: true,
-              config: {
-                dreaming: {
-                  enabled: true,
-                },
-              },
-            },
-          },
-        },
-      } as OpenClawConfig,
-      expected: ["browser", "memory-core"],
+      config: createStartupConfig({
+        enabledPluginIds: ["memory-lancedb"],
+        memorySlot: "memory-lancedb",
+      }),
+      expected: ["demo-channel", "browser", "memory-lancedb"],
     });
   });
 
-  it("includes the selected memory-slot plugin and memory-core when dreaming is enabled", () => {
+  it("normalizes the raw memory slot id before startup filtering", () => {
     expectStartupPluginIdsCase({
-      config: {
-        plugins: {
-          slots: {
-            memory: "memory-lancedb",
-          },
-          entries: {
-            "memory-core": {
-              enabled: true,
-            },
-            "memory-lancedb": {
-              enabled: true,
-              config: {
-                dreaming: {
-                  enabled: true,
-                },
-              },
-            },
-          },
-        },
-      } as OpenClawConfig,
-      expected: ["demo-channel", "browser", "memory-core", "memory-lancedb"],
+      config: createStartupConfig({
+        enabledPluginIds: ["memory-core"],
+        memorySlot: "Memory-Core",
+      }),
+      expected: ["demo-channel", "browser", "memory-core"],
     });
   });
 
-  it("does not bypass activation policy for dreaming startup owners", () => {
+  it("does not include non-selected memory plugins only because they are enabled", () => {
     expectStartupPluginIdsCase({
-      config: {
-        channels: {},
-        plugins: {
-          slots: {
-            memory: "memory-lancedb",
-          },
-          entries: {
-            "memory-lancedb": {
-              enabled: false,
-              config: {
-                dreaming: {
-                  enabled: true,
-                },
-              },
-            },
-          },
-        },
-      } as OpenClawConfig,
-      expected: ["browser"],
+      config: createStartupConfig({
+        enabledPluginIds: ["memory-lancedb"],
+      }),
+      expected: ["demo-channel", "browser"],
     });
   });
 });

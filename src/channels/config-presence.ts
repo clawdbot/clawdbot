@@ -36,7 +36,12 @@ function hasPersistedChannelState(env: NodeJS.ProcessEnv): boolean {
   return fs.existsSync(resolveStateDir(env, os.homedir));
 }
 
-const PERSISTED_AUTH_STATE_CHANNEL_IDS = listBundledChannelIdsWithPersistedAuthState();
+let persistedAuthStateChannelIds: string[] | null = null;
+
+function getPersistedAuthStateChannelIds(): string[] {
+  persistedAuthStateChannelIds ??= listBundledChannelIdsWithPersistedAuthState();
+  return persistedAuthStateChannelIds;
+}
 
 export function listPotentialConfiguredChannelIds(
   cfg: OpenClawConfig,
@@ -70,7 +75,7 @@ export function listPotentialConfiguredChannelIds(
   }
 
   if (options.includePersistedAuthState !== false && hasPersistedChannelState(env)) {
-    for (const channelId of PERSISTED_AUTH_STATE_CHANNEL_IDS) {
+    for (const channelId of getPersistedAuthStateChannelIds()) {
       if (hasBundledChannelPersistedAuthState({ channelId, cfg, env })) {
         configuredChannelIds.add(channelId);
       }
@@ -98,7 +103,7 @@ function hasEnvConfiguredChannel(
   if (options.includePersistedAuthState === false || !hasPersistedChannelState(env)) {
     return false;
   }
-  return PERSISTED_AUTH_STATE_CHANNEL_IDS.some((channelId) =>
+  return getPersistedAuthStateChannelIds().some((channelId) =>
     hasBundledChannelPersistedAuthState({ channelId, cfg, env }),
   );
 }

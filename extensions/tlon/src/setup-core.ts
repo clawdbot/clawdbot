@@ -99,7 +99,7 @@ export function createTlonSetupWizardBase(params: TlonSetupWizardBaseParams): Ch
         placeholder: "https://your-ship-host",
         currentValue: ({ cfg, accountId }) => resolveTlonAccount(cfg, accountId).url ?? undefined,
         validate: ({ value }) => {
-          const next = validateUrbitBaseUrl(String(value ?? ""));
+          const next = validateUrbitBaseUrl(value ?? "");
           if (!next.ok) {
             return next.error;
           }

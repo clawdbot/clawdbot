@@ -178,7 +178,7 @@ describe("fetchWithSlackAuth", () => {
 describe("resolveSlackMedia", () => {
   beforeEach(() => {
     mockFetch = vi.fn();
-    globalThis.fetch = withFetchPreconnect(mockFetch);
+    globalThis.fetch = mockFetch as unknown as typeof fetch;
     mockPinnedHostnameResolution();
   });
 
@@ -655,16 +655,8 @@ describe("Slack media SSRF policy", () => {
 describe("resolveSlackAttachmentContent", () => {
   beforeEach(() => {
     mockFetch = vi.fn();
-    globalThis.fetch = withFetchPreconnect(mockFetch);
-    vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementation(async (hostname) => {
-      const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
-      const addresses = ["93.184.216.34"];
-      return {
-        hostname: normalized,
-        addresses,
-        lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
-      };
-    });
+    globalThis.fetch = mockFetch as unknown as typeof fetch;
+    mockPinnedHostnameResolution();
   });
 
   afterEach(() => {

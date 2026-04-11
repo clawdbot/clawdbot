@@ -9,6 +9,7 @@ const FAILURE_REPLY_PREFIXES = [
   "⚠️ model login expired on the gateway",
   "⚠️ model login failed on the gateway",
   "⚠️ agent failed before reply:",
+  "⚠️ ✉️ message failed",
   "⚠️ no api key found for provider ",
   "⚠️ missing api key for ",
 ];

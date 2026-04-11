@@ -138,8 +138,7 @@ function parsePinnedIdentity(stdout: string): FileIdentityStat {
     .trim()
     .split(/\r?\n/)
     .map((value) => value.trim())
-    .filter(Boolean)
-    .at(-1);
+    .findLast(Boolean);
   if (!line) {
     throw new Error("Pinned write helper returned no identity");
   }

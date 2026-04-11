@@ -58,7 +58,7 @@ describe("sessions tools visibility", () => {
         return { sessions: [{ key: "subagent:child-1" }] };
       }
       if (req.method === "sessions.resolve") {
-        const key = typeof req.params?.key === "string" ? String(req.params?.key) : "";
+        const key = typeof req.params?.key === "string" ? req.params.key : "";
         return { key };
       }
       return undefined;

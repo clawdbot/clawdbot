@@ -327,11 +327,7 @@ export async function promptAndConfigureOllama(params: {
     placeholder: OLLAMA_DEFAULT_BASE_URL,
     validate: (value) => (value?.trim() ? undefined : "Required"),
   });
-  const baseUrl = resolveOllamaApiBase(
-    String(baseUrlRaw ?? "")
-      .trim()
-      .replace(/\/+$/, ""),
-  );
+  const baseUrl = resolveOllamaApiBase((baseUrlRaw ?? "").trim().replace(/\/+$/, ""));
   const { reachable, models } = await fetchOllamaModels(baseUrl);
 
   if (!reachable) {

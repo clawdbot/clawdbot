@@ -327,8 +327,8 @@ export function registerVoiceCallCli(params: {
       async (options: { mode?: string; port?: string; path?: string; servePath?: string }) => {
         const mode = resolveMode(options.mode ?? "funnel");
         const servePort = Number(options.port ?? config.serve.port ?? 3334);
-        const servePath = String(options.servePath ?? config.serve.path ?? "/voice/webhook");
-        const tsPath = String(options.path ?? config.tailscale?.path ?? servePath);
+        const servePath = options.servePath ?? config.serve.path ?? "/voice/webhook";
+        const tsPath = options.path ?? config.tailscale?.path ?? servePath;
 
         const localUrl = `http://127.0.0.1:${servePort}`;
 

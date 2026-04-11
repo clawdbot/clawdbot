@@ -40,7 +40,7 @@ export const whatsappSetupWizard: ChannelSetupWizard = {
       return [`${label}: ${configured ? "linked" : "not linked"}`];
     },
   },
-  resolveShouldPromptAccountIds: ({ shouldPromptAccountIds }) => Boolean(shouldPromptAccountIds),
+  resolveShouldPromptAccountIds: ({ shouldPromptAccountIds }) => shouldPromptAccountIds,
   credentials: [],
   finalize: async ({ cfg, accountId, forceAllowFrom, prompter, runtime }) =>
     await finalizeWhatsAppSetup({ cfg, accountId, forceAllowFrom, prompter, runtime }),

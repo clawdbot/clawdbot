@@ -1,13 +1,14 @@
 import { getChannelPlugin } from "../channels/plugins/index.js";
-import {
-  resolveSessionConversationRef,
-  resolveSessionParentSessionKey,
-} from "../channels/plugins/session-conversation.js";
+import { resolveSessionConversation } from "../channels/plugins/session-conversation.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import {
+  parseRawSessionConversationRef,
+  parseThreadSessionSuffix,
+} from "../sessions/session-key-utils.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -135,26 +136,74 @@ function normalizeProviderKey(value: string): string {
   return normalizeLowercaseStringOrEmpty(value);
 }
 
+function collectUniqueStrings(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const resolved: string[] = [];
+  for (const value of values) {
+    const trimmed = value?.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    resolved.push(trimmed);
+  }
+  return resolved;
+}
+
+function buildScopedGroupIdCandidates(groupId?: string | null): string[] {
+  const raw = groupId?.trim();
+  if (!raw) {
+    return [];
+  }
+  const topicSenderMatch = raw.match(/^(.+):topic:([^:]+):sender:([^:]+)$/i);
+  if (topicSenderMatch) {
+    const [, chatId, topicId] = topicSenderMatch;
+    // Sender-scoped sessions still inherit topic/base group tool policies.
+    return collectUniqueStrings([raw, `${chatId}:topic:${topicId}`, chatId]);
+  }
+  const topicMatch = raw.match(/^(.+):topic:([^:]+)$/i);
+  if (topicMatch) {
+    const [, chatId, topicId] = topicMatch;
+    return collectUniqueStrings([`${chatId}:topic:${topicId}`, chatId]);
+  }
+  const senderMatch = raw.match(/^(.+):sender:([^:]+)$/i);
+  if (senderMatch) {
+    const [, chatId] = senderMatch;
+    return collectUniqueStrings([raw, chatId]);
+  }
+  return [raw];
+}
+
 function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
   channel?: string;
-  groupId?: string;
+  groupIds?: string[];
 } {
   const raw = (sessionKey ?? "").trim();
   if (!raw) {
     return {};
   }
-  const resolvedConversation = resolveSessionConversationRef(raw);
-  if (resolvedConversation) {
-    const groupId = resolvedConversation.baseConversationId;
-    if (!groupId) {
-      return {};
-    }
+  const { baseSessionKey, threadId } = parseThreadSessionSuffix(raw);
+  const conversationKey = threadId ? baseSessionKey : raw;
+  const conversation = parseRawSessionConversationRef(conversationKey);
+  if (conversation) {
+    const resolvedConversation = /:(?:sender|thread|topic):/iu.test(conversation.rawId)
+      ? resolveSessionConversation({
+          channel: conversation.channel,
+          kind: conversation.kind,
+          rawId: conversation.rawId,
+        })
+      : null;
     return {
-      channel: resolvedConversation.channel,
-      groupId,
+      channel: conversation.channel,
+      groupIds: collectUniqueStrings([
+        ...buildScopedGroupIdCandidates(conversation.rawId),
+        resolvedConversation?.id,
+        resolvedConversation?.baseConversationId,
+        ...(resolvedConversation?.parentConversationCandidates ?? []),
+      ]),
     };
   }
-  const base = resolveSessionParentSessionKey(raw) ?? raw;
+  const base = conversationKey ?? raw;
   const parts = base.split(":").filter(Boolean);
   let body = parts[0] === "agent" ? parts.slice(2) : parts;
   if (body[0] === "subagent") {
@@ -171,7 +220,10 @@ function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
   if (!groupId) {
     return {};
   }
-  return { channel: normalizeLowercaseStringOrEmpty(channel), groupId };
+  return {
+    channel: normalizeLowercaseStringOrEmpty(channel),
+    groupIds: buildScopedGroupIdCandidates(groupId),
+  };
 }
 
 function resolveProviderToolPolicy(params: {
@@ -321,8 +373,12 @@ export function resolveGroupToolPolicy(params: {
   }
   const sessionContext = resolveGroupContextFromSessionKey(params.sessionKey);
   const spawnedContext = resolveGroupContextFromSessionKey(params.spawnedBy);
-  const groupId = params.groupId ?? sessionContext.groupId ?? spawnedContext.groupId;
-  if (!groupId) {
+  const groupIds = collectUniqueStrings([
+    ...buildScopedGroupIdCandidates(params.groupId),
+    ...(sessionContext.groupIds ?? []),
+    ...(spawnedContext.groupIds ?? []),
+  ]);
+  if (groupIds.length === 0) {
     return undefined;
   }
   const channelRaw = params.messageProvider ?? sessionContext.channel ?? spawnedContext.channel;
@@ -336,8 +392,8 @@ export function resolveGroupToolPolicy(params: {
   } catch {
     plugin = undefined;
   }
-  const toolsConfig =
-    plugin?.groups?.resolveToolPolicy?.({
+  for (const groupId of groupIds) {
+    const toolsConfig = plugin?.groups?.resolveToolPolicy?.({
       cfg: params.config,
       groupId,
       groupChannel: params.groupChannel,
@@ -347,18 +403,24 @@ export function resolveGroupToolPolicy(params: {
       senderName: params.senderName,
       senderUsername: params.senderUsername,
       senderE164: params.senderE164,
-    }) ??
-    resolveChannelGroupToolsPolicy({
-      cfg: params.config,
-      channel,
-      groupId,
-      accountId: params.accountId,
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
     });
-  return pickSandboxToolPolicy(toolsConfig);
+    const policy = pickSandboxToolPolicy(toolsConfig);
+    if (policy) {
+      return policy;
+    }
+  }
+  const configTools = resolveChannelGroupToolsPolicy({
+    cfg: params.config,
+    channel,
+    groupId: groupIds[0],
+    groupIdCandidates: groupIds.slice(1),
+    accountId: params.accountId,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
+  });
+  return pickSandboxToolPolicy(configTools);
 }
 
 export { isToolAllowedByPolicies, isToolAllowedByPolicyName } from "./tool-policy-match.js";

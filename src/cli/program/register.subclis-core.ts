@@ -131,8 +131,8 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
     },
     {
       commandNames: ["qa"],
-      loadModule: () => import("../qa-cli.js"),
-      exportName: "registerQaCli",
+      loadModule: () => import("../../plugin-sdk/qa-lab.js"),
+      exportName: "registerQaLabCli",
     },
     {
       commandNames: ["hooks"],

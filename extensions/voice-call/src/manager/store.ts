@@ -50,15 +50,15 @@ export function loadActiveCallsFromStore(storePath: string): {
   const rejectedProviderCallIds = new Set<string>();
 
   for (const [callId, call] of callMap) {
+    for (const eventId of call.processedEventIds) {
+      processedEventIds.add(eventId);
+    }
     if (TerminalStates.has(call.state)) {
       continue;
     }
     activeCalls.set(callId, call);
     if (call.providerCallId) {
       providerCallIdMap.set(call.providerCallId, callId);
-    }
-    for (const eventId of call.processedEventIds) {
-      processedEventIds.add(eventId);
     }
   }
 

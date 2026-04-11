@@ -6,8 +6,8 @@ import { buildTestCtx } from "./test-ctx.js";
 describe("buildCommandContext", () => {
   it("canonicalizes registered aliases like /id to their primary command", () => {
     const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
+      Provider: "webchat",
+      Surface: "webchat",
       From: "user",
       To: "bot",
       Body: "/id",

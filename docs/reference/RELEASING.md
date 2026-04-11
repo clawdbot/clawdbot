@@ -69,9 +69,9 @@ OpenClaw has three public release lanes:
 - npm release preflight fails closed unless the tarball includes both
   `dist/control-ui/index.html` and a non-empty `dist/control-ui/assets/` payload
   so we do not ship an empty browser dashboard again
-- If the release work touched CI planning, extension timing manifests, or fast
-  test matrices, regenerate and review the planner-owned `checks-fast-extensions`
-  workflow matrix outputs from `.github/workflows/ci.yml`
+- If the release work touched CI planning, extension timing manifests, or
+  extension test matrices, regenerate and review the planner-owned
+  `checks-node-extensions` workflow matrix outputs from `.github/workflows/ci.yml`
   before approval so release notes do not describe a stale CI layout
 - Stable macOS release readiness also includes the updater surfaces:
   - the GitHub release must end up with the packaged `.zip`, `.dmg`, and `.dSYM.zip`

@@ -44,6 +44,10 @@ function hasSensitiveUrlHintPath(hints: ConfigUiHints | undefined, paths: string
   return paths.some((path) => hasSensitiveUrlHintTag(hints[path]));
 }
 
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function collectSensitiveStrings(value: unknown, values: string[]): void {
   if (typeof value === "string") {
     if (!isEnvVarPlaceholder(value)) {
@@ -57,8 +61,8 @@ function collectSensitiveStrings(value: unknown, values: string[]): void {
     }
     return;
   }
-  if (value && typeof value === "object") {
-    const obj = value as Record<string, unknown>;
+  if (isObjectRecord(value)) {
+    const obj = value;
     // SecretRef objects include structural fields like source/provider that are
     // not secret material and may appear widely in config text.
     if (isSecretRefShape(obj)) {
@@ -135,6 +139,7 @@ function buildRedactionLookup(hints: ConfigUiHints): Set<string> {
  * Deep-walk an object and replace string values at sensitive paths
  * with the redaction sentinel.
  */
+function redactObject<T>(obj: T, hints?: ConfigUiHints): T;
 function redactObject(obj: unknown, hints?: ConfigUiHints): unknown {
   if (hints) {
     const lookup = buildRedactionLookup(hints);
@@ -196,9 +201,9 @@ function redactObjectWithLookup(
     });
   }
 
-  if (typeof obj === "object") {
+  if (isObjectRecord(obj)) {
     const result: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
+    for (const [key, value] of Object.entries(obj)) {
       const path = prefix ? `${prefix}.${key}` : key;
       const wildcardPath = prefix ? `${prefix}.*` : "*";
       let matched = false;
@@ -212,7 +217,7 @@ function redactObjectWithLookup(
             values.push(value);
           } else if (typeof value === "object" && value !== null) {
             if (hints[candidate]?.sensitive === true && !Array.isArray(value)) {
-              const objectValue = value as Record<string, unknown>;
+              const objectValue = toObjectRecord(value);
               if (isSecretRefShape(objectValue)) {
                 result[key] = redactSecretRefId({
                   value: objectValue,
@@ -315,9 +320,9 @@ function redactObjectGuessing(
     });
   }
 
-  if (typeof obj === "object") {
+  if (isObjectRecord(obj)) {
     const result: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
+    for (const [key, value] of Object.entries(obj)) {
       const dotPath = prefix ? `${prefix}.${key}` : key;
       const wildcardPath = prefix ? `${prefix}.*` : "*";
       if (
@@ -403,7 +408,7 @@ function withRestoreWarningsSuppressed<T>(fn: () => T): T {
  * leaking credentials in their responses.
  */
 export function redactConfigObject<T>(value: T, uiHints?: ConfigUiHints): T {
-  return redactObject(value, uiHints) as T;
+  return redactObject(value, uiHints);
 }
 
 export function redactConfigSnapshot(
@@ -429,7 +434,7 @@ export function redactConfigSnapshot(
   // else: snapshot.config must be valid and populated, as that is what
   // readConfigFileSnapshot() does when it creates the snapshot.
 
-  const redactedConfig = redactObject(snapshot.config, uiHints) as ConfigFileSnapshot["config"];
+  const redactedConfig = redactObject(snapshot.config, uiHints);
   const redactedParsed = snapshot.parsed ? redactObject(snapshot.parsed, uiHints) : snapshot.parsed;
   let redactedRaw = snapshot.raw ? redactRawText(snapshot.raw, snapshot.config, uiHints) : null;
   if (
@@ -550,8 +555,8 @@ function assertNoRedactedSentinel(value: unknown, path: string): void {
     }
     return;
   }
-  if (value && typeof value === "object") {
-    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+  if (isObjectRecord(value)) {
+    for (const [key, item] of Object.entries(value)) {
       assertNoRedactedSentinel(item, path ? `${path}.${key}` : key);
     }
   }
@@ -612,10 +617,7 @@ function mapRedactedArray(params: {
 }
 
 function toObjectRecord(value: unknown): Record<string, unknown> {
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
-  }
-  return {};
+  return isObjectRecord(value) ? value : {};
 }
 
 function shouldPassThroughRestoreValue(incoming: unknown): boolean {
@@ -739,7 +741,7 @@ function restoreRedactedValuesWithLookup(
   }
   const orig = toObjectRecord(original);
   const result: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(incoming as Record<string, unknown>)) {
+  for (const [key, value] of Object.entries(toObjectRecord(incoming))) {
     result[key] = value;
     const path = prefix ? `${prefix}.${key}` : key;
     const wildcardPath = prefix ? `${prefix}.*` : "*";
@@ -826,7 +828,7 @@ function restoreRedactedValuesGuessing(
   }
   const orig = toObjectRecord(original);
   const result: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(incoming as Record<string, unknown>)) {
+  for (const [key, value] of Object.entries(toObjectRecord(incoming))) {
     const path = prefix ? `${prefix}.${key}` : key;
     const wildcardPath = prefix ? `${prefix}.*` : "*";
     if (

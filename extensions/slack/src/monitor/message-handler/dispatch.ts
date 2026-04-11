@@ -22,6 +22,10 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runti
 import { reactSlackMessage, removeSlackReaction } from "../../actions.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
 import { normalizeSlackOutboundText } from "../../format.js";
+import {
+  compileSlackInteractiveReplies,
+  isSlackInteractiveRepliesEnabled,
+} from "../../interactive-replies.js";
 import { SLACK_TEXT_LIMIT } from "../../limits.js";
 import { recordSlackThreadParticipation } from "../../sent-thread-cache.js";
 import {
@@ -306,6 +310,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     agentId: route.agentId,
     channel: "slack",
     accountId: route.accountId,
+    transformReplyPayload: (payload) =>
+      isSlackInteractiveRepliesEnabled({ cfg, accountId: route.accountId })
+        ? compileSlackInteractiveReplies(payload)
+        : payload,
     typing: {
       start: async () => {
         didSetStatus = true;

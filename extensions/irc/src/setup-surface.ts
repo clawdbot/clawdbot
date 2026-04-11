@@ -96,12 +96,12 @@ async function promptIrcNickServConfig(params: {
     return params.cfg;
   }
 
-  const service = String(
+  const service = (
     await params.prompter.text({
       message: "NickServ service nick",
       initialValue: existing?.service || "NickServ",
       validate: (value) => (normalizeStringifiedOptionalString(value) ? undefined : "Required"),
-    }),
+    })
   ).trim();
 
   const useEnvPassword =
@@ -116,11 +116,11 @@ async function promptIrcNickServConfig(params: {
 
   const password = useEnvPassword
     ? undefined
-    : String(
+    : (
         await params.prompter.text({
           message: "NickServ password (blank to disable NickServ auth)",
           validate: () => undefined,
-        }),
+        })
       ).trim();
 
   if (!password && !useEnvPassword) {
@@ -135,7 +135,7 @@ async function promptIrcNickServConfig(params: {
     initialValue: existing?.register ?? false,
   });
   const registerEmail = register
-    ? String(
+    ? (
         await params.prompter.text({
           message: "NickServ register email",
           initialValue:
@@ -144,7 +144,7 @@ async function promptIrcNickServConfig(params: {
               ? process.env.IRC_NICKSERV_REGISTER_EMAIL
               : undefined),
           validate: (value) => (normalizeStringifiedOptionalString(value) ? undefined : "Required"),
-        }),
+        })
       ).trim()
     : undefined;
 
@@ -273,11 +273,11 @@ export const ircSetupWizard: ChannelSetupWizard = {
           ? undefined
           : "Use a port between 1 and 65535";
       },
-      normalizeValue: ({ value }) => String(parsePort(String(value), 6697)),
+      normalizeValue: ({ value }) => String(parsePort(value, 6697)),
       applySet: async ({ cfg, accountId, value }) =>
         updateIrcAccountConfig(cfg as CoreConfig, accountId, {
           enabled: true,
-          port: parsePort(String(value), 6697),
+          port: parsePort(value, 6697),
         }),
     },
     {
@@ -338,13 +338,13 @@ export const ircSetupWizard: ChannelSetupWizard = {
         resolveIrcAccount({ cfg: cfg as CoreConfig, accountId }).config.channels?.join(", "),
       shouldPrompt: ({ credentialValues }) => credentialValues[USE_ENV_FLAG] !== "1",
       normalizeValue: ({ value }) =>
-        parseListInput(String(value))
+        parseListInput(value)
           .map((entry) => normalizeGroupEntry(entry))
           .filter((entry): entry is string => Boolean(entry && entry !== "*"))
           .filter((entry) => isChannelTarget(entry))
           .join(", "),
       applySet: async ({ cfg, accountId, value }) => {
-        const channels = parseListInput(String(value))
+        const channels = parseListInput(value)
           .map((entry) => normalizeGroupEntry(entry))
           .filter((entry): entry is string => Boolean(entry && entry !== "*"))
           .filter((entry) => isChannelTarget(entry));

@@ -214,7 +214,7 @@ export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] |
 
   for (const match of text.matchAll(scanRe)) {
     const index = match.index ?? 0;
-    const isClose = Boolean(match[1]?.includes("/"));
+    const isClose = match[1]?.includes("/") ?? false;
 
     if (!inThinking && !isClose) {
       pushText(text.slice(cursor, index));

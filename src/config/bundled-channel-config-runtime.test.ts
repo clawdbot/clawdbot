@@ -1,6 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../test/helpers/import-fresh.ts";
 
+vi.mock("../plugins/bundled-plugin-metadata.js", () => ({
+  listBundledPluginMetadata: () => [
+    {
+      manifest: {
+        channelConfigs: {
+          msteams: {
+            schema: { type: "object" },
+            runtime: { configWrites: true },
+          },
+          whatsapp: {
+            schema: { type: "object" },
+          },
+        },
+      },
+    },
+  ],
+}));
+
 describe("bundled channel config runtime", () => {
   beforeEach(() => {
     vi.doUnmock("../channels/plugins/bundled.js");

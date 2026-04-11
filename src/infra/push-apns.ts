@@ -706,7 +706,7 @@ async function sendApnsRequest(params: {
     });
     req.on("response", (headers) => {
       const statusHeader = headers[":status"];
-      statusCode = typeof statusHeader === "number" ? statusHeader : Number(statusHeader ?? 0);
+      statusCode = statusHeader ?? 0;
       const idHeader = headers["apns-id"];
       if (typeof idHeader === "string" && idHeader.trim().length > 0) {
         apnsId = idHeader.trim();

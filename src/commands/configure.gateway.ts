@@ -42,7 +42,7 @@ export async function promptGatewayConfig(
     }),
     runtime,
   );
-  const port = Number.parseInt(String(portRaw), 10);
+  const port = Number.parseInt(portRaw, 10);
 
   let bind = guardCancel(
     await select({
@@ -129,14 +129,12 @@ export async function promptGatewayConfig(
   let tailscaleResetOnExit = false;
   if (tailscaleMode !== "off") {
     note(TAILSCALE_DOCS_LINES.join("\n"), "Tailscale");
-    tailscaleResetOnExit = Boolean(
-      guardCancel(
-        await confirm({
-          message: "Reset Tailscale serve/funnel on exit?",
-          initialValue: false,
-        }),
-        runtime,
-      ),
+    tailscaleResetOnExit = guardCancel(
+      await confirm({
+        message: "Reset Tailscale serve/funnel on exit?",
+        initialValue: false,
+      }),
+      runtime,
     );
   }
 
@@ -274,7 +272,7 @@ export async function promptGatewayConfig(
       runtime,
     );
     const requiredHeaders = requiredHeadersRaw
-      ? normalizeStringEntries(String(requiredHeadersRaw).split(","))
+      ? normalizeStringEntries(requiredHeadersRaw.split(","))
       : [];
 
     const allowUsersRaw = guardCancel(
@@ -284,9 +282,7 @@ export async function promptGatewayConfig(
       }),
       runtime,
     );
-    const allowUsers = allowUsersRaw
-      ? normalizeStringEntries(String(allowUsersRaw).split(","))
-      : [];
+    const allowUsers = allowUsersRaw ? normalizeStringEntries(allowUsersRaw.split(",")) : [];
 
     const trustedProxiesRaw = guardCancel(
       await text({
@@ -301,7 +297,7 @@ export async function promptGatewayConfig(
       }),
       runtime,
     );
-    trustedProxies = normalizeStringEntries(String(trustedProxiesRaw).split(","));
+    trustedProxies = normalizeStringEntries(trustedProxiesRaw.split(","));
 
     trustedProxyConfig = {
       userHeader: normalizeOptionalString(userHeader) ?? "",

@@ -33,7 +33,7 @@ export function isWhatsAppSupplementalSenderAllowed(params: {
     return false;
   }
   for (const entry of params.allowFrom) {
-    const rawEntry = String(entry).trim();
+    const rawEntry = entry.trim();
     if (!rawEntry) {
       continue;
     }

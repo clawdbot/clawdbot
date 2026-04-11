@@ -239,7 +239,7 @@ export async function runTavilyExtract(
     ...(Array.isArray(r.images)
       ? {
           images: (r.images as string[]).map((img) =>
-            wrapExternalContent(String(img), { source: "web_fetch", includeWarning: false }),
+            wrapExternalContent(img, { source: "web_fetch", includeWarning: false }),
           ),
         }
       : {}),

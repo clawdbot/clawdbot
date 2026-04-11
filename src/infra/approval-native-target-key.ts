@@ -1,4 +1,4 @@
-import type { ChannelApprovalNativeTarget } from "../channels/plugins/types.adapters.js";
+import type { ChannelApprovalNativeTarget } from "../channels/plugins/approval-native.types.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export function buildChannelApprovalNativeTargetKey(target: ChannelApprovalNativeTarget): string {

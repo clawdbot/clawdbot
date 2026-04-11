@@ -1,11 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
 import { listAuthProfileStorePaths as listAuthProfileStorePathsFromAuthStorePaths } from "./auth-store-paths.js";
 import { parseEnvValue } from "./shared.js";
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 export function parseEnvAssignmentValue(raw: string): string {
   return parseEnvValue(raw);
@@ -119,11 +123,11 @@ export function readJsonObjectIfExists(
       };
     }
     const raw = fs.readFileSync(filePath, "utf8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    const parsed: unknown = JSON.parse(raw);
+    if (!isJsonObject(parsed)) {
       return { value: null };
     }
-    return { value: parsed as Record<string, unknown> };
+    return { value: parsed };
   } catch (err) {
     return {
       value: null,

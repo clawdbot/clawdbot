@@ -164,9 +164,13 @@ Enable any bundled hook:
 openclaw hooks enable <hook-name>
 ```
 
+<a id="session-memory"></a>
+
 ### session-memory details
 
 Extracts the last 15 user/assistant messages, generates a descriptive filename slug via LLM, and saves to `<workspace>/memory/YYYY-MM-DD-slug.md`. Requires `workspace.dir` to be configured.
+
+<a id="bootstrap-extra-files"></a>
 
 ### bootstrap-extra-files config
 
@@ -186,6 +190,18 @@ Extracts the last 15 user/assistant messages, generates a descriptive filename s
 ```
 
 Paths resolve relative to workspace. Only recognized bootstrap basenames are loaded (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`, `MEMORY.md`).
+
+<a id="command-logger"></a>
+
+### command-logger details
+
+Logs every slash command to `~/.openclaw/logs/commands.log`.
+
+<a id="boot-md"></a>
+
+### boot-md details
+
+Runs `BOOT.md` from the active workspace when the gateway starts.
 
 ## Plugin hooks
 

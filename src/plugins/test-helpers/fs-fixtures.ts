@@ -16,14 +16,14 @@ export function mkdirSafeDir(dir: string) {
 }
 
 export function makeTrackedTempDir(prefix: string, trackedDirs: string[]) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), String(prefix) + "-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix + "-"));
   chmodSafeDir(dir);
   trackedDirs.push(dir);
   return dir;
 }
 
 export async function makeTrackedTempDirAsync(prefix: string, trackedDirs: string[]) {
-  const dir = await fsPromises.mkdtemp(path.join(os.tmpdir(), String(prefix) + "-"));
+  const dir = await fsPromises.mkdtemp(path.join(os.tmpdir(), prefix + "-"));
   chmodSafeDir(dir);
   trackedDirs.push(dir);
   return dir;
@@ -63,12 +63,12 @@ export function createSuiteTempRootTracker(
       return suiteTempRoot;
     }
     fs.mkdirSync(baseDir, { recursive: true });
-    suiteTempRoot = fs.mkdtempSync(path.join(baseDir, String(prefix) + "-"));
+    suiteTempRoot = fs.mkdtempSync(path.join(baseDir, `${prefix}-`));
     return suiteTempRoot;
   }
 
   function makeTempDir() {
-    const dir = path.join(ensureSuiteTempRoot(), `case-${String(tempDirCounter)}`);
+    const dir = path.join(ensureSuiteTempRoot(), `case-${tempDirCounter}`);
     tempDirCounter += 1;
     fs.mkdirSync(dir);
     return dir;

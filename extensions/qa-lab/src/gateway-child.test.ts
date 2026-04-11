@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -301,6 +302,49 @@ describe("buildQaRuntimeEnv", () => {
       }),
     );
     expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("force-stops gateway children that ignore the graceful signal", async () => {
+    const child = spawn(
+      process.execPath,
+      [
+        "-e",
+        [
+          "process.on('SIGTERM', () => {});",
+          "process.stdout.write('ready\\n');",
+          "setInterval(() => {}, 1000);",
+        ].join(""),
+      ],
+      {
+        detached: process.platform !== "win32",
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    );
+    cleanups.push(async () => {
+      if (child.exitCode === null && child.signalCode === null) {
+        try {
+          if (process.platform === "win32") {
+            child.kill("SIGKILL");
+          } else if (child.pid) {
+            process.kill(-child.pid, "SIGKILL");
+          }
+        } catch {
+          // The child already exited.
+        }
+      }
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      child.once("error", reject);
+      child.stdout?.once("data", () => resolve());
+    });
+
+    await __testing.stopQaGatewayChildProcessTree(child, {
+      gracefulTimeoutMs: 50,
+      forceTimeoutMs: 1_000,
+    });
+
+    expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
   });
 });
 

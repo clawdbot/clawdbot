@@ -1401,7 +1401,7 @@ export async function runMemoryPromoteExplain(
         `${colorize(rich, theme.heading, "Promotion Explain")} ${colorize(
           rich,
           theme.muted,
-          "(" + String(agentId) + ")",
+          "(" + agentId + ")",
         )}`,
         colorize(rich, theme.accent, candidate.key),
         colorize(

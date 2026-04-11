@@ -4,7 +4,7 @@ import {
   resolveIMessageAttachmentRoots,
   resolveIMessageRemoteAttachmentRoots,
 } from "../../test/helpers/channels/channel-media-roots-contract.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 
 describe("channel-inbound-roots contract", () => {
   function expectResolvedRootsCase(resolve: () => string[], expected: readonly string[]) {

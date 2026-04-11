@@ -281,9 +281,7 @@ function createDefaultProviderPlugins() {
     run: async (ctx) => {
       const state = "state-test";
       ctx.runtime.log(`Open this URL: https://api.chutes.ai/idp/authorize?state=${state}`);
-      const redirect = String(
-        await ctx.prompter.text({ message: "Paste the redirect URL or code" }),
-      );
+      const redirect = await ctx.prompter.text({ message: "Paste the redirect URL or code" });
       const params = new URLSearchParams(redirect.startsWith("?") ? redirect.slice(1) : redirect);
       const code = params.get("code") ?? redirect;
       const tokenResponse = await fetch("https://api.chutes.ai/idp/token", {

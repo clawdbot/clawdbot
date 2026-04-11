@@ -410,7 +410,7 @@ describe("installDownloadSpec extraction safety (tar.bz2)", () => {
         return runCommandResult({ stdout: "package/hello.txt\n" });
       }
       if (cmd[0] === "tar" && cmd[1] === "tvf") {
-        const archivePath = String(cmd[2] ?? "");
+        const archivePath = cmd[2] ?? "";
         if (archivePath) {
           await fs.appendFile(archivePath, "mutated");
         }
@@ -460,7 +460,7 @@ describe("installDownloadSpec extraction safety (tar.bz2)", () => {
         return runCommandResult({ stdout: "-rw-r--r--  0 0 0 0 Jan  1 00:00 escape/pwn.txt\n" });
       }
       if (cmd[0] === "tar" && cmd[1] === "xf") {
-        const stagingDir = String(cmd[cmd.indexOf("-C") + 1] ?? "");
+        const stagingDir = cmd[cmd.indexOf("-C") + 1] ?? "";
         await fs.mkdir(path.join(stagingDir, "escape"), { recursive: true });
         await fs.writeFile(path.join(stagingDir, "escape", "pwn.txt"), "owned");
         return runCommandResult({ stdout: "ok" });

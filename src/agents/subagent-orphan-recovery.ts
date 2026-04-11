@@ -21,7 +21,7 @@ import {
 import { callGateway } from "../gateway/call.js";
 import { readSessionMessages } from "../gateway/session-utils.fs.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { replaceSubagentRunAfterSteer } from "./subagent-registry-runtime.js";
+import { replaceSubagentRunAfterSteer } from "./subagent-registry-steer-runtime.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const log = createSubsystemLogger("subagent-orphan-recovery");

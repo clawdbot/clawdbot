@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -58,6 +59,7 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { escapeRegExp } from "../utils.js";
+import { loadOrCreateDeviceIdentity } from "./device-identity.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { isWithinActiveHours } from "./heartbeat-active-hours.js";
 import {
@@ -68,6 +70,11 @@ import {
 } from "./heartbeat-events-filter.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
 import { resolveHeartbeatReasonKind } from "./heartbeat-reason.js";
+import {
+  computeNextHeartbeatPhaseDueMs,
+  resolveHeartbeatPhaseMs,
+  resolveNextHeartbeatDueMs,
+} from "./heartbeat-schedule.js";
 import {
   isHeartbeatEnabledForAgent,
   resolveHeartbeatIntervalMs,
@@ -129,7 +136,7 @@ type HeartbeatAgentState = {
   agentId: string;
   heartbeat?: HeartbeatConfig;
   intervalMs: number;
-  lastRunMs?: number;
+  phaseMs: number;
   nextDueMs: number;
 };
 
@@ -137,6 +144,22 @@ export type HeartbeatRunner = {
   stop: () => void;
   updateConfig: (cfg: OpenClawConfig) => void;
 };
+
+function resolveHeartbeatSchedulerSeed(explicitSeed?: string) {
+  const normalized = normalizeOptionalString(explicitSeed);
+  if (normalized) {
+    return normalized;
+  }
+  try {
+    return loadOrCreateDeviceIdentity().deviceId;
+  } catch {
+    return createHash("sha256")
+      .update(process.env.HOME ?? "")
+      .update("\0")
+      .update(process.cwd())
+      .digest("hex");
+  }
+}
 
 function hasExplicitHeartbeatAgents(cfg: OpenClawConfig) {
   const list = cfg.agents?.list ?? [];
@@ -933,16 +956,18 @@ export async function runHeartbeatOnce(opts: {
   try {
     const heartbeatModelOverride = normalizeOptionalString(heartbeat?.model);
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
+    const timeoutOverrideSeconds =
+      typeof heartbeat?.timeoutSeconds === "number" ? heartbeat.timeoutSeconds : undefined;
     const bootstrapContextMode: "lightweight" | undefined =
       heartbeat?.lightContext === true ? "lightweight" : undefined;
-    const replyOpts = heartbeatModelOverride
-      ? {
-          isHeartbeat: true,
-          heartbeatModelOverride,
-          suppressToolErrorWarnings,
-          bootstrapContextMode,
-        }
-      : { isHeartbeat: true, suppressToolErrorWarnings, bootstrapContextMode };
+    const replyOpts = {
+      isHeartbeat: true,
+      ...(heartbeatModelOverride ? { heartbeatModelOverride } : {}),
+      suppressToolErrorWarnings,
+      // Heartbeat timeout is a per-run override so user turns keep the global default.
+      timeoutOverrideSeconds,
+      bootstrapContextMode,
+    };
     const getReplyFromConfig =
       opts.deps?.getReplyFromConfig ?? (await loadHeartbeatRunnerRuntime()).getReplyFromConfig;
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
@@ -1179,31 +1204,50 @@ export function startHeartbeatRunner(opts: {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   runOnce?: typeof runHeartbeatOnce;
+  stableSchedulerSeed?: string;
 }): HeartbeatRunner {
   const runtime = opts.runtime ?? defaultRuntime;
   const runOnce = opts.runOnce ?? runHeartbeatOnce;
   const state = {
     cfg: opts.cfg ?? loadConfig(),
     runtime,
+    schedulerSeed: resolveHeartbeatSchedulerSeed(opts.stableSchedulerSeed),
     agents: new Map<string, HeartbeatAgentState>(),
     timer: null as NodeJS.Timeout | null,
     stopped: false,
   };
   let initialized = false;
 
-  const resolveNextDue = (now: number, intervalMs: number, prevState?: HeartbeatAgentState) => {
-    if (typeof prevState?.lastRunMs === "number") {
-      return prevState.lastRunMs + intervalMs;
-    }
-    if (prevState && prevState.intervalMs === intervalMs && prevState.nextDueMs > now) {
-      return prevState.nextDueMs;
-    }
-    return now + intervalMs;
-  };
+  const resolveNextDue = (
+    now: number,
+    intervalMs: number,
+    phaseMs: number,
+    prevState?: HeartbeatAgentState,
+  ) =>
+    resolveNextHeartbeatDueMs({
+      nowMs: now,
+      intervalMs,
+      phaseMs,
+      prev: prevState
+        ? {
+            intervalMs: prevState.intervalMs,
+            phaseMs: prevState.phaseMs,
+            nextDueMs: prevState.nextDueMs,
+          }
+        : undefined,
+    });
 
-  const advanceAgentSchedule = (agent: HeartbeatAgentState, now: number) => {
-    agent.lastRunMs = now;
-    agent.nextDueMs = now + agent.intervalMs;
+  const advanceAgentSchedule = (agent: HeartbeatAgentState, now: number, reason?: string) => {
+    agent.nextDueMs =
+      reason === "interval"
+        ? computeNextHeartbeatPhaseDueMs({
+            nowMs: now,
+            intervalMs: agent.intervalMs,
+            phaseMs: agent.phaseMs,
+          })
+        : // Targeted and action-driven wakes still count as a fresh heartbeat run
+          // for cooldown purposes, so keep the existing now + interval behavior.
+          now + agent.intervalMs;
   };
 
   const scheduleNext = () => {
@@ -1249,14 +1293,19 @@ export function startHeartbeatRunner(opts: {
       if (!intervalMs) {
         continue;
       }
+      const phaseMs = resolveHeartbeatPhaseMs({
+        schedulerSeed: state.schedulerSeed,
+        agentId: agent.agentId,
+        intervalMs,
+      });
       intervals.push(intervalMs);
       const prevState = prevAgents.get(agent.agentId);
-      const nextDueMs = resolveNextDue(now, intervalMs, prevState);
+      const nextDueMs = resolveNextDue(now, intervalMs, phaseMs, prevState);
       nextAgents.set(agent.agentId, {
         agentId: agent.agentId,
         heartbeat: agent.heartbeat,
         intervalMs,
-        lastRunMs: prevState?.lastRunMs,
+        phaseMs,
         nextDueMs,
       });
     }
@@ -1330,7 +1379,7 @@ export function startHeartbeatRunner(opts: {
             deps: { runtime: state.runtime },
           });
           if (res.status !== "skipped" || res.reason !== "disabled") {
-            advanceAgentSchedule(targetAgent, now);
+            advanceAgentSchedule(targetAgent, now, reason);
           }
           return res.status === "ran" ? { status: "ran", durationMs: Date.now() - startedAt } : res;
         } catch (err) {
@@ -1338,7 +1387,7 @@ export function startHeartbeatRunner(opts: {
           log.error(`heartbeat runner: targeted runOnce threw unexpectedly: ${errMsg}`, {
             error: errMsg,
           });
-          advanceAgentSchedule(targetAgent, now);
+          advanceAgentSchedule(targetAgent, now, reason);
           return { status: "failed", reason: errMsg };
         }
       }
@@ -1360,7 +1409,7 @@ export function startHeartbeatRunner(opts: {
         } catch (err) {
           const errMsg = formatErrorMessage(err);
           log.error(`heartbeat runner: runOnce threw unexpectedly: ${errMsg}`, { error: errMsg });
-          advanceAgentSchedule(agent, now);
+          advanceAgentSchedule(agent, now, reason);
           continue;
         }
         if (res.status === "skipped" && res.reason === "requests-in-flight") {
@@ -1372,7 +1421,7 @@ export function startHeartbeatRunner(opts: {
           return res;
         }
         if (res.status !== "skipped" || res.reason !== "disabled") {
-          advanceAgentSchedule(agent, now);
+          advanceAgentSchedule(agent, now, reason);
         }
         if (res.status === "ran") {
           ran = true;

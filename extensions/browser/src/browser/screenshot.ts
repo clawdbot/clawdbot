@@ -19,8 +19,8 @@ export async function normalizeBrowserScreenshot(
   const maxBytes = Math.max(1, Math.round(opts?.maxBytes ?? DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES));
 
   const meta = await getImageMetadata(buffer);
-  const width = Number(meta?.width ?? 0);
-  const height = Number(meta?.height ?? 0);
+  const width = meta?.width ?? 0;
+  const height = meta?.height ?? 0;
   const maxDim = Math.max(width, height);
 
   if (buffer.byteLength <= maxBytes && (maxDim === 0 || (width <= maxSide && height <= maxSide))) {

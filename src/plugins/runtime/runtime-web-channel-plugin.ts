@@ -177,7 +177,7 @@ function getLightExport<K extends keyof WebChannelLightRuntimeModule>(
   const loaded = loadWebChannelLightModule();
   const value = loaded[exportName];
   if (value == null) {
-    throw new Error(`web channel plugin runtime is missing export '${String(exportName)}'`);
+    throw new Error(`web channel plugin runtime is missing export '${exportName}'`);
   }
   return value as NonNullable<WebChannelLightRuntimeModule[K]>;
 }
@@ -188,7 +188,7 @@ async function getHeavyExport<K extends keyof WebChannelHeavyRuntimeModule>(
   const loaded = await loadWebChannelHeavyModule();
   const value = loaded[exportName];
   if (value == null) {
-    throw new Error(`web channel plugin runtime is missing export '${String(exportName)}'`);
+    throw new Error(`web channel plugin runtime is missing export '${exportName}'`);
   }
   return value as NonNullable<WebChannelHeavyRuntimeModule[K]>;
 }

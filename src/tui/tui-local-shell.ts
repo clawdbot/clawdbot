@@ -133,9 +133,7 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
             deps.chatLog.addSystem(`[local] ${line}`);
           }
         }
-        deps.chatLog.addSystem(
-          `[local] exit ${code ?? "?"}${signal ? ` (signal ${String(signal)})` : ""}`,
-        );
+        deps.chatLog.addSystem(`[local] exit ${code ?? "?"}${signal ? ` (signal ${signal})` : ""}`);
         deps.tui.requestRender();
         resolve();
       });

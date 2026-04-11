@@ -20,7 +20,7 @@ function resolveLocation(location: NormalizedLocation): ResolvedLocation {
   const source =
     location.source ??
     (location.isLive ? "live" : location.name || location.address ? "place" : "pin");
-  const isLive = Boolean(location.isLive ?? source === "live");
+  const isLive = location.isLive ?? source === "live";
   return { ...location, source, isLive };
 }
 

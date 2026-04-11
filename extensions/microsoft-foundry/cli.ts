@@ -37,7 +37,7 @@ function summarizeAzErrorMessage(raw: string): string {
 }
 
 function buildAzCommandError(error: Error, stderr: string, stdout: string): Error {
-  const details = summarizeAzErrorMessage(`${String(stderr ?? "")} ${String(stdout ?? "")}`);
+  const details = summarizeAzErrorMessage(`${stderr ?? ""} ${stdout ?? ""}`);
   return new Error(details ? `${error.message}: ${details}` : error.message);
 }
 
@@ -65,7 +65,7 @@ export async function execAzAsync(args: string[]): Promise<string> {
       },
       (error, stdout, stderr) => {
         if (error) {
-          reject(buildAzCommandError(error, String(stderr ?? ""), String(stdout ?? "")));
+          reject(buildAzCommandError(error, stderr ?? "", stdout ?? ""));
           return;
         }
         resolve(normalizeStringifiedOptionalString(stdout) ?? "");

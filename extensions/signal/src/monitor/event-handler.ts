@@ -162,7 +162,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       envelope: envelopeOptions,
     });
     let combinedBody = body;
-    const historyKey = entry.isGroup ? String(entry.groupId ?? "unknown") : undefined;
+    const historyKey = entry.isGroup ? (entry.groupId ?? "unknown") : undefined;
     if (entry.isGroup && historyKey) {
       combinedBody = buildPendingHistoryContextFromMap({
         historyMap: deps.groupHistories,
@@ -679,7 +679,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
       policy: {
         isGroup,
-        requireMention: Boolean(requireMention),
+        requireMention,
         allowTextCommands: true,
         hasControlCommand: hasControlCommandInMessage,
         commandAuthorized,

@@ -115,7 +115,7 @@ export function registerBrowserStateCommands(
         if (!headersJsonValue) {
           throw new Error("Missing headers JSON (pass --headers-json or positional JSON argument)");
         }
-        const parsed = JSON.parse(String(headersJsonValue)) as unknown;
+        const parsed = JSON.parse(headersJsonValue) as unknown;
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
           throw new Error("Headers JSON must be a JSON object");
         }

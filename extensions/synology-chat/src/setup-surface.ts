@@ -127,12 +127,24 @@ function parseSynologyUserId(value: string): string | null {
   return /^\d+$/.test(cleaned) ? cleaned : null;
 }
 
+function normalizeSynologyAllowedUserId(value: unknown): string {
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
+    return `${value}`.trim();
+  }
+  return "";
+}
+
 function resolveExistingAllowedUserIds(cfg: OpenClawConfig, accountId: string): string[] {
   const raw = getRawAccountConfig(cfg, accountId).allowedUserIds;
   if (Array.isArray(raw)) {
-    return raw.map((value) => String(value).trim()).filter(Boolean);
+    return raw.map(normalizeSynologyAllowedUserId).filter(Boolean);
   }
-  return String(raw ?? "")
+  return normalizeSynologyAllowedUserId(raw)
     .split(",")
     .map((value) => value.trim())
     .filter(Boolean);

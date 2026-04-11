@@ -15,6 +15,7 @@ const EXPECTED_HEARTBEAT_KEYS = [
   "includeSystemPromptSection",
   "ackMaxChars",
   "suppressToolErrorWarnings",
+  "timeoutSeconds",
   "lightContext",
   "isolatedSession",
   "target",

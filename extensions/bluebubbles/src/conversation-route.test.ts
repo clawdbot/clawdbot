@@ -3,7 +3,7 @@ import {
   __testing as sessionBindingTesting,
   registerSessionBindingAdapter,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveBlueBubblesConversationRoute } from "./conversation-route.js";
 
 const baseCfg = {
@@ -15,6 +15,10 @@ const baseCfg = {
 
 describe("resolveBlueBubblesConversationRoute", () => {
   beforeEach(() => {
+    sessionBindingTesting.resetSessionBindingAdaptersForTests();
+  });
+
+  afterEach(() => {
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
   });
 

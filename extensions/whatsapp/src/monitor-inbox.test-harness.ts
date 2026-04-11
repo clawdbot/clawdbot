@@ -202,14 +202,11 @@ export function expectPairingPromptSent(sock: MockSock, jid: string, senderE164:
   expect(sock.sendMessage).toHaveBeenCalledTimes(1);
   const sendCall = sock.sendMessage.mock.calls[0];
   expect(sendCall?.[0]).toBe(jid);
-  expectInboxPairingReplyText(
-    String((sendCall?.[1] as { text?: string } | undefined)?.text ?? ""),
-    {
-      channel: "whatsapp",
-      idLine: `Your WhatsApp phone number: ${senderE164}`,
-      code: "PAIRCODE",
-    },
-  );
+  expectInboxPairingReplyText((sendCall?.[1] as { text?: string } | undefined)?.text ?? "", {
+    channel: "whatsapp",
+    idLine: `Your WhatsApp phone number: ${senderE164}`,
+    code: "PAIRCODE",
+  });
 }
 
 let authDir: string | undefined;

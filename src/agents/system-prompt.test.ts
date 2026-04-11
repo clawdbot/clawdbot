@@ -939,7 +939,7 @@ describe("buildAgentSystemPrompt", () => {
         containerWorkspaceDir: "/workspace",
         workspaceAccess: "ro",
         agentWorkspaceMount: "/agent",
-        elevated: { allowed: true, defaultLevel: "on" },
+        elevated: { allowed: true, defaultLevel: "on", fullAccessAvailable: true },
       },
     });
 
@@ -955,6 +955,35 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Sub-agents stay sandboxed");
     expect(prompt).toContain("User can toggle with /elevated on|off|ask|full.");
     expect(prompt).toContain("Current elevated level: on");
+  });
+
+  it("does not advertise /elevated full when auto-approved full access is unavailable", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      sandboxInfo: {
+        enabled: true,
+        workspaceDir: "/tmp/sandbox",
+        containerWorkspaceDir: "/workspace",
+        workspaceAccess: "ro",
+        agentWorkspaceMount: "/agent",
+        elevated: {
+          allowed: true,
+          defaultLevel: "full",
+          fullAccessAvailable: false,
+          fullAccessBlockedReason: "runtime",
+        },
+      },
+    });
+
+    expect(prompt).toContain("Elevated exec is available for this session.");
+    expect(prompt).toContain("User can toggle with /elevated on|off|ask.");
+    expect(prompt).not.toContain("User can toggle with /elevated on|off|ask|full.");
+    expect(prompt).toContain(
+      "Auto-approved /elevated full is unavailable here (runtime constraints).",
+    );
+    expect(prompt).toContain(
+      "Current elevated level: full (full auto-approval unavailable here; use ask/on instead).",
+    );
   });
 
   it("includes reaction guidance when provided", () => {

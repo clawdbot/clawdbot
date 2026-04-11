@@ -590,7 +590,7 @@ export async function discoverGatewayBeacons(
   const domainsRaw = Array.isArray(opts.domains) ? opts.domains : [];
   const defaultDomains = ["local.", ...(wideAreaDomain ? [wideAreaDomain] : [])];
   const domains = (domainsRaw.length > 0 ? domainsRaw : defaultDomains)
-    .map((d) => String(d).trim())
+    .map((d) => d.trim())
     .filter(Boolean)
     .map((d) => (d.endsWith(".") ? d : `${d}.`));
 

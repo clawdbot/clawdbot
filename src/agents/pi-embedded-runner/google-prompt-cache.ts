@@ -113,6 +113,16 @@ function buildGooglePromptCacheMatchKey(params: {
   return stableStringify(params);
 }
 
+function stringifyGooglePromptCacheKeyPart(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value);
+  }
+  return "";
+}
+
 function readLatestGooglePromptCacheEntry(
   sessionManager: GooglePromptCacheSessionManager,
   matchKey: string,
@@ -124,16 +134,20 @@ function readLatestGooglePromptCacheEntry(
       if (entry?.type !== "custom" || entry?.customType !== GOOGLE_PROMPT_CACHE_CUSTOM_TYPE) {
         continue;
       }
-      const data = entry.data as Partial<GooglePromptCacheEntry> | undefined;
+      const data = entry.data;
       if (!data || typeof data !== "object") {
         continue;
       }
+      const cacheData = data as Record<string, unknown>;
       const candidateKey = buildGooglePromptCacheMatchKey({
-        provider: String(data.provider ?? ""),
-        modelId: String(data.modelId ?? ""),
-        modelApi: typeof data.modelApi === "string" || data.modelApi == null ? data.modelApi : null,
-        baseUrl: String(data.baseUrl ?? ""),
-        systemPromptDigest: String(data.systemPromptDigest ?? ""),
+        provider: stringifyGooglePromptCacheKeyPart(cacheData.provider),
+        modelId: stringifyGooglePromptCacheKeyPart(cacheData.modelId),
+        modelApi:
+          typeof cacheData.modelApi === "string" || cacheData.modelApi == null
+            ? cacheData.modelApi
+            : null,
+        baseUrl: stringifyGooglePromptCacheKeyPart(cacheData.baseUrl),
+        systemPromptDigest: stringifyGooglePromptCacheKeyPart(cacheData.systemPromptDigest),
       });
       if (candidateKey === matchKey) {
         return data as GooglePromptCacheEntry;

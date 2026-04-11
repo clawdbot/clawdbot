@@ -83,7 +83,7 @@ function resolvePairingPath(channel: PairingChannel, env: NodeJS.ProcessEnv = pr
 }
 
 function safeAccountKey(accountId: string): string {
-  const raw = normalizeLowercaseStringOrEmpty(String(accountId));
+  const raw = normalizeLowercaseStringOrEmpty(accountId);
   if (!raw) {
     throw new Error("invalid pairing account id");
   }
@@ -200,7 +200,7 @@ function resolveLastSeenAt(entry: PairingRequest): number {
 }
 
 function resolvePairingRequestAccountId(entry: PairingRequest): string {
-  return normalizePairingAccountId(String(entry.meta?.accountId ?? "")) || DEFAULT_ACCOUNT_ID;
+  return normalizePairingAccountId(entry.meta?.accountId) || DEFAULT_ACCOUNT_ID;
 }
 
 function pruneExcessRequestsByAccount(reqs: PairingRequest[], maxPending: number) {
@@ -299,9 +299,7 @@ function normalizeAllowEntry(channel: PairingChannel, entry: string): string {
 
 function normalizeAllowFromList(channel: PairingChannel, store: AllowFromStore): string[] {
   const list = Array.isArray(store.allowFrom) ? store.allowFrom : [];
-  return dedupePreserveOrder(
-    list.map((v) => normalizeAllowEntry(channel, String(v))).filter(Boolean),
-  );
+  return dedupePreserveOrder(list.map((v) => normalizeAllowEntry(channel, v)).filter(Boolean));
 }
 
 function normalizeAllowFromInput(channel: PairingChannel, entry: string | number): string {
@@ -848,7 +846,7 @@ export async function approveChannelPairingCode(params: {
       const { requests: pruned, removed } = await readPrunedPairingRequests(filePath);
       const normalizedAccountId = normalizePairingAccountId(params.accountId);
       const idx = pruned.findIndex((r) => {
-        if (String(r.code ?? "").toUpperCase() !== code) {
+        if (r.code.toUpperCase() !== code) {
           return false;
         }
         return requestMatchesAccountId(r, normalizedAccountId);
@@ -871,7 +869,7 @@ export async function approveChannelPairingCode(params: {
         version: 1,
         requests: pruned,
       } satisfies PairingStore);
-      const entryAccountId = normalizeOptionalString(String(entry.meta?.accountId ?? ""));
+      const entryAccountId = normalizeOptionalString(entry.meta?.accountId);
       await addChannelAllowFromStoreEntry({
         channel: params.channel,
         entry: entry.id,

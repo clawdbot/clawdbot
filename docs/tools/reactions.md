@@ -68,7 +68,7 @@ tool with the `react` action. Reaction behavior varies by channel.
 Per-channel `reactionLevel` config controls how broadly the agent uses reactions. Values are typically `off`, `ack`, `minimal`, or `extensive`.
 
 - [Telegram reactionLevel](/channels/telegram#reaction-notifications) — `channels.telegram.reactionLevel`
-- [WhatsApp reactionLevel](/channels/whatsapp#reactions) — `channels.whatsapp.reactionLevel`
+- [WhatsApp reactionLevel](/channels/whatsapp#reaction-level) — `channels.whatsapp.reactionLevel`
 
 Set `reactionLevel` on individual channels to tune how actively the agent reacts to messages on each platform.
 

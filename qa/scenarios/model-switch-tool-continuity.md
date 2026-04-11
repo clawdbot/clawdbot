@@ -19,8 +19,8 @@ execution:
   kind: flow
   summary: Verify switching models preserves session context and tool use instead of dropping into plain-text only behavior.
   config:
-    initialPrompt: "Read QA_KICKOFF_TASK.md and summarize the QA mission in one clause before any model switch."
-    followupPrompt: "Switch models now. Tool continuity check: reread QA_KICKOFF_TASK.md and mention the handoff in one short sentence."
+    initialPrompt: "Read repo/qa/scenarios/index.md and summarize the QA scenario pack mission in one clause before any model switch."
+    followupPrompt: "The harness has already requested the alternate model for this turn. Do not call session_status or change models yourself. Tool continuity check: use the read tool to reread repo/qa/scenarios/index.md, then mention the model handoff and QA mission in one short sentence."
     promptSnippet: "Tool continuity check"
 ```
 
@@ -64,7 +64,7 @@ steps:
         args:
           - lambda:
               expr: "state.getSnapshot().messages.slice(beforeSwitchCursor).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && hasModelSwitchContinuityEvidence(candidate.text)).at(-1)"
-          - 10000
+          - expr: resolveQaLiveTurnTimeoutMs(env, 20000, env.alternateModel)
       - assert:
           expr: hasModelSwitchContinuityEvidence(outbound.text)
           message:

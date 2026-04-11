@@ -1,5 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { validateConfigObject } from "./config.js";
+import { validateConfigObject } from "./validation.js";
+import {
+  BlueBubblesConfigSchema,
+  DiscordConfigSchema,
+  IMessageConfigSchema,
+  IrcConfigSchema,
+  SignalConfigSchema,
+  SlackConfigSchema,
+  TelegramConfigSchema,
+} from "./zod-schema.providers-core.js";
+import { WhatsAppConfigSchema } from "./zod-schema.providers-whatsapp.js";
+
+const providerSchemas = {
+  bluebubbles: BlueBubblesConfigSchema,
+  discord: DiscordConfigSchema,
+  imessage: IMessageConfigSchema,
+  irc: IrcConfigSchema,
+  signal: SignalConfigSchema,
+  slack: SlackConfigSchema,
+  telegram: TelegramConfigSchema,
+  whatsapp: WhatsAppConfigSchema,
+} as const;
 
 function expectChannelAllowlistIssue(
   result: ReturnType<typeof validateConfigObject>,
@@ -10,6 +31,29 @@ function expectChannelAllowlistIssue(
     const pathParts = Array.isArray(path) ? path : [path];
     expect(
       result.issues.some((issue) => pathParts.every((part) => issue.path.includes(part))),
+    ).toBe(true);
+  }
+}
+
+function expectSchemaAllowlistIssue(params: {
+  schema: { safeParse: (value: unknown) => { success: true } | { success: false; error: unknown } };
+  config: unknown;
+  path: string | readonly string[];
+}) {
+  const result = params.schema.safeParse(params.config);
+  expect(result.success).toBe(false);
+  if (!result.success) {
+    const pathParts = Array.isArray(params.path) ? params.path : [params.path];
+    const issues =
+      (result.error as { issues?: Array<{ path?: Array<string | number> }> }).issues ?? [];
+    const expectedParts = pathParts
+      .map((part) => part.replace(/^channels\.[^.]+\.?/u, ""))
+      .filter(Boolean);
+    expect(
+      issues.some((issue) => {
+        const issuePath = issue.path?.join(".") ?? "";
+        return expectedParts.every((part) => issuePath.includes(part));
+      }),
     ).toBe(true);
   }
 }
@@ -36,15 +80,22 @@ describe('dmPolicy="allowlist" requires non-empty effective allowFrom', () => {
       config: { whatsapp: { dmPolicy: "allowlist" } },
       issuePath: "channels.whatsapp.allowFrom",
     },
-  ] as const)('rejects $name dmPolicy="allowlist" without allowFrom', ({ config, issuePath }) => {
-    expectChannelAllowlistIssue(validateConfigObject({ channels: config }), issuePath);
-  });
+  ] as const)(
+    'rejects $name dmPolicy="allowlist" without allowFrom',
+    ({ name, config, issuePath }) => {
+      const providerConfig = config[name];
+      const schema = providerSchemas[name as keyof typeof providerSchemas];
+      if (schema) {
+        expectSchemaAllowlistIssue({ schema, config: providerConfig, path: issuePath });
+        return;
+      }
+      expectChannelAllowlistIssue(validateConfigObject({ channels: config }), issuePath);
+    },
+  );
 
   it('accepts dmPolicy="pairing" without allowFrom', () => {
-    const res = validateConfigObject({
-      channels: { telegram: { dmPolicy: "pairing", botToken: "fake" } },
-    });
-    expect(res.ok).toBe(true);
+    const res = TelegramConfigSchema.safeParse({ dmPolicy: "pairing", botToken: "fake" });
+    expect(res.success).toBe(true);
   });
 });
 
@@ -108,18 +159,24 @@ describe('account dmPolicy="allowlist" uses inherited allowFrom', () => {
         bluebubbles: { allowFrom: ["sender"], accounts: { work: { dmPolicy: "allowlist" } } },
       },
     },
-  ] as const)("accepts $name account allowlist when parent allowFrom exists", ({ config }) => {
-    expect(validateConfigObject({ channels: config }).ok).toBe(true);
-  });
+  ] as const)(
+    "accepts $name account allowlist when parent allowFrom exists",
+    ({ name, config }) => {
+      const providerConfig = config[name];
+      const schema = providerSchemas[name];
+      if (schema) {
+        expect(schema.safeParse(providerConfig).success).toBe(true);
+        return;
+      }
+      expect(validateConfigObject({ channels: config }).ok).toBe(true);
+    },
+  );
 
   it("rejects telegram account allowlist when neither account nor parent has allowFrom", () => {
-    expectChannelAllowlistIssue(
-      validateConfigObject({
-        channels: {
-          telegram: { accounts: { bot1: { dmPolicy: "allowlist", botToken: "fake" } } },
-        },
-      }),
-      "channels.telegram.accounts.bot1.allowFrom",
-    );
+    expectSchemaAllowlistIssue({
+      schema: TelegramConfigSchema,
+      config: { accounts: { bot1: { dmPolicy: "allowlist", botToken: "fake" } } },
+      path: "accounts.bot1.allowFrom",
+    });
   });
 });

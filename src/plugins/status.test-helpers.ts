@@ -128,6 +128,7 @@ export function createPluginLoadResult(
     webFetchProviders: [],
     webSearchProviders: [],
     memoryEmbeddingProviders: [],
+    textTransforms: [],
     agentHarnesses: [],
     tools: [],
     hooks: [],

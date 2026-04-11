@@ -43,6 +43,24 @@ function buildParams(commandBody: string) {
   };
 }
 
+function buildElevatedDeniedParams(commandBody: string) {
+  const base = buildParams(commandBody);
+  return {
+    ...base,
+    ctx: {
+      ...base.ctx,
+      SessionKey: "agent:main:telegram:slash-session",
+    } as MsgContext,
+    agentId: "main",
+    sessionKey: "agent:target:telegram:direct:target-session",
+    elevated: {
+      enabled: true,
+      allowed: false,
+      failures: [],
+    },
+  };
+}
+
 function buildRunningSession(overrides?: Record<string, unknown>) {
   return {
     id: "session-1",
@@ -115,5 +133,39 @@ describe("handleBashChatCommand stop", () => {
     expect(result.text).toContain("Unable to stop bash session");
     expect(result.text).toContain("!poll session-1");
     expect(killProcessTreeMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the canonical target session for elevated sandbox explanation", async () => {
+    const sandboxRuntime = await import("../../agents/sandbox.js");
+    const resolveSandboxRuntimeStatusSpy = vi
+      .spyOn(sandboxRuntime, "resolveSandboxRuntimeStatus")
+      .mockReturnValue({
+        agentId: "target",
+        sessionKey: "agent:target:telegram:direct:target-session",
+        mainSessionKey: "agent:target:main",
+        mode: "non-main",
+        sandboxed: true,
+        toolPolicy: {
+          allow: [],
+          deny: ["bash"],
+          sources: {
+            allow: { source: "default", key: "agents.defaults.tools.sandbox.tools.allow" },
+            deny: { source: "default", key: "agents.defaults.tools.sandbox.tools.deny" },
+          },
+        },
+      });
+
+    const result = await handleBashChatCommand(buildElevatedDeniedParams("/bash pwd"));
+
+    expect(resolveSandboxRuntimeStatusSpy).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
+      sessionKey: "agent:target:telegram:direct:target-session",
+    });
+    expect(result.text).toContain(
+      "openclaw sandbox explain --session agent:target:telegram:direct:target-session",
+    );
+    expect(result.text).not.toContain(
+      "openclaw sandbox explain --session agent:main:telegram:slash-session",
+    );
   });
 });

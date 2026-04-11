@@ -1,6 +1,8 @@
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
+import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { PollInput } from "openclaw/plugin-sdk/media-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
+import { resolveDefaultWhatsAppAccountId } from "./accounts.js";
 
 export type ActiveWebSendOptions = {
   gifPlayback?: boolean;
@@ -53,7 +55,7 @@ function setCurrentListener(listener: ActiveWebListener | null): void {
 }
 
 export function resolveWebAccountId(accountId?: string | null): string {
-  return (accountId ?? "").trim() || DEFAULT_ACCOUNT_ID;
+  return (accountId ?? "").trim() || resolveDefaultWhatsAppAccountId(loadConfig());
 }
 
 export function requireActiveWebListener(accountId?: string | null): {
@@ -83,7 +85,10 @@ export function setActiveWebListener(
     typeof accountIdOrListener === "string"
       ? { accountId: accountIdOrListener, listener: maybeListener ?? null }
       : {
-          accountId: DEFAULT_ACCOUNT_ID,
+          // Resolve the configured default account name so that callers using the
+          // single-arg overload register under the right key (e.g. "work"), not
+          // always under DEFAULT_ACCOUNT_ID ("default").
+          accountId: resolveDefaultWhatsAppAccountId(loadConfig()),
           listener: accountIdOrListener ?? null,
         };
 

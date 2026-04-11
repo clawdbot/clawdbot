@@ -636,7 +636,7 @@ module.exports = {
     );
     const memory = registry.plugins.find((entry) => entry.id === "memory-external");
     expect(memory?.status).toBe("disabled");
-    expect(String(memory?.error ?? "")).toContain('memory slot set to "memory-other"');
+    expect(memory?.error ?? "").toContain('memory slot set to "memory-other"');
   });
 
   it("re-evaluates memory slot gating after resolving exported plugin kind", async () => {
@@ -676,6 +676,6 @@ module.exports = {
     );
     const memory = registry.plugins.find((entry) => entry.id === "memory-export-only");
     expect(memory?.status).toBe("disabled");
-    expect(String(memory?.error ?? "")).toContain('memory slot set to "memory-other"');
+    expect(memory?.error ?? "").toContain('memory slot set to "memory-other"');
   });
 });

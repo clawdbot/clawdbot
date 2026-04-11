@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { OpenClawConfig } from "../../../config/types.js";
 import { runPluginSetupConfigMigrations } from "../../../plugins/setup-registry.js";
 import { collectChannelDoctorCompatibilityMutations } from "./channel-doctor.js";
 import {

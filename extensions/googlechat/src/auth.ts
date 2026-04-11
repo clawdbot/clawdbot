@@ -114,7 +114,7 @@ export async function verifyGoogleChatRequest(params: {
         audience,
       });
       const payload = ticket.getPayload();
-      const email = normalizeLowercaseStringOrEmpty(String(payload?.email ?? ""));
+      const email = normalizeLowercaseStringOrEmpty(payload?.email ?? "");
       if (!payload?.email_verified) {
         return { ok: false, reason: "email not verified" };
       }
@@ -130,7 +130,7 @@ export async function verifyGoogleChatRequest(params: {
       if (!expectedAddOnPrincipal) {
         return { ok: false, reason: "missing add-on principal binding" };
       }
-      const tokenPrincipal = normalizeLowercaseStringOrEmpty(String(payload?.sub ?? ""));
+      const tokenPrincipal = normalizeLowercaseStringOrEmpty(payload?.sub ?? "");
       if (!tokenPrincipal || tokenPrincipal !== expectedAddOnPrincipal) {
         return {
           ok: false,

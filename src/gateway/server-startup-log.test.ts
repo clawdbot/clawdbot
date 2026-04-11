@@ -19,7 +19,7 @@ describe("gateway startup log", () => {
         },
       },
       bindHost: "127.0.0.1",
-      pluginCount: 0,
+      loadedPluginIds: [],
       port: 18789,
       log: { info, warn },
       isNixMode: false,
@@ -40,7 +40,7 @@ describe("gateway startup log", () => {
     logGatewayStartup({
       cfg: {},
       bindHost: "127.0.0.1",
-      pluginCount: 0,
+      loadedPluginIds: [],
       port: 18789,
       log: { info, warn },
       isNixMode: false,
@@ -49,7 +49,7 @@ describe("gateway startup log", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("logs a compact ready line with plugin count and duration", () => {
+  it("logs a compact ready line with loaded plugin ids and duration", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-03T10:00:16.000Z"));
 
@@ -60,7 +60,7 @@ describe("gateway startup log", () => {
       cfg: {},
       bindHost: "127.0.0.1",
       bindHosts: ["127.0.0.1", "::1"],
-      pluginCount: 8,
+      loadedPluginIds: ["delta", "alpha", "delta", "beta"],
       port: 18789,
       startupStartedAt: Date.parse("2026-04-03T10:00:00.000Z"),
       log: { info, warn },
@@ -70,6 +70,6 @@ describe("gateway startup log", () => {
     const readyMessages = info.mock.calls
       .map((call) => call[0])
       .filter((message) => message.startsWith("ready ("));
-    expect(readyMessages).toEqual(["ready (8 plugins, 16.0s)"]);
+    expect(readyMessages).toEqual(["ready (3 plugins: alpha, beta, delta; 16.0s)"]);
   });
 });

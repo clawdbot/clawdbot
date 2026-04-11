@@ -9,6 +9,7 @@ import {
 import { isAtLeast, parseSemver } from "./runtime-guard.js";
 import { compareComparableSemver, parseComparableSemver } from "./semver-compare.js";
 import { createTempDownloadTarget } from "./temp-download.js";
+export { parseClawHubPluginSpec } from "./clawhub-spec.js";
 
 const DEFAULT_CLAWHUB_URL = "https://clawhub.ai";
 const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
@@ -451,29 +452,6 @@ export function normalizeClawHubSha256Hex(value: string): string | null {
     return null;
   }
   return normalizeLowercaseStringOrEmpty(trimmed);
-}
-
-export function parseClawHubPluginSpec(raw: string): {
-  name: string;
-  version?: string;
-  baseUrl?: string;
-} | null {
-  const trimmed = raw.trim();
-  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("clawhub:")) {
-    return null;
-  }
-  const spec = trimmed.slice("clawhub:".length).trim();
-  if (!spec) {
-    return null;
-  }
-  const atIndex = spec.lastIndexOf("@");
-  if (atIndex <= 0 || atIndex >= spec.length - 1) {
-    return { name: spec };
-  }
-  return {
-    name: spec.slice(0, atIndex).trim(),
-    version: spec.slice(atIndex + 1).trim() || undefined,
-  };
 }
 
 export async function fetchClawHubPackageDetail(params: {

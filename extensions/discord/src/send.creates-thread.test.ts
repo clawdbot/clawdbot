@@ -1,7 +1,7 @@
 import { RateLimitError } from "@buape/carbon";
 import { ChannelType, Routes } from "discord-api-types/v10";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeDiscordRest } from "./send.test-harness.js";
 
 vi.mock("openclaw/plugin-sdk/web-media", async () => {
@@ -61,6 +61,14 @@ beforeAll(async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/web-media");
 });
 
 describe("sendMessageDiscord", () => {
@@ -475,29 +483,29 @@ describe("retry rate limits", () => {
   });
 
   it("uses retry_after delays when rate limited", async () => {
-    vi.useFakeTimers();
     const setTimeoutSpy = vi.spyOn(global, "setTimeout");
-    const { rest, postMock } = makeDiscordRest();
-    const rateLimitError = createMockRateLimitError(0.5);
+    try {
+      const { rest, postMock } = makeDiscordRest();
+      const rateLimitError = createMockRateLimitError(0.001);
 
-    postMock
-      .mockRejectedValueOnce(rateLimitError)
-      .mockResolvedValueOnce({ id: "msg1", channel_id: "789" });
+      postMock
+        .mockRejectedValueOnce(rateLimitError)
+        .mockResolvedValueOnce({ id: "msg1", channel_id: "789" });
 
-    const promise = sendMessageDiscord("channel:789", "hello", {
-      rest,
-      token: "t",
-      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 1000, jitter: 0 },
-    });
+      const promise = sendMessageDiscord("channel:789", "hello", {
+        rest,
+        token: "t",
+        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 1000, jitter: 0 },
+      });
 
-    await vi.runAllTimersAsync();
-    await expect(promise).resolves.toEqual({
-      messageId: "msg1",
-      channelId: "789",
-    });
-    expect(setTimeoutSpy.mock.calls[0]?.[1]).toBe(500);
-    setTimeoutSpy.mockRestore();
-    vi.useRealTimers();
+      await expect(promise).resolves.toEqual({
+        messageId: "msg1",
+        channelId: "789",
+      });
+      expect(setTimeoutSpy.mock.calls[0]?.[1]).toBe(1);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
   });
 
   it("stops after max retry attempts", async () => {

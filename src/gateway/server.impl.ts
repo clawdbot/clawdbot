@@ -737,7 +737,6 @@ export async function startGatewayServer(
       bindHosts: httpBindHosts,
       port,
       tlsEnabled: gatewayTls.enabled,
-      pluginCount: pluginRegistry.plugins.length,
       log,
       isNixMode,
       startupStartedAt: opts.startupStartedAt,

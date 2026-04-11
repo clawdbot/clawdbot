@@ -125,7 +125,7 @@ function buildGenericParentOverrideCandidates(sessionKey: string | null | undefi
     return [];
   }
   const { baseSessionKey, threadId } = parseThreadSessionSuffix(raw.rawId);
-  return buildChannelKeyCandidates(threadId ? baseSessionKey : undefined);
+  return buildChannelKeyCandidates(threadId ? baseSessionKey : raw.rawId);
 }
 
 function buildFeishuParentOverrideCandidates(rawId: string | undefined): string[] {

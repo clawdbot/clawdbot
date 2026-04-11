@@ -1,8 +1,8 @@
 import type { ReplyPayload } from "../types.js";
+import { isDirectiveOnly } from "./directive-handling.directive-only.js";
 import { handleDirectiveOnly } from "./directive-handling.impl.js";
 import { resolveCurrentDirectiveLevels } from "./directive-handling.levels.js";
 import type { ApplyInlineDirectivesFastLaneParams } from "./directive-handling.params.js";
-import { isDirectiveOnly } from "./directive-handling.parse.js";
 
 export async function applyInlineDirectivesFastLane(
   params: ApplyInlineDirectivesFastLaneParams,
@@ -57,7 +57,9 @@ export async function applyInlineDirectivesFastLane(
   } = await resolveCurrentDirectiveLevels({
     sessionEntry,
     agentCfg,
-    resolveDefaultThinkingLevel: () => modelState.resolveDefaultThinkingLevel(),
+    resolveDefaultThinkingLevel: directives.hasThinkDirective
+      ? () => modelState.resolveDefaultThinkingLevel()
+      : async () => undefined,
   });
 
   const directiveAck = await handleDirectiveOnly({

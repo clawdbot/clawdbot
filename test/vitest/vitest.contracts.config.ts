@@ -10,6 +10,10 @@ export function createContractsVitestConfig() {
     test: {
       ...baseTest,
       isolate: false,
+      // The contracts shard intentionally runs non-isolated and loads hundreds of
+      // contract files. Use forks so full-suite parallel runs do not hit
+      // Vitest worker-thread heap limits.
+      pool: "forks",
       runner: nonIsolatedRunnerPath,
       setupFiles: baseTest.setupFiles ?? [],
       include: [

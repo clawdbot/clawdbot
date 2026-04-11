@@ -56,9 +56,7 @@ export async function applyWhatsAppSecurityConfigFixes(params: {
     params.env,
     DEFAULT_ACCOUNT_ID,
   ).catch(() => []);
-  const normalized = Array.from(new Set(fromStore.map((entry) => String(entry).trim()))).filter(
-    Boolean,
-  );
+  const normalized = Array.from(new Set(fromStore.map((entry) => entry.trim()))).filter(Boolean);
   if (normalized.length === 0) {
     return { config: params.cfg, changes: [] };
   }

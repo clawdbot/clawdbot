@@ -123,6 +123,34 @@ describe("bound delivery router", () => {
       expectedConversationId: "thread-2",
     },
     {
+      name: "normalizes adapter binding conversations before requester matching",
+      bindings: [
+        {
+          ...createDiscordBinding(TARGET_SESSION_KEY, "thread-1", 1),
+          conversation: {
+            channel: " discord ",
+            accountId: " runtime ",
+            conversationId: " thread-1 ",
+          },
+        },
+        {
+          ...createDiscordBinding(TARGET_SESSION_KEY, "thread-2", 2),
+          conversation: {
+            channel: " DISCORD ",
+            accountId: " Runtime ",
+            conversationId: " thread-2 ",
+          },
+        },
+      ],
+      requesterConversationId: "thread-2",
+      failClosed: true,
+      expected: {
+        mode: "bound",
+        reason: "requester-match",
+      },
+      expectedConversationId: " thread-2 ",
+    },
+    {
       name: "falls back for invalid requester conversation values",
       bindings: [createDiscordBinding(TARGET_SESSION_KEY, "thread-1", 1)],
       requesterConversationId: " ",

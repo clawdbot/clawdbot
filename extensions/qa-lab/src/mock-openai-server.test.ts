@@ -593,6 +593,55 @@ describe("qa mock openai server", () => {
     });
   });
 
+  it("uses the latest exact marker directive from conversation history", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: false,
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Earlier turn: reply with only this exact marker: OLD_TOKEN",
+              },
+            ],
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Current turn: reply with only this exact marker: NEW_TOKEN",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      output: [
+        {
+          content: [{ text: "NEW_TOKEN" }],
+        },
+      ],
+    });
+  });
+
   it("records image inputs and describes attached images", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",

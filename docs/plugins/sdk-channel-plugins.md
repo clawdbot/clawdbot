@@ -256,7 +256,7 @@ should use `resolveInboundMentionDecision({ facts, policy })`.
   <Step title="Package and manifest">
     Create the standard plugin files. The `channel` field in `package.json` is
     what makes this a channel plugin. For the full package-metadata surface,
-    see [Plugin Setup and Config](/plugins/sdk-setup#openclawchannel):
+    see [Plugin Setup and Config](/plugins/sdk-setup#openclaw-channel):
 
     <CodeGroup>
     ```json package.json
