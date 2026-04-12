@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { acquireLocalHeavyCheckLockSync } from "./lib/local-heavy-check-runtime.mjs";
+import { isCiLikeEnv, resolveLocalFullSuiteProfile } from "./lib/vitest-local-scheduling.mjs";
 import { spawnPnpmRunner } from "./pnpm-runner.mjs";
 import {
   forwardVitestOutput,
@@ -157,14 +158,15 @@ function runVitestSpec(spec) {
 }
 
 function applyDefaultParallelVitestWorkerBudget(specs, env) {
-  if (env.OPENCLAW_VITEST_MAX_WORKERS || env.OPENCLAW_TEST_WORKERS) {
+  if (env.OPENCLAW_VITEST_MAX_WORKERS || env.OPENCLAW_TEST_WORKERS || isCiLikeEnv(env)) {
     return specs;
   }
+  const { vitestMaxWorkers } = resolveLocalFullSuiteProfile(env);
   return specs.map((spec) => ({
     ...spec,
     env: {
       ...spec.env,
-      OPENCLAW_VITEST_MAX_WORKERS: "1",
+      OPENCLAW_VITEST_MAX_WORKERS: String(vitestMaxWorkers),
     },
   }));
 }
@@ -255,6 +257,7 @@ async function main() {
   if (isFullSuiteRun) {
     const concurrency = resolveParallelFullSuiteConcurrency(runSpecs.length, process.env);
     if (concurrency > 1) {
+      const localFullSuiteProfile = resolveLocalFullSuiteProfile(process.env);
       const parallelSpecs = applyDefaultParallelVitestWorkerBudget(
         applyParallelVitestCachePaths(orderFullSuiteSpecsForParallelRun(runSpecs), {
           cwd: process.cwd(),
@@ -262,6 +265,16 @@ async function main() {
         }),
         process.env,
       );
+      if (
+        !isCiLikeEnv(process.env) &&
+        !process.env.OPENCLAW_TEST_PROJECTS_PARALLEL &&
+        !process.env.OPENCLAW_VITEST_MAX_WORKERS &&
+        !process.env.OPENCLAW_TEST_WORKERS &&
+        localFullSuiteProfile.shardParallelism === 10 &&
+        localFullSuiteProfile.vitestMaxWorkers === 2
+      ) {
+        console.error("[test] using host-aware local full-suite profile: shards=10 workers=2");
+      }
       console.error(
         `[test] running ${parallelSpecs.length} Vitest shards with parallelism ${concurrency}`,
       );

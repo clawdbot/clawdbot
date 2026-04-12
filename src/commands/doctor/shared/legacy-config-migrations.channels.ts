@@ -7,7 +7,6 @@ import {
 import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 
 type StreamingMode = "off" | "partial" | "block" | "progress";
-type DiscordPreviewStreamMode = "off" | "partial" | "block";
 type TelegramPreviewStreamMode = "off" | "partial" | "block";
 type SlackLegacyDraftStreamMode = "replace" | "status_final" | "append";
 
@@ -30,14 +29,6 @@ function parseStreamingMode(value: unknown): StreamingMode | null {
     return normalized;
   }
   return null;
-}
-
-function parseDiscordPreviewStreamMode(value: unknown): DiscordPreviewStreamMode | null {
-  const parsed = parseStreamingMode(value);
-  if (!parsed) {
-    return null;
-  }
-  return parsed === "progress" ? "partial" : parsed;
 }
 
 function parseTelegramPreviewStreamMode(value: unknown): TelegramPreviewStreamMode | null {
@@ -85,27 +76,6 @@ function resolveTelegramPreviewStreamMode(
     return params.streaming ? "partial" : "off";
   }
   return "partial";
-}
-
-function resolveDiscordPreviewStreamMode(
-  params: {
-    streamMode?: unknown;
-    streaming?: unknown;
-  } = {},
-): DiscordPreviewStreamMode {
-  const parsedStreaming = parseDiscordPreviewStreamMode(params.streaming);
-  if (parsedStreaming) {
-    return parsedStreaming;
-  }
-
-  const legacy = parseDiscordPreviewStreamMode(params.streamMode);
-  if (legacy) {
-    return legacy;
-  }
-  if (typeof params.streaming === "boolean") {
-    return params.streaming ? "partial" : "off";
-  }
-  return "off";
 }
 
 function resolveSlackStreamingMode(
@@ -205,22 +175,6 @@ function hasLegacyThreadBindingTtlInAnyChannel(value: unknown): boolean {
 }
 
 function hasLegacyTelegramStreamingKeys(value: unknown): boolean {
-  const entry = getRecord(value);
-  if (!entry) {
-    return false;
-  }
-  return (
-    entry.streamMode !== undefined ||
-    typeof entry.streaming === "boolean" ||
-    typeof entry.streaming === "string" ||
-    hasOwnKey(entry, "chunkMode") ||
-    hasOwnKey(entry, "blockStreaming") ||
-    hasOwnKey(entry, "draftChunk") ||
-    hasOwnKey(entry, "blockStreamingCoalesce")
-  );
-}
-
-function hasLegacyDiscordStreamingKeys(value: unknown): boolean {
   const entry = getRecord(value);
   if (!entry) {
     return false;
@@ -525,18 +479,6 @@ const CHANNEL_STREAMING_RULES: LegacyConfigRule[] = [
     match: (value) => hasLegacyKeysInAccounts(value, hasLegacyTelegramStreamingKeys),
   },
   {
-    path: ["channels", "discord"],
-    message:
-      'channels.discord.streamMode, channels.discord.streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy; use channels.discord.streaming.{mode,chunkMode,preview.chunk,block.enabled,block.coalesce} instead. Run "openclaw doctor --fix".',
-    match: (value) => hasLegacyDiscordStreamingKeys(value),
-  },
-  {
-    path: ["channels", "discord", "accounts"],
-    message:
-      'channels.discord.accounts.<id>.streamMode, streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy; use channels.discord.accounts.<id>.streaming.{mode,chunkMode,preview.chunk,block.enabled,block.coalesce} instead. Run "openclaw doctor --fix".',
-    match: (value) => hasLegacyKeysInAccounts(value, hasLegacyDiscordStreamingKeys),
-  },
-  {
     path: ["channels", "slack"],
     message:
       'channels.slack.streamMode, channels.slack.streaming (scalar), chunkMode, blockStreaming, blockStreamingCoalesce, and nativeStreaming are legacy; use channels.slack.streaming.{mode,chunkMode,block.enabled,block.coalesce,nativeTransport} instead. Run "openclaw doctor --fix".',
@@ -659,8 +601,7 @@ export const LEGACY_CONFIG_MIGRATIONS_CHANNELS: LegacyConfigMigrationSpec[] = [
   }),
   defineLegacyConfigMigration({
     id: "channels.streaming-keys->channels.streaming",
-    describe:
-      "Normalize legacy streaming keys to channels.<provider>.streaming (Telegram/Discord/Slack)",
+    describe: "Normalize legacy streaming keys to channels.<provider>.streaming (Telegram/Slack)",
     legacyRules: CHANNEL_STREAMING_RULES,
     apply: (raw, changes) => {
       const channels = getRecord(raw.channels);
@@ -683,16 +624,6 @@ export const LEGACY_CONFIG_MIGRATIONS_CHANNELS: LegacyConfigMigrationSpec[] = [
           return;
         }
 
-        if (params.provider === "discord") {
-          moveLegacyStreamingShapeForPath({
-            entry: params.entry,
-            pathPrefix: params.pathPrefix,
-            changes,
-            resolveMode: resolveDiscordPreviewStreamMode,
-          });
-          return;
-        }
-
         moveLegacyStreamingShapeForPath({
           entry: params.entry,
           pathPrefix: params.pathPrefix,
@@ -702,7 +633,7 @@ export const LEGACY_CONFIG_MIGRATIONS_CHANNELS: LegacyConfigMigrationSpec[] = [
         });
       };
 
-      const migrateProvider = (provider: "telegram" | "discord" | "slack") => {
+      const migrateProvider = (provider: "telegram" | "slack") => {
         const providerEntry = getRecord(channels[provider]);
         if (!providerEntry) {
           return;
@@ -730,7 +661,6 @@ export const LEGACY_CONFIG_MIGRATIONS_CHANNELS: LegacyConfigMigrationSpec[] = [
       };
 
       migrateProvider("telegram");
-      migrateProvider("discord");
       migrateProvider("slack");
     },
   }),

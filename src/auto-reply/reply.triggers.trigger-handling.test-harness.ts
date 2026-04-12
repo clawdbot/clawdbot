@@ -65,6 +65,10 @@ const installPiEmbeddedMock = () =>
 
 installPiEmbeddedMock();
 
+vi.doMock("../agents/pi-embedded-runner/runs.js", () => ({
+  abortEmbeddedPiRun: (...args: unknown[]) => piEmbeddedMocks.abortEmbeddedPiRun(...args),
+}));
+
 const providerUsageMocks = vi.hoisted(() => ({
   loadProviderUsageSummary: vi.fn().mockResolvedValue({
     updatedAt: 0,

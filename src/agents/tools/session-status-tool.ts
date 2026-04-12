@@ -21,6 +21,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import { importRuntimeModule } from "../../shared/runtime-import.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { buildTaskStatusSnapshotForRelatedSessionKeyForOwner } from "../../tasks/task-owner-access.js";
 import { formatTaskStatusDetail, formatTaskStatusTitle } from "../../tasks/task-status.js";
@@ -54,12 +55,47 @@ const SessionStatusToolSchema = Type.Object({
   model: Type.Optional(Type.String()),
 });
 
-let commandsStatusRuntimePromise: Promise<
-  typeof import("../../auto-reply/reply/commands-status.runtime.js")
-> | null = null;
+type CommandsStatusRuntimeModule = {
+  buildStatusText: (params: {
+    cfg: OpenClawConfig;
+    sessionEntry?: SessionEntry;
+    sessionKey: string;
+    parentSessionKey?: string;
+    sessionScope?: "global" | "per-sender" | "per-thread" | "shared";
+    storePath?: string;
+    statusChannel: string;
+    provider: string;
+    model: string;
+    contextTokens?: number;
+    resolvedThinkLevel?: ThinkLevel;
+    resolvedFastMode?: boolean;
+    resolvedVerboseLevel: VerboseLevel;
+    resolvedReasoningLevel: ReasoningLevel;
+    resolvedElevatedLevel?: ElevatedLevel;
+    resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
+    isGroup: boolean;
+    defaultGroupActivation: () => "always" | "mention";
+    taskLineOverride?: string;
+    skipDefaultTaskLookup?: boolean;
+    primaryModelLabelOverride?: string;
+    modelAuthOverride?: string;
+    activeModelAuthOverride?: string;
+    includeTranscriptUsage?: boolean;
+  }) => Promise<string>;
+};
 
-function loadCommandsStatusRuntime() {
-  commandsStatusRuntimePromise ??= import("../../auto-reply/reply/commands-status.runtime.js");
+const COMMANDS_STATUS_RUNTIME_SPEC = [
+  "../../auto-reply/reply/commands-status.runtime",
+  ".js",
+] as const;
+
+let commandsStatusRuntimePromise: Promise<CommandsStatusRuntimeModule> | null = null;
+
+function loadCommandsStatusRuntime(): Promise<CommandsStatusRuntimeModule> {
+  commandsStatusRuntimePromise ??= importRuntimeModule<CommandsStatusRuntimeModule>(
+    import.meta.url,
+    COMMANDS_STATUS_RUNTIME_SPEC,
+  );
   return commandsStatusRuntimePromise;
 }
 

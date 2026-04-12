@@ -9,6 +9,9 @@ export const PREEMPTIVE_OVERFLOW_ERROR_TEXT =
 
 const ESTIMATED_CHARS_PER_TOKEN = 4;
 const TRUNCATION_ROUTE_BUFFER_TOKENS = 512;
+const MIN_PROMPT_BUDGET_TOKENS = 8_000;
+const MIN_PROMPT_BUDGET_RATIO = 0.5;
+
 export type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
 
 export function estimatePrePromptTokens(params: {
@@ -46,12 +49,20 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   promptBudgetBeforeReserve: number;
   overflowTokens: number;
   toolResultReducibleChars: number;
+  effectiveReserveTokens: number;
 } {
   const estimatedPromptTokens = estimatePrePromptTokens(params);
-  const promptBudgetBeforeReserve = Math.max(
-    1,
-    Math.floor(params.contextTokenBudget) - Math.max(0, Math.floor(params.reserveTokens)),
+  const contextTokenBudget = Math.max(1, Math.floor(params.contextTokenBudget));
+  const requestedReserveTokens = Math.max(0, Math.floor(params.reserveTokens));
+  const minPromptBudget = Math.min(
+    MIN_PROMPT_BUDGET_TOKENS,
+    Math.max(1, Math.floor(contextTokenBudget * MIN_PROMPT_BUDGET_RATIO)),
   );
+  const effectiveReserveTokens = Math.min(
+    requestedReserveTokens,
+    Math.max(0, contextTokenBudget - minPromptBudget),
+  );
+  const promptBudgetBeforeReserve = Math.max(1, contextTokenBudget - effectiveReserveTokens);
   const overflowTokens = Math.max(0, estimatedPromptTokens - promptBudgetBeforeReserve);
   const toolResultPotential = estimateToolResultReductionPotential({
     messages: params.messages,
@@ -82,5 +93,6 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
     promptBudgetBeforeReserve,
     overflowTokens,
     toolResultReducibleChars,
+    effectiveReserveTokens,
   };
 }

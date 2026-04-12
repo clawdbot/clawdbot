@@ -265,14 +265,16 @@ export function createSubagentRegistryLifecycleController(params: {
       await safeRemoveAttachmentsDir(giveUpParams.entry);
     }
     const completionReason = resolveCleanupCompletionReason(giveUpParams.entry);
-    await emitCompletionEndedHookIfNeeded(giveUpParams.entry, completionReason);
     logAnnounceGiveUp(giveUpParams.entry, giveUpParams.reason);
+    // Retry-limit / expiry give-up should not leave cleanup stuck behind the
+    // best-effort ended hook. Mark the run cleaned first, then fire the hook.
     completeCleanupBookkeeping({
       runId: giveUpParams.runId,
       entry: giveUpParams.entry,
       cleanup: giveUpParams.entry.cleanup,
       completedAt: Date.now(),
     });
+    await emitCompletionEndedHookIfNeeded(giveUpParams.entry, completionReason);
   };
 
   const beginSubagentCleanup = (runId: string) => {
@@ -445,14 +447,16 @@ export function createSubagentRegistryLifecycleController(params: {
         await safeRemoveAttachmentsDir(entry);
       }
       const completionReason = resolveCleanupCompletionReason(entry);
-      await emitCompletionEndedHookIfNeeded(entry, completionReason);
       logAnnounceGiveUp(entry, deferredDecision.reason);
+      // Giving up on announce delivery is terminal for cleanup even if the
+      // best-effort hook is still resolving.
       completeCleanupBookkeeping({
         runId,
         entry,
         cleanup,
         completedAt: now,
       });
+      await emitCompletionEndedHookIfNeeded(entry, completionReason);
       return;
     }
 

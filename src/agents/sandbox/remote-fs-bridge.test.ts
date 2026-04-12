@@ -52,6 +52,20 @@ function createLocalRemoteRuntime(params: {
   return { calls, runtime };
 }
 
+function createWorkspaceReadBridge(workspaceDir: string) {
+  const { runtime } = createLocalRemoteRuntime({
+    remoteWorkspaceDir: workspaceDir,
+    remoteAgentWorkspaceDir: workspaceDir,
+  });
+  return createRemoteShellSandboxFsBridge({
+    sandbox: createSandbox({
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+    }),
+    runtime,
+  });
+}
+
 describe("remote sandbox fs bridge", () => {
   it.runIf(process.platform !== "win32")(
     "reads files with the pinned mutation helper",
@@ -121,17 +135,7 @@ describe("remote sandbox fs bridge", () => {
       await fs.writeFile(path.join(outsideDir, "secret.txt"), "classified", "utf8");
       await fs.symlink(path.join(outsideDir, "secret.txt"), path.join(workspaceDir, "link.txt"));
 
-      const { runtime } = createLocalRemoteRuntime({
-        remoteWorkspaceDir: workspaceDir,
-        remoteAgentWorkspaceDir: workspaceDir,
-      });
-      const bridge = createRemoteShellSandboxFsBridge({
-        sandbox: createSandbox({
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-        }),
-        runtime,
-      });
+      const bridge = createWorkspaceReadBridge(workspaceDir);
 
       await expect(bridge.readFile({ filePath: "link.txt" })).rejects.toThrow(
         /symbolic links|too many levels|ELOOP/i,
@@ -148,17 +152,7 @@ describe("remote sandbox fs bridge", () => {
         await fs.writeFile(path.join(workspaceDir, "note.txt"), "hello", "utf8");
         await fs.symlink("note.txt", path.join(workspaceDir, "link.txt"));
 
-        const { runtime } = createLocalRemoteRuntime({
-          remoteWorkspaceDir: workspaceDir,
-          remoteAgentWorkspaceDir: workspaceDir,
-        });
-        const bridge = createRemoteShellSandboxFsBridge({
-          sandbox: createSandbox({
-            workspaceDir,
-            agentWorkspaceDir: workspaceDir,
-          }),
-          runtime,
-        });
+        const bridge = createWorkspaceReadBridge(workspaceDir);
 
         await expect(bridge.readFile({ filePath: "link.txt" })).rejects.toThrow(
           /symbolic links|too many levels|ELOOP/i,

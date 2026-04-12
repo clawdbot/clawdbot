@@ -15,6 +15,9 @@ import {
   runCronTurn,
   withTempHome,
 } from "./isolated-agent.turn-test-helpers.js";
+import { setupRunCronIsolatedAgentTurnSuite } from "./isolated-agent/run.suite-helpers.js";
+
+setupRunCronIsolatedAgentTurnSuite();
 
 describe("runCronIsolatedAgentTurn session identity", () => {
   beforeEach(() => {
@@ -98,6 +101,22 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       expect(call?.sessionKey).toBe("agent:ops:cron:job-ops");
       expect(call?.workspaceDir).toBe(opsWorkspace);
       expect(call?.sessionFile).toContain(path.join("agents", "ops"));
+    });
+  });
+
+  it("passes sessionFile to isolated cron runs", async () => {
+    await withTempHome(async (home) => {
+      await runCronTurn(home, {
+        jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
+      });
+      const call = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0] as {
+        sessionFile?: string;
+      };
+
+      expect(call?.sessionFile).toContain(
+        path.join(home, ".openclaw", "agents", "main", "sessions"),
+      );
+      expect(call?.sessionFile?.endsWith(".jsonl")).toBe(true);
     });
   });
 

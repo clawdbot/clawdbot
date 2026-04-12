@@ -151,6 +151,14 @@ describe("waitForAgentRun", () => {
     });
   });
 
+  it("preserves pending agent.wait status", async () => {
+    callGatewayMock.mockResolvedValue({ status: "pending" });
+
+    const result = await waitForAgentRun({ runId: "run-pending", timeoutMs: 500 });
+
+    expect(result).toEqual({ status: "pending" });
+  });
+
   it("preserves timing metadata from agent.wait", async () => {
     callGatewayMock.mockResolvedValue({
       status: "ok",

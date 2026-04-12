@@ -5,6 +5,7 @@ import type { ContextEngine, SubagentEndReason } from "../context-engine/types.j
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { importRuntimeModule } from "../shared/runtime-import.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
@@ -93,9 +94,30 @@ const defaultSubagentRegistryDeps: SubagentRegistryDeps = {
 };
 
 let subagentRegistryDeps: SubagentRegistryDeps = defaultSubagentRegistryDeps;
-let subagentRegistryRuntimePromise: Promise<
-  typeof import("./subagent-registry.runtime.js")
-> | null = null;
+type ContextEngineInitModule = Pick<
+  {
+    ensureContextEnginesInitialized: () => void;
+  },
+  "ensureContextEnginesInitialized"
+>;
+type ContextEngineRegistryModule = Pick<
+  {
+    resolveContextEngine: (cfg: OpenClawConfig) => Promise<ContextEngine>;
+  },
+  "resolveContextEngine"
+>;
+type RuntimePluginsModule = Pick<
+  {
+    ensureRuntimePluginsLoaded: typeof ensureRuntimePluginsLoadedFn;
+  },
+  "ensureRuntimePluginsLoaded"
+>;
+
+const SUBAGENT_REGISTRY_RUNTIME_SPEC = ["./subagent-registry.runtime", ".js"] as const;
+
+let contextEngineInitPromise: Promise<ContextEngineInitModule> | null = null;
+let contextEngineRegistryPromise: Promise<ContextEngineRegistryModule> | null = null;
+let runtimePluginsPromise: Promise<RuntimePluginsModule> | null = null;
 
 let sweeper: NodeJS.Timeout | null = null;
 let sweepInProgress = false;
@@ -117,9 +139,28 @@ const SESSION_RUN_TTL_MS = 5 * 60_000; // 5 minutes
 /** Absolute TTL for orphaned pendingLifecycleError entries. */
 const PENDING_ERROR_TTL_MS = 5 * 60_000; // 5 minutes
 
-function loadSubagentRegistryRuntime() {
-  subagentRegistryRuntimePromise ??= import("./subagent-registry.runtime.js");
-  return subagentRegistryRuntimePromise;
+function loadContextEngineInitModule(): Promise<ContextEngineInitModule> {
+  contextEngineInitPromise ??= importRuntimeModule<ContextEngineInitModule>(
+    import.meta.url,
+    SUBAGENT_REGISTRY_RUNTIME_SPEC,
+  );
+  return contextEngineInitPromise;
+}
+
+function loadContextEngineRegistryModule(): Promise<ContextEngineRegistryModule> {
+  contextEngineRegistryPromise ??= importRuntimeModule<ContextEngineRegistryModule>(
+    import.meta.url,
+    SUBAGENT_REGISTRY_RUNTIME_SPEC,
+  );
+  return contextEngineRegistryPromise;
+}
+
+function loadRuntimePluginsModule(): Promise<RuntimePluginsModule> {
+  runtimePluginsPromise ??= importRuntimeModule<RuntimePluginsModule>(
+    import.meta.url,
+    SUBAGENT_REGISTRY_RUNTIME_SPEC,
+  );
+  return runtimePluginsPromise;
 }
 
 async function ensureSubagentRegistryPluginRuntimeLoaded(params: {
@@ -132,16 +173,17 @@ async function ensureSubagentRegistryPluginRuntimeLoaded(params: {
     ensureRuntimePluginsLoaded(params);
     return;
   }
-  const runtime = await loadSubagentRegistryRuntime();
-  runtime.ensureRuntimePluginsLoaded(params);
+  (await loadRuntimePluginsModule()).ensureRuntimePluginsLoaded(params);
 }
 
 async function resolveSubagentRegistryContextEngine(cfg: OpenClawConfig) {
-  const runtime = await loadSubagentRegistryRuntime();
+  const initModule = await loadContextEngineInitModule();
+  const registryModule = await loadContextEngineRegistryModule();
   const ensureContextEnginesInitialized =
-    subagentRegistryDeps.ensureContextEnginesInitialized ?? runtime.ensureContextEnginesInitialized;
+    subagentRegistryDeps.ensureContextEnginesInitialized ??
+    initModule.ensureContextEnginesInitialized;
   const resolveContextEngine =
-    subagentRegistryDeps.resolveContextEngine ?? runtime.resolveContextEngine;
+    subagentRegistryDeps.resolveContextEngine ?? registryModule.resolveContextEngine;
   ensureContextEnginesInitialized();
   return await resolveContextEngine(cfg);
 }
@@ -282,6 +324,9 @@ async function emitSubagentEndedHookForRun(params: {
   sendFarewell?: boolean;
   accountId?: string;
 }) {
+  if (params.entry.endedHookEmittedAt) {
+    return;
+  }
   const cfg = subagentRegistryDeps.loadConfig();
   await ensureSubagentRegistryPluginRuntimeLoaded({
     config: cfg,
@@ -696,7 +741,9 @@ export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   resumedRuns.clear();
   endedHookInFlightRunIds.clear();
   clearAllPendingLifecycleErrors();
-  subagentRegistryRuntimePromise = null;
+  contextEngineInitPromise = null;
+  contextEngineRegistryPromise = null;
+  runtimePluginsPromise = null;
   resetAnnounceQueuesForTests();
   stopSweeper();
   sweepInProgress = false;

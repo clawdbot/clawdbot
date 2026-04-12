@@ -8,7 +8,7 @@ import {
 } from "./doctor.js";
 
 describe("discord doctor", () => {
-  it("normalizes legacy discord streaming aliases into the nested streaming shape", () => {
+  it("leaves legacy discord streaming aliases untouched during doctor normalization", () => {
     const normalize = discordDoctor.normalizeCompatibilityConfig;
     expect(normalize).toBeDefined();
     if (!normalize) {
@@ -38,62 +38,23 @@ describe("discord doctor", () => {
       } as never,
     });
 
-    expect(result.config.channels?.discord?.streaming).toEqual({
-      mode: "block",
+    expect(result.config.channels?.discord).toEqual({
+      streamMode: "block",
       chunkMode: "newline",
-      block: {
-        enabled: true,
+      blockStreaming: true,
+      draftChunk: {
+        minChars: 120,
       },
-      preview: {
-        chunk: {
-          minChars: 120,
-        },
-      },
-    });
-    expect(result.config.channels?.discord?.accounts?.work?.streaming).toEqual({
-      mode: "off",
-      block: {
-        coalesce: {
-          idleMs: 250,
-        },
-      },
-    });
-    expect(result.changes).toEqual(
-      expect.arrayContaining([
-        "Moved channels.discord.streamMode → channels.discord.streaming.mode (block).",
-        "Moved channels.discord.chunkMode → channels.discord.streaming.chunkMode.",
-        "Moved channels.discord.blockStreaming → channels.discord.streaming.block.enabled.",
-        "Moved channels.discord.draftChunk → channels.discord.streaming.preview.chunk.",
-        "Moved channels.discord.accounts.work.streaming (boolean) → channels.discord.accounts.work.streaming.mode (off).",
-        "Moved channels.discord.accounts.work.blockStreamingCoalesce → channels.discord.accounts.work.streaming.block.coalesce.",
-      ]),
-    );
-  });
-
-  it("does not duplicate streaming.mode change messages when streamMode wins over boolean streaming", () => {
-    const normalize = discordDoctor.normalizeCompatibilityConfig;
-    expect(normalize).toBeDefined();
-    if (!normalize) {
-      return;
-    }
-
-    const result = normalize({
-      cfg: {
-        channels: {
-          discord: {
-            streamMode: "block",
-            streaming: false,
+      accounts: {
+        work: {
+          streaming: false,
+          blockStreamingCoalesce: {
+            idleMs: 250,
           },
         },
-      } as never,
+      },
     });
-
-    expect(result.config.channels?.discord?.streaming).toEqual({
-      mode: "block",
-    });
-    expect(
-      result.changes.filter((change) => change.includes("channels.discord.streaming.mode")),
-    ).toEqual(["Moved channels.discord.streamMode → channels.discord.streaming.mode (block)."]);
+    expect(result.changes).toEqual([]);
   });
 
   it("moves account voice.tts.edge into providers.microsoft", () => {

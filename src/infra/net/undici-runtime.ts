@@ -5,6 +5,7 @@ export const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS
 export type UndiciRuntimeDeps = {
   Agent: typeof import("undici").Agent;
   EnvHttpProxyAgent: typeof import("undici").EnvHttpProxyAgent;
+  FormData?: typeof import("undici").FormData;
   ProxyAgent: typeof import("undici").ProxyAgent;
   fetch: typeof import("undici").fetch;
 };
@@ -44,6 +45,7 @@ export function loadUndiciRuntimeDeps(): UndiciRuntimeDeps {
   return {
     Agent: undici.Agent,
     EnvHttpProxyAgent: undici.EnvHttpProxyAgent,
+    FormData: undici.FormData,
     ProxyAgent: undici.ProxyAgent,
     fetch: undici.fetch,
   };

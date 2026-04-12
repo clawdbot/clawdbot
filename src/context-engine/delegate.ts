@@ -1,7 +1,25 @@
+import type { CompactEmbeddedPiSessionDirect } from "../agents/pi-embedded-runner/compact.runtime.types.js";
 import { normalizeStructuredPromptSection } from "../agents/prompt-cache-stability.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { buildMemoryPromptSection } from "../plugins/memory-state.js";
+import { importRuntimeModule } from "../shared/runtime-import.js";
 import type { ContextEngine, CompactResult, ContextEngineRuntimeContext } from "./types.js";
+
+type CompactRuntimeModule = {
+  compactEmbeddedPiSessionDirect: CompactEmbeddedPiSessionDirect;
+};
+
+const COMPACT_RUNTIME_SPEC = ["../agents/pi-embedded-runner/compact.runtime", ".js"] as const;
+
+let compactRuntimePromise: Promise<CompactRuntimeModule> | null = null;
+
+function loadCompactRuntime(): Promise<CompactRuntimeModule> {
+  compactRuntimePromise ??= importRuntimeModule<CompactRuntimeModule>(
+    import.meta.url,
+    COMPACT_RUNTIME_SPEC,
+  );
+  return compactRuntimePromise;
+}
 
 /**
  * Delegate a context-engine compaction request to OpenClaw's built-in runtime compaction path.
@@ -19,9 +37,9 @@ import type { ContextEngine, CompactResult, ContextEngineRuntimeContext } from "
 export async function delegateCompactionToRuntime(
   params: Parameters<ContextEngine["compact"]>[0],
 ): Promise<CompactResult> {
-  // Import through a dedicated runtime boundary so the lazy edge remains effective.
-  const { compactEmbeddedPiSessionDirect } =
-    await import("../agents/pi-embedded-runner/compact.runtime.js");
+  // Load through the dedicated runtime boundary without introducing another
+  // source-level static edge into the embedded runner graph.
+  const { compactEmbeddedPiSessionDirect } = await loadCompactRuntime();
   type RuntimeCompactionParams = Parameters<typeof compactEmbeddedPiSessionDirect>[0];
 
   // runtimeContext carries the full CompactEmbeddedPiSessionParams fields set

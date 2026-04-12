@@ -8,6 +8,22 @@ const ANTHROPIC_VERTEX_DISCOVERY_ENV = {
   OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS: "anthropic",
 } satisfies NodeJS.ProcessEnv;
 
+async function withAdcCredentialsFile(
+  credentials: Record<string, string>,
+  run: (params: { agentDir: string; credentialsPath: string }) => Promise<void>,
+) {
+  const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+  const adcDir = mkdtempSync(join(tmpdir(), "openclaw-adc-"));
+  const credentialsPath = join(adcDir, "application_default_credentials.json");
+  writeFileSync(credentialsPath, JSON.stringify(credentials), "utf8");
+
+  try {
+    await run({ agentDir, credentialsPath });
+  } finally {
+    rmSync(adcDir, { recursive: true, force: true });
+  }
+}
+
 describe("anthropic-vertex implicit provider", () => {
   it("does not auto-enable from GOOGLE_CLOUD_PROJECT_ID alone", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
@@ -22,30 +38,26 @@ describe("anthropic-vertex implicit provider", () => {
   });
 
   it("accepts ADC credentials when the file includes a project_id", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    const adcDir = mkdtempSync(join(tmpdir(), "openclaw-adc-"));
-    const credentialsPath = join(adcDir, "application_default_credentials.json");
-    writeFileSync(credentialsPath, JSON.stringify({ project_id: "vertex-project" }), "utf8");
-
-    try {
-      const providers = await resolveImplicitProvidersForTest({
-        agentDir,
-        env: {
-          ...ANTHROPIC_VERTEX_DISCOVERY_ENV,
-          GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
-          GOOGLE_CLOUD_LOCATION: "us-east1",
-        },
-      });
-      expect(providers?.["anthropic-vertex"]?.baseUrl).toBe(
-        "https://us-east1-aiplatform.googleapis.com",
-      );
-      expect(providers?.["anthropic-vertex"]?.models).toMatchObject([
-        { id: "claude-opus-4-6", maxTokens: 128000, contextWindow: 1_000_000 },
-        { id: "claude-sonnet-4-6", maxTokens: 128000, contextWindow: 1_000_000 },
-      ]);
-    } finally {
-      rmSync(adcDir, { recursive: true, force: true });
-    }
+    await withAdcCredentialsFile(
+      { project_id: "vertex-project" },
+      async ({ agentDir, credentialsPath }) => {
+        const providers = await resolveImplicitProvidersForTest({
+          agentDir,
+          env: {
+            ...ANTHROPIC_VERTEX_DISCOVERY_ENV,
+            GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+            GOOGLE_CLOUD_LOCATION: "us-east1",
+          },
+        });
+        expect(providers?.["anthropic-vertex"]?.baseUrl).toBe(
+          "https://us-east1-aiplatform.googleapis.com",
+        );
+        expect(providers?.["anthropic-vertex"]?.models).toMatchObject([
+          { id: "claude-opus-4-6", maxTokens: 128000, contextWindow: 1_000_000 },
+          { id: "claude-sonnet-4-6", maxTokens: 128000, contextWindow: 1_000_000 },
+        ]);
+      },
+    );
   });
 
   it("accepts ADC credentials when the file only includes a quota_project_id", async () => {
@@ -95,45 +107,37 @@ describe("anthropic-vertex implicit provider", () => {
   });
 
   it("falls back to the default region when GOOGLE_CLOUD_LOCATION is invalid", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    const adcDir = mkdtempSync(join(tmpdir(), "openclaw-adc-"));
-    const credentialsPath = join(adcDir, "application_default_credentials.json");
-    writeFileSync(credentialsPath, JSON.stringify({ project_id: "vertex-project" }), "utf8");
-
-    try {
-      const providers = await resolveImplicitProvidersForTest({
-        agentDir,
-        env: {
-          ...ANTHROPIC_VERTEX_DISCOVERY_ENV,
-          GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
-          GOOGLE_CLOUD_LOCATION: "us-central1.attacker.example",
-        },
-      });
-      expect(providers?.["anthropic-vertex"]?.baseUrl).toBe("https://aiplatform.googleapis.com");
-    } finally {
-      rmSync(adcDir, { recursive: true, force: true });
-    }
+    await withAdcCredentialsFile(
+      { project_id: "vertex-project" },
+      async ({ agentDir, credentialsPath }) => {
+        const providers = await resolveImplicitProvidersForTest({
+          agentDir,
+          env: {
+            ...ANTHROPIC_VERTEX_DISCOVERY_ENV,
+            GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+            GOOGLE_CLOUD_LOCATION: "us-central1.attacker.example",
+          },
+        });
+        expect(providers?.["anthropic-vertex"]?.baseUrl).toBe("https://aiplatform.googleapis.com");
+      },
+    );
   });
 
   it("uses the Vertex global endpoint when GOOGLE_CLOUD_LOCATION=global", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    const adcDir = mkdtempSync(join(tmpdir(), "openclaw-adc-"));
-    const credentialsPath = join(adcDir, "application_default_credentials.json");
-    writeFileSync(credentialsPath, JSON.stringify({ project_id: "vertex-project" }), "utf8");
-
-    try {
-      const providers = await resolveImplicitProvidersForTest({
-        agentDir,
-        env: {
-          ...ANTHROPIC_VERTEX_DISCOVERY_ENV,
-          GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
-          GOOGLE_CLOUD_LOCATION: "global",
-        },
-      });
-      expect(providers?.["anthropic-vertex"]?.baseUrl).toBe("https://aiplatform.googleapis.com");
-    } finally {
-      rmSync(adcDir, { recursive: true, force: true });
-    }
+    await withAdcCredentialsFile(
+      { project_id: "vertex-project" },
+      async ({ agentDir, credentialsPath }) => {
+        const providers = await resolveImplicitProvidersForTest({
+          agentDir,
+          env: {
+            ...ANTHROPIC_VERTEX_DISCOVERY_ENV,
+            GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+            GOOGLE_CLOUD_LOCATION: "global",
+          },
+        });
+        expect(providers?.["anthropic-vertex"]?.baseUrl).toBe("https://aiplatform.googleapis.com");
+      },
+    );
   });
 
   it("accepts explicit metadata auth opt-in without local credential files", async () => {

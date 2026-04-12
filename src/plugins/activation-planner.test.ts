@@ -167,4 +167,16 @@ describe("resolveManifestActivationPluginIds", () => {
       }),
     ).toEqual(["demo-channel"]);
   });
+
+  it("treats explicit empty plugin scopes as scoped-empty", () => {
+    expect(
+      resolveManifestActivationPluginIds({
+        trigger: {
+          kind: "provider",
+          provider: "openai",
+        },
+        onlyPluginIds: [],
+      }),
+    ).toEqual([]);
+  });
 });

@@ -1,35 +1,33 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { VIDEO_GENERATION_TASK_KIND } from "../video-generation-task-status.js";
 import {
-  createVideoGenerationTaskRun,
-  recordVideoGenerationTaskProgress,
-  wakeVideoGenerationTaskCompletion,
-} from "./video-generate-background.js";
-
-const taskExecutorMocks = vi.hoisted(() => ({
-  createRunningTaskRun: vi.fn(),
-  recordTaskRunProgressByRunId: vi.fn(),
-  completeTaskRunByRunId: vi.fn(),
-  failTaskRunByRunId: vi.fn(),
-}));
-
-const announceDeliveryMocks = vi.hoisted(() => ({
-  deliverSubagentAnnouncement: vi.fn(),
-}));
-const taskDeliveryRuntimeMocks = vi.hoisted(() => ({
-  sendMessage: vi.fn(),
-}));
+  announceDeliveryMocks,
+  expectDirectMediaSend,
+  expectFallbackMediaAnnouncement,
+  expectQueuedTaskRun,
+  expectRecordedTaskProgress,
+  resetMediaBackgroundMocks,
+  taskDeliveryRuntimeMocks,
+  taskExecutorMocks,
+} from "./media-generate-background.test-support.js";
 
 vi.mock("../../tasks/task-executor.js", () => taskExecutorMocks);
 vi.mock("../../tasks/task-registry-delivery-runtime.js", () => taskDeliveryRuntimeMocks);
 vi.mock("../subagent-announce-delivery.js", () => announceDeliveryMocks);
 
+const {
+  createVideoGenerationTaskRun,
+  recordVideoGenerationTaskProgress,
+  wakeVideoGenerationTaskCompletion,
+} = await import("./video-generate-background.js");
+
 describe("video generate background helpers", () => {
   beforeEach(() => {
-    taskExecutorMocks.createRunningTaskRun.mockReset();
-    taskExecutorMocks.recordTaskRunProgressByRunId.mockReset();
-    taskDeliveryRuntimeMocks.sendMessage.mockReset();
-    announceDeliveryMocks.deliverSubagentAnnouncement.mockReset();
+    resetMediaBackgroundMocks({
+      taskExecutorMocks,
+      taskDeliveryRuntimeMocks,
+      announceDeliveryMocks,
+    });
   });
 
   it("creates a running task with queued progress text", () => {
@@ -52,13 +50,12 @@ describe("video generate background helpers", () => {
       requesterSessionKey: "agent:main:discord:direct:123",
       taskLabel: "friendly lobster surfing",
     });
-    expect(taskExecutorMocks.createRunningTaskRun).toHaveBeenCalledWith(
-      expect.objectContaining({
-        taskKind: VIDEO_GENERATION_TASK_KIND,
-        sourceId: "video_generate:openai",
-        progressSummary: "Queued video generation",
-      }),
-    );
+    expectQueuedTaskRun({
+      taskExecutorMocks,
+      taskKind: VIDEO_GENERATION_TASK_KIND,
+      sourceId: "video_generate:openai",
+      progressSummary: "Queued video generation",
+    });
   });
 
   it("records task progress updates", () => {
@@ -72,12 +69,11 @@ describe("video generate background helpers", () => {
       progressSummary: "Saving generated video",
     });
 
-    expect(taskExecutorMocks.recordTaskRunProgressByRunId).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: "tool:video_generate:abc",
-        progressSummary: "Saving generated video",
-      }),
-    );
+    expectRecordedTaskProgress({
+      taskExecutorMocks,
+      runId: "tool:video_generate:abc",
+      progressSummary: "Saving generated video",
+    });
   });
 
   it("queues a completion event by default when direct send is disabled", async () => {
@@ -132,15 +128,14 @@ describe("video generate background helpers", () => {
       result: "Generated 1 video.\nMEDIA:/tmp/generated-lobster.mp4",
     });
 
-    expect(taskDeliveryRuntimeMocks.sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "discord",
-        to: "channel:1",
-        threadId: "thread-1",
-        content: "Generated 1 video.",
-        mediaUrls: ["/tmp/generated-lobster.mp4"],
-      }),
-    );
+    expectDirectMediaSend({
+      sendMessageMock: taskDeliveryRuntimeMocks.sendMessage,
+      channel: "discord",
+      to: "channel:1",
+      threadId: "thread-1",
+      content: "Generated 1 video.",
+      mediaUrls: ["/tmp/generated-lobster.mp4"],
+    });
     expect(announceDeliveryMocks.deliverSubagentAnnouncement).not.toHaveBeenCalled();
   });
 
@@ -170,25 +165,15 @@ describe("video generate background helpers", () => {
       mediaUrls: ["/tmp/generated-lobster.mp4"],
     });
 
-    expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requesterSessionKey: "agent:main:discord:direct:123",
-        requesterOrigin: expect.objectContaining({
-          channel: "discord",
-          to: "channel:1",
-        }),
-        expectsCompletionMessage: true,
-        internalEvents: expect.arrayContaining([
-          expect.objectContaining({
-            source: "video_generation",
-            announceType: "video generation task",
-            status: "ok",
-            result: expect.stringContaining("MEDIA:/tmp/generated-lobster.mp4"),
-            mediaUrls: ["/tmp/generated-lobster.mp4"],
-            replyInstruction: expect.stringContaining("Prefer the message tool for delivery"),
-          }),
-        ]),
-      }),
-    );
+    expectFallbackMediaAnnouncement({
+      deliverAnnouncementMock: announceDeliveryMocks.deliverSubagentAnnouncement,
+      requesterSessionKey: "agent:main:discord:direct:123",
+      channel: "discord",
+      to: "channel:1",
+      source: "video_generation",
+      announceType: "video generation task",
+      resultMediaPath: "MEDIA:/tmp/generated-lobster.mp4",
+      mediaUrls: ["/tmp/generated-lobster.mp4"],
+    });
   });
 });

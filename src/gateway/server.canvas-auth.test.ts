@@ -12,7 +12,7 @@ import type { GatewayWsClient } from "./server/ws-types.js";
 import { withTempConfig } from "./test-temp-config.js";
 
 const WS_REJECT_TIMEOUT_MS = 2_000;
-const WS_CONNECT_TIMEOUT_MS = 2_000;
+const WS_CONNECT_TIMEOUT_MS = 5_000;
 
 function isConnectionReset(value: unknown): boolean {
   let current: unknown = value;
@@ -100,17 +100,44 @@ async function expectWsRejected(
 async function expectWsConnected(url: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const ws = new WebSocket(url);
-    const timer = setTimeout(() => reject(new Error("timeout")), WS_CONNECT_TIMEOUT_MS);
-    ws.once("open", () => {
+    let settled = false;
+    const finish = (fn: () => void) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
       clearTimeout(timer);
-      ws.terminate();
-      resolve();
+      fn();
+    };
+    const timer = setTimeout(
+      () =>
+        finish(() => {
+          ws.terminate();
+          reject(new Error("timeout"));
+        }),
+      WS_CONNECT_TIMEOUT_MS,
+    );
+    ws.once("open", () => {
+      finish(() => {
+        ws.terminate();
+        resolve();
+      });
     });
     ws.once("unexpected-response", (_req, res) => {
-      clearTimeout(timer);
-      reject(new Error(`unexpected response ${res.statusCode}`));
+      finish(() => reject(new Error(`unexpected response ${res.statusCode}`)));
     });
-    ws.once("error", reject);
+    ws.once("close", (code, reason) => {
+      finish(() =>
+        reject(
+          new Error(
+            `socket closed before open (${code}${reason.length > 0 ? `: ${reason.toString()}` : ""})`,
+          ),
+        ),
+      );
+    });
+    ws.once("error", (err) => {
+      finish(() => reject(err));
+    });
   });
 }
 

@@ -1,8 +1,6 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Context, Model } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { runExtraParamsPayloadCase } from "./pi-embedded-runner-extraparams.test-support.js";
 import { __testing as extraParamsTesting } from "./pi-embedded-runner/extra-params.js";
-import { applyExtraParamsToAgent } from "./pi-embedded-runner/extra-params.js";
 import {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
@@ -40,45 +38,8 @@ afterEach(() => {
 });
 
 describe("applyExtraParamsToAgent Moonshot and Ollama Kimi", () => {
-  function runPayloadCase(params: {
-    provider: "moonshot" | "ollama";
-    modelId: string;
-    thinkingLevel?: "off" | "low" | "medium" | "high";
-    payload?: Record<string, unknown>;
-    cfg?: Record<string, unknown>;
-  }) {
-    const payloads: Record<string, unknown>[] = [];
-    const baseStreamFn: StreamFn = (model, _context, options) => {
-      const payload = { ...params.payload };
-      options?.onPayload?.(payload, model);
-      payloads.push(payload);
-      return {} as ReturnType<StreamFn>;
-    };
-    const agent = { streamFn: baseStreamFn };
-
-    applyExtraParamsToAgent(
-      agent,
-      params.cfg as Parameters<typeof applyExtraParamsToAgent>[1],
-      params.provider,
-      params.modelId,
-      undefined,
-      params.thinkingLevel,
-    );
-
-    const model = {
-      api: "openai-completions",
-      provider: params.provider,
-      id: params.modelId,
-    } as Model<"openai-completions">;
-    const context: Context = { messages: [] };
-    void agent.streamFn?.(model, context, {});
-
-    expect(payloads).toHaveLength(1);
-    return payloads[0] ?? {};
-  }
-
   it("maps thinkingLevel=off to Moonshot thinking.type=disabled", () => {
-    const payload = runPayloadCase({
+    const payload = runExtraParamsPayloadCase({
       provider: "moonshot",
       modelId: "kimi-k2.5",
       thinkingLevel: "off",
@@ -88,7 +49,7 @@ describe("applyExtraParamsToAgent Moonshot and Ollama Kimi", () => {
   });
 
   it("maps non-off thinking levels to Moonshot thinking.type=enabled and normalizes tool_choice", () => {
-    const payload = runPayloadCase({
+    const payload = runExtraParamsPayloadCase({
       provider: "moonshot",
       modelId: "kimi-k2.5",
       thinkingLevel: "low",
@@ -100,7 +61,7 @@ describe("applyExtraParamsToAgent Moonshot and Ollama Kimi", () => {
   });
 
   it("disables thinking instead of broadening pinned Moonshot tool_choice", () => {
-    const payload = runPayloadCase({
+    const payload = runExtraParamsPayloadCase({
       provider: "moonshot",
       modelId: "kimi-k2.5",
       thinkingLevel: "low",
@@ -112,7 +73,7 @@ describe("applyExtraParamsToAgent Moonshot and Ollama Kimi", () => {
   });
 
   it("respects explicit Moonshot thinking param from model config", () => {
-    const payload = runPayloadCase({
+    const payload = runExtraParamsPayloadCase({
       provider: "moonshot",
       modelId: "kimi-k2.5",
       thinkingLevel: "high",
@@ -135,7 +96,7 @@ describe("applyExtraParamsToAgent Moonshot and Ollama Kimi", () => {
   });
 
   it("applies Moonshot payload compatibility to Ollama Kimi cloud models", () => {
-    const payload = runPayloadCase({
+    const payload = runExtraParamsPayloadCase({
       provider: "ollama",
       modelId: "kimi-k2.5:cloud",
       thinkingLevel: "low",
@@ -147,7 +108,7 @@ describe("applyExtraParamsToAgent Moonshot and Ollama Kimi", () => {
   });
 
   it("maps thinkingLevel=off for Ollama Kimi cloud models through Moonshot compatibility", () => {
-    const payload = runPayloadCase({
+    const payload = runExtraParamsPayloadCase({
       provider: "ollama",
       modelId: "kimi-k2.5:cloud",
       thinkingLevel: "off",
@@ -157,7 +118,7 @@ describe("applyExtraParamsToAgent Moonshot and Ollama Kimi", () => {
   });
 
   it("disables thinking instead of broadening pinned Ollama Kimi cloud tool_choice", () => {
-    const payload = runPayloadCase({
+    const payload = runExtraParamsPayloadCase({
       provider: "ollama",
       modelId: "kimi-k2.5:cloud",
       thinkingLevel: "low",

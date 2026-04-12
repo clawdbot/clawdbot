@@ -1,8 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Context, Model } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { runExtraParamsPayloadCase } from "./pi-embedded-runner-extraparams.test-support.js";
 import { __testing as extraParamsTesting } from "./pi-embedded-runner/extra-params.js";
-import { applyExtraParamsToAgent } from "./pi-embedded-runner/extra-params.js";
 import {
   createOpenRouterSystemCacheWrapper,
   createOpenRouterWrapper,
@@ -49,43 +48,9 @@ afterEach(() => {
 });
 
 describe("applyExtraParamsToAgent OpenRouter reasoning", () => {
-  function runPayloadCase(params: {
-    modelId: string;
-    thinkingLevel?: "off" | "low" | "medium" | "high";
-    payload?: Record<string, unknown>;
-  }) {
-    const payloads: Record<string, unknown>[] = [];
-    const baseStreamFn: StreamFn = (model, _context, options) => {
-      const payload = { ...params.payload };
-      options?.onPayload?.(payload, model);
-      payloads.push(payload);
-      return {} as ReturnType<StreamFn>;
-    };
-    const agent = { streamFn: baseStreamFn };
-
-    applyExtraParamsToAgent(
-      agent,
-      undefined,
-      "openrouter",
-      params.modelId,
-      undefined,
-      params.thinkingLevel,
-    );
-
-    const model = {
-      api: "openai-completions",
-      provider: "openrouter",
-      id: params.modelId,
-    } as Model<"openai-completions">;
-    const context: Context = { messages: [] };
-    void agent.streamFn?.(model, context, {});
-
-    expect(payloads).toHaveLength(1);
-    return payloads[0] ?? {};
-  }
-
   it("does not inject reasoning when thinkingLevel is off (default) for OpenRouter", () => {
-    const payload = runPayloadCase({
+    const payload = runExtraParamsPayloadCase({
+      provider: "openrouter",
       modelId: "deepseek/deepseek-r1",
       thinkingLevel: "off",
       payload: { model: "deepseek/deepseek-r1" },
@@ -96,7 +61,8 @@ describe("applyExtraParamsToAgent OpenRouter reasoning", () => {
   });
 
   it("injects reasoning.effort when thinkingLevel is non-off for OpenRouter", () => {
-    const payload = runPayloadCase({
+    const payload = runExtraParamsPayloadCase({
+      provider: "openrouter",
       modelId: "openrouter/auto",
       thinkingLevel: "low",
     });
@@ -105,7 +71,8 @@ describe("applyExtraParamsToAgent OpenRouter reasoning", () => {
   });
 
   it("removes legacy reasoning_effort and keeps reasoning unset when thinkingLevel is off", () => {
-    const payload = runPayloadCase({
+    const payload = runExtraParamsPayloadCase({
+      provider: "openrouter",
       modelId: "openrouter/auto",
       thinkingLevel: "off",
       payload: { reasoning_effort: "high" },
@@ -116,7 +83,8 @@ describe("applyExtraParamsToAgent OpenRouter reasoning", () => {
   });
 
   it("does not inject effort when payload already has reasoning.max_tokens", () => {
-    const payload = runPayloadCase({
+    const payload = runExtraParamsPayloadCase({
+      provider: "openrouter",
       modelId: "openrouter/auto",
       thinkingLevel: "low",
       payload: { reasoning: { max_tokens: 256 } },
@@ -126,7 +94,8 @@ describe("applyExtraParamsToAgent OpenRouter reasoning", () => {
   });
 
   it("does not inject reasoning.effort for x-ai/grok models on OpenRouter (#32039)", () => {
-    const payload = runPayloadCase({
+    const payload = runExtraParamsPayloadCase({
+      provider: "openrouter",
       modelId: "x-ai/grok-4.1-fast",
       thinkingLevel: "medium",
       payload: { reasoning_effort: "medium" },

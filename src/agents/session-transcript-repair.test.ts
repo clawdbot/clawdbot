@@ -207,10 +207,8 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(result.added[0]?.toolCallId).toBe("call_normal");
   });
 
-  it("retains matching tool results that follow an aborted assistant message", () => {
-    // Aborted assistant turns do not synthesize missing tool results, but real
-    // matching results in the same span remain part of the repaired transcript.
-    const input = castAgentMessages([
+  function createAbortedAssistantTranscript() {
+    return castAgentMessages([
       {
         role: "assistant",
         content: [{ type: "toolCall", id: "call_aborted", name: "exec", arguments: {} }],
@@ -225,6 +223,12 @@ describe("sanitizeToolUseResultPairing", () => {
       },
       { role: "user", content: "retrying" },
     ]);
+  }
+
+  it("retains matching tool results that follow an aborted assistant message", () => {
+    // Aborted assistant turns do not synthesize missing tool results, but real
+    // matching results in the same span remain part of the repaired transcript.
+    const input = createAbortedAssistantTranscript();
 
     const result = repairToolUseResultPairing(input);
 
@@ -237,21 +241,7 @@ describe("sanitizeToolUseResultPairing", () => {
   });
 
   it("drops matching tool results for aborted assistant messages when requested", () => {
-    const input = castAgentMessages([
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_aborted", name: "exec", arguments: {} }],
-        stopReason: "aborted",
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_aborted",
-        toolName: "exec",
-        content: [{ type: "text", text: "partial result" }],
-        isError: false,
-      },
-      { role: "user", content: "retrying" },
-    ]);
+    const input = createAbortedAssistantTranscript();
 
     const result = repairToolUseResultPairing(input, {
       erroredAssistantResultPolicy: "drop",

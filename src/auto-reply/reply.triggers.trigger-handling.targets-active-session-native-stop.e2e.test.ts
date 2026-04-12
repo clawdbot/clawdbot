@@ -145,15 +145,13 @@ function mockSuccessfulCompaction() {
 
 function makeUnauthorizedWhatsAppCfg(home: string) {
   const baseCfg = makeCfg(home);
-  return {
-    ...baseCfg,
-    channels: {
-      ...baseCfg.channels,
-      whatsapp: {
-        allowFrom: ["+1000"],
-      },
+  baseCfg.channels = {
+    ...baseCfg.channels,
+    whatsapp: {
+      allowFrom: ["+1000"],
     },
   };
+  return baseCfg;
 }
 
 async function expectResetBlockedForNonOwner(params: { home: string }): Promise<void> {

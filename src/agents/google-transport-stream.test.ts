@@ -14,6 +14,24 @@ vi.mock("./provider-transport-fetch.js", () => ({
 let buildGoogleGenerativeAiParams: typeof import("./google-transport-stream.js").buildGoogleGenerativeAiParams;
 let createGoogleGenerativeAiTransportStreamFn: typeof import("./google-transport-stream.js").createGoogleGenerativeAiTransportStreamFn;
 
+function buildGeminiModel(
+  overrides: Partial<Model<"google-generative-ai">> = {},
+): Model<"google-generative-ai"> {
+  return {
+    id: "gemini-2.5-pro",
+    name: "Gemini 2.5 Pro",
+    api: "google-generative-ai",
+    provider: "google",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128000,
+    maxTokens: 8192,
+    ...overrides,
+  };
+}
+
 function buildSseResponse(events: unknown[]): Response {
   const sse = `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`;
   const encoder = new TextEncoder();
@@ -218,20 +236,7 @@ describe("google transport stream", () => {
   });
 
   it("coerces replayed malformed tool-call args to an object for Google payloads", () => {
-    const model = {
-      id: "gemini-2.5-pro",
-      name: "Gemini 2.5 Pro",
-      api: "google-generative-ai",
-      provider: "google",
-      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128000,
-      maxTokens: 8192,
-    } satisfies Model<"google-generative-ai">;
-
-    const params = buildGoogleGenerativeAiParams(model, {
+    const params = buildGoogleGenerativeAiParams(buildGeminiModel(), {
       messages: [
         {
           role: "assistant",
@@ -291,21 +296,8 @@ describe("google transport stream", () => {
   });
 
   it("includes cachedContent in direct Gemini payloads when requested", () => {
-    const model = {
-      id: "gemini-2.5-pro",
-      name: "Gemini 2.5 Pro",
-      api: "google-generative-ai",
-      provider: "google",
-      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128000,
-      maxTokens: 8192,
-    } satisfies Model<"google-generative-ai">;
-
     const params = buildGoogleGenerativeAiParams(
-      model,
+      buildGeminiModel(),
       {
         messages: [{ role: "user", content: "hello", timestamp: 0 }],
       } as never,

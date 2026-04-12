@@ -166,11 +166,6 @@ vi.mock("./doctor/shared/channel-doctor.js", () => {
   function collectCompatibilityMutations(cfg: { channels?: Record<string, unknown> }) {
     const next = structuredClone(cfg);
     const changes: string[] = [];
-    const discord = asRecord(next.channels?.discord);
-    if (discord && typeof discord.streaming === "boolean") {
-      discord.streaming = { mode: discord.streaming ? "partial" : "off" };
-      changes.push("Normalized channels.discord.streaming legacy scalar.");
-    }
     const telegram = asRecord(next.channels?.telegram);
     if (telegram && "groupMentionsOnly" in telegram) {
       const groups = asRecord(telegram.groups) ?? {};
@@ -952,14 +947,6 @@ describe("doctor config flow", () => {
         noteSpy.mock.calls.some(
           ([message, title]) =>
             title === "Legacy config keys detected" &&
-            message.includes("channels.discord:") &&
-            message.includes("channels.discord.streamMode, channels.discord.streaming"),
-        ),
-      ).toBe(true);
-      expect(
-        noteSpy.mock.calls.some(
-          ([message, title]) =>
-            title === "Legacy config keys detected" &&
             message.includes("channels.googlechat:") &&
             message.includes("channels.googlechat.streamMode is legacy and no longer used"),
         ),
@@ -975,6 +962,55 @@ describe("doctor config flow", () => {
     } finally {
       noteSpy.mockClear();
     }
+  });
+
+  it("keeps discord streaming aliases on disk during repair so downgrades stay recoverable", async () => {
+    await withTempHome(
+      async (home) => {
+        const configDir = path.join(home, ".openclaw");
+        const configPath = path.join(configDir, "openclaw.json");
+        await fs.mkdir(configDir, { recursive: true });
+        await fs.writeFile(
+          configPath,
+          JSON.stringify(
+            {
+              channels: {
+                discord: {
+                  streaming: false,
+                  chunkMode: "newline",
+                  blockStreaming: true,
+                },
+              },
+            },
+            null,
+            2,
+          ),
+          "utf-8",
+        );
+
+        await loadAndMaybeMigrateDoctorConfig({
+          options: { nonInteractive: true, repair: true },
+          confirm: async () => false,
+        });
+
+        const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+          channels?: {
+            discord?: {
+              streaming?: unknown;
+              chunkMode?: unknown;
+              blockStreaming?: unknown;
+            };
+          };
+        };
+
+        expect(persisted.channels?.discord).toEqual({
+          streaming: false,
+          chunkMode: "newline",
+          blockStreaming: true,
+        });
+      },
+      { skipSessionCleanup: true },
+    );
   });
 
   it("repairs legacy googlechat streamMode by removing it", async () => {

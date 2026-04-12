@@ -178,7 +178,7 @@ describe("legacy migrate sandbox scope aliases", () => {
 });
 
 describe("legacy migrate channel streaming aliases", () => {
-  it("migrates preview-channel legacy streaming fields into the nested streaming shape", () => {
+  it("migrates Telegram and Slack preview-channel legacy streaming fields without rewriting Discord", () => {
     const res = migrateLegacyConfigForTest({
       channels: {
         telegram: {
@@ -227,12 +227,6 @@ describe("legacy migrate channel streaming aliases", () => {
       "Moved channels.telegram.blockStreamingCoalesce → channels.telegram.streaming.block.coalesce.",
     );
     expect(res.changes).toContain(
-      "Moved channels.discord.streaming (boolean) → channels.discord.streaming.mode (off).",
-    );
-    expect(res.changes).toContain(
-      "Moved channels.discord.draftChunk → channels.discord.streaming.preview.chunk.",
-    );
-    expect(res.changes).toContain(
       "Moved channels.slack.streamMode → channels.slack.streaming.mode (progress).",
     );
     expect(res.changes).toContain(
@@ -256,17 +250,11 @@ describe("legacy migrate channel streaming aliases", () => {
       },
     });
     expect(res.config?.channels?.discord).toMatchObject({
-      streaming: {
-        mode: "off",
-        chunkMode: "newline",
-        block: {
-          enabled: true,
-        },
-        preview: {
-          chunk: {
-            maxChars: 900,
-          },
-        },
+      streaming: false,
+      chunkMode: "newline",
+      blockStreaming: true,
+      draftChunk: {
+        maxChars: 900,
       },
     });
     expect(res.config?.channels?.slack).toMatchObject({

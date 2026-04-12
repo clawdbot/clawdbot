@@ -70,12 +70,13 @@ export function resolveConversationDeliveryTarget(params: {
   const isThreadChild =
     conversationId && parentConversationId && parentConversationId !== conversationId;
   if (channel && isThreadChild) {
-    if (
-      channel === "matrix" ||
-      channel === "slack" ||
-      channel === "mattermost" ||
-      channel === "telegram"
-    ) {
+    if (channel === "matrix") {
+      return {
+        to: `room:${parentConversationId}`,
+        threadId: conversationId,
+      };
+    }
+    if (channel === "slack" || channel === "mattermost" || channel === "telegram") {
       return {
         to: `channel:${parentConversationId}`,
         threadId: conversationId,

@@ -227,14 +227,10 @@ export async function runCodexAppServerAttempt(
   );
 
   const abortListener = () => {
-    void client
-      .request("turn/interrupt", {
-        threadId: thread.threadId,
-        turnId: activeTurnId,
-      })
-      .catch((error: unknown) => {
-        embeddedAgentLog.debug("codex app-server turn interrupt failed during abort", { error });
-      });
+    interruptCodexTurnBestEffort(client, {
+      threadId: thread.threadId,
+      turnId: activeTurnId,
+    });
     resolveCompletion?.();
   };
   runAbortController.signal.addEventListener("abort", abortListener, { once: true });
@@ -266,6 +262,20 @@ export async function runCodexAppServerAttempt(
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
   }
+}
+
+function interruptCodexTurnBestEffort(
+  client: CodexAppServerClient,
+  params: {
+    threadId: string;
+    turnId: string;
+  },
+): void {
+  void Promise.resolve()
+    .then(() => client.request("turn/interrupt", params))
+    .catch((error: unknown) => {
+      embeddedAgentLog.debug("codex app-server turn interrupt failed during abort", { error });
+    });
 }
 
 type DynamicToolBuildParams = {

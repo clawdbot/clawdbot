@@ -1,7 +1,9 @@
 import type { CodexAppServerStartOptions } from "./config.js";
 import { type JsonObject, type JsonValue } from "./protocol.js";
-import { getSharedCodexAppServerClient } from "./shared-client.js";
-import { withTimeout } from "./timeout.js";
+import {
+  createIsolatedCodexAppServerClient,
+  getSharedCodexAppServerClient,
+} from "./shared-client.js";
 
 export type CodexAppServerModel = {
   id: string;
@@ -26,32 +28,39 @@ export type CodexAppServerListModelsOptions = {
   includeHidden?: boolean;
   timeoutMs?: number;
   startOptions?: CodexAppServerStartOptions;
+  sharedClient?: boolean;
 };
 
 export async function listCodexAppServerModels(
   options: CodexAppServerListModelsOptions = {},
 ): Promise<CodexAppServerModelListResult> {
   const timeoutMs = options.timeoutMs ?? 2500;
-  return await withTimeout(
-    (async () => {
-      const client = await getSharedCodexAppServerClient({
+  const useSharedClient = options.sharedClient !== false;
+  const client = useSharedClient
+    ? await getSharedCodexAppServerClient({
+        startOptions: options.startOptions,
+        timeoutMs,
+      })
+    : await createIsolatedCodexAppServerClient({
         startOptions: options.startOptions,
         timeoutMs,
       });
-      const response = await client.request<JsonObject>(
-        "model/list",
-        {
-          limit: options.limit ?? null,
-          cursor: options.cursor ?? null,
-          includeHidden: options.includeHidden ?? null,
-        },
-        { timeoutMs },
-      );
-      return readModelListResult(response);
-    })(),
-    timeoutMs,
-    "codex app-server model/list timed out",
-  );
+  try {
+    const response = await client.request<JsonObject>(
+      "model/list",
+      {
+        limit: options.limit ?? null,
+        cursor: options.cursor ?? null,
+        includeHidden: options.includeHidden ?? null,
+      },
+      { timeoutMs },
+    );
+    return readModelListResult(response);
+  } finally {
+    if (!useSharedClient) {
+      client.close();
+    }
+  }
 }
 
 function readModelListResult(value: JsonValue | undefined): CodexAppServerModelListResult {

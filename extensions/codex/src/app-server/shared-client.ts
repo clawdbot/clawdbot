@@ -59,6 +59,23 @@ export async function getSharedCodexAppServerClient(options?: {
   }
 }
 
+export async function createIsolatedCodexAppServerClient(options?: {
+  startOptions?: CodexAppServerStartOptions;
+  timeoutMs?: number;
+}): Promise<CodexAppServerClient> {
+  const startOptions = options?.startOptions ?? resolveCodexAppServerRuntimeOptions().start;
+  const client = CodexAppServerClient.start(startOptions);
+  const initialize = client.initialize();
+  try {
+    await withTimeout(initialize, options?.timeoutMs ?? 0, "codex app-server initialize timed out");
+    return client;
+  } catch (error) {
+    client.close();
+    await initialize.catch(() => undefined);
+    throw error;
+  }
+}
+
 export function resetSharedCodexAppServerClientForTests(): void {
   const state = getSharedCodexAppServerClientState();
   state.client = undefined;

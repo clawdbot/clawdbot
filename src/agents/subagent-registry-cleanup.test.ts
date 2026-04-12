@@ -78,4 +78,19 @@ describe("resolveDeferredCleanupDecision", () => {
 
     expect(decision).toEqual({ kind: "retry", retryCount: 2, resumeDelayMs: 2_000 });
   });
+
+  it("uses retry backoff for non-completion flows so cleanup can settle after announce failures", () => {
+    const decision = resolveDeferredCleanupDecision({
+      entry: makeEntry({ expectsCompletionMessage: false, announceRetryCount: 1 }),
+      now,
+      activeDescendantRuns: 0,
+      announceExpiryMs: 5 * 60_000,
+      announceCompletionHardExpiryMs: 30 * 60_000,
+      maxAnnounceRetryCount: 3,
+      deferDescendantDelayMs: 1_000,
+      resolveAnnounceRetryDelayMs: (retryCount) => retryCount * 1_000,
+    });
+
+    expect(decision).toEqual({ kind: "retry", retryCount: 2, resumeDelayMs: 2_000 });
+  });
 });

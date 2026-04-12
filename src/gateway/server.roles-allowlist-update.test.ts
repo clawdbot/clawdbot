@@ -134,6 +134,35 @@ const connectNodeClientWithNodePairing = async (
   return await connectNodeClient(params);
 };
 
+async function findConnectedNodeByDisplayName(displayName: string) {
+  const listRes = await rpcReq<{
+    nodes?: Array<{
+      nodeId: string;
+      displayName?: string;
+      connected?: boolean;
+      commands?: string[];
+    }>;
+  }>(ws, "node.list", {});
+  return (listRes.payload?.nodes ?? []).find(
+    (node) => node.connected && node.displayName === displayName,
+  );
+}
+
+async function expectPendingPairingCommands(nodeId: string, commands: string[]) {
+  const pairingList = await rpcReq<{
+    pending?: Array<{ nodeId?: string; commands?: string[] }>;
+  }>(ws, "node.pair.list", {});
+  expect(pairingList.ok).toBe(true);
+  expect(pairingList.payload?.pending ?? []).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        nodeId,
+        commands,
+      }),
+    ]),
+  );
+}
+
 describe("gateway role enforcement", () => {
   test("enforces operator and node permissions", async () => {
     let nodeClient: GatewayClient | undefined;
@@ -382,20 +411,6 @@ describe("gateway node command allowlist", () => {
   });
 
   test("keeps allowlisted declared commands available before node pairing exists", async () => {
-    const findConnectedNode = async (displayName: string) => {
-      const listRes = await rpcReq<{
-        nodes?: Array<{
-          nodeId: string;
-          displayName?: string;
-          connected?: boolean;
-          commands?: string[];
-        }>;
-      }>(ws, "node.list", {});
-      return (listRes.payload?.nodes ?? []).find(
-        (node) => node.connected && node.displayName === displayName,
-      );
-    };
-
     const displayName = "node-device-paired-only";
     let nodeClient: GatewayClient | undefined;
 
@@ -410,27 +425,16 @@ describe("gateway node command allowlist", () => {
 
       await expect
         .poll(async () => {
-          const node = await findConnectedNode(displayName);
+          const node = await findConnectedNodeByDisplayName(displayName);
           return node?.commands?.toSorted() ?? [];
         }, FAST_WAIT_OPTS)
         .toEqual(["canvas.snapshot", "system.run"]);
 
-      const node = await findConnectedNode(displayName);
+      const node = await findConnectedNodeByDisplayName(displayName);
       const nodeId = node?.nodeId ?? "";
       expect(nodeId).toBeTruthy();
 
-      const pairingList = await rpcReq<{
-        pending?: Array<{ nodeId?: string; commands?: string[] }>;
-      }>(ws, "node.pair.list", {});
-      expect(pairingList.ok).toBe(true);
-      expect(pairingList.payload?.pending ?? []).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            nodeId,
-            commands: ["canvas.snapshot", "system.run"],
-          }),
-        ]),
-      );
+      await expectPendingPairingCommands(nodeId, ["canvas.snapshot", "system.run"]);
     } finally {
       await nodeClient?.stopAndWait();
     }
@@ -470,18 +474,7 @@ describe("gateway node command allowlist", () => {
         )?.nodeId ?? "";
       expect(nodeId).toBeTruthy();
 
-      const pairingList = await rpcReq<{
-        pending?: Array<{ nodeId?: string; commands?: string[] }>;
-      }>(ws, "node.pair.list", {});
-      expect(pairingList.ok).toBe(true);
-      expect(pairingList.payload?.pending ?? []).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            nodeId,
-            commands: ["canvas.snapshot"],
-          }),
-        ]),
-      );
+      await expectPendingPairingCommands(nodeId, ["canvas.snapshot"]);
     } finally {
       await nodeClient?.stopAndWait();
     }
@@ -557,20 +550,6 @@ describe("gateway node command allowlist", () => {
       const deviceIdentity = loadOrCreateDeviceIdentity(deviceIdentityPath);
       const displayName = `node-${testCase.label}`;
 
-      const findConnectedNode = async () => {
-        const listRes = await rpcReq<{
-          nodes?: Array<{
-            nodeId: string;
-            displayName?: string;
-            connected?: boolean;
-            commands?: string[];
-          }>;
-        }>(ws, "node.list", {});
-        return (listRes.payload?.nodes ?? []).find(
-          (node) => node.connected && node.displayName === displayName,
-        );
-      };
-
       let client: GatewayClient | undefined;
       try {
         client = await connectNodeClientWithNodePairing({
@@ -586,14 +565,14 @@ describe("gateway node command allowlist", () => {
         await expect
           .poll(
             async () => {
-              const node = await findConnectedNode();
+              const node = await findConnectedNodeByDisplayName(displayName);
               return node?.commands?.toSorted() ?? [];
             },
             { timeout: 2_000, interval: 10 },
           )
           .toEqual(["canvas.snapshot"]);
 
-        const node = await findConnectedNode();
+        const node = await findConnectedNodeByDisplayName(displayName);
         const nodeId = node?.nodeId ?? "";
         expect(nodeId).toBeTruthy();
 

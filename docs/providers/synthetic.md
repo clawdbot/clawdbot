@@ -8,23 +8,42 @@ title: "Synthetic"
 
 # Synthetic
 
-Synthetic exposes Anthropic-compatible endpoints. OpenClaw registers it as the
-`synthetic` provider and uses the Anthropic Messages API.
+[Synthetic](https://synthetic.new) exposes Anthropic-compatible endpoints.
+OpenClaw registers it as the `synthetic` provider and uses the Anthropic
+Messages API.
 
-## Quick setup
+| Property | Value                                 |
+| -------- | ------------------------------------- |
+| Provider | `synthetic`                           |
+| Auth     | `SYNTHETIC_API_KEY`                   |
+| API      | Anthropic Messages                    |
+| Base URL | `https://api.synthetic.new/anthropic` |
 
-1. Set `SYNTHETIC_API_KEY` (or run the wizard below).
-2. Run onboarding:
+## Getting started
 
-```bash
-openclaw onboard --auth-choice synthetic-api-key
-```
+<Steps>
+  <Step title="Get an API key">
+    Obtain a `SYNTHETIC_API_KEY` from your Synthetic account, or let the
+    onboarding wizard prompt you for one.
+  </Step>
+  <Step title="Run onboarding">
+    ```bash
+    openclaw onboard --auth-choice synthetic-api-key
+    ```
+  </Step>
+  <Step title="Verify the default model">
+    After onboarding the default model is set to:
+    ```
+    synthetic/hf:MiniMaxAI/MiniMax-M2.5
+    ```
+  </Step>
+</Steps>
 
-The default model is set to:
-
-```
-synthetic/hf:MiniMaxAI/MiniMax-M2.5
-```
+<Warning>
+OpenClaw's Anthropic client appends `/v1` to the base URL automatically, so use
+`https://api.synthetic.new/anthropic` (not `/anthropic/v1`). If Synthetic
+changes its base URL, override `models.providers.synthetic.baseUrl`.
+</Warning>
 
 ## Config example
 
@@ -61,41 +80,77 @@ synthetic/hf:MiniMaxAI/MiniMax-M2.5
 }
 ```
 
-Note: OpenClaw's Anthropic client appends `/v1` to the base URL, so use
-`https://api.synthetic.new/anthropic` (not `/anthropic/v1`). If Synthetic changes
-its base URL, override `models.providers.synthetic.baseUrl`.
-
 ## Model catalog
 
-All models below use cost `0` (input/output/cache).
+All Synthetic models use cost `0` (input/output/cache).
 
 | Model ID                                               | Context window | Max tokens | Reasoning | Input        |
 | ------------------------------------------------------ | -------------- | ---------- | --------- | ------------ |
-| `hf:MiniMaxAI/MiniMax-M2.5`                            | 192000         | 65536      | false     | text         |
-| `hf:moonshotai/Kimi-K2-Thinking`                       | 256000         | 8192       | true      | text         |
-| `hf:zai-org/GLM-4.7`                                   | 198000         | 128000     | false     | text         |
-| `hf:deepseek-ai/DeepSeek-R1-0528`                      | 128000         | 8192       | false     | text         |
-| `hf:deepseek-ai/DeepSeek-V3-0324`                      | 128000         | 8192       | false     | text         |
-| `hf:deepseek-ai/DeepSeek-V3.1`                         | 128000         | 8192       | false     | text         |
-| `hf:deepseek-ai/DeepSeek-V3.1-Terminus`                | 128000         | 8192       | false     | text         |
-| `hf:deepseek-ai/DeepSeek-V3.2`                         | 159000         | 8192       | false     | text         |
-| `hf:meta-llama/Llama-3.3-70B-Instruct`                 | 128000         | 8192       | false     | text         |
-| `hf:meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8` | 524000         | 8192       | false     | text         |
-| `hf:moonshotai/Kimi-K2-Instruct-0905`                  | 256000         | 8192       | false     | text         |
-| `hf:moonshotai/Kimi-K2.5`                              | 256000         | 8192       | true      | text + image |
-| `hf:openai/gpt-oss-120b`                               | 128000         | 8192       | false     | text         |
-| `hf:Qwen/Qwen3-235B-A22B-Instruct-2507`                | 256000         | 8192       | false     | text         |
-| `hf:Qwen/Qwen3-Coder-480B-A35B-Instruct`               | 256000         | 8192       | false     | text         |
-| `hf:Qwen/Qwen3-VL-235B-A22B-Instruct`                  | 250000         | 8192       | false     | text + image |
-| `hf:zai-org/GLM-4.5`                                   | 128000         | 128000     | false     | text         |
-| `hf:zai-org/GLM-4.6`                                   | 198000         | 128000     | false     | text         |
-| `hf:zai-org/GLM-5`                                     | 256000         | 128000     | true      | text + image |
-| `hf:deepseek-ai/DeepSeek-V3`                           | 128000         | 8192       | false     | text         |
-| `hf:Qwen/Qwen3-235B-A22B-Thinking-2507`                | 256000         | 8192       | true      | text         |
+| `hf:MiniMaxAI/MiniMax-M2.5`                            | 192,000        | 65,536     | no        | text         |
+| `hf:moonshotai/Kimi-K2-Thinking`                       | 256,000        | 8,192      | yes       | text         |
+| `hf:zai-org/GLM-4.7`                                   | 198,000        | 128,000    | no        | text         |
+| `hf:deepseek-ai/DeepSeek-R1-0528`                      | 128,000        | 8,192      | no        | text         |
+| `hf:deepseek-ai/DeepSeek-V3-0324`                      | 128,000        | 8,192      | no        | text         |
+| `hf:deepseek-ai/DeepSeek-V3.1`                         | 128,000        | 8,192      | no        | text         |
+| `hf:deepseek-ai/DeepSeek-V3.1-Terminus`                | 128,000        | 8,192      | no        | text         |
+| `hf:deepseek-ai/DeepSeek-V3.2`                         | 159,000        | 8,192      | no        | text         |
+| `hf:meta-llama/Llama-3.3-70B-Instruct`                 | 128,000        | 8,192      | no        | text         |
+| `hf:meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8` | 524,000        | 8,192      | no        | text         |
+| `hf:moonshotai/Kimi-K2-Instruct-0905`                  | 256,000        | 8,192      | no        | text         |
+| `hf:moonshotai/Kimi-K2.5`                              | 256,000        | 8,192      | yes       | text + image |
+| `hf:openai/gpt-oss-120b`                               | 128,000        | 8,192      | no        | text         |
+| `hf:Qwen/Qwen3-235B-A22B-Instruct-2507`                | 256,000        | 8,192      | no        | text         |
+| `hf:Qwen/Qwen3-Coder-480B-A35B-Instruct`               | 256,000        | 8,192      | no        | text         |
+| `hf:Qwen/Qwen3-VL-235B-A22B-Instruct`                  | 250,000        | 8,192      | no        | text + image |
+| `hf:zai-org/GLM-4.5`                                   | 128,000        | 128,000    | no        | text         |
+| `hf:zai-org/GLM-4.6`                                   | 198,000        | 128,000    | no        | text         |
+| `hf:zai-org/GLM-5`                                     | 256,000        | 128,000    | yes       | text + image |
+| `hf:deepseek-ai/DeepSeek-V3`                           | 128,000        | 8,192      | no        | text         |
+| `hf:Qwen/Qwen3-235B-A22B-Thinking-2507`                | 256,000        | 8,192      | yes       | text         |
 
-## Notes
+<Tip>
+Model refs use the form `synthetic/<modelId>`. Use
+`openclaw models list --provider synthetic` to see all models available on your
+account.
+</Tip>
 
-- Model refs use `synthetic/<modelId>`.
-- If you enable a model allowlist (`agents.defaults.models`), add every model you
-  plan to use.
-- See [Model providers](/concepts/model-providers) for provider rules.
+<AccordionGroup>
+  <Accordion title="Model allowlist">
+    If you enable a model allowlist (`agents.defaults.models`), add every
+    Synthetic model you plan to use. Models not in the allowlist will be hidden
+    from the agent.
+  </Accordion>
+
+  <Accordion title="Base URL override">
+    If Synthetic changes its API endpoint, override the base URL in your config:
+
+    ```json5
+    {
+      models: {
+        providers: {
+          synthetic: {
+            baseUrl: "https://new-api.synthetic.new/anthropic",
+          },
+        },
+      },
+    }
+    ```
+
+    Remember that OpenClaw appends `/v1` automatically.
+
+  </Accordion>
+</AccordionGroup>
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Model providers" href="/concepts/model-providers" icon="layers">
+    Provider rules, model refs, and failover behavior.
+  </Card>
+  <Card title="Configuration reference" href="/gateway/configuration-reference" icon="gear">
+    Full config schema including provider settings.
+  </Card>
+  <Card title="Synthetic" href="https://synthetic.new" icon="arrow-up-right-from-square">
+    Synthetic dashboard and API docs.
+  </Card>
+</CardGroup>

@@ -8,6 +8,10 @@ import {
   drainSessionStoreLockQueuesForTest,
 } from "../config/sessions/store.js";
 import { captureEnv } from "../test-utils/env.js";
+import {
+  createSubagentRegistryTestDeps,
+  writeSubagentSessionEntry,
+} from "./subagent-registry.persistence.test-support.js";
 
 const hoisted = vi.hoisted(() => ({
   announceSpy: vi.fn(async () => true),
@@ -71,22 +75,6 @@ describe("subagent registry persistence resume", () => {
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
   let tempStateDir: string | null = null;
 
-  const resolveSessionStorePath = (stateDir: string, agentId: string) =>
-    path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
-
-  const readSessionStore = async (storePath: string) => {
-    try {
-      const raw = await fs.readFile(storePath, "utf8");
-      const parsed = JSON.parse(raw) as unknown;
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return parsed as Record<string, Record<string, unknown>>;
-      }
-    } catch {
-      // ignore
-    }
-    return {} as Record<string, Record<string, unknown>>;
-  };
-
   const writeChildSessionEntry = async (params: {
     sessionKey: string;
     sessionId?: string;
@@ -95,16 +83,14 @@ describe("subagent registry persistence resume", () => {
     if (!tempStateDir) {
       throw new Error("tempStateDir not initialized");
     }
-    const storePath = resolveSessionStorePath(tempStateDir, "main");
-    const store = await readSessionStore(storePath);
-    store[params.sessionKey] = {
-      ...store[params.sessionKey],
-      sessionId: params.sessionId ?? `sess-${Date.now()}`,
-      updatedAt: params.updatedAt ?? Date.now(),
-    };
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(storePath, `${JSON.stringify(store)}\n`, "utf8");
-    return storePath;
+    return await writeSubagentSessionEntry({
+      stateDir: tempStateDir,
+      agentId: "main",
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      updatedAt: params.updatedAt,
+      defaultSessionId: `sess-${Date.now()}`,
+    });
   };
 
   const flushQueuedRegistryWork = async () => {
@@ -129,19 +115,10 @@ describe("subagent registry persistence resume", () => {
       endedAt: 222,
     });
     mod.__testing.setDepsForTest({
-      callGateway: vi.mocked(callGatewayModule.callGateway),
-      cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
-      captureSubagentCompletionReply: vi.fn(async () => undefined),
-      ensureContextEnginesInitialized: vi.fn(),
-      ensureRuntimePluginsLoaded: vi.fn(),
-      loadConfig: vi.fn(() => ({})),
-      resolveAgentTimeoutMs: vi.fn(() => 100),
-      resolveContextEngine: vi.fn(async () => ({
-        info: { id: "test", name: "Test", version: "0.0.1" },
-        ingest: vi.fn(async () => ({ ingested: false })),
-        assemble: vi.fn(async ({ messages }) => ({ messages, estimatedTokens: 0 })),
-        compact: vi.fn(async () => ({ ok: false, compacted: false })),
-      })),
+      ...createSubagentRegistryTestDeps({
+        callGateway: vi.mocked(callGatewayModule.callGateway),
+        captureSubagentCompletionReply: vi.fn(async () => undefined),
+      }),
     });
     mod.resetSubagentRegistryForTests({ persist: false });
     vi.mocked(agentEventsModule.onAgentEvent).mockReset();

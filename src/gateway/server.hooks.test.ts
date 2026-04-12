@@ -102,6 +102,30 @@ async function expectFirstHookDelivery(
   return firstBody;
 }
 
+async function expectHookAgentSessionRouting(params: {
+  port: number;
+  requestSessionKey: string;
+  expectedSessionKey: string;
+}) {
+  mockIsolatedRunOkOnce();
+
+  const resAgent = await postHook(params.port, "/hooks/agent", {
+    message: "Do it",
+    name: "Email",
+    agentId: "hooks",
+    sessionKey: params.requestSessionKey,
+  });
+  expect(resAgent.status).toBe(200);
+  await waitForSystemEvent();
+
+  const routedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
+    | { sessionKey?: string; job?: { agentId?: string } }
+    | undefined;
+  expect(routedCall?.job?.agentId).toBe("hooks");
+  expect(routedCall?.sessionKey).toBe(params.expectedSessionKey);
+  drainSystemEvents(resolveMainKey());
+}
+
 describe("gateway server hooks", () => {
   test("handles auth, wake, and agent flows", async () => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
@@ -379,23 +403,11 @@ describe("gateway server hooks", () => {
     };
     setMainAndHooksAgents();
     await withGatewayServer(async ({ port }) => {
-      mockIsolatedRunOkOnce();
-
-      const resAgent = await postHook(port, "/hooks/agent", {
-        message: "Do it",
-        name: "Email",
-        agentId: "hooks",
-        sessionKey: "agent:hooks:slack:channel:c123",
+      await expectHookAgentSessionRouting({
+        port,
+        requestSessionKey: "agent:hooks:slack:channel:c123",
+        expectedSessionKey: "agent:hooks:slack:channel:c123",
       });
-      expect(resAgent.status).toBe(200);
-      await waitForSystemEvent();
-
-      const routedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
-        | { sessionKey?: string; job?: { agentId?: string } }
-        | undefined;
-      expect(routedCall?.job?.agentId).toBe("hooks");
-      expect(routedCall?.sessionKey).toBe("agent:hooks:slack:channel:c123");
-      drainSystemEvents(resolveMainKey());
     });
   });
 
@@ -408,23 +420,11 @@ describe("gateway server hooks", () => {
     };
     setMainAndHooksAgents();
     await withGatewayServer(async ({ port }) => {
-      mockIsolatedRunOkOnce();
-
-      const resAgent = await postHook(port, "/hooks/agent", {
-        message: "Do it",
-        name: "Email",
-        agentId: "hooks",
-        sessionKey: "agent:main:slack:channel:c123",
+      await expectHookAgentSessionRouting({
+        port,
+        requestSessionKey: "agent:main:slack:channel:c123",
+        expectedSessionKey: "agent:hooks:slack:channel:c123",
       });
-      expect(resAgent.status).toBe(200);
-      await waitForSystemEvent();
-
-      const routedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
-        | { sessionKey?: string; job?: { agentId?: string } }
-        | undefined;
-      expect(routedCall?.job?.agentId).toBe("hooks");
-      expect(routedCall?.sessionKey).toBe("agent:hooks:slack:channel:c123");
-      drainSystemEvents(resolveMainKey());
     });
   });
 

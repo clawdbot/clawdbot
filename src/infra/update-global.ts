@@ -29,6 +29,7 @@ const PRIMARY_PACKAGE_NAME = "openclaw";
 const ALL_PACKAGE_NAMES = [PRIMARY_PACKAGE_NAME] as const;
 const GLOBAL_RENAME_PREFIX = ".";
 export const OPENCLAW_MAIN_PACKAGE_SPEC = "github:openclaw/openclaw#main";
+const COREPACK_ENABLE_DOWNLOAD_PROMPT_DEFAULT = "0";
 const NPM_GLOBAL_INSTALL_QUIET_FLAGS = ["--no-fund", "--no-audit", "--loglevel=error"] as const;
 const NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS = [
   "--omit=optional",
@@ -140,6 +141,13 @@ function applyWindowsPackageInstallEnv(env: Record<string, string>) {
   env.NODE_LLAMA_CPP_SKIP_DOWNLOAD = "1";
 }
 
+function applyCorepackDownloadPromptEnv(env: Record<string, string>) {
+  const current = env.COREPACK_ENABLE_DOWNLOAD_PROMPT?.trim();
+  if (!current) {
+    env.COREPACK_ENABLE_DOWNLOAD_PROMPT = COREPACK_ENABLE_DOWNLOAD_PROMPT_DEFAULT;
+  }
+}
+
 export function resolveGlobalInstallSpec(params: {
   packageName: string;
   tag: string;
@@ -165,16 +173,23 @@ export async function createGlobalInstallEnv(
   env?: NodeJS.ProcessEnv,
 ): Promise<NodeJS.ProcessEnv | undefined> {
   const pathPrepend = await resolvePortableGitPathPrepend(env);
-  if (pathPrepend.length === 0 && process.platform !== "win32") {
+  const sourceEnv = env ?? process.env;
+  const hasCorepackDownloadPromptSetting = Boolean(
+    sourceEnv.COREPACK_ENABLE_DOWNLOAD_PROMPT?.trim(),
+  );
+  const requiresMergedEnv =
+    pathPrepend.length > 0 || process.platform === "win32" || !hasCorepackDownloadPromptSetting;
+  if (!requiresMergedEnv) {
     return env;
   }
   const merged = Object.fromEntries(
-    Object.entries(env ?? process.env)
+    Object.entries(sourceEnv)
       .filter(([, value]) => value != null)
       .map(([key, value]) => [key, String(value)]),
   ) as Record<string, string>;
   applyPathPrepend(merged, pathPrepend);
   applyWindowsPackageInstallEnv(merged);
+  applyCorepackDownloadPromptEnv(merged);
   return merged;
 }
 

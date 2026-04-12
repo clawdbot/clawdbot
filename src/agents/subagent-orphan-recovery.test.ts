@@ -50,6 +50,19 @@ function createActiveRuns(...runs: SubagentRunRecord[]) {
   return new Map(runs.map((run) => [run.runId, run] satisfies [string, SubagentRunRecord]));
 }
 
+function mockSingleAbortedSession(
+  overrides: Partial<NonNullable<ReturnType<typeof sessions.loadSessionStore>[string]>> = {},
+) {
+  vi.mocked(sessions.loadSessionStore).mockReturnValue({
+    "agent:main:subagent:test-session-1": {
+      sessionId: "session-abc",
+      updatedAt: Date.now(),
+      abortedLastRun: true,
+      ...overrides,
+    },
+  });
+}
+
 async function expectSkippedRecovery(store: ReturnType<typeof sessions.loadSessionStore>) {
   vi.mocked(sessions.loadSessionStore).mockReturnValue(store);
 
@@ -60,6 +73,13 @@ async function expectSkippedRecovery(store: ReturnType<typeof sessions.loadSessi
   expect(result.recovered).toBe(0);
   expect(result.skipped).toBe(1);
   expect(gateway.callGateway).not.toHaveBeenCalled();
+}
+
+function getResumeMessage() {
+  const call = vi.mocked(gateway.callGateway).mock.calls[0];
+  expect(call).toBeDefined();
+  const params = call[0].params as Record<string, unknown>;
+  return params.message as string;
 }
 
 describe("subagent-orphan-recovery", () => {
@@ -299,40 +319,23 @@ describe("subagent-orphan-recovery", () => {
   });
 
   it("truncates long task descriptions in resume message", async () => {
-    vi.mocked(sessions.loadSessionStore).mockReturnValue({
-      "agent:main:subagent:test-session-1": {
-        sessionId: "session-abc",
-        updatedAt: Date.now(),
-        abortedLastRun: true,
-      },
-    });
+    mockSingleAbortedSession();
 
     const longTask = "x".repeat(5000);
-    const activeRuns = new Map<string, SubagentRunRecord>();
-    activeRuns.set("run-1", createTestRunRecord({ task: longTask }));
+    const activeRuns = createActiveRuns(createTestRunRecord({ task: longTask }));
 
     await recoverOrphanedSubagentSessions({
       getActiveRuns: () => activeRuns,
     });
 
-    const callArgs = vi.mocked(gateway.callGateway).mock.calls[0];
-    const opts = callArgs[0];
-    const params = opts.params as Record<string, unknown>;
-    const message = params.message as string;
+    const message = getResumeMessage();
     // Message should contain truncated task (2000 chars + "...")
     expect(message.length).toBeLessThan(5000);
     expect(message).toContain("...");
   });
 
   it("includes last human message in resume when available", async () => {
-    vi.mocked(sessions.loadSessionStore).mockReturnValue({
-      "agent:main:subagent:test-session-1": {
-        sessionId: "session-abc",
-        updatedAt: Date.now(),
-        abortedLastRun: true,
-        sessionFile: "session-abc.jsonl",
-      },
-    });
+    mockSingleAbortedSession({ sessionFile: "session-abc.jsonl" });
 
     vi.mocked(sessionUtils.readSessionMessages).mockReturnValue([
       { role: "user", content: [{ type: "text", text: "Please build feature Y" }] },
@@ -341,40 +344,28 @@ describe("subagent-orphan-recovery", () => {
       { role: "assistant", content: [{ type: "text", text: "Sure, adding tests now." }] },
     ]);
 
-    const activeRuns = new Map<string, SubagentRunRecord>();
-    activeRuns.set("run-1", createTestRunRecord());
+    const activeRuns = createActiveRuns(createTestRunRecord());
 
     await recoverOrphanedSubagentSessions({ getActiveRuns: () => activeRuns });
 
-    const callArgs = vi.mocked(gateway.callGateway).mock.calls[0];
-    const params = callArgs[0].params as Record<string, unknown>;
-    const message = params.message as string;
+    const message = getResumeMessage();
     expect(message).toContain("Also add tests for it");
     expect(message).toContain("last message from the user");
   });
 
   it("adds config change hint when assistant messages reference config modifications", async () => {
-    vi.mocked(sessions.loadSessionStore).mockReturnValue({
-      "agent:main:subagent:test-session-1": {
-        sessionId: "session-abc",
-        updatedAt: Date.now(),
-        abortedLastRun: true,
-      },
-    });
+    mockSingleAbortedSession();
 
     vi.mocked(sessionUtils.readSessionMessages).mockReturnValue([
       { role: "user", content: "Update the config" },
       { role: "assistant", content: "I've modified openclaw.json to add the new setting." },
     ]);
 
-    const activeRuns = new Map<string, SubagentRunRecord>();
-    activeRuns.set("run-1", createTestRunRecord());
+    const activeRuns = createActiveRuns(createTestRunRecord());
 
     await recoverOrphanedSubagentSessions({ getActiveRuns: () => activeRuns });
 
-    const callArgs = vi.mocked(gateway.callGateway).mock.calls[0];
-    const params = callArgs[0].params as Record<string, unknown>;
-    const message = params.message as string;
+    const message = getResumeMessage();
     expect(message).toContain("config changes from your previous run were already applied");
   });
 

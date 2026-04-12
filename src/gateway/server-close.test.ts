@@ -27,6 +27,41 @@ vi.mock("../logging/subsystem.js", () => ({
 
 const { createGatewayCloseHandler } = await import("./server-close.js");
 
+function createGatewayCloseTestDeps(
+  overrides: Partial<Parameters<typeof createGatewayCloseHandler>[0]> = {},
+) {
+  return {
+    bonjourStop: null,
+    tailscaleCleanup: null,
+    canvasHost: null,
+    canvasHostServer: null,
+    stopChannel: vi.fn(async () => undefined),
+    pluginServices: null,
+    cron: { stop: vi.fn() },
+    heartbeatRunner: { stop: vi.fn() } as never,
+    updateCheckStop: null,
+    stopTaskRegistryMaintenance: null,
+    nodePresenceTimers: new Map(),
+    broadcast: vi.fn(),
+    tickInterval: setInterval(() => undefined, 60_000),
+    healthInterval: setInterval(() => undefined, 60_000),
+    dedupeCleanup: setInterval(() => undefined, 60_000),
+    mediaCleanup: null,
+    agentUnsub: null,
+    heartbeatUnsub: null,
+    transcriptUnsub: null,
+    lifecycleUnsub: null,
+    chatRunState: { clear: vi.fn() },
+    clients: new Set(),
+    configReloader: { stop: vi.fn(async () => undefined) },
+    httpServer: {
+      close: (cb: (err?: Error | null) => void) => cb(null),
+      closeIdleConnections: vi.fn(),
+    } as never,
+    ...overrides,
+  };
+}
+
 describe("createGatewayCloseHandler", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -82,41 +117,16 @@ describe("createGatewayCloseHandler", () => {
     const terminate = vi.fn(() => {
       closeCallback?.();
     });
-    const close = createGatewayCloseHandler({
-      bonjourStop: null,
-      tailscaleCleanup: null,
-      canvasHost: null,
-      canvasHostServer: null,
-      stopChannel: vi.fn(async () => undefined),
-      pluginServices: null,
-      cron: { stop: vi.fn() },
-      heartbeatRunner: { stop: vi.fn() } as never,
-      updateCheckStop: null,
-      stopTaskRegistryMaintenance: null,
-      nodePresenceTimers: new Map(),
-      broadcast: vi.fn(),
-      tickInterval: setInterval(() => undefined, 60_000),
-      healthInterval: setInterval(() => undefined, 60_000),
-      dedupeCleanup: setInterval(() => undefined, 60_000),
-      mediaCleanup: null,
-      agentUnsub: null,
-      heartbeatUnsub: null,
-      transcriptUnsub: null,
-      lifecycleUnsub: null,
-      chatRunState: { clear: vi.fn() },
-      clients: new Set(),
-      configReloader: { stop: vi.fn(async () => undefined) },
-      wss: {
-        clients: new Set([{ terminate }]),
-        close: (cb: () => void) => {
-          closeCallback = cb;
-        },
-      } as never,
-      httpServer: {
-        close: (cb: (err?: Error | null) => void) => cb(null),
-        closeIdleConnections: vi.fn(),
-      } as never,
-    });
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        wss: {
+          clients: new Set([{ terminate }]),
+          close: (cb: () => void) => {
+            closeCallback = cb;
+          },
+        } as never,
+      }),
+    );
 
     const closePromise = close({ reason: "test shutdown" });
     await vi.advanceTimersByTimeAsync(WEBSOCKET_CLOSE_GRACE_MS);
@@ -133,39 +143,14 @@ describe("createGatewayCloseHandler", () => {
   it("continues shutdown when websocket close hangs without tracked clients", async () => {
     vi.useFakeTimers();
 
-    const close = createGatewayCloseHandler({
-      bonjourStop: null,
-      tailscaleCleanup: null,
-      canvasHost: null,
-      canvasHostServer: null,
-      stopChannel: vi.fn(async () => undefined),
-      pluginServices: null,
-      cron: { stop: vi.fn() },
-      heartbeatRunner: { stop: vi.fn() } as never,
-      updateCheckStop: null,
-      stopTaskRegistryMaintenance: null,
-      nodePresenceTimers: new Map(),
-      broadcast: vi.fn(),
-      tickInterval: setInterval(() => undefined, 60_000),
-      healthInterval: setInterval(() => undefined, 60_000),
-      dedupeCleanup: setInterval(() => undefined, 60_000),
-      mediaCleanup: null,
-      agentUnsub: null,
-      heartbeatUnsub: null,
-      transcriptUnsub: null,
-      lifecycleUnsub: null,
-      chatRunState: { clear: vi.fn() },
-      clients: new Set(),
-      configReloader: { stop: vi.fn(async () => undefined) },
-      wss: {
-        clients: new Set(),
-        close: () => undefined,
-      } as never,
-      httpServer: {
-        close: (cb: (err?: Error | null) => void) => cb(null),
-        closeIdleConnections: vi.fn(),
-      } as never,
-    });
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        wss: {
+          clients: new Set(),
+          close: () => undefined,
+        } as never,
+      }),
+    );
 
     const closePromise = close({ reason: "test shutdown" });
     await vi.advanceTimersByTimeAsync(WEBSOCKET_CLOSE_GRACE_MS + WEBSOCKET_CLOSE_FORCE_CONTINUE_MS);

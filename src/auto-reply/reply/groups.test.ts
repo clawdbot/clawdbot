@@ -25,7 +25,7 @@ describe("group runtime loading", () => {
           Provider: "whatsapp",
         },
       }),
-    ).toContain('You are in the Whatsapp group chat "Ops".');
+    ).toContain('You are in the WhatsApp group chat "Ops".');
     expect(
       groups.buildGroupIntro({
         cfg: {} as OpenClawConfig,

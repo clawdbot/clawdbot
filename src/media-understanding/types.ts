@@ -7,6 +7,13 @@ export type MediaUnderstandingKind =
 
 export type MediaUnderstandingCapability = "image" | "audio" | "video";
 
+export type MediaUnderstandingCapabilityRegistry = Map<
+  string,
+  {
+    capabilities?: MediaUnderstandingCapability[];
+  }
+>;
+
 export type MediaAttachment = {
   path?: string;
   url?: string;
@@ -25,6 +32,7 @@ export type MediaUnderstandingOutput = {
 
 export type MediaUnderstandingDecisionOutcome =
   | "success"
+  | "failed"
   | "skipped"
   | "disabled"
   | "no-attachment"
@@ -37,6 +45,8 @@ export type MediaUnderstandingModelDecision = {
   outcome: "success" | "skipped" | "failed";
   reason?: string;
 };
+
+export type MediaUnderstandingAttemptOutcome = MediaUnderstandingModelDecision["outcome"];
 
 export type MediaUnderstandingAttachmentDecision = {
   attachmentIndex: number;

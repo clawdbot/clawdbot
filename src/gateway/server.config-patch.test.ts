@@ -70,6 +70,30 @@ async function expectSchemaLookupInvalid(path: unknown) {
   expect(res.error?.message ?? "").toContain("invalid config.schema.lookup params");
 }
 
+async function writeUnresolvedAuthProfileTokenRef(missingEnvVar: string) {
+  delete process.env[missingEnvVar];
+  const authStorePath = path.join(resolveOpenClawAgentDir(), AUTH_PROFILE_FILENAME);
+  await fs.mkdir(path.dirname(authStorePath), { recursive: true });
+  await fs.writeFile(
+    authStorePath,
+    `${JSON.stringify(
+      {
+        version: 1,
+        profiles: {
+          "custom:token": {
+            type: "token",
+            provider: "custom",
+            tokenRef: { source: "env", provider: "default", id: missingEnvVar },
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf-8",
+  );
+}
+
 beforeEach(() => {
   controlPlaneRateLimitTesting.resetControlPlaneRateLimitState();
 });
@@ -135,28 +159,7 @@ describe("gateway config methods", () => {
 
   it("does not reject config.set for unresolved auth-profile refs outside submitted config", async () => {
     const missingEnvVar = `OPENCLAW_MISSING_AUTH_PROFILE_REF_${Date.now()}`;
-    delete process.env[missingEnvVar];
-
-    const authStorePath = path.join(resolveOpenClawAgentDir(), AUTH_PROFILE_FILENAME);
-    await fs.mkdir(path.dirname(authStorePath), { recursive: true });
-    await fs.writeFile(
-      authStorePath,
-      `${JSON.stringify(
-        {
-          version: 1,
-          profiles: {
-            "custom:token": {
-              type: "token",
-              provider: "custom",
-              tokenRef: { source: "env", provider: "default", id: missingEnvVar },
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
+    await writeUnresolvedAuthProfileTokenRef(missingEnvVar);
 
     const current = await rpcReq<{
       hash?: string;
@@ -366,28 +369,7 @@ describe("gateway config.apply", () => {
 
   it("does not reject config.apply for unresolved auth-profile refs outside submitted config", async () => {
     const missingEnvVar = `OPENCLAW_MISSING_AUTH_PROFILE_REF_APPLY_${Date.now()}`;
-    delete process.env[missingEnvVar];
-
-    const authStorePath = path.join(resolveOpenClawAgentDir(), AUTH_PROFILE_FILENAME);
-    await fs.mkdir(path.dirname(authStorePath), { recursive: true });
-    await fs.writeFile(
-      authStorePath,
-      `${JSON.stringify(
-        {
-          version: 1,
-          profiles: {
-            "custom:token": {
-              type: "token",
-              provider: "custom",
-              tokenRef: { source: "env", provider: "default", id: missingEnvVar },
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
+    await writeUnresolvedAuthProfileTokenRef(missingEnvVar);
 
     const current = await rpcReq<{
       config?: Record<string, unknown>;

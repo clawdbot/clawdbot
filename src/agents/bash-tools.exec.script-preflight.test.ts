@@ -15,6 +15,42 @@ afterEach(() => {
   __setFsSafeTestHooksForTest();
 });
 
+async function expectSymlinkSwapDuringPreflightToAvoidErrors(params: {
+  hookName: "afterPreOpenLstat" | "beforeOpen";
+  callId: string;
+}) {
+  await withTempDir("openclaw-exec-preflight-open-race-", async (parent) => {
+    const workdir = path.join(parent, "workdir");
+    const scriptPath = path.join(workdir, "script.js");
+    const outsidePath = path.join(parent, "outside.js");
+    await fs.mkdir(workdir, { recursive: true });
+    await fs.writeFile(scriptPath, 'console.log("inside")', "utf-8");
+    await fs.writeFile(outsidePath, 'console.log("$DM_JSON outside")', "utf-8");
+    const scriptRealPath = await fs.realpath(scriptPath);
+
+    let swapped = false;
+    __setFsSafeTestHooksForTest({
+      [params.hookName]: async (target: string) => {
+        if (swapped || path.resolve(target) !== scriptRealPath) {
+          return;
+        }
+        await fs.rm(scriptPath, { force: true });
+        await fs.symlink(outsidePath, scriptPath);
+        swapped = true;
+      },
+    });
+
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+    const result = await tool.execute(params.callId, {
+      command: "node script.js",
+      workdir,
+    });
+    const text = result.content.find((block) => block.type === "text")?.text ?? "";
+    expect(swapped).toBe(true);
+    expect(text).not.toMatch(/exec preflight:/);
+  });
+}
+
 describeNonWin("exec script preflight", () => {
   it("blocks shell env var injection tokens in python scripts before execution", async () => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
@@ -323,68 +359,16 @@ describeNonWin("exec script preflight", () => {
   });
 
   it("does not trust a swapped script pathname between validation and read", async () => {
-    await withTempDir("openclaw-exec-preflight-race-", async (parent) => {
-      const workdir = path.join(parent, "workdir");
-      const scriptPath = path.join(workdir, "script.js");
-      const outsidePath = path.join(parent, "outside.js");
-      await fs.mkdir(workdir, { recursive: true });
-      await fs.writeFile(scriptPath, 'console.log("inside")', "utf-8");
-      await fs.writeFile(outsidePath, 'console.log("$DM_JSON outside")', "utf-8");
-      const scriptRealPath = await fs.realpath(scriptPath);
-
-      let swapped = false;
-      __setFsSafeTestHooksForTest({
-        afterPreOpenLstat: async (target) => {
-          if (swapped || path.resolve(target) !== scriptRealPath) {
-            return;
-          }
-          await fs.rm(scriptPath, { force: true });
-          await fs.symlink(outsidePath, scriptPath);
-          swapped = true;
-        },
-      });
-
-      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
-      const result = await tool.execute("call-swapped-pathname", {
-        command: "node script.js",
-        workdir,
-      });
-      const text = result.content.find((block) => block.type === "text")?.text ?? "";
-      expect(swapped).toBe(true);
-      expect(text).not.toMatch(/exec preflight:/);
+    await expectSymlinkSwapDuringPreflightToAvoidErrors({
+      hookName: "afterPreOpenLstat",
+      callId: "call-swapped-pathname",
     });
   });
 
   it("handles pre-open symlink swaps without surfacing preflight errors", async () => {
-    await withTempDir("openclaw-exec-preflight-open-race-", async (parent) => {
-      const workdir = path.join(parent, "workdir");
-      const scriptPath = path.join(workdir, "script.js");
-      const outsidePath = path.join(parent, "outside.js");
-      await fs.mkdir(workdir, { recursive: true });
-      await fs.writeFile(scriptPath, 'console.log("inside")', "utf-8");
-      await fs.writeFile(outsidePath, 'console.log("$DM_JSON outside")', "utf-8");
-      const scriptRealPath = await fs.realpath(scriptPath);
-
-      let swapped = false;
-      __setFsSafeTestHooksForTest({
-        beforeOpen: async (target) => {
-          if (swapped || path.resolve(target) !== scriptRealPath) {
-            return;
-          }
-          await fs.rm(scriptPath, { force: true });
-          await fs.symlink(outsidePath, scriptPath);
-          swapped = true;
-        },
-      });
-
-      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
-      const result = await tool.execute("call-pre-open-swapped-pathname", {
-        command: "node script.js",
-        workdir,
-      });
-      const text = result.content.find((block) => block.type === "text")?.text ?? "";
-      expect(swapped).toBe(true);
-      expect(text).not.toMatch(/exec preflight:/);
+    await expectSymlinkSwapDuringPreflightToAvoidErrors({
+      hookName: "beforeOpen",
+      callId: "call-pre-open-swapped-pathname",
     });
   });
 

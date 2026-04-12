@@ -104,6 +104,25 @@ describe("startGatewayMaintenanceTimers", () => {
     stopMaintenanceTimers(timers);
   });
 
+  it("broadcasts tick keepalives without dropIfSlow", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-12T00:00:00Z"));
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const broadcast = vi.fn();
+
+    const timers = startGatewayMaintenanceTimers({
+      ...createMaintenanceTimerDeps(),
+      broadcast,
+    });
+
+    broadcast.mockClear();
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(broadcast).toHaveBeenCalledWith("tick", { ts: Date.now() });
+
+    stopMaintenanceTimers(timers);
+  });
+
   it("skips overlapping media cleanup runs", async () => {
     vi.useFakeTimers();
     let resolveCleanup = () => {};

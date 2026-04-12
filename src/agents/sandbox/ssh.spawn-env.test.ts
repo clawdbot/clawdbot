@@ -32,6 +32,21 @@ vi.mock("node:child_process", async () => {
   };
 });
 
+function mockSuccessfulSpawnCalls(times = 1) {
+  let chain = spawnMock;
+  for (let i = 0; i < times; i += 1) {
+    chain = chain.mockImplementationOnce(
+      (_command: string, _args: readonly string[], _options: SpawnOptions): ChildProcess => {
+        const child = createMockChildProcess();
+        process.nextTick(() => {
+          child.emit("close", 0);
+        });
+        return child as unknown as ChildProcess;
+      },
+    );
+  }
+}
+
 let runSshSandboxCommand: typeof import("./ssh.js").runSshSandboxCommand;
 let uploadDirectoryToSshTarget: typeof import("./ssh.js").uploadDirectoryToSshTarget;
 
@@ -60,15 +75,7 @@ describe("ssh subprocess env sanitization", () => {
   });
 
   it("filters blocked secrets before spawning ssh commands", async () => {
-    spawnMock.mockImplementationOnce(
-      (_command: string, _args: readonly string[], _options: SpawnOptions): ChildProcess => {
-        const child = createMockChildProcess();
-        process.nextTick(() => {
-          child.emit("close", 0);
-        });
-        return child as unknown as ChildProcess;
-      },
-    );
+    mockSuccessfulSpawnCalls();
 
     process.env.OPENAI_API_KEY = "sk-test-secret";
     process.env.LANG = "en_US.UTF-8";
@@ -89,25 +96,7 @@ describe("ssh subprocess env sanitization", () => {
   });
 
   it("filters blocked secrets before spawning ssh uploads", async () => {
-    spawnMock
-      .mockImplementationOnce(
-        (_command: string, _args: readonly string[], _options: SpawnOptions): ChildProcess => {
-          const child = createMockChildProcess();
-          process.nextTick(() => {
-            child.emit("close", 0);
-          });
-          return child as unknown as ChildProcess;
-        },
-      )
-      .mockImplementationOnce(
-        (_command: string, _args: readonly string[], _options: SpawnOptions): ChildProcess => {
-          const child = createMockChildProcess();
-          process.nextTick(() => {
-            child.emit("close", 0);
-          });
-          return child as unknown as ChildProcess;
-        },
-      );
+    mockSuccessfulSpawnCalls(2);
 
     process.env.ANTHROPIC_API_KEY = "sk-test-secret";
     process.env.NODE_ENV = "test";
@@ -133,25 +122,7 @@ describe("ssh subprocess env sanitization", () => {
   it.runIf(process.platform !== "win32")(
     "allows in-workspace symlinks to upload normally",
     async () => {
-      spawnMock
-        .mockImplementationOnce(
-          (_command: string, _args: readonly string[], _options: SpawnOptions): ChildProcess => {
-            const child = createMockChildProcess();
-            process.nextTick(() => {
-              child.emit("close", 0);
-            });
-            return child as unknown as ChildProcess;
-          },
-        )
-        .mockImplementationOnce(
-          (_command: string, _args: readonly string[], _options: SpawnOptions): ChildProcess => {
-            const child = createMockChildProcess();
-            process.nextTick(() => {
-              child.emit("close", 0);
-            });
-            return child as unknown as ChildProcess;
-          },
-        );
+      mockSuccessfulSpawnCalls(2);
 
       const localDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ssh-upload-safe-"));
       tempDirs.push(localDir);

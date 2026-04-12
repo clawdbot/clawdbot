@@ -64,7 +64,15 @@ const {
     targetArgs: string[];
     watchMode: boolean;
   };
-  resolveParallelFullSuiteConcurrency: (specCount: number, env?: NodeJS.ProcessEnv) => number;
+  resolveParallelFullSuiteConcurrency: (
+    specCount: number,
+    env?: NodeJS.ProcessEnv,
+    hostInfo?: {
+      cpuCount?: number;
+      loadAverage1m?: number;
+      totalMemoryBytes?: number;
+    },
+  ) => number;
 };
 
 const VITEST_NODE_PREFIX = [
@@ -486,9 +494,17 @@ describe("test-projects args", () => {
 
   it("uses a bounded local default for full-suite project parallelism", () => {
     expect(
-      resolveParallelFullSuiteConcurrency(58, {
-        OPENCLAW_TEST_PROJECTS_LEAF_SHARDS: "1",
-      }),
+      resolveParallelFullSuiteConcurrency(
+        58,
+        {
+          OPENCLAW_TEST_PROJECTS_LEAF_SHARDS: "1",
+        },
+        {
+          cpuCount: 8,
+          loadAverage1m: 0,
+          totalMemoryBytes: 16 * 1024 ** 3,
+        },
+      ),
     ).toBe(4);
   });
 

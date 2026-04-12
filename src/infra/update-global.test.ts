@@ -11,6 +11,7 @@ import {
   cleanupGlobalRenameDirs,
   detectGlobalInstallManagerByPresence,
   detectGlobalInstallManagerForRoot,
+  createGlobalInstallEnv,
   globalInstallArgs,
   globalInstallFallbackArgs,
   isExplicitPackageInstallSpec,
@@ -87,6 +88,20 @@ describe("update global helpers", () => {
         tag: "https://example.com/openclaw-main.tgz",
       }),
     ).toBe("https://example.com/openclaw-main.tgz");
+  });
+
+  it("defaults corepack download prompts off for global install env", async () => {
+    await expect(createGlobalInstallEnv({})).resolves.toMatchObject({
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+    });
+
+    await expect(
+      createGlobalInstallEnv({
+        COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
+      }),
+    ).resolves.toMatchObject({
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
+    });
   });
 
   it("classifies main and raw install specs separately from registry selectors", () => {

@@ -4,6 +4,19 @@ type AnyMock = Mock<(...args: unknown[]) => unknown>;
 
 const programMocks = vi.hoisted(() => {
   const setupWizardCommand = vi.fn();
+  const runtime = {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(() => {
+      throw new Error("exit");
+    }),
+    writeStdout: vi.fn((value: string) => {
+      runtime.log(value.endsWith("\n") ? value.slice(0, -1) : value);
+    }),
+    writeJson: vi.fn((value: unknown, space = 2) => {
+      runtime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
+    }),
+  };
   return {
     messageCommand: vi.fn(),
     statusCommand: vi.fn(),
@@ -19,13 +32,7 @@ const programMocks = vi.hoisted(() => {
     loadAndMaybeMigrateDoctorConfig: vi.fn(),
     ensureConfigReady: vi.fn(),
     ensurePluginRegistryLoaded: vi.fn(),
-    runtime: {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(() => {
-        throw new Error("exit");
-      }),
-    },
+    runtime,
   };
 });
 
@@ -49,6 +56,8 @@ export const runtime = programMocks.runtime as {
   log: Mock<(...args: unknown[]) => void>;
   error: Mock<(...args: unknown[]) => void>;
   exit: Mock<(...args: unknown[]) => never>;
+  writeStdout: Mock<(...args: [string]) => void>;
+  writeJson: Mock<(...args: [unknown, number?]) => void>;
 };
 
 // Keep these mocks at top level so Vitest does not warn about hoisted nested mocks.

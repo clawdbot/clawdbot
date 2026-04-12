@@ -44,7 +44,7 @@ afterEach(() => {
 });
 
 describe("openUrl", () => {
-  it("quotes URLs on win32 so '&' is not treated as cmd separator", async () => {
+  it("passes OAuth URLs to explorer.exe on win32 without cmd parsing", async () => {
     vi.stubEnv("VITEST", "");
     vi.stubEnv("NODE_ENV", "");
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
@@ -59,23 +59,20 @@ describe("openUrl", () => {
 
     expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(1);
     const [argv, options] = mocks.runCommandWithTimeout.mock.calls[0] ?? [];
-    expect(argv?.slice(0, 4)).toEqual(["cmd", "/c", "start", '""']);
-    expect(argv?.at(-1)).toBe(`"${url}"`);
-    expect(options).toMatchObject({
-      timeoutMs: 5_000,
-      windowsVerbatimArguments: true,
-    });
+    expect(argv).toEqual(["explorer.exe", url]);
+    expect(options).toMatchObject({ timeoutMs: 5_000 });
+    expect(options?.windowsVerbatimArguments).toBeUndefined();
 
     platformSpy.mockRestore();
   });
 });
 
 describe("resolveBrowserOpenCommand", () => {
-  it("marks win32 commands as quoteUrl=true", async () => {
+  it("uses explorer.exe on win32", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const resolved = await resolveBrowserOpenCommand();
-    expect(resolved.argv).toEqual(["cmd", "/c", "start", ""]);
-    expect(resolved.quoteUrl).toBe(true);
+    expect(resolved.argv).toEqual(["explorer.exe"]);
+    expect(resolved.command).toBe("explorer.exe");
     platformSpy.mockRestore();
   });
 });

@@ -550,6 +550,22 @@ describe("capability cli", () => {
     );
   });
 
+  it("surfaces the underlying transcription failure for audio transcribe", async () => {
+    mocks.transcribeAudioFile.mockRejectedValueOnce(
+      new Error("Audio transcription response missing text"),
+    );
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "audio", "transcribe", "--file", "memo.m4a", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringMatching(/Audio transcription response missing text/),
+    );
+  });
+
   it("forwards transcription prompt and language hints", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,

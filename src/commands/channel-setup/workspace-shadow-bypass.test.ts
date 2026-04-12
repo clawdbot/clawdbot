@@ -55,6 +55,29 @@ beforeEach(() => {
   listChatChannels.mockReturnValue([]);
 });
 
+function createWorkspaceCatalogEntry(id: string, label: string) {
+  return {
+    id,
+    pluginId: id,
+    origin: "workspace",
+    meta: {
+      id,
+      label,
+      selectionLabel: label,
+      docsPath: "/",
+      blurb: "t",
+      order: 1,
+    },
+    install: { npmSpec: id },
+  };
+}
+
+function mockWorkspaceOnlyCatalogEntry(entry: ReturnType<typeof createWorkspaceCatalogEntry>) {
+  listChannelPluginCatalogEntries.mockImplementation((opts?: unknown) =>
+    (opts as { excludeWorkspace?: boolean } | undefined)?.excludeWorkspace ? [] : [entry],
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Regression: resolveChannelSetupEntries (discovery.ts)
 // ---------------------------------------------------------------------------
@@ -217,25 +240,7 @@ describe("resolveChannelSetupEntries workspace shadow exclusion (GHSA-2qrv-rc5x-
   });
 
   it("keeps workspace-only install candidates visible until the user trusts them", () => {
-    const workspaceEntry = {
-      id: "my-cool-plugin",
-      pluginId: "my-cool-plugin",
-      origin: "workspace",
-      meta: {
-        id: "my-cool-plugin",
-        label: "My Cool Plugin",
-        selectionLabel: "My Cool Plugin",
-        docsPath: "/",
-        blurb: "t",
-        order: 1,
-      },
-      install: { npmSpec: "my-cool-plugin" },
-    };
-    listChannelPluginCatalogEntries.mockImplementation((opts?: unknown) =>
-      (opts as { excludeWorkspace?: boolean } | undefined)?.excludeWorkspace
-        ? []
-        : [workspaceEntry],
-    );
+    mockWorkspaceOnlyCatalogEntry(createWorkspaceCatalogEntry("my-cool-plugin", "My Cool Plugin"));
 
     const result = resolveChannelSetupEntries({
       cfg: {} as never,
@@ -249,25 +254,7 @@ describe("resolveChannelSetupEntries workspace shadow exclusion (GHSA-2qrv-rc5x-
   });
 
   it("does not surface untrusted workspace-only entries as installed", () => {
-    const workspaceEntry = {
-      id: "my-cool-plugin",
-      pluginId: "my-cool-plugin",
-      origin: "workspace",
-      meta: {
-        id: "my-cool-plugin",
-        label: "My Cool Plugin",
-        selectionLabel: "My Cool Plugin",
-        docsPath: "/",
-        blurb: "t",
-        order: 1,
-      },
-      install: { npmSpec: "my-cool-plugin" },
-    };
-    listChannelPluginCatalogEntries.mockImplementation((opts?: unknown) =>
-      (opts as { excludeWorkspace?: boolean } | undefined)?.excludeWorkspace
-        ? []
-        : [workspaceEntry],
-    );
+    mockWorkspaceOnlyCatalogEntry(createWorkspaceCatalogEntry("my-cool-plugin", "My Cool Plugin"));
     applyPluginAutoEnable.mockImplementation(({ config }: { config: unknown }) => ({
       config: {
         ...(config as Record<string, unknown>),

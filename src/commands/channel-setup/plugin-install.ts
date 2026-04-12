@@ -10,13 +10,13 @@ import {
   findBundledPluginSourceInMap,
   resolveBundledPluginSources,
 } from "../../plugins/bundled-sources.js";
+import { resolveDiscoverableScopedChannelPluginIds } from "../../plugins/channel-plugin-ids.js";
 import { clearPluginDiscoveryCache } from "../../plugins/discovery.js";
 import { enablePluginInConfig } from "../../plugins/enable.js";
 import { installPluginFromNpmSpec } from "../../plugins/install.js";
 import { buildNpmResolutionInstallFields, recordPluginInstall } from "../../plugins/installs.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import { createPluginLoaderLogger } from "../../plugins/logger.js";
-import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
 import { getActivePluginChannelRegistry } from "../../plugins/runtime.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -286,13 +286,14 @@ function resolveUniqueManifestScopedChannelPluginId(params: {
   channel: string;
   workspaceDir?: string;
 }): string | undefined {
-  const matches = loadPluginManifestRegistry({
+  const matches = resolveDiscoverableScopedChannelPluginIds({
     config: params.cfg,
+    channelIds: [params.channel],
     workspaceDir: params.workspaceDir,
-    cache: false,
     env: process.env,
-  }).plugins.filter((plugin) => plugin.channels.includes(params.channel));
-  return matches.length === 1 ? matches[0]?.id : undefined;
+    cache: false,
+  });
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 export function reloadChannelSetupPluginRegistryForChannel(params: {

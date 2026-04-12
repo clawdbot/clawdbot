@@ -78,4 +78,18 @@ describe("loadPluginMetadataRegistrySnapshot", () => {
       }),
     );
   });
+
+  it("preserves explicit empty plugin scopes on metadata snapshots", () => {
+    loadPluginMetadataRegistrySnapshot({
+      config: { plugins: {} },
+      onlyPluginIds: [],
+    });
+
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: [],
+        mode: "validate",
+      }),
+    );
+  });
 });

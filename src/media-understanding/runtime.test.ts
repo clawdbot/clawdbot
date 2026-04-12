@@ -101,4 +101,43 @@ describe("media-understanding runtime", () => {
     expect(mocks.runCapability).toHaveBeenCalledTimes(1);
     expect(mocks.cleanup).toHaveBeenCalledTimes(1);
   });
+
+  it("surfaces the underlying provider failure when media understanding fails", async () => {
+    mocks.normalizeMediaAttachments.mockReturnValue([
+      { index: 0, path: "/tmp/sample.ogg", mime: "audio/ogg" },
+    ]);
+    mocks.runCapability.mockResolvedValue({
+      outputs: [],
+      decision: {
+        capability: "audio",
+        outcome: "failed",
+        attachments: [
+          {
+            attachmentIndex: 0,
+            attempts: [
+              {
+                type: "provider",
+                provider: "openai",
+                model: "gpt-4o-mini-transcribe",
+                outcome: "failed",
+                reason: "Error: Audio transcription response missing text",
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    await expect(
+      runMediaUnderstandingFile({
+        capability: "audio",
+        filePath: "/tmp/sample.ogg",
+        mime: "audio/ogg",
+        cfg: {} as OpenClawConfig,
+        agentDir: "/tmp/agent",
+      }),
+    ).rejects.toThrow("Audio transcription response missing text");
+
+    expect(mocks.cleanup).toHaveBeenCalledTimes(1);
+  });
 });

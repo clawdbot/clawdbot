@@ -18,6 +18,7 @@ import {
   resetDiscordComponentRuntimeMocks,
   resolveStorePathMock,
 } from "../test-support/component-runtime.js";
+import type { DiscordGuildEntryResolved } from "./allow-list.js";
 
 type CreateDiscordComponentButton =
   typeof import("./agent-components.js").createDiscordComponentButton;
@@ -478,7 +479,7 @@ describe("discord component interactions", () => {
   async function expectBlockedGuildButton(params: {
     guildId: string;
     interactionId: string;
-    guildEntries: Record<string, unknown>;
+    guildEntries: Record<string, DiscordGuildEntryResolved>;
   }) {
     registerDiscordComponentEntries({
       entries: [createButtonEntry()],

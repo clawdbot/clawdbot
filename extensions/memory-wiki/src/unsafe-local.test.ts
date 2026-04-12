@@ -103,4 +103,30 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
       code: "ENOENT",
     });
   });
+
+  it("caps composed unsafe-local filenames to the filesystem component limit", async () => {
+    const privateDir = await createPrivateDir(`${"漢".repeat(50)}-private`);
+    const nestedDir = path.join(privateDir, `${"語".repeat(50)}-nested`);
+    const secretPath = path.join(nestedDir, `${"録".repeat(50)}.md`);
+    await fs.mkdir(nestedDir, { recursive: true });
+    await fs.writeFile(secretPath, "# very private\n", "utf8");
+
+    const { rootDir: vaultDir, config } = await createVault({
+      rootDir: nextCaseRoot("long-unsafe-vault"),
+      config: {
+        vaultMode: "unsafe-local",
+        unsafeLocal: {
+          allowPrivateMemoryCoreAccess: true,
+          paths: [privateDir],
+        },
+      },
+    });
+
+    const result = await syncMemoryWikiUnsafeLocalSources(config);
+    const pagePath = result.pagePaths[0] ?? "";
+
+    expect(result.importedCount).toBe(1);
+    expect(Buffer.byteLength(path.basename(pagePath))).toBeLessThanOrEqual(255);
+    await expect(fs.stat(path.join(vaultDir, pagePath))).resolves.toBeTruthy();
+  });
 });

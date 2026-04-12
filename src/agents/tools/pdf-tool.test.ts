@@ -9,6 +9,7 @@ import * as modelAuth from "../model-auth.js";
 import * as modelsConfig from "../models-config.js";
 import * as modelDiscovery from "../pi-model-discovery.js";
 import * as pdfNativeProviders from "./pdf-native-providers.js";
+import { resetPdfToolAuthEnv, withTempPdfAgentDir } from "./pdf-tool.test-support.js";
 
 const completeMock = vi.hoisted(() => vi.fn());
 
@@ -29,15 +30,6 @@ async function loadCreatePdfTool() {
     ({ createPdfTool, PdfToolSchema } = await import("./pdf-tool.js"));
   }
   return createPdfTool;
-}
-
-async function withTempAgentDir<T>(run: (agentDir: string) => Promise<T>): Promise<T> {
-  const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pdf-"));
-  try {
-    return await run(agentDir);
-  } finally {
-    await fs.rm(agentDir, { recursive: true, force: true });
-  }
 }
 
 const ANTHROPIC_PDF_MODEL = "anthropic/claude-opus-4-6";
@@ -66,25 +58,11 @@ type PdfToolInstance = ReturnType<typeof requirePdfTool>;
 async function withConfiguredPdfTool(
   run: (tool: PdfToolInstance, agentDir: string) => Promise<void>,
 ) {
-  await withTempAgentDir(async (agentDir) => {
+  await withTempPdfAgentDir(async (agentDir) => {
     const cfg = withPdfModel(ANTHROPIC_PDF_MODEL);
     const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
     await run(tool, agentDir);
   });
-}
-
-function resetAuthEnv() {
-  vi.stubEnv("OPENAI_API_KEY", "");
-  vi.stubEnv("ANTHROPIC_API_KEY", "");
-  vi.stubEnv("ANTHROPIC_OAUTH_TOKEN", "");
-  vi.stubEnv("GEMINI_API_KEY", "");
-  vi.stubEnv("GOOGLE_API_KEY", "");
-  vi.stubEnv("MINIMAX_API_KEY", "");
-  vi.stubEnv("ZAI_API_KEY", "");
-  vi.stubEnv("Z_AI_API_KEY", "");
-  vi.stubEnv("COPILOT_GITHUB_TOKEN", "");
-  vi.stubEnv("GH_TOKEN", "");
-  vi.stubEnv("GITHUB_TOKEN", "");
 }
 
 function withPdfModel(primary: string): OpenClawConfig {
@@ -132,7 +110,7 @@ describe("createPdfTool", () => {
   const priorFetch = global.fetch;
 
   beforeEach(() => {
-    resetAuthEnv();
+    resetPdfToolAuthEnv();
     completeMock.mockReset();
   });
 
@@ -177,7 +155,7 @@ describe("createPdfTool", () => {
   });
 
   it("respects fsPolicy.workspaceOnly for non-sandbox pdf paths", async () => {
-    await withTempAgentDir(async (agentDir) => {
+    await withTempPdfAgentDir(async (agentDir) => {
       const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pdf-ws-"));
       const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pdf-out-"));
       try {
@@ -217,7 +195,7 @@ describe("createPdfTool", () => {
   });
 
   it("uses native PDF path without eager extraction", async () => {
-    await withTempAgentDir(async (agentDir) => {
+    await withTempPdfAgentDir(async (agentDir) => {
       await stubPdfToolInfra(agentDir, { provider: "anthropic", input: ["text", "document"] });
       vi.spyOn(pdfNativeProviders, "anthropicAnalyzePdf").mockResolvedValue("native summary");
       const extractSpy = vi.spyOn(pdfExtractModule, "extractPdfContent");
@@ -238,7 +216,7 @@ describe("createPdfTool", () => {
   });
 
   it("rejects pages parameter for native PDF providers", async () => {
-    await withTempAgentDir(async (agentDir) => {
+    await withTempPdfAgentDir(async (agentDir) => {
       await stubPdfToolInfra(agentDir, { provider: "anthropic", input: ["text", "document"] });
       const cfg = withPdfModel(ANTHROPIC_PDF_MODEL);
       const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
@@ -254,7 +232,7 @@ describe("createPdfTool", () => {
   });
 
   it("uses extraction fallback for non-native models", async () => {
-    await withTempAgentDir(async (agentDir) => {
+    await withTempPdfAgentDir(async (agentDir) => {
       await stubPdfToolInfra(agentDir, { provider: "openai", input: ["text"] });
       const extractSpy = vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
         text: "Extracted content",

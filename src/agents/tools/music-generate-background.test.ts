@@ -1,35 +1,33 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MUSIC_GENERATION_TASK_KIND } from "../music-generation-task-status.js";
 import {
-  createMusicGenerationTaskRun,
-  recordMusicGenerationTaskProgress,
-  wakeMusicGenerationTaskCompletion,
-} from "./music-generate-background.js";
-
-const taskExecutorMocks = vi.hoisted(() => ({
-  createRunningTaskRun: vi.fn(),
-  recordTaskRunProgressByRunId: vi.fn(),
-  completeTaskRunByRunId: vi.fn(),
-  failTaskRunByRunId: vi.fn(),
-}));
-
-const announceDeliveryMocks = vi.hoisted(() => ({
-  deliverSubagentAnnouncement: vi.fn(),
-}));
-const taskDeliveryRuntimeMocks = vi.hoisted(() => ({
-  sendMessage: vi.fn(),
-}));
+  announceDeliveryMocks,
+  expectDirectMediaSend,
+  expectFallbackMediaAnnouncement,
+  expectQueuedTaskRun,
+  expectRecordedTaskProgress,
+  resetMediaBackgroundMocks,
+  taskDeliveryRuntimeMocks,
+  taskExecutorMocks,
+} from "./media-generate-background.test-support.js";
 
 vi.mock("../../tasks/task-executor.js", () => taskExecutorMocks);
 vi.mock("../../tasks/task-registry-delivery-runtime.js", () => taskDeliveryRuntimeMocks);
 vi.mock("../subagent-announce-delivery.js", () => announceDeliveryMocks);
 
+const {
+  createMusicGenerationTaskRun,
+  recordMusicGenerationTaskProgress,
+  wakeMusicGenerationTaskCompletion,
+} = await import("./music-generate-background.js");
+
 describe("music generate background helpers", () => {
   beforeEach(() => {
-    taskExecutorMocks.createRunningTaskRun.mockReset();
-    taskExecutorMocks.recordTaskRunProgressByRunId.mockReset();
-    taskDeliveryRuntimeMocks.sendMessage.mockReset();
-    announceDeliveryMocks.deliverSubagentAnnouncement.mockReset();
+    resetMediaBackgroundMocks({
+      taskExecutorMocks,
+      taskDeliveryRuntimeMocks,
+      announceDeliveryMocks,
+    });
   });
 
   it("creates a running task with queued progress text", () => {
@@ -52,13 +50,12 @@ describe("music generate background helpers", () => {
       requesterSessionKey: "agent:main:discord:direct:123",
       taskLabel: "night-drive synthwave",
     });
-    expect(taskExecutorMocks.createRunningTaskRun).toHaveBeenCalledWith(
-      expect.objectContaining({
-        taskKind: MUSIC_GENERATION_TASK_KIND,
-        sourceId: "music_generate:google",
-        progressSummary: "Queued music generation",
-      }),
-    );
+    expectQueuedTaskRun({
+      taskExecutorMocks,
+      taskKind: MUSIC_GENERATION_TASK_KIND,
+      sourceId: "music_generate:google",
+      progressSummary: "Queued music generation",
+    });
   });
 
   it("records task progress updates", () => {
@@ -72,12 +69,11 @@ describe("music generate background helpers", () => {
       progressSummary: "Saving generated music",
     });
 
-    expect(taskExecutorMocks.recordTaskRunProgressByRunId).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: "tool:music_generate:abc",
-        progressSummary: "Saving generated music",
-      }),
-    );
+    expectRecordedTaskProgress({
+      taskExecutorMocks,
+      runId: "tool:music_generate:abc",
+      progressSummary: "Saving generated music",
+    });
   });
 
   it("queues a completion event by default when direct send is disabled", async () => {
@@ -132,15 +128,14 @@ describe("music generate background helpers", () => {
       result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
     });
 
-    expect(taskDeliveryRuntimeMocks.sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "discord",
-        to: "channel:1",
-        threadId: "thread-1",
-        content: "Generated 1 track.",
-        mediaUrls: ["/tmp/generated-night-drive.mp3"],
-      }),
-    );
+    expectDirectMediaSend({
+      sendMessageMock: taskDeliveryRuntimeMocks.sendMessage,
+      channel: "discord",
+      to: "channel:1",
+      threadId: "thread-1",
+      content: "Generated 1 track.",
+      mediaUrls: ["/tmp/generated-night-drive.mp3"],
+    });
     expect(announceDeliveryMocks.deliverSubagentAnnouncement).not.toHaveBeenCalled();
   });
 
@@ -170,25 +165,15 @@ describe("music generate background helpers", () => {
       mediaUrls: ["/tmp/generated-night-drive.mp3"],
     });
 
-    expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requesterSessionKey: "agent:main:discord:direct:123",
-        requesterOrigin: expect.objectContaining({
-          channel: "discord",
-          to: "channel:1",
-        }),
-        expectsCompletionMessage: true,
-        internalEvents: expect.arrayContaining([
-          expect.objectContaining({
-            source: "music_generation",
-            announceType: "music generation task",
-            status: "ok",
-            result: expect.stringContaining("MEDIA:/tmp/generated-night-drive.mp3"),
-            mediaUrls: ["/tmp/generated-night-drive.mp3"],
-            replyInstruction: expect.stringContaining("Prefer the message tool for delivery"),
-          }),
-        ]),
-      }),
-    );
+    expectFallbackMediaAnnouncement({
+      deliverAnnouncementMock: announceDeliveryMocks.deliverSubagentAnnouncement,
+      requesterSessionKey: "agent:main:discord:direct:123",
+      channel: "discord",
+      to: "channel:1",
+      source: "music_generation",
+      announceType: "music generation task",
+      resultMediaPath: "MEDIA:/tmp/generated-night-drive.mp3",
+      mediaUrls: ["/tmp/generated-night-drive.mp3"],
+    });
   });
 });

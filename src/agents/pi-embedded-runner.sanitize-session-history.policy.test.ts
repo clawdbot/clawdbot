@@ -1,5 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  createSanitizeSessionHistoryHelpersMock,
+  createSanitizeSessionHistoryProviderRuntimeMock,
   loadSanitizeSessionHistoryWithCleanMocks,
   makeMockSessionManager,
   makeSimpleUserMessages,
@@ -8,23 +10,15 @@ import {
   sanitizeWithOpenAIResponses,
 } from "./pi-embedded-runner.sanitize-session-history.test-harness.js";
 
-vi.mock("./pi-embedded-helpers.js", async () => ({
-  ...(await vi.importActual("./pi-embedded-helpers.js")),
-  isGoogleModelApi: vi.fn(),
-  sanitizeSessionMessagesImages: vi.fn(async (msgs) => msgs),
-}));
+vi.mock(
+  "./pi-embedded-helpers.js",
+  async () => await createSanitizeSessionHistoryHelpersMock({ isGoogleModelApi: vi.fn() }),
+);
 
-vi.mock("../plugins/provider-runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
-    "../plugins/provider-runtime.js",
-  );
-  return {
-    ...actual,
-    resolveProviderRuntimePlugin: vi.fn(() => undefined),
-    sanitizeProviderReplayHistoryWithPlugin: vi.fn(() => undefined),
-    validateProviderReplayTurnsWithPlugin: vi.fn(() => undefined),
-  };
-});
+vi.mock(
+  "../plugins/provider-runtime.js",
+  async () => await createSanitizeSessionHistoryProviderRuntimeMock(),
+);
 
 let sanitizeSessionHistory: SanitizeSessionHistoryHarness["sanitizeSessionHistory"];
 let mockedHelpers: SanitizeSessionHistoryHarness["mockedHelpers"];

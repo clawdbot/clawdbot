@@ -278,7 +278,15 @@ export function readQaScenarioPackMarkdown(): string {
 export function readQaScenarioPack(): QaScenarioPack {
   const packMarkdown = readTextFile(QA_SCENARIO_PACK_INDEX_PATH).trim();
   if (!packMarkdown) {
-    throw new Error(`qa scenario pack not found: ${QA_SCENARIO_PACK_INDEX_PATH}`);
+    // The QA scenario pack is optional in npm distributions.  Return an empty
+    // pack so completion cache updates and other consumers don't crash when
+    // the qa/scenarios/ directory is not shipped with the package.
+    return {
+      version: 1,
+      agent: { identityMarkdown: DEFAULT_QA_AGENT_IDENTITY_MARKDOWN },
+      kickoffTask: "QA scenarios not available in this distribution.",
+      scenarios: [],
+    };
   }
   const parsedPack = parseQaYamlWithContext(
     qaScenarioPackSchema,
@@ -344,7 +352,7 @@ export function readQaScenarioById(id: string): QaSeedScenario {
 }
 
 export function readQaScenarioExecutionConfig(id: string): Record<string, unknown> | undefined {
-  return readQaScenarioById(id).execution?.config;
+  return readQaScenarioPack().scenarios.find((candidate) => candidate.id === id)?.execution?.config;
 }
 
 export function validateQaScenarioExecutionConfig(config: Record<string, unknown>) {

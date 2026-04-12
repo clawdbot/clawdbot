@@ -1,6 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple, type AssistantMessageEvent } from "@mariozechner/pi-ai";
-import type { PluginTextReplacement, PluginTextTransforms } from "../plugins/types.js";
+import type { PluginTextReplacement, PluginTextTransforms } from "../plugins/cli-backend.types.js";
 
 export function mergePluginTextTransforms(
   ...transforms: Array<PluginTextTransforms | undefined>

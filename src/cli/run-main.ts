@@ -13,6 +13,7 @@ import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { enableConsoleCapture } from "../logging.js";
 import { resolveManifestCommandAliasOwner } from "../plugins/manifest-command-aliases.runtime.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { hasMemoryRuntime } from "../plugins/memory-state.js";
 import { maybeWarnAboutDebugProxyCoverage } from "../proxy-capture/coverage.js";
 import {
@@ -73,6 +74,7 @@ export function shouldUseRootHelpFastPath(argv: string[]): boolean {
 export function resolveMissingPluginCommandMessage(
   pluginId: string,
   config?: OpenClawConfig,
+  options?: { registry?: PluginManifestRegistry },
 ): string | null {
   const normalizedPluginId = normalizeLowercaseStringOrEmpty(pluginId);
   if (!normalizedPluginId) {
@@ -88,6 +90,7 @@ export function resolveMissingPluginCommandMessage(
   const commandAlias = resolveManifestCommandAliasOwner({
     command: normalizedPluginId,
     config,
+    registry: options?.registry,
   });
   const parentPluginId = commandAlias?.pluginId;
   if (parentPluginId) {
@@ -118,6 +121,9 @@ export function resolveMissingPluginCommandMessage(
   }
 
   if (allow.length > 0 && !allow.includes(normalizedPluginId)) {
+    if (parentPluginId && allow.includes(parentPluginId)) {
+      return null;
+    }
     return (
       `The \`openclaw ${normalizedPluginId}\` command is unavailable because ` +
       `\`plugins.allow\` excludes "${normalizedPluginId}". Add "${normalizedPluginId}" to ` +

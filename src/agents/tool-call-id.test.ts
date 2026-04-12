@@ -111,6 +111,41 @@ function expectSingleToolCallRewrite(
   expect(result.toolCallId).toBe(toolCall.id);
 }
 
+function expectReplaySafeSignedTurnOwnership(params: {
+  input: AgentMessage[];
+  preservedTurn: "first" | "second";
+  firstToolCallIndex: number;
+}) {
+  const out = sanitizeToolCallIdsForCloudCodeAssist(params.input, "strict", {
+    preserveReplaySafeThinkingToolCallIds: true,
+    allowedToolNames: ["read"],
+  });
+
+  expect(out).not.toBe(params.input);
+  const firstAssistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+  const secondAssistant = out[2] as Extract<AgentMessage, { role: "assistant" }>;
+  const firstToolCall = firstAssistant.content?.[params.firstToolCallIndex] as { id?: string };
+  const secondToolCall = secondAssistant.content?.[1] as { id?: string };
+
+  if (params.preservedTurn === "first") {
+    expect(firstToolCall.id).toBe("call1");
+    expect(secondToolCall.id).not.toBe("call1");
+    expect((out[1] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe("call1");
+    expect((out[3] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe(
+      secondToolCall.id,
+    );
+  } else {
+    expect(firstToolCall.id).not.toBe("call1");
+    expect(secondToolCall.id).toBe("call1");
+    expect((out[1] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe(
+      firstToolCall.id,
+    );
+    expect((out[3] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe("call1");
+  }
+
+  expect(firstToolCall.id).not.toBe(secondToolCall.id);
+}
+
 describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
   describe("strict mode (default)", () => {
     it("is a no-op for already-valid non-colliding IDs", () => {
@@ -357,16 +392,14 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
 
       expect(out).not.toBe(input);
       const firstAssistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
-      const secondAssistant = out[2] as Extract<AgentMessage, { role: "assistant" }>;
       const firstToolCall = firstAssistant.content?.[0] as { id?: string };
-      const secondToolCall = secondAssistant.content?.[1] as { id?: string };
       expect(firstToolCall.id).not.toBe("call1");
-      expect(secondToolCall.id).toBe("call1");
-      expect(firstToolCall.id).not.toBe(secondToolCall.id);
-      expect((out[1] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe(
-        firstToolCall.id,
-      );
-      expect((out[3] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe("call1");
+
+      expectReplaySafeSignedTurnOwnership({
+        input,
+        preservedTurn: "second",
+        firstToolCallIndex: 0,
+      });
     });
 
     it("rewrites later signed turns when an earlier signed turn already owns the raw id", () => {
@@ -399,23 +432,11 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
         },
       ]);
 
-      const out = sanitizeToolCallIdsForCloudCodeAssist(input, "strict", {
-        preserveReplaySafeThinkingToolCallIds: true,
-        allowedToolNames: ["read"],
+      expectReplaySafeSignedTurnOwnership({
+        input,
+        preservedTurn: "first",
+        firstToolCallIndex: 1,
       });
-
-      expect(out).not.toBe(input);
-      const firstAssistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
-      const secondAssistant = out[2] as Extract<AgentMessage, { role: "assistant" }>;
-      const firstToolCall = firstAssistant.content?.[1] as { id?: string };
-      const secondToolCall = secondAssistant.content?.[1] as { id?: string };
-      expect(firstToolCall.id).toBe("call1");
-      expect(secondToolCall.id).not.toBe("call1");
-      expect(secondToolCall.id).not.toBe(firstToolCall.id);
-      expect((out[1] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe("call1");
-      expect((out[3] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe(
-        secondToolCall.id,
-      );
     });
 
     it("avoids collisions with alphanumeric-only suffixes", () => {

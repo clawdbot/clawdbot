@@ -90,6 +90,14 @@ function resolveProviderLabel(rawProvider: string | undefined): string {
   if (isInternalMessageChannel(providerKey)) {
     return "WebChat";
   }
+  const labels: Record<string, string> = {
+    imessage: "iMessage",
+    whatsapp: "WhatsApp",
+  };
+  const label = labels[providerKey];
+  if (label) {
+    return label;
+  }
   return `${providerKey.at(0)?.toUpperCase() ?? ""}${providerKey.slice(1)}`;
 }
 

@@ -894,10 +894,10 @@ jobs:
         continue-on-error: true
         run: pnpm check:import-cycles
 
-      - name: Run static import SCC guard
-        id: static_import_sccs
+      - name: Run madge import cycle guard
+        id: madge_import_cycles
         continue-on-error: true
-        run: pnpm check:static-import-sccs
+        run: pnpm check:madge-import-cycles
 
       - name: Upload gateway watch regression artifacts
         if: always()
@@ -932,7 +932,7 @@ jobs:
           CONTROL_UI_I18N_OUTCOME: ${{ steps.control_ui_i18n.outcome == 'skipped' && 'success' || steps.control_ui_i18n.outcome }}
           GATEWAY_WATCH_REGRESSION_OUTCOME: ${{ steps.gateway_watch_regression.outcome }}
           IMPORT_CYCLES_OUTCOME: ${{ steps.import_cycles.outcome }}
-          STATIC_IMPORT_SCCS_OUTCOME: ${{ steps.static_import_sccs.outcome }}
+          MADGE_IMPORT_CYCLES_OUTCOME: ${{ steps.madge_import_cycles.outcome }}
         run: |
           failures=0
           for result in \
@@ -958,7 +958,7 @@ jobs:
             "ui:i18n:check|$CONTROL_UI_I18N_OUTCOME" \
             "gateway-watch-regression|$GATEWAY_WATCH_REGRESSION_OUTCOME" \
             "check:import-cycles|$IMPORT_CYCLES_OUTCOME" \
-            "check:static-import-sccs|$STATIC_IMPORT_SCCS_OUTCOME"; do
+            "check:madge-import-cycles|$MADGE_IMPORT_CYCLES_OUTCOME"; do
             name="${result%%|*}"
             outcome="${result#*|}"
             if [ "$outcome" != "success" ]; then

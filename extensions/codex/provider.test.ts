@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildCodexProvider, buildCodexProviderCatalog } from "./provider.js";
 import { CodexAppServerClient } from "./src/app-server/client.js";
-import { resetSharedCodexAppServerClientForTests } from "./src/app-server/shared-client.js";
+import {
+  getSharedCodexAppServerClient,
+  resetSharedCodexAppServerClientForTests,
+} from "./src/app-server/shared-client.js";
 
 afterEach(() => {
   resetSharedCodexAppServerClientForTests();
@@ -37,7 +40,7 @@ describe("codex provider", () => {
     });
 
     expect(listModels).toHaveBeenCalledWith(
-      expect.objectContaining({ limit: 100, timeoutMs: 1234 }),
+      expect.objectContaining({ limit: 100, timeoutMs: 1234, sharedClient: false }),
     );
     expect(result.provider).toMatchObject({
       auth: "token",
@@ -101,6 +104,32 @@ describe("codex provider", () => {
     });
 
     expect(client.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not close an active shared app-server client during live discovery", async () => {
+    const activeClient = {
+      initialize: vi.fn(async () => undefined),
+      request: vi.fn(async () => ({ data: [] })),
+      addCloseHandler: vi.fn(() => () => undefined),
+      close: vi.fn(),
+    } as unknown as CodexAppServerClient;
+    const discoveryClient = {
+      initialize: vi.fn(async () => undefined),
+      request: vi.fn(async () => ({ data: [] })),
+      addCloseHandler: vi.fn(() => () => undefined),
+      close: vi.fn(),
+    } as unknown as CodexAppServerClient;
+    vi.spyOn(CodexAppServerClient, "start")
+      .mockReturnValueOnce(activeClient)
+      .mockReturnValueOnce(discoveryClient);
+
+    await getSharedCodexAppServerClient({ timeoutMs: 1000 });
+    await buildCodexProviderCatalog({
+      env: { OPENCLAW_CODEX_DISCOVERY_LIVE: "1" },
+    });
+
+    expect(activeClient.close).not.toHaveBeenCalled();
+    expect(discoveryClient.close).toHaveBeenCalledTimes(1);
   });
 
   it("resolves arbitrary Codex app-server model ids through the codex provider", () => {

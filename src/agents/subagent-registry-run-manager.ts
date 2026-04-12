@@ -2,6 +2,7 @@ import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { createRunningTaskRun } from "../tasks/task-executor.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { waitForAgentRun } from "./run-wait.js";
@@ -80,6 +81,9 @@ export function createSubagentRunManager(params: {
       });
       const entry = params.runs.get(runId);
       if (!entry) {
+        return;
+      }
+      if (wait.status === "pending") {
         return;
       }
       let mutated = false;
@@ -419,6 +423,17 @@ export function createSubagentRunManager(params: {
     if (updated > 0) {
       params.persist();
       for (const entry of entriesByChildSessionKey.values()) {
+        const emitEndedHook = () =>
+          emitSubagentEndedHookOnce({
+            entry,
+            reason: SUBAGENT_ENDED_REASON_KILLED,
+            sendFarewell: true,
+            accountId: entry.requesterOrigin?.accountId,
+            outcome: SUBAGENT_ENDED_OUTCOME_KILLED,
+            error: reason,
+            inFlightRunIds: params.endedHookInFlightRunIds,
+            persist: () => params.persist(),
+          });
         void persistSubagentSessionTiming(entry).catch((err) => {
           log.warn("failed to persist killed subagent session timing", {
             err,
@@ -435,6 +450,12 @@ export function createSubagentRunManager(params: {
           cleanup: entry.cleanup,
           completedAt: now,
         });
+        if (getGlobalHookRunner()) {
+          void emitEndedHook().catch(() => {
+            // Hook failures should not break termination flow.
+          });
+          continue;
+        }
         const cfg = params.loadConfig();
         void Promise.resolve(
           params.ensureRuntimePluginsLoaded({
@@ -443,18 +464,7 @@ export function createSubagentRunManager(params: {
             allowGatewaySubagentBinding: true,
           }),
         )
-          .then(() =>
-            emitSubagentEndedHookOnce({
-              entry,
-              reason: SUBAGENT_ENDED_REASON_KILLED,
-              sendFarewell: true,
-              accountId: entry.requesterOrigin?.accountId,
-              outcome: SUBAGENT_ENDED_OUTCOME_KILLED,
-              error: reason,
-              inFlightRunIds: params.endedHookInFlightRunIds,
-              persist: () => params.persist(),
-            }),
-          )
+          .then(emitEndedHook)
           .catch(() => {
             // Hook failures should not break termination flow.
           });

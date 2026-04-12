@@ -108,10 +108,9 @@ describe("sanitizeToolCallInputs redacts sessions_spawn attachments", () => {
       input?: { attachments?: unknown[] };
       arguments?: { attachments?: unknown[] };
     } | null;
-    const attachment =
-      (tool?.input?.attachments?.[0] ?? tool?.arguments?.attachments?.[0] ?? null) as
-        | Record<string, unknown>
-        | null;
+    const attachment = (tool?.input?.attachments?.[0] ??
+      tool?.arguments?.attachments?.[0] ??
+      null) as Record<string, unknown> | null;
     expect(attachment).toEqual({
       name: "payload.json",
       mimeType: "application/json",

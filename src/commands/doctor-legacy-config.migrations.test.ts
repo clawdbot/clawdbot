@@ -110,38 +110,6 @@ describe("normalizeCompatibilityConfigValues", () => {
     ]);
   });
 
-  it("migrates legacy x_search auth into xai plugin-owned config", () => {
-    const res = normalizeCompatibilityConfigValues({
-      tools: {
-        web: {
-          x_search: {
-            apiKey: "xai-legacy-key",
-            enabled: true,
-            model: "grok-4-1-fast",
-          },
-        } as Record<string, unknown>,
-      },
-    });
-
-    expect((res.config.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
-      enabled: true,
-      model: "grok-4-1-fast",
-    });
-    expect(res.config.plugins?.entries?.xai).toEqual({
-      enabled: true,
-      config: {
-        webSearch: {
-          apiKey: "xai-legacy-key",
-        },
-      },
-    });
-    expect(res.changes).toEqual(
-      expect.arrayContaining([
-        "Moved tools.web.x_search.apiKey → plugins.entries.xai.config.webSearch.apiKey.",
-      ]),
-    );
-  });
-
   it("migrates Discord account dm.policy/dm.allowFrom to dmPolicy/allowFrom aliases", () => {
     const res = normalizeCompatibilityConfigValues({
       channels: {
@@ -182,19 +150,16 @@ describe("normalizeCompatibilityConfigValues", () => {
       }),
     );
 
-    expect(res.config.channels?.discord?.streaming).toEqual({ mode: "partial" });
+    expect(res.config.channels?.discord?.streaming).toBe(true);
     expect(getLegacyProperty(res.config.channels?.discord, "streamMode")).toBeUndefined();
-    expect(res.config.channels?.discord?.accounts?.work?.streaming).toEqual({ mode: "off" });
+    expect(res.config.channels?.discord?.accounts?.work?.streaming).toBe(false);
     expect(
       getLegacyProperty(res.config.channels?.discord?.accounts?.work, "streamMode"),
     ).toBeUndefined();
-    expect(res.changes).toEqual([
-      "Moved channels.discord.streaming (boolean) → channels.discord.streaming.mode (partial).",
-      "Moved channels.discord.accounts.work.streaming (boolean) → channels.discord.accounts.work.streaming.mode (off).",
-    ]);
+    expect(res.changes).toEqual([]);
   });
 
-  it("migrates Discord legacy streamMode into nested streaming.mode", () => {
+  it("keeps Discord legacy streamMode untouched", () => {
     const res = normalizeCompatibilityConfigValues(
       asLegacyConfig({
         channels: {
@@ -206,11 +171,9 @@ describe("normalizeCompatibilityConfigValues", () => {
       }),
     );
 
-    expect(res.config.channels?.discord?.streaming).toEqual({ mode: "block" });
-    expect(getLegacyProperty(res.config.channels?.discord, "streamMode")).toBeUndefined();
-    expect(res.changes).toEqual([
-      "Moved channels.discord.streamMode → channels.discord.streaming.mode (block).",
-    ]);
+    expect(res.config.channels?.discord?.streaming).toBe(false);
+    expect(getLegacyProperty(res.config.channels?.discord, "streamMode")).toBe("block");
+    expect(res.changes).toEqual([]);
   });
 
   it("migrates Telegram streamMode into nested streaming.mode", () => {
@@ -562,42 +525,6 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
     expect(res.changes).toEqual([
       "Merged tools.web.search.gemini → plugins.entries.google.config.webSearch (filled missing fields from legacy; kept explicit plugin config values).",
-    ]);
-  });
-
-  it("migrates legacy web fetch provider config to plugin-owned config paths", () => {
-    const res = normalizeCompatibilityConfigValues({
-      tools: {
-        web: {
-          fetch: {
-            provider: "firecrawl",
-            timeoutSeconds: 15,
-            firecrawl: {
-              apiKey: "firecrawl-key",
-              baseUrl: "https://api.firecrawl.dev",
-              onlyMainContent: false,
-            },
-          },
-        },
-      },
-    } as OpenClawConfig);
-
-    expect(res.config.tools?.web?.fetch).toEqual({
-      provider: "firecrawl",
-      timeoutSeconds: 15,
-    });
-    expect(res.config.plugins?.entries?.firecrawl).toEqual({
-      enabled: true,
-      config: {
-        webFetch: {
-          apiKey: "firecrawl-key",
-          baseUrl: "https://api.firecrawl.dev",
-          onlyMainContent: false,
-        },
-      },
-    });
-    expect(res.changes).toEqual([
-      "Moved tools.web.fetch.firecrawl → plugins.entries.firecrawl.config.webFetch.",
     ]);
   });
 

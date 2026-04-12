@@ -8,21 +8,35 @@ title: "NVIDIA"
 
 # NVIDIA
 
-NVIDIA provides an OpenAI-compatible API at `https://integrate.api.nvidia.com/v1` for open models for free. Authenticate with an API key from [build.nvidia.com](https://build.nvidia.com/settings/api-keys).
+NVIDIA provides an OpenAI-compatible API at `https://integrate.api.nvidia.com/v1` for
+open models for free. Authenticate with an API key from
+[build.nvidia.com](https://build.nvidia.com/settings/api-keys).
 
-## CLI setup
+## Getting started
 
-Export the key once, then run onboarding and set an NVIDIA model:
+<Steps>
+  <Step title="Get your API key">
+    Create an API key at [build.nvidia.com](https://build.nvidia.com/settings/api-keys).
+  </Step>
+  <Step title="Export the key and run onboarding">
+    ```bash
+    export NVIDIA_API_KEY="nvapi-..."
+    openclaw onboard --auth-choice skip
+    ```
+  </Step>
+  <Step title="Set an NVIDIA model">
+    ```bash
+    openclaw models set nvidia/nvidia/nemotron-3-super-120b-a12b
+    ```
+  </Step>
+</Steps>
 
-```bash
-export NVIDIA_API_KEY="nvapi-..."
-openclaw onboard --auth-choice skip
-openclaw models set nvidia/nvidia/nemotron-3-super-120b-a12b
-```
+<Warning>
+If you pass `--token` instead of the env var, the value lands in shell history and
+`ps` output. Prefer the `NVIDIA_API_KEY` environment variable when possible.
+</Warning>
 
-If you still pass `--token`, remember it lands in shell history and `ps` output; prefer the env var when possible.
-
-## Config snippet
+## Config example
 
 ```json5
 {
@@ -43,7 +57,7 @@ If you still pass `--token`, remember it lands in shell history and `ps` output;
 }
 ```
 
-## Model IDs
+## Built-in catalog
 
 | Model ref                                  | Name                         | Context | Max output |
 | ------------------------------------------ | ---------------------------- | ------- | ---------- |
@@ -52,8 +66,38 @@ If you still pass `--token`, remember it lands in shell history and `ps` output;
 | `nvidia/minimaxai/minimax-m2.5`            | Minimax M2.5                 | 196,608 | 8,192      |
 | `nvidia/z-ai/glm5`                         | GLM 5                        | 202,752 | 8,192      |
 
-## Notes
+## Advanced notes
 
-- OpenAI-compatible `/v1` endpoint; use an API key from [build.nvidia.com](https://build.nvidia.com/).
-- Provider auto-enables when `NVIDIA_API_KEY` is set.
-- The bundled catalog is static; costs default to `0` in source.
+<AccordionGroup>
+  <Accordion title="Auto-enable behavior">
+    The provider auto-enables when the `NVIDIA_API_KEY` environment variable is set.
+    No explicit provider config is required beyond the key.
+  </Accordion>
+
+  <Accordion title="Catalog and pricing">
+    The bundled catalog is static. Costs default to `0` in source since NVIDIA
+    currently offers free API access for the listed models.
+  </Accordion>
+
+  <Accordion title="OpenAI-compatible endpoint">
+    NVIDIA uses the standard `/v1` completions endpoint. Any OpenAI-compatible
+    tooling should work out of the box with the NVIDIA base URL.
+  </Accordion>
+</AccordionGroup>
+
+<Tip>
+NVIDIA models are currently free to use. Check
+[build.nvidia.com](https://build.nvidia.com/) for the latest availability and
+rate-limit details.
+</Tip>
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Model selection" href="/concepts/model-providers" icon="layers">
+    Choosing providers, model refs, and failover behavior.
+  </Card>
+  <Card title="Configuration reference" href="/gateway/configuration-reference" icon="gear">
+    Full config reference for agents, models, and providers.
+  </Card>
+</CardGroup>

@@ -47,7 +47,7 @@ type ManagedCronJobCreate = {
   enabled: boolean;
   schedule: CronSchedule;
   sessionTarget: "main";
-  wakeMode: "next-heartbeat";
+  wakeMode: "now";
   payload: CronPayload;
 };
 
@@ -57,7 +57,7 @@ type ManagedCronJobPatch = {
   enabled?: boolean;
   schedule?: CronSchedule;
   sessionTarget?: "main";
-  wakeMode?: "next-heartbeat";
+  wakeMode?: "now";
   payload?: CronPayload;
 };
 
@@ -154,7 +154,7 @@ function buildManagedDreamingCronJob(
       ...(config.timezone ? { tz: config.timezone } : {}),
     },
     sessionTarget: "main",
-    wakeMode: "next-heartbeat",
+    wakeMode: "now",
     payload: {
       kind: "systemEvent",
       text: DREAMING_SYSTEM_EVENT_TEXT,
@@ -257,8 +257,8 @@ function buildManagedDreamingPatch(
     patch.sessionTarget = "main";
   }
   const wakeMode = normalizeLowercaseStringOrEmpty(normalizeTrimmedString(job.wakeMode));
-  if (wakeMode !== "next-heartbeat") {
-    patch.wakeMode = "next-heartbeat";
+  if (wakeMode !== "now") {
+    patch.wakeMode = "now";
   }
 
   const payloadKind = normalizeLowercaseStringOrEmpty(normalizeTrimmedString(job.payload?.kind));

@@ -739,6 +739,43 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Media: image ok (openai/gpt-5.4) · audio skipped (maxBytes)");
   });
 
+  it("includes failed media understanding decisions with the surfaced reason", () => {
+    const text = buildStatusMessage({
+      agent: { model: "anthropic/claude-opus-4-6" },
+      sessionEntry: { sessionId: "media-failed", updatedAt: 0 },
+      sessionKey: "agent:main:main",
+      queue: { mode: "none" },
+      mediaDecisions: [
+        {
+          capability: "audio",
+          outcome: "failed",
+          attachments: [
+            {
+              attachmentIndex: 0,
+              attempts: [
+              {
+                type: "provider",
+                outcome: "skipped",
+                reason: "empty output",
+              },
+              {
+                type: "provider",
+                outcome: "failed",
+                reason: "Error: Audio transcription response missing text",
+              },
+            ],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(normalizeTestText(text)).toContain(
+      "Media: audio failed (Audio transcription response missing text)",
+    );
+    expect(normalizeTestText(text)).not.toContain("empty output");
+  });
+
   it("omits media line when all decisions are none", () => {
     const text = buildStatusMessage({
       agent: { model: "anthropic/claude-opus-4-6" },

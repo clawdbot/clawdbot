@@ -1053,15 +1053,11 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
     );
 
-    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
-      baseFn as never,
-      new Set(["read"]),
-      {
-        validateAnthropicTurns: true,
-        preserveSignatures: true,
-        dropThinkingBlocks: false,
-      } as never,
-    );
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
+      validateAnthropicTurns: true,
+      preserveSignatures: true,
+      dropThinkingBlocks: false,
+    } as never);
     const stream = wrapped(
       { api: "anthropic-messages" } as never,
       { messages } as never,

@@ -112,6 +112,7 @@ describe("ensurePluginRegistryLoaded", () => {
     expect(mocks.resolveConfiguredChannelPluginIds).toHaveBeenCalledWith(
       expect.objectContaining({
         config: resolvedConfig,
+        activationSourceConfig: { plugins: { allow: ["demo-channel"] } },
         env,
         workspaceDir: "/resolved-workspace",
       }),
@@ -122,14 +123,63 @@ describe("ensurePluginRegistryLoaded", () => {
     });
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
-        config: resolvedConfig,
-        activationSourceConfig: { plugins: { allow: ["demo-channel"] } },
+        config: expect.objectContaining({
+          ...resolvedConfig,
+          plugins: expect.objectContaining({
+            entries: expect.objectContaining({
+              demo: { enabled: true },
+              "demo-channel": { enabled: true },
+            }),
+            allow: ["demo-channel"],
+          }),
+        }),
+        activationSourceConfig: {
+          plugins: {
+            allow: ["demo-channel"],
+            entries: {
+              "demo-channel": { enabled: true },
+            },
+          },
+        },
         autoEnabledReasons: {
           demo: ["demo configured"],
         },
         workspaceDir: "/resolved-workspace",
         onlyPluginIds: ["demo-channel"],
         throwOnLoadError: true,
+      }),
+    );
+  });
+
+  it("temporarily activates configured-channel owners before loading them", () => {
+    const rawConfig = { channels: { demo: { enabled: true } } };
+
+    mocks.resolveConfiguredChannelPluginIds.mockReturnValue(["activation-only-channel"]);
+
+    ensurePluginRegistryLoaded({
+      scope: "configured-channels",
+      config: rawConfig as never,
+    });
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            entries: expect.objectContaining({
+              "activation-only-channel": { enabled: true },
+            }),
+            allow: ["activation-only-channel"],
+          }),
+        }),
+        activationSourceConfig: expect.objectContaining({
+          plugins: expect.objectContaining({
+            entries: expect.objectContaining({
+              "activation-only-channel": { enabled: true },
+            }),
+            allow: ["activation-only-channel"],
+          }),
+        }),
+        onlyPluginIds: ["activation-only-channel"],
       }),
     );
   });
@@ -155,5 +205,54 @@ describe("ensurePluginRegistryLoaded", () => {
       2,
       expect.objectContaining({ onlyPluginIds: ["demo-b"] }),
     );
+  });
+
+  it("forwards explicit empty scopes without widening to channel resolution", () => {
+    ensurePluginRegistryLoaded({
+      scope: "configured-channels",
+      config: {} as never,
+      onlyPluginIds: [],
+    });
+
+    expect(mocks.resolveConfiguredChannelPluginIds).not.toHaveBeenCalled();
+    expect(mocks.resolveChannelPluginIds).not.toHaveBeenCalled();
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: [],
+      }),
+    );
+  });
+
+  it("preserves empty configured-channel scopes when no owners are activatable", () => {
+    mocks.resolveConfiguredChannelPluginIds.mockReturnValue([]);
+
+    ensurePluginRegistryLoaded({
+      scope: "configured-channels",
+      config: { channels: { demo: { enabled: true } } } as never,
+    });
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: [],
+      }),
+    );
+  });
+
+  it("does not forward empty channel scopes for broad channel loads", () => {
+    mocks.resolveChannelPluginIds.mockReturnValue([]);
+
+    ensurePluginRegistryLoaded({
+      scope: "channels",
+      config: {} as never,
+    });
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        onlyPluginIds: [],
+      }),
+    );
+    expect(
+      (mocks.loadOpenClawPlugins.mock.calls[0]?.[0] as { onlyPluginIds?: string[] }).onlyPluginIds,
+    ).toBeUndefined();
   });
 });

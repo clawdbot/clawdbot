@@ -319,13 +319,14 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
   const current = resolveResponseUsageMode(currentRaw);
   const next = requested ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
 
-  if (params.sessionEntry && params.sessionStore && params.sessionKey) {
+  if (targetSessionEntry && params.sessionStore && params.sessionKey) {
     if (next === "off") {
-      delete params.sessionEntry.responseUsage;
+      delete targetSessionEntry.responseUsage;
     } else {
-      params.sessionEntry.responseUsage = next;
+      targetSessionEntry.responseUsage = next;
     }
-    await persistSessionEntry(params);
+    params.sessionStore[params.sessionKey] = targetSessionEntry;
+    await persistSessionEntry({ ...params, sessionEntry: targetSessionEntry });
   }
 
   return {

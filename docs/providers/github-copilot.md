@@ -8,73 +8,124 @@ title: "GitHub Copilot"
 
 # GitHub Copilot
 
-## What is GitHub Copilot?
-
 GitHub Copilot is GitHub's AI coding assistant. It provides access to Copilot
 models for your GitHub account and plan. OpenClaw can use Copilot as a model
 provider in two different ways.
 
 ## Two ways to use Copilot in OpenClaw
 
-### 1) Built-in GitHub Copilot provider (`github-copilot`)
+<Tabs>
+  <Tab title="Built-in provider (github-copilot)">
+    Use the native device-login flow to obtain a GitHub token, then exchange it for
+    Copilot API tokens when OpenClaw runs. This is the **default** and simplest path
+    because it does not require VS Code.
 
-Use the native device-login flow to obtain a GitHub token, then exchange it for
-Copilot API tokens when OpenClaw runs. This is the **default** and simplest path
-because it does not require VS Code.
+    <Steps>
+      <Step title="Run the login command">
+        ```bash
+        openclaw models auth login-github-copilot
+        ```
 
-### 2) Copilot Proxy plugin (`copilot-proxy`)
+        You will be prompted to visit a URL and enter a one-time code. Keep the
+        terminal open until it completes.
+      </Step>
+      <Step title="Set a default model">
+        ```bash
+        openclaw models set github-copilot/gpt-4o
+        ```
 
-Use the **Copilot Proxy** VS Code extension as a local bridge. OpenClaw talks to
-the proxy’s `/v1` endpoint and uses the model list you configure there. Choose
-this when you already run Copilot Proxy in VS Code or need to route through it.
-You must enable the plugin and keep the VS Code extension running.
+        Or in config:
 
-Use GitHub Copilot as a model provider (`github-copilot`). The login command runs
-the GitHub device flow, saves an auth profile, and updates your config to use that
-profile.
+        ```json5
+        {
+          agents: { defaults: { model: { primary: "github-copilot/gpt-4o" } } },
+        }
+        ```
+      </Step>
+    </Steps>
 
-## CLI setup
+  </Tab>
+
+  <Tab title="Copilot Proxy plugin (copilot-proxy)">
+    Use the **Copilot Proxy** VS Code extension as a local bridge. OpenClaw talks to
+    the proxy's `/v1` endpoint and uses the model list you configure there.
+
+    <Note>
+    Choose this when you already run Copilot Proxy in VS Code or need to route
+    through it. You must enable the plugin and keep the VS Code extension running.
+    </Note>
+
+  </Tab>
+</Tabs>
+
+## Optional flags
+
+| Flag            | Description                                         |
+| --------------- | --------------------------------------------------- |
+| `--yes`         | Skip the confirmation prompt                        |
+| `--set-default` | Also apply the provider's recommended default model |
 
 ```bash
-openclaw models auth login-github-copilot
-```
-
-You'll be prompted to visit a URL and enter a one-time code. Keep the terminal
-open until it completes.
-
-### Optional flags
-
-```bash
+# Skip confirmation
 openclaw models auth login-github-copilot --yes
-```
 
-To also apply the provider's recommended default model in one step, use the
-generic auth command instead:
-
-```bash
+# Login and set the default model in one step
 openclaw models auth login --provider github-copilot --method device --set-default
 ```
 
-## Set a default model
+<AccordionGroup>
+  <Accordion title="Interactive TTY required">
+    The device-login flow requires an interactive TTY. Run it directly in a
+    terminal, not in a non-interactive script or CI pipeline.
+  </Accordion>
 
-```bash
-openclaw models set github-copilot/gpt-4o
-```
+  <Accordion title="Model availability depends on your plan">
+    Copilot model availability depends on your GitHub plan. If a model is
+    rejected, try another ID (for example `github-copilot/gpt-4.1`).
+  </Accordion>
 
-### Config snippet
+  <Accordion title="Transport selection">
+    Claude model IDs use the Anthropic Messages transport automatically. GPT,
+    o-series, and Gemini models keep the OpenAI Responses transport. OpenClaw
+    selects the correct transport based on the model ref.
+  </Accordion>
 
-```json5
-{
-  agents: { defaults: { model: { primary: "github-copilot/gpt-4o" } } },
-}
-```
+  <Accordion title="Environment variable resolution order">
+    OpenClaw resolves Copilot auth from environment variables in the following
+    priority order:
 
-## Notes
+    | Priority | Variable              | Notes                            |
+    | -------- | --------------------- | -------------------------------- |
+    | 1        | `COPILOT_GITHUB_TOKEN` | Highest priority, Copilot-specific |
+    | 2        | `GH_TOKEN`            | GitHub CLI token (fallback)      |
+    | 3        | `GITHUB_TOKEN`        | Standard GitHub token (lowest)   |
 
-- Requires an interactive TTY; run it directly in a terminal.
-- Copilot model availability depends on your plan; if a model is rejected, try
-  another ID (for example `github-copilot/gpt-4.1`).
-- Claude model IDs use the Anthropic Messages transport automatically; GPT, o-series,
-  and Gemini models keep the OpenAI Responses transport.
-- The login stores a GitHub token in the auth profile store and exchanges it for a
-  Copilot API token when OpenClaw runs.
+    When multiple variables are set, OpenClaw uses the highest-priority one.
+    The device-login flow (`openclaw models auth login-github-copilot`) stores
+    its token in the auth profile store and takes precedence over all environment
+    variables.
+
+  </Accordion>
+
+  <Accordion title="Token storage">
+    The login stores a GitHub token in the auth profile store and exchanges it
+    for a Copilot API token when OpenClaw runs. You do not need to manage the
+    token manually.
+  </Accordion>
+</AccordionGroup>
+
+<Warning>
+Requires an interactive TTY. Run the login command directly in a terminal, not
+inside a headless script or CI job.
+</Warning>
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Model selection" href="/concepts/model-providers" icon="layers">
+    Choosing providers, model refs, and failover behavior.
+  </Card>
+  <Card title="OAuth and auth" href="/gateway/authentication" icon="key">
+    Auth details and credential reuse rules.
+  </Card>
+</CardGroup>

@@ -11,42 +11,51 @@ read_when:
 
 OpenClaw ships a bundled `fal` provider for hosted image and video generation.
 
-- Provider: `fal`
-- Auth: `FAL_KEY` (canonical; `FAL_API_KEY` also works as a fallback)
-- API: fal model endpoints
+| Property | Value                                                         |
+| -------- | ------------------------------------------------------------- |
+| Provider | `fal`                                                         |
+| Auth     | `FAL_KEY` (canonical; `FAL_API_KEY` also works as a fallback) |
+| API      | fal model endpoints                                           |
 
-## Quick start
+## Getting started
 
-1. Set the API key:
-
-```bash
-openclaw onboard --auth-choice fal-api-key
-```
-
-2. Set a default image model:
-
-```json5
-{
-  agents: {
-    defaults: {
-      imageGenerationModel: {
-        primary: "fal/fal-ai/flux/dev",
+<Steps>
+  <Step title="Set the API key">
+    ```bash
+    openclaw onboard --auth-choice fal-api-key
+    ```
+  </Step>
+  <Step title="Set a default image model">
+    ```json5
+    {
+      agents: {
+        defaults: {
+          imageGenerationModel: {
+            primary: "fal/fal-ai/flux/dev",
+          },
+        },
       },
-    },
-  },
-}
-```
+    }
+    ```
+  </Step>
+</Steps>
 
 ## Image generation
 
 The bundled `fal` image-generation provider defaults to
 `fal/fal-ai/flux/dev`.
 
-- Generate: up to 4 images per request
-- Edit mode: enabled, 1 reference image
-- Supports `size`, `aspectRatio`, and `resolution`
-- Current edit caveat: the fal image edit endpoint does **not** support
-  `aspectRatio` overrides
+| Capability     | Value                      |
+| -------------- | -------------------------- |
+| Max images     | 4 per request              |
+| Edit mode      | Enabled, 1 reference image |
+| Size overrides | Supported                  |
+| Aspect ratio   | Supported                  |
+| Resolution     | Supported                  |
+
+<Warning>
+The fal image edit endpoint does **not** support `aspectRatio` overrides.
+</Warning>
 
 To use fal as the default image provider:
 
@@ -67,46 +76,70 @@ To use fal as the default image provider:
 The bundled `fal` video-generation provider defaults to
 `fal/fal-ai/minimax/video-01-live`.
 
-- Modes: text-to-video and single-image reference flows
-- Runtime: queue-backed submit/status/result flow for long-running jobs
-- HeyGen video-agent model ref:
-  - `fal/fal-ai/heygen/v2/video-agent`
-- Seedance 2.0 model refs:
-  - `fal/bytedance/seedance-2.0/fast/text-to-video`
-  - `fal/bytedance/seedance-2.0/fast/image-to-video`
-  - `fal/bytedance/seedance-2.0/text-to-video`
-  - `fal/bytedance/seedance-2.0/image-to-video`
+| Capability | Value                                                        |
+| ---------- | ------------------------------------------------------------ |
+| Modes      | Text-to-video, single-image reference                        |
+| Runtime    | Queue-backed submit/status/result flow for long-running jobs |
 
-To use Seedance 2.0 as the default video model:
+<AccordionGroup>
+  <Accordion title="Available video models">
+    **HeyGen video-agent:**
 
-```json5
-{
-  agents: {
-    defaults: {
-      videoGenerationModel: {
-        primary: "fal/bytedance/seedance-2.0/fast/text-to-video",
+    - `fal/fal-ai/heygen/v2/video-agent`
+
+    **Seedance 2.0:**
+
+    - `fal/bytedance/seedance-2.0/fast/text-to-video`
+    - `fal/bytedance/seedance-2.0/fast/image-to-video`
+    - `fal/bytedance/seedance-2.0/text-to-video`
+    - `fal/bytedance/seedance-2.0/image-to-video`
+
+  </Accordion>
+
+  <Accordion title="Seedance 2.0 config example">
+    ```json5
+    {
+      agents: {
+        defaults: {
+          videoGenerationModel: {
+            primary: "fal/bytedance/seedance-2.0/fast/text-to-video",
+          },
+        },
       },
-    },
-  },
-}
-```
+    }
+    ```
+  </Accordion>
 
-To use HeyGen video-agent as the default video model:
-
-```json5
-{
-  agents: {
-    defaults: {
-      videoGenerationModel: {
-        primary: "fal/fal-ai/heygen/v2/video-agent",
+  <Accordion title="HeyGen video-agent config example">
+    ```json5
+    {
+      agents: {
+        defaults: {
+          videoGenerationModel: {
+            primary: "fal/fal-ai/heygen/v2/video-agent",
+          },
+        },
       },
-    },
-  },
-}
-```
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+<Tip>
+Use `openclaw models list --provider fal` to see the full list of available fal
+models, including any recently added entries.
+</Tip>
 
 ## Related
 
-- [Image Generation](/tools/image-generation)
-- [Video Generation](/tools/video-generation)
-- [Configuration Reference](/gateway/configuration-reference#agent-defaults)
+<CardGroup cols={2}>
+  <Card title="Image generation" href="/tools/image-generation" icon="image">
+    Shared image tool parameters and provider selection.
+  </Card>
+  <Card title="Video generation" href="/tools/video-generation" icon="video">
+    Shared video tool parameters and provider selection.
+  </Card>
+  <Card title="Configuration reference" href="/gateway/configuration-reference#agent-defaults" icon="gear">
+    Agent defaults including image and video model selection.
+  </Card>
+</CardGroup>

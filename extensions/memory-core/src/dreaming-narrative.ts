@@ -1,5 +1,13 @@
+import type { Dirent } from "node:fs";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  loadConfig,
+  loadSessionStore,
+  resolveStorePath,
+  updateSessionStore,
+} from "openclaw/plugin-sdk/config-runtime";
 import {
   extractErrorCode,
   formatErrorMessage,
@@ -7,8 +15,9 @@ import {
   readErrorName,
   SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE,
 } from "openclaw/plugin-sdk/error-runtime";
-import { createAsyncLock } from "../../../src/infra/json-files.js";
-import { resolveGlobalMap } from "../../../src/shared/global-singleton.js";
+import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
+import { createAsyncLock } from "openclaw/plugin-sdk/infra-runtime";
+import { resolveStateDir } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -76,6 +85,11 @@ const NARRATIVE_SYSTEM_PROMPT = [
 ].join("\n");
 
 const NARRATIVE_TIMEOUT_MS = 60_000;
+const NARRATIVE_DELETE_SETTLE_TIMEOUT_MS = 120_000;
+const DREAMING_SESSION_KEY_PREFIX = "dreaming-narrative-";
+const DREAMING_TRANSCRIPT_RUN_MARKER = '"runId":"dreaming-narrative-';
+const DREAMING_ORPHAN_MIN_AGE_MS = 300_000;
+const SAFE_SESSION_ID_RE = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
 const DREAMS_FILENAMES = ["DREAMS.md", "dreams.md"] as const;
 const DIARY_START_MARKER = "<!-- openclaw:dreaming:diary:start -->";
 const DIARY_END_MARKER = "<!-- openclaw:dreaming:diary:end -->";
@@ -163,6 +177,15 @@ async function startNarrativeRunOrFallback(params: {
   }
 }
 
+function buildNarrativeSessionKey(params: {
+  workspaceDir: string;
+  phase: NarrativePhaseData["phase"];
+  nowMs: number;
+}): string {
+  const workspaceHash = createHash("sha1").update(params.workspaceDir).digest("hex").slice(0, 12);
+  return `dreaming-narrative-${params.phase}-${workspaceHash}-${params.nowMs}`;
+}
+
 // ── Prompt building ────────────────────────────────────────────────────
 
 export function buildNarrativePrompt(data: NarrativePhaseData): string {
@@ -231,13 +254,18 @@ export function extractNarrativeText(messages: unknown[]): string | null {
 
 export function formatNarrativeDate(epochMs: number, timezone?: string): string {
   const opts: Intl.DateTimeFormatOptions = {
-    timeZone: timezone ?? "UTC",
+    timeZone: timezone,
     year: "numeric",
     month: "long",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
     hour12: true,
+    // Always include the timezone abbreviation so the reader knows which
+    // timezone the timestamp refers to.  Without this, users who haven't
+    // configured a timezone see bare times that look local but are actually
+    // UTC, causing confusion (see #65027).
+    timeZoneName: "short",
   };
   return new Intl.DateTimeFormat("en-US", opts).format(new Date(epochMs));
 }
@@ -615,6 +643,194 @@ export async function appendNarrativeEntry(params: {
 
 // ── Orchestrator ───────────────────────────────────────────────────────
 
+async function safePathExists(pathname: string): Promise<boolean> {
+  try {
+    await fs.stat(pathname);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function normalizeComparablePath(pathname: string): string {
+  return process.platform === "win32" ? pathname.toLowerCase() : pathname;
+}
+
+async function normalizeSessionFileForComparison(params: {
+  sessionsDir: string;
+  sessionFile: string;
+}): Promise<string | null> {
+  const trimmed = params.sessionFile.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const resolved = path.isAbsolute(trimmed) ? trimmed : path.resolve(params.sessionsDir, trimmed);
+  try {
+    return normalizeComparablePath(await fs.realpath(resolved));
+  } catch {
+    return normalizeComparablePath(path.resolve(resolved));
+  }
+}
+
+function isDreamingSessionStoreKey(sessionKey: string): boolean {
+  const firstSeparator = sessionKey.indexOf(":");
+  if (firstSeparator < 0) {
+    return sessionKey.startsWith(DREAMING_SESSION_KEY_PREFIX);
+  }
+  const secondSeparator = sessionKey.indexOf(":", firstSeparator + 1);
+  const sessionSegment = secondSeparator < 0 ? sessionKey : sessionKey.slice(secondSeparator + 1);
+  return sessionSegment.startsWith(DREAMING_SESSION_KEY_PREFIX);
+}
+
+async function normalizeSessionEntryPathForComparison(params: {
+  sessionsDir: string;
+  entry: { sessionFile?: string; sessionId?: string } | undefined;
+}): Promise<string | null> {
+  const sessionFile = typeof params.entry?.sessionFile === "string" ? params.entry.sessionFile : "";
+  if (sessionFile) {
+    return normalizeSessionFileForComparison({
+      sessionsDir: params.sessionsDir,
+      sessionFile,
+    });
+  }
+  const sessionId =
+    typeof params.entry?.sessionId === "string" ? params.entry.sessionId.trim() : "";
+  if (!SAFE_SESSION_ID_RE.test(sessionId)) {
+    return null;
+  }
+  return normalizeSessionFileForComparison({
+    sessionsDir: params.sessionsDir,
+    sessionFile: `${sessionId}.jsonl`,
+  });
+}
+
+async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
+  const cfg = loadConfig();
+  const agentsDir = path.join(resolveStateDir(), "agents");
+  let agentEntries: Dirent[] = [];
+  try {
+    agentEntries = await fs.readdir(agentsDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  let prunedEntries = 0;
+  let archivedOrphans = 0;
+
+  for (const agentEntry of agentEntries) {
+    if (!agentEntry.isDirectory()) {
+      continue;
+    }
+
+    const storePath = resolveStorePath(cfg.session?.store, { agentId: agentEntry.name });
+    const sessionsDir = path.dirname(storePath);
+    let store: Record<string, { sessionFile?: string; sessionId?: string } | undefined>;
+    try {
+      store = loadSessionStore(storePath) as Record<
+        string,
+        { sessionFile?: string; sessionId?: string } | undefined
+      >;
+    } catch {
+      continue;
+    }
+
+    const referencedSessionFiles = new Set<string>();
+    let needsStoreUpdate = false;
+    for (const [key, entry] of Object.entries(store)) {
+      const normalizedSessionFile = await normalizeSessionEntryPathForComparison({
+        sessionsDir,
+        entry,
+      });
+      if (normalizedSessionFile) {
+        referencedSessionFiles.add(normalizedSessionFile);
+      }
+      if (!isDreamingSessionStoreKey(key)) {
+        continue;
+      }
+      if (!normalizedSessionFile || !(await safePathExists(normalizedSessionFile))) {
+        needsStoreUpdate = true;
+      }
+    }
+
+    if (needsStoreUpdate) {
+      referencedSessionFiles.clear();
+      prunedEntries += await updateSessionStore(storePath, async (lockedStore) => {
+        let prunedForAgent = 0;
+        for (const [key, entry] of Object.entries(lockedStore)) {
+          const normalizedSessionFile = await normalizeSessionEntryPathForComparison({
+            sessionsDir,
+            entry,
+          });
+          if (normalizedSessionFile) {
+            referencedSessionFiles.add(normalizedSessionFile);
+          }
+          if (!isDreamingSessionStoreKey(key)) {
+            continue;
+          }
+          if (!normalizedSessionFile || !(await safePathExists(normalizedSessionFile))) {
+            delete lockedStore[key];
+            prunedForAgent += 1;
+          }
+        }
+        return prunedForAgent;
+      });
+    }
+
+    let sessionFiles: Dirent[] = [];
+    try {
+      sessionFiles = await fs.readdir(sessionsDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const fileEntry of sessionFiles) {
+      if (!fileEntry.isFile() || !fileEntry.name.endsWith(".jsonl")) {
+        continue;
+      }
+      const transcriptPath = path.join(sessionsDir, fileEntry.name);
+      const normalizedTranscriptPath =
+        (await normalizeSessionFileForComparison({
+          sessionsDir,
+          sessionFile: fileEntry.name,
+        })) ?? normalizeComparablePath(transcriptPath);
+      if (referencedSessionFiles.has(normalizedTranscriptPath)) {
+        continue;
+      }
+      let stat;
+      try {
+        stat = await fs.stat(transcriptPath);
+      } catch {
+        continue;
+      }
+      if (Date.now() - stat.mtimeMs < DREAMING_ORPHAN_MIN_AGE_MS) {
+        continue;
+      }
+      let content = "";
+      try {
+        content = await fs.readFile(transcriptPath, "utf-8");
+      } catch {
+        continue;
+      }
+      if (!content.includes(DREAMING_TRANSCRIPT_RUN_MARKER)) {
+        continue;
+      }
+      const archivedPath = `${transcriptPath}.deleted.${Date.now()}`;
+      try {
+        await fs.rename(transcriptPath, archivedPath);
+        archivedOrphans += 1;
+      } catch {
+        // best-effort scrubber
+      }
+    }
+  }
+
+  if (prunedEntries > 0 || archivedOrphans > 0) {
+    logger.info(
+      `memory-core: dreaming cleanup scrubbed ${prunedEntries} stale session entr${prunedEntries === 1 ? "y" : "ies"} and archived ${archivedOrphans} orphan transcript${archivedOrphans === 1 ? "" : "s"}.`,
+    );
+  }
+}
+
 export async function generateAndAppendDreamNarrative(params: {
   subagent: SubagentSurface;
   workspaceDir: string;
@@ -629,11 +845,17 @@ export async function generateAndAppendDreamNarrative(params: {
     return;
   }
 
-  const sessionKey = `dreaming-narrative-${params.data.phase}-${nowMs}`;
+  const sessionKey = buildNarrativeSessionKey({
+    workspaceDir: params.workspaceDir,
+    phase: params.data.phase,
+    nowMs,
+  });
   const message = buildNarrativePrompt(params.data);
+  let runId: string | null = null;
+  let waitStatus: string | null = null;
 
   try {
-    const runId = await startNarrativeRunOrFallback({
+    runId = await startNarrativeRunOrFallback({
       subagent: params.subagent,
       sessionKey,
       message,
@@ -651,6 +873,7 @@ export async function generateAndAppendDreamNarrative(params: {
       runId,
       timeoutMs: NARRATIVE_TIMEOUT_MS,
     });
+    waitStatus = result.status;
 
     if (result.status !== "ok") {
       params.logger.warn(
@@ -688,11 +911,36 @@ export async function generateAndAppendDreamNarrative(params: {
       `memory-core: narrative generation failed for ${params.data.phase} phase: ${formatErrorMessage(err)}`,
     );
   } finally {
-    // Clean up the transient session.
+    if (runId && waitStatus === "timeout") {
+      try {
+        const settle = await params.subagent.waitForRun({
+          runId,
+          timeoutMs: NARRATIVE_DELETE_SETTLE_TIMEOUT_MS,
+        });
+        if (settle.status !== "ok" && settle.status !== "error") {
+          params.logger.warn(
+            `memory-core: narrative cleanup wait ended with status=${settle.status} for ${params.data.phase} phase.`,
+          );
+        }
+      } catch (cleanupWaitErr) {
+        params.logger.warn(
+          `memory-core: narrative cleanup wait failed for ${params.data.phase} phase: ${formatErrorMessage(cleanupWaitErr)}`,
+        );
+      }
+    }
+
     try {
       await params.subagent.deleteSession({ sessionKey });
-    } catch {
-      // Ignore cleanup failures.
+    } catch (cleanupErr) {
+      params.logger.warn(
+        `memory-core: narrative session cleanup failed for ${params.data.phase} phase: ${formatErrorMessage(cleanupErr)}`,
+      );
     }
+
+    await scrubDreamingNarrativeArtifacts(params.logger).catch((scrubErr: unknown) => {
+      params.logger.warn(
+        `memory-core: dreaming cleanup scrub failed for ${params.data.phase} phase: ${formatErrorMessage(scrubErr)}`,
+      );
+    });
   }
 }

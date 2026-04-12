@@ -23,6 +23,12 @@ import {
   resetSubagentRegistryForTests,
 } from "./subagent-registry.js";
 import {
+  createSubagentRegistryTestDeps,
+  readSubagentSessionStore,
+  removeSubagentSessionEntry,
+  writeSubagentSessionEntry,
+} from "./subagent-registry.persistence.test-support.js";
+import {
   loadSubagentRegistryFromDisk,
   resolveSubagentRegistryPath,
 } from "./subagent-registry.store.js";
@@ -47,22 +53,6 @@ describe("subagent registry persistence", () => {
     return (match?.[1] ?? "main").trim().toLowerCase() || "main";
   };
 
-  const resolveSessionStorePath = (stateDir: string, agentId: string) =>
-    path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
-
-  const readSessionStore = async (storePath: string) => {
-    try {
-      const raw = await fs.readFile(storePath, "utf8");
-      const parsed = JSON.parse(raw) as unknown;
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return parsed as Record<string, Record<string, unknown>>;
-      }
-    } catch {
-      // ignore
-    }
-    return {} as Record<string, Record<string, unknown>>;
-  };
-
   const writeChildSessionEntry = async (params: {
     sessionKey: string;
     sessionId?: string;
@@ -72,16 +62,14 @@ describe("subagent registry persistence", () => {
       throw new Error("tempStateDir not initialized");
     }
     const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
-    const storePath = resolveSessionStorePath(tempStateDir, agentId);
-    const store = await readSessionStore(storePath);
-    store[params.sessionKey] = {
-      ...store[params.sessionKey],
-      sessionId: params.sessionId ?? `sess-${agentId}-${Date.now()}`,
-      updatedAt: params.updatedAt ?? Date.now(),
-    };
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(storePath, `${JSON.stringify(store)}\n`, "utf8");
-    return storePath;
+    return await writeSubagentSessionEntry({
+      stateDir: tempStateDir,
+      agentId,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      updatedAt: params.updatedAt,
+      defaultSessionId: `sess-${agentId}-${Date.now()}`,
+    });
   };
 
   const removeChildSessionEntry = async (sessionKey: string) => {
@@ -89,12 +77,11 @@ describe("subagent registry persistence", () => {
       throw new Error("tempStateDir not initialized");
     }
     const agentId = resolveAgentIdFromSessionKey(sessionKey);
-    const storePath = resolveSessionStorePath(tempStateDir, agentId);
-    const store = await readSessionStore(storePath);
-    delete store[sessionKey];
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(storePath, `${JSON.stringify(store)}\n`, "utf8");
-    return storePath;
+    return await removeSubagentSessionEntry({
+      stateDir: tempStateDir,
+      agentId,
+      sessionKey,
+    });
   };
 
   const seedChildSessionsForPersistedRuns = async (persisted: Record<string, unknown>) => {
@@ -181,17 +168,7 @@ describe("subagent registry persistence", () => {
 
   beforeEach(() => {
     __testing.setDepsForTest({
-      cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
-      ensureContextEnginesInitialized: vi.fn(),
-      ensureRuntimePluginsLoaded: vi.fn(),
-      loadConfig: vi.fn(() => ({})),
-      resolveAgentTimeoutMs: vi.fn(() => 100),
-      resolveContextEngine: vi.fn(async () => ({
-        info: { id: "test", name: "Test", version: "0.0.1" },
-        ingest: vi.fn(async () => ({ ingested: false })),
-        assemble: vi.fn(async ({ messages }) => ({ messages, estimatedTokens: 0 })),
-        compact: vi.fn(async () => ({ ok: false, compacted: false })),
-      })),
+      ...createSubagentRegistryTestDeps(),
       runSubagentAnnounceFlow: announceSpy,
     });
     vi.mocked(callGateway).mockReset();
@@ -245,7 +222,7 @@ describe("subagent registry persistence", () => {
       outcome: { status: "ok" },
     } as never);
 
-    const store = await readSessionStore(storePath);
+    const store = await readSubagentSessionStore(storePath);
     const persisted = store["agent:main:subagent:timing"];
     expect(persisted?.endedAt).toBe(endedAt);
     expect(persisted?.runtimeMs).toBe(500);

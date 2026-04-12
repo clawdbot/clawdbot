@@ -415,7 +415,7 @@ describe("short-term dreaming cron reconciliation", () => {
     expect(harness.addCalls[0]).toMatchObject({
       name: constants.MANAGED_DREAMING_CRON_NAME,
       sessionTarget: "main",
-      wakeMode: "next-heartbeat",
+      wakeMode: "now",
       payload: {
         kind: "systemEvent",
         text: constants.DREAMING_SYSTEM_EVENT_TEXT,
@@ -488,6 +488,7 @@ describe("short-term dreaming cron reconciliation", () => {
       id: "job-primary",
       patch: {
         enabled: true,
+        wakeMode: "now",
         schedule: desired.schedule,
         payload: desired.payload,
       },
@@ -502,7 +503,7 @@ describe("short-term dreaming cron reconciliation", () => {
       enabled: true,
       schedule: { kind: "cron", expr: "0 3 * * *" },
       sessionTarget: "main",
-      wakeMode: "next-heartbeat",
+      wakeMode: "now",
       payload: { kind: "systemEvent", text: constants.DREAMING_SYSTEM_EVENT_TEXT },
       createdAtMs: 10,
     };
@@ -548,7 +549,7 @@ describe("short-term dreaming cron reconciliation", () => {
       enabled: true,
       schedule: { kind: "cron", expr: "0 3 * * *" },
       sessionTarget: "main",
-      wakeMode: "next-heartbeat",
+      wakeMode: "now",
       payload: { kind: "systemEvent", text: constants.DREAMING_SYSTEM_EVENT_TEXT },
       createdAtMs: 10,
     };
@@ -645,7 +646,7 @@ describe("short-term dreaming cron reconciliation", () => {
       enabled: true,
       schedule: { kind: "cron", expr: "0 3 * * *" },
       sessionTarget: "main",
-      wakeMode: "next-heartbeat",
+      wakeMode: "now",
       payload: { kind: "systemEvent", text: constants.DREAMING_SYSTEM_EVENT_TEXT },
       createdAtMs: 10,
     };
@@ -679,7 +680,7 @@ describe("short-term dreaming cron reconciliation", () => {
       enabled: true,
       schedule: { kind: "cron", expr: "0 3 * * *" },
       sessionTarget: "main",
-      wakeMode: "next-heartbeat",
+      wakeMode: "now",
       payload: { kind: "systemEvent", text: constants.DREAMING_SYSTEM_EVENT_TEXT },
       createdAtMs: 10,
     };

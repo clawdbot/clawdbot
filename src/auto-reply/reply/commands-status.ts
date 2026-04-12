@@ -7,8 +7,6 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
-import { listControlledSubagentRuns } from "../../agents/subagent-control.js";
-import { countPendingDescendantRuns } from "../../agents/subagent-registry.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -23,6 +21,7 @@ import {
   resolveUsageProviderId,
 } from "../../infra/provider-usage.js";
 import type { MediaUnderstandingDecision } from "../../media-understanding/types.js";
+import { importRuntimeModule } from "../../shared/runtime-import.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import {
   listTasksForAgentIdForStatus,
@@ -35,10 +34,8 @@ import {
 } from "../../tasks/task-status.js";
 import { normalizeGroupActivation } from "../group-activation.js";
 import { resolveSelectedAndActiveModel } from "../model-runtime.js";
-import { buildStatusMessage } from "../status.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
-import { buildSubagentsStatusLine } from "./commands-status-subagents.js";
 import type { CommandContext } from "./commands-types.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "./queue.js";
 
@@ -50,6 +47,43 @@ const USAGE_OAUTH_ONLY_PROVIDERS = new Set([
   "google-gemini-cli",
   "openai-codex",
 ]);
+
+type StatusRuntimeModule = {
+  buildStatusMessage: (args: Record<string, unknown>) => string;
+};
+type CommandsStatusSubagentsModule = {
+  buildSubagentsStatusLine: (params: {
+    runs: Array<{ childSessionKey: string; endedAt?: number | null }>;
+    verboseEnabled: boolean;
+    pendingDescendantsForRun: (entry: { childSessionKey: string }) => number;
+  }) => string | undefined;
+  countPendingDescendantRuns: (rootSessionKey: string) => number;
+  listControlledSubagentRuns: (
+    controllerSessionKey: string,
+  ) => Array<{ childSessionKey: string; endedAt?: number | null }>;
+};
+
+const STATUS_RUNTIME_SPEC = ["../status.runtime", ".js"] as const;
+const COMMANDS_STATUS_DEPS_RUNTIME_SPEC = ["./commands-status-deps.runtime", ".js"] as const;
+
+let statusRuntimePromise: Promise<StatusRuntimeModule> | null = null;
+let commandsStatusDepsRuntimePromise: Promise<CommandsStatusSubagentsModule> | null = null;
+
+function loadStatusRuntime(): Promise<StatusRuntimeModule> {
+  statusRuntimePromise ??= importRuntimeModule<StatusRuntimeModule>(
+    import.meta.url,
+    STATUS_RUNTIME_SPEC,
+  );
+  return statusRuntimePromise;
+}
+
+function loadCommandsStatusDepsRuntime(): Promise<CommandsStatusSubagentsModule> {
+  commandsStatusDepsRuntimePromise ??= importRuntimeModule<CommandsStatusSubagentsModule>(
+    import.meta.url,
+    COMMANDS_STATUS_DEPS_RUNTIME_SPEC,
+  );
+  return commandsStatusDepsRuntimePromise;
+}
 
 function shouldLoadUsageSummary(params: {
   provider?: string;
@@ -274,6 +308,8 @@ export async function buildStatusText(params: {
     if (!taskLine && !params.skipDefaultTaskLookup) {
       taskLine = formatAgentTaskCountsLine(statusAgentId);
     }
+    const { buildSubagentsStatusLine, countPendingDescendantRuns, listControlledSubagentRuns } =
+      await loadCommandsStatusDepsRuntime();
     const runs = listControlledSubagentRuns(requesterKey);
     const verboseEnabled = resolvedVerboseLevel && resolvedVerboseLevel !== "off";
     subagentsLine = buildSubagentsStatusLine({
@@ -297,6 +333,7 @@ export async function buildStatusText(params: {
       sessionEntry,
     }).enabled;
   const agentFallbacksOverride = resolveAgentModelFallbacksOverride(cfg, statusAgentId);
+  const { buildStatusMessage } = await loadStatusRuntime();
   const statusText = buildStatusMessage({
     config: cfg,
     agent: {

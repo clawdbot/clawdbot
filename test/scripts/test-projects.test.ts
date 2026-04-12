@@ -6,6 +6,7 @@ import {
   buildVitestRunPlans,
   shouldAcquireLocalHeavyCheckLock,
   resolveChangedTargetArgs,
+  resolveParallelFullSuiteConcurrency,
 } from "../../scripts/test-projects.test-support.mjs";
 
 describe("scripts/test-projects changed-target routing", () => {
@@ -247,6 +248,52 @@ describe("scripts/test-projects local heavy-check lock", () => {
 });
 
 describe("scripts/test-projects full-suite sharding", () => {
+  it("uses the large host-aware local profile on roomy local hosts", () => {
+    expect(
+      resolveParallelFullSuiteConcurrency(
+        61,
+        {},
+        {
+          cpuCount: 14,
+          loadAverage1m: 0,
+          totalMemoryBytes: 48 * 1024 ** 3,
+        },
+      ),
+    ).toBe(10);
+  });
+
+  it("keeps CI full-suite runs serial even on roomy hosts", () => {
+    expect(
+      resolveParallelFullSuiteConcurrency(
+        61,
+        {
+          CI: "true",
+        },
+        {
+          cpuCount: 14,
+          loadAverage1m: 0,
+          totalMemoryBytes: 48 * 1024 ** 3,
+        },
+      ),
+    ).toBe(1);
+  });
+
+  it("keeps explicit parallel overrides ahead of the host-aware profile", () => {
+    expect(
+      resolveParallelFullSuiteConcurrency(
+        61,
+        {
+          OPENCLAW_TEST_PROJECTS_PARALLEL: "3",
+        },
+        {
+          cpuCount: 14,
+          loadAverage1m: 0,
+          totalMemoryBytes: 48 * 1024 ** 3,
+        },
+      ),
+    ).toBe(3);
+  });
+
   it("splits untargeted runs into fixed core shards and per-extension configs", () => {
     const previousParallel = process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
     const previousSerial = process.env.OPENCLAW_TEST_PROJECTS_SERIAL;

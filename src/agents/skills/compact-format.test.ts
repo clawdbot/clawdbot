@@ -1,8 +1,13 @@
 import os from "node:os";
 import { formatSkillsForPrompt as upstreamFormatSkillsForPrompt } from "@mariozechner/pi-coding-agent";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createCanonicalFixtureSkill } from "../skills.test-helpers.js";
+import {
+  restoreMockSkillsHomeEnv,
+  setMockSkillsHomeEnv,
+  type SkillsHomeEnvSnapshot,
+} from "./home-env.test-support.js";
 import { formatSkillsForPrompt, type Skill } from "./skill-contract.js";
 import type { SkillEntry } from "./types.js";
 import {
@@ -100,38 +105,13 @@ describe("formatSkillsCompact", () => {
 });
 
 describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
-  let previousHome: string | undefined;
-  let previousOpenClawHome: string | undefined;
-  let previousUserProfile: string | undefined;
+  let envSnapshot: SkillsHomeEnvSnapshot;
 
   beforeEach(() => {
-    previousHome = process.env.HOME;
-    previousOpenClawHome = process.env.OPENCLAW_HOME;
-    previousUserProfile = process.env.USERPROFILE;
-    process.env.HOME = "/Users/openclaw-test-user";
-    delete process.env.OPENCLAW_HOME;
-    delete process.env.USERPROFILE;
-    vi.spyOn(os, "homedir").mockReturnValue("/Users/openclaw-test-user");
+    envSnapshot = setMockSkillsHomeEnv("/Users/openclaw-test-user");
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-    if (previousHome === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = previousHome;
-    }
-    if (previousOpenClawHome === undefined) {
-      delete process.env.OPENCLAW_HOME;
-    } else {
-      process.env.OPENCLAW_HOME = previousOpenClawHome;
-    }
-    if (previousUserProfile === undefined) {
-      delete process.env.USERPROFILE;
-    } else {
-      process.env.USERPROFILE = previousUserProfile;
-    }
-  });
+  afterEach(() => restoreMockSkillsHomeEnv(envSnapshot));
 
   it("respects explicit exposure metadata before compact formatting", () => {
     const hidden = makeEntry({ ...makeSkill("hidden"), disableModelInvocation: true });

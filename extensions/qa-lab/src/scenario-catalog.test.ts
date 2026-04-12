@@ -119,4 +119,8 @@ describe("qa scenario catalog", () => {
       }),
     ).toThrow(/gracefulFallbackAny entries must be strings/);
   });
+
+  it("returns undefined execution config for an unknown scenario id", () => {
+    expect(readQaScenarioExecutionConfig("missing-scenario-id")).toBeUndefined();
+  });
 });

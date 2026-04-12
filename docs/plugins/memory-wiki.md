@@ -45,6 +45,28 @@ both layers in one pass with `memory_search corpus=all`.
 When you need wiki-specific ranking, provenance, or direct page access, use the
 wiki-native tools instead.
 
+## Recommended hybrid pattern
+
+A strong default for local-first setups is:
+
+- QMD as the active memory backend for recall and broad semantic search
+- `memory-wiki` in `bridge` mode for durable synthesized knowledge pages
+
+That split works well because each layer stays focused:
+
+- QMD keeps raw notes, session exports, and extra collections searchable
+- `memory-wiki` compiles stable entities, claims, dashboards, and source pages
+
+Practical rule:
+
+- use `memory_search` when you want one broad recall pass across memory
+- use `wiki_search` and `wiki_get` when you want provenance-aware wiki results
+- use `memory_search corpus=all` when you want shared search to span both layers
+
+If bridge mode reports zero exported artifacts, the active memory plugin is not
+currently exposing public bridge inputs yet. Run `openclaw wiki doctor` first,
+then confirm the active memory plugin supports public artifacts.
+
 ## Vault modes
 
 `memory-wiki` supports three vault modes:
@@ -303,6 +325,47 @@ Key toggles:
 - `context.includeCompiledDigestPrompt`: append compact digest snapshot to memory prompt sections
 - `render.createBacklinks`: generate deterministic related blocks
 - `render.createDashboards`: generate dashboard pages
+
+### Example: QMD + bridge mode
+
+Use this when you want QMD for recall and `memory-wiki` for a maintained
+knowledge layer:
+
+```json5
+{
+  memory: {
+    backend: "qmd",
+      "memory-wiki": {
+        enabled: true,
+        config: {
+          vaultMode: "bridge",
+          bridge: {
+            enabled: true,
+            readMemoryArtifacts: true,
+            indexDreamReports: true,
+            indexDailyNotes: true,
+            indexMemoryRoot: true,
+            followMemoryEvents: true,
+          },
+          search: {
+            backend: "shared",
+            corpus: "all",
+          },
+          context: {
+            includeCompiledDigestPrompt: false,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+This keeps:
+
+- QMD in charge of active memory recall
+- `memory-wiki` focused on compiled pages and dashboards
+- prompt shape unchanged until you intentionally enable compiled digest prompts
 
 ## CLI
 

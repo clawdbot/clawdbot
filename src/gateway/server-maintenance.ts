@@ -61,7 +61,7 @@ export function startGatewayMaintenanceTimers(params: {
   // periodic keepalive
   const tickInterval = setInterval(() => {
     const payload = { ts: Date.now() };
-    params.broadcast("tick", payload, { dropIfSlow: true });
+    params.broadcast("tick", payload);
     params.nodeSendToAllSubscribed("tick", payload);
   }, TICK_INTERVAL_MS);
 

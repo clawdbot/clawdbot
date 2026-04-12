@@ -50,6 +50,8 @@ export type BundledPluginCompatibleActivationInputs = PluginActivationInputs & {
 export function withActivatedPluginIds(params: {
   config?: OpenClawConfig;
   pluginIds: readonly string[];
+  overrideGlobalDisable?: boolean;
+  overrideExplicitDisable?: boolean;
 }): OpenClawConfig | undefined {
   if (params.pluginIds.length === 0) {
     return params.config;
@@ -64,12 +66,14 @@ export function withActivatedPluginIds(params: {
       continue;
     }
     allow.add(normalized);
+    const existingEntry = entries[normalized];
     entries[normalized] = {
-      ...entries[normalized],
-      enabled: true,
+      ...existingEntry,
+      enabled: existingEntry?.enabled !== false || params.overrideExplicitDisable === true,
     };
   }
-  const forcePluginsEnabled = params.config?.plugins?.enabled === false;
+  const forcePluginsEnabled =
+    params.overrideGlobalDisable === true && params.config?.plugins?.enabled === false;
   return {
     ...params.config,
     plugins: {

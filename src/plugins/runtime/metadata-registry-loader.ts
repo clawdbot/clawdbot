@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadOpenClawPlugins } from "../loader.js";
+import { hasExplicitPluginIdScope } from "../plugin-scope.js";
 import type { PluginRegistry } from "../registry.js";
 import { buildPluginRuntimeLoadOptions, resolvePluginRuntimeLoadContext } from "./load-context.js";
 
@@ -20,7 +21,9 @@ export function loadPluginMetadataRegistrySnapshot(options?: {
       activate: false,
       mode: "validate",
       loadModules: options?.loadModules,
-      ...(options?.onlyPluginIds?.length ? { onlyPluginIds: options.onlyPluginIds } : {}),
+      ...(hasExplicitPluginIdScope(options?.onlyPluginIds)
+        ? { onlyPluginIds: options?.onlyPluginIds }
+        : {}),
     }),
   );
 }

@@ -22,23 +22,15 @@ const NEW_TOKEN = "shared-token-new";
 const DEFERRED_RESTART_DELAY_MS = 1_000;
 const SECRET_REF_TOKEN_ID = "OPENCLAW_SHARED_AUTH_ROTATION_SECRET_REF";
 
-let server: Awaited<ReturnType<typeof startGatewayServer>>;
 let port = 0;
 
-beforeAll(async () => {
-  port = await getFreePort();
-  testState.gatewayAuth = { mode: "token", token: OLD_TOKEN };
-  server = await startGatewayServer(port, { controlUiEnabled: true });
-});
-
-afterAll(async () => {
+afterAll(() => {
   testState.gatewayAuth = ORIGINAL_GATEWAY_AUTH;
   if (ORIGINAL_GATEWAY_TOKEN_ENV === undefined) {
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
   } else {
     process.env.OPENCLAW_GATEWAY_TOKEN = ORIGINAL_GATEWAY_TOKEN_ENV;
   }
-  await server.close();
 });
 
 async function openAuthenticatedWs(token: string): Promise<WebSocket> {
@@ -95,6 +87,32 @@ async function waitForClose(ws: WebSocket): Promise<{ code: number; reason: stri
   });
 }
 
+async function closeWsAndWait(ws: WebSocket, timeoutMs = 2_000): Promise<void> {
+  if (ws.readyState === WebSocket.CLOSED) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    const onClose = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      ws.off("close", onClose);
+      resolve();
+    }, timeoutMs);
+    ws.once("close", onClose);
+    try {
+      if (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN) {
+        ws.close();
+      }
+    } catch {
+      clearTimeout(timer);
+      ws.off("close", onClose);
+      resolve();
+    }
+  });
+}
+
 async function loadCurrentConfig(ws: WebSocket): Promise<{
   hash: string;
   config: Record<string, unknown>;
@@ -129,8 +147,20 @@ async function applyCurrentConfig(ws: WebSocket) {
 }
 
 describe("gateway shared auth rotation", () => {
+  let server: Awaited<ReturnType<typeof startGatewayServer>>;
+
+  beforeAll(async () => {
+    port = await getFreePort();
+    testState.gatewayAuth = { mode: "token", token: OLD_TOKEN };
+    server = await startGatewayServer(port, { controlUiEnabled: true });
+  });
+
   beforeEach(() => {
     testState.gatewayAuth = { mode: "token", token: OLD_TOKEN };
+  });
+
+  afterAll(async () => {
+    await server.close();
   });
 
   it("disconnects existing shared-token websocket sessions after config.patch rotates auth", async () => {
@@ -145,7 +175,7 @@ describe("gateway shared auth rotation", () => {
         reason: "gateway auth changed",
       });
     } finally {
-      ws.close();
+      await closeWsAndWait(ws);
     }
   });
 
@@ -159,7 +189,7 @@ describe("gateway shared auth rotation", () => {
       expect(followUp.ok).toBe(true);
       expect(typeof followUp.payload?.hash).toBe("string");
     } finally {
-      ws.close();
+      await closeWsAndWait(ws);
     }
   });
 });
@@ -226,7 +256,7 @@ describe("gateway shared auth rotation with unchanged SecretRefs", () => {
         reason: "gateway auth changed",
       });
     } finally {
-      ws.close();
+      await closeWsAndWait(ws);
     }
   });
 });

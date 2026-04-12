@@ -169,9 +169,10 @@ export async function setupChannels(
     }
     return resolveChannelSetupWizardAdapterForPlugin(getChannelSetupPlugin(channel));
   };
-  const preloadConfiguredExternalPlugins = () => {
+  const preloadConfiguredExternalPlugins = async () => {
     // Keep setup memory bounded by snapshot-loading only configured external plugins.
     const workspaceDir = resolveWorkspaceDir();
+    const preloadTasks: Promise<unknown>[] = [];
     // Security: keep trusted workspace overrides eligible during setup while
     // falling back from untrusted workspace shadows to the non-workspace entry.
     for (const entry of listTrustedChannelPluginCatalogEntries({ cfg: next, workspaceDir })) {
@@ -184,10 +185,11 @@ export async function setupChannels(
       if (!explicitlyEnabled && !isChannelConfigured(next, channel)) {
         continue;
       }
-      void loadScopedChannelPlugin(channel, entry.pluginId);
+      preloadTasks.push(loadScopedChannelPlugin(channel, entry.pluginId));
     }
+    await Promise.all(preloadTasks);
   };
-  preloadConfiguredExternalPlugins();
+  await preloadConfiguredExternalPlugins();
 
   const {
     installedPlugins,

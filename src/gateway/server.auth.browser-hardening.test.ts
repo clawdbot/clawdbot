@@ -115,6 +115,34 @@ async function withTrustedProxyBrowserWs(origin: string, run: (ws: WebSocket) =>
   });
 }
 
+async function expectBrowserOriginConnectRejected(params: {
+  client?: {
+    id: string;
+    version: string;
+    platform: string;
+    mode: string;
+  };
+}) {
+  testState.gatewayAuth = { mode: "token", token: "secret" };
+  await withGatewayServer(async ({ port }) => {
+    const ws = await openWs(port, { origin: "https://attacker.example" });
+    try {
+      const res = await connectReq(ws, {
+        token: "secret",
+        client: params.client ?? TEST_OPERATOR_CLIENT,
+        ...(params.client ? { device: null } : {}),
+      });
+      expect(res.ok).toBe(false);
+      expect(res.error?.message ?? "").toContain("origin not allowed");
+      expect((res.error?.details as { code?: string } | undefined)?.code).toBe(
+        ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED,
+      );
+    } finally {
+      ws.close();
+    }
+  });
+}
+
 describe("gateway auth browser hardening", () => {
   test("rejects trusted-proxy browser connects from origins outside the allowlist", async () => {
     await withTrustedProxyBrowserWs("https://evil.example", async (ws) => {
@@ -205,48 +233,17 @@ describe("gateway auth browser hardening", () => {
   );
 
   test("rejects non-local browser origins for non-control-ui clients", async () => {
-    testState.gatewayAuth = { mode: "token", token: "secret" };
-    await withGatewayServer(async ({ port }) => {
-      const ws = await openWs(port, { origin: "https://attacker.example" });
-      try {
-        const res = await connectReq(ws, {
-          token: "secret",
-          client: TEST_OPERATOR_CLIENT,
-        });
-        expect(res.ok).toBe(false);
-        expect(res.error?.message ?? "").toContain("origin not allowed");
-        expect((res.error?.details as { code?: string } | undefined)?.code).toBe(
-          ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED,
-        );
-      } finally {
-        ws.close();
-      }
-    });
+    await expectBrowserOriginConnectRejected({});
   });
 
   test("rejects browser-origin connects that claim to be tui clients", async () => {
-    testState.gatewayAuth = { mode: "token", token: "secret" };
-    await withGatewayServer(async ({ port }) => {
-      const ws = await openWs(port, { origin: "https://attacker.example" });
-      try {
-        const res = await connectReq(ws, {
-          token: "secret",
-          client: {
-            id: GATEWAY_CLIENT_NAMES.TUI,
-            version: "1.0.0",
-            platform: "darwin",
-            mode: GATEWAY_CLIENT_MODES.UI,
-          },
-          device: null,
-        });
-        expect(res.ok).toBe(false);
-        expect(res.error?.message ?? "").toContain("origin not allowed");
-        expect((res.error?.details as { code?: string } | undefined)?.code).toBe(
-          ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED,
-        );
-      } finally {
-        ws.close();
-      }
+    await expectBrowserOriginConnectRejected({
+      client: {
+        id: GATEWAY_CLIENT_NAMES.TUI,
+        version: "1.0.0",
+        platform: "darwin",
+        mode: GATEWAY_CLIENT_MODES.UI,
+      },
     });
   });
 

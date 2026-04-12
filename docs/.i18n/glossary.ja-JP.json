@@ -1,14 +1,98 @@
 [
-  { "source": "OpenClaw", "target": "OpenClaw" },
-  { "source": "Gateway", "target": "Gateway" },
-  { "source": "Pi", "target": "Pi" },
-  { "source": "Skills", "target": "Skills" },
-  { "source": "local loopback", "target": "local loopback" },
-  { "source": "Tailscale", "target": "Tailscale" },
-  { "source": "Getting Started", "target": "はじめに" },
-  { "source": "Getting started", "target": "はじめに" },
-  { "source": "Quick start", "target": "クイックスタート" },
-  { "source": "Quick Start", "target": "クイックスタート" },
-  { "source": "Onboarding", "target": "オンボーディング" },
-  { "source": "wizard", "target": "ウィザード" }
+  {
+    "source": "ACP",
+    "target": "ACP"
+  },
+  {
+    "source": "Active Memory",
+    "target": "Active Memory"
+  },
+  {
+    "source": "ClawHub",
+    "target": "ClawHub"
+  },
+  {
+    "source": "Compaction",
+    "target": "Compaction"
+  },
+  {
+    "source": "Cron",
+    "target": "Cron"
+  },
+  {
+    "source": "Dreaming",
+    "target": "Dreaming"
+  },
+  {
+    "source": "Gateway",
+    "target": "Gateway"
+  },
+  {
+    "source": "Getting Started",
+    "target": "はじめに"
+  },
+  {
+    "source": "Getting started",
+    "target": "はじめに"
+  },
+  {
+    "source": "Heartbeat",
+    "target": "Heartbeat"
+  },
+  {
+    "source": "local loopback",
+    "target": "local loopback"
+  },
+  {
+    "source": "Node",
+    "target": "Node"
+  },
+  {
+    "source": "Onboarding",
+    "target": "オンボーディング"
+  },
+  {
+    "source": "OpenClaw",
+    "target": "OpenClaw"
+  },
+  {
+    "source": "Pi",
+    "target": "Pi"
+  },
+  {
+    "source": "Plugin",
+    "target": "Plugin"
+  },
+  {
+    "source": "Quick start",
+    "target": "クイックスタート"
+  },
+  {
+    "source": "Quick Start",
+    "target": "クイックスタート"
+  },
+  {
+    "source": "Skills",
+    "target": "Skills"
+  },
+  {
+    "source": "Tailscale",
+    "target": "Tailscale"
+  },
+  {
+    "source": "TaskFlow",
+    "target": "TaskFlow"
+  },
+  {
+    "source": "TUI",
+    "target": "TUI"
+  },
+  {
+    "source": "Webhook",
+    "target": "Webhook"
+  },
+  {
+    "source": "wizard",
+    "target": "ウィザード"
+  }
 ]

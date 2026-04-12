@@ -15,7 +15,7 @@ export function registerGroupIntroPromptCases(): void {
       setup?: (cfg: ReturnType<typeof makeCfg>) => void;
     };
     const groupParticipationNote =
-      "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available. Write like a human. Avoid Markdown tables. Don't type literal \\n sequences; use real line breaks sparingly.";
+      "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available. Write like a human. Avoid Markdown tables. Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \\n sequences; use real line breaks sparingly.";
     const cases: GroupIntroCase[] = [
       {
         name: "discord",
@@ -44,8 +44,8 @@ export function registerGroupIntroPromptCases(): void {
           Provider: "whatsapp",
         },
         expected: [
-          `You are in the WhatsApp group chat "Ops". Your replies are automatically sent to this group chat. Do not use the message tool to send to this same group — just reply normally.`,
-          `Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). WhatsApp IDs: SenderId is the participant JID (group participant id). ${groupParticipationNote} Address the specific sender noted in the message context.`,
+          `You are in the WhatsApp group chat "Ops". Your replies are automatically sent to this group chat. Do not use the message tool to send to this same group - just reply normally.`,
+          `Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). ${groupParticipationNote} Address the specific sender noted in the message context.`,
         ],
       },
       {

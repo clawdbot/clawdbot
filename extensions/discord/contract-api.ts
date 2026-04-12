@@ -1,4 +1,8 @@
 export { createThreadBindingManager } from "./src/monitor/thread-bindings.manager.js";
+export {
+  listDiscordDirectoryGroupsFromConfig,
+  listDiscordDirectoryPeersFromConfig,
+} from "./src/directory-config.js";
 export { normalizeCompatibilityConfig, legacyConfigRules } from "./src/doctor-contract.js";
 export {
   collectRuntimeConfigAssignments,

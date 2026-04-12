@@ -53,6 +53,10 @@
   },
   "redirects": [
     {
+      "source": "/mcp",
+      "destination": "/cli/mcp"
+    },
+    {
       "source": "/providers/modelstudio",
       "destination": "/providers/qwen"
     },
@@ -1116,6 +1120,8 @@
                   "plugins/codex-harness",
                   "plugins/webhooks",
                   "plugins/voice-call",
+                  "plugins/memory-wiki",
+                  "plugins/zalouser",
                   {
                     "group": "Building Plugins",
                     "pages": [
@@ -1188,6 +1194,7 @@
                       "tools/gemini-search",
                       "tools/grok-search",
                       "tools/kimi-search",
+                      "tools/minimax-search",
                       "tools/ollama-search",
                       "tools/perplexity-search",
                       "tools/searxng-search",
@@ -1237,22 +1244,24 @@
                 "group": "Providers",
                 "pages": [
                   "providers/alibaba",
-                  "providers/anthropic",
-                  "providers/arcee",
                   "providers/bedrock",
                   "providers/bedrock-mantle",
+                  "providers/anthropic",
+                  "providers/arcee",
                   "providers/chutes",
-                  "providers/comfy",
                   "providers/claude-max-api-proxy",
                   "providers/cloudflare-ai-gateway",
+                  "providers/comfy",
                   "providers/deepgram",
                   "providers/deepseek",
                   "providers/fal",
+                  "providers/fireworks",
                   "providers/github-copilot",
                   "providers/glm",
                   "providers/google",
                   "providers/groq",
                   "providers/huggingface",
+                  "providers/inferrs",
                   "providers/kilocode",
                   "providers/litellm",
                   "providers/minimax",
@@ -1274,9 +1283,9 @@
                   "providers/together",
                   "providers/venice",
                   "providers/vercel-ai-gateway",
-                  "providers/vydra",
                   "providers/vllm",
                   "providers/volcengine",
+                  "providers/vydra",
                   "providers/xai",
                   "providers/xiaomi",
                   "providers/zai"
@@ -1455,6 +1464,7 @@
                       "cli/agent",
                       "cli/agents",
                       "cli/hooks",
+                      "cli/infer",
                       "cli/memory",
                       "cli/message",
                       "cli/models",
@@ -1505,7 +1515,8 @@
                       "cli/completion",
                       "cli/dns",
                       "cli/docs",
-                      "cli/mcp"
+                      "cli/mcp",
+                      "cli/wiki"
                     ]
                   }
                 ]
@@ -1539,6 +1550,7 @@
                   "reference/api-usage-costs",
                   "reference/transcript-hygiene",
                   "reference/memory-config",
+                  "reference/rich-output-protocol",
                   "date-time"
                 ]
               },

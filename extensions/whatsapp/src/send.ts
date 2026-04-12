@@ -35,6 +35,7 @@ export async function sendMessageWhatsApp(
     verbose: boolean;
     cfg?: OpenClawConfig;
     mediaUrl?: string;
+    mediaUrls?: readonly string[];
     mediaAccess?: {
       localRoots?: readonly string[];
       readFile?: (filePath: string) => Promise<Buffer>;
@@ -47,7 +48,13 @@ export async function sendMessageWhatsApp(
 ): Promise<{ messageId: string; toJid: string }> {
   let text = body.trimStart();
   const jid = toWhatsappJid(to);
-  if (!text && !options.mediaUrl) {
+  const mediaUrls = Array.isArray(options.mediaUrls)
+    ? options.mediaUrls
+        .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+        .filter(Boolean)
+    : [];
+  const primaryMediaUrl = options.mediaUrl?.trim() || mediaUrls[0];
+  if (!text && !primaryMediaUrl) {
     return { messageId: "", toJid: jid };
   }
   const correlationId = generateSecureUuid();
@@ -81,8 +88,8 @@ export async function sendMessageWhatsApp(
     let mediaBuffer: Buffer | undefined;
     let mediaType: string | undefined;
     let documentFileName: string | undefined;
-    if (options.mediaUrl) {
-      const media = await loadOutboundMediaFromUrl(options.mediaUrl, {
+    if (primaryMediaUrl) {
+      const media = await loadOutboundMediaFromUrl(primaryMediaUrl, {
         maxBytes: resolveWhatsAppMediaMaxBytes(account),
         mediaAccess: options.mediaAccess,
         mediaLocalRoots: options.mediaLocalRoots,
@@ -106,8 +113,8 @@ export async function sendMessageWhatsApp(
         documentFileName = media.fileName;
       }
     }
-    outboundLog.info(`Sending message -> ${redactedJid}${options.mediaUrl ? " (media)" : ""}`);
-    logger.info({ jid: redactedJid, hasMedia: Boolean(options.mediaUrl) }, "sending message");
+    outboundLog.info(`Sending message -> ${redactedJid}${primaryMediaUrl ? " (media)" : ""}`);
+    logger.info({ jid: redactedJid, hasMedia: Boolean(primaryMediaUrl) }, "sending message");
     await active.sendComposingTo(to);
     const hasExplicitAccountId = Boolean(options.accountId?.trim());
     const accountId = hasExplicitAccountId ? resolvedAccountId : undefined;
@@ -125,13 +132,13 @@ export async function sendMessageWhatsApp(
     const messageId = (result as { messageId?: string })?.messageId ?? "unknown";
     const durationMs = Date.now() - startedAt;
     outboundLog.info(
-      `Sent message ${messageId} -> ${redactedJid}${options.mediaUrl ? " (media)" : ""} (${durationMs}ms)`,
+      `Sent message ${messageId} -> ${redactedJid}${primaryMediaUrl ? " (media)" : ""} (${durationMs}ms)`,
     );
     logger.info({ jid: redactedJid, messageId }, "sent message");
     return { messageId, toJid: jid };
   } catch (err) {
     logger.error(
-      { err: String(err), to: redactedTo, hasMedia: Boolean(options.mediaUrl) },
+      { err: String(err), to: redactedTo, hasMedia: Boolean(primaryMediaUrl) },
       "failed to send via web session",
     );
     throw err;

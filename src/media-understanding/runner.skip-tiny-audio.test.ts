@@ -182,4 +182,30 @@ describe("runCapability skips tiny audio files", () => {
       },
     });
   });
+
+  it("marks the decision as failed when every audio model attempt fails", async () => {
+    await withAudioFixture({
+      filePrefix: "openclaw-failed-audio",
+      extension: "ogg",
+      mediaType: "audio/ogg",
+      fileContents: Buffer.alloc(MIN_AUDIO_FILE_BYTES + 100),
+      run: async ({ ctx, media, cache }) => {
+        const result = await runAudioCapabilityWithTranscriber({
+          ctx,
+          media,
+          cache,
+          transcribeAudio: async () => {
+            throw new Error("upstream 500");
+          },
+        });
+
+        expect(result.outputs).toHaveLength(0);
+        expect(result.decision.outcome).toBe("failed");
+        expect(result.decision.attachments).toHaveLength(1);
+        expect(result.decision.attachments[0]?.attempts).toHaveLength(1);
+        expect(result.decision.attachments[0]?.attempts[0]?.outcome).toBe("failed");
+        expect(result.decision.attachments[0]?.attempts[0]?.reason).toContain("upstream 500");
+      },
+    });
+  });
 });

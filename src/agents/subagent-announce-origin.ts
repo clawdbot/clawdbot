@@ -128,6 +128,11 @@ function shouldStripThreadFromAnnounceEntry(
       return requesterTarget !== entryTarget;
     }
   }
+  const requesterTarget = normalizeOptionalString(normalizedRequester.to);
+  const entryTarget = normalizeOptionalString(normalizedEntry?.to);
+  if (requesterTarget && entryTarget) {
+    return requesterTarget !== entryTarget;
+  }
   return false;
 }
 

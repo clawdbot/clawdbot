@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -65,13 +66,54 @@ const RELATED_BLOCK_PATTERN = new RegExp(
   `${WIKI_RELATED_START_MARKER}[\\s\\S]*?${WIKI_RELATED_END_MARKER}`,
   "g",
 );
+const MAX_WIKI_SEGMENT_BYTES = 240;
+const MAX_WIKI_FILENAME_COMPONENT_BYTES = 255;
+const WIKI_SEGMENT_HASH_BYTES = 12;
+
+function truncateUtf8CodePointSafe(value: string, maxBytes: number): string {
+  let result = "";
+  let bytes = 0;
+  for (const char of value) {
+    const nextBytes = Buffer.byteLength(char);
+    if (bytes + nextBytes > maxBytes) {
+      break;
+    }
+    result += char;
+    bytes += nextBytes;
+  }
+  return result;
+}
+
+function capWikiValueWithHash(raw: string, maxBytes: number, fallback: string): string {
+  if (Buffer.byteLength(raw) <= maxBytes) {
+    return raw;
+  }
+  const suffix = createHash("sha1").update(raw).digest("hex").slice(0, WIKI_SEGMENT_HASH_BYTES);
+  const truncated = truncateUtf8CodePointSafe(
+    raw,
+    maxBytes - Buffer.byteLength(`-${suffix}`),
+  ).replace(/-+$/g, "");
+  return `${truncated || fallback}-${suffix}`;
+}
 
 export function slugifyWikiSegment(raw: string): string {
   const slug = normalizeLowercaseStringOrEmpty(raw)
-    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/[^\p{L}\p{N}\p{M}]+/gu, "-")
     .replace(/-+/g, "-")
     .replace(/^-+|-+$/g, "");
-  return slug || "page";
+  if (!slug) {
+    return "page";
+  }
+  return capWikiValueWithHash(slug, MAX_WIKI_SEGMENT_BYTES, "page");
+}
+
+export function createWikiPageFilename(stem: string, extension = ".md"): string {
+  const normalizedExtension = extension.startsWith(".") ? extension : `.${extension}`;
+  const maxStemBytes = Math.max(
+    1,
+    MAX_WIKI_FILENAME_COMPONENT_BYTES - Buffer.byteLength(normalizedExtension),
+  );
+  return `${capWikiValueWithHash(stem, maxStemBytes, "page")}${normalizedExtension}`;
 }
 
 export function parseWikiMarkdown(content: string): ParsedWikiMarkdown {

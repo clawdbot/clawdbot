@@ -6,7 +6,6 @@ export type BrowserOpenCommand = {
   argv: string[] | null;
   reason?: string;
   command?: string;
-  quoteUrl?: boolean;
 };
 
 export type BrowserOpenSupport = {
@@ -36,9 +35,8 @@ export async function resolveBrowserOpenCommand(): Promise<BrowserOpenCommand> {
 
   if (platform === "win32") {
     return {
-      argv: ["cmd", "/c", "start", ""],
-      command: "cmd",
-      quoteUrl: true,
+      argv: ["explorer.exe"],
+      command: "explorer.exe",
     };
   }
 
@@ -86,21 +84,10 @@ export async function openUrl(url: string): Promise<boolean> {
   if (!resolved.argv) {
     return false;
   }
-  const quoteUrl = resolved.quoteUrl === true;
   const command = [...resolved.argv];
-  if (quoteUrl) {
-    if (command.at(-1) === "") {
-      command[command.length - 1] = '""';
-    }
-    command.push(`"${url}"`);
-  } else {
-    command.push(url);
-  }
+  command.push(url);
   try {
-    await runCommandWithTimeout(command, {
-      timeoutMs: 5_000,
-      windowsVerbatimArguments: quoteUrl,
-    });
+    await runCommandWithTimeout(command, { timeoutMs: 5_000 });
     return true;
   } catch {
     return false;

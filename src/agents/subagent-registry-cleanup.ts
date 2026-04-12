@@ -66,9 +66,6 @@ export function resolveDeferredCleanupDecision(params: {
   return {
     kind: "retry",
     retryCount,
-    resumeDelayMs:
-      params.entry.expectsCompletionMessage === true
-        ? params.resolveAnnounceRetryDelayMs(retryCount)
-        : undefined,
+    resumeDelayMs: params.resolveAnnounceRetryDelayMs(retryCount),
   };
 }

@@ -18,7 +18,7 @@ export type AssistantReplySnapshot = {
 };
 
 export type AgentWaitResult = {
-  status: "ok" | "timeout" | "error";
+  status: "ok" | "timeout" | "error" | "pending";
   error?: string;
   startedAt?: number;
   endedAt?: number;
@@ -132,6 +132,9 @@ export async function waitForAgentRun(params: {
     });
     if (wait?.status === "timeout") {
       return normalizeAgentWaitResult("timeout", wait);
+    }
+    if (wait?.status === "pending") {
+      return normalizeAgentWaitResult("pending", wait);
     }
     if (wait?.status === "error") {
       return normalizeAgentWaitResult("error", wait);

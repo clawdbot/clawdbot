@@ -26,6 +26,14 @@ function expectPrunedImageMessage(
   return content;
 }
 
+function expectImageMessagePreserved(messages: AgentMessage[], errorMessage: string) {
+  const didMutate = pruneProcessedHistoryImages(messages);
+
+  expect(didMutate).toBe(false);
+  const content = expectArrayMessageContent(messages[0], errorMessage);
+  expect(content[1]).toMatchObject({ type: "image", data: "abc" });
+}
+
 describe("pruneProcessedHistoryImages", () => {
   const image: ImageContent = { type: "image", data: "abc", mimeType: "image/png" };
   const assistantTurn = () => castAgentMessage({ role: "assistant", content: "ack" });
@@ -63,11 +71,7 @@ describe("pruneProcessedHistoryImages", () => {
       assistantTurn(),
     ];
 
-    const didMutate = pruneProcessedHistoryImages(messages);
-
-    expect(didMutate).toBe(false);
-    const content = expectArrayMessageContent(messages[0], "expected user array content");
-    expect(content[1]).toMatchObject({ type: "image", data: "abc" });
+    expectImageMessagePreserved(messages, "expected user array content");
   });
 
   it("does not count multiple assistant messages from one tool loop as separate turns", () => {
@@ -93,11 +97,7 @@ describe("pruneProcessedHistoryImages", () => {
       assistantTurn(),
     ];
 
-    const didMutate = pruneProcessedHistoryImages(messages);
-
-    expect(didMutate).toBe(false);
-    const content = expectArrayMessageContent(messages[0], "expected user array content");
-    expect(content[1]).toMatchObject({ type: "image", data: "abc" });
+    expectImageMessagePreserved(messages, "expected user array content");
   });
 
   it("does not prune latest user message when no assistant response exists yet", () => {

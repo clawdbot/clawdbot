@@ -26,6 +26,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readLatestSessionUsageFromTranscript } from "../gateway/session-utils.fs.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { resolveCommitHash } from "../infra/git-commit.js";
+import { findDecisionReason, summarizeDecisionReason } from "../media-understanding/runner.entries.js";
 import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
@@ -375,11 +376,14 @@ const formatMediaUnderstandingLine = (decisions?: ReadonlyArray<MediaUnderstandi
         return `${decision.capability} denied`;
       }
       if (decision.outcome === "skipped") {
-        const reason = decision.attachments
-          .flatMap((entry) => entry.attempts.map((attempt) => attempt.reason).filter(Boolean))
-          .find(Boolean);
-        const shortReason = reason ? reason.split(":")[0]?.trim() : undefined;
+        const reason = findDecisionReason(decision);
+        const shortReason = summarizeDecisionReason(reason);
         return `${decision.capability} skipped${shortReason ? ` (${shortReason})` : ""}`;
+      }
+      if (decision.outcome === "failed") {
+        const reason = findDecisionReason(decision, "failed");
+        const shortReason = summarizeDecisionReason(reason);
+        return `${decision.capability} failed${shortReason ? ` (${shortReason})` : ""}`;
       }
       return null;
     })

@@ -11,7 +11,7 @@ let doctorCommand: typeof import("./doctor.js").doctorCommand;
 describe("doctor command", () => {
   beforeEach(async () => {
     doctorCommand = await loadDoctorCommandForTest({
-      unmockModules: ["./doctor-sandbox.js"],
+      unmockModules: ["./doctor-sandbox.js", "../flows/doctor-health-contributions.js"],
     });
   });
 

@@ -88,6 +88,32 @@ function makeToolResultMessage(
   } as unknown as StreamFnParams[1]["messages"][number];
 }
 
+async function runWebsocketToolFollowupTurn(params: {
+  streamFn: ReturnType<StreamFactory>;
+  context: StreamFnParams[1];
+  firstDone: AssistantMessage;
+  toolCallId: string;
+  output: string;
+}) {
+  const secondContext = {
+    ...params.context,
+    messages: [
+      ...params.context.messages,
+      params.firstDone,
+      makeToolResultMessage(params.toolCallId, params.output),
+    ],
+  } as unknown as StreamFnParams[1];
+
+  return expectDone(
+    await collectEvents(
+      params.streamFn(model, secondContext, {
+        transport: "websocket",
+        maxTokens: 128,
+      }),
+    ),
+  );
+}
+
 async function collectEvents(stream: StreamReturn): Promise<AssistantMessageEvent[]> {
   const events: AssistantMessageEvent[] = [];
   const resolvedStream: AssistantMessageEventStream = await stream;
@@ -256,22 +282,13 @@ describe("OpenAI WebSocket e2e", () => {
       expect(toolCall?.name).toBe("noop");
       expect(toolCall?.id).toBeTruthy();
 
-      const secondContext = {
-        ...firstContext,
-        messages: [
-          ...firstContext.messages,
-          firstDone,
-          makeToolResultMessage(toolCall!.id, "TOOL_OK"),
-        ],
-      } as unknown as StreamFnParams[1];
-      const secondDone = expectDone(
-        await collectEvents(
-          streamFn(model, secondContext, {
-            transport: "websocket",
-            maxTokens: 128,
-          }),
-        ),
-      );
+      const secondDone = await runWebsocketToolFollowupTurn({
+        streamFn,
+        context: firstContext,
+        firstDone,
+        toolCallId: toolCall!.id,
+        output: "TOOL_OK",
+      });
 
       expect(assistantText(secondDone)).toMatch(/TOOL_OK/);
     },
@@ -340,22 +357,13 @@ describe("OpenAI WebSocket e2e", () => {
         rawToolCall ? `${rawToolCall.call_id}|${rawToolCall.id}` : undefined,
       );
 
-      const secondContext = {
-        ...firstContext,
-        messages: [
-          ...firstContext.messages,
-          firstDone,
-          makeToolResultMessage(toolCall!.id, "TOOL_OK"),
-        ],
-      } as unknown as StreamFnParams[1];
-      const secondDone = expectDone(
-        await collectEvents(
-          streamFn(model, secondContext, {
-            transport: "websocket",
-            maxTokens: 128,
-          }),
-        ),
-      );
+      const secondDone = await runWebsocketToolFollowupTurn({
+        streamFn,
+        context: firstContext,
+        firstDone,
+        toolCallId: toolCall!.id,
+        output: "TOOL_OK",
+      });
 
       expect(assistantText(secondDone)).toMatch(/TOOL_OK/);
     },

@@ -16,7 +16,8 @@ import * as hookRunnerGlobal from "../plugins/hook-runner-global.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import * as piEmbedded from "./pi-embedded.js";
+import * as piEmbedded from "./pi-embedded-runner/runs.js";
+import { __testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
 import * as agentStep from "./tools/agent-step.js";
 
 type AgentCallRequest = { method?: string; params?: Record<string, unknown> };
@@ -202,6 +203,7 @@ describe("subagent announce formatting", () => {
   });
 
   afterAll(() => {
+    subagentAnnounceDeliveryTesting.setDepsForTest();
     clearRuntimeConfigSnapshot();
     if (previousFastTestEnv === undefined) {
       delete process.env.OPENCLAW_TEST_FAST;
@@ -242,6 +244,11 @@ describe("subagent announce formatting", () => {
         return {};
       }
       return {};
+    });
+    subagentAnnounceDeliveryTesting.setDepsForTest({
+      callGateway: async <T = Record<string, unknown>>(
+        req: Parameters<typeof gatewayCall.callGateway>[0],
+      ) => (await callGatewaySpy(req)) as T,
     });
     loadSessionStoreSpy.mockReset().mockImplementation(() => loadSessionStoreFixture());
     resolveAgentIdFromSessionKeySpy.mockReset().mockImplementation(() => "main");

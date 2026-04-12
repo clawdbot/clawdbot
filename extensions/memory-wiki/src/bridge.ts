@@ -8,7 +8,12 @@ import {
 import type { OpenClawConfig } from "../api.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
-import { renderMarkdownFence, renderWikiMarkdown, slugifyWikiSegment } from "./markdown.js";
+import {
+  createWikiPageFilename,
+  renderMarkdownFence,
+  renderWikiMarkdown,
+  slugifyWikiSegment,
+} from "./markdown.js";
 import { writeImportedSourcePage } from "./source-page-shared.js";
 import { resolveArtifactKey } from "./source-path-shared.js";
 import {
@@ -110,11 +115,10 @@ function resolveBridgePagePath(params: { workspaceDir: string; relativePath: str
   const artifactHash = createHash("sha1").update(params.relativePath).digest("hex");
   const workspaceSlug = `${workspaceBaseSlug}-${workspaceHash.slice(0, 8)}`;
   const artifactSlug = `${artifactBaseSlug}-${artifactHash.slice(0, 8)}`;
+  const fileName = createWikiPageFilename(`bridge-${workspaceSlug}-${artifactSlug}`);
   return {
     pageId: `source.bridge.${workspaceSlug}.${artifactSlug}`,
-    pagePath: path
-      .join("sources", `bridge-${workspaceSlug}-${artifactSlug}.md`)
-      .replace(/\\/g, "/"),
+    pagePath: path.join("sources", fileName).replace(/\\/g, "/"),
     workspaceSlug,
     artifactSlug,
   };

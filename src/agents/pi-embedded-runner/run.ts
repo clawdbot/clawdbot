@@ -750,6 +750,7 @@ export async function runEmbeddedPiAgent(
           const activeErrorContext = resolveActiveErrorContext({
             provider,
             model: modelId,
+            assistant: currentAttemptAssistant ?? sessionLastAssistant,
           });
           const resolveReplayInvalidForAttempt = (incompleteTurnText?: string | null) =>
             accumulatedReplayState.replayInvalid ||

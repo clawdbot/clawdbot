@@ -4,19 +4,18 @@ import {
   matrixSetupWizard,
 } from "../../test/helpers/channels/matrix-setup-contract.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
+import {
+  ensureChannelSetupPluginInstalled,
+  loadChannelSetupPluginRegistrySnapshotForChannel,
+  reloadChannelSetupPluginRegistry,
+} from "../commands/channel-setup/plugin-install.js";
+import { getChannelSetupWizardAdapter } from "../commands/channel-setup/registry.js";
+import type { ChannelSetupWizardAdapter } from "../commands/channel-setup/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import {
-  ensureChannelSetupPluginInstalled,
-  loadChannelSetupPluginRegistrySnapshotForChannel,
-  reloadChannelSetupPluginRegistry,
-} from "./channel-setup/plugin-install.js";
-import { getChannelSetupWizardAdapter } from "./channel-setup/registry.js";
-import type { ChannelSetupWizardAdapter } from "./channel-setup/types.js";
-import { setupChannels } from "./onboard-channels.js";
 import { createExitThrowingRuntime, createWizardPrompter } from "./test-wizard-helpers.js";
 
 const catalogMocks = vi.hoisted(() => ({
@@ -48,7 +47,10 @@ function createUnexpectedPromptGuards() {
   };
 }
 
-type SetupChannelsOptions = Parameters<typeof setupChannels>[3];
+type SetupChannels = typeof import("./onboard-channels.js").setupChannels;
+let setupChannels: SetupChannels;
+
+type SetupChannelsOptions = Parameters<SetupChannels>[3];
 
 function runSetupChannels(
   cfg: OpenClawConfig,
@@ -101,17 +103,17 @@ function createTelegramCfg(botToken: string, enabled?: boolean): OpenClawConfig 
 
 function createMSTeamsCatalogEntry(): ChannelPluginCatalogEntry {
   return {
-    id: "msteams",
-    pluginId: "@openclaw/msteams-plugin",
+    id: "external-chat",
+    pluginId: "@openclaw/external-chat-plugin",
     meta: {
-      id: "msteams",
-      label: "Microsoft Teams",
-      selectionLabel: "Microsoft Teams",
-      docsPath: "/channels/msteams",
-      blurb: "teams channel",
+      id: "external-chat",
+      label: "External Chat",
+      selectionLabel: "External Chat",
+      docsPath: "/channels/external-chat",
+      blurb: "external chat channel",
     },
     install: {
-      npmSpec: "@openclaw/msteams",
+      npmSpec: "@openclaw/external-chat",
     },
   };
 }
@@ -205,6 +207,9 @@ function createMatrixQuickstartPrompter(notes: string[]): WizardPrompter {
       return false;
     }
     if (message === "Configure DM access policies now? (default: pairing)") {
+      return false;
+    }
+    if (message === "Configure Matrix invite auto-join?") {
       return false;
     }
     if (message.startsWith("Matrix env vars detected")) {
@@ -369,10 +374,10 @@ type PatchedSetupAdapterFields = {
 
 function createMSTeamsPluginRegistryEntry(params?: { includeSetupWizard?: boolean }) {
   return {
-    pluginId: "@openclaw/msteams-plugin",
+    pluginId: "@openclaw/external-chat-plugin",
     source: "test",
     plugin: {
-      id: "msteams",
+      id: "external-chat",
       meta: createMSTeamsCatalogEntry().meta,
       capabilities: { chatTypes: ["direct"] as const },
       config: {
@@ -382,7 +387,7 @@ function createMSTeamsPluginRegistryEntry(params?: { includeSetupWizard?: boolea
       ...(params?.includeSetupWizard
         ? {
             setupWizard: {
-              channel: "msteams",
+              channel: "external-chat",
               status: {
                 configuredLabel: "configured",
                 unconfiguredLabel: "installed",
@@ -403,7 +408,7 @@ function mockMSTeamsRegistrySnapshot(params?: { includeSetupWizard?: boolean }) 
   vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockImplementation(
     ({ channel }: { channel: string }) => {
       const registry = createEmptyPluginRegistry();
-      if (channel === "msteams") {
+      if (channel === "external-chat") {
         if (params?.includeSetupWizard) {
           registry.channelSetups.push(createMSTeamsPluginRegistryEntry(params) as never);
         } else {
@@ -613,8 +618,8 @@ vi.mock("./onboard-helpers.js", () => ({
   detectBinary: vi.fn(async () => false),
 }));
 
-vi.mock("./channel-setup/plugin-install.js", async () => {
-  const actual = await vi.importActual("./channel-setup/plugin-install.js");
+vi.mock("../commands/channel-setup/plugin-install.js", async () => {
+  const actual = await vi.importActual("../commands/channel-setup/plugin-install.js");
   return {
     ...(actual as Record<string, unknown>),
     ensureChannelSetupPluginInstalled: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
@@ -628,7 +633,8 @@ vi.mock("./channel-setup/plugin-install.js", async () => {
 });
 
 describe("setupChannels", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    ({ setupChannels } = await import("./onboard-channels.js"));
     setMinimalOnboardingRegistryForTests();
     catalogMocks.listChannelPluginCatalogEntries.mockReset();
     manifestRegistryMocks.loadPluginManifestRegistry.mockReset();
@@ -726,7 +732,7 @@ describe("setupChannels", () => {
       text: text as unknown as WizardPrompter["text"],
     });
 
-    await runSetupChannels({} as OpenClawConfig, prompter, {
+    const cfg = await runSetupChannels({} as OpenClawConfig, prompter, {
       quickstartDefaults: true,
     });
 
@@ -739,12 +745,7 @@ describe("setupChannels", () => {
       );
     });
     expect(sawHardStop).toBe(false);
-    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "telegram",
-        pluginId: "telegram",
-      }),
-    );
+    expect(cfg.channels?.telegram?.botToken).toBe("123:token");
     expect(reloadChannelSetupPluginRegistry).not.toHaveBeenCalled();
   });
 
@@ -778,7 +779,7 @@ describe("setupChannels", () => {
     const select = vi.fn(async ({ message, options }: { message: string; options: unknown[] }) => {
       if (message === "Select a channel") {
         const entries = options as Array<{ value: string; hint?: string }>;
-        const msteams = entries.find((entry) => entry.value === "msteams");
+        const msteams = entries.find((entry) => entry.value === "external-chat");
         expect(msteams).toBeDefined();
         expect(msteams?.hint ?? "").not.toContain("plugin");
         expect(msteams?.hint ?? "").not.toContain("install");
@@ -796,13 +797,13 @@ describe("setupChannels", () => {
     await runSetupChannels(
       {
         channels: {
-          msteams: {
+          "external-chat": {
             tenantId: "tenant-1",
           },
         },
         plugins: {
           entries: {
-            "@openclaw/msteams-plugin": { enabled: true },
+            "@openclaw/external-chat-plugin": { enabled: true },
           },
         },
       } as OpenClawConfig,
@@ -811,8 +812,8 @@ describe("setupChannels", () => {
 
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
       expect.objectContaining({
-        channel: "msteams",
-        pluginId: "@openclaw/msteams-plugin",
+        channel: "external-chat",
+        pluginId: "@openclaw/external-chat-plugin",
       }),
     );
     expect(multiselect).not.toHaveBeenCalled();
@@ -869,8 +870,8 @@ describe("setupChannels", () => {
     manifestRegistryMocks.loadPluginManifestRegistry.mockReturnValue({
       plugins: [
         {
-          id: "@openclaw/msteams-plugin",
-          channels: ["msteams"],
+          id: "@openclaw/external-chat-plugin",
+          channels: ["external-chat"],
         } as never,
       ],
       diagnostics: [],
@@ -881,7 +882,7 @@ describe("setupChannels", () => {
     const select = vi.fn(async ({ message }: { message: string }) => {
       if (message === "Select a channel") {
         channelSelectionCount += 1;
-        return channelSelectionCount === 1 ? "msteams" : "__done__";
+        return channelSelectionCount === 1 ? "external-chat" : "__done__";
       }
       return "__done__";
     });
@@ -897,8 +898,8 @@ describe("setupChannels", () => {
     expect(ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
       expect.objectContaining({
-        channel: "msteams",
-        pluginId: "@openclaw/msteams-plugin",
+        channel: "external-chat",
+        pluginId: "@openclaw/external-chat-plugin",
       }),
     );
     expect(multiselect).not.toHaveBeenCalled();
@@ -919,14 +920,17 @@ describe("setupChannels", () => {
         ...cfg,
         channels: {
           ...cfg.channels,
-          msteams: {
-            ...(cfg.channels?.msteams as Record<string, unknown> | undefined),
+          "external-chat": {
+            ...(cfg.channels?.["external-chat"] as Record<string, unknown> | undefined),
             accounts: {
-              ...(cfg.channels?.msteams as { accounts?: Record<string, unknown> } | undefined)
-                ?.accounts,
+              ...(
+                cfg.channels?.["external-chat"] as
+                  | { accounts?: Record<string, unknown> }
+                  | undefined
+              )?.accounts,
               [accountId]: {
                 ...(
-                  cfg.channels?.msteams as
+                  cfg.channels?.["external-chat"] as
                     | {
                         accounts?: Record<string, Record<string, unknown>>;
                       }
@@ -942,29 +946,32 @@ describe("setupChannels", () => {
     vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockImplementation(
       ({ channel }: { channel: string }) => {
         const registry = createEmptyPluginRegistry();
-        if (channel === "msteams") {
+        if (channel === "external-chat") {
           registry.channels.push({
-            pluginId: "msteams",
+            pluginId: "external-chat",
             source: "test",
             plugin: {
-              id: "msteams",
+              id: "external-chat",
               meta: {
-                id: "msteams",
-                label: "Microsoft Teams",
-                selectionLabel: "Microsoft Teams",
-                docsPath: "/channels/msteams",
-                blurb: "teams channel",
+                id: "external-chat",
+                label: "External Chat",
+                selectionLabel: "External Chat",
+                docsPath: "/channels/external-chat",
+                blurb: "external chat channel",
               },
               capabilities: { chatTypes: ["direct"] },
               config: {
                 listAccountIds: (cfg: OpenClawConfig) =>
                   Object.keys(
-                    (cfg.channels?.msteams as { accounts?: Record<string, unknown> } | undefined)
-                      ?.accounts ?? {},
+                    (
+                      cfg.channels?.["external-chat"] as
+                        | { accounts?: Record<string, unknown> }
+                        | undefined
+                    )?.accounts ?? {},
                   ),
                 resolveAccount: (cfg: OpenClawConfig, accountId: string) =>
                   (
-                    cfg.channels?.msteams as
+                    cfg.channels?.["external-chat"] as
                       | {
                           accounts?: Record<string, Record<string, unknown>>;
                         }
@@ -973,12 +980,15 @@ describe("setupChannels", () => {
                 setAccountEnabled,
               },
               setupWizard: {
-                channel: "msteams",
+                channel: "external-chat",
                 status: {
                   configuredLabel: "configured",
                   unconfiguredLabel: "needs setup",
                   resolveConfigured: ({ cfg }: { cfg: OpenClawConfig }) =>
-                    Boolean((cfg.channels?.msteams as { tenantId?: string } | undefined)?.tenantId),
+                    Boolean(
+                      (cfg.channels?.["external-chat"] as { tenantId?: string } | undefined)
+                        ?.tenantId,
+                    ),
                   resolveStatusLines: async () => [],
                   resolveSelectionHint: async () => "configured",
                 },
@@ -996,12 +1006,12 @@ describe("setupChannels", () => {
     const select = vi.fn(async ({ message, options }: { message: string; options: unknown[] }) => {
       if (message === "Select a channel") {
         channelSelectionCount += 1;
-        return channelSelectionCount === 1 ? "msteams" : "__done__";
+        return channelSelectionCount === 1 ? "external-chat" : "__done__";
       }
       if (message.includes("already configured")) {
         return "disable";
       }
-      if (message === "Microsoft Teams account") {
+      if (message === "External Chat account") {
         const accountOptions = options as Array<{ value: string; label: string }>;
         expect(accountOptions.map((option) => option.value)).toEqual(["default", "work"]);
         return "work";
@@ -1018,7 +1028,7 @@ describe("setupChannels", () => {
     const next = await runSetupChannels(
       {
         channels: {
-          msteams: {
+          "external-chat": {
             tenantId: "tenant-1",
             accounts: {
               default: { enabled: true },
@@ -1028,7 +1038,7 @@ describe("setupChannels", () => {
         },
         plugins: {
           entries: {
-            msteams: { enabled: true },
+            "external-chat": { enabled: true },
           },
         },
       } as OpenClawConfig,
@@ -1037,14 +1047,14 @@ describe("setupChannels", () => {
     );
 
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
-      expect.objectContaining({ channel: "msteams" }),
+      expect.objectContaining({ channel: "external-chat" }),
     );
     expect(setAccountEnabled).toHaveBeenCalledWith(
       expect.objectContaining({ accountId: "work", enabled: false }),
     );
     expect(
       (
-        next.channels?.msteams as
+        next.channels?.["external-chat"] as
           | {
               accounts?: Record<string, { enabled?: boolean }>;
             }

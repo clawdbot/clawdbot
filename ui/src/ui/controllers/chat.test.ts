@@ -561,6 +561,66 @@ describe("loadChatHistory", () => {
     // text takes precedence — "real reply" is NOT silent, so message is kept.
     expect(state.chatMessages).toHaveLength(1);
   });
+
+  it("filters the synthetic transcript-repair tool result from history", async () => {
+    const messages = [
+      { role: "user", content: [{ type: "text", text: "hello" }] },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "unknown",
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.",
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_2",
+        toolName: "shell",
+        content: [{ type: "text", text: "real tool output" }],
+      },
+    ];
+    const mockClient = {
+      request: vi.fn().mockResolvedValue({ messages }),
+    };
+    const state = createState({
+      client: mockClient as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([messages[0], messages[2]]);
+  });
+
+  it("keeps a user message even if it matches the synthetic repair text", async () => {
+    const messages = [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.",
+          },
+        ],
+      },
+    ];
+    const mockClient = {
+      request: vi.fn().mockResolvedValue({ messages }),
+    };
+    const state = createState({
+      client: mockClient as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual(messages);
+  });
 });
 
 describe("sendChatMessage", () => {
