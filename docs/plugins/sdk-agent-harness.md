@@ -133,6 +133,25 @@ OpenClaw requires Codex app-server `0.118.0` or newer. The Codex plugin checks
 the app-server initialize handshake and blocks older or unversioned servers so
 OpenClaw only runs against the protocol surface it has been tested with.
 
+### Native Codex harness mode
+
+The bundled `codex` harness is the native Codex mode for embedded OpenClaw
+agent turns. Enable the bundled `codex` plugin first, and include `codex` in
+`plugins.allow` if your config uses a restrictive allowlist. It is different
+from `openai-codex/*`:
+
+- `openai-codex/*` uses ChatGPT/Codex OAuth through the normal OpenClaw provider
+  path.
+- `codex/*` uses the bundled Codex provider and routes the turn through Codex
+  app-server.
+
+When this mode runs, Codex owns the native thread id, resume behavior,
+compaction, and app-server execution. OpenClaw still owns the chat channel,
+visible transcript mirror, tool policy, approvals, media delivery, and session
+selection. Use `embeddedHarness.runtime: "codex"` with
+`embeddedHarness.fallback: "none"` when you need to prove that the Codex
+app-server path is used and PI fallback is not hiding a broken native harness.
+
 ## Disable PI fallback
 
 By default, OpenClaw runs embedded agents with `agents.defaults.embeddedHarness`

@@ -1,9 +1,9 @@
 import fsPromises from "node:fs/promises";
 import nodePath from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { readConfigFileSnapshot, replaceConfigFile, resolveGatewayPort } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";

@@ -5,7 +5,7 @@ import {
   hasMeaningfulChannelConfigShallow,
   resolveChannelConfigRecord,
 } from "./channel-configured-shared.js";
-import type { OpenClawConfig } from "./config.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 
 export function isChannelConfigured(
   cfg: OpenClawConfig,

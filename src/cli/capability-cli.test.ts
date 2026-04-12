@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
 import { registerCapabilityCli } from "./capability-cli.js";
 
@@ -58,6 +58,7 @@ const mocks = vi.hoisted(() => ({
     model: "gpt-4.1-mini",
   })),
   generateImage: vi.fn(),
+  generateVideo: vi.fn(),
   transcribeAudioFile: vi.fn(async () => ({ text: "meeting notes" })),
   textToSpeech: vi.fn(async () => ({
     success: true,
@@ -202,7 +203,7 @@ vi.mock("../image-generation/runtime.js", () => ({
 }));
 
 vi.mock("../video-generation/runtime.js", () => ({
-  generateVideo: vi.fn(),
+  generateVideo: mocks.generateVideo,
   listRuntimeVideoGenerationProviders: vi.fn(() => []),
 }));
 
@@ -238,6 +239,10 @@ vi.mock("../web-fetch/runtime.js", () => ({
 }));
 
 describe("capability cli", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   beforeEach(() => {
     mocks.runtime.log.mockClear();
     mocks.runtime.error.mockClear();
@@ -278,6 +283,7 @@ describe("capability cli", () => {
     }) as never);
     mocks.describeImageFile.mockClear();
     mocks.generateImage.mockReset();
+    mocks.generateVideo.mockReset();
     mocks.transcribeAudioFile.mockClear();
     mocks.textToSpeech.mockClear();
     mocks.setTtsProvider.mockClear();
@@ -431,6 +437,85 @@ describe("capability cli", () => {
           }),
         ],
       }),
+    );
+  });
+
+  it("streams url-only generated videos to --output paths", async () => {
+    mocks.generateVideo.mockResolvedValue({
+      provider: "vydra",
+      model: "veo3",
+      attempts: [],
+      videos: [
+        {
+          url: "https://example.com/generated-video.mp4",
+          mimeType: "video/mp4",
+          fileName: "provider-name.mp4",
+        },
+      ],
+    });
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(Buffer.from("video-bytes"), {
+          status: 200,
+          headers: { "content-type": "video/mp4" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-video-generate-"));
+    const outputBase = path.join(tempDir, "result");
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "video",
+        "generate",
+        "--prompt",
+        "friendly lobster",
+        "--output",
+        outputBase,
+        "--json",
+      ],
+    });
+
+    const outputPath = `${outputBase}.mp4`;
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://example.com/generated-video.mp4",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(await fs.readFile(outputPath, "utf8")).toBe("video-bytes");
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        capability: "video.generate",
+        provider: "vydra",
+        outputs: [
+          expect.objectContaining({
+            path: outputPath,
+            mimeType: "video/mp4",
+            size: 11,
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("fails video generate when a provider returns an undeliverable asset", async () => {
+    mocks.generateVideo.mockResolvedValue({
+      provider: "vydra",
+      model: "veo3",
+      attempts: [],
+      videos: [{ mimeType: "video/mp4" }],
+    });
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "video", "generate", "--prompt", "friendly lobster", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Video asset at index 0 has neither buffer nor url"),
     );
   });
 

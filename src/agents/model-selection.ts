@@ -1,13 +1,11 @@
 import { resolveThinkingDefaultForModel } from "../auto-reply/thinking.shared.js";
-import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
   toAgentModelListLike,
 } from "../config/model-input.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
-import { resolvePluginSetupCliBackendRuntime } from "../plugins/setup-registry.runtime.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -21,7 +19,7 @@ import {
 } from "./agent-scope.js";
 import { resolveConfiguredProviderFallback } from "./configured-provider-fallback.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
-import type { ModelCatalogEntry } from "./model-catalog.js";
+import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import {
   type ModelRef,
@@ -76,19 +74,7 @@ export {
   parseModelRef,
 };
 export type { ModelRef };
-
-export function isCliProvider(provider: string, cfg?: OpenClawConfig): boolean {
-  const normalized = normalizeProviderId(provider);
-  const cliBackends = resolveRuntimeCliBackends();
-  if (cliBackends.some((backend) => normalizeProviderId(backend.id) === normalized)) {
-    return true;
-  }
-  if (resolvePluginSetupCliBackendRuntime({ backend: normalized })) {
-    return true;
-  }
-  const backends = cfg?.agents?.defaults?.cliBackends ?? {};
-  return Object.keys(backends).some((key) => normalizeProviderId(key) === normalized);
-}
+export { isCliProvider } from "./model-selection-cli.js";
 
 export function resolvePersistedOverrideModelRef(params: {
   defaultProvider: string;

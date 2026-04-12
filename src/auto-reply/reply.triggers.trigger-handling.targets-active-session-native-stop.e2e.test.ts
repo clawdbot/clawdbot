@@ -99,6 +99,19 @@ function maybeReplyText(reply: Awaited<ReturnType<GetReplyFromConfig>>) {
   return Array.isArray(reply) ? reply[0]?.text : reply?.text;
 }
 
+function formatDateStampForZone(nowMs: number, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(nowMs));
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+  return `${year}-${month}-${day}`;
+}
+
 function mockEmbeddedOkPayload() {
   return mockRunEmbeddedPiAgentOk("ok");
 }
@@ -248,6 +261,113 @@ describe("trigger handling", () => {
         expect(maybeReplyText(res)).toBe(testCase.expected);
         expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
       }
+    });
+  });
+
+  it("prepends runtime-loaded daily memory context on bare /new", async () => {
+    await withTempHome(async (home) => {
+      const workspaceDir = join(home, "openclaw");
+      const timeZone = "America/Chicago";
+      const nowMs = Date.now();
+      const todayStamp = formatDateStampForZone(nowMs, timeZone);
+      const yesterdayStamp = formatDateStampForZone(nowMs - 24 * 60 * 60 * 1000, timeZone);
+      await fs.mkdir(join(workspaceDir, "memory"), { recursive: true });
+      await fs.writeFile(
+        join(workspaceDir, "memory", `${todayStamp}.md`),
+        "today startup note",
+        "utf-8",
+      );
+      await fs.writeFile(
+        join(workspaceDir, "memory", `${yesterdayStamp}.md`),
+        "yesterday startup note",
+        "utf-8",
+      );
+
+      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+      runEmbeddedPiAgentMock.mockReset();
+      runEmbeddedPiAgentMock.mockResolvedValue({
+        payloads: [{ text: "hello" }],
+        meta: {
+          durationMs: 1,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      const cfg = makeCfg(home);
+      cfg.agents ??= {};
+      cfg.agents.defaults ??= {};
+      cfg.agents.defaults.userTimezone = timeZone;
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/new",
+          From: "+1003",
+          To: "+2000",
+          CommandAuthorized: true,
+        },
+        {},
+        cfg,
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toBe("hello");
+      const prompt = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0]?.prompt ?? "";
+      expect(prompt).toContain("[Startup context loaded by runtime]");
+      expect(prompt).toContain(`[Untrusted daily memory: memory/${todayStamp}.md]`);
+      expect(prompt).toContain("BEGIN_QUOTED_NOTES");
+      expect(prompt).toContain("today startup note");
+      expect(prompt).toContain(`[Untrusted daily memory: memory/${yesterdayStamp}.md]`);
+      expect(prompt).toContain("yesterday startup note");
+    });
+  });
+
+  it("treats normalized /RESET as reset for startupContext.applyOn", async () => {
+    await withTempHome(async (home) => {
+      const workspaceDir = join(home, "openclaw");
+      const timeZone = "America/Chicago";
+      const nowMs = Date.now();
+      const todayStamp = formatDateStampForZone(nowMs, timeZone);
+      await fs.mkdir(join(workspaceDir, "memory"), { recursive: true });
+      await fs.writeFile(
+        join(workspaceDir, "memory", `${todayStamp}.md`),
+        "reset startup note",
+        "utf-8",
+      );
+
+      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+      runEmbeddedPiAgentMock.mockReset();
+      runEmbeddedPiAgentMock.mockResolvedValue({
+        payloads: [{ text: "hello" }],
+        meta: {
+          durationMs: 1,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      const cfg = makeCfg(home);
+      cfg.agents ??= {};
+      cfg.agents.defaults ??= {};
+      cfg.agents.defaults.userTimezone = timeZone;
+      cfg.agents.defaults.startupContext = {
+        applyOn: ["reset"],
+      };
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/RESET",
+          From: "+1003",
+          To: "+2000",
+          CommandAuthorized: true,
+        },
+        {},
+        cfg,
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toBe("hello");
+      const prompt = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0]?.prompt ?? "";
+      expect(prompt).toContain(`[Untrusted daily memory: memory/${todayStamp}.md]`);
+      expect(prompt).toContain("reset startup note");
     });
   });
 

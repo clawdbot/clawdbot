@@ -1,6 +1,6 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
-import type { MessagingToolSend } from "./pi-embedded-messaging.js";
+import type { MessagingToolSend } from "./pi-embedded-messaging.types.js";
 import {
   handleToolExecutionEnd,
   handleToolExecutionStart,

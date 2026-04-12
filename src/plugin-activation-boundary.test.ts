@@ -1,16 +1,104 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
+const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() =>
+  vi.fn((params: { artifactBasename: string }) => {
+    if (params.artifactBasename === "browser-control-auth.js") {
+      return {
+        ensureBrowserControlAuth: async () => ({ auth: {} }),
+        resolveBrowserControlAuth: () => ({ token: undefined, password: undefined }),
+        shouldAutoGenerateBrowserAuth: () => false,
+      };
+    }
+    if (params.artifactBasename === "browser-host-inspection.js") {
+      return {
+        parseBrowserMajorVersion: (raw: string | null | undefined) => {
+          const match = raw?.match(/\b(\d+)\./u);
+          return match?.[1] ? Number(match[1]) : null;
+        },
+        readBrowserVersion: () => null,
+        resolveGoogleChromeExecutableForPlatform: () => null,
+      };
+    }
+    if (params.artifactBasename === "browser-profiles.js") {
+      return {
+        resolveBrowserConfig: () => ({
+          attachOnly: false,
+          cdpHost: "127.0.0.1",
+          cdpIsLoopback: true,
+          cdpPortRangeEnd: 9420,
+          cdpPortRangeStart: 9222,
+          cdpProtocol: "http",
+          color: "#FF4500",
+          controlPort: 9223,
+          defaultProfile: "openclaw",
+          enabled: true,
+          evaluateEnabled: true,
+          extraArgs: [],
+          headless: true,
+          noSandbox: false,
+          profiles: {
+            openclaw: {
+              color: "#FF4500",
+              driver: "openclaw",
+              name: "openclaw",
+            },
+          },
+          remoteCdpHandshakeTimeoutMs: 3000,
+          remoteCdpTimeoutMs: 1500,
+        }),
+        resolveProfile: () => ({
+          attachOnly: false,
+          cdpHost: "127.0.0.1",
+          cdpIsLoopback: true,
+          cdpPort: 9222,
+          cdpUrl: "http://127.0.0.1:9222",
+          color: "#FF4500",
+          driver: "openclaw",
+          name: "openclaw",
+        }),
+      };
+    }
+    throw new Error(`unexpected public surface load: ${params.artifactBasename}`);
+  }),
+);
 
-vi.mock("./plugin-sdk/facade-runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("./plugin-sdk/facade-runtime.js")>(
-    "./plugin-sdk/facade-runtime.js",
-  );
-  return {
-    ...actual,
-    loadBundledPluginPublicSurfaceModuleSync,
-  };
+const facadeMockHelpers = vi.hoisted(() => {
+  const createLazyFacadeObjectValue = <T extends object>(load: () => T): T =>
+    new Proxy(
+      {},
+      {
+        get(_target, property, receiver) {
+          return Reflect.get(load(), property, receiver);
+        },
+      },
+    ) as T;
+  const createLazyFacadeArrayValue = <T extends readonly unknown[]>(load: () => T): T =>
+    new Proxy([], {
+      get(_target, property, receiver) {
+        return Reflect.get(load(), property, receiver);
+      },
+    }) as unknown as T;
+  return { createLazyFacadeArrayValue, createLazyFacadeObjectValue };
 });
+
+vi.mock("./plugin-sdk/facade-loader.js", () => ({
+  ...facadeMockHelpers,
+  listImportedBundledPluginFacadeIds: () => [],
+  loadBundledPluginPublicSurfaceModuleSync,
+  loadFacadeModuleAtLocationSync: vi.fn(),
+  resetFacadeLoaderStateForTest: vi.fn(),
+}));
+
+vi.mock("./plugin-sdk/facade-runtime.js", () => ({
+  ...facadeMockHelpers,
+  __testing: {},
+  canLoadActivatedBundledPluginPublicSurface: () => true,
+  listImportedBundledPluginFacadeIds: () => [],
+  loadActivatedBundledPluginPublicSurfaceModuleSync: loadBundledPluginPublicSurfaceModuleSync,
+  loadBundledPluginPublicSurfaceModuleSync,
+  resetFacadeRuntimeStateForTest: vi.fn(),
+  tryLoadActivatedBundledPluginPublicSurfaceModuleSync: loadBundledPluginPublicSurfaceModuleSync,
+}));
 
 describe("plugin activation boundary", () => {
   beforeEach(() => {
@@ -181,7 +269,18 @@ describe("plugin activation boundary", () => {
     ).not.toContain("secret");
     expect(browser.readBrowserVersion("/path/that/does/not/exist")).toBeNull();
     expect(browser.resolveGoogleChromeExecutableForPlatform("aix")).toBeNull();
-    expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
+    expect(
+      loadBundledPluginPublicSurfaceModuleSync.mock.calls.map(
+        ([params]) => params.artifactBasename,
+      ),
+    ).toEqual([
+      "browser-host-inspection.js",
+      "browser-control-auth.js",
+      "browser-profiles.js",
+      "browser-profiles.js",
+      "browser-host-inspection.js",
+      "browser-host-inspection.js",
+    ]);
   });
 
   it("keeps browser cleanup helpers cold when browser is disabled", async () => {

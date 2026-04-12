@@ -1,6 +1,7 @@
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { expectExplicitVideoGenerationCapabilities } from "../../test/helpers/media-generation/provider-capability-assertions.js";
 import { buildVydraVideoGenerationProvider } from "./video-generation-provider.js";
 
 describe("vydra video-generation provider", () => {
@@ -9,6 +10,10 @@ describe("vydra video-generation provider", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it("declares explicit mode capabilities", () => {
+    expectExplicitVideoGenerationCapabilities(buildVydraVideoGenerationProvider());
   });
 
   it("submits veo3 jobs and downloads the completed video", async () => {

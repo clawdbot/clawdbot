@@ -8,7 +8,7 @@ import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
 } from "../agents/pi-embedded-helpers.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { note } from "../terminal/note.js";
 
 function formatInt(value: number): string {

@@ -1,5 +1,5 @@
 import type { SubagentRunRecord } from "../../agents/subagent-registry.types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { handleSubagentsSendAction } from "./commands-subagents/action-send.js";
 
 export function buildSubagentRun(): SubagentRunRecord {

@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "../../config/config.js";
 import type { AuthProfileConfig } from "../../config/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { findNormalizedProviderKey, normalizeProviderId } from "../provider-id.js";
 import { resolveAuthProfileMetadata } from "./identity.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profiles.js";

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import type { Mock } from "vitest";
 import { beforeEach, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import type { enqueueSystemEvent } from "../infra/system-events.js";
 import type { CliBackendPlugin } from "../plugin-sdk/cli-backend.js";

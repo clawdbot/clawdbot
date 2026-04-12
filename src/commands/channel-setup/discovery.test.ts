@@ -27,7 +27,7 @@ vi.mock("../../channels/plugins/catalog.js", () => ({
   listChannelPluginCatalogEntries: (_args?: unknown) => listChannelPluginCatalogEntries(),
 }));
 
-vi.mock("../../channels/registry.js", () => ({
+vi.mock("../../channels/chat-meta.js", () => ({
   listChatChannels: () => listChatChannels(),
 }));
 

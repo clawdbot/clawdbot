@@ -131,6 +131,13 @@ describe("bundled plugin metadata", () => {
     },
   );
 
+  it("excludes private QA sidecars from the packaged runtime sidecar baseline", () => {
+    expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain(
+      "dist/extensions/qa-channel/runtime-api.js",
+    );
+    expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain("dist/extensions/qa-lab/runtime-api.js");
+  });
+
   it("captures setup-entry metadata for bundled channel plugins", () => {
     const discord = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "discord");
     expect(discord?.source).toEqual({ source: "./index.ts", built: "index.js" });

@@ -2,11 +2,7 @@ import type { SecretProviderConfig, SecretRef } from "../config/types.secrets.js
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
 import { isValidExecSecretRefId, isValidSecretProviderAlias } from "./ref-contract.js";
 import { parseDotPath, toDotPath } from "./shared.js";
-import {
-  isKnownSecretTargetType,
-  resolvePlanTargetAgainstRegistry,
-  type ResolvedPlanTarget,
-} from "./target-registry.js";
+import { resolvePlanTargetAgainstRegistry, type ResolvedPlanTarget } from "./target-registry.js";
 
 export type SecretsPlanTargetType = string;
 
@@ -81,7 +77,7 @@ export function resolveValidatedPlanTarget(candidate: {
   accountId?: string;
   authProfileProvider?: string;
 }): ResolvedPlanTarget | null {
-  if (!isKnownSecretTargetType(candidate.type)) {
+  if (typeof candidate.type !== "string" || !candidate.type.trim()) {
     return null;
   }
   const path = typeof candidate.path === "string" ? candidate.path.trim() : "";
@@ -127,7 +123,6 @@ export function isSecretsApplyPlan(value: unknown): value is SecretsApplyPlan {
       authProfileProvider: candidate.authProfileProvider,
     });
     if (
-      !isKnownSecretTargetType(candidate.type) ||
       typeof candidate.path !== "string" ||
       !candidate.path.trim() ||
       (candidate.pathSegments !== undefined && !Array.isArray(candidate.pathSegments)) ||

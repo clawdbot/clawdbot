@@ -1,15 +1,85 @@
 import fs from "node:fs/promises";
-import { describe, expect, it } from "vitest";
+import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import { withTempHome } from "../../test/helpers/temp-home.js";
 import {
   listConfiguredMcpServers,
   setConfiguredMcpServer,
   unsetConfiguredMcpServer,
 } from "./mcp-config.js";
-import { withTempHomeConfig } from "./test-helpers.js";
+
+function validationOk(raw: unknown) {
+  return { ok: true as const, config: raw, warnings: [] };
+}
+
+const mockReadSourceConfigSnapshot = vi.hoisted(() => async () => {
+  const fs = await import("node:fs/promises");
+  const path = await import("node:path");
+  const configPath = path.join(process.env.OPENCLAW_STATE_DIR ?? "", "openclaw.json");
+  try {
+    const raw = await fs.readFile(configPath, "utf-8");
+    const parsed = JSON.parse(raw);
+    return {
+      valid: true,
+      path: configPath,
+      sourceConfig: parsed,
+      resolved: parsed,
+      hash: "test-hash",
+    };
+  } catch {
+    return {
+      valid: false,
+      path: configPath,
+    };
+  }
+});
+
+const mockReplaceConfigFile = vi.hoisted(() => async ({ nextConfig }: { nextConfig: unknown }) => {
+  const fs = await import("node:fs/promises");
+  const path = await import("node:path");
+  const configPath = path.join(process.env.OPENCLAW_STATE_DIR ?? "", "openclaw.json");
+  await fs.writeFile(configPath, JSON.stringify(nextConfig, null, 2), "utf-8");
+});
+
+vi.mock("./io.js", () => ({
+  readSourceConfigSnapshot: mockReadSourceConfigSnapshot,
+}));
+
+vi.mock("./mutate.js", () => ({
+  replaceConfigFile: mockReplaceConfigFile,
+}));
+
+vi.mock("./validation.js", () => ({
+  validateConfigObjectWithPlugins: validationOk,
+  validateConfigObjectRawWithPlugins: validationOk,
+}));
+
+async function withMcpConfigHome<T>(
+  config: unknown,
+  fn: (params: { configPath: string }) => Promise<T>,
+) {
+  return await withTempHome(
+    async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
+      return await fn({ configPath });
+    },
+    {
+      prefix: "openclaw-mcp-config-",
+      skipSessionCleanup: true,
+      env: {
+        OPENCLAW_CONFIG_PATH: undefined,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+      },
+    },
+  );
+}
 
 describe("config mcp config", () => {
   it("writes and removes top-level mcp servers", async () => {
-    await withTempHomeConfig({}, async () => {
+    await withMcpConfigHome({}, async () => {
       const setResult = await setConfiguredMcpServer({
         name: "context7",
         server: {
@@ -42,7 +112,7 @@ describe("config mcp config", () => {
   });
 
   it("fails closed when the config file is invalid", async () => {
-    await withTempHomeConfig({}, async ({ configPath }) => {
+    await withMcpConfigHome({}, async ({ configPath }) => {
       await fs.writeFile(configPath, "{", "utf-8");
 
       const loaded = await listConfiguredMcpServers();
@@ -55,7 +125,7 @@ describe("config mcp config", () => {
   });
 
   it("accepts SSE MCP configs with headers at the config layer", async () => {
-    await withTempHomeConfig({}, async () => {
+    await withMcpConfigHome({}, async () => {
       const setResult = await setConfiguredMcpServer({
         name: "remote",
         server: {

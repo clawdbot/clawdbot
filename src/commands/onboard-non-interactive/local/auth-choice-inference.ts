@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveManifestProviderOnboardAuthFlags } from "../../../plugins/provider-auth-choices.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import { CORE_ONBOARD_AUTH_FLAGS } from "../../onboard-core-auth-flags.js";

@@ -43,6 +43,8 @@ const TAG_OVERRIDES: Record<string, ConfigTag[]> = {
   "gateway.auth.token": ["security", "auth", "access", "network"],
   "gateway.auth.password": ["security", "auth", "access", "network"],
   "gateway.push.apns.relay.baseUrl": ["network", "advanced"],
+  "gateway.controlUi.embedSandbox": ["security", "access", "advanced"],
+  "gateway.controlUi.allowExternalEmbedUrls": ["security", "access", "network", "advanced"],
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback": [
     "security",
     "access",

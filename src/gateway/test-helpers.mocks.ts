@@ -192,6 +192,29 @@ vi.mock("../config/config.js", async () => {
   return createGatewayConfigModuleMock(actual);
 });
 
+vi.mock("../config/io.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
+  const configActual =
+    await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+  const configMock = createGatewayConfigModuleMock(configActual);
+  const createConfigIO = vi.fn(() => ({
+    ...actual.createConfigIO(),
+    loadConfig: configMock.loadConfig,
+    readConfigFileSnapshot: configMock.readConfigFileSnapshot,
+    readConfigFileSnapshotForWrite: configMock.readConfigFileSnapshotForWrite,
+    writeConfigFile: configMock.writeConfigFile,
+  }));
+  return {
+    ...actual,
+    createConfigIO,
+    getRuntimeConfig: configMock.getRuntimeConfig,
+    loadConfig: configMock.loadConfig,
+    readConfigFileSnapshot: configMock.readConfigFileSnapshot,
+    readConfigFileSnapshotForWrite: configMock.readConfigFileSnapshotForWrite,
+    writeConfigFile: configMock.writeConfigFile,
+  };
+});
+
 vi.mock("../agents/pi-embedded.js", async () => {
   return await importEmbeddedRunMockModule<typeof import("../agents/pi-embedded.js")>(
     "../agents/pi-embedded.js",

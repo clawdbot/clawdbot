@@ -3,9 +3,9 @@ import {
   parseExplicitTargetForLoadedChannel,
   resolveComparableTargetForLoadedChannel,
 } from "../../channels/plugins/target-parsing.js";
-import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.js";
+import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { deliveryContextFromSession } from "../../utils/delivery-context.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import type {
   DeliverableMessageChannel,
   GatewayMessageChannel,

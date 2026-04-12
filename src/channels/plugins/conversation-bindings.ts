@@ -1,6 +1,6 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getChannelPlugin } from "./registry.js";
-import type { ChannelId } from "./types.js";
+import type { ChannelId } from "./types.public.js";
 
 export async function createChannelConversationBindingManager(params: {
   channelId: ChannelId;

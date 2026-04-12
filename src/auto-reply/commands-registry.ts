@@ -2,12 +2,16 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import type { SkillCommandSpec } from "../agents/skills.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
-import { isCommandFlagEnabled } from "../config/commands.js";
 import type { OpenClawConfig } from "../config/types.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
+import {
+  isCommandEnabled,
+  listChatCommands,
+  listChatCommandsForConfig,
+} from "./commands-registry-list.js";
 import { normalizeCommandBody, resolveTextCommand } from "./commands-registry-normalize.js";
 import { getChatCommands, getNativeCommandSurfaces } from "./commands-registry.data.js";
 import type {
@@ -22,6 +26,12 @@ import type {
   NativeCommandSpec,
   ShouldHandleTextCommandsParams,
 } from "./commands-registry.types.js";
+
+export {
+  isCommandEnabled,
+  listChatCommands,
+  listChatCommandsForConfig,
+} from "./commands-registry-list.js";
 
 export {
   getCommandDetection,
@@ -43,62 +53,6 @@ export type {
   NativeCommandSpec,
   ShouldHandleTextCommandsParams,
 } from "./commands-registry.types.js";
-
-function buildSkillCommandDefinitions(skillCommands?: SkillCommandSpec[]): ChatCommandDefinition[] {
-  if (!skillCommands || skillCommands.length === 0) {
-    return [];
-  }
-  return skillCommands.map((spec) => ({
-    key: `skill:${spec.skillName}`,
-    nativeName: spec.name,
-    description: spec.description,
-    textAliases: [`/${spec.name}`],
-    acceptsArgs: true,
-    argsParsing: "none",
-    scope: "both",
-    category: "tools",
-  }));
-}
-
-export function listChatCommands(params?: {
-  skillCommands?: SkillCommandSpec[];
-}): ChatCommandDefinition[] {
-  const commands = getChatCommands();
-  if (!params?.skillCommands?.length) {
-    return [...commands];
-  }
-  return [...commands, ...buildSkillCommandDefinitions(params.skillCommands)];
-}
-
-export function isCommandEnabled(cfg: OpenClawConfig, commandKey: string): boolean {
-  if (commandKey === "config") {
-    return isCommandFlagEnabled(cfg, "config");
-  }
-  if (commandKey === "mcp") {
-    return isCommandFlagEnabled(cfg, "mcp");
-  }
-  if (commandKey === "plugins") {
-    return isCommandFlagEnabled(cfg, "plugins");
-  }
-  if (commandKey === "debug") {
-    return isCommandFlagEnabled(cfg, "debug");
-  }
-  if (commandKey === "bash") {
-    return isCommandFlagEnabled(cfg, "bash");
-  }
-  return true;
-}
-
-export function listChatCommandsForConfig(
-  cfg: OpenClawConfig,
-  params?: { skillCommands?: SkillCommandSpec[] },
-): ChatCommandDefinition[] {
-  const base = getChatCommands().filter((command) => isCommandEnabled(cfg, command.key));
-  if (!params?.skillCommands?.length) {
-    return base;
-  }
-  return [...base, ...buildSkillCommandDefinitions(params.skillCommands)];
-}
 
 function resolveNativeName(command: ChatCommandDefinition, provider?: string): string | undefined {
   if (!command.nativeName) {

@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { expectExplicitVideoGenerationCapabilities } from "../../test/helpers/media-generation/provider-capability-assertions.js";
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
@@ -15,6 +16,10 @@ beforeAll(async () => {
 installProviderHttpMockCleanup();
 
 describe("runway video generation provider", () => {
+  it("declares explicit mode capabilities", () => {
+    expectExplicitVideoGenerationCapabilities(buildRunwayVideoGenerationProvider());
+  });
+
   it("submits a text-to-video task, polls it, and downloads the output", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: {

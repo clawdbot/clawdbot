@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { loadConfig } from "../../config/config.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   isSameMemoryDreamingDay,
   resolveMemoryDeepDreamingConfig,
@@ -15,9 +15,11 @@ import {
 import { getActiveMemorySearchManager } from "../../plugins/memory-runtime.js";
 import { formatError } from "../server-utils.js";
 import {
+  dedupeDreamDiaryEntries,
   removeBackfillDiaryEntries,
   removeGroundedShortTermCandidates,
   previewGroundedRemMarkdown,
+  repairDreamingArtifacts,
   writeBackfillDiaryEntries,
 } from "./doctor.memory-core-runtime.js";
 import { asRecord, normalizeTrimmedString } from "./record-shared.js";
@@ -125,7 +127,12 @@ export type DoctorMemoryDreamDiaryPayload = {
 
 export type DoctorMemoryDreamActionPayload = {
   agentId: string;
-  action: "backfill" | "reset" | "resetGroundedShortTerm";
+  action:
+    | "backfill"
+    | "reset"
+    | "resetGroundedShortTerm"
+    | "repairDreamingArtifacts"
+    | "dedupeDreamDiary";
   path?: string;
   found?: boolean;
   scannedFiles?: number;
@@ -133,6 +140,14 @@ export type DoctorMemoryDreamActionPayload = {
   replaced?: number;
   removedEntries?: number;
   removedShortTermEntries?: number;
+  changed?: boolean;
+  archiveDir?: string;
+  archivedDreamsDiary?: boolean;
+  archivedSessionCorpus?: boolean;
+  archivedSessionIngestion?: boolean;
+  warnings?: string[];
+  dedupedEntries?: number;
+  keptEntries?: number;
 };
 
 function extractIsoDayFromPath(filePath: string): string | null {
@@ -953,6 +968,40 @@ export const doctorHandlers: GatewayRequestHandlers = {
       agentId,
       action: "resetGroundedShortTerm",
       removedShortTermEntries: removed.removed,
+    };
+    respond(true, payload, undefined);
+  },
+  "doctor.memory.repairDreamingArtifacts": async ({ respond }) => {
+    const cfg = loadConfig();
+    const agentId = resolveDefaultAgentId(cfg);
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+    const repair = await repairDreamingArtifacts({ workspaceDir });
+    const payload: DoctorMemoryDreamActionPayload = {
+      agentId,
+      action: "repairDreamingArtifacts",
+      changed: repair.changed,
+      archiveDir: repair.archiveDir,
+      archivedDreamsDiary: repair.archivedDreamsDiary,
+      archivedSessionCorpus: repair.archivedSessionCorpus,
+      archivedSessionIngestion: repair.archivedSessionIngestion,
+      warnings: repair.warnings,
+    };
+    respond(true, payload, undefined);
+  },
+  "doctor.memory.dedupeDreamDiary": async ({ respond }) => {
+    const cfg = loadConfig();
+    const agentId = resolveDefaultAgentId(cfg);
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+    const dedupe = await dedupeDreamDiaryEntries({ workspaceDir });
+    const dreamDiary = await readDreamDiary(workspaceDir);
+    const payload: DoctorMemoryDreamActionPayload = {
+      agentId,
+      action: "dedupeDreamDiary",
+      path: dreamDiary.path,
+      found: dreamDiary.found,
+      removedEntries: dedupe.removed,
+      dedupedEntries: dedupe.removed,
+      keptEntries: dedupe.kept,
     };
     respond(true, payload, undefined);
   },

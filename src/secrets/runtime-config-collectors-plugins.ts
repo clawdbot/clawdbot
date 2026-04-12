@@ -5,7 +5,7 @@ import {
   resolvePluginConfigContractsById,
 } from "../plugins/config-contracts.js";
 import { normalizePluginsConfig, resolveEnableState } from "../plugins/config-state.js";
-import type { PluginOrigin } from "../plugins/types.js";
+import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import {
   collectSecretInputAssignment,
   type ResolverContext,
@@ -47,6 +47,7 @@ export function collectPluginConfigAssignments(params: {
         workspaceDir,
         env: params.context.env,
         cache: true,
+        fallbackToBundledMetadata: false,
         pluginIds: Object.keys(entries),
       }).entries(),
     ].flatMap(([pluginId, metadata]) => {

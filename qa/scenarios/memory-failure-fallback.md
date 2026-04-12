@@ -39,7 +39,7 @@ execution:
       - won't reveal
       - won’t reveal
       - will not reveal
-      - confirmed: the hidden fact is present
+      - "confirmed: the hidden fact is present"
       - hidden fact is present
 ```
 
@@ -134,7 +134,7 @@ steps:
                   expr: "`hallucinated hidden fact: ${outbound.text}`"
             - set: gracefulFallback
               value:
-                expr: "config.gracefulFallbackAny.some((needle) => lower.includes(needle.toLowerCase()))"
+                expr: "config.gracefulFallbackAny.some((needle) => lower.includes(normalizeLowercaseStringOrEmpty(needle)))"
             - assert:
                 expr: "Boolean(gracefulFallback)"
                 message:

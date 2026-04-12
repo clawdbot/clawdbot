@@ -32,6 +32,7 @@ describe("resolveRunFailoverDecision", () => {
       resolveRunFailoverDecision({
         stage: "prompt",
         aborted: false,
+        externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: true,
         failoverReason: "rate_limit",
@@ -48,6 +49,7 @@ describe("resolveRunFailoverDecision", () => {
       resolveRunFailoverDecision({
         stage: "prompt",
         aborted: false,
+        externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: true,
         failoverReason: "rate_limit",
@@ -64,6 +66,7 @@ describe("resolveRunFailoverDecision", () => {
       resolveRunFailoverDecision({
         stage: "assistant",
         aborted: false,
+        externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: false,
         failoverReason: "rate_limit",
@@ -82,6 +85,7 @@ describe("resolveRunFailoverDecision", () => {
       resolveRunFailoverDecision({
         stage: "assistant",
         aborted: false,
+        externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: false,
         failoverReason: "rate_limit",
@@ -100,6 +104,7 @@ describe("resolveRunFailoverDecision", () => {
       resolveRunFailoverDecision({
         stage: "assistant",
         aborted: false,
+        externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: false,
         failoverReason: null,
@@ -109,6 +114,42 @@ describe("resolveRunFailoverDecision", () => {
       }),
     ).toEqual({
       action: "continue_normal",
+    });
+  });
+
+  it("does not model-fallback prompt failures after an external abort", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "prompt",
+        aborted: true,
+        externalAbort: true,
+        fallbackConfigured: true,
+        failoverFailure: true,
+        failoverReason: "timeout",
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "surface_error",
+      reason: "timeout",
+    });
+  });
+
+  it("does not rotate or fallback assistant timeouts after an external abort", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        aborted: true,
+        externalAbort: true,
+        fallbackConfigured: true,
+        failoverFailure: false,
+        failoverReason: null,
+        timedOut: true,
+        timedOutDuringCompaction: false,
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "surface_error",
+      reason: null,
     });
   });
 });

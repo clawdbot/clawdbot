@@ -1,6 +1,6 @@
 import { listAgentIds } from "../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   getActiveMemorySearchManager,
   resolveActiveMemoryBackendConfig,

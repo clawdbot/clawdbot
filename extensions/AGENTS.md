@@ -51,6 +51,15 @@ third-party plugins see.
   provider needs OpenAI-style Anthropic tool payload compat, Gemini schema
   cleanup, or an XAI compat patch, use a named shared helper instead of
   inlining the policy knobs again.
+- Keep control-plane metadata separate from runtime logic. Discovery, config
+  validation, setup hints, onboarding hints, and activation planning should be
+  expressible from manifest/descriptors whenever possible.
+- If setup truly requires runtime execution, make that explicit in the plugin's
+  declared setup/runtime surface instead of letting metadata flows import
+  runtime code accidentally.
+- Do not rely on eager global registry seeding or import-time side effects to
+  make a plugin “available”. Plugin availability should come from manifest
+  ownership plus targeted activation.
 
 ## Expanding The Boundary
 

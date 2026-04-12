@@ -1,5 +1,5 @@
 import { getCommandPathWithRootOptions } from "../cli/argv.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveNodeRequireFromMeta } from "./node-require.js";
 
 type LoggingConfig = OpenClawConfig["logging"];

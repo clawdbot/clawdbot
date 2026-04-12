@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import {

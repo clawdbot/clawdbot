@@ -1,7 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.plugin.js";
+import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import { collectBundledChannelConfigs } from "../plugins/bundled-channel-config-metadata.js";
 import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";

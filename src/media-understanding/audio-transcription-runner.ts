@@ -1,7 +1,7 @@
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
+import type { ActiveMediaModel } from "./active-model.types.js";
 import {
-  type ActiveMediaModel,
   buildProviderRegistry,
   createMediaAttachmentCache,
   normalizeMediaAttachments,

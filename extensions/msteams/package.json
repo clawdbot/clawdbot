@@ -4,6 +4,7 @@
   "description": "OpenClaw Microsoft Teams channel plugin",
   "type": "module",
   "dependencies": {
+    "@azure/identity": "^4.9.1",
     "@microsoft/teams.api": "2.0.7",
     "@microsoft/teams.apps": "2.0.7",
     "@sinclair/typebox": "0.34.49",
@@ -44,7 +45,7 @@
     "install": {
       "npmSpec": "@openclaw/msteams",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.4.11"
+      "minHostVersion": ">=2026.4.10"
     },
     "compat": {
       "pluginApi": ">=2026.4.11"

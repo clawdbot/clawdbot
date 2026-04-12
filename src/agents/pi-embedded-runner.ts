@@ -1,8 +1,8 @@
-export type { MessagingToolSend } from "./pi-embedded-messaging.js";
+export type { MessagingToolSend } from "./pi-embedded-messaging.types.js";
 export {
   compactEmbeddedPiSession,
   compactEmbeddedPiSession as compactEmbeddedAgentSession,
-} from "./pi-embedded-runner/compact.js";
+} from "./pi-embedded-runner/compact.queued.js";
 export {
   applyExtraParamsToAgent,
   resolveAgentTransportOverride,

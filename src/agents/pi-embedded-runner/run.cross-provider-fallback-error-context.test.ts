@@ -1,0 +1,174 @@
+import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
+import { makeModelFallbackCfg } from "../test-helpers/model-fallback-config-fixture.js";
+import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
+import {
+  loadRunOverflowCompactionHarness,
+  MockedFailoverError,
+  mockedFormatAssistantErrorText,
+  mockedGlobalHookRunner,
+  mockedIsFailoverAssistantError,
+  mockedIsRateLimitAssistantError,
+  mockedRunEmbeddedAttempt,
+  overflowBaseRunParams,
+  resetRunOverflowCompactionHarnessMocks,
+} from "./run.overflow-compaction.harness.js";
+import type { EmbeddedRunAttemptResult } from "./run/types.js";
+
+let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
+
+function isCurrentAttemptAssistant(
+  value: unknown,
+): value is NonNullable<EmbeddedRunAttemptResult["currentAttemptAssistant"]> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "provider" in value &&
+    "model" in value &&
+    "errorMessage" in value
+  );
+}
+describe("runEmbeddedPiAgent cross-provider fallback error handling", () => {
+  beforeAll(async () => {
+    ({ runEmbeddedPiAgent } = await loadRunOverflowCompactionHarness());
+  });
+
+  beforeEach(() => {
+    resetRunOverflowCompactionHarnessMocks();
+    mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
+  });
+
+  it("uses the current attempt assistant for fallback errors instead of stale session history", async () => {
+    mockedIsFailoverAssistantError.mockImplementation((...args: unknown[]) => {
+      const assistant = args[0];
+      return isCurrentAttemptAssistant(assistant) && assistant.provider === "deepseek";
+    });
+    mockedIsRateLimitAssistantError.mockImplementation((...args: unknown[]) => {
+      const assistant = args[0];
+      return isCurrentAttemptAssistant(assistant) && assistant.provider === "deepseek";
+    });
+    let lastFormattedAssistant: unknown;
+    mockedFormatAssistantErrorText.mockImplementation((...args: unknown[]) => {
+      lastFormattedAssistant = args[0];
+      if (!isCurrentAttemptAssistant(lastFormattedAssistant)) {
+        return String(lastFormattedAssistant);
+      }
+      return `${lastFormattedAssistant.provider}/${lastFormattedAssistant.model}: ${lastFormattedAssistant.errorMessage}`;
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: makeAssistantMessageFixture({
+          stopReason: "error",
+          errorMessage: "You have hit your ChatGPT usage limit (plus plan).",
+          provider: "openai-codex",
+          model: "gpt-5.4",
+          content: [],
+        }),
+        currentAttemptAssistant: makeAssistantMessageFixture({
+          stopReason: "error",
+          errorMessage: "429 deepseek rate limit",
+          provider: "deepseek",
+          model: "deepseek-chat",
+          content: [],
+        }),
+      }),
+    );
+
+    const promise = runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      runId: "run-cross-provider-fallback-error-context",
+      config: makeModelFallbackCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai-codex/gpt-5.4",
+              fallbacks: ["deepseek/deepseek-chat", "google/gemini-2.5-flash"],
+            },
+          },
+        },
+      }),
+    });
+
+    await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
+    await expect(promise).rejects.toThrow("deepseek/deepseek-chat: 429 deepseek rate limit");
+    expect(mockedIsRateLimitAssistantError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "deepseek",
+        model: "deepseek-chat",
+        errorMessage: "429 deepseek rate limit",
+      }),
+    );
+    expect(lastFormattedAssistant).toEqual(
+      expect.objectContaining({
+        provider: "deepseek",
+        model: "deepseek-chat",
+        errorMessage: "429 deepseek rate limit",
+      }),
+    );
+  });
+
+  it("falls back to the session assistant when compaction removes the current attempt slice", async () => {
+    mockedIsFailoverAssistantError.mockImplementation((...args: unknown[]) => {
+      const assistant = args[0];
+      return isCurrentAttemptAssistant(assistant) && assistant.provider === "deepseek";
+    });
+    mockedIsRateLimitAssistantError.mockImplementation((...args: unknown[]) => {
+      const assistant = args[0];
+      return isCurrentAttemptAssistant(assistant) && assistant.provider === "deepseek";
+    });
+    let lastFormattedAssistant: unknown;
+    mockedFormatAssistantErrorText.mockImplementation((...args: unknown[]) => {
+      lastFormattedAssistant = args[0];
+      if (!isCurrentAttemptAssistant(lastFormattedAssistant)) {
+        return String(lastFormattedAssistant);
+      }
+      return `${lastFormattedAssistant.provider}/${lastFormattedAssistant.model}: ${lastFormattedAssistant.errorMessage}`;
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: makeAssistantMessageFixture({
+          stopReason: "error",
+          errorMessage: "429 deepseek rate limit",
+          provider: "deepseek",
+          model: "deepseek-chat",
+          content: [],
+        }),
+        currentAttemptAssistant: undefined,
+      }),
+    );
+
+    const promise = runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      runId: "run-compaction-fallback-error-context",
+      config: makeModelFallbackCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai-codex/gpt-5.4",
+              fallbacks: ["deepseek/deepseek-chat", "google/gemini-2.5-flash"],
+            },
+          },
+        },
+      }),
+    });
+
+    await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
+    await expect(promise).rejects.toThrow("deepseek/deepseek-chat: 429 deepseek rate limit");
+    expect(mockedIsRateLimitAssistantError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "deepseek",
+        model: "deepseek-chat",
+        errorMessage: "429 deepseek rate limit",
+      }),
+    );
+    expect(lastFormattedAssistant).toEqual(
+      expect.objectContaining({
+        provider: "deepseek",
+        model: "deepseek-chat",
+        errorMessage: "429 deepseek rate limit",
+      }),
+    );
+  });
+});

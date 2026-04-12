@@ -1,4 +1,4 @@
-import { deliveryContextFromSession } from "../../utils/delivery-context.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import { loadConfig } from "../io.js";
 import { resolveStorePath } from "./paths.js";
 import { loadSessionStore } from "./store.js";

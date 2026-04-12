@@ -5,8 +5,8 @@ import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { isRecord, resolveConfigDir, resolveUserPath } from "../utils.js";
-import type { OpenClawConfig } from "./config.js";
 import type { PluginAutoEnableCandidate } from "./plugin-auto-enable.types.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 
 type ExternalCatalogChannelEntry = {
   id: string;
@@ -91,17 +91,23 @@ function resolveExternalCatalogPreferOver(channelId: string, env: NodeJS.Process
   return [];
 }
 
+function resolveBuiltInChannelPreferOver(channelId: string): readonly string[] {
+  const builtInChannelId = normalizeChatChannelId(channelId);
+  if (!builtInChannelId) {
+    return [];
+  }
+  return getChatChannelMeta(builtInChannelId).preferOver ?? [];
+}
+
 function resolvePreferredOverIds(
-  pluginId: string,
+  candidate: PluginAutoEnableCandidate,
   env: NodeJS.ProcessEnv,
   registry: PluginManifestRegistry,
 ): string[] {
-  const normalized = normalizeChatChannelId(pluginId);
-  if (normalized) {
-    return [...(getChatChannelMeta(normalized).preferOver ?? [])];
-  }
-  const installedPlugin = registry.plugins.find((record) => record.id === pluginId);
-  const manifestChannelPreferOver = installedPlugin?.channelConfigs?.[pluginId]?.preferOver;
+  const channelId =
+    candidate.kind === "channel-configured" ? candidate.channelId : candidate.pluginId;
+  const installedPlugin = registry.plugins.find((record) => record.id === candidate.pluginId);
+  const manifestChannelPreferOver = installedPlugin?.channelConfigs?.[channelId]?.preferOver;
   if (manifestChannelPreferOver?.length) {
     return [...manifestChannelPreferOver];
   }
@@ -109,7 +115,11 @@ function resolvePreferredOverIds(
   if (installedChannelMeta?.preferOver?.length) {
     return [...installedChannelMeta.preferOver];
   }
-  return resolveExternalCatalogPreferOver(pluginId, env);
+  const builtInChannelPreferOver = resolveBuiltInChannelPreferOver(channelId);
+  if (builtInChannelPreferOver.length) {
+    return [...builtInChannelPreferOver];
+  }
+  return resolveExternalCatalogPreferOver(channelId, env);
 }
 
 export function shouldSkipPreferredPluginAutoEnable(params: {
@@ -132,9 +142,7 @@ export function shouldSkipPreferredPluginAutoEnable(params: {
       continue;
     }
     if (
-      resolvePreferredOverIds(other.pluginId, params.env, params.registry).includes(
-        params.entry.pluginId,
-      )
+      resolvePreferredOverIds(other, params.env, params.registry).includes(params.entry.pluginId)
     ) {
       return true;
     }

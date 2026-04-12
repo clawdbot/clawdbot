@@ -9,6 +9,7 @@ import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
+import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import { resolveCatalogHookProviderPluginIds } from "./providers.js";
 import { isPluginProvidersLoadInFlight, resolvePluginProviders } from "./providers.runtime.js";
 import { resolvePluginCacheInputs } from "./roots.js";
@@ -55,7 +56,6 @@ import type {
   ProviderResolveWebSocketSessionPolicyContext,
   ProviderSystemPromptContributionContext,
   ProviderTransformSystemPromptContext,
-  ProviderRuntimeModel,
   ProviderThinkingPolicyContext,
   ProviderTransportTurnState,
   ProviderValidateReplayTurnsContext,

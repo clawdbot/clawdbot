@@ -4,6 +4,7 @@ import {
   expectSuccessfulDashscopeVideoResult,
   mockSuccessfulDashscopeVideoTask,
 } from "../../test/helpers/media-generation/dashscope-video-provider.js";
+import { expectExplicitVideoGenerationCapabilities } from "../../test/helpers/media-generation/provider-capability-assertions.js";
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
@@ -20,6 +21,10 @@ beforeAll(async () => {
 installProviderHttpMockCleanup();
 
 describe("alibaba video generation provider", () => {
+  it("declares explicit mode capabilities", () => {
+    expectExplicitVideoGenerationCapabilities(buildAlibabaVideoGenerationProvider());
+  });
+
   it("submits async Wan generation, polls task status, and downloads the resulting video", async () => {
     mockSuccessfulDashscopeVideoTask({ postJsonRequestMock, fetchWithTimeoutMock });
 

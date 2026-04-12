@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "./config.js";
 import type { AgentAcpBinding, AgentBinding, AgentRouteBinding } from "./types.agents.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 
 export type ConfiguredBindingRule = AgentBinding;
 

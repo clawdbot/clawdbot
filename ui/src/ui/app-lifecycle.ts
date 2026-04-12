@@ -28,6 +28,9 @@ type LifecycleHost = {
   assistantAvatar: string | null;
   assistantAgentId: string | null;
   serverVersion: string | null;
+  localMediaPreviewRoots: string[];
+  embedSandboxMode: "strict" | "scripts" | "trusted";
+  allowExternalEmbedUrls: boolean;
   chatHasAutoScrolled: boolean;
   chatManualRefreshInFlight: boolean;
   chatLoading: boolean;

@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "../config/config.js";
 import { replaceConfigFile } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { type HookInstallUpdate, recordHookInstall } from "../hooks/installs.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import { type PluginInstallUpdate, recordPluginInstall } from "../plugins/installs.js";

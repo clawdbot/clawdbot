@@ -16,7 +16,7 @@ import {
   classifyOAuthRefreshFailure,
   type OAuthRefreshFailureReason,
 } from "../agents/auth-profiles/oauth-refresh-failure.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolvePluginProviders } from "../plugins/providers.runtime.js";
 import { note } from "../terminal/note.js";

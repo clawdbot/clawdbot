@@ -1,5 +1,6 @@
 import type { Command } from "commander";
-import { loadConfig, readConfigFileSnapshot, type OpenClawConfig } from "../config/config.js";
+import { loadConfig, readConfigFileSnapshot } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createPluginCliLogger,
   loadPluginCliDescriptors,
@@ -43,11 +44,16 @@ export async function registerPluginCliCommands(
   options?: RegisterPluginCliOptions,
 ) {
   const mode = options?.mode ?? "eager";
-  const primary = options?.primary ?? null;
+  const primary = options?.primary ?? undefined;
 
   await registerPluginCliCommandGroups(
     program,
-    await loadPluginCliRegistrationEntriesWithDefaults({ cfg, env, loaderOptions }),
+    await loadPluginCliRegistrationEntriesWithDefaults({
+      cfg,
+      env,
+      loaderOptions,
+      primaryCommand: primary,
+    }),
     {
       mode,
       primary,

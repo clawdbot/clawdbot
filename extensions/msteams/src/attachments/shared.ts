@@ -391,6 +391,17 @@ export type MSTeamsAttachmentFetchPolicy = {
   authAllowHosts: string[];
 };
 
+/**
+ * Logger surface for attachment download errors. Structured so callers can
+ * pass `MSTeamsMonitorLogger` directly without adapters. Optional `warn`/
+ * `error` methods prevent silent swallowing of fetch failures — see issue
+ * #63396 where empty `catch {}` blocks hid a Node 24+ undici incompatibility.
+ */
+export type MSTeamsAttachmentDownloadLogger = {
+  warn?: (message: string, meta?: Record<string, unknown>) => void;
+  error?: (message: string, meta?: Record<string, unknown>) => void;
+};
+
 export function resolveAttachmentFetchPolicy(params?: {
   allowHosts?: string[];
   authAllowHosts?: string[];

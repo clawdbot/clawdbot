@@ -301,8 +301,10 @@ export const tr: TranslationMap = {
     },
     scene: {
       backfill: "Geri doldur",
+      dedupeDiary: "Yinelenen Günlüğü Temizle",
       reset: "Sıfırla",
       clearGrounded: "Temellendirilmişleri Temizle",
+      repairCache: "Rüya Önbelleğini Onar",
       working: "Çalışıyor…",
     },
     phase: {

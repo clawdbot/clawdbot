@@ -227,10 +227,14 @@ export async function runCodexAppServerAttempt(
   );
 
   const abortListener = () => {
-    void client.request("turn/interrupt", {
-      threadId: thread.threadId,
-      turnId: activeTurnId,
-    });
+    void client
+      .request("turn/interrupt", {
+        threadId: thread.threadId,
+        turnId: activeTurnId,
+      })
+      .catch((error: unknown) => {
+        embeddedAgentLog.debug("codex app-server turn interrupt failed during abort", { error });
+      });
     resolveCompletion?.();
   };
   runAbortController.signal.addEventListener("abort", abortListener, { once: true });

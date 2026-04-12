@@ -48,6 +48,26 @@ async function writeCompletionCache(params: {
   }
 }
 
+function writeCompletionRegistrationWarning(message: string): void {
+  process.stderr.write(`[completion] ${message}\n`);
+}
+
+async function registerSubcommandsForCompletion(program: Command): Promise<void> {
+  const entries = getSubCliEntries();
+  for (const entry of entries) {
+    if (entry.name === "completion") {
+      continue;
+    }
+    try {
+      await registerSubCliByName(program, entry.name);
+    } catch (error) {
+      writeCompletionRegistrationWarning(
+        `skipping subcommand \`${entry.name}\` while building completion cache: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+}
+
 export function registerCompletionCli(program: Command) {
   program
     .command("completion")
@@ -84,13 +104,7 @@ export function registerCompletionCli(program: Command) {
       }
 
       // Eagerly register all subcommands except completion itself to build the full tree.
-      const entries = getSubCliEntries();
-      for (const entry of entries) {
-        if (entry.name === "completion") {
-          continue;
-        }
-        await registerSubCliByName(program, entry.name);
-      }
+      await registerSubcommandsForCompletion(program);
 
       const { registerPluginCliCommandsFromValidatedConfig } = await import("../plugins/cli.js");
       await registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {

@@ -1,11 +1,18 @@
 import type { AgentHarness } from "../agents/harness/types.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandlers } from "../gateway/server-methods/types.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { PluginActivationSource } from "./config-state.js";
+import type {
+  PluginBundleFormat,
+  PluginConfigUiHint,
+  PluginDiagnostic,
+  PluginFormat,
+} from "./manifest-types.js";
 import type { PluginManifestContracts } from "./manifest.js";
 import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
+import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type {
   CliBackendPlugin,
@@ -24,13 +31,8 @@ import type {
   OpenClawPluginSecurityAuditCollector,
   OpenClawPluginService,
   OpenClawPluginToolFactory,
-  PluginBundleFormat,
-  PluginConfigUiHint,
   PluginConversationBindingResolvedEvent,
-  PluginDiagnostic,
-  PluginFormat,
   PluginHookRegistration as TypedPluginHookRegistration,
-  PluginKind,
   PluginLogger,
   PluginOrigin,
   PluginTextTransformRegistration,

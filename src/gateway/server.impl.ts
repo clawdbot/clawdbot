@@ -3,7 +3,7 @@ import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.
 import type { CanvasHostServer } from "../canvas-host/server.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { createDefaultDeps } from "../cli/deps.js";
-import { isRestartEnabled } from "../config/commands.js";
+import { isRestartEnabled } from "../config/commands.flags.js";
 import {
   type OpenClawConfig,
   applyConfigOverrides,

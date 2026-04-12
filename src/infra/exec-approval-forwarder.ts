@@ -1,11 +1,11 @@
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { getChannelPlugin, resolveChannelApprovalAdapter } from "../channels/plugins/index.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import type {
   ExecApprovalForwardingConfig,
   ExecApprovalForwardTarget,
 } from "../config/types.approvals.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildApprovalPendingReplyPayload,

@@ -8,7 +8,7 @@ import {
 } from "../shared/chat-message-content.js";
 import { sanitizeAssistantVisibleText } from "../shared/text/assistant-visible-text.js";
 import { stripReasoningTagsFromText } from "../shared/text/reasoning-tags.js";
-import { sanitizeUserFacingText } from "./pi-embedded-helpers.js";
+import { sanitizeUserFacingText } from "./pi-embedded-helpers/sanitize-user-facing-text.js";
 import { formatToolDetail, resolveToolDisplay } from "./tool-display.js";
 
 export {

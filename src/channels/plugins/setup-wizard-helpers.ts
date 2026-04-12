@@ -1,4 +1,4 @@
-import type { DmPolicy, GroupPolicy } from "../../config/types.js";
+import type { DmPolicy, GroupPolicy } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SecretInput } from "../../config/types.secrets.js";
 import { resolveSecretInputModeForEnvSelection } from "../../plugins/provider-auth-mode.js";

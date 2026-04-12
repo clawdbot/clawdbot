@@ -322,67 +322,39 @@ describe("deliverDiscordReply", () => {
     );
   });
 
-  it("uses replyToId only for the first chunk when replyToMode is first", async () => {
-    await deliverDiscordReply({
-      replies: [
-        {
-          text: "1234567890",
-        },
-      ],
-      target: "channel:789",
-      token: "token",
-      runtime,
-      cfg,
-      textLimit: 5,
-      replyToId: "reply-1",
-      replyToMode: "first",
-    });
+  it.each(["first", "batched"] as const)(
+    "uses replyToId only for the first chunk when replyToMode is %s",
+    async (replyToMode) => {
+      await deliverDiscordReply({
+        replies: [
+          {
+            text: "1234567890",
+          },
+        ],
+        target: "channel:789",
+        token: "token",
+        runtime,
+        cfg,
+        textLimit: 5,
+        replyToId: "reply-1",
+        replyToMode,
+      });
 
-    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(2);
-    expect(sendMessageDiscordMock.mock.calls).toEqual([
-      expect.arrayContaining([
-        "channel:789",
-        "12345",
-        expect.objectContaining({ replyTo: "reply-1" }),
-      ]),
-      expect.arrayContaining([
-        "channel:789",
-        "67890",
-        expect.not.objectContaining({ replyTo: expect.anything() }),
-      ]),
-    ]);
-  });
-
-  it("uses replyToId only for the first chunk when replyToMode is batched", async () => {
-    await deliverDiscordReply({
-      replies: [
-        {
-          text: "1234567890",
-        },
-      ],
-      target: "channel:789",
-      token: "token",
-      runtime,
-      cfg,
-      textLimit: 5,
-      replyToId: "reply-1",
-      replyToMode: "batched",
-    });
-
-    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(2);
-    expect(sendMessageDiscordMock.mock.calls).toEqual([
-      expect.arrayContaining([
-        "channel:789",
-        "12345",
-        expect.objectContaining({ replyTo: "reply-1" }),
-      ]),
-      expect.arrayContaining([
-        "channel:789",
-        "67890",
-        expect.not.objectContaining({ replyTo: expect.anything() }),
-      ]),
-    ]);
-  });
+      expect(sendMessageDiscordMock).toHaveBeenCalledTimes(2);
+      expect(sendMessageDiscordMock.mock.calls).toEqual([
+        expect.arrayContaining([
+          "channel:789",
+          "12345",
+          expect.objectContaining({ replyTo: "reply-1" }),
+        ]),
+        expect.arrayContaining([
+          "channel:789",
+          "67890",
+          expect.not.objectContaining({ replyTo: expect.anything() }),
+        ]),
+      ]);
+    },
+  );
 
   it("does not consume replyToId for replyToMode=first on whitespace-only payloads", async () => {
     await deliverDiscordReply({

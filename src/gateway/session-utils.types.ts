@@ -1,12 +1,11 @@
 import type { ChatType } from "../channels/chat-type.js";
-import type { SessionEntry } from "../config/sessions.js";
-import type { SessionCompactionCheckpoint } from "../config/sessions.js";
+import type { SessionCompactionCheckpoint, SessionEntry } from "../config/sessions/types.js";
 import type {
   GatewayAgentRow as SharedGatewayAgentRow,
   SessionsListResultBase,
   SessionsPatchResultBase,
 } from "../shared/session-types.js";
-import type { DeliveryContext } from "../utils/delivery-context.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
 export type GatewaySessionsDefaults = {
   modelProvider: string | null;

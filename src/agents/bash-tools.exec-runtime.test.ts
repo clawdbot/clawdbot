@@ -305,11 +305,21 @@ describe("emitExecSystemEvent", () => {
     emitExecSystemEvent("Exec finished", {
       sessionKey: "agent:ops:main",
       contextKey: "exec:run-1",
+      deliveryContext: {
+        channel: "telegram",
+        to: "telegram:-100123:topic:47",
+        threadId: 47,
+      },
     });
 
     expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
       sessionKey: "agent:ops:main",
       contextKey: "exec:run-1",
+      deliveryContext: {
+        channel: "telegram",
+        to: "telegram:-100123:topic:47",
+        threadId: 47,
+      },
     });
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
       reason: "exec-event",

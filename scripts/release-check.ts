@@ -36,6 +36,7 @@ const requiredPathGroups = [
   ...listPluginSdkDistArtifacts(),
   ...listBundledPluginPackArtifacts(),
   ...listStaticExtensionAssetOutputs(),
+  ...listRequiredQaScenarioPackPaths(),
   "scripts/npm-runner.mjs",
   "scripts/postinstall-bundled-plugins.mjs",
   "dist/plugin-sdk/compat.js",
@@ -58,6 +59,14 @@ const npmPackUnpackedSizeBudgetBytes = 191 * 1024 * 1024;
 const appcastPath = resolve("appcast.xml");
 const laneBuildMin = 1_000_000_000;
 const laneFloorAdoptionDateKey = 20260227;
+
+export function listRequiredQaScenarioPackPaths(): string[] {
+  const scenariosDir = resolve("qa/scenarios");
+  return readdirSync(scenariosDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+    .map((entry) => `qa/scenarios/${entry.name}`)
+    .toSorted((left, right) => left.localeCompare(right));
+}
 
 function collectBundledExtensions(): BundledExtension[] {
   const extensionsDir = resolve("extensions");
@@ -199,6 +208,32 @@ function runPackedBundledChannelEntrySmoke(): void {
         },
       },
     );
+
+    const homeDir = join(tmpRoot, "home");
+    const stateDir = join(tmpRoot, "state");
+    mkdirSync(homeDir, { recursive: true });
+    execFileSync(
+      process.execPath,
+      [join(packageRoot, "openclaw.mjs"), "completion", "--write-state"],
+      {
+        cwd: packageRoot,
+        stdio: "inherit",
+        env: {
+          ...process.env,
+          HOME: homeDir,
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_SUPPRESS_NOTES: "1",
+          OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
+        },
+      },
+    );
+
+    const completionFiles = readdirSync(join(stateDir, "completions")).filter(
+      (entry) => !entry.startsWith("."),
+    );
+    if (completionFiles.length === 0) {
+      throw new Error("release-check: packed completion smoke produced no completion files.");
+    }
   } finally {
     rmSync(tmpRoot, { recursive: true, force: true });
   }

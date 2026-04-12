@@ -1,6 +1,7 @@
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { expectExplicitVideoGenerationCapabilities } from "../../test/helpers/media-generation/provider-capability-assertions.js";
 import {
   _setFalVideoFetchGuardForTesting,
   buildFalVideoGenerationProvider,
@@ -16,6 +17,10 @@ describe("fal video generation provider", () => {
     vi.restoreAllMocks();
     fetchGuardMock.mockReset();
     _setFalVideoFetchGuardForTesting(null);
+  });
+
+  it("declares explicit mode capabilities", () => {
+    expectExplicitVideoGenerationCapabilities(buildFalVideoGenerationProvider());
   });
 
   it("submits fal video jobs through the queue API and downloads the completed result", async () => {

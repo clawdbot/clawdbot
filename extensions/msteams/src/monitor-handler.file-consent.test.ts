@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import {
   type MSTeamsActivityHandler,
@@ -9,6 +12,7 @@ import {
   createActivityHandler,
   createMSTeamsMessageHandlerDeps,
 } from "./monitor-handler.test-helpers.js";
+import { getPendingUploadFs, storePendingUploadFs } from "./pending-uploads-fs.js";
 import { clearPendingUploads, getPendingUpload, storePendingUpload } from "./pending-uploads.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
@@ -25,19 +29,32 @@ vi.mock("./file-consent.js", async () => {
   };
 });
 
-const runtimeStub: PluginRuntime = {
-  logging: {
-    shouldLogVerbose: () => false,
-  },
-  channel: {
-    debounce: {
-      resolveInboundDebounceMs: () => 0,
-      createInboundDebouncer: () => ({
-        enqueue: async () => {},
-      }),
+function createRuntimeStub(stateDir?: string): PluginRuntime {
+  return {
+    logging: {
+      shouldLogVerbose: () => false,
     },
-  },
-} as unknown as PluginRuntime;
+    channel: {
+      debounce: {
+        resolveInboundDebounceMs: () => 0,
+        createInboundDebouncer: () => ({
+          enqueue: async () => {},
+        }),
+      },
+    },
+    state: {
+      resolveStateDir: (env?: NodeJS.ProcessEnv) => {
+        const override = env?.OPENCLAW_STATE_DIR?.trim();
+        if (override) {
+          return override;
+        }
+        return stateDir ?? path.join(os.homedir(), ".openclaw");
+      },
+    },
+  } as unknown as PluginRuntime;
+}
+
+const runtimeStub: PluginRuntime = createRuntimeStub();
 
 function createDeps(): MSTeamsMessageHandlerDeps {
   return createMSTeamsMessageHandlerDeps({
@@ -292,5 +309,136 @@ describe("msteams file consent invoke authz", () => {
       contentType: "text/plain",
     });
     expect(sendActivity).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("msteams file consent invoke FS fallback", () => {
+  let tmpDir: string;
+  let originalStateDir: string | undefined;
+
+  beforeEach(async () => {
+    originalStateDir = process.env.OPENCLAW_STATE_DIR;
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-invoke-"));
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    setMSTeamsRuntime(createRuntimeStub(tmpDir));
+    clearPendingUploads();
+    fileConsentMockState.uploadToConsentUrl.mockReset();
+    fileConsentMockState.uploadToConsentUrl.mockResolvedValue(undefined);
+  });
+
+  afterEach(async () => {
+    if (originalStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = originalStateDir;
+    }
+    try {
+      await fs.promises.rm(tmpDir, { recursive: true, force: true });
+    } catch {
+      // tmp dir may already be gone
+    }
+  });
+
+  it("reads pending upload from FS store when in-memory store is empty (cross-process CLI path)", async () => {
+    // Simulate the CLI process writing to the FS store before exiting; the
+    // in-memory store in this (monitor) process is empty.
+    const uploadId = "cli-upload-id-123";
+    const conversationId = "19:victim@thread.v2";
+    await storePendingUploadFs({
+      id: uploadId,
+      buffer: Buffer.from("CLI PAYLOAD"),
+      filename: "cli.bin",
+      contentType: "application/octet-stream",
+      conversationId,
+    });
+
+    expect(getPendingUpload(uploadId)).toBeUndefined();
+
+    const sendActivity = vi.fn(async () => ({ id: "activity-id" }));
+    const updateActivity = vi.fn(async () => ({ id: "activity-id" }));
+    const context = {
+      activity: {
+        type: "invoke",
+        name: "fileConsent/invoke",
+        conversation: { id: `${conversationId};messageid=abc123` },
+        value: {
+          type: "fileUpload",
+          action: "accept",
+          uploadInfo: {
+            name: "cli.bin",
+            uploadUrl: "https://upload.example.com/put",
+            contentUrl: "https://content.example.com/cli.bin",
+            uniqueId: "unique-cli",
+            fileType: "bin",
+          },
+          context: { uploadId },
+        },
+      },
+      sendActivity,
+      sendActivities: async () => [],
+      updateActivity,
+    } as unknown as MSTeamsTurnContext;
+
+    const handler = registerMSTeamsHandlers(
+      createActivityHandler(),
+      createDeps(),
+    ) as MSTeamsActivityHandler & {
+      run: NonNullable<MSTeamsActivityHandler["run"]>;
+    };
+
+    await handler.run(context);
+
+    // The upload should have run using the FS-loaded buffer
+    expect(fileConsentMockState.uploadToConsentUrl).toHaveBeenCalledTimes(1);
+    expect(fileConsentMockState.uploadToConsentUrl).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://upload.example.com/put",
+      }),
+    );
+
+    // FS entry should have been cleaned up after successful upload
+    expect(await getPendingUploadFs(uploadId)).toBeUndefined();
+  });
+
+  it("cleans up FS entry on decline even when in-memory store is empty", async () => {
+    const uploadId = "cli-decline-id";
+    const conversationId = "19:victim@thread.v2";
+    await storePendingUploadFs({
+      id: uploadId,
+      buffer: Buffer.from("DECLINED"),
+      filename: "decline.txt",
+      contentType: "text/plain",
+      conversationId,
+    });
+
+    const sendActivity = vi.fn(async () => ({ id: "activity-id" }));
+    const updateActivity = vi.fn(async () => ({ id: "activity-id" }));
+    const context = {
+      activity: {
+        type: "invoke",
+        name: "fileConsent/invoke",
+        conversation: { id: `${conversationId};messageid=abc123` },
+        value: {
+          type: "fileUpload",
+          action: "decline",
+          context: { uploadId },
+        },
+      },
+      sendActivity,
+      sendActivities: async () => [],
+      updateActivity,
+    } as unknown as MSTeamsTurnContext;
+
+    const handler = registerMSTeamsHandlers(
+      createActivityHandler(),
+      createDeps(),
+    ) as MSTeamsActivityHandler & {
+      run: NonNullable<MSTeamsActivityHandler["run"]>;
+    };
+
+    await handler.run(context);
+
+    expect(fileConsentMockState.uploadToConsentUrl).not.toHaveBeenCalled();
+    expect(await getPendingUploadFs(uploadId)).toBeUndefined();
   });
 });

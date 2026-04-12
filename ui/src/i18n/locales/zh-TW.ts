@@ -293,8 +293,10 @@ export const zh_TW: TranslationMap = {
     },
     scene: {
       backfill: "補回填",
+      dedupeDiary: "去重日誌",
       reset: "重設",
       clearGrounded: "清除 Grounded",
+      repairCache: "修復夢境快取",
       working: "處理中…",
     },
     phase: {

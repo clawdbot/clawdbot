@@ -1,5 +1,4 @@
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import type { OpenClawConfig } from "./config.js";
 import { detectPluginAutoEnableCandidates } from "./plugin-auto-enable.detect.js";
 import {
   materializePluginAutoEnableCandidatesInternal,
@@ -9,6 +8,7 @@ import type {
   PluginAutoEnableCandidate,
   PluginAutoEnableResult,
 } from "./plugin-auto-enable.types.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 
 export function materializePluginAutoEnableCandidates(params: {
   config?: OpenClawConfig;

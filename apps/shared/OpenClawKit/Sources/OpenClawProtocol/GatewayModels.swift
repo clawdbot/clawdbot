@@ -401,6 +401,60 @@ public struct AgentEvent: Codable, Sendable {
     }
 }
 
+public struct MessageActionParams: Codable, Sendable {
+    public let channel: String
+    public let action: String
+    public let params: [String: AnyCodable]
+    public let accountid: String?
+    public let requestersenderid: String?
+    public let senderisowner: Bool?
+    public let sessionkey: String?
+    public let sessionid: String?
+    public let agentid: String?
+    public let toolcontext: [String: AnyCodable]?
+    public let idempotencykey: String
+
+    public init(
+        channel: String,
+        action: String,
+        params: [String: AnyCodable],
+        accountid: String?,
+        requestersenderid: String?,
+        senderisowner: Bool?,
+        sessionkey: String?,
+        sessionid: String?,
+        agentid: String?,
+        toolcontext: [String: AnyCodable]?,
+        idempotencykey: String)
+    {
+        self.channel = channel
+        self.action = action
+        self.params = params
+        self.accountid = accountid
+        self.requestersenderid = requestersenderid
+        self.senderisowner = senderisowner
+        self.sessionkey = sessionkey
+        self.sessionid = sessionid
+        self.agentid = agentid
+        self.toolcontext = toolcontext
+        self.idempotencykey = idempotencykey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case channel
+        case action
+        case params
+        case accountid = "accountId"
+        case requestersenderid = "requesterSenderId"
+        case senderisowner = "senderIsOwner"
+        case sessionkey = "sessionKey"
+        case sessionid = "sessionId"
+        case agentid = "agentId"
+        case toolcontext = "toolContext"
+        case idempotencykey = "idempotencyKey"
+    }
+}
+
 public struct SendParams: Codable, Sendable {
     public let to: String
     public let message: String?

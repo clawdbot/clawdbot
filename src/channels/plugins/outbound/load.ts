@@ -1,5 +1,7 @@
+import type { ChannelId } from "../channel-id.types.js";
+import type { ChannelOutboundAdapter } from "../outbound.types.js";
 import { createChannelRegistryLoader } from "../registry-loader.js";
-import type { ChannelId, ChannelOutboundAdapter } from "../types.js";
+import type { LoadChannelOutboundAdapter } from "./load.types.js";
 
 // Channel docking: outbound sends should stay cheap to import.
 //
@@ -15,3 +17,5 @@ export async function loadChannelOutboundAdapter(
 ): Promise<ChannelOutboundAdapter | undefined> {
   return loadOutboundAdapterFromRegistry(id);
 }
+
+export type { LoadChannelOutboundAdapter };

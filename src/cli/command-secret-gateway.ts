@@ -1,6 +1,7 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { callGateway } from "../gateway/call.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import { validateSecretsResolveResult } from "../gateway/protocol/index.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveManifestContractOwnerPluginId } from "../plugins/manifest-registry.js";
@@ -19,7 +20,6 @@ import {
   type DiscoveredConfigSecretTarget,
 } from "../secrets/target-registry.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 
 type ResolveCommandSecretsResult = {
   resolvedConfig: OpenClawConfig;

@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { makeModelFallbackCfg } from "../test-helpers/model-fallback-config-fixture.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
@@ -12,7 +13,6 @@ import {
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
-import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
 
@@ -35,15 +35,17 @@ describe("runEmbeddedPiAgent Codex server_error fallback handoff", () => {
     mockedFormatAssistantErrorText.mockReturnValue(
       "LLM error server_error: An error occurred while processing your request.",
     );
+    const currentAttemptAssistant = makeAssistantMessageFixture({
+      stopReason: "error",
+      errorMessage: rawCodexError,
+      provider: "openai-codex",
+      model: "gpt-5.4",
+    });
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          stopReason: "error",
-          errorMessage: rawCodexError,
-          provider: "openai-codex",
-          model: "gpt-5.4",
-        } as EmbeddedRunAttemptResult["lastAssistant"],
+        lastAssistant: currentAttemptAssistant,
+        currentAttemptAssistant,
       }),
     );
 

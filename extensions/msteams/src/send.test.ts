@@ -11,6 +11,7 @@ const mockState = vi.hoisted(() => ({
   runtimeConvertMarkdownTables: vi.fn((text: string) => text),
   requiresFileConsent: vi.fn(),
   prepareFileConsentActivity: vi.fn(),
+  prepareFileConsentActivityFs: vi.fn(),
   extractFilename: vi.fn(async () => "fallback.bin"),
   sendMSTeamsMessages: vi.fn(),
   uploadAndShareSharePoint: vi.fn(),
@@ -41,6 +42,7 @@ vi.mock("./send-context.js", () => ({
 vi.mock("./file-consent-helpers.js", () => ({
   requiresFileConsent: mockState.requiresFileConsent,
   prepareFileConsentActivity: mockState.prepareFileConsentActivity,
+  prepareFileConsentActivityFs: mockState.prepareFileConsentActivityFs,
 }));
 
 vi.mock("./media-helpers.js", () => ({
@@ -166,6 +168,7 @@ describe("sendMessageMSTeams", () => {
     mockState.runtimeConvertMarkdownTables.mockImplementation((text: string) => text);
     mockState.requiresFileConsent.mockReset();
     mockState.prepareFileConsentActivity.mockReset();
+    mockState.prepareFileConsentActivityFs.mockReset();
     mockState.extractFilename.mockReset();
     mockState.sendMSTeamsMessages.mockReset();
     mockState.uploadAndShareSharePoint.mockReset();

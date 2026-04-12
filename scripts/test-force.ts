@@ -28,7 +28,7 @@ function runTests() {
   const isolatedLock =
     process.env.OPENCLAW_GATEWAY_LOCK ??
     path.join(os.tmpdir(), `openclaw-gateway.lock.test.${Date.now()}`);
-  const result = spawnSync("pnpm", ["exec", "vitest", "run", "--config", "vitest.config.ts"], {
+  const result = spawnSync(process.execPath, ["scripts/test-projects.mjs"], {
     stdio: "inherit",
     env: {
       ...process.env,
@@ -36,7 +36,7 @@ function runTests() {
     },
   });
   if (result.error) {
-    console.error(`pnpm test failed to start: ${String(result.error)}`);
+    console.error(`test runner failed to start: ${String(result.error)}`);
     process.exit(1);
   }
   process.exit(result.status ?? 1);

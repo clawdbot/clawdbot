@@ -164,6 +164,9 @@ describe("handleFeishuCommentEvent", () => {
       },
       replyOptions: {},
       markDispatchIdle: vi.fn(),
+      markRunComplete: vi.fn(),
+      startTypingReaction: vi.fn(async () => {}),
+      cleanupTypingReaction: vi.fn(async () => {}),
     });
   });
 
@@ -198,9 +201,15 @@ describe("handleFeishuCommentEvent", () => {
         OriginatingChannel: "feishu",
         OriginatingTo: "comment:docx:doc_token_1:comment_1",
         MessageSid: "drive-comment:evt_1",
+        MessageThreadId: "reply_1",
       }),
     );
     expect(recordInboundSession).toHaveBeenCalledTimes(1);
+    expect(recordInboundSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:feishu:direct:comment-doc:docx:doc_token_1",
+      }),
+    );
     expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 
@@ -309,8 +318,124 @@ describe("handleFeishuCommentEvent", () => {
         commentId: "comment_whole",
         fileToken: "doc_token_1",
         fileType: "docx",
+        replyId: "reply_whole",
         isWholeComment: true,
       }),
     );
+  });
+
+  it("always finalizes comment typing cleanup even when dispatch fails", async () => {
+    const dispatchReplyFromConfig = vi.fn(async () => {
+      throw new Error("dispatch failed");
+    });
+    const runtime = createTestRuntime({ dispatchReplyFromConfig });
+    setFeishuRuntime(runtime);
+    const markRunComplete = vi.fn();
+    const markDispatchIdle = vi.fn();
+    const cleanupTypingReaction = vi.fn(async () => {});
+    createFeishuCommentReplyDispatcherMock.mockReturnValue({
+      dispatcher: {
+        markComplete: vi.fn(),
+        waitForIdle: vi.fn(async () => {}),
+      },
+      replyOptions: {},
+      markDispatchIdle,
+      markRunComplete,
+      startTypingReaction: vi.fn(async () => {}),
+      cleanupTypingReaction,
+    });
+
+    await expect(
+      handleFeishuCommentEvent({
+        cfg: buildConfig(),
+        accountId: "default",
+        event: { event_id: "evt_1" },
+        botOpenId: "ou_bot",
+        runtime: {
+          log: vi.fn(),
+          error: vi.fn(),
+        } as never,
+      }),
+    ).rejects.toThrow("dispatch failed");
+
+    expect(markRunComplete).toHaveBeenCalledTimes(1);
+    expect(markDispatchIdle).toHaveBeenCalledTimes(1);
+    expect(cleanupTypingReaction).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not wait for comment typing cleanup before returning", async () => {
+    let resolveCleanup: (() => void) | undefined;
+    const cleanupTypingReaction = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveCleanup = resolve;
+        }),
+    );
+    createFeishuCommentReplyDispatcherMock.mockReturnValue({
+      dispatcher: {
+        markComplete: vi.fn(),
+        waitForIdle: vi.fn(async () => {}),
+      },
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      markRunComplete: vi.fn(),
+      startTypingReaction: vi.fn(async () => {}),
+      cleanupTypingReaction,
+    });
+
+    const eventPromise = handleFeishuCommentEvent({
+      cfg: buildConfig(),
+      accountId: "default",
+      event: { event_id: "evt_1" },
+      botOpenId: "ou_bot",
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+
+    const status = await Promise.race([
+      eventPromise.then(() => "done"),
+      new Promise<string>((resolve) => setTimeout(() => resolve("pending"), 0)),
+    ]);
+
+    expect(status).toBe("done");
+    expect(cleanupTypingReaction).toHaveBeenCalledTimes(1);
+
+    resolveCleanup?.();
+    await eventPromise;
+  });
+
+  it("does not start comment typing reaction before dispatch begins", async () => {
+    const startTypingReaction = vi.fn(async () => {});
+    createFeishuCommentReplyDispatcherMock.mockReturnValue({
+      dispatcher: {
+        markComplete: vi.fn(),
+        waitForIdle: vi.fn(async () => {}),
+      },
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      markRunComplete: vi.fn(),
+      startTypingReaction,
+      cleanupTypingReaction: vi.fn(async () => {}),
+    });
+
+    await handleFeishuCommentEvent({
+      cfg: buildConfig(),
+      accountId: "default",
+      event: { event_id: "evt_1" },
+      botOpenId: "ou_bot",
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+
+    expect(startTypingReaction).not.toHaveBeenCalled();
+    const runtime = (await import("./runtime.js")).getFeishuRuntime();
+    const dispatchReplyFromConfig = runtime.channel.reply.dispatchReplyFromConfig as ReturnType<
+      typeof vi.fn
+    >;
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 });

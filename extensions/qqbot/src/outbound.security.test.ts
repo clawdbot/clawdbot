@@ -172,6 +172,31 @@ function writeFileWithParents(filePath: string, content: string = "payload"): nu
   return fs.statSync(filePath).size;
 }
 
+function installMissingSegmentSymlinkRace(
+  delayedVoicePath: string,
+  outsideRootPrefix: string,
+): boolean {
+  const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), outsideRootPrefix));
+  createdRoots.push(outsideRoot);
+
+  const symlinkProbe = path.join(path.dirname(path.dirname(delayedVoicePath)), "probe-link");
+  try {
+    fs.symlinkSync(outsideRoot, symlinkProbe, "dir");
+    fs.unlinkSync(symlinkProbe);
+  } catch {
+    return false;
+  }
+
+  audioConvertMocks.waitForFile.mockImplementationOnce(async (candidatePath: string) => {
+    const symlinkParent = path.dirname(candidatePath);
+    fs.symlinkSync(outsideRoot, symlinkParent, "dir");
+    const outsideFile = path.join(outsideRoot, path.basename(candidatePath));
+    return writeFileWithParents(outsideFile);
+  });
+
+  return true;
+}
+
 function expectBlocked(result: OutboundResult, expectedError: string): void {
   expect(result.channel).toBe("qqbot");
   expect(result.error).toBe(expectedError);
@@ -225,23 +250,9 @@ describe("qqbot outbound local media path security", () => {
 
   it("blocks delayed voice paths when a missing segment is replaced by a symlink after precheck", async () => {
     const delayedVoicePath = createDelayedMissingMediaPath(".mp3");
-    const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), "qqbot-outbound-race-outside-"));
-    createdRoots.push(outsideRoot);
-
-    const symlinkProbe = path.join(path.dirname(path.dirname(delayedVoicePath)), "probe-link");
-    try {
-      fs.symlinkSync(outsideRoot, symlinkProbe, "dir");
-      fs.unlinkSync(symlinkProbe);
-    } catch {
+    if (!installMissingSegmentSymlinkRace(delayedVoicePath, "qqbot-outbound-race-outside-")) {
       return;
     }
-
-    audioConvertMocks.waitForFile.mockImplementationOnce(async (candidatePath: string) => {
-      const symlinkParent = path.dirname(candidatePath);
-      fs.symlinkSync(outsideRoot, symlinkParent, "dir");
-      const outsideFile = path.join(outsideRoot, path.basename(candidatePath));
-      return writeFileWithParents(outsideFile);
-    });
 
     const result = await sendVoice(buildTarget(), delayedVoicePath, undefined, true);
 
@@ -356,23 +367,9 @@ describe("qqbot outbound local media path security", () => {
 
   it("blocks sendMedia delayed audio paths when a missing segment is replaced by a symlink", async () => {
     const delayedVoicePath = createDelayedMissingMediaPath(".mp3");
-    const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), "qqbot-outbound-race-sendmedia-"));
-    createdRoots.push(outsideRoot);
-
-    const symlinkProbe = path.join(path.dirname(path.dirname(delayedVoicePath)), "probe-link");
-    try {
-      fs.symlinkSync(outsideRoot, symlinkProbe, "dir");
-      fs.unlinkSync(symlinkProbe);
-    } catch {
+    if (!installMissingSegmentSymlinkRace(delayedVoicePath, "qqbot-outbound-race-sendmedia-")) {
       return;
     }
-
-    audioConvertMocks.waitForFile.mockImplementationOnce(async (candidatePath: string) => {
-      const symlinkParent = path.dirname(candidatePath);
-      fs.symlinkSync(outsideRoot, symlinkParent, "dir");
-      const outsideFile = path.join(outsideRoot, path.basename(candidatePath));
-      return writeFileWithParents(outsideFile);
-    });
 
     const result = await sendMedia(buildMediaContext(delayedVoicePath));
 

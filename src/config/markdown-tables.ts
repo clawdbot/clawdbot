@@ -3,7 +3,7 @@ import { listChannelPlugins } from "../channels/plugins/registry.js";
 import { getActivePluginChannelRegistryVersion } from "../plugins/runtime.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
-import type { OpenClawConfig } from "./config.js";
+import type { ResolveMarkdownTableModeParams } from "./markdown-tables.types.js";
 import type { MarkdownTableMode } from "./types.base.js";
 
 type MarkdownConfigEntry = {
@@ -80,11 +80,14 @@ function resolveMarkdownModeFromSection(
   return isMarkdownTableMode(sectionMode) ? sectionMode : undefined;
 }
 
-export function resolveMarkdownTableMode(params: {
-  cfg?: Partial<OpenClawConfig>;
-  channel?: string | null;
-  accountId?: string | null;
-}): MarkdownTableMode {
+export type {
+  ResolveMarkdownTableMode,
+  ResolveMarkdownTableModeParams,
+} from "./markdown-tables.types.js";
+
+export function resolveMarkdownTableMode(
+  params: ResolveMarkdownTableModeParams,
+): MarkdownTableMode {
   const channel = normalizeChannelId(params.channel);
   const defaultMode = channel ? (getDefaultTableModes().get(channel) ?? "code") : "code";
   if (!channel || !params.cfg) {

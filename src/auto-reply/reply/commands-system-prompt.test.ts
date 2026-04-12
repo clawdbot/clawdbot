@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
 import { resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
+import { createOpenClawCodingTools } from "../../agents/pi-tools.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
+import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
+import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const { createOpenClawCodingToolsMock } = vi.hoisted(() => ({
@@ -47,6 +50,14 @@ vi.mock("../../agents/system-prompt-params.js", () => ({
 
 vi.mock("../../agents/system-prompt.js", () => ({
   buildAgentSystemPrompt: vi.fn(() => "system prompt"),
+}));
+
+vi.mock("../../agents/pi-tools.js", () => ({
+  createOpenClawCodingTools: createOpenClawCodingToolsMock,
+}));
+
+vi.mock("../../tts/tts.js", () => ({
+  buildTtsSystemPromptHint: vi.fn(() => undefined),
 }));
 
 vi.mock("../../infra/skills-remote.js", () => ({
@@ -103,24 +114,16 @@ function makeParams(): HandleCommandsParams {
 }
 
 describe("resolveCommandsSystemPromptBundle", () => {
-  beforeEach(async () => {
-    vi.restoreAllMocks();
-    vi.resetModules();
+  beforeEach(() => {
+    vi.clearAllMocks();
     createOpenClawCodingToolsMock.mockClear();
     createOpenClawCodingToolsMock.mockReturnValue([]);
-    const piTools = await import("../../agents/pi-tools.js");
-    vi.spyOn(piTools, "createOpenClawCodingTools").mockImplementation(
-      createOpenClawCodingToolsMock,
-    );
-    const ttsRuntime = await import("../../tts/tts.js");
-    vi.spyOn(ttsRuntime, "buildTtsSystemPromptHint").mockReturnValue(undefined);
   });
 
   it("opts command tool builds into gateway subagent binding", async () => {
-    const { resolveCommandsSystemPromptBundle } = await import("./commands-system-prompt.js");
     await resolveCommandsSystemPromptBundle(makeParams());
 
-    expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
+    expect(vi.mocked(createOpenClawCodingTools)).toHaveBeenCalledWith(
       expect.objectContaining({
         allowGatewaySubagentBinding: true,
         sessionKey: "agent:main:default",
@@ -139,7 +142,6 @@ describe("resolveCommandsSystemPromptBundle", () => {
     params.ctx.SessionKey = "agent:main:telegram:slash-session";
     params.sessionKey = "agent:main:telegram:direct:target-session";
 
-    const { resolveCommandsSystemPromptBundle } = await import("./commands-system-prompt.js");
     await resolveCommandsSystemPromptBundle(params);
 
     expect(vi.mocked(resolveSandboxRuntimeStatus)).toHaveBeenCalledWith({
@@ -157,10 +159,9 @@ describe("resolveCommandsSystemPromptBundle", () => {
       defaultAgentId: "main",
     });
 
-    const { resolveCommandsSystemPromptBundle } = await import("./commands-system-prompt.js");
     await resolveCommandsSystemPromptBundle(params);
 
-    expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
+    expect(vi.mocked(createOpenClawCodingTools)).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "target",
         sessionKey: "agent:target:telegram:direct:target-session",
@@ -190,7 +191,6 @@ describe("resolveCommandsSystemPromptBundle", () => {
     } as HandleCommandsParams["sessionStore"];
     params.sessionKey = "agent:target:telegram:direct:target-session";
 
-    const { resolveCommandsSystemPromptBundle } = await import("./commands-system-prompt.js");
     await resolveCommandsSystemPromptBundle(params);
 
     expect(vi.mocked(resolveBootstrapContextForRun)).toHaveBeenCalledWith(
@@ -198,7 +198,7 @@ describe("resolveCommandsSystemPromptBundle", () => {
         sessionId: "target-session",
       }),
     );
-    expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
+    expect(vi.mocked(createOpenClawCodingTools)).toHaveBeenCalledWith(
       expect.objectContaining({
         groupId: "target-group",
         groupChannel: "#target",
@@ -209,11 +209,7 @@ describe("resolveCommandsSystemPromptBundle", () => {
   });
 
   it("uses the resolved session key and forwards full-access block reasons", async () => {
-    const { resolveCommandsSystemPromptBundle } = await import("./commands-system-prompt.js");
-    const sandboxRuntime = await import("../../agents/sandbox.js");
-    const systemPromptRuntime = await import("../../agents/system-prompt.js");
-
-    vi.mocked(sandboxRuntime.resolveSandboxRuntimeStatus).mockImplementation(({ sessionKey }) => {
+    vi.mocked(resolveSandboxRuntimeStatus).mockImplementation(({ sessionKey }) => {
       expect(sessionKey).toBe("agent:target:default");
       return { sandboxed: true, mode: "workspace-write" } as never;
     });
@@ -229,7 +225,7 @@ describe("resolveCommandsSystemPromptBundle", () => {
 
     await resolveCommandsSystemPromptBundle(params);
 
-    expect(vi.mocked(systemPromptRuntime.buildAgentSystemPrompt)).toHaveBeenCalledWith(
+    expect(vi.mocked(buildAgentSystemPrompt)).toHaveBeenCalledWith(
       expect.objectContaining({
         sandboxInfo: expect.objectContaining({
           enabled: true,

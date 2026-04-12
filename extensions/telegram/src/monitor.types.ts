@@ -1,4 +1,4 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
+import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 
@@ -7,7 +7,7 @@ export type MonitorTelegramOpts = {
   accountId?: string;
   config?: OpenClawConfig;
   runtime?: RuntimeEnv;
-  channelRuntime?: PluginRuntime["channel"];
+  channelRuntime?: ChannelRuntimeSurface;
   abortSignal?: AbortSignal;
   useWebhook?: boolean;
   webhookPath?: string;

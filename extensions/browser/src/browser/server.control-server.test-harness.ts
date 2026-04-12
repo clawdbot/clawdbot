@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, vi } from "vitest";
+import { deriveDefaultBrowserCdpPortRange } from "../config/port-defaults.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import { installChromeUserDataDirHooks } from "./chrome-user-data-dir.test-harness.js";
 import { getFreePort } from "./test-port.js";
@@ -375,9 +376,13 @@ function makeProc(pid = 123) {
 
 const proc = makeProc();
 
+function defaultBrowserCdpPortForState(testPort: number): number {
+  return deriveDefaultBrowserCdpPortRange(testPort).start;
+}
+
 function defaultProfilesForState(testPort: number): HarnessState["cfgProfiles"] {
   return {
-    openclaw: { cdpPort: testPort + 9, color: "#FF4500" },
+    openclaw: { cdpPort: defaultBrowserCdpPortForState(testPort), color: "#FF4500" },
   };
 }
 
@@ -520,7 +525,7 @@ export async function resetBrowserControlServerTestContext(): Promise<void> {
   mockClearAll(chromeMcpMocks);
 
   state.testPort = await getFreePort();
-  state.cdpBaseUrl = `http://127.0.0.1:${state.testPort + 9}`;
+  state.cdpBaseUrl = `http://127.0.0.1:${defaultBrowserCdpPortForState(state.testPort)}`;
   state.cfgProfiles = defaultProfilesForState(state.testPort);
   state.prevGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;
   process.env.OPENCLAW_GATEWAY_PORT = String(state.testPort - 2);

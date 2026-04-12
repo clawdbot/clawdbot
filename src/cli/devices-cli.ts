@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { isLoopbackHost } from "../gateway/net.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import {
   approveDevicePairing,
   formatDevicePairingForbiddenMessage,
@@ -17,7 +18,6 @@ import {
 } from "../shared/string-coerce.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { withProgress } from "./progress.js";
 
 type DevicesRpcOpts = {

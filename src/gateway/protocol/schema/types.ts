@@ -17,6 +17,7 @@ export type StateVersion = SchemaType<"StateVersion">;
 export type AgentEvent = SchemaType<"AgentEvent">;
 export type AgentIdentityParams = SchemaType<"AgentIdentityParams">;
 export type AgentIdentityResult = SchemaType<"AgentIdentityResult">;
+export type MessageActionParams = SchemaType<"MessageActionParams">;
 export type PollParams = SchemaType<"PollParams">;
 export type AgentWaitParams = SchemaType<"AgentWaitParams">;
 export type WakeParams = SchemaType<"WakeParams">;

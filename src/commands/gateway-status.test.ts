@@ -4,8 +4,7 @@ import type { GatewayBonjourBeacon } from "../infra/bonjour-discovery.js";
 import type { GatewayTlsRuntime } from "../infra/tls/gateway.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
-
-let gatewayStatusCommand: typeof import("./gateway-status.js").gatewayStatusCommand;
+import { gatewayStatusCommand } from "./gateway-status.js";
 
 const mocks = vi.hoisted(() => {
   const sshStop = vi.fn(async () => {});
@@ -240,10 +239,8 @@ function findUnresolvedSecretRefWarning(runtimeLogs: string[]) {
 }
 
 describe("gateway-status command", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeEach(() => {
     vi.clearAllMocks();
-    ({ gatewayStatusCommand } = await import("./gateway-status.js"));
   });
 
   it("prints human output by default", async () => {

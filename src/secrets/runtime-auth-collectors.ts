@@ -1,5 +1,5 @@
-import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles.js";
 import { assertNoOAuthSecretRefPolicyViolations } from "../agents/auth-profiles/policy.js";
+import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import {
   pushAssignment,

@@ -1,6 +1,7 @@
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { resolveApprovalRequestSessionConversation } from "openclaw/plugin-sdk/approval-native-runtime";
+import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-contract";
 import type { DiscordExecApprovalConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -172,7 +173,9 @@ export function createDiscordApprovalCapability(configOverride?: DiscordExecAppr
   return createApproverRestrictedNativeApprovalCapability({
     channel: "discord",
     channelLabel: "Discord",
-    describeExecApprovalSetup: ({ accountId }) => {
+    describeExecApprovalSetup: ({
+      accountId,
+    }: Parameters<NonNullable<ChannelApprovalCapability["describeExecApprovalSetup"]>>[0]) => {
       const prefix =
         accountId && accountId !== "default"
           ? `channels.discord.accounts.${accountId}`

@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
   sanitizeProviderReplayHistoryWithPlugin,
   validateProviderReplayTurnsWithPlugin,
@@ -8,7 +9,6 @@ import {
 import type {
   ProviderReplaySessionEntry,
   ProviderReplaySessionState,
-  ProviderRuntimeModel,
 } from "../../plugins/types.js";
 import {
   hasInterSessionUserProvenance,
@@ -29,7 +29,11 @@ import {
   stripToolResultDetails,
 } from "../session-transcript-repair.js";
 import type { TranscriptPolicy } from "../transcript-policy.js";
-import { resolveTranscriptPolicy } from "../transcript-policy.js";
+import {
+  resolveTranscriptPolicy,
+  shouldAllowProviderOwnedThinkingReplay,
+} from "../transcript-policy.js";
+import { sanitizeToolCallIdsForCloudCodeAssist } from "../tool-call-id.js";
 import {
   makeZeroUsageSnapshot,
   normalizeUsage,
@@ -400,12 +404,16 @@ export async function sanitizeSessionHistory(params: {
       model: params.model,
     });
   const withInterSessionMarkers = annotateInterSessionUserMessages(params.messages);
+  const allowProviderOwnedThinkingReplay = shouldAllowProviderOwnedThinkingReplay({
+    modelApi: params.modelApi,
+    policy,
+  });
   const sanitizedImages = await sanitizeSessionMessagesImages(
     withInterSessionMarkers,
     "session:history",
     {
       sanitizeMode: policy.sanitizeMode,
-      sanitizeToolCallIds: policy.sanitizeToolCallIds,
+      sanitizeToolCallIds: policy.sanitizeToolCallIds && !allowProviderOwnedThinkingReplay,
       toolCallIdMode: policy.toolCallIdMode,
       preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
       preserveSignatures: policy.preserveSignatures,
@@ -418,12 +426,21 @@ export async function sanitizeSessionHistory(params: {
     : sanitizedImages;
   const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
     allowedToolNames: params.allowedToolNames,
+    allowProviderOwnedThinkingReplay,
   });
+  const sanitizedToolIds =
+    policy.sanitizeToolCallIds && policy.toolCallIdMode
+      ? sanitizeToolCallIdsForCloudCodeAssist(sanitizedToolCalls, policy.toolCallIdMode, {
+          preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
+          preserveReplaySafeThinkingToolCallIds: allowProviderOwnedThinkingReplay,
+          allowedToolNames: params.allowedToolNames,
+        })
+      : sanitizedToolCalls;
   const repairedTools = policy.repairToolUseResultPairing
-    ? sanitizeToolUseResultPairing(sanitizedToolCalls, {
+    ? sanitizeToolUseResultPairing(sanitizedToolIds, {
         erroredAssistantResultPolicy: "drop",
       })
-    : sanitizedToolCalls;
+    : sanitizedToolIds;
   const sanitizedToolResults = stripToolResultDetails(repairedTools);
   const sanitizedCompactionUsage = ensureAssistantUsageSnapshots(
     stripStaleAssistantUsageBeforeLatestCompaction(sanitizedToolResults),

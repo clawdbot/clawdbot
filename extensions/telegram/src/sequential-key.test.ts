@@ -94,6 +94,50 @@ describe("getTelegramSequentialKey", () => {
       { message: mockMessage({ chat: mockChat({ id: 123 }), text: "halt" }) },
       "telegram:123:control",
     ],
+    [
+      {
+        update: {
+          callback_query: {
+            message: mockMessage({ chat: mockChat({ id: 123 }) }),
+            data: "/approve plugin:abc123 allow-once",
+          },
+        },
+      },
+      "telegram:123:approval",
+    ],
+    [
+      {
+        update: {
+          callback_query: {
+            message: mockMessage({ chat: mockChat({ id: 456 }) }),
+            data: "/approve exec:def456 deny",
+          },
+        },
+      },
+      "telegram:456:approval",
+    ],
+    [
+      {
+        update: {
+          callback_query: {
+            message: mockMessage({ chat: mockChat({ id: 789 }) }),
+            data: "/approve plugin:ghi789 always",
+          },
+        },
+      },
+      "telegram:789:approval",
+    ],
+    [
+      {
+        update: {
+          callback_query: {
+            message: mockMessage({ chat: mockChat({ id: 123 }) }),
+            data: "some-other-button",
+          },
+        },
+      },
+      "telegram:123",
+    ],
     [{ message: mockMessage({ chat: mockChat({ id: 123 }), text: "/abort" }) }, "telegram:123"],
     [{ message: mockMessage({ chat: mockChat({ id: 123 }), text: "/abort now" }) }, "telegram:123"],
     [

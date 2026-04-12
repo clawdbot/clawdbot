@@ -404,6 +404,26 @@ describe("GatewayBrowserClient", () => {
     vi.useRealTimers();
   });
 
+  it("cancels a scheduled reconnect when stopped before the retry fires", async () => {
+    vi.useFakeTimers();
+
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+    });
+
+    client.start();
+    const ws = getLatestWebSocket();
+    ws.emitClose(1006, "socket lost");
+
+    client.stop();
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(wsInstances).toHaveLength(1);
+
+    vi.useRealTimers();
+  });
+
   it("does not auto-reconnect on AUTH_TOKEN_MISSING", async () => {
     vi.useFakeTimers();
     localStorage.clear();

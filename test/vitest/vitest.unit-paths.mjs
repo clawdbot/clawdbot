@@ -25,11 +25,10 @@ export const boundaryTestFiles = [
   "src/infra/package-json.test.ts",
   "src/infra/path-env.test.ts",
   "src/infra/stable-node-path.test.ts",
-  "test/extension-plugin-sdk-boundary.test.ts",
+  "test/extension-import-boundaries.test.ts",
   "test/extension-test-boundary.test.ts",
   "test/plugin-extension-import-boundary.test.ts",
-  "test/web-fetch-provider-boundary.test.ts",
-  "test/web-search-provider-boundary.test.ts",
+  "test/web-provider-boundary.test.ts",
 ];
 
 export const bundledPluginDependentUnitTestFiles = [

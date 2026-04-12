@@ -27,4 +27,42 @@ describe("getReplyFromConfig media note plumbing", () => {
     expect(idxA).toBeLessThan(idxB);
     expect(prompt).toContain("hello");
   });
+
+  it("keeps the real image attachment note after image understanding rewrites the body", () => {
+    const describedBody = [
+      "[Image]",
+      "User text:",
+      "make this widescreen",
+      "Description:",
+      "a red barn at sunset",
+    ].join("\n");
+    const sessionCtx = finalizeInboundContext({
+      Body: describedBody,
+      BodyForAgent: describedBody,
+      From: "+1001",
+      To: "+2000",
+      MediaPaths: ["/tmp/media-store/real-image.png"],
+      MediaUrls: ["https://example.com/real-image.png"],
+      MediaTypes: ["image/png"],
+      MediaUnderstanding: [
+        {
+          kind: "image.description",
+          attachmentIndex: 0,
+          text: "a red barn at sunset",
+          provider: "openai",
+        },
+      ],
+    });
+    const prompt = buildReplyPromptBodies({
+      ctx: sessionCtx,
+      sessionCtx,
+      effectiveBaseBody: sessionCtx.BodyForAgent,
+      prefixedBody: sessionCtx.BodyForAgent,
+    }).prefixedCommandBody;
+
+    expect(prompt).toContain(
+      "[media attached: /tmp/media-store/real-image.png (image/png) | https://example.com/real-image.png]",
+    );
+    expect(prompt).toContain(describedBody);
+  });
 });

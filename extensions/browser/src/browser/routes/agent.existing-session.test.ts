@@ -1,23 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createExistingSessionAgentSharedModule,
+  existingSessionRouteState,
+} from "./existing-session.test-support.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
-import type { BrowserRequest } from "./types.js";
 
-const routeState = vi.hoisted(() => ({
-  profileCtx: {
-    profile: {
-      driver: "existing-session" as const,
-      name: "chrome-live",
-    },
-    ensureTabAvailable: vi.fn(async () => ({
-      targetId: "7",
-      url: "https://example.com",
-    })),
-  },
-  tab: {
-    targetId: "7",
-    url: "https://example.com",
-  },
-}));
+const routeState = existingSessionRouteState;
 
 const chromeMcpMocks = vi.hoisted(() => ({
   evaluateChromeMcpScript: vi.fn(
@@ -73,26 +61,7 @@ vi.mock("../../media/store.js", () => ({
   saveMediaBuffer: vi.fn(async () => ({ path: "/tmp/fake.png" })),
 }));
 
-vi.mock("./agent.shared.js", () => ({
-  getPwAiModule: vi.fn(async () => null),
-  handleRouteError: vi.fn(),
-  readBody: vi.fn((req: BrowserRequest) => req.body ?? {}),
-  requirePwAi: vi.fn(async () => {
-    throw new Error("Playwright should not be used for existing-session tests");
-  }),
-  resolveProfileContext: vi.fn(() => routeState.profileCtx),
-  resolveTargetIdFromBody: vi.fn((body: Record<string, unknown>) =>
-    typeof body.targetId === "string" ? body.targetId : undefined,
-  ),
-  withPlaywrightRouteContext: vi.fn(),
-  withRouteTabContext: vi.fn(async ({ run }: { run: (args: unknown) => Promise<void> }) => {
-    await run({
-      profileCtx: routeState.profileCtx,
-      cdpUrl: "http://127.0.0.1:18800",
-      tab: routeState.tab,
-    });
-  }),
-}));
+vi.mock("./agent.shared.js", () => createExistingSessionAgentSharedModule());
 
 const { registerBrowserAgentActRoutes } = await import("./agent.act.js");
 const { registerBrowserAgentSnapshotRoutes } = await import("./agent.snapshot.js");

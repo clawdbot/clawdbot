@@ -27,6 +27,43 @@ function getRequestHeader(callIndex: number, headerName: string): string | null 
   return new Headers(init?.headers).get(headerName);
 }
 
+async function expectPrivateDownloadRedirect(params: {
+  location: string;
+  redirectedUrl: string;
+  secondAuthorization: string | null;
+}) {
+  vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(
+    createSavedMedia("/tmp/test.jpg", "image/jpeg"),
+  );
+
+  mockFetch
+    .mockResolvedValueOnce(
+      new Response(null, {
+        status: 302,
+        headers: { location: params.location },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(Buffer.from("image data"), {
+        status: 200,
+        headers: { "content-type": "image/jpeg" },
+      }),
+    );
+
+  const result = await resolveSlackMedia({
+    files: [{ url_private_download: "https://files.slack.com/download.jpg", name: "test.jpg" }],
+    token: "xoxb-test-token",
+    maxBytes: 1024 * 1024,
+  });
+
+  expect(result).not.toBeNull();
+  expect(mockFetch).toHaveBeenCalledTimes(2);
+  expect(mockFetch.mock.calls[0]?.[0]).toBe("https://files.slack.com/download.jpg");
+  expect(mockFetch.mock.calls[1]?.[0]).toBe(params.redirectedUrl);
+  expect(getRequestHeader(0, "Authorization")).toBe("Bearer xoxb-test-token");
+  expect(getRequestHeader(1, "Authorization")).toBe(params.secondAuthorization);
+}
+
 describe("fetchWithSlackAuth", () => {
   beforeEach(() => {
     // Create a new mock for each test
@@ -217,71 +254,19 @@ describe("resolveSlackMedia", () => {
   });
 
   it("preserves Authorization on same-origin redirects for private downloads", async () => {
-    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(
-      createSavedMedia("/tmp/test.jpg", "image/jpeg"),
-    );
-
-    mockFetch
-      .mockResolvedValueOnce(
-        new Response(null, {
-          status: 302,
-          headers: { location: "/files/redirect-target" },
-        }),
-      )
-      .mockResolvedValueOnce(
-        new Response(Buffer.from("image data"), {
-          status: 200,
-          headers: { "content-type": "image/jpeg" },
-        }),
-      );
-
-    const result = await resolveSlackMedia({
-      files: [{ url_private_download: "https://files.slack.com/download.jpg", name: "test.jpg" }],
-      token: "xoxb-test-token",
-      maxBytes: 1024 * 1024,
+    await expectPrivateDownloadRedirect({
+      location: "/files/redirect-target",
+      redirectedUrl: "https://files.slack.com/files/redirect-target",
+      secondAuthorization: "Bearer xoxb-test-token",
     });
-
-    expect(result).not.toBeNull();
-    expect(mockFetch).toHaveBeenCalledTimes(2);
-    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://files.slack.com/download.jpg");
-    expect(mockFetch.mock.calls[1]?.[0]).toBe("https://files.slack.com/files/redirect-target");
-    expect(getRequestHeader(0, "Authorization")).toBe("Bearer xoxb-test-token");
-    expect(getRequestHeader(1, "Authorization")).toBe("Bearer xoxb-test-token");
   });
 
   it("strips Authorization on cross-origin redirects for private downloads", async () => {
-    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(
-      createSavedMedia("/tmp/test.jpg", "image/jpeg"),
-    );
-
-    mockFetch
-      .mockResolvedValueOnce(
-        new Response(null, {
-          status: 302,
-          headers: { location: "https://downloads.slack-edge.com/presigned-url?sig=abc123" },
-        }),
-      )
-      .mockResolvedValueOnce(
-        new Response(Buffer.from("image data"), {
-          status: 200,
-          headers: { "content-type": "image/jpeg" },
-        }),
-      );
-
-    const result = await resolveSlackMedia({
-      files: [{ url_private_download: "https://files.slack.com/download.jpg", name: "test.jpg" }],
-      token: "xoxb-test-token",
-      maxBytes: 1024 * 1024,
+    await expectPrivateDownloadRedirect({
+      location: "https://downloads.slack-edge.com/presigned-url?sig=abc123",
+      redirectedUrl: "https://downloads.slack-edge.com/presigned-url?sig=abc123",
+      secondAuthorization: null,
     });
-
-    expect(result).not.toBeNull();
-    expect(mockFetch).toHaveBeenCalledTimes(2);
-    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://files.slack.com/download.jpg");
-    expect(mockFetch.mock.calls[1]?.[0]).toBe(
-      "https://downloads.slack-edge.com/presigned-url?sig=abc123",
-    );
-    expect(getRequestHeader(0, "Authorization")).toBe("Bearer xoxb-test-token");
-    expect(getRequestHeader(1, "Authorization")).toBeNull();
   });
 
   it("returns null when download fails", async () => {

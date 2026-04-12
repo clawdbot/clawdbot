@@ -9,6 +9,7 @@ type ModelRef = { provider: string; model: string };
 
 const mediaRuntimeMocks = vi.hoisted(() => {
   const debug = vi.fn();
+  const warn = vi.fn();
   const parseGenerationModelRef = (raw?: string): ModelRef | undefined => {
     const trimmed = raw?.trim();
     if (!trimmed) {
@@ -24,7 +25,7 @@ const mediaRuntimeMocks = vi.hoisted(() => {
     };
   };
   return {
-    createSubsystemLogger: vi.fn(() => ({ debug })),
+    createSubsystemLogger: vi.fn(() => ({ debug, warn: vi.fn() })),
     describeFailoverError: vi.fn(),
     getImageGenerationProvider: vi.fn<
       (providerId: string, config?: OpenClawConfig) => ImageGenerationProvider | undefined
@@ -56,6 +57,7 @@ const mediaRuntimeMocks = vi.hoisted(() => {
     resolveAgentModelPrimaryValue: vi.fn<(value: unknown) => string | undefined>(() => undefined),
     resolveProviderAuthEnvVarCandidates: vi.fn(() => ({})),
     debug,
+    warn,
   };
 });
 

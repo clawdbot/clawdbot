@@ -8,6 +8,7 @@ import {
   withGatewayServer,
 } from "./server-http.test-harness.js";
 import type { ReadinessChecker } from "./server/readiness.js";
+import { withTempConfig } from "./test-temp-config.js";
 
 describe("gateway OpenAI-compatible disabled HTTP routes", () => {
   it("returns 404 when compat endpoints are disabled", async () => {
@@ -107,6 +108,57 @@ describe("gateway probe endpoints", () => {
           ready: false,
           failing: ["discord", "telegram"],
           uptimeMs: 8_000,
+        });
+      },
+    });
+  });
+
+  it("hides readiness details when trusted-proxy auth violates browser origin policy", async () => {
+    const getReadiness: ReadinessChecker = () => ({
+      ready: false,
+      failing: ["discord", "telegram"],
+      uptimeMs: 8_000,
+    });
+
+    await withTempConfig({
+      prefix: "probe-remote-origin-rejected",
+      cfg: {
+        gateway: {
+          trustedProxies: ["10.0.0.1"],
+          controlUi: {
+            allowedOrigins: ["https://control.example"],
+          },
+        },
+      },
+      run: async () => {
+        await withGatewayServer({
+          prefix: "probe-remote-origin-rejected-server",
+          resolvedAuth: {
+            mode: "trusted-proxy",
+            allowTailscale: false,
+            trustedProxy: { userHeader: "x-forwarded-user" },
+          },
+          overrides: {
+            getReadiness,
+          },
+          run: async (server) => {
+            const req = createRequest({
+              path: "/ready",
+              remoteAddress: "10.0.0.1",
+              host: "gateway.test",
+              headers: {
+                origin: "https://evil.example",
+                forwarded: "for=203.0.113.10;proto=https;host=gateway.test",
+                "x-forwarded-user": "user@example.com",
+                "x-forwarded-proto": "https",
+              },
+            });
+            const { res, getBody } = createResponse();
+            await dispatchRequest(server, req, res);
+
+            expect(res.statusCode).toBe(503);
+            expect(JSON.parse(getBody())).toEqual({ ready: false });
+          },
         });
       },
     });

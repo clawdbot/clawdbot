@@ -3,11 +3,8 @@ import { normalizeChannelId } from "../channels/plugins/index.js";
 import { listPairingChannels, notifyPairingApproved } from "../channels/plugins/pairing.js";
 import { loadConfig } from "../config/config.js";
 import { resolvePairingIdLabel } from "../pairing/pairing-labels.js";
-import {
-  approveChannelPairingCode,
-  listChannelPairingRequests,
-  type PairingChannel,
-} from "../pairing/pairing-store.js";
+import { approveChannelPairingCode, listChannelPairingRequests } from "../pairing/pairing-store.js";
+import type { PairingChannel } from "../pairing/pairing-store.types.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   normalizeLowercaseStringOrEmpty,

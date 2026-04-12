@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "../config/config.js";
 import type { InboundDebounceByProvider } from "../config/types.messages.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const resolveMs = (value: unknown): number | undefined => {
   if (typeof value !== "number" || !Number.isFinite(value)) {

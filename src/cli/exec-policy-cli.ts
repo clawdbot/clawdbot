@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import type { Command } from "commander";
-import type { OpenClawConfig } from "../config/config.js";
 import { readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sanitizeExecApprovalDisplayText } from "../infra/exec-approval-command-display.js";
 import {
   collectExecPolicyScopeSnapshots,

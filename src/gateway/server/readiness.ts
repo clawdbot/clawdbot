@@ -1,5 +1,5 @@
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import type { ChannelAccountSnapshot } from "../../channels/plugins/types.js";
+import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,

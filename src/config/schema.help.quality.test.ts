@@ -118,6 +118,7 @@ const TARGET_KEYS = [
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback",
   "gateway.controlUi.allowInsecureAuth",
   "gateway.controlUi.dangerouslyDisableDeviceAuth",
+  "gateway.controlUi.embedSandbox",
   "cron",
   "cron.enabled",
   "cron.store",
@@ -306,6 +307,7 @@ const TARGET_KEYS = [
   "discovery.wideArea.enabled",
   "discovery.mdns",
   "discovery.mdns.mode",
+  "gateway.controlUi.embedSandbox",
   "canvasHost",
   "canvasHost.enabled",
   "canvasHost.root",
@@ -801,5 +803,17 @@ describe("config help copy quality", () => {
 
     const flush = FIELD_HELP["agents.defaults.compaction.memoryFlush.enabled"];
     expect(/pre-compaction|memory flush|token/i.test(flush)).toBe(true);
+  });
+
+  it("documents agent startup-context preload controls", () => {
+    const startupContext = FIELD_HELP["agents.defaults.startupContext"];
+    expect(/first-turn|\/new|\/reset|daily memory/i.test(startupContext)).toBe(true);
+
+    const applyOn = FIELD_HELP["agents.defaults.startupContext.applyOn"];
+    expect(applyOn.includes('"new"')).toBe(true);
+    expect(applyOn.includes('"reset"')).toBe(true);
+
+    const dailyMemoryDays = FIELD_HELP["agents.defaults.startupContext.dailyMemoryDays"];
+    expect(/today \+ yesterday|default:\s*2/i.test(dailyMemoryDays)).toBe(true);
   });
 });

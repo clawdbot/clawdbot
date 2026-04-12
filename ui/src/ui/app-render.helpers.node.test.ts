@@ -23,6 +23,7 @@ vi.mock("./controllers/sessions.ts", () => ({
 import {
   isCronSessionKey,
   parseSessionKey,
+  resolveAssistantAttachmentAuthToken,
   resolveSessionDisplayName,
   switchChatSession,
 } from "./app-render.helpers.ts";
@@ -120,6 +121,35 @@ describe("parseSessionKey", () => {
       prefix: "",
       fallbackName: "something-unknown",
     });
+  });
+});
+
+describe("resolveAssistantAttachmentAuthToken", () => {
+  it("prefers the explicit gateway token when present", () => {
+    expect(
+      resolveAssistantAttachmentAuthToken({
+        settings: { token: "session-token" } as AppViewState["settings"],
+        password: "shared-password",
+      }),
+    ).toBe("session-token");
+  });
+
+  it("falls back to the shared password when token is blank", () => {
+    expect(
+      resolveAssistantAttachmentAuthToken({
+        settings: { token: "   " } as AppViewState["settings"],
+        password: "shared-password",
+      }),
+    ).toBe("shared-password");
+  });
+
+  it("returns null when neither auth secret is available", () => {
+    expect(
+      resolveAssistantAttachmentAuthToken({
+        settings: { token: "" } as AppViewState["settings"],
+        password: "   ",
+      }),
+    ).toBeNull();
   });
 });
 

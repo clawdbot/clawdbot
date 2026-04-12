@@ -7,24 +7,22 @@ export type {
   ChannelAgentTool,
   ChannelAgentToolFactory,
   ChannelCapabilities,
-  ChannelGatewayContext,
   ChannelId,
   ChannelMessageActionAdapter,
   ChannelMessageActionContext,
   ChannelMessageActionName,
   ChannelStatusIssue,
-} from "../channels/plugins/types.js";
+} from "../channels/plugins/types.public.js";
+export type { ChannelGatewayContext } from "../channels/plugins/types.adapters.js";
+export type { ChannelConfigSchema, ChannelConfigUiHint } from "../channels/plugins/types.config.js";
+export type { ChannelSetupInput } from "../channels/plugins/types.public.js";
+export type { ChannelSetupAdapter } from "../channels/plugins/types.adapters.js";
 export type {
   ChannelConfiguredBindingConversationRef,
   ChannelConfiguredBindingMatch,
   ChannelConfiguredBindingProvider,
 } from "../channels/plugins/types.adapters.js";
-export type {
-  ChannelConfigSchema,
-  ChannelConfigUiHint,
-  ChannelPlugin,
-} from "../channels/plugins/types.plugin.js";
-export type { ChannelSetupAdapter, ChannelSetupInput } from "../channels/plugins/types.js";
+export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type {
   ConfiguredBindingConversation,
   ConfiguredBindingResolution,
@@ -52,10 +50,10 @@ export type {
   ProviderAuthContext,
   ProviderAuthResult,
   ProviderPreparedRuntimeAuth,
-  ProviderRuntimeModel,
   RealtimeTranscriptionProviderPlugin,
   SpeechProviderPlugin,
 } from "../plugins/types.js";
+export type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 export type { ResolvedProviderRuntimeAuth } from "../plugins/runtime/model-auth-types.js";
 export type {
   PluginRuntime,
@@ -69,7 +67,7 @@ export type {
   PluginRuntimeTaskFlows,
   PluginRuntimeTaskRuns,
   PluginRuntimeTasks,
-} from "../plugins/runtime/runtime-tasks.js";
+} from "../plugins/runtime/runtime-tasks.types.js";
 export type {
   TaskFlowDetail,
   TaskFlowView,
@@ -92,7 +90,7 @@ export * from "./music-generation.js";
 export type { SecretInput, SecretRef } from "../config/types.secrets.js";
 export type { RuntimeEnv } from "../runtime.js";
 export type { HookEntry } from "../hooks/types.js";
-export type { ReplyPayload } from "../auto-reply/types.js";
+export type { ReplyPayload } from "../auto-reply/reply-payload.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export type { ContextEngineFactory } from "../context-engine/registry.js";
 export type { DiagnosticEventPayload } from "../infra/diagnostic-events.js";

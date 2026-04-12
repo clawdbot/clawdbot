@@ -2,7 +2,7 @@ import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-
 import { hasUsableCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { buildProviderAuthRecoveryHint } from "./provider-auth-guidance.js";
 

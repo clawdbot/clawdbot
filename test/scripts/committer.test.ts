@@ -37,13 +37,31 @@ function writeRepoFile(repo: string, relativePath: string, contents: string) {
   writeFileSync(fullPath, contents);
 }
 
+function installHook(repo: string, relativePath: string, contents: string) {
+  const fullPath = path.join(repo, relativePath);
+  mkdirSync(path.dirname(fullPath), { recursive: true });
+  writeFileSync(fullPath, contents, {
+    encoding: "utf8",
+    mode: 0o755,
+  });
+  git(repo, "config", "core.hooksPath", path.dirname(relativePath));
+}
+
 function commitWithHelper(repo: string, commitMessage: string, ...args: string[]) {
   return run(repo, "bash", [scriptPath, commitMessage, ...args]);
+}
+
+function commitWithHelperArgs(repo: string, ...args: string[]) {
+  return run(repo, "bash", [scriptPath, ...args]);
 }
 
 function committedPaths(repo: string) {
   const output = git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD");
   return output.split("\n").filter(Boolean).toSorted();
+}
+
+function committedFileContents(repo: string, relativePath: string) {
+  return git(repo, "show", `HEAD:${relativePath}`);
 }
 
 describe("scripts/committer", () => {
@@ -104,5 +122,78 @@ describe("scripts/committer", () => {
 
     expect(committedPaths(repo)).toEqual(["CHANGELOG.md"]);
     expect(git(repo, "status", "--short")).toContain("M unrelated.ts");
+  });
+
+  it("supports --fast before the commit message", () => {
+    const repo = createRepo();
+    writeRepoFile(repo, "note.txt", "hello\n");
+
+    const output = commitWithHelperArgs(repo, "--fast", "test: fast helper", "note.txt");
+
+    expect(output).toContain('Committed "test: fast helper" with 1 files');
+    expect(committedPaths(repo)).toEqual(["note.txt"]);
+  });
+
+  it("supports combining --force and --fast", () => {
+    const repo = createRepo();
+    writeRepoFile(repo, "note.txt", "hello\n");
+
+    const output = commitWithHelperArgs(
+      repo,
+      "--force",
+      "--fast",
+      "test: fast forced helper",
+      "note.txt",
+    );
+
+    expect(output).toContain('Committed "test: fast forced helper" with 1 files');
+    expect(committedPaths(repo)).toEqual(["note.txt"]);
+  });
+
+  it("passes FAST_COMMIT through to git hooks when using --fast", () => {
+    const repo = createRepo();
+    installHook(
+      repo,
+      ".githooks/pre-commit",
+      '#!/usr/bin/env bash\nset -euo pipefail\n[ "${FAST_COMMIT:-}" = "1" ] || exit 91\n',
+    );
+    writeRepoFile(repo, "note.txt", "hello\n");
+
+    const output = commitWithHelperArgs(repo, "--fast", "test: fast hook env", "note.txt");
+
+    expect(output).toContain('Committed "test: fast hook env" with 1 files');
+    expect(committedPaths(repo)).toEqual(["note.txt"]);
+  });
+
+  it("commits the hook-restaged file contents and leaves the tree clean", () => {
+    const repo = createRepo();
+    installHook(
+      repo,
+      ".githooks/pre-commit",
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        "printf 'formatted\\n' > note.txt",
+        "git add note.txt",
+      ].join("\n") + "\n",
+    );
+    writeRepoFile(repo, "note.txt", "raw\n");
+
+    const output = commitWithHelperArgs(repo, "test: hook rewrite", "note.txt");
+
+    expect(output).toContain('Committed "test: hook rewrite" with 1 files');
+    expect(committedPaths(repo)).toEqual(["note.txt"]);
+    expect(committedFileContents(repo, "note.txt")).toBe("formatted");
+    expect(git(repo, "status", "--short", "--untracked-files=no")).toBe("");
+  });
+
+  it("prints usage for --help", () => {
+    const repo = createRepo();
+
+    const output = commitWithHelperArgs(repo, "--help");
+
+    expect(output).toContain(
+      'Usage: committer [--force] [--fast] "commit message" "file" ["file" ...]',
+    );
   });
 });

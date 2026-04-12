@@ -1,0 +1,274 @@
+import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
+import type { Tone } from "../memory-host-sdk/status.js";
+import type { PluginCompatibilityNotice } from "../plugins/status.js";
+import type { buildStatusCommandOverviewRows } from "./status-overview-rows.ts";
+import type { StatusOverviewSurface } from "./status-overview-surface.ts";
+import type { AgentLocalStatus } from "./status.agent-local.js";
+import type { buildStatusCommandReportData } from "./status.command-report-data.ts";
+import type { MemoryPluginStatus, MemoryStatusSnapshot } from "./status.scan.shared.js";
+import type { StatusSummary } from "./status.types.js";
+
+type StatusCommandOverviewRowsParams = Parameters<typeof buildStatusCommandOverviewRows>[0];
+type StatusCommandReportDataParams = Parameters<typeof buildStatusCommandReportData>[0];
+
+export const baseStatusCfg = {
+  update: { channel: "stable" },
+  gateway: { bind: "loopback" },
+} as const;
+
+export const baseStatusUpdate = {
+  installKind: "git",
+  git: {
+    branch: "main",
+    tag: "v1.2.3",
+    upstream: "origin/main",
+    behind: 2,
+    ahead: 0,
+    dirty: false,
+    fetchOk: true,
+  },
+  registry: { latestVersion: "2026.4.10" },
+} as never;
+
+export const baseStatusGatewaySnapshot = {
+  gatewayMode: "remote",
+  remoteUrlMissing: false,
+  gatewayConnection: {
+    url: "wss://gateway.example.com",
+    urlSource: "config",
+    message: "Gateway target: wss://gateway.example.com",
+  },
+  gatewayReachable: true,
+  gatewayProbe: { connectLatencyMs: 42, error: null } as never,
+  gatewayProbeAuth: { token: "tok" },
+  gatewayProbeAuthWarning: "warn-text",
+  gatewaySelf: { host: "gateway", version: "1.2.3" },
+} as const;
+
+export const baseStatusOverviewScanFields = {
+  cfg: baseStatusCfg,
+  update: baseStatusUpdate,
+  tailscaleMode: "serve",
+  tailscaleDns: "box.tail.ts.net",
+  tailscaleHttpsUrl: "https://box.tail.ts.net",
+  ...baseStatusGatewaySnapshot,
+};
+
+export const baseStatusGatewayService = {
+  label: "LaunchAgent",
+  installed: true,
+  managedByOpenClaw: true,
+  loadedText: "loaded",
+  runtimeShort: "running",
+};
+
+export const baseStatusNodeService = {
+  label: "node",
+  installed: true,
+  loadedText: "loaded",
+  runtime: { status: "running", pid: 42 },
+};
+
+export const baseStatusServices = {
+  gatewayService: baseStatusGatewayService,
+  nodeService: baseStatusNodeService,
+  nodeOnlyGateway: null,
+};
+
+export const baseStatusOverviewSurface = {
+  ...baseStatusOverviewScanFields,
+  ...baseStatusServices,
+} as unknown as StatusOverviewSurface;
+
+export const baseStatusSummary = {
+  tasks: { total: 3, active: 1, failures: 0, byStatus: { queued: 1, running: 1 } },
+  taskAudit: { errors: 1, warnings: 0 },
+  heartbeat: {
+    defaultAgentId: "main",
+    agents: [{ agentId: "main", enabled: true, everyMs: 60_000, every: "1m" }],
+  },
+  channelSummary: [],
+  queuedSystemEvents: ["one", "two"],
+  sessions: {
+    count: 2,
+    paths: ["store.json"],
+    defaults: { model: "gpt-5.4", contextTokens: 12_000 },
+    recent: [
+      {
+        key: "session-key",
+        kind: "direct",
+        updatedAt: 1,
+        age: 5_000,
+        model: "gpt-5.4",
+        totalTokens: 12_000,
+        totalTokensFresh: true,
+        remainingTokens: 4_000,
+        percentUsed: 75,
+        contextTokens: 16_000,
+        flags: [],
+      },
+    ],
+    byAgent: [],
+  },
+} as unknown as StatusSummary;
+
+export const baseStatusAgentStatus = {
+  defaultId: "main",
+  bootstrapPendingCount: 1,
+  totalSessions: 2,
+  agents: [{ id: "main", lastActiveAgeMs: 60_000 }] as AgentLocalStatus[],
+};
+
+export const baseStatusMemory = {
+  agentId: "main",
+  files: 1,
+  chunks: 2,
+  vector: {},
+  fts: {},
+  cache: {},
+} as unknown as MemoryStatusSnapshot;
+
+export const baseStatusMemoryPlugin = {
+  enabled: true,
+  slot: "memory",
+} as const satisfies MemoryPluginStatus;
+
+export const baseStatusPluginCompatibility = [
+  { pluginId: "a", severity: "warn", message: "legacy" },
+] as PluginCompatibilityNotice[];
+
+export function createStatusLastHeartbeat(): HeartbeatEventPayload {
+  return {
+    ts: Date.now() - 30_000,
+    status: "ok-token",
+    channel: "discord",
+    accountId: "acct",
+  };
+}
+
+export const statusTestDecorators = {
+  ok: (value: string) => `ok(${value})`,
+  warn: (value: string) => `warn(${value})`,
+  muted: (value: string) => `muted(${value})`,
+  accentDim: (value: string) => `accent(${value})`,
+};
+
+export const statusTestFormatting = {
+  shortenText: (value: string) => value,
+  formatCliCommand: (value: string) => `cmd:${value}`,
+  formatTimeAgo: (value: number) => `${value}ms`,
+  formatKTokens: (value: number) => `${Math.round(value / 1000)}k`,
+  formatTokensCompact: () => "12k",
+  formatPromptCacheCompact: () => "cache ok",
+  formatHealthChannelLines: () => ["Discord: OK · ready"],
+  formatPluginCompatibilityNotice: (notice: { message?: unknown }) => String(notice.message),
+  formatUpdateAvailableHint: () => "update available",
+};
+
+export const statusTestMemoryResolvers = {
+  resolveMemoryVectorState: () => ({ state: "ready", tone: "ok" as Tone }),
+  resolveMemoryFtsState: () => ({ state: "ready", tone: "warn" as Tone }),
+  resolveMemoryCacheSummary: () => ({ text: "cache warm", tone: "muted" as Tone }),
+};
+
+export const statusTestTheme = {
+  heading: (value: string) => `# ${value}`,
+  muted: (value: string) => `muted(${value})`,
+  warn: (value: string) => `warn(${value})`,
+  error: (value: string) => `error(${value})`,
+};
+
+export function createStatusCommandOverviewRowsParams(
+  overrides: Partial<StatusCommandOverviewRowsParams> = {},
+): StatusCommandOverviewRowsParams {
+  return {
+    opts: { deep: true },
+    surface: baseStatusOverviewSurface,
+    osLabel: "macOS",
+    summary: baseStatusSummary,
+    health: {
+      ok: true,
+      ts: Date.now(),
+      durationMs: 42,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 60,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: {
+        path: "store.json",
+        count: 2,
+        recent: [{ key: "session-key", updatedAt: 1, age: 5_000 }],
+      },
+    },
+    lastHeartbeat: createStatusLastHeartbeat(),
+    agentStatus: baseStatusAgentStatus,
+    memory: baseStatusMemory,
+    memoryPlugin: baseStatusMemoryPlugin,
+    pluginCompatibility: baseStatusPluginCompatibility,
+    ...statusTestDecorators,
+    ...statusTestFormatting,
+    ...statusTestMemoryResolvers,
+    updateValue: "available · custom update",
+    ...overrides,
+  };
+}
+
+export function createStatusCommandReportDataParams(
+  overrides: Partial<StatusCommandReportDataParams> = {},
+): StatusCommandReportDataParams {
+  return {
+    opts: { deep: true, verbose: true },
+    surface: baseStatusOverviewSurface,
+    osSummary: { label: "macOS" } as never,
+    summary: baseStatusSummary,
+    securityAudit: {
+      ts: Date.now(),
+      summary: { critical: 0, warn: 1, info: 0 },
+      findings: [
+        {
+          checkId: "warn-first",
+          severity: "warn",
+          title: "Warn first",
+          detail: "warn detail",
+        },
+      ],
+    },
+    health: {
+      ok: true,
+      ts: Date.now(),
+      durationMs: 42,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 60,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: {
+        path: "store.json",
+        count: 2,
+        recent: [{ key: "session-key", updatedAt: 1, age: 5_000 }],
+      },
+    },
+    usageLines: ["usage line"],
+    lastHeartbeat: createStatusLastHeartbeat(),
+    agentStatus: baseStatusAgentStatus,
+    channels: {
+      rows: [{ id: "discord", label: "Discord", enabled: true, state: "ok", detail: "ready" }],
+    },
+    channelIssues: [{ channel: "discord", message: "warn msg" }],
+    memory: baseStatusMemory,
+    memoryPlugin: baseStatusMemoryPlugin,
+    pluginCompatibility: baseStatusPluginCompatibility,
+    pairingRecovery: { requestId: "req-1" },
+    tableWidth: 120,
+    ...statusTestDecorators,
+    ...statusTestFormatting,
+    ...statusTestMemoryResolvers,
+    theme: statusTestTheme,
+    renderTable: ({ rows }: { rows: Array<Record<string, string>> }) => `table:${rows.length}`,
+    updateValue: "available · custom update",
+    ...overrides,
+  };
+}

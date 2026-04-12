@@ -62,6 +62,18 @@ Timestamps without a timezone are treated as UTC. Add `--tz America/New_York` fo
 
 Recurring top-of-hour expressions are automatically staggered by up to 5 minutes to reduce load spikes. Use `--exact` to force precise timing or `--stagger 30s` for an explicit window.
 
+### Day-of-month and day-of-week use OR logic
+
+Cron expressions are parsed by [croner](https://github.com/Hexagon/croner). When both the day-of-month and day-of-week fields are non-wildcard, croner matches when **either** field matches — not both. This is standard Vixie cron behavior.
+
+```
+# Intended: "9 AM on the 15th, only if it's a Monday"
+# Actual:   "9 AM on every 15th, AND 9 AM on every Monday"
+0 9 15 * 1
+```
+
+This fires ~5–6 times per month instead of 0–1 times per month. OpenClaw uses Croner's default OR behavior here. To require both conditions, use Croner's `+` day-of-week modifier (`0 9 15 * +1`) or schedule on one field and guard the other in your job's prompt or command.
+
 ## Execution styles
 
 | Style           | `--session` value   | Runs in                  | Best for                        |

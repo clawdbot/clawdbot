@@ -184,6 +184,7 @@ if (!isCI && localScheduling.throttledBySystem && shouldPrintVitestThrottle(proc
 
 export const sharedVitestConfig = {
   root: repoRoot,
+  envFile: false,
   resolve: {
     alias: [
       {

@@ -1,11 +1,12 @@
 import { loadConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createRunningTaskRun } from "../tasks/task-executor.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { waitForAgentRun } from "./run-wait.js";
 import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
-import type { SubagentRunOutcome } from "./subagent-announce.js";
+import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import {
   SUBAGENT_ENDED_OUTCOME_KILLED,
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -39,7 +40,7 @@ export function createSubagentRunManager(params: {
   ensureRuntimePluginsLoaded:
     | typeof ensureRuntimePluginsLoadedFn
     | ((args: {
-        config: ReturnType<typeof loadConfig>;
+        config: OpenClawConfig;
         workspaceDir?: string;
         allowGatewaySubagentBinding?: boolean;
       }) => void | Promise<void>);
@@ -48,10 +49,7 @@ export function createSubagentRunManager(params: {
   stopSweeper(): void;
   resumeSubagentRun(runId: string): void;
   clearPendingLifecycleError(runId: string): void;
-  resolveSubagentWaitTimeoutMs(
-    cfg: ReturnType<typeof loadConfig>,
-    runTimeoutSeconds?: number,
-  ): number;
+  resolveSubagentWaitTimeoutMs(cfg: OpenClawConfig, runTimeoutSeconds?: number): number;
   notifyContextEngineSubagentEnded(args: {
     childSessionKey: string;
     reason: "completed" | "deleted" | "released";

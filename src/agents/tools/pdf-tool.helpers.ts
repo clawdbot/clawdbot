@@ -1,9 +1,9 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { bundledProviderSupportsNativePdfDocument } from "../../media-understanding/bundled-defaults.js";
 import { extractAssistantText } from "../pi-embedded-utils.js";
 

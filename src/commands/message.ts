@@ -1,14 +1,13 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import {
-  CHANNEL_MESSAGE_ACTION_NAMES,
-  type ChannelMessageActionName,
-} from "../channels/plugins/types.js";
+import { CHANNEL_MESSAGE_ACTION_NAMES } from "../channels/plugins/message-action-names.js";
+import type { ChannelMessageActionName } from "../channels/plugins/types.public.js";
 import { resolveCommandConfigWithSecrets } from "../cli/command-config-resolution.js";
 import { getScopedChannelsCommandSecretTargets } from "../cli/command-secret-targets.js";
 import { resolveMessageSecretScope } from "../cli/message-secret-scope.js";
 import { createOutboundSendDeps, type CliDeps } from "../cli/outbound-send-deps.js";
 import { withProgress } from "../cli/progress.js";
 import { loadConfig } from "../config/config.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
 import { runMessageAction } from "../infra/outbound/message-action-runner.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
@@ -16,7 +15,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { buildMessageCliJson, formatMessageCliText } from "./message-format.js";
 
 export async function messageCommand(

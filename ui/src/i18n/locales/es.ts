@@ -297,8 +297,10 @@ export const es: TranslationMap = {
     },
     scene: {
       backfill: "Rellenar",
+      dedupeDiary: "Diario de deduplicación",
       reset: "Restablecer",
       clearGrounded: "Borrar Grounded",
+      repairCache: "Reparar caché de sueños",
       working: "Trabajando…",
     },
     phase: {

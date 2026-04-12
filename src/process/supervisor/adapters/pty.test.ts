@@ -1,4 +1,8 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  expectRealExitWinsOverSigkillFallback,
+  expectWaitStaysPendingUntilSigkillFallback,
+} from "./test-support.js";
 
 const { spawnMock, ptyKillMock, killProcessTreeMock } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
@@ -98,20 +102,9 @@ describe("createPtyAdapter", () => {
       args: ["-lc", "sleep 10"],
     });
 
-    const waitPromise = adapter.wait();
-    const settled = vi.fn();
-    void waitPromise.then(() => settled());
-
-    adapter.kill();
-
-    await Promise.resolve();
-    expect(settled).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(3999);
-    expect(settled).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(1);
-    await expect(waitPromise).resolves.toEqual({ code: null, signal: "SIGKILL" });
+    await expectWaitStaysPendingUntilSigkillFallback(adapter.wait(), () => {
+      adapter.kill();
+    });
   });
 
   it("prefers real PTY exit over SIGKILL fallback settle", async () => {
@@ -124,14 +117,16 @@ describe("createPtyAdapter", () => {
       args: ["-lc", "sleep 10"],
     });
 
-    const waitPromise = adapter.wait();
-    adapter.kill();
-    stub.emitExit({ exitCode: 0, signal: 9 });
-
-    await expect(waitPromise).resolves.toEqual({ code: 0, signal: 9 });
-
-    await vi.advanceTimersByTimeAsync(4_001);
-    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: 9 });
+    await expectRealExitWinsOverSigkillFallback({
+      waitPromise: adapter.wait(),
+      triggerKill: () => {
+        adapter.kill();
+      },
+      emitExit: () => {
+        stub.emitExit({ exitCode: 0, signal: 9 });
+      },
+      expected: { code: 0, signal: 9 },
+    });
   });
 
   it("resolves wait when exit fires before wait is called", async () => {

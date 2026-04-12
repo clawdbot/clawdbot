@@ -14,6 +14,20 @@ repo_root() {
   (cd "$base_dir/.." && pwd)
 }
 
+ensure_gh_api_auth() {
+  # Use a non-interactive API probe so wrapper auth behaves the same in
+  # terminal sessions and redirected/scripted runs.
+  if gh api user >/dev/null 2>&1; then
+    return 0
+  fi
+
+  cat >&2 <<'EOF'
+GitHub CLI auth is not usable for non-interactive API calls.
+Run `gh auth login -h github.com` (or refresh the current token) and retry.
+EOF
+  return 1
+}
+
 enter_worktree() {
   local pr="$1"
   local reset_to_main="${2:-false}"
@@ -27,7 +41,7 @@ enter_worktree() {
   fi
 
   cd "$root"
-  gh auth status >/dev/null
+  ensure_gh_api_auth
   git fetch origin main
 
   local dir=".worktrees/pr-$pr"

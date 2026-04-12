@@ -81,6 +81,7 @@ function isVisibleMentionLabel(params: {
     localpart ? extractVisibleMentionText(localpart) : null,
     localpart ? extractVisibleMentionText(`@${localpart}`) : null,
     params.displayName ? extractVisibleMentionText(params.displayName) : null,
+    params.displayName ? extractVisibleMentionText(`@${params.displayName}`) : null,
   ].filter((value): value is string => Boolean(value));
   return candidates.includes(cleaned);
 }
@@ -163,6 +164,9 @@ export function resolveMentions(params: {
         mentionRegexes: params.mentionRegexes,
       })
     : false;
+  // Matrix clients can mention users through m.mentions metadata plus a visible
+  // Matrix URI label in formatted_body. Keep the visible-mention requirement so
+  // hidden metadata-only mentions do not trigger the handler.
   const metadataBackedUserMention = Boolean(
     params.userId &&
     mentionedUsers.has(params.userId) &&

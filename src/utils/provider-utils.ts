@@ -1,6 +1,6 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderReasoningOutputModeWithPlugin } from "../plugins/provider-runtime.js";
-import type { ProviderRuntimeModel } from "../plugins/types.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,

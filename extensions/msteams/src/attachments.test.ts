@@ -190,11 +190,12 @@ const createHostedContentsWithType = (contentType: string, ...ids: string[]) =>
   ids.map((id) => ({ id, contentType, contentBytes: PNG_BASE64 }));
 const _createHostedImageContents = (...ids: string[]) =>
   createHostedContentsWithType(CONTENT_TYPE_IMAGE_PNG, ...ids);
-const _createPdfResponse = (payload: Buffer | string = PDF_BUFFER) => {
+type BinaryPayload = Uint8Array | string;
+const _createPdfResponse = (payload: BinaryPayload = PDF_BUFFER) => {
   return createBufferResponse(payload, CONTENT_TYPE_APPLICATION_PDF);
 };
-const createBufferResponse = (payload: Buffer | string, contentType: string, status = 200) => {
-  const raw = Buffer.isBuffer(payload) ? payload : Buffer.from(payload);
+const createBufferResponse = (payload: BinaryPayload, contentType: string, status = 200) => {
+  const raw = typeof payload === "string" ? Buffer.from(payload) : payload;
   return new Response(new Uint8Array(raw), {
     status,
     headers: { "content-type": contentType },
@@ -652,6 +653,49 @@ describe("msteams attachments", () => {
         // Should have hit the original host, NOT graph shares.
         expect(calledUrls.some((url) => url === directUrl)).toBe(true);
         expect(calledUrls.some((url) => url.startsWith(GRAPH_SHARES_URL_PREFIX))).toBe(false);
+      });
+    });
+
+    describe("error logging (issue #63396)", () => {
+      // Before this fix, fetch failures were swallowed by empty `catch {}`
+      // blocks, leaving operators with no signal that SharePoint downloads
+      // were silently failing on Node 24+. These tests pin the logger contract
+      // so the regression cannot return.
+      it("invokes logger.warn when a remote media download fails", async () => {
+        const logger = { warn: vi.fn(), error: vi.fn() };
+        const fetchMock = vi.fn(async () => createTextResponse("server error", 500));
+
+        const media = await downloadMSTeamsAttachments(
+          buildDownloadParams(createImageAttachments(TEST_URL_IMAGE), {
+            fetchFn: asFetchFn(fetchMock),
+            logger,
+          }),
+        );
+
+        expectAttachmentMediaLength(media, 0);
+        expect(logger.warn).toHaveBeenCalledWith(
+          "msteams attachment download failed",
+          expect.objectContaining({
+            error: expect.stringContaining("HTTP 500"),
+            host: expect.any(String),
+          }),
+        );
+      });
+
+      it("does not log when downloads succeed", async () => {
+        const logger = { warn: vi.fn(), error: vi.fn() };
+        const fetchMock = createOkFetchMock(CONTENT_TYPE_IMAGE_PNG);
+
+        const media = await downloadMSTeamsAttachments(
+          buildDownloadParams(createImageAttachments(TEST_URL_IMAGE), {
+            fetchFn: asFetchFn(fetchMock),
+            logger,
+          }),
+        );
+
+        expectAttachmentMediaLength(media, 1);
+        expect(logger.warn).not.toHaveBeenCalled();
+        expect(logger.error).not.toHaveBeenCalled();
       });
     });
   });

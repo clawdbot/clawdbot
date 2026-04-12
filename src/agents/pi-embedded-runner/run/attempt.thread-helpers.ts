@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { normalizeStructuredPromptSection } from "../../prompt-cache-stability.js";
 
@@ -86,5 +86,21 @@ export function appendAttemptCacheTtlIfNeeded(params: {
     provider: params.provider,
     modelId: params.modelId,
   });
+  return true;
+}
+
+export function shouldPersistCompletedBootstrapTurn(params: {
+  shouldRecordCompletedBootstrapTurn: boolean;
+  promptError: unknown;
+  aborted: boolean;
+  timedOutDuringCompaction: boolean;
+  compactionOccurredThisAttempt: boolean;
+}): boolean {
+  if (!params.shouldRecordCompletedBootstrapTurn || params.promptError || params.aborted) {
+    return false;
+  }
+  if (params.timedOutDuringCompaction || params.compactionOccurredThisAttempt) {
+    return false;
+  }
   return true;
 }

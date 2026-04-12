@@ -3,12 +3,12 @@ import type {
   ConversationRef,
   SessionBindingRecord,
 } from "../../infra/outbound/session-binding-service.js";
+import type { ChannelConfiguredBindingConversationRef } from "./types.adapters.js";
 import type {
-  ChannelConfiguredBindingConversationRef,
   ChannelConfiguredBindingMatch,
   ChannelConfiguredBindingProvider,
 } from "./types.adapters.js";
-import type { ChannelId } from "./types.js";
+import type { ChannelId } from "./types.public.js";
 
 export type ConfiguredBindingConversation = ConversationRef;
 export type ConfiguredBindingChannel = ChannelId;

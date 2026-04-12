@@ -1,7 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { stripAnsi } from "../terminal/ansi.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import type { HealthSummary } from "./health.js";
 import { healthCommand } from "./health.js";
 
@@ -25,6 +23,32 @@ vi.mock("../gateway/call.js", () => ({
     Reflect.apply(buildGatewayConnectionDetailsMock, undefined, args),
 }));
 
+vi.mock("../channels/plugins/index.js", () => {
+  const whatsappPlugin = {
+    id: "whatsapp",
+    meta: {
+      id: "whatsapp",
+      label: "WhatsApp",
+      selectionLabel: "WhatsApp",
+      docsPath: "/channels/whatsapp",
+      blurb: "WhatsApp test stub.",
+    },
+    capabilities: { chatTypes: ["direct", "group"] },
+    config: {
+      listAccountIds: () => ["default"],
+      resolveAccount: () => ({}),
+    },
+    status: {
+      logSelfId: () => logWebSelfIdMock(),
+    },
+  };
+
+  return {
+    getChannelPlugin: (channelId: string) => (channelId === "whatsapp" ? whatsappPlugin : null),
+    listChannelPlugins: () => [whatsappPlugin],
+  };
+});
+
 describe("healthCommand (coverage)", () => {
   const runtime = {
     log: vi.fn(),
@@ -37,32 +61,6 @@ describe("healthCommand (coverage)", () => {
     buildGatewayConnectionDetailsMock.mockReturnValue({
       message: "Gateway mode: local\nGateway target: ws://127.0.0.1:18789",
     });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "whatsapp",
-          source: "test",
-          plugin: {
-            id: "whatsapp",
-            meta: {
-              id: "whatsapp",
-              label: "WhatsApp",
-              selectionLabel: "WhatsApp",
-              docsPath: "/channels/whatsapp",
-              blurb: "WhatsApp test stub.",
-            },
-            capabilities: { chatTypes: ["direct", "group"] },
-            config: {
-              listAccountIds: () => ["default"],
-              resolveAccount: () => ({}),
-            },
-            status: {
-              logSelfId: () => logWebSelfIdMock(),
-            },
-          },
-        },
-      ]),
-    );
   });
 
   it("prints the rich text summary when linked and configured", async () => {

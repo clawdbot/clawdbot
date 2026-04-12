@@ -8,6 +8,7 @@
   "runtime",
   "runtime-doctor",
   "runtime-env",
+  "proxy-capture",
   "runtime-secret-resolution",
   "setup",
   "setup-adapter-runtime",

@@ -1,7 +1,7 @@
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import type { DeliveryContext } from "../utils/delivery-context.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import {
   resolveTaskFlowRegistryDir,
   resolveTaskFlowRegistrySqlitePath,

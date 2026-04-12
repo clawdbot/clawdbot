@@ -1,11 +1,69 @@
+import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
-import { buildPayloads, expectSingleToolErrorPayload } from "./payloads.test-helpers.js";
+import {
+  buildPayloads,
+  expectSinglePayloadText,
+  expectSingleToolErrorPayload,
+} from "./payloads.test-helpers.js";
 
 describe("buildEmbeddedRunPayloads tool-error warnings", () => {
   function expectNoPayloads(params: Parameters<typeof buildPayloads>[0]) {
     const payloads = buildPayloads(params);
     expect(payloads).toHaveLength(0);
   }
+
+  it("does not fall back to commentary-only assistant text when streamed text was suppressed", () => {
+    const payloads = buildPayloads({
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "toolUse",
+        content: [
+          {
+            type: "text",
+            text: "Need update cron messages to use finalBrief/briefPath.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_commentary",
+              phase: "commentary",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+
+    expect(payloads).toEqual([]);
+  });
+
+  it("falls back to final-answer assistant text when streamed text is unavailable", () => {
+    const payloads = buildPayloads({
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "Need inspect.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_commentary",
+              phase: "commentary",
+            }),
+          },
+          {
+            type: "text",
+            text: "Done.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+
+    expectSinglePayloadText(payloads, "Done.");
+  });
 
   it("suppresses exec tool errors when verbose mode is off", () => {
     expectNoPayloads({

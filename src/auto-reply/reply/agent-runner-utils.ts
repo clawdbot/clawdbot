@@ -1,6 +1,9 @@
 import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
+import type {
+  ChannelId,
+  ChannelThreadingToolContext,
+} from "../../channels/plugins/types.public.js";
 import { normalizeAnyChannelId, normalizeChannelId } from "../../channels/registry.js";
 import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
 import { getAgentRuntimeCommandSecretTargetIds } from "../../cli/command-secret-targets.js";

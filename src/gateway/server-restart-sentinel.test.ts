@@ -69,7 +69,7 @@ vi.mock("./session-utils.js", () => ({
   loadSessionEntry: mocks.loadSessionEntry,
 }));
 
-vi.mock("../utils/delivery-context.js", () => ({
+vi.mock("../utils/delivery-context.shared.js", () => ({
   deliveryContextFromSession: mocks.deliveryContextFromSession,
   mergeDeliveryContext: mocks.mergeDeliveryContext,
 }));

@@ -1,4 +1,4 @@
-import { registerLegacyContextEngine } from "./legacy.js";
+import { registerLegacyContextEngine } from "./legacy.registration.js";
 
 /**
  * Ensures all built-in context engines are registered exactly once.

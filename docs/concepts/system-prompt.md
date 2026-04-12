@@ -110,9 +110,12 @@ heartbeats are disabled for the default agent or
 files concise — especially `MEMORY.md`, which can grow over time and lead to
 unexpectedly high context usage and more frequent compaction.
 
-> **Note:** `memory/*.md` daily files are **not** injected automatically. They
-> are accessed on demand via the `memory_search` and `memory_get` tools, so they
-> do not count against the context window unless the model explicitly reads them.
+> **Note:** `memory/*.md` daily files are **not** part of the normal bootstrap
+> Project Context. On ordinary turns they are accessed on demand via the
+> `memory_search` and `memory_get` tools, so they do not count against the
+> context window unless the model explicitly reads them. Bare `/new` and
+> `/reset` turns are the exception: the runtime can prepend recent daily memory
+> as a one-shot startup-context block for that first turn.
 
 Large files are truncated with a marker. The max per-file size is controlled by
 `agents.defaults.bootstrapMaxChars` (default: 20000). Total injected bootstrap

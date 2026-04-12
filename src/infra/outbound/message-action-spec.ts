@@ -1,5 +1,5 @@
 import { getBootstrapChannelPlugin } from "../../channels/plugins/bootstrap-registry.js";
-import type { ChannelMessageActionName } from "../../channels/plugins/types.js";
+import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,

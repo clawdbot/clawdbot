@@ -12,6 +12,11 @@ describe("loadControlUiBootstrapConfig", () => {
         basePath: "/openclaw",
         assistantName: "Ops",
         assistantAvatar: "O",
+        assistantAgentId: "main",
+        serverVersion: "2026.3.7",
+        localMediaPreviewRoots: ["/tmp/openclaw"],
+        embedSandbox: "scripts",
+        allowExternalEmbedUrls: true,
       }),
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
@@ -21,6 +26,9 @@ describe("loadControlUiBootstrapConfig", () => {
       assistantName: "Assistant",
       assistantAvatar: null,
       assistantAgentId: null,
+      localMediaPreviewRoots: [],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
       serverVersion: null,
     };
 
@@ -32,8 +40,11 @@ describe("loadControlUiBootstrapConfig", () => {
     );
     expect(state.assistantName).toBe("Ops");
     expect(state.assistantAvatar).toBe("O");
-    expect(state.assistantAgentId).toBeNull();
-    expect(state.serverVersion).toBeNull();
+    expect(state.assistantAgentId).toBe("main");
+    expect(state.serverVersion).toBe("2026.3.7");
+    expect(state.localMediaPreviewRoots).toEqual(["/tmp/openclaw"]);
+    expect(state.embedSandboxMode).toBe("scripts");
+    expect(state.allowExternalEmbedUrls).toBe(true);
 
     vi.unstubAllGlobals();
   });
@@ -47,6 +58,9 @@ describe("loadControlUiBootstrapConfig", () => {
       assistantName: "Assistant",
       assistantAvatar: null,
       assistantAgentId: null,
+      localMediaPreviewRoots: [],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
       serverVersion: null,
     };
 
@@ -57,8 +71,8 @@ describe("loadControlUiBootstrapConfig", () => {
       expect.objectContaining({ method: "GET" }),
     );
     expect(state.assistantName).toBe("Assistant");
-    expect(state.assistantAgentId).toBeNull();
-    expect(state.serverVersion).toBeNull();
+    expect(state.embedSandboxMode).toBe("scripts");
+    expect(state.allowExternalEmbedUrls).toBe(false);
 
     vi.unstubAllGlobals();
   });
@@ -72,6 +86,9 @@ describe("loadControlUiBootstrapConfig", () => {
       assistantName: "Assistant",
       assistantAvatar: null,
       assistantAgentId: null,
+      localMediaPreviewRoots: [],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
       serverVersion: null,
     };
 
@@ -81,8 +98,6 @@ describe("loadControlUiBootstrapConfig", () => {
       `/openclaw${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`,
       expect.objectContaining({ method: "GET" }),
     );
-    expect(state.assistantAgentId).toBeNull();
-    expect(state.serverVersion).toBeNull();
 
     vi.unstubAllGlobals();
   });

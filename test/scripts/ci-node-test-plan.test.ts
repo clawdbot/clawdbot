@@ -7,7 +7,11 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
 
     expect(shards).not.toHaveLength(0);
     expect(shards.map((shard) => shard.checkName)).toEqual(
-      shards.map((shard) => `checks-node-core-test-${shard.shardName}`),
+      shards.map((shard) =>
+        shard.shardName.startsWith("core-unit-")
+          ? `checks-node-core-${shard.shardName.slice("core-unit-".length)}`
+          : `checks-node-${shard.shardName}`,
+      ),
     );
   });
 

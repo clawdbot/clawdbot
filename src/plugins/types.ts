@@ -1,7 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { Command } from "commander";
 import type {
@@ -15,26 +14,18 @@ import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import type { FailoverReason } from "../agents/pi-embedded-helpers/types.js";
 import type { ModelProviderRequestTransportOverrides } from "../agents/provider-request-config.js";
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
-import type { PromptMode } from "../agents/system-prompt.js";
-import type { ToolFsPolicy } from "../agents/tool-fs-policy.js";
+import type { PromptMode } from "../agents/system-prompt.types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import type { ReplyDispatchKind, ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
-import type { FinalizedMsgContext } from "../auto-reply/templating.js";
-import type { ThinkLevel } from "../auto-reply/thinking.js";
-import type { ReplyPayload } from "../auto-reply/types.js";
-import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
-import type {
-  CliBackendConfig,
-  ModelProviderAuthMode,
-  ModelProviderConfig,
-} from "../config/types.js";
+import type { ReplyPayload } from "../auto-reply/reply-payload.js";
+import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
+import type { ModelProviderConfig } from "../config/types.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { TtsAutoMode } from "../config/types.tts.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
-import type { InternalHookHandler } from "../hooks/internal-hooks.js";
-import type { HookEntry } from "../hooks/types.js";
+import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
 import type { ImageGenerationProvider } from "../image-generation/types.js";
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
 import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
@@ -56,10 +47,6 @@ import type {
   RealtimeVoiceProviderResolveConfigContext,
 } from "../realtime-voice/provider-types.js";
 import type { RuntimeEnv } from "../runtime.js";
-import type {
-  RuntimeWebFetchMetadata,
-  RuntimeWebSearchMetadata,
-} from "../secrets/runtime-web-tools.types.js";
 import type { SecurityAuditFinding } from "../security/audit.types.js";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -77,46 +64,89 @@ import type {
   SpeechTelephonySynthesisResult,
   SpeechVoiceOption,
 } from "../tts/provider-types.js";
-import type { DeliveryContext } from "../utils/delivery-context.js";
 import type { VideoGenerationProvider } from "../video-generation/types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import {
-  PLUGIN_PROMPT_MUTATION_RESULT_FIELDS,
-  stripPromptMutationFieldsFromLegacyHookResult,
-} from "./hook-before-agent-start.types.js";
 import type {
-  PluginHookBeforeAgentStartEvent,
-  PluginHookBeforeAgentStartResult,
-  PluginHookBeforeModelResolveEvent,
-  PluginHookBeforeModelResolveResult,
-  PluginHookBeforePromptBuildEvent,
-  PluginHookBeforePromptBuildResult,
-} from "./hook-before-agent-start.types.js";
+  CliBackendPlugin,
+  CliBundleMcpMode,
+  PluginTextReplacement,
+  PluginTextTransforms,
+} from "./cli-backend.types.js";
+import type {
+  PluginConversationBinding,
+  PluginConversationBindingRequestParams,
+  PluginConversationBindingRequestResult,
+  PluginConversationBindingResolvedEvent,
+  PluginConversationBindingResolutionDecision,
+} from "./conversation-binding.types.js";
+import type { PluginHookHandlerMap, PluginHookName } from "./hook-types.js";
+import type {
+  PluginBundleFormat,
+  PluginConfigUiHint,
+  PluginDiagnostic,
+  PluginFormat,
+} from "./manifest-types.js";
 import type { PluginKind } from "./plugin-kind.types.js";
+import type { PluginOrigin } from "./plugin-origin.types.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
+import type {
+  ProviderApplyConfigDefaultsContext,
+  ProviderNormalizeConfigContext,
+  ProviderResolveConfigApiKeyContext,
+} from "./provider-config-context.types.js";
+import type {
+  ProviderExternalAuthProfile,
+  ProviderExternalOAuthProfile,
+  ProviderResolveExternalAuthProfilesContext,
+  ProviderResolveExternalOAuthProfilesContext,
+  ProviderResolveSyntheticAuthContext,
+  ProviderSyntheticAuthResult,
+} from "./provider-external-auth.types.js";
 import type { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
+import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingPolicyContext,
 } from "./provider-thinking.types.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import type {
+  OpenClawPluginHookOptions,
+  OpenClawPluginToolContext,
+  OpenClawPluginToolFactory,
+  OpenClawPluginToolOptions,
+} from "./tool-types.js";
+import type { WebFetchProviderPlugin, WebSearchProviderPlugin } from "./web-provider-types.js";
 
 export type { PluginRuntime } from "./runtime/types.js";
+export type { PluginOrigin } from "./plugin-origin.types.js";
+export type {
+  PluginBundleFormat,
+  PluginConfigUiHint,
+  PluginDiagnostic,
+  PluginFormat,
+} from "./manifest-types.js";
+export type {
+  OpenClawPluginHookOptions,
+  OpenClawPluginToolContext,
+  OpenClawPluginToolFactory,
+  OpenClawPluginToolOptions,
+} from "./tool-types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
 export type { AgentHarness } from "../agents/harness/types.js";
 export type {
-  PluginHookBeforeAgentStartEvent,
-  PluginHookBeforeAgentStartOverrideResult,
-  PluginHookBeforeAgentStartResult,
-  PluginHookBeforeModelResolveEvent,
-  PluginHookBeforeModelResolveResult,
-  PluginHookBeforePromptBuildEvent,
-  PluginHookBeforePromptBuildResult,
-} from "./hook-before-agent-start.types.js";
-export {
-  PLUGIN_PROMPT_MUTATION_RESULT_FIELDS,
-  stripPromptMutationFieldsFromLegacyHookResult,
-} from "./hook-before-agent-start.types.js";
+  PluginConversationBinding,
+  PluginConversationBindingRequestParams,
+  PluginConversationBindingRequestResult,
+  PluginConversationBindingResolvedEvent,
+  PluginConversationBindingResolutionDecision,
+} from "./conversation-binding.types.js";
+export type {
+  CliBackendPlugin,
+  CliBundleMcpMode,
+  PluginTextReplacement,
+  PluginTextTransforms,
+} from "./cli-backend.types.js";
+export * from "./hook-types.js";
 
 export type ProviderAuthOptionBag = {
   token?: string;
@@ -133,16 +163,33 @@ export type PluginLogger = {
   error: (message: string) => void;
 };
 
-export type PluginConfigUiHint = {
-  label?: string;
-  help?: string;
-  tags?: string[];
-  advanced?: boolean;
-  sensitive?: boolean;
-  placeholder?: string;
-};
-
 export type { PluginKind } from "./plugin-kind.types.js";
+export type {
+  ProviderExternalAuthProfile,
+  ProviderExternalOAuthProfile,
+  ProviderResolveExternalAuthProfilesContext,
+  ProviderResolveExternalOAuthProfilesContext,
+  ProviderResolveSyntheticAuthContext,
+  ProviderSyntheticAuthResult,
+} from "./provider-external-auth.types.js";
+export type {
+  PluginWebFetchProviderEntry,
+  PluginWebSearchProviderEntry,
+  WebFetchCredentialResolutionSource,
+  WebFetchProviderContext,
+  WebFetchProviderId,
+  WebFetchProviderPlugin,
+  WebFetchProviderToolDefinition,
+  WebFetchRuntimeMetadataContext,
+  WebSearchCredentialResolutionSource,
+  WebSearchProviderContext,
+  WebSearchProviderId,
+  WebSearchProviderPlugin,
+  WebSearchProviderSetupContext,
+  WebSearchProviderToolDefinition,
+  WebSearchRuntimeMetadataContext,
+} from "./web-provider-types.js";
+export type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 
 export type PluginConfigValidation =
   | { ok: true; value?: unknown }
@@ -167,51 +214,6 @@ export type OpenClawPluginConfigSchema = {
   validate?: (value: unknown) => PluginConfigValidation;
   uiHints?: Record<string, PluginConfigUiHint>;
   jsonSchema?: Record<string, unknown>;
-};
-
-/** Trusted execution context passed to plugin-owned agent tool factories. */
-export type OpenClawPluginToolContext = {
-  config?: OpenClawConfig;
-  /** Active runtime-resolved config snapshot when one is available. */
-  runtimeConfig?: OpenClawConfig;
-  /** Effective filesystem policy for the active tool run. */
-  fsPolicy?: ToolFsPolicy;
-  workspaceDir?: string;
-  agentDir?: string;
-  agentId?: string;
-  sessionKey?: string;
-  /** Ephemeral session UUID - regenerated on /new and /reset. Use for per-conversation isolation. */
-  sessionId?: string;
-  browser?: {
-    sandboxBridgeUrl?: string;
-    allowHostControl?: boolean;
-  };
-  messageChannel?: string;
-  agentAccountId?: string;
-  /** Trusted ambient delivery route for the active agent/session. */
-  deliveryContext?: DeliveryContext;
-  /** Trusted sender id from inbound context (runtime-provided, not tool args). */
-  requesterSenderId?: string;
-  /** Whether the trusted sender is an owner. */
-  senderIsOwner?: boolean;
-  sandboxed?: boolean;
-};
-
-export type OpenClawPluginToolFactory = (
-  ctx: OpenClawPluginToolContext,
-) => AnyAgentTool | AnyAgentTool[] | null | undefined;
-
-export type OpenClawPluginToolOptions = {
-  name?: string;
-  names?: string[];
-  optional?: boolean;
-};
-
-export type OpenClawPluginHookOptions = {
-  entry?: HookEntry;
-  name?: string;
-  description?: string;
-  register?: boolean;
 };
 
 export type ProviderAuthKind = "oauth" | "api_key" | "token" | "device_code" | "custom";
@@ -366,17 +368,6 @@ export type ProviderPluginCatalog = {
   run: (ctx: ProviderCatalogContext) => Promise<ProviderCatalogResult>;
 };
 
-/**
- * Fully-resolved runtime model shape used by the embedded runner.
- *
- * Catalog hooks publish config-time `models.providers` entries.
- * Runtime hooks below operate on the final `pi-ai` model object after
- * discovery/override merging, just before inference runs.
- */
-export type ProviderRuntimeModel = Model<Api> & {
-  contextTokens?: number;
-};
-
 export type ProviderRuntimeProviderConfig = {
   baseUrl?: string;
   api?: ModelProviderConfig["api"];
@@ -446,16 +437,11 @@ export type ProviderNormalizeModelIdContext = {
   modelId: string;
 };
 
-/**
- * Provider-owned config normalization for `models.providers.<id>` entries.
- *
- * Use this for provider-specific config cleanup that should stay with the
- * plugin rather than in core config-policy tables.
- */
-export type ProviderNormalizeConfigContext = {
-  provider: string;
-  providerConfig: ModelProviderConfig;
-};
+export type {
+  ProviderApplyConfigDefaultsContext,
+  ProviderNormalizeConfigContext,
+  ProviderResolveConfigApiKeyContext,
+} from "./provider-config-context.types.js";
 
 /**
  * Provider-owned transport normalization for arbitrary provider/model config.
@@ -468,17 +454,6 @@ export type ProviderNormalizeTransportContext = {
   provider: string;
   api?: string | null;
   baseUrl?: string;
-};
-
-/**
- * Provider-owned env/config auth marker resolution for `models.providers`.
- *
- * Use this when a provider resolves auth from env vars that do not follow the
- * generic API-key conventions.
- */
-export type ProviderResolveConfigApiKeyContext = {
-  provider: string;
-  env: NodeJS.ProcessEnv;
 };
 
 /**
@@ -815,18 +790,6 @@ export type ProviderFailoverErrorContext = {
 };
 
 /**
- * Provider-owned config-default application input.
- *
- * Use this when a provider needs to add global config defaults that depend on
- * provider auth mode or provider-specific model families.
- */
-export type ProviderApplyConfigDefaultsContext = {
-  provider: string;
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-};
-
-/**
  * Generic embedding provider shape returned by provider plugins.
  *
  * Keep this aligned with the memory embedding contract without forcing the
@@ -1059,35 +1022,6 @@ export type ProviderModelSelectedContext = {
   workspaceDir?: string;
 };
 
-export type ProviderResolveSyntheticAuthContext = {
-  config?: OpenClawConfig;
-  provider: string;
-  providerConfig?: ModelProviderConfig;
-};
-
-export type ProviderSyntheticAuthResult = {
-  apiKey: string;
-  source: string;
-  mode: Exclude<ModelProviderAuthMode, "aws-sdk">;
-};
-
-export type ProviderResolveExternalOAuthProfilesContext = {
-  config?: OpenClawConfig;
-  agentDir?: string;
-  workspaceDir?: string;
-  env: NodeJS.ProcessEnv;
-  store: AuthProfileStore;
-};
-export type ProviderResolveExternalAuthProfilesContext =
-  ProviderResolveExternalOAuthProfilesContext;
-
-export type ProviderExternalOAuthProfile = {
-  profileId: string;
-  credential: OAuthCredential;
-  persistence?: "runtime-only" | "persisted";
-};
-export type ProviderExternalAuthProfile = ProviderExternalOAuthProfile;
-
 export type ProviderDeferSyntheticProfileAuthContext = {
   config?: OpenClawConfig;
   provider: string;
@@ -1109,18 +1043,6 @@ export type ProviderSystemPromptContributionContext = {
 
 export type ProviderTransformSystemPromptContext = ProviderSystemPromptContributionContext & {
   systemPrompt: string;
-};
-
-export type PluginTextReplacement = {
-  from: string | RegExp;
-  to: string;
-};
-
-export type PluginTextTransforms = {
-  /** Rewrites applied to outbound prompt text before provider/CLI transport. */
-  input?: PluginTextReplacement[];
-  /** Rewrites applied to inbound assistant text before OpenClaw consumes it. */
-  output?: PluginTextReplacement[];
 };
 
 export type PluginTextTransformRegistration = PluginTextTransforms;
@@ -1644,140 +1566,6 @@ export type ProviderPlugin = {
   onModelSelected?: (ctx: ProviderModelSelectedContext) => Promise<void>;
 };
 
-export type WebSearchProviderId = string;
-export type WebFetchProviderId = string;
-
-export type WebSearchProviderToolDefinition = {
-  description: string;
-  parameters: Record<string, unknown>;
-  execute: (args: Record<string, unknown>) => Promise<Record<string, unknown>>;
-};
-
-export type WebFetchProviderToolDefinition = {
-  description: string;
-  parameters: Record<string, unknown>;
-  execute: (args: Record<string, unknown>) => Promise<Record<string, unknown>>;
-};
-
-export type WebSearchProviderContext = {
-  config?: OpenClawConfig;
-  searchConfig?: Record<string, unknown>;
-  runtimeMetadata?: RuntimeWebSearchMetadata;
-};
-
-export type WebFetchProviderContext = {
-  config?: OpenClawConfig;
-  fetchConfig?: Record<string, unknown>;
-  runtimeMetadata?: RuntimeWebFetchMetadata;
-};
-
-export type WebSearchCredentialResolutionSource = "config" | "secretRef" | "env" | "missing";
-
-export type WebSearchRuntimeMetadataContext = {
-  config?: OpenClawConfig;
-  searchConfig?: Record<string, unknown>;
-  runtimeMetadata?: RuntimeWebSearchMetadata;
-  resolvedCredential?: {
-    value?: string;
-    source: WebSearchCredentialResolutionSource;
-    fallbackEnvVar?: string;
-  };
-};
-
-export type WebSearchProviderSetupContext = {
-  config: OpenClawConfig;
-  runtime: RuntimeEnv;
-  prompter: WizardPrompter;
-  quickstartDefaults?: boolean;
-  secretInputMode?: SecretInputMode;
-};
-
-export type WebFetchCredentialResolutionSource = "config" | "secretRef" | "env" | "missing";
-
-export type WebFetchRuntimeMetadataContext = {
-  config?: OpenClawConfig;
-  fetchConfig?: Record<string, unknown>;
-  runtimeMetadata?: RuntimeWebFetchMetadata;
-  resolvedCredential?: {
-    value?: string;
-    source: WebFetchCredentialResolutionSource;
-    fallbackEnvVar?: string;
-  };
-};
-
-export type WebSearchProviderPlugin = {
-  id: WebSearchProviderId;
-  label: string;
-  hint: string;
-  /**
-   * Interactive onboarding surfaces where this search provider should appear
-   * when OpenClaw has no config-aware runtime context yet.
-   *
-   * Unlike provider auth, search setup historically exposed only a curated
-   * quickstart subset. Keep this plugin-owned so core does not hardcode the
-   * default bundled provider list.
-   */
-  onboardingScopes?: Array<"text-inference">;
-  requiresCredential?: boolean;
-  credentialLabel?: string;
-  envVars: string[];
-  placeholder: string;
-  signupUrl: string;
-  docsUrl?: string;
-  autoDetectOrder?: number;
-  credentialPath: string;
-  inactiveSecretPaths?: string[];
-  getCredentialValue: (searchConfig?: Record<string, unknown>) => unknown;
-  setCredentialValue: (searchConfigTarget: Record<string, unknown>, value: unknown) => void;
-  getConfiguredCredentialValue?: (config?: OpenClawConfig) => unknown;
-  setConfiguredCredentialValue?: (configTarget: OpenClawConfig, value: unknown) => void;
-  applySelectionConfig?: (config: OpenClawConfig) => OpenClawConfig;
-  runSetup?: (ctx: WebSearchProviderSetupContext) => OpenClawConfig | Promise<OpenClawConfig>;
-  resolveRuntimeMetadata?: (
-    ctx: WebSearchRuntimeMetadataContext,
-  ) => Partial<RuntimeWebSearchMetadata> | Promise<Partial<RuntimeWebSearchMetadata>>;
-  createTool: (ctx: WebSearchProviderContext) => WebSearchProviderToolDefinition | null;
-};
-
-export type PluginWebSearchProviderEntry = WebSearchProviderPlugin & {
-  pluginId: string;
-};
-
-export type WebFetchProviderPlugin = {
-  id: WebFetchProviderId;
-  label: string;
-  hint: string;
-  requiresCredential?: boolean;
-  credentialLabel?: string;
-  envVars: string[];
-  placeholder: string;
-  signupUrl: string;
-  docsUrl?: string;
-  autoDetectOrder?: number;
-  /** Canonical plugin-owned config path for this provider's primary fetch credential. */
-  credentialPath: string;
-  /**
-   * Legacy or inactive credential paths that should warn but not activate this provider.
-   * Include credentialPath here when overriding the list, because runtime classification
-   * treats inactiveSecretPaths as the full inactive surface for this provider.
-   */
-  inactiveSecretPaths?: string[];
-  getCredentialValue: (fetchConfig?: Record<string, unknown>) => unknown;
-  setCredentialValue: (fetchConfigTarget: Record<string, unknown>, value: unknown) => void;
-  getConfiguredCredentialValue?: (config?: OpenClawConfig) => unknown;
-  setConfiguredCredentialValue?: (configTarget: OpenClawConfig, value: unknown) => void;
-  /** Apply the minimal config needed to select this provider without scattering plugin config writes in core. */
-  applySelectionConfig?: (config: OpenClawConfig) => OpenClawConfig;
-  resolveRuntimeMetadata?: (
-    ctx: WebFetchRuntimeMetadataContext,
-  ) => Partial<RuntimeWebFetchMetadata> | Promise<Partial<RuntimeWebFetchMetadata>>;
-  createTool: (ctx: WebFetchProviderContext) => WebFetchProviderToolDefinition | null;
-};
-
-export type PluginWebFetchProviderEntry = WebFetchProviderPlugin & {
-  pluginId: string;
-};
-
 /** Speech capability registered by a plugin. */
 export type SpeechProviderPlugin = {
   id: SpeechProviderId;
@@ -1891,61 +1679,6 @@ export type PluginCommandContext = {
   ) => Promise<PluginConversationBindingRequestResult>;
   detachConversationBinding: () => Promise<{ removed: boolean }>;
   getCurrentConversationBinding: () => Promise<PluginConversationBinding | null>;
-};
-
-export type PluginConversationBindingRequestParams = {
-  summary?: string;
-  detachHint?: string;
-};
-
-export type PluginConversationBindingResolutionDecision = "allow-once" | "allow-always" | "deny";
-
-export type PluginConversationBinding = {
-  bindingId: string;
-  pluginId: string;
-  pluginName?: string;
-  pluginRoot: string;
-  channel: string;
-  accountId: string;
-  conversationId: string;
-  parentConversationId?: string;
-  threadId?: string | number;
-  boundAt: number;
-  summary?: string;
-  detachHint?: string;
-};
-
-export type PluginConversationBindingRequestResult =
-  | {
-      status: "bound";
-      binding: PluginConversationBinding;
-    }
-  | {
-      status: "pending";
-      approvalId: string;
-      reply: ReplyPayload;
-    }
-  | {
-      status: "error";
-      message: string;
-    };
-
-export type PluginConversationBindingResolvedEvent = {
-  status: "approved" | "denied";
-  binding?: PluginConversationBinding;
-  decision: PluginConversationBindingResolutionDecision;
-  request: {
-    summary?: string;
-    detachHint?: string;
-    requestedBySenderId?: string;
-    conversation: {
-      channel: string;
-      accountId: string;
-      conversationId: string;
-      parentConversationId?: string;
-      threadId?: string | number;
-    };
-  };
 };
 
 /**
@@ -2086,79 +1819,6 @@ export type OpenClawPluginService = {
   id: string;
   start: (ctx: OpenClawPluginServiceContext) => void | Promise<void>;
   stop?: (ctx: OpenClawPluginServiceContext) => void | Promise<void>;
-};
-
-export type CliBundleMcpMode =
-  | "claude-config-file"
-  | "codex-config-overrides"
-  | "gemini-system-settings";
-
-/** Plugin-owned CLI backend defaults used by the text-only CLI runner. */
-export type CliBackendPlugin = {
-  /** Provider id used in model refs, for example `claude-cli/opus`. */
-  id: string;
-  /** Default backend config before user overrides from `agents.defaults.cliBackends`. */
-  config: CliBackendConfig;
-  /**
-   * Optional live-smoke metadata owned by the backend plugin.
-   *
-   * Keep provider-specific test wiring here instead of scattering it across
-   * Docker wrappers, docs, and gateway live tests.
-   */
-  liveTest?: {
-    defaultModelRef?: string;
-    defaultImageProbe?: boolean;
-    defaultMcpProbe?: boolean;
-    docker?: {
-      npmPackage?: string;
-      binaryName?: string;
-    };
-  };
-  /**
-   * Whether OpenClaw should inject bundle MCP config for this backend.
-   *
-   * Keep this opt-in. Only backends that explicitly consume OpenClaw's bundle
-   * MCP bridge should enable it.
-   */
-  bundleMcp?: boolean;
-  /**
-   * Provider-owned bundle MCP integration strategy.
-   *
-   * Different CLIs wire MCP through different surfaces:
-   * - Claude: `--strict-mcp-config --mcp-config`
-   * - Codex: `-c mcp_servers=...`
-   * - Gemini: system-level `settings.json`
-   */
-  bundleMcpMode?: CliBundleMcpMode;
-  /**
-   * Optional config normalizer applied after user overrides merge.
-   *
-   * Use this for backend-specific compatibility rewrites when old config
-   * shapes need to stay working.
-   */
-  normalizeConfig?: (config: CliBackendConfig) => CliBackendConfig;
-  /**
-   * Backend-owned final system-prompt transform.
-   *
-   * Use this for tiny CLI-specific compatibility rewrites without replacing
-   * the generic CLI runner or prompt builder.
-   */
-  transformSystemPrompt?: (ctx: {
-    config?: OpenClawConfig;
-    workspaceDir?: string;
-    provider: string;
-    modelId: string;
-    modelDisplay: string;
-    agentId?: string;
-    systemPrompt: string;
-  }) => string | null | undefined;
-  /**
-   * Backend-owned bidirectional text replacements.
-   *
-   * `input` applies to the system prompt and user prompt passed to the CLI.
-   * `output` applies to parsed/streamed assistant text from the CLI.
-   */
-  textTransforms?: PluginTextTransforms;
 };
 
 export type OpenClawPluginChannelRegistration = {
@@ -2356,814 +2016,5 @@ export type OpenClawPluginApi = {
   ) => void;
 };
 
-export type PluginOrigin = "bundled" | "global" | "workspace" | "config";
-
-export type PluginFormat = "openclaw" | "bundle";
-
-export type PluginBundleFormat = "codex" | "claude" | "cursor";
-
-export type PluginDiagnostic = {
-  level: "warn" | "error";
-  message: string;
-  pluginId?: string;
-  source?: string;
-};
-
-// ============================================================================
-// Plugin Hooks
-// ============================================================================
-
-export type PluginHookName =
-  | "before_model_resolve"
-  | "before_prompt_build"
-  | "before_agent_start"
-  | "before_agent_reply"
-  | "llm_input"
-  | "llm_output"
-  | "agent_end"
-  | "before_compaction"
-  | "after_compaction"
-  | "before_reset"
-  | "inbound_claim"
-  | "message_received"
-  | "message_sending"
-  | "message_sent"
-  | "before_tool_call"
-  | "after_tool_call"
-  | "tool_result_persist"
-  | "before_message_write"
-  | "session_start"
-  | "session_end"
-  | "subagent_spawning"
-  | "subagent_delivery_target"
-  | "subagent_spawned"
-  | "subagent_ended"
-  | "gateway_start"
-  | "gateway_stop"
-  | "before_dispatch"
-  | "reply_dispatch"
-  | "before_install";
-
-export const PLUGIN_HOOK_NAMES = [
-  "before_model_resolve",
-  "before_prompt_build",
-  "before_agent_start",
-  "before_agent_reply",
-  "llm_input",
-  "llm_output",
-  "agent_end",
-  "before_compaction",
-  "after_compaction",
-  "before_reset",
-  "inbound_claim",
-  "message_received",
-  "message_sending",
-  "message_sent",
-  "before_tool_call",
-  "after_tool_call",
-  "tool_result_persist",
-  "before_message_write",
-  "session_start",
-  "session_end",
-  "subagent_spawning",
-  "subagent_delivery_target",
-  "subagent_spawned",
-  "subagent_ended",
-  "gateway_start",
-  "gateway_stop",
-  "before_dispatch",
-  "reply_dispatch",
-  "before_install",
-] as const satisfies readonly PluginHookName[];
-
-type MissingPluginHookNames = Exclude<PluginHookName, (typeof PLUGIN_HOOK_NAMES)[number]>;
-type AssertAllPluginHookNamesListed = MissingPluginHookNames extends never ? true : never;
-const assertAllPluginHookNamesListed: AssertAllPluginHookNamesListed = true;
-void assertAllPluginHookNamesListed;
-
-const pluginHookNameSet = new Set<PluginHookName>(PLUGIN_HOOK_NAMES);
-
-export const isPluginHookName = (hookName: unknown): hookName is PluginHookName =>
-  typeof hookName === "string" && pluginHookNameSet.has(hookName as PluginHookName);
-
-export const PROMPT_INJECTION_HOOK_NAMES = [
-  "before_prompt_build",
-  "before_agent_start",
-] as const satisfies readonly PluginHookName[];
-
-export type PromptInjectionHookName = (typeof PROMPT_INJECTION_HOOK_NAMES)[number];
-
-const promptInjectionHookNameSet = new Set<PluginHookName>(PROMPT_INJECTION_HOOK_NAMES);
-
-export const isPromptInjectionHookName = (hookName: PluginHookName): boolean =>
-  promptInjectionHookNameSet.has(hookName);
-
-// Agent context shared across agent hooks
-export type PluginHookAgentContext = {
-  /** Unique identifier for this agent run. */
-  runId?: string;
-  agentId?: string;
-  sessionKey?: string;
-  sessionId?: string;
-  workspaceDir?: string;
-  /** Resolved model provider for this run (for example "openai"). */
-  modelProviderId?: string;
-  /** Resolved model id for this run (for example "gpt-5.4"). */
-  modelId?: string;
-  messageProvider?: string;
-  /** What initiated this agent run: "user", "heartbeat", "cron", or "memory". */
-  trigger?: string;
-  /** Channel identifier (e.g. "telegram", "discord", "whatsapp"). */
-  channelId?: string;
-};
-
-// before_agent_reply hook
-export type PluginHookBeforeAgentReplyEvent = {
-  /** The final user message text heading to the LLM (after commands/directives). */
-  cleanedBody: string;
-};
-
-export type PluginHookBeforeAgentReplyResult = {
-  /** Whether the plugin is claiming this message (short-circuits the LLM agent). */
-  handled: boolean;
-  /** Synthetic reply that short-circuits the LLM agent. */
-  reply?: ReplyPayload;
-  /** Reason for interception (for logging/debugging). */
-  reason?: string;
-};
-
-// llm_input hook
-export type PluginHookLlmInputEvent = {
-  runId: string;
-  sessionId: string;
-  provider: string;
-  model: string;
-  systemPrompt?: string;
-  prompt: string;
-  historyMessages: unknown[];
-  imagesCount: number;
-};
-
-// llm_output hook
-export type PluginHookLlmOutputEvent = {
-  runId: string;
-  sessionId: string;
-  provider: string;
-  model: string;
-  assistantTexts: string[];
-  lastAssistant?: unknown;
-  usage?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    total?: number;
-  };
-};
-
-// agent_end hook
-export type PluginHookAgentEndEvent = {
-  messages: unknown[];
-  success: boolean;
-  error?: string;
-  durationMs?: number;
-};
-
-// Compaction hooks
-export type PluginHookBeforeCompactionEvent = {
-  /** Total messages in the session before any truncation or compaction */
-  messageCount: number;
-  /** Messages being fed to the compaction LLM (after history-limit truncation) */
-  compactingCount?: number;
-  tokenCount?: number;
-  messages?: unknown[];
-  /** Path to the session JSONL transcript. All messages are already on disk
-   *  before compaction starts, so plugins can read this file asynchronously
-   *  and process in parallel with the compaction LLM call. */
-  sessionFile?: string;
-};
-
-// before_reset hook - fired when /new or /reset clears a session
-export type PluginHookBeforeResetEvent = {
-  sessionFile?: string;
-  messages?: unknown[];
-  reason?: string;
-};
-
-export type PluginHookAfterCompactionEvent = {
-  messageCount: number;
-  tokenCount?: number;
-  compactedCount: number;
-  /** Path to the session JSONL transcript. All pre-compaction messages are
-   *  preserved on disk, so plugins can read and process them asynchronously
-   *  without blocking the compaction pipeline. */
-  sessionFile?: string;
-};
-
-// Message context
-export type PluginHookMessageContext = {
-  channelId: string;
-  accountId?: string;
-  conversationId?: string;
-};
-
-export type PluginHookInboundClaimContext = PluginHookMessageContext & {
-  parentConversationId?: string;
-  senderId?: string;
-  messageId?: string;
-};
-
-export type PluginHookInboundClaimEvent = {
-  content: string;
-  body?: string;
-  bodyForAgent?: string;
-  transcript?: string;
-  timestamp?: number;
-  channel: string;
-  accountId?: string;
-  conversationId?: string;
-  parentConversationId?: string;
-  senderId?: string;
-  senderName?: string;
-  senderUsername?: string;
-  threadId?: string | number;
-  messageId?: string;
-  isGroup: boolean;
-  commandAuthorized?: boolean;
-  wasMentioned?: boolean;
-  metadata?: Record<string, unknown>;
-};
-
-export type PluginHookInboundClaimResult = {
-  handled: boolean;
-};
-
-// before_dispatch hook
-export type PluginHookBeforeDispatchEvent = {
-  /** Message text content. */
-  content: string;
-  /** Body text prepared for agent (after command parsing). */
-  body?: string;
-  /** Channel identifier (e.g. "telegram", "discord"). */
-  channel?: string;
-  /** Session key for this message. */
-  sessionKey?: string;
-  /** Sender identifier. */
-  senderId?: string;
-  /** Whether this is a group message. */
-  isGroup?: boolean;
-  /** Message timestamp. */
-  timestamp?: number;
-};
-
-export type PluginHookBeforeDispatchContext = {
-  channelId?: string;
-  accountId?: string;
-  conversationId?: string;
-  sessionKey?: string;
-  senderId?: string;
-};
-
-export type PluginHookBeforeDispatchResult = {
-  /** Whether the plugin handled this message (skips default dispatch). */
-  handled: boolean;
-  /** Plugin-defined reply text (used when handled=true). */
-  text?: string;
-};
-
-// reply_dispatch hook
-export type PluginHookReplyDispatchEvent = {
-  ctx: FinalizedMsgContext;
-  runId?: string;
-  sessionKey?: string;
-  inboundAudio: boolean;
-  sessionTtsAuto?: TtsAutoMode;
-  ttsChannel?: string;
-  suppressUserDelivery?: boolean;
-  shouldRouteToOriginating: boolean;
-  originatingChannel?: string;
-  originatingTo?: string;
-  shouldSendToolSummaries: boolean;
-  sendPolicy: "allow" | "deny";
-  isTailDispatch?: boolean;
-};
-
-export type PluginHookReplyDispatchContext = {
-  cfg: OpenClawConfig;
-  dispatcher: ReplyDispatcher;
-  abortSignal?: AbortSignal;
-  onReplyStart?: () => Promise<void> | void;
-  recordProcessed: (
-    outcome: "completed" | "skipped" | "error",
-    opts?: {
-      reason?: string;
-      error?: string;
-    },
-  ) => void;
-  markIdle: (reason: string) => void;
-};
-
-export type PluginHookReplyDispatchResult = {
-  handled: boolean;
-  queuedFinal: boolean;
-  counts: Record<ReplyDispatchKind, number>;
-};
-
-// message_received hook
-export type PluginHookMessageReceivedEvent = {
-  from: string;
-  content: string;
-  timestamp?: number;
-  metadata?: Record<string, unknown>;
-};
-
-// message_sending hook
-export type PluginHookMessageSendingEvent = {
-  to: string;
-  content: string;
-  metadata?: Record<string, unknown>;
-};
-
-export type PluginHookMessageSendingResult = {
-  content?: string;
-  cancel?: boolean;
-};
-
-// message_sent hook
-export type PluginHookMessageSentEvent = {
-  to: string;
-  content: string;
-  success: boolean;
-  error?: string;
-};
-
-// Tool context
-export type PluginHookToolContext = {
-  agentId?: string;
-  sessionKey?: string;
-  /** Ephemeral session UUID - regenerated on /new and /reset. */
-  sessionId?: string;
-  /** Stable run identifier for this agent invocation. */
-  runId?: string;
-  toolName: string;
-  /** Provider-specific tool call ID when available. */
-  toolCallId?: string;
-};
-
-// before_tool_call hook
-export type PluginHookBeforeToolCallEvent = {
-  toolName: string;
-  params: Record<string, unknown>;
-  /** Stable run identifier for this agent invocation. */
-  runId?: string;
-  /** Provider-specific tool call ID when available. */
-  toolCallId?: string;
-};
-
-export const PluginApprovalResolutions = {
-  ALLOW_ONCE: "allow-once",
-  ALLOW_ALWAYS: "allow-always",
-  DENY: "deny",
-  TIMEOUT: "timeout",
-  CANCELLED: "cancelled",
-} as const;
-
-export type PluginApprovalResolution =
-  (typeof PluginApprovalResolutions)[keyof typeof PluginApprovalResolutions];
-
-export type PluginHookBeforeToolCallResult = {
-  params?: Record<string, unknown>;
-  block?: boolean;
-  blockReason?: string;
-  requireApproval?: {
-    title: string;
-    description: string;
-    severity?: "info" | "warning" | "critical";
-    timeoutMs?: number;
-    timeoutBehavior?: "allow" | "deny";
-    /** Set automatically by the hook runner - plugins should not set this. */
-    pluginId?: string;
-    /**
-     * Best-effort callback invoked with the final outcome after approval resolves, times out, or is cancelled.
-     * OpenClaw does not await this callback before allowing or denying the tool call.
-     */
-    onResolution?: (decision: PluginApprovalResolution) => Promise<void> | void;
-  };
-};
-
-// after_tool_call hook
-export type PluginHookAfterToolCallEvent = {
-  toolName: string;
-  params: Record<string, unknown>;
-  /** Stable run identifier for this agent invocation. */
-  runId?: string;
-  /** Provider-specific tool call ID when available. */
-  toolCallId?: string;
-  result?: unknown;
-  error?: string;
-  durationMs?: number;
-};
-
-// tool_result_persist hook
-export type PluginHookToolResultPersistContext = {
-  agentId?: string;
-  sessionKey?: string;
-  toolName?: string;
-  toolCallId?: string;
-};
-
-export type PluginHookToolResultPersistEvent = {
-  toolName?: string;
-  toolCallId?: string;
-  /**
-   * The toolResult message about to be written to the session transcript.
-   * Handlers may return a modified message (e.g. drop non-essential fields).
-   */
-  message: AgentMessage;
-  /** True when the tool result was synthesized by a guard/repair step. */
-  isSynthetic?: boolean;
-};
-
-export type PluginHookToolResultPersistResult = {
-  message?: AgentMessage;
-};
-
-// before_message_write hook
-export type PluginHookBeforeMessageWriteEvent = {
-  message: AgentMessage;
-  sessionKey?: string;
-  agentId?: string;
-};
-
-export type PluginHookBeforeMessageWriteResult = {
-  block?: boolean; // If true, message is NOT written to JSONL
-  message?: AgentMessage; // Optional: modified message to write instead
-};
-
-// Session context
-export type PluginHookSessionContext = {
-  agentId?: string;
-  sessionId: string;
-  sessionKey?: string;
-};
-
-// session_start hook
-export type PluginHookSessionStartEvent = {
-  sessionId: string;
-  sessionKey?: string;
-  resumedFrom?: string;
-};
-
-// session_end hook
-export type PluginHookSessionEndReason =
-  | "new"
-  | "reset"
-  | "idle"
-  | "daily"
-  | "compaction"
-  | "deleted"
-  | "unknown";
-
-export type PluginHookSessionEndEvent = {
-  sessionId: string;
-  sessionKey?: string;
-  messageCount: number;
-  durationMs?: number;
-  reason?: PluginHookSessionEndReason;
-  sessionFile?: string;
-  transcriptArchived?: boolean;
-  nextSessionId?: string;
-  nextSessionKey?: string;
-};
-
-// Subagent context
-export type PluginHookSubagentContext = {
-  runId?: string;
-  childSessionKey?: string;
-  requesterSessionKey?: string;
-};
-
-export type PluginHookSubagentTargetKind = "subagent" | "acp";
-
-type PluginHookSubagentSpawnBase = {
-  childSessionKey: string;
-  agentId: string;
-  label?: string;
-  mode: "run" | "session";
-  requester?: {
-    channel?: string;
-    accountId?: string;
-    to?: string;
-    threadId?: string | number;
-  };
-  threadRequested: boolean;
-};
-
-// subagent_spawning hook
-export type PluginHookSubagentSpawningEvent = PluginHookSubagentSpawnBase;
-
-export type PluginHookSubagentSpawningResult =
-  | {
-      status: "ok";
-      threadBindingReady?: boolean;
-    }
-  | {
-      status: "error";
-      error: string;
-    };
-
-// subagent_delivery_target hook
-export type PluginHookSubagentDeliveryTargetEvent = {
-  childSessionKey: string;
-  requesterSessionKey: string;
-  requesterOrigin?: {
-    channel?: string;
-    accountId?: string;
-    to?: string;
-    threadId?: string | number;
-  };
-  childRunId?: string;
-  spawnMode?: "run" | "session";
-  expectsCompletionMessage: boolean;
-};
-
-export type PluginHookSubagentDeliveryTargetResult = {
-  origin?: {
-    channel?: string;
-    accountId?: string;
-    to?: string;
-    threadId?: string | number;
-  };
-};
-
-// subagent_spawned hook
-export type PluginHookSubagentSpawnedEvent = PluginHookSubagentSpawnBase & {
-  runId: string;
-};
-
-// subagent_ended hook
-export type PluginHookSubagentEndedEvent = {
-  targetSessionKey: string;
-  targetKind: PluginHookSubagentTargetKind;
-  reason: string;
-  sendFarewell?: boolean;
-  accountId?: string;
-  runId?: string;
-  endedAt?: number;
-  outcome?: "ok" | "error" | "timeout" | "killed" | "reset" | "deleted";
-  error?: string;
-};
-
-// Gateway context
-export type PluginHookGatewayContext = {
-  port?: number;
-};
-
-// gateway_start hook
-export type PluginHookGatewayStartEvent = {
-  port: number;
-};
-
-// gateway_stop hook
-export type PluginHookGatewayStopEvent = {
-  reason?: string;
-};
-
-export type PluginInstallTargetType = "skill" | "plugin";
-export type PluginInstallRequestKind =
-  | "skill-install"
-  | "plugin-dir"
-  | "plugin-archive"
-  | "plugin-file"
-  | "plugin-npm";
-export type PluginInstallSourcePathKind = "file" | "directory";
-
-export type PluginInstallFinding = {
-  ruleId: string;
-  severity: "info" | "warn" | "critical";
-  file: string;
-  line: number;
-  message: string;
-};
-
-export type PluginHookBeforeInstallRequest = {
-  /** Original install entrypoint/provenance. */
-  kind: PluginInstallRequestKind;
-  /** Install mode requested by the caller. */
-  mode: "install" | "update";
-  /** Raw user-facing specifier or path when available. */
-  requestedSpecifier?: string;
-};
-
-export type PluginHookBeforeInstallBuiltinScan = {
-  /** Whether the built-in scan completed successfully. */
-  status: "ok" | "error";
-  /** Number of files the built-in scanner actually inspected. */
-  scannedFiles: number;
-  critical: number;
-  warn: number;
-  info: number;
-  findings: PluginInstallFinding[];
-  /** Scanner failure reason when status=`error`. */
-  error?: string;
-};
-
-export type PluginHookBeforeInstallSkillInstallSpec = {
-  id?: string;
-  kind: "brew" | "node" | "go" | "uv" | "download";
-  label?: string;
-  bins?: string[];
-  os?: string[];
-  formula?: string;
-  package?: string;
-  module?: string;
-  url?: string;
-  archive?: string;
-  extract?: boolean;
-  stripComponents?: number;
-  targetDir?: string;
-};
-
-export type PluginHookBeforeInstallSkill = {
-  installId: string;
-  installSpec?: PluginHookBeforeInstallSkillInstallSpec;
-};
-
-export type PluginHookBeforeInstallPlugin = {
-  /** Canonical plugin id OpenClaw will install under. */
-  pluginId: string;
-  /** Normalized installable content shape after source resolution. */
-  contentType: "bundle" | "package" | "file";
-  packageName?: string;
-  manifestId?: string;
-  version?: string;
-  extensions?: string[];
-};
-
-// before_install hook
-export type PluginHookBeforeInstallContext = {
-  /** Category of install target being checked. */
-  targetType: PluginInstallTargetType;
-  /** Original install entrypoint/provenance. */
-  requestKind: PluginInstallRequestKind;
-  /** Normalized origin of the install target (e.g. "openclaw-bundled", "plugin-package"). */
-  origin?: string;
-};
-
-export type PluginHookBeforeInstallEvent = {
-  /** Category of install target being checked. */
-  targetType: PluginInstallTargetType;
-  /** Human-readable skill or plugin name. */
-  targetName: string;
-  /** Absolute path to the install target content being scanned. */
-  sourcePath: string;
-  /** Whether the install target content is a file or directory. */
-  sourcePathKind: PluginInstallSourcePathKind;
-  /** Normalized origin of the install target (e.g. "openclaw-bundled", "plugin-package"). */
-  origin?: string;
-  /** Install request provenance and caller mode. */
-  request: PluginHookBeforeInstallRequest;
-  /** Structured result of the built-in scanner. */
-  builtinScan: PluginHookBeforeInstallBuiltinScan;
-  /** Present when targetType=`skill`. */
-  skill?: PluginHookBeforeInstallSkill;
-  /** Present when targetType=`plugin`. */
-  plugin?: PluginHookBeforeInstallPlugin;
-};
-
-export type PluginHookBeforeInstallResult = {
-  /** Additional findings to merge with built-in scanner results. */
-  findings?: PluginInstallFinding[];
-  /** If true, block the installation entirely. */
-  block?: boolean;
-  /** Human-readable reason for blocking. */
-  blockReason?: string;
-};
-
-// Hook handler types mapped by hook name
-export type PluginHookHandlerMap = {
-  before_model_resolve: (
-    event: PluginHookBeforeModelResolveEvent,
-    ctx: PluginHookAgentContext,
-  ) =>
-    | Promise<PluginHookBeforeModelResolveResult | void>
-    | PluginHookBeforeModelResolveResult
-    | void;
-  before_prompt_build: (
-    event: PluginHookBeforePromptBuildEvent,
-    ctx: PluginHookAgentContext,
-  ) => Promise<PluginHookBeforePromptBuildResult | void> | PluginHookBeforePromptBuildResult | void;
-  before_agent_start: (
-    event: PluginHookBeforeAgentStartEvent,
-    ctx: PluginHookAgentContext,
-  ) => Promise<PluginHookBeforeAgentStartResult | void> | PluginHookBeforeAgentStartResult | void;
-  before_agent_reply: (
-    event: PluginHookBeforeAgentReplyEvent,
-    ctx: PluginHookAgentContext,
-  ) => Promise<PluginHookBeforeAgentReplyResult | void> | PluginHookBeforeAgentReplyResult | void;
-  llm_input: (event: PluginHookLlmInputEvent, ctx: PluginHookAgentContext) => Promise<void> | void;
-  llm_output: (
-    event: PluginHookLlmOutputEvent,
-    ctx: PluginHookAgentContext,
-  ) => Promise<void> | void;
-  agent_end: (event: PluginHookAgentEndEvent, ctx: PluginHookAgentContext) => Promise<void> | void;
-  before_compaction: (
-    event: PluginHookBeforeCompactionEvent,
-    ctx: PluginHookAgentContext,
-  ) => Promise<void> | void;
-  after_compaction: (
-    event: PluginHookAfterCompactionEvent,
-    ctx: PluginHookAgentContext,
-  ) => Promise<void> | void;
-  before_reset: (
-    event: PluginHookBeforeResetEvent,
-    ctx: PluginHookAgentContext,
-  ) => Promise<void> | void;
-  inbound_claim: (
-    event: PluginHookInboundClaimEvent,
-    ctx: PluginHookInboundClaimContext,
-  ) => Promise<PluginHookInboundClaimResult | void> | PluginHookInboundClaimResult | void;
-  before_dispatch: (
-    event: PluginHookBeforeDispatchEvent,
-    ctx: PluginHookBeforeDispatchContext,
-  ) => Promise<PluginHookBeforeDispatchResult | void> | PluginHookBeforeDispatchResult | void;
-  reply_dispatch: (
-    event: PluginHookReplyDispatchEvent,
-    ctx: PluginHookReplyDispatchContext,
-  ) => Promise<PluginHookReplyDispatchResult | void> | PluginHookReplyDispatchResult | void;
-  message_received: (
-    event: PluginHookMessageReceivedEvent,
-    ctx: PluginHookMessageContext,
-  ) => Promise<void> | void;
-  message_sending: (
-    event: PluginHookMessageSendingEvent,
-    ctx: PluginHookMessageContext,
-  ) => Promise<PluginHookMessageSendingResult | void> | PluginHookMessageSendingResult | void;
-  message_sent: (
-    event: PluginHookMessageSentEvent,
-    ctx: PluginHookMessageContext,
-  ) => Promise<void> | void;
-  before_tool_call: (
-    event: PluginHookBeforeToolCallEvent,
-    ctx: PluginHookToolContext,
-  ) => Promise<PluginHookBeforeToolCallResult | void> | PluginHookBeforeToolCallResult | void;
-  after_tool_call: (
-    event: PluginHookAfterToolCallEvent,
-    ctx: PluginHookToolContext,
-  ) => Promise<void> | void;
-  tool_result_persist: (
-    event: PluginHookToolResultPersistEvent,
-    ctx: PluginHookToolResultPersistContext,
-  ) => PluginHookToolResultPersistResult | void;
-  before_message_write: (
-    event: PluginHookBeforeMessageWriteEvent,
-    ctx: { agentId?: string; sessionKey?: string },
-  ) => PluginHookBeforeMessageWriteResult | void;
-  session_start: (
-    event: PluginHookSessionStartEvent,
-    ctx: PluginHookSessionContext,
-  ) => Promise<void> | void;
-  session_end: (
-    event: PluginHookSessionEndEvent,
-    ctx: PluginHookSessionContext,
-  ) => Promise<void> | void;
-  subagent_spawning: (
-    event: PluginHookSubagentSpawningEvent,
-    ctx: PluginHookSubagentContext,
-  ) => Promise<PluginHookSubagentSpawningResult | void> | PluginHookSubagentSpawningResult | void;
-  subagent_delivery_target: (
-    event: PluginHookSubagentDeliveryTargetEvent,
-    ctx: PluginHookSubagentContext,
-  ) =>
-    | Promise<PluginHookSubagentDeliveryTargetResult | void>
-    | PluginHookSubagentDeliveryTargetResult
-    | void;
-  subagent_spawned: (
-    event: PluginHookSubagentSpawnedEvent,
-    ctx: PluginHookSubagentContext,
-  ) => Promise<void> | void;
-  subagent_ended: (
-    event: PluginHookSubagentEndedEvent,
-    ctx: PluginHookSubagentContext,
-  ) => Promise<void> | void;
-  gateway_start: (
-    event: PluginHookGatewayStartEvent,
-    ctx: PluginHookGatewayContext,
-  ) => Promise<void> | void;
-  gateway_stop: (
-    event: PluginHookGatewayStopEvent,
-    ctx: PluginHookGatewayContext,
-  ) => Promise<void> | void;
-  before_install: (
-    event: PluginHookBeforeInstallEvent,
-    ctx: PluginHookBeforeInstallContext,
-  ) => Promise<PluginHookBeforeInstallResult | void> | PluginHookBeforeInstallResult | void;
-};
-
-export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = {
-  pluginId: string;
-  hookName: K;
-  handler: PluginHookHandlerMap[K];
-  priority?: number;
-  source: string;
-};
+// Plugin hook contracts now live in hook-types.ts so hook runners can import a
+// leaf contract surface instead of pulling the full plugin runtime barrel.

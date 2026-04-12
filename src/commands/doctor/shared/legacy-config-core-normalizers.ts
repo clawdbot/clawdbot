@@ -1,9 +1,7 @@
-import { isDeepStrictEqual } from "node:util";
-import { normalizeProviderId } from "../../../agents/model-selection.js";
-import { resolveSingleAccountKeysToMove } from "../../../channels/plugins/setup-helpers.js";
-import type { OpenClawConfig } from "../../../config/config.js";
+import { normalizeProviderId } from "../../../agents/provider-id.js";
+import { resolveSingleAccountKeysToMove } from "../../../channels/plugins/setup-promotion-helpers.js";
 import { resolveNormalizedProviderModelMaxTokens } from "../../../config/defaults.js";
-import { normalizeTalkSection } from "../../../config/talk.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { DEFAULT_GOOGLE_API_BASE_URL } from "../../../infra/google-api-base-url.js";
 import { DEFAULT_ACCOUNT_ID } from "../../../routing/session-key.js";
 import {
@@ -11,18 +9,7 @@ import {
   normalizeOptionalString,
 } from "../../../shared/string-coerce.js";
 import { isRecord } from "./legacy-config-record-shared.js";
-
-function buildLegacyTalkProviderCompat(
-  talk: Record<string, unknown>,
-): Record<string, unknown> | undefined {
-  const compat: Record<string, unknown> = {};
-  for (const key of ["voiceId", "voiceAliases", "modelId", "outputFormat", "apiKey"] as const) {
-    if (talk[key] !== undefined) {
-      compat[key] = talk[key];
-    }
-  }
-  return Object.keys(compat).length > 0 ? compat : undefined;
-}
+export { normalizeLegacyTalkConfig } from "./legacy-talk-config-normalizer.js";
 
 export function normalizeLegacyBrowserConfig(
   cfg: OpenClawConfig,
@@ -317,36 +304,6 @@ export function normalizeLegacyNanoBananaSkill(
   return {
     ...next,
     skills,
-  };
-}
-
-export function normalizeLegacyTalkConfig(cfg: OpenClawConfig, changes: string[]): OpenClawConfig {
-  const rawTalk = cfg.talk;
-  if (!isRecord(rawTalk)) {
-    return cfg;
-  }
-
-  const normalizedTalk = normalizeTalkSection(rawTalk as OpenClawConfig["talk"]) ?? {};
-  const legacyProviderCompat = buildLegacyTalkProviderCompat(rawTalk);
-  if (legacyProviderCompat) {
-    normalizedTalk.providers = {
-      ...normalizedTalk.providers,
-      elevenlabs: {
-        ...legacyProviderCompat,
-        ...normalizedTalk.providers?.elevenlabs,
-      },
-    };
-  }
-  if (Object.keys(normalizedTalk).length === 0 || isDeepStrictEqual(normalizedTalk, rawTalk)) {
-    return cfg;
-  }
-
-  changes.push(
-    "Normalized talk.provider/providers shape (trimmed provider ids and merged missing compatibility fields).",
-  );
-  return {
-    ...cfg,
-    talk: normalizedTalk,
   };
 }
 

@@ -1384,7 +1384,7 @@ install_main_tgz() {
   local tgz_url script_url
   local runner_name log_name done_name done_status launcher_state guest_log
   local start_seconds poll_deadline startup_checked poll_rc state_rc log_rc
-  local log_state_path npm_log_state_path last_npm_log_poll
+  local log_state_path npm_log_state_path last_npm_log_poll last_process_check process_state
   tgz_url="http://$host_ip:$HOST_PORT/$(basename "$MAIN_TGZ_PATH")"
   write_install_runner_script
   script_url="http://$host_ip:$HOST_PORT/$(basename "$WINDOWS_INSTALL_SCRIPT_PATH")"
@@ -1399,6 +1399,7 @@ install_main_tgz() {
   poll_deadline=$((SECONDS + TIMEOUT_INSTALL_S + 60))
   startup_checked=0
   last_npm_log_poll=0
+  last_process_check=0
 
   guest_powershell_poll 20 "$(cat <<EOF
 \$runner = Join-Path \$env:TEMP '$runner_name'
@@ -1506,6 +1507,26 @@ PY
         :
       fi
       last_npm_log_poll=$SECONDS
+    fi
+    if (( SECONDS - start_seconds >= 60 && SECONDS - last_process_check >= 30 )); then
+      set +e
+      process_state="$(
+        guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; \$done = Join-Path \$env:TEMP '$done_name'; \$currentPid = \$PID; \$process = Get-CimInstance Win32_Process | Where-Object { \$_.ProcessId -ne \$currentPid -and ((\$_.CommandLine -like '*$runner_name*') -or (\$_.CommandLine -like '*$temp_name*')) } | Select-Object -First 1; 'log=' + (Test-Path \$log) + ' done=' + (Test-Path \$done) + ' process=' + [bool]\$process"
+      )"
+      state_rc=$?
+      set -e
+      process_state="${process_state//$'\r'/}"
+      last_process_check=$SECONDS
+      if [[ $state_rc -eq 0 && "$process_state" == *"log=True"* && "$process_state" == *"done=False"* && "$process_state" == *"process=False"* ]]; then
+        warn "windows install helper exited without writing done file"
+        if ! stream_windows_install_log; then
+          :
+        fi
+        dump_latest_guest_npm_log_tail "windows packaged install npm debug tail" || true
+        rm -f "$log_state_path"
+        rm -f "$npm_log_state_path"
+        return 1
+      fi
     fi
     if (( SECONDS >= poll_deadline )); then
       if ! stream_windows_install_log; then
@@ -2224,14 +2245,21 @@ capture_latest_ref_failure() {
 run_fresh_main_lane() {
   local snapshot_id="$1"
   local host_ip="$2"
+  local install_log_phase
   phase_run "fresh.restore-snapshot" "$TIMEOUT_SNAPSHOT_S" restore_snapshot "$snapshot_id" || return $?
   phase_run "fresh.wait-for-user" "$TIMEOUT_SNAPSHOT_S" wait_for_guest_ready || return $?
   if ! phase_run "fresh.ensure-git" "$TIMEOUT_INSTALL_S" ensure_guest_git "$host_ip"; then
     phase_run "fresh.wait-for-user-retry" "$TIMEOUT_SNAPSHOT_S" wait_for_guest_ready || return $?
     phase_run "fresh.ensure-git-retry" "$TIMEOUT_INSTALL_S" ensure_guest_git "$host_ip" || return $?
   fi
-  phase_run "fresh.install-main" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-fresh.tgz" || return $?
-  FRESH_MAIN_VERSION="$(extract_last_version "$(phase_log_path fresh.install-main)")"
+  if phase_run "fresh.install-main" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-fresh.tgz"; then
+    install_log_phase="fresh.install-main"
+  else
+    phase_run "fresh.wait-for-user-install-retry" "$TIMEOUT_SNAPSHOT_S" wait_for_guest_ready || return $?
+    phase_run "fresh.install-main-retry" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-fresh.tgz" || return $?
+    install_log_phase="fresh.install-main-retry"
+  fi
+  FRESH_MAIN_VERSION="$(extract_last_version "$(phase_log_path "$install_log_phase")")"
   phase_run "fresh.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version || return $?
   phase_run "fresh.onboard-ref" "$TIMEOUT_ONBOARD_PHASE_S" run_ref_onboard || return $?
   phase_run "fresh.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway_reachable || return $?

@@ -16,6 +16,12 @@ export type ProbeMSTeamsResult = BaseProbeResult<string> & {
     roles?: string[];
     scopes?: string[];
   };
+  delegatedAuth?: {
+    ok: boolean;
+    error?: string;
+    scopes?: string[];
+    userPrincipalName?: string;
+  };
 };
 
 function decodeJwtPayload(token: string): Record<string, unknown> | null {
@@ -91,7 +97,32 @@ export async function probeMSTeams(cfg?: MSTeamsConfig): Promise<ProbeMSTeamsRes
     } catch (err) {
       graph = { ok: false, error: formatUnknownError(err) };
     }
-    return { ok: true, appId: creds.appId, ...(graph ? { graph } : {}) };
+    let delegatedAuth: ProbeMSTeamsResult["delegatedAuth"];
+    if (cfg?.delegatedAuth?.enabled) {
+      try {
+        const { loadDelegatedTokens } = await import("./token.js");
+        const tokens = loadDelegatedTokens();
+        if (tokens) {
+          const isExpired = tokens.expiresAt <= Date.now();
+          delegatedAuth = {
+            ok: !isExpired,
+            scopes: tokens.scopes,
+            userPrincipalName: tokens.userPrincipalName,
+            ...(isExpired ? { error: "token expired (will auto-refresh on next use)" } : {}),
+          };
+        } else {
+          delegatedAuth = { ok: false, error: "no delegated tokens found (run setup wizard)" };
+        }
+      } catch {
+        delegatedAuth = { ok: false, error: "failed to load delegated tokens" };
+      }
+    }
+    return {
+      ok: true,
+      appId: creds.appId,
+      ...(graph ? { graph } : {}),
+      ...(delegatedAuth ? { delegatedAuth } : {}),
+    };
   } catch (err) {
     return {
       ok: false,

@@ -754,6 +754,20 @@ export function createVitestRunSpecs(args, params = {}) {
   });
 }
 
+export function shouldAcquireLocalHeavyCheckLock(runSpecs, env = process.env) {
+  if (env.OPENCLAW_TEST_PROJECTS_FORCE_LOCK === "1") {
+    return true;
+  }
+
+  return !(
+    runSpecs.length === 1 &&
+    runSpecs[0]?.config === TOOLING_VITEST_CONFIG &&
+    runSpecs[0]?.watchMode === false &&
+    Array.isArray(runSpecs[0]?.includePatterns) &&
+    runSpecs[0].includePatterns.length > 0
+  );
+}
+
 export function writeVitestIncludeFile(filePath, includePatterns) {
   fs.writeFileSync(filePath, `${JSON.stringify(includePatterns, null, 2)}\n`);
 }

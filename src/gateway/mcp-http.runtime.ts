@@ -1,4 +1,4 @@
-import { loadConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   clearActiveMcpLoopbackRuntime,
   createMcpLoopbackServerConfig,
@@ -18,7 +18,7 @@ const NATIVE_TOOL_EXCLUDE = new Set(["read", "write", "edit", "apply_patch", "ex
 type CachedScopedTools = {
   tools: McpLoopbackTool[];
   toolSchema: McpToolSchemaEntry[];
-  configRef: ReturnType<typeof loadConfig>;
+  configRef: OpenClawConfig;
   time: number;
 };
 
@@ -26,7 +26,7 @@ export class McpLoopbackToolCache {
   #entries = new Map<string, CachedScopedTools>();
 
   resolve(params: {
-    cfg: ReturnType<typeof loadConfig>;
+    cfg: OpenClawConfig;
     sessionKey: string;
     messageProvider: string | undefined;
     accountId: string | undefined;

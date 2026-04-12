@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { expectExplicitMusicGenerationCapabilities } from "../../test/helpers/media-generation/provider-capability-assertions.js";
 import {
   getMinimaxProviderHttpMocks,
   installMinimaxProviderHttpMockCleanup,
@@ -31,6 +32,10 @@ function mockMusicGenerationResponse(json: Record<string, unknown>): void {
 }
 
 describe("minimax music generation provider", () => {
+  it("declares explicit mode capabilities", () => {
+    expectExplicitMusicGenerationCapabilities(buildMinimaxMusicGenerationProvider());
+  });
+
   it("creates music and downloads the generated track", async () => {
     mockMusicGenerationResponse({
       task_id: "task-123",

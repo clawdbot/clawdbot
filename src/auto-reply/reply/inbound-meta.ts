@@ -1,6 +1,7 @@
 import { normalizeChatType } from "../../channels/chat-type.js";
-import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
-import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import { getLoadedChannelPluginById } from "../../channels/plugins/registry-loaded.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { resolveSenderLabel } from "../../channels/sender-label.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { EnvelopeFormatOptions } from "../envelope.js";
@@ -39,10 +40,9 @@ function resolveInboundFormattingHints(ctx: TemplateContext):
   if (!channelValue) {
     return undefined;
   }
-  const normalizedChannel = normalizeChannelId(channelValue) ?? channelValue;
-  const agentPrompt =
-    getLoadedChannelPlugin(normalizedChannel)?.agentPrompt ??
-    getBundledChannelPlugin(normalizedChannel)?.agentPrompt;
+  const normalizedChannel = normalizeAnyChannelId(channelValue) ?? channelValue;
+  const agentPrompt = (getLoadedChannelPluginById(normalizedChannel) as ChannelPlugin | undefined)
+    ?.agentPrompt;
   return agentPrompt?.inboundFormattingHints?.({
     accountId: normalizeOptionalString(ctx.AccountId) ?? undefined,
   });

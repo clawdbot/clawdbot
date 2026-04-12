@@ -450,6 +450,32 @@ describe("gateway server hooks", () => {
     });
   });
 
+  test("rejects mapped hook session rebinding into a disallowed target-agent prefix", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowRequestSessionKey: true,
+      allowedSessionKeyPrefixes: ["hook:", "agent:main:"],
+      mappings: [
+        {
+          match: { path: "mapped-rebind-denied" },
+          action: "agent",
+          agentId: "hooks",
+          messageTemplate: "Mapped: {{payload.subject}}",
+          sessionKey: "agent:main:slack:channel:c123",
+        },
+      ],
+    };
+    setMainAndHooksAgents();
+    await withGatewayServer(async ({ port }) => {
+      const denied = await postHook(port, "/hooks/mapped-rebind-denied", { subject: "hello" });
+      expect(denied.status).toBe(400);
+      const body = (await denied.json()) as { error?: string };
+      expect(body.error).toContain("sessionKey must start with one of");
+      expect(cronIsolatedRun).not.toHaveBeenCalled();
+    });
+  });
+
   test("dedupes repeated /hooks/agent deliveries by idempotency key", async () => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
     await withGatewayServer(async ({ port }) => {

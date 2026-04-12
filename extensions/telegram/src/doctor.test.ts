@@ -14,12 +14,9 @@ const listTelegramAccountIdsMock = vi.hoisted(() => vi.fn());
 const inspectTelegramAccountMock = vi.hoisted(() => vi.fn());
 const lookupTelegramChatIdMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime")>(
-    "openclaw/plugin-sdk/runtime",
-  );
+vi.mock("openclaw/plugin-sdk/runtime-secret-resolution", () => {
   return {
-    ...actual,
+    getChannelsCommandSecretTargetIds: () => ["channels"],
     resolveCommandSecretRefsViaGateway: resolveCommandSecretRefsViaGatewayMock,
   };
 });

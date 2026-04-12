@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { getPairingAdapter } from "../channels/plugins/pairing.js";
-import type { ChannelId, ChannelPairingAdapter } from "../channels/plugins/types.js";
+import type { ChannelPairingAdapter } from "../channels/plugins/pairing.types.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import { withFileLock as withPathLock } from "../infra/file-lock.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
@@ -15,6 +15,8 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
+import type { PairingChannel } from "./pairing-store.types.js";
+export type { PairingChannel } from "./pairing-store.types.js";
 
 const PAIRING_CODE_LENGTH = 8;
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -39,8 +41,6 @@ type AllowFromReadCacheEntry = {
 type AllowFromStatLike = { mtimeMs: number; size: number } | null;
 
 const allowFromReadCache = new Map<string, AllowFromReadCacheEntry>();
-
-export type PairingChannel = ChannelId;
 
 export type PairingRequest = {
   id: string;

@@ -1,4 +1,5 @@
 import { resolveSessionFilePath } from "./paths.js";
+import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import { updateSessionStore } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
@@ -12,6 +13,7 @@ export async function resolveAndPersistSessionFile(params: {
   sessionsDir?: string;
   fallbackSessionFile?: string;
   activeSessionKey?: string;
+  maintenanceConfig?: ResolvedSessionMaintenanceConfig;
 }): Promise<{ sessionFile: string; sessionEntry: SessionEntry }> {
   const { sessionId, sessionKey, sessionStore, storePath } = params;
   const baseEntry = params.sessionEntry ??
@@ -41,7 +43,12 @@ export async function resolveAndPersistSessionFile(params: {
           ...persistedEntry,
         };
       },
-      params.activeSessionKey ? { activeSessionKey: params.activeSessionKey } : undefined,
+      params.activeSessionKey || params.maintenanceConfig
+        ? {
+            ...(params.activeSessionKey ? { activeSessionKey: params.activeSessionKey } : {}),
+            ...(params.maintenanceConfig ? { maintenanceConfig: params.maintenanceConfig } : {}),
+          }
+        : undefined,
     );
     return { sessionFile, sessionEntry: persistedEntry };
   }

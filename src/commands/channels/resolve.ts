@@ -1,5 +1,8 @@
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import type { ChannelResolveKind, ChannelResolveResult } from "../../channels/plugins/types.js";
+import type {
+  ChannelResolveKind,
+  ChannelResolveResult,
+} from "../../channels/plugins/types.adapters.js";
 import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
 import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
 import { loadConfig, readConfigFileSnapshot, replaceConfigFile } from "../../config/config.js";

@@ -76,6 +76,8 @@ describeLive("pi embedded anthropic replay sanitization (live)", () => {
       const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["noop"]), {
         validateGeminiTurns: false,
         validateAnthropicTurns: true,
+        preserveSignatures: false,
+        dropThinkingBlocks: false,
       });
 
       await Promise.resolve(wrapped(model as never, { messages } as never, {} as never));

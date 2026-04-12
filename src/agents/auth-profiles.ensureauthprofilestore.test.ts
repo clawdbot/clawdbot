@@ -14,6 +14,42 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   resolveExternalAuthProfilesWithPlugins: () => [],
 }));
 
+vi.mock("./cli-credentials.js", () => ({
+  readCodexCliCredentialsCached: () => {
+    const codexHome = process.env.CODEX_HOME;
+    if (!codexHome) {
+      return null;
+    }
+    try {
+      const raw = JSON.parse(fs.readFileSync(path.join(codexHome, "auth.json"), "utf8")) as {
+        tokens?: {
+          access_token?: unknown;
+          refresh_token?: unknown;
+          account_id?: unknown;
+        };
+      };
+      const access = raw.tokens?.access_token;
+      const refresh = raw.tokens?.refresh_token;
+      if (typeof access !== "string" || typeof refresh !== "string") {
+        return null;
+      }
+      return {
+        type: "oauth",
+        provider: "openai-codex",
+        access,
+        refresh,
+        expires: Date.now() + 60 * 60 * 1000,
+        accountId: typeof raw.tokens?.account_id === "string" ? raw.tokens.account_id : undefined,
+      };
+    } catch {
+      return null;
+    }
+  },
+  readMiniMaxCliCredentialsCached: () => null,
+  resetCliCredentialCachesForTest: vi.fn(),
+  writeCodexCliCredentials: vi.fn(() => false),
+}));
+
 describe("ensureAuthProfileStore", () => {
   function withTempAgentDir<T>(prefix: string, run: (agentDir: string) => T): T {
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));

@@ -4,8 +4,8 @@ import {
   hasBundledChannelPersistedAuthState,
   listBundledChannelIdsWithPersistedAuthState,
 } from "../channels/plugins/persisted-auth-state.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasNonEmptyString } from "../infra/outbound/channel-target.js";
 import { isRecord } from "../utils.js";
 import { listBundledChannelPluginIds } from "./plugins/bundled-ids.js";
@@ -14,6 +14,14 @@ const IGNORED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
 
 type ChannelPresenceOptions = {
   includePersistedAuthState?: boolean;
+  persistedAuthStateProbe?: {
+    listChannelIds: () => readonly string[];
+    hasState: (params: {
+      channelId: string;
+      cfg: OpenClawConfig;
+      env: NodeJS.ProcessEnv;
+    }) => boolean;
+  };
 };
 
 export function hasMeaningfulChannelConfig(value: unknown): boolean {
@@ -36,11 +44,31 @@ function hasPersistedChannelState(env: NodeJS.ProcessEnv): boolean {
   return fs.existsSync(resolveStateDir(env, os.homedir));
 }
 
-let persistedAuthStateChannelIds: string[] | null = null;
+let persistedAuthStateChannelIds: readonly string[] | null = null;
 
-function getPersistedAuthStateChannelIds(): string[] {
-  persistedAuthStateChannelIds ??= listBundledChannelIdsWithPersistedAuthState();
+function listPersistedAuthStateChannelIds(options: ChannelPresenceOptions): readonly string[] {
+  const override = options.persistedAuthStateProbe?.listChannelIds();
+  if (override) {
+    return override;
+  }
+  if (persistedAuthStateChannelIds) {
+    return persistedAuthStateChannelIds;
+  }
+  persistedAuthStateChannelIds = listBundledChannelIdsWithPersistedAuthState();
   return persistedAuthStateChannelIds;
+}
+
+function hasPersistedAuthState(params: {
+  channelId: string;
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  options: ChannelPresenceOptions;
+}): boolean {
+  const override = params.options.persistedAuthStateProbe;
+  if (override) {
+    return override.hasState(params);
+  }
+  return hasBundledChannelPersistedAuthState(params);
 }
 
 export function listPotentialConfiguredChannelIds(
@@ -75,8 +103,8 @@ export function listPotentialConfiguredChannelIds(
   }
 
   if (options.includePersistedAuthState !== false && hasPersistedChannelState(env)) {
-    for (const channelId of getPersistedAuthStateChannelIds()) {
-      if (hasBundledChannelPersistedAuthState({ channelId, cfg, env })) {
+    for (const channelId of listPersistedAuthStateChannelIds(options)) {
+      if (hasPersistedAuthState({ channelId, cfg, env, options })) {
         configuredChannelIds.add(channelId);
       }
     }
@@ -103,8 +131,8 @@ function hasEnvConfiguredChannel(
   if (options.includePersistedAuthState === false || !hasPersistedChannelState(env)) {
     return false;
   }
-  return getPersistedAuthStateChannelIds().some((channelId) =>
-    hasBundledChannelPersistedAuthState({ channelId, cfg, env }),
+  return listPersistedAuthStateChannelIds(options).some((channelId) =>
+    hasPersistedAuthState({ channelId, cfg, env, options }),
   );
 }
 

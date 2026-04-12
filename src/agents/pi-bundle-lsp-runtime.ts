@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logDebug, logWarn } from "../logger.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { loadEmbeddedPiLspConfig } from "./embedded-pi-lsp.js";

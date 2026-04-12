@@ -27,6 +27,7 @@ import { logWarn } from "../logger.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit, TerminationReason } from "../process/supervisor/types.js";
+import { normalizeDeliveryContext, type DeliveryContext } from "../utils/delivery-context.js";
 import {
   addSession,
   appendOutput,
@@ -343,7 +344,11 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   const summary = output
     ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
     : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
-  enqueueSystemEvent(summary, { sessionKey, trusted: false });
+  enqueueSystemEvent(summary, {
+    sessionKey,
+    deliveryContext: session.notifyDeliveryContext,
+    trusted: false,
+  });
   requestHeartbeatNow(scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event" }));
 }
 
@@ -409,13 +414,17 @@ export function resolveApprovalRunningNoticeMs(value?: number) {
 
 export function emitExecSystemEvent(
   text: string,
-  opts: { sessionKey?: string; contextKey?: string },
+  opts: { sessionKey?: string; contextKey?: string; deliveryContext?: DeliveryContext },
 ) {
   const sessionKey = opts.sessionKey?.trim();
   if (!sessionKey) {
     return;
   }
-  enqueueSystemEvent(text, { sessionKey, contextKey: opts.contextKey });
+  enqueueSystemEvent(text, {
+    sessionKey,
+    contextKey: opts.contextKey,
+    deliveryContext: opts.deliveryContext,
+  });
   requestHeartbeatNow(scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event" }));
 }
 
@@ -547,6 +556,7 @@ export async function runExecProcess(opts: {
   notifyOnExitEmptySuccess?: boolean;
   scopeKey?: string;
   sessionKey?: string;
+  notifyDeliveryContext?: DeliveryContext;
   timeoutSec: number | null;
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
 }): Promise<ExecProcessHandle> {
@@ -564,6 +574,7 @@ export async function runExecProcess(opts: {
     command: opts.command,
     scopeKey: opts.scopeKey,
     sessionKey: opts.sessionKey,
+    notifyDeliveryContext: normalizeDeliveryContext(opts.notifyDeliveryContext),
     notifyOnExit: opts.notifyOnExit,
     notifyOnExitEmptySuccess: opts.notifyOnExitEmptySuccess === true,
     exitNotified: false,

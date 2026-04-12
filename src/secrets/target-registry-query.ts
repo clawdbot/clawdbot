@@ -28,6 +28,7 @@ let compiledCoreOpenClawTargetState: {
   knownTargetIds: Set<string>;
   openClawCompiledSecretTargets: CompiledTargetRegistryEntry[];
   openClawTargetsById: Map<string, CompiledTargetRegistryEntry[]>;
+  targetsByType: Map<string, CompiledTargetRegistryEntry[]>;
 } | null = null;
 
 function buildTargetTypeIndex(
@@ -100,6 +101,7 @@ function getCompiledCoreOpenClawTargetState() {
     knownTargetIds: new Set(openClawCompiledSecretTargets.map((entry) => entry.id)),
     openClawCompiledSecretTargets,
     openClawTargetsById: buildConfigTargetIdIndex(openClawCompiledSecretTargets),
+    targetsByType: buildTargetTypeIndex(openClawCompiledSecretTargets),
   };
   return compiledCoreOpenClawTargetState;
 }
@@ -241,7 +243,23 @@ export function resolvePlanTargetAgainstRegistry(candidate: {
   providerId?: string;
   accountId?: string;
 }): ResolvedPlanTarget | null {
+  const coreEntries = getCompiledCoreOpenClawTargetState().targetsByType.get(candidate.type);
+  if (coreEntries) {
+    return resolvePlanTargetAgainstEntries(candidate, coreEntries);
+  }
   const entries = getCompiledSecretTargetRegistryState().targetsByType.get(candidate.type);
+  return resolvePlanTargetAgainstEntries(candidate, entries);
+}
+
+function resolvePlanTargetAgainstEntries(
+  candidate: {
+    type: string;
+    pathSegments: string[];
+    providerId?: string;
+    accountId?: string;
+  },
+  entries: CompiledTargetRegistryEntry[] | undefined,
+): ResolvedPlanTarget | null {
   if (!entries || entries.length === 0) {
     return null;
   }

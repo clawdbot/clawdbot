@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { findNormalizedProviderValue } from "./provider-id.js";
 
 export const CONTEXT_WINDOW_HARD_MIN_TOKENS = 16_000;

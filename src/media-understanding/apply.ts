@@ -14,6 +14,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
+import type { ActiveMediaModel } from "./active-model.types.js";
 import { resolveAttachmentKind } from "./attachments.js";
 import { runWithConcurrency } from "./concurrency.js";
 import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
@@ -24,7 +25,6 @@ import {
 } from "./format.js";
 import { resolveConcurrency } from "./resolve.js";
 import {
-  type ActiveMediaModel,
   buildProviderRegistry,
   createMediaAttachmentCache,
   normalizeMediaAttachments,

@@ -1,9 +1,9 @@
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   ensureAuthProfileStore,
   hasAnyAuthProfileStoreSource,

@@ -1,5 +1,5 @@
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
-import type { CliDeps } from "../cli/deps.js";
+import type { CliDeps } from "../cli/deps.types.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { parseSessionThreadInfo } from "../config/sessions/thread-info.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -15,7 +15,10 @@ import {
 } from "../infra/restart-sentinel.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { deliveryContextFromSession, mergeDeliveryContext } from "../utils/delivery-context.js";
+import {
+  deliveryContextFromSession,
+  mergeDeliveryContext,
+} from "../utils/delivery-context.shared.js";
 import { loadSessionEntry } from "./session-utils.js";
 
 const log = createSubsystemLogger("gateway/restart-sentinel");

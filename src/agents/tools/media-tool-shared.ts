@@ -1,6 +1,6 @@
 import { type Api, type Model } from "@mariozechner/pi-ai";
-import type { OpenClawConfig } from "../../config/config.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getDefaultLocalRoots } from "../../media/web-media.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import {

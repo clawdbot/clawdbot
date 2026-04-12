@@ -4,8 +4,8 @@
 // without recursing through provider-specific facades.
 
 import { findNormalizedProviderKey } from "../agents/provider-id.js";
-import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderRequestCapabilities } from "./provider-http.js";
 import type { ModelProviderConfig } from "./provider-model-shared.js";
 

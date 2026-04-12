@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { seedSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
+import { resetSystemEventsForTest } from "./system-events.js";
 
 vi.mock("./outbound/deliver.js", () => ({
   deliverOutboundPayloads: vi.fn().mockResolvedValue(undefined),
@@ -12,6 +13,7 @@ vi.mock("./outbound/deliver.js", () => ({
 
 afterEach(() => {
   vi.restoreAllMocks();
+  resetSystemEventsForTest();
 });
 
 describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {

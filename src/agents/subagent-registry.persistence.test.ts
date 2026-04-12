@@ -181,6 +181,17 @@ describe("subagent registry persistence", () => {
 
   beforeEach(() => {
     __testing.setDepsForTest({
+      cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
+      ensureContextEnginesInitialized: vi.fn(),
+      ensureRuntimePluginsLoaded: vi.fn(),
+      loadConfig: vi.fn(() => ({})),
+      resolveAgentTimeoutMs: vi.fn(() => 100),
+      resolveContextEngine: vi.fn(async () => ({
+        info: { id: "test", name: "Test", version: "0.0.1" },
+        ingest: vi.fn(async () => ({ ingested: false })),
+        assemble: vi.fn(async ({ messages }) => ({ messages, estimatedTokens: 0 })),
+        compact: vi.fn(async () => ({ ok: false, compacted: false })),
+      })),
       runSubagentAnnounceFlow: announceSpy,
     });
     vi.mocked(callGateway).mockReset();
@@ -362,11 +373,7 @@ describe("subagent registry persistence", () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
     process.env.OPENCLAW_STATE_DIR = tempStateDir;
 
-    vi.mocked(callGateway).mockResolvedValue({
-      status: "ok",
-      startedAt: 111,
-      endedAt: 222,
-    });
+    vi.mocked(callGateway).mockImplementationOnce(async () => await new Promise(() => {}));
 
     registerSubagentRun({
       runId: " run-live ",

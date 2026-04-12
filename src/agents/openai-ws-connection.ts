@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 /**
  * OpenAI WebSocket Connection Manager
  *
@@ -12,9 +13,11 @@
  *
  * @see https://developers.openai.com/api/docs/guides/websocket-mode
  */
-
 import { EventEmitter } from "node:events";
 import WebSocket, { type ClientOptions } from "ws";
+import { rawDataToString } from "../infra/ws.js";
+import { createDebugProxyWebSocketAgent, resolveDebugProxySettings } from "../proxy-capture/env.js";
+import { captureWsEvent } from "../proxy-capture/runtime.js";
 import { buildOpenAIWebSocketWarmUpPayload } from "./openai-ws-request.js";
 import type {
   ClientEvent,
@@ -289,6 +292,7 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
   private readonly socketFactory: (url: string, options: ClientOptions) => WebSocket;
   private readonly headers?: Record<string, string>;
   private readonly request?: ModelProviderRequestTransportOverrides;
+  private readonly flowId: string;
 
   constructor(options: OpenAIWebSocketManagerOptions = {}) {
     super();
@@ -299,6 +303,7 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
       options.socketFactory ?? ((url, socketOptions) => new WebSocket(url, socketOptions));
     this.headers = options.headers;
     this.request = options.request;
+    this.flowId = randomUUID();
   }
 
   // ─── Public API ────────────────────────────────────────────────────────────
@@ -343,7 +348,16 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
         `OpenAIWebSocketManager: cannot send — connection is not open (readyState=${this.ws?.readyState ?? "no socket"})`,
       );
     }
-    this.ws.send(JSON.stringify(event));
+    const payload = JSON.stringify(event);
+    captureWsEvent({
+      url: this.wsUrl,
+      direction: "outbound",
+      kind: "ws-frame",
+      flowId: this.flowId,
+      payload,
+      meta: { eventType: event.type },
+    });
+    this.ws.send(payload);
   }
 
   /**
@@ -411,8 +425,10 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
         request: this.request,
         allowPrivateNetwork: this.request?.allowPrivateNetwork === true,
       });
+      const debugAgent = createDebugProxyWebSocketAgent(resolveDebugProxySettings());
       const socket = this.socketFactory(this.wsUrl, {
         headers: requestConfig.headers,
+        ...(debugAgent ? { agent: debugAgent } : {}),
         ...buildProviderRequestTlsClientOptions(requestConfig),
       });
 
@@ -422,6 +438,12 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
         this.retryCount = 0;
         this._connectionState = "open";
         this._lastCloseInfo = null;
+        captureWsEvent({
+          url: this.wsUrl,
+          direction: "local",
+          kind: "ws-open",
+          flowId: this.flowId,
+        });
         resolve();
         this.emit("open");
       };
@@ -436,6 +458,13 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
         if (this.listenerCount("error") > 0) {
           this.emit("error", err);
         }
+        captureWsEvent({
+          url: this.wsUrl,
+          direction: "local",
+          kind: "error",
+          flowId: this.flowId,
+          errorText: err.message,
+        });
         if (this._connectionState === "connecting" || this._connectionState === "reconnecting") {
           this._connectionState = "closed";
         }
@@ -450,6 +479,14 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
           retryable: isRetryableWebSocketClose(code),
         } satisfies OpenAIWebSocketCloseInfo;
         this._lastCloseInfo = closeInfo;
+        captureWsEvent({
+          url: this.wsUrl,
+          direction: "local",
+          kind: "ws-close",
+          flowId: this.flowId,
+          closeCode: code,
+          payload: reasonStr,
+        });
         this.emit("close", code, reasonStr);
 
         if (!this.closed && closeInfo.retryable) {
@@ -460,6 +497,13 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
       };
 
       const onMessage = (data: WebSocket.RawData) => {
+        captureWsEvent({
+          url: this.wsUrl,
+          direction: "inbound",
+          kind: "ws-frame",
+          flowId: this.flowId,
+          payload: Buffer.from(rawDataToString(data)),
+        });
         this._handleMessage(data);
       };
 

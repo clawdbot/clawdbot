@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   backfillDreamDiary,
+  copyDreamingArchivePath,
+  dedupeDreamDiary,
   loadDreamDiary,
   loadDreamingStatus,
   loadWikiImportInsights,
   loadWikiMemoryPalace,
+  repairDreamingArtifacts,
   resetGroundedShortTerm,
   resetDreamDiary,
   resolveConfiguredDreaming,
@@ -27,6 +30,8 @@ function createState(): { state: DreamingState; request: ReturnType<typeof vi.fn
     dreamingModeSaving: false,
     dreamDiaryLoading: false,
     dreamDiaryActionLoading: false,
+    dreamDiaryActionMessage: null,
+    dreamDiaryActionArchivePath: null,
     dreamDiaryError: null,
     dreamDiaryPath: null,
     dreamDiaryContent: null,
@@ -682,5 +687,109 @@ describe("dreaming controller", () => {
     expect(request).not.toHaveBeenCalledWith("doctor.memory.dreamDiary", {});
     expect(state.dreamDiaryContent).toBe("keep existing diary");
     expect(state.dreamDiaryActionLoading).toBe(false);
+  });
+
+  it("repairs dreaming artifacts and reloads only dreaming status", async () => {
+    const { state, request } = createState();
+    state.dreamDiaryContent = "keep existing diary";
+    const confirmSpy = vi.spyOn(globalThis, "confirm").mockReturnValue(true);
+    request.mockImplementation(async (method: string) => {
+      if (method === "doctor.memory.repairDreamingArtifacts") {
+        return {
+          action: "repairDreamingArtifacts",
+          changed: true,
+          archiveDir: "/tmp/openclaw/.openclaw-repair/dreaming/2026-04-11T22-10-00-000Z",
+          archivedSessionCorpus: true,
+          archivedSessionIngestion: true,
+        };
+      }
+      if (method === "doctor.memory.status") {
+        return { dreaming: null };
+      }
+      return {};
+    });
+
+    const ok = await repairDreamingArtifacts(state);
+
+    expect(ok).toBe(true);
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(request).toHaveBeenCalledWith("doctor.memory.repairDreamingArtifacts", {});
+    expect(request).toHaveBeenCalledWith("doctor.memory.status", {});
+    expect(request).not.toHaveBeenCalledWith("doctor.memory.dreamDiary", {});
+    expect(state.dreamDiaryContent).toBe("keep existing diary");
+    expect(state.dreamDiaryActionMessage).toEqual({
+      kind: "success",
+      text: "Dream cache repair complete: archived session corpus, archived ingestion state. Archive: /tmp/openclaw/.openclaw-repair/dreaming/2026-04-11T22-10-00-000Z",
+    });
+    expect(state.dreamDiaryActionArchivePath).toBe(
+      "/tmp/openclaw/.openclaw-repair/dreaming/2026-04-11T22-10-00-000Z",
+    );
+    expect(state.dreamDiaryActionLoading).toBe(false);
+  });
+
+  it("dedupes dream diary entries and reloads diary plus status", async () => {
+    const { state, request } = createState();
+    const confirmSpy = vi.spyOn(globalThis, "confirm").mockReturnValue(true);
+    request.mockImplementation(async (method: string) => {
+      if (method === "doctor.memory.dedupeDreamDiary") {
+        return {
+          action: "dedupeDreamDiary",
+          removedEntries: 2,
+          keptEntries: 5,
+        };
+      }
+      if (method === "doctor.memory.dreamDiary") {
+        return { found: true, path: "DREAMS.md", content: "deduped diary" };
+      }
+      if (method === "doctor.memory.status") {
+        return { dreaming: null };
+      }
+      return {};
+    });
+
+    const ok = await dedupeDreamDiary(state);
+
+    expect(ok).toBe(true);
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(request).toHaveBeenCalledWith("doctor.memory.dedupeDreamDiary", {});
+    expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", {});
+    expect(request).toHaveBeenCalledWith("doctor.memory.status", {});
+    expect(state.dreamDiaryContent).toBe("deduped diary");
+    expect(state.dreamDiaryActionMessage).toEqual({
+      kind: "success",
+      text: "Removed 2 duplicate dream entries and kept 5.",
+    });
+    expect(state.dreamDiaryActionArchivePath).toBeNull();
+    expect(state.dreamDiaryActionLoading).toBe(false);
+  });
+
+  it("copies the dreaming repair archive path", async () => {
+    const { state } = createState();
+    state.dreamDiaryActionArchivePath =
+      "/tmp/openclaw/.openclaw-repair/dreaming/2026-04-11T22-10-00-000Z";
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } } as unknown as Navigator);
+
+    const ok = await copyDreamingArchivePath(state);
+
+    expect(ok).toBe(true);
+    expect(writeText).toHaveBeenCalledWith(
+      "/tmp/openclaw/.openclaw-repair/dreaming/2026-04-11T22-10-00-000Z",
+    );
+    expect(state.dreamDiaryActionMessage).toEqual({
+      kind: "success",
+      text: "Archive path copied.",
+    });
+  });
+
+  it("does not run repair when confirmation is cancelled", async () => {
+    const { state, request } = createState();
+    vi.spyOn(globalThis, "confirm").mockReturnValue(false);
+
+    const ok = await repairDreamingArtifacts(state);
+
+    expect(ok).toBe(false);
+    expect(request).not.toHaveBeenCalled();
+    expect(state.dreamDiaryActionMessage).toBeNull();
   });
 });

@@ -1,4 +1,4 @@
-import type { ChannelId } from "../channels/plugins/types.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 

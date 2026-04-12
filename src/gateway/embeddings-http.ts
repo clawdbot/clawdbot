@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { loadConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import {
@@ -90,7 +91,7 @@ function validateInputTexts(texts: string[]): string | undefined {
   return undefined;
 }
 
-function resolveAutoExplicitProviders(cfg: ReturnType<typeof loadConfig>): Set<string> {
+function resolveAutoExplicitProviders(cfg: OpenClawConfig): Set<string> {
   return new Set(
     listMemoryEmbeddingProviders(cfg)
       .filter((adapter) => adapter.allowExplicitWhenConfiguredAuto)
@@ -106,7 +107,7 @@ function shouldContinueAutoSelection(
 }
 
 async function createConfiguredEmbeddingProvider(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   agentDir: string;
   provider: EmbeddingProviderRequest;
   model: string;
@@ -171,7 +172,7 @@ async function createConfiguredEmbeddingProvider(params: {
 function resolveEmbeddingsTarget(params: {
   requestModel: string;
   configuredProvider: EmbeddingProviderRequest;
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
 }): { provider: EmbeddingProviderRequest; model: string } | { errorMessage: string } {
   const raw = params.requestModel.trim();
   const slash = raw.indexOf("/");

@@ -1,9 +1,9 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
-import type { AuthProfileStore } from "../../agents/auth-profiles.js";
+import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { shouldSuppressBuiltInModel } from "../../agents/model-suppression.js";
 import { normalizeProviderId } from "../../agents/provider-id.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadModelRegistry, toModelRow } from "./list.registry.js";
 import { loadModelCatalog, resolveModelWithRegistry } from "./list.runtime.js";
 import type { ConfiguredEntry, ModelRow } from "./list.types.js";

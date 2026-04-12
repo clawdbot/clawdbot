@@ -2,7 +2,7 @@ import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "../agents/internal-runtime-context.js";
-import { sanitizeUserFacingText } from "../agents/pi-embedded-helpers/errors.js";
+import { sanitizeUserFacingText } from "../agents/pi-embedded-helpers/sanitize-user-facing-text.js";
 import { truncateUtf16Safe } from "../utils.js";
 import type { TaskRecord } from "./task-registry.types.js";
 

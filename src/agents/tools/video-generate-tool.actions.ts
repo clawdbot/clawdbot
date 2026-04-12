@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listSupportedVideoGenerationModes } from "../../video-generation/capabilities.js";
 import { listRuntimeVideoGenerationProviders } from "../../video-generation/runtime.js";
 import {
@@ -21,11 +21,36 @@ function summarizeVideoGenerationCapabilities(
   const generate = provider.capabilities.generate;
   const imageToVideo = provider.capabilities.imageToVideo;
   const videoToVideo = provider.capabilities.videoToVideo;
+  // providerOptions may be declared at the mode level (generate) or at the flat
+  // provider-capabilities level. The runtime checks both; surface the union so
+  // the agent sees a single merged view of which opaque keys each provider
+  // actually accepts.
+  const declaredProviderOptions: Record<string, string> = {};
+  for (const [key, type] of Object.entries(provider.capabilities.providerOptions ?? {})) {
+    declaredProviderOptions[key] = type;
+  }
+  for (const [key, type] of Object.entries(generate?.providerOptions ?? {})) {
+    declaredProviderOptions[key] = type;
+  }
+  for (const [key, type] of Object.entries(imageToVideo?.providerOptions ?? {})) {
+    declaredProviderOptions[key] = type;
+  }
+  for (const [key, type] of Object.entries(videoToVideo?.providerOptions ?? {})) {
+    declaredProviderOptions[key] = type;
+  }
+  const maxInputAudios =
+    generate?.maxInputAudios ??
+    imageToVideo?.maxInputAudios ??
+    videoToVideo?.maxInputAudios ??
+    provider.capabilities.maxInputAudios;
   const capabilities = [
     supportedModes.length > 0 ? `modes=${supportedModes.join("/")}` : null,
     generate?.maxVideos ? `maxVideos=${generate.maxVideos}` : null,
     imageToVideo?.maxInputImages ? `maxInputImages=${imageToVideo.maxInputImages}` : null,
     videoToVideo?.maxInputVideos ? `maxInputVideos=${videoToVideo.maxInputVideos}` : null,
+    typeof maxInputAudios === "number" && maxInputAudios > 0
+      ? `maxInputAudios=${maxInputAudios}`
+      : null,
     generate?.maxDurationSeconds ? `maxDurationSeconds=${generate.maxDurationSeconds}` : null,
     generate?.supportedDurationSeconds?.length
       ? `supportedDurationSeconds=${generate.supportedDurationSeconds.join("/")}`
@@ -41,6 +66,11 @@ function summarizeVideoGenerationCapabilities(
     generate?.supportsSize ? "size" : null,
     generate?.supportsAudio ? "audio" : null,
     generate?.supportsWatermark ? "watermark" : null,
+    Object.keys(declaredProviderOptions).length > 0
+      ? `providerOptions={${Object.entries(declaredProviderOptions)
+          .map(([key, type]) => `${key}:${type}`)
+          .join(", ")}}`
+      : null,
   ]
     .filter((entry): entry is string => Boolean(entry))
     .join(", ");

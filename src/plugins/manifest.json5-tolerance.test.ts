@@ -102,6 +102,54 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     }
   });
 
+  it("normalizes activation and setup descriptor metadata from the manifest", () => {
+    const dir = makeTempDir();
+    const json5Content = `{
+  id: "openai",
+  activation: {
+    onProviders: ["openai", "", "openai-codex"],
+    onCommands: ["models", ""],
+    onChannels: ["web", ""],
+    onRoutes: ["gateway-webhook", ""],
+    onCapabilities: ["provider", "tool", "wat"]
+  },
+  setup: {
+    providers: [
+      { id: "openai", authMethods: ["api-key", ""], envVars: ["OPENAI_API_KEY", ""] },
+      { id: "", authMethods: ["oauth"] }
+    ],
+    cliBackends: ["openai-cli", ""],
+    configMigrations: ["legacy-openai-auth", ""],
+    requiresRuntime: false
+  },
+  configSchema: { type: "object" }
+}`;
+    fs.writeFileSync(path.join(dir, "openclaw.plugin.json"), json5Content, "utf-8");
+    const result = loadPluginManifest(dir, false);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.manifest.activation).toEqual({
+        onProviders: ["openai", "openai-codex"],
+        onCommands: ["models"],
+        onChannels: ["web"],
+        onRoutes: ["gateway-webhook"],
+        onCapabilities: ["provider", "tool"],
+      });
+      expect(result.manifest.setup).toEqual({
+        providers: [
+          {
+            id: "openai",
+            authMethods: ["api-key"],
+            envVars: ["OPENAI_API_KEY"],
+          },
+        ],
+        cliBackends: ["openai-cli"],
+        configMigrations: ["legacy-openai-auth"],
+        requiresRuntime: false,
+      });
+    }
+  });
+
   it("still rejects completely invalid syntax", () => {
     const dir = makeTempDir();
     fs.writeFileSync(path.join(dir, "openclaw.plugin.json"), "not json at all {{{}}", "utf-8");

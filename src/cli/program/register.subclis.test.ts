@@ -19,8 +19,9 @@ const { nodesAction, registerNodesCli } = vi.hoisted(() => {
   return { nodesAction: action, registerNodesCli: register };
 });
 
-const { registerQaCli } = vi.hoisted(() => ({
-  registerQaCli: vi.fn((program: Command) => {
+const { isQaLabCliAvailable, registerQaLabCli } = vi.hoisted(() => ({
+  isQaLabCliAvailable: vi.fn(() => true),
+  registerQaLabCli: vi.fn((program: Command) => {
     const qa = program.command("qa");
     qa.command("run").action(() => undefined);
   }),
@@ -36,8 +37,8 @@ const { inferAction, registerCapabilityCli } = vi.hoisted(() => {
 
 vi.mock("../acp-cli.js", () => ({ registerAcpCli }));
 vi.mock("../nodes-cli.js", () => ({ registerNodesCli }));
-vi.mock("../qa-cli.js", () => ({ registerQaCli }));
 vi.mock("../capability-cli.js", () => ({ registerCapabilityCli }));
+vi.mock("../../plugin-sdk/qa-lab.js", () => ({ isQaLabCliAvailable, registerQaLabCli }));
 
 describe("registerSubCliCommands", () => {
   const originalArgv = process.argv;
@@ -63,6 +64,8 @@ describe("registerSubCliCommands", () => {
     acpAction.mockClear();
     registerNodesCli.mockClear();
     nodesAction.mockClear();
+    isQaLabCliAvailable.mockReset().mockReturnValue(true);
+    registerQaLabCli.mockClear();
     registerCapabilityCli.mockClear();
     inferAction.mockClear();
   });
@@ -96,6 +99,14 @@ describe("registerSubCliCommands", () => {
     expect(names).toContain("clawbot");
     expect(names).toContain("qa");
     expect(registerAcpCli).not.toHaveBeenCalled();
+  });
+
+  it("omits the qa placeholder when the private qa bundle is unavailable", () => {
+    isQaLabCliAvailable.mockReturnValue(false);
+
+    const program = createRegisteredProgram(["node", "openclaw"]);
+
+    expect(program.commands.map((cmd) => cmd.name())).not.toContain("qa");
   });
 
   it("re-parses argv for lazy subcommands", async () => {

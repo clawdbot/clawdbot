@@ -50,6 +50,21 @@ export type AgentContextPruningConfig = {
   };
 };
 
+export type AgentStartupContextConfig = {
+  /** Enable runtime-owned startup-context prelude on bare session resets (default: true). */
+  enabled?: boolean;
+  /** Which bare reset commands should receive startup context (default: ["new", "reset"]). */
+  applyOn?: Array<"new" | "reset">;
+  /** How many dated memory files to load counting backward from today (default: 2). */
+  dailyMemoryDays?: number;
+  /** Max bytes to read from each daily memory file before skipping (default: 16384). */
+  maxFileBytes?: number;
+  /** Max characters retained from each daily memory file (default: 2000). */
+  maxFileChars?: number;
+  /** Max total characters retained across the startup prelude (default: 4500). */
+  maxTotalChars?: number;
+};
+
 export type CliBackendConfig = {
   /** CLI command to execute (absolute path or on PATH). */
   command: string;
@@ -192,6 +207,8 @@ export type AgentDefaultsConfig = {
   bootstrapPromptTruncationWarning?: "off" | "once" | "always";
   /** Optional IANA timezone for the user (used in system prompt; defaults to host timezone). */
   userTimezone?: string;
+  /** Runtime-owned first-turn startup context for bare /new and /reset. */
+  startupContext?: AgentStartupContextConfig;
   /** Time format in system prompt: auto (OS preference), 12-hour, or 24-hour. */
   timeFormat?: "auto" | "12" | "24";
   /**

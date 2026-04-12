@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
+import type { GatewayBindMode } from "../config/types.gateway.js";
 import {
   pickMatchingExternalInterfaceAddress,
   readNetworkInterfaces,
@@ -295,7 +296,7 @@ export function __resetContainerCacheForTest(): void {
  * @returns The bind address to use (never null)
  */
 export async function resolveGatewayBindHost(
-  bind: import("../config/config.js").GatewayBindMode | undefined,
+  bind: GatewayBindMode | undefined,
   customHost?: string,
 ): Promise<string> {
   const mode = bind ?? "loopback";
@@ -365,9 +366,7 @@ export async function resolveGatewayBindHost(
  * environment as the eventual bind decision. Host-side diagnostics should keep
  * their own explicit defaults instead of inferring from the caller process.
  */
-export function defaultGatewayBindMode(
-  tailscaleMode?: string,
-): import("../config/config.js").GatewayBindMode {
+export function defaultGatewayBindMode(tailscaleMode?: string): GatewayBindMode {
   if (tailscaleMode && tailscaleMode !== "off") {
     return "loopback";
   }

@@ -168,9 +168,17 @@ type DoctorMemoryDreamDiaryPayload = {
 type DoctorMemoryDreamActionPayload = {
   action?: unknown;
   removedEntries?: unknown;
+  dedupedEntries?: unknown;
+  keptEntries?: unknown;
   written?: unknown;
   replaced?: unknown;
   removedShortTermEntries?: unknown;
+  changed?: unknown;
+  archiveDir?: unknown;
+  archivedSessionCorpus?: unknown;
+  archivedSessionIngestion?: unknown;
+  archivedDreamsDiary?: unknown;
+  warnings?: unknown;
 };
 
 type WikiImportInsightsPayload = {
@@ -199,6 +207,8 @@ export type DreamingState = {
   dreamingModeSaving: boolean;
   dreamDiaryLoading: boolean;
   dreamDiaryActionLoading: boolean;
+  dreamDiaryActionMessage: { kind: "success" | "error"; text: string } | null;
+  dreamDiaryActionArchivePath: string | null;
   dreamDiaryError: string | null;
   dreamDiaryPath: string | null;
   dreamDiaryContent: string | null;
@@ -210,6 +220,64 @@ export type DreamingState = {
   wikiMemoryPalace: WikiMemoryPalace | null;
   lastError: string | null;
 };
+
+function confirmDreamingAction(message: string): boolean {
+  if (typeof globalThis.confirm !== "function") {
+    return true;
+  }
+  return globalThis.confirm(message);
+}
+
+function buildDreamDiaryActionSuccessMessage(
+  method:
+    | "doctor.memory.backfillDreamDiary"
+    | "doctor.memory.resetDreamDiary"
+    | "doctor.memory.resetGroundedShortTerm"
+    | "doctor.memory.repairDreamingArtifacts"
+    | "doctor.memory.dedupeDreamDiary",
+  payload: DoctorMemoryDreamActionPayload | undefined,
+): string {
+  switch (method) {
+    case "doctor.memory.dedupeDreamDiary": {
+      const removed =
+        typeof payload?.dedupedEntries === "number"
+          ? payload.dedupedEntries
+          : typeof payload?.removedEntries === "number"
+            ? payload.removedEntries
+            : 0;
+      const kept = typeof payload?.keptEntries === "number" ? payload.keptEntries : undefined;
+      return kept !== undefined
+        ? `Removed ${removed} duplicate dream ${removed === 1 ? "entry" : "entries"} and kept ${kept}.`
+        : `Removed ${removed} duplicate dream ${removed === 1 ? "entry" : "entries"}.`;
+    }
+    case "doctor.memory.repairDreamingArtifacts": {
+      const actions: string[] = [];
+      const archiveDir = normalizeTrimmedString(payload?.archiveDir);
+      if (payload?.archivedSessionCorpus === true) {
+        actions.push("archived session corpus");
+      }
+      if (payload?.archivedSessionIngestion === true) {
+        actions.push("archived ingestion state");
+      }
+      if (payload?.archivedDreamsDiary === true) {
+        actions.push("archived dream diary");
+      }
+      if (actions.length === 0) {
+        return "Dream cache repair finished with no changes.";
+      }
+      return archiveDir
+        ? `Dream cache repair complete: ${actions.join(", ")}. Archive: ${archiveDir}`
+        : `Dream cache repair complete: ${actions.join(", ")}.`;
+    }
+    case "doctor.memory.backfillDreamDiary":
+      return `Backfilled ${typeof payload?.written === "number" ? payload.written : 0} dream diary entries.`;
+    case "doctor.memory.resetDreamDiary":
+      return `Removed ${typeof payload?.removedEntries === "number" ? payload.removedEntries : 0} backfilled dream diary entries.`;
+    case "doctor.memory.resetGroundedShortTerm":
+      return `Cleared ${typeof payload?.removedShortTermEntries === "number" ? payload.removedShortTermEntries : 0} replayed short-term entries.`;
+  }
+  return "Dream diary action complete.";
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -708,7 +776,9 @@ async function runDreamDiaryAction(
   method:
     | "doctor.memory.backfillDreamDiary"
     | "doctor.memory.resetDreamDiary"
-    | "doctor.memory.resetGroundedShortTerm",
+    | "doctor.memory.resetGroundedShortTerm"
+    | "doctor.memory.repairDreamingArtifacts"
+    | "doctor.memory.dedupeDreamDiary",
   options?: {
     reloadDiary?: boolean;
   },
@@ -716,20 +786,48 @@ async function runDreamDiaryAction(
   if (!state.client || !state.connected || state.dreamDiaryActionLoading) {
     return false;
   }
+  if (
+    method === "doctor.memory.repairDreamingArtifacts" &&
+    !confirmDreamingAction(
+      "Repair Dream Cache? This archives derived dream cache files and rebuilds them from clean inputs. Your dream diary stays untouched.",
+    )
+  ) {
+    return false;
+  }
+  if (
+    method === "doctor.memory.dedupeDreamDiary" &&
+    !confirmDreamingAction(
+      "Dedupe Dream Diary? This rewrites DREAMS.md and removes only exact duplicate diary entries.",
+    )
+  ) {
+    return false;
+  }
   state.dreamDiaryActionLoading = true;
   state.dreamingStatusError = null;
   state.dreamDiaryError = null;
+  state.dreamDiaryActionMessage = null;
+  state.dreamDiaryActionArchivePath = null;
   try {
-    await state.client.request<DoctorMemoryDreamActionPayload>(method, {});
+    const payload = await state.client.request<DoctorMemoryDreamActionPayload>(method, {});
     if (options?.reloadDiary !== false) {
       await loadDreamDiary(state);
     }
     await loadDreamingStatus(state);
+    state.dreamDiaryActionArchivePath =
+      method === "doctor.memory.repairDreamingArtifacts"
+        ? (normalizeTrimmedString(payload?.archiveDir) ?? null)
+        : null;
+    state.dreamDiaryActionMessage = {
+      kind: "success",
+      text: buildDreamDiaryActionSuccessMessage(method, payload),
+    };
     return true;
   } catch (err) {
     const message = String(err);
     state.dreamingStatusError = message;
     state.lastError = message;
+    state.dreamDiaryActionArchivePath = null;
+    state.dreamDiaryActionMessage = { kind: "error", text: message };
     return false;
   } finally {
     state.dreamDiaryActionLoading = false;
@@ -748,6 +846,44 @@ export async function resetGroundedShortTerm(state: DreamingState): Promise<bool
   return runDreamDiaryAction(state, "doctor.memory.resetGroundedShortTerm", {
     reloadDiary: false,
   });
+}
+
+export async function repairDreamingArtifacts(state: DreamingState): Promise<boolean> {
+  return runDreamDiaryAction(state, "doctor.memory.repairDreamingArtifacts", {
+    reloadDiary: false,
+  });
+}
+
+export async function copyDreamingArchivePath(state: DreamingState): Promise<boolean> {
+  const path = state.dreamDiaryActionArchivePath;
+  if (!path) {
+    return false;
+  }
+  if (!globalThis.navigator?.clipboard?.writeText) {
+    state.dreamDiaryActionMessage = {
+      kind: "error",
+      text: "Could not copy archive path.",
+    };
+    return false;
+  }
+  try {
+    await globalThis.navigator.clipboard.writeText(path);
+    state.dreamDiaryActionMessage = {
+      kind: "success",
+      text: "Archive path copied.",
+    };
+    return true;
+  } catch {
+    state.dreamDiaryActionMessage = {
+      kind: "error",
+      text: "Could not copy archive path.",
+    };
+    return false;
+  }
+}
+
+export async function dedupeDreamDiary(state: DreamingState): Promise<boolean> {
+  return runDreamDiaryAction(state, "doctor.memory.dedupeDreamDiary");
 }
 
 async function writeDreamingPatch(

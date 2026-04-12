@@ -1,17 +1,25 @@
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import {
   isPackageProvenControlUiRootSync,
   resolveControlUiRootSync,
 } from "../infra/control-ui-assets.js";
+import { openLocalFileSafely, SafeOpenError } from "../infra/fs-safe.js";
+import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { isWithinDir } from "../infra/path-safety.js";
 import { openVerifiedFileSync } from "../infra/safe-open-sync.js";
+import { assertLocalMediaAllowed, getDefaultLocalRoots } from "../media/local-media-access.js";
+import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
+import { detectMime } from "../media/mime.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { resolveUserPath } from "../utils.js";
+import { resolveRuntimeServiceVersion } from "../version.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
+import type { AuthRateLimiter } from "./auth-rate-limit.js";
+import { authorizeHttpGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   type ControlUiBootstrapConfig,
@@ -29,8 +37,11 @@ import {
   normalizeControlUiBasePath,
   resolveAssistantAvatarUrl,
 } from "./control-ui-shared.js";
+import { sendGatewayAuthFailure } from "./http-common.js";
+import { getBearerToken, resolveHttpBrowserOriginPolicy } from "./http-utils.js";
 
 const ROOT_PREFIX = "/";
+const CONTROL_UI_ASSISTANT_MEDIA_PREFIX = "/__openclaw__/assistant-media";
 const CONTROL_UI_ASSETS_MISSING_MESSAGE =
   "Control UI assets not found. Build them with `pnpm ui:build` (auto-installs UI deps), or run `pnpm ui:dev` during development.";
 
@@ -153,6 +164,218 @@ function isValidAgentId(agentId: string): boolean {
   return /^[a-z0-9][a-z0-9_-]{0,63}$/i.test(agentId);
 }
 
+function normalizeAssistantMediaSource(source: string): string | null {
+  const trimmed = source.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed.startsWith("file://")) {
+    try {
+      return safeFileURLToPath(trimmed);
+    } catch {
+      return null;
+    }
+  }
+  if (trimmed.startsWith("~")) {
+    return resolveUserPath(trimmed);
+  }
+  return trimmed;
+}
+
+function resolveAssistantMediaRoutePath(basePath?: string): string {
+  const normalizedBasePath =
+    basePath && basePath !== "/" ? (basePath.endsWith("/") ? basePath.slice(0, -1) : basePath) : "";
+  return `${normalizedBasePath}${CONTROL_UI_ASSISTANT_MEDIA_PREFIX}`;
+}
+
+function resolveAssistantMediaAuthToken(req: IncomingMessage): string | undefined {
+  const bearer = getBearerToken(req);
+  if (bearer) {
+    return bearer;
+  }
+  const urlRaw = req.url;
+  if (!urlRaw) {
+    return undefined;
+  }
+  try {
+    const url = new URL(urlRaw, "http://localhost");
+    const token = url.searchParams.get("token")?.trim();
+    return token || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+type AssistantMediaAvailability =
+  | { available: true }
+  | { available: false; reason: string; code: string };
+
+function classifyAssistantMediaError(err: unknown): AssistantMediaAvailability {
+  if (err instanceof SafeOpenError) {
+    switch (err.code) {
+      case "not-found":
+        return { available: false, code: "file-not-found", reason: "File not found" };
+      case "not-file":
+        return { available: false, code: "not-a-file", reason: "Not a file" };
+      case "invalid-path":
+      case "path-mismatch":
+      case "symlink":
+        return { available: false, code: "invalid-file", reason: "Invalid file" };
+      default:
+        return {
+          available: false,
+          code: "attachment-unavailable",
+          reason: "Attachment unavailable",
+        };
+    }
+  }
+  if (err instanceof Error && "code" in err) {
+    const errorCode = (err as { code?: unknown }).code;
+    switch (typeof errorCode === "string" ? errorCode : "") {
+      case "path-not-allowed":
+        return {
+          available: false,
+          code: "outside-allowed-folders",
+          reason: "Outside allowed folders",
+        };
+      case "invalid-file-url":
+      case "invalid-path":
+      case "unsafe-bypass":
+      case "network-path-not-allowed":
+      case "invalid-root":
+        return { available: false, code: "blocked-local-file", reason: "Blocked local file" };
+      case "not-found":
+        return { available: false, code: "file-not-found", reason: "File not found" };
+      case "not-file":
+        return { available: false, code: "not-a-file", reason: "Not a file" };
+      default:
+        break;
+    }
+  }
+  return { available: false, code: "attachment-unavailable", reason: "Attachment unavailable" };
+}
+
+async function resolveAssistantMediaAvailability(
+  source: string,
+  localRoots: readonly string[],
+): Promise<AssistantMediaAvailability> {
+  try {
+    await assertLocalMediaAllowed(source, localRoots);
+    const opened = await openLocalFileSafely({ filePath: source });
+    await opened.handle.close();
+    return { available: true };
+  } catch (err) {
+    return classifyAssistantMediaError(err);
+  }
+}
+
+export async function handleControlUiAssistantMediaRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  opts?: {
+    basePath?: string;
+    config?: OpenClawConfig;
+    agentId?: string;
+    auth?: ResolvedGatewayAuth;
+    trustedProxies?: string[];
+    allowRealIpFallback?: boolean;
+    rateLimiter?: AuthRateLimiter;
+  },
+): Promise<boolean> {
+  const urlRaw = req.url;
+  if (!urlRaw || !isReadHttpMethod(req.method)) {
+    return false;
+  }
+  const url = new URL(urlRaw, "http://localhost");
+  if (url.pathname !== resolveAssistantMediaRoutePath(opts?.basePath)) {
+    return false;
+  }
+
+  applyControlUiSecurityHeaders(res);
+  if (opts?.auth) {
+    const token = resolveAssistantMediaAuthToken(req);
+    const authResult = await authorizeHttpGatewayConnect({
+      auth: opts.auth,
+      connectAuth: token ? { token, password: token } : null,
+      req,
+      browserOriginPolicy: resolveHttpBrowserOriginPolicy(req),
+      trustedProxies: opts.trustedProxies,
+      allowRealIpFallback: opts.allowRealIpFallback,
+      rateLimiter: opts.rateLimiter,
+    });
+    if (!authResult.ok) {
+      sendGatewayAuthFailure(res, authResult);
+      return true;
+    }
+  }
+  const source = normalizeAssistantMediaSource(url.searchParams.get("source") ?? "");
+  if (!source) {
+    respondControlUiNotFound(res);
+    return true;
+  }
+  const localRoots = opts?.config
+    ? getAgentScopedMediaLocalRoots(opts.config, opts.agentId)
+    : getDefaultLocalRoots();
+
+  if (url.searchParams.get("meta") === "1") {
+    const availability = await resolveAssistantMediaAvailability(source, localRoots);
+    sendJson(res, 200, availability);
+    return true;
+  }
+
+  let opened: Awaited<ReturnType<typeof openLocalFileSafely>> | null = null;
+  let handleClosed = false;
+  const closeOpenedHandle = async () => {
+    if (!opened || handleClosed) {
+      return;
+    }
+    handleClosed = true;
+    await opened.handle.close().catch(() => {});
+  };
+  try {
+    await assertLocalMediaAllowed(source, localRoots);
+    opened = await openLocalFileSafely({ filePath: source });
+    const sniffLength = Math.min(opened.stat.size, 8192);
+    const sniffBuffer = sniffLength > 0 ? Buffer.allocUnsafe(sniffLength) : undefined;
+    const bytesRead =
+      sniffBuffer && sniffLength > 0
+        ? (await opened.handle.read(sniffBuffer, 0, sniffLength, 0)).bytesRead
+        : 0;
+    const mime = await detectMime({
+      buffer: sniffBuffer?.subarray(0, bytesRead),
+      filePath: source,
+    });
+    if (mime) {
+      res.setHeader("Content-Type", mime);
+    } else {
+      res.setHeader("Content-Type", "application/octet-stream");
+    }
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Content-Length", String(opened.stat.size));
+    const stream = opened.handle.createReadStream({ start: 0, autoClose: false });
+    const finishClose = () => {
+      void closeOpenedHandle();
+    };
+    stream.once("end", finishClose);
+    stream.once("close", finishClose);
+    stream.once("error", () => {
+      void closeOpenedHandle();
+      if (!res.headersSent) {
+        respondControlUiNotFound(res);
+      } else {
+        res.destroy();
+      }
+    });
+    res.once("close", finishClose);
+    stream.pipe(res);
+    return true;
+  } catch {
+    await closeOpenedHandle();
+    respondControlUiNotFound(res);
+    return true;
+  }
+}
+
 export function handleControlUiAvatarRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -221,7 +444,7 @@ export function handleControlUiAvatarRequest(
 }
 
 function setStaticFileHeaders(res: ServerResponse, filePath: string) {
-  const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
+  const ext = path.extname(filePath).toLowerCase();
   res.setHeader("Content-Type", contentTypeForExt(ext));
   // Static UI should never be cached aggressively while iterating; allow the
   // browser to revalidate.
@@ -365,6 +588,16 @@ export function handleControlUiHttpRequest(
       basePath,
       assistantName: identity.name,
       assistantAvatar: avatarValue ?? identity.avatar,
+      assistantAgentId: identity.agentId,
+      serverVersion: resolveRuntimeServiceVersion(process.env),
+      localMediaPreviewRoots: [...getAgentScopedMediaLocalRoots(config ?? {}, identity.agentId)],
+      embedSandbox:
+        config?.gateway?.controlUi?.embedSandbox === "trusted"
+          ? "trusted"
+          : config?.gateway?.controlUi?.embedSandbox === "strict"
+            ? "strict"
+            : "scripts",
+      allowExternalEmbedUrls: config?.gateway?.controlUi?.allowExternalEmbedUrls === true,
     } satisfies ControlUiBootstrapConfig);
     return true;
   }
@@ -463,7 +696,7 @@ export function handleControlUiHttpRequest(
   // against the same set of extensions that contentTypeForExt() recognises so
   // that dotted SPA routes (e.g. /user/jane.doe, /v2.0) still get the
   // client-side router fallback.
-  if (STATIC_ASSET_EXTENSIONS.has(normalizeLowercaseStringOrEmpty(path.extname(fileRel)))) {
+  if (STATIC_ASSET_EXTENSIONS.has(path.extname(fileRel).toLowerCase())) {
     respondControlUiNotFound(res);
     return true;
   }

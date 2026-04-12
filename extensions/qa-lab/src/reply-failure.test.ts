@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractQaFailureReplyText } from "./reply-failure.js";
+import { extractQaFailureReplyText, extractQaVisibleReplyLeakText } from "./reply-failure.js";
 
 describe("extractQaFailureReplyText", () => {
   it("returns undefined for normal assistant replies", () => {
@@ -30,5 +30,25 @@ describe("extractQaFailureReplyText", () => {
         "⚠️ Missing API key for OpenAI on the gateway. Use `openai-codex/gpt-5.4` for OAuth, or set `OPENAI_API_KEY`, then try again.",
       ),
     ).toContain("Missing API key for OpenAI on the gateway.");
+  });
+
+  it("classifies leaked codex harness coordination chatter as a failure", () => {
+    expect(
+      extractQaFailureReplyText("checking thread context; then post a tight progress reply here."),
+    ).toContain("checking thread context");
+  });
+});
+
+describe("extractQaVisibleReplyLeakText", () => {
+  it("returns undefined for normal visible replies", () => {
+    expect(extractQaVisibleReplyLeakText("QA_LEAK_OK")).toBe(undefined);
+  });
+
+  it("detects coordination-nudge leak text", () => {
+    expect(
+      extractQaVisibleReplyLeakText(
+        "thread context thin; posting a coordination nudge, not inventing status.",
+      ),
+    ).toContain("thread context thin");
   });
 });

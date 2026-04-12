@@ -3,7 +3,7 @@ import type {
   ChannelApprovalNativeAvailabilityAdapter,
   ChannelApprovalNativeRuntimeAdapter,
 } from "./approval-handler-runtime-types.js";
-import type { ExecApprovalChannelRuntimeEventKind } from "./exec-approval-channel-runtime.js";
+import type { ExecApprovalChannelRuntimeEventKind } from "./exec-approval-channel-runtime.types.js";
 
 export const CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY = "approval.native";
 

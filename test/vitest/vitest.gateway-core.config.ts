@@ -9,6 +9,11 @@ const nonCoreGatewayTestExclude = [
   "src/gateway/**/*gateway-cli-backend*.test.ts",
   "src/gateway/**/*server*.test.ts",
   "src/gateway/gateway.test.ts",
+  "src/gateway/embeddings-http.test.ts",
+  "src/gateway/models-http.test.ts",
+  "src/gateway/openai-http.test.ts",
+  "src/gateway/openresponses-http.test.ts",
+  "src/gateway/probe.auth.integration.test.ts",
   "src/gateway/server.startup-matrix-migration.integration.test.ts",
   "src/gateway/sessions-history-http.test.ts",
 ];

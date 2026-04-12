@@ -293,8 +293,10 @@ export const zh_CN: TranslationMap = {
     },
     scene: {
       backfill: "回填",
+      dedupeDiary: "去重日记",
       reset: "重置",
       clearGrounded: "清除已落地",
+      repairCache: "修复梦境缓存",
       working: "处理中…",
     },
     phase: {

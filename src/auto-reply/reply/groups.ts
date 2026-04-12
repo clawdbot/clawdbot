@@ -1,6 +1,6 @@
-import type { OpenClawConfig } from "../../config/config.js";
 import { resolveChannelGroupRequireMention } from "../../config/group-policy.js";
 import type { GroupKeyResolution, SessionEntry } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,

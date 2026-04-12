@@ -1,6 +1,6 @@
 import type { Mock } from "vitest";
 import { vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 

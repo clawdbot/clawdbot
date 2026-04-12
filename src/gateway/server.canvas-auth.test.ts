@@ -118,7 +118,7 @@ function makeWsClient(params: {
   connId: string;
   clientIp: string;
   role: "node" | "operator";
-  mode: "node" | "backend";
+  mode: "node" | "backend" | "webchat";
   canvasCapability?: string;
   canvasCapabilityExpiresAtMs?: number;
 }): GatewayWsClient {
@@ -246,7 +246,7 @@ describe("gateway canvas host auth", () => {
         handleHttpRequest: allowCanvasHostHttp,
         run: async ({ listener, clients }) => {
           const host = "127.0.0.1";
-          const operatorOnlyCapability = "operator-only";
+          const webchatCapability = "webchat-cap";
           const expiredNodeCapability = "expired-node";
           const activeNodeCapability = "active-node";
           const activeCanvasPath = scopedCanvasPath(activeNodeCapability, `${CANVAS_HOST_PATH}/`);
@@ -264,19 +264,19 @@ describe("gateway canvas host auth", () => {
 
           clients.add(
             makeWsClient({
-              connId: "c-operator",
+              connId: "c-webchat",
               clientIp: "192.168.1.10",
               role: "operator",
-              mode: "backend",
-              canvasCapability: operatorOnlyCapability,
+              mode: "webchat",
+              canvasCapability: webchatCapability,
               canvasCapabilityExpiresAtMs: Date.now() + 60_000,
             }),
           );
 
-          const operatorCapabilityBlocked = await fetchCanvas(
-            `http://${host}:${listener.port}${scopedCanvasPath(operatorOnlyCapability, `${CANVAS_HOST_PATH}/`)}`,
+          const webchatCapabilityAllowed = await fetchCanvas(
+            `http://${host}:${listener.port}${scopedCanvasPath(webchatCapability, `${CANVAS_HOST_PATH}/`)}`,
           );
-          expect(operatorCapabilityBlocked.status).toBe(401);
+          expect(webchatCapabilityAllowed.status).toBe(200);
 
           clients.add(
             makeWsClient({

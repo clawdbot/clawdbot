@@ -1,63 +1,14 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type { AuthProfileStore } from "../agents/auth-profiles.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { createEmptyPluginRegistry } from "../plugins/registry.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { loadBundledChannelSecretContractApi } from "./channel-contract-api.js";
+import { describe, expect, it } from "vitest";
+import "./runtime-nextcloud-talk.test-support.ts";
+import {
+  asConfig,
+  loadAuthStoreWithProfiles,
+  setupSecretsRuntimeSnapshotTestHooks,
+} from "./runtime.test-support.ts";
 
-const nextcloudTalkSecrets = loadBundledChannelSecretContractApi("nextcloud-talk");
-if (!nextcloudTalkSecrets?.collectRuntimeConfigAssignments) {
-  throw new Error("Missing Nextcloud Talk secret contract api");
-}
-
-vi.mock("../channels/plugins/bootstrap-registry.js", () => {
-  return {
-    getBootstrapChannelPlugin: (id: string) =>
-      id === "nextcloud-talk"
-        ? {
-            secrets: {
-              collectRuntimeConfigAssignments: nextcloudTalkSecrets.collectRuntimeConfigAssignments,
-            },
-          }
-        : undefined,
-    getBootstrapChannelSecrets: (id: string) =>
-      id === "nextcloud-talk"
-        ? {
-            collectRuntimeConfigAssignments: nextcloudTalkSecrets.collectRuntimeConfigAssignments,
-          }
-        : undefined,
-  };
-});
-
-function asConfig(value: unknown): OpenClawConfig {
-  return value as OpenClawConfig;
-}
-
-let clearConfigCache: typeof import("../config/config.js").clearConfigCache;
-let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
-let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
-let prepareSecretsRuntimeSnapshot: typeof import("./runtime.js").prepareSecretsRuntimeSnapshot;
-
-function loadAuthStoreWithProfiles(profiles: AuthProfileStore["profiles"]): AuthProfileStore {
-  return {
-    version: 1,
-    profiles,
-  };
-}
+const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 
 describe("secrets runtime snapshot nextcloud talk file precedence", () => {
-  beforeAll(async () => {
-    ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
-    ({ clearSecretsRuntimeSnapshot, prepareSecretsRuntimeSnapshot } = await import("./runtime.js"));
-  });
-
-  afterEach(() => {
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    clearSecretsRuntimeSnapshot();
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
-  });
-
   it("treats top-level Nextcloud Talk botSecret and apiPassword refs as active when file paths are configured", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({

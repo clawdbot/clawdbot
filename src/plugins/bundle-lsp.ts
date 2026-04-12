@@ -14,7 +14,7 @@ import {
   mergeBundlePathLists,
   normalizeBundlePathList,
 } from "./bundle-manifest.js";
-import type { PluginBundleFormat } from "./types.js";
+import type { PluginBundleFormat } from "./manifest-types.js";
 
 export type BundleLspServerConfig = Record<string, unknown>;
 

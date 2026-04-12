@@ -9,7 +9,7 @@ import type {
   TaskStatusCounts,
   TaskTerminalOutcome,
 } from "../../tasks/task-registry.types.js";
-import type { DeliveryContext } from "../../utils/delivery-context.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 
 export type TaskRunAggregateSummary = {
   total: number;

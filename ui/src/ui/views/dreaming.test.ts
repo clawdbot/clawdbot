@@ -63,10 +63,13 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
     modeSaving: false,
     dreamDiaryLoading: false,
     dreamDiaryActionLoading: false,
+    dreamDiaryActionMessage: null,
+    dreamDiaryActionArchivePath: null,
     dreamDiaryError: null,
     dreamDiaryPath: "DREAMS.md",
     dreamDiaryContent:
       "# Dream Diary\n\n<!-- openclaw:dreaming:diary:start -->\n\n---\n\n*April 5, 2026, 3:00 AM*\n\nThe repository whispered of forgotten endpoints tonight.\n\n<!-- openclaw:dreaming:diary:end -->",
+    memoryWikiEnabled: true,
     wikiImportInsightsLoading: false,
     wikiImportInsightsError: null,
     wikiImportInsights: {
@@ -176,10 +179,14 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
     onRefreshDiary: () => {},
     onRefreshImports: () => {},
     onRefreshMemoryPalace: () => {},
+    onOpenConfig: () => {},
     onOpenWikiPage: async () => null,
     onBackfillDiary: () => {},
+    onCopyDreamingArchivePath: () => {},
+    onDedupeDreamDiary: () => {},
     onResetDiary: () => {},
     onResetGroundedShortTerm: () => {},
+    onRepairDreamingArtifacts: () => {},
     ...overrides,
   };
 }
@@ -383,6 +390,27 @@ describe("dreaming view", () => {
     expect(container.querySelector(".dreams-diary__explainer")?.textContent).toContain(
       "compiled memory wiki surface",
     );
+    setDreamDiarySubTab("dreams");
+    setDreamSubTab("scene");
+  });
+
+  it("shows a memory-wiki enablement CTA when wiki subtabs are selected but the plugin is disabled", () => {
+    setDreamSubTab("diary");
+    setDreamDiarySubTab("palace");
+    const onOpenConfig = vi.fn();
+    const container = renderInto(
+      buildProps({
+        memoryWikiEnabled: false,
+        onOpenConfig,
+      }),
+    );
+    expect(container.textContent).toContain("Memory Wiki is not enabled");
+    expect(container.textContent).toContain("plugins.entries.memory-wiki.enabled = true");
+
+    container
+      .querySelector<HTMLButtonElement>(".dreams-diary__empty-actions .btn")
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onOpenConfig).toHaveBeenCalledTimes(1);
     setDreamDiarySubTab("dreams");
     setDreamSubTab("scene");
   });

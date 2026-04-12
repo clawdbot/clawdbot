@@ -1,9 +1,9 @@
 import os from "node:os";
 import path from "node:path";
 import type { Command } from "commander";
-import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import { listMarketplacePlugins } from "../plugins/marketplace.js";

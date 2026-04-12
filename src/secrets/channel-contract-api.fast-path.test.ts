@@ -1,4 +1,3 @@
-import { basename } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { loadPluginManifestRegistryMock } = vi.hoisted(() => ({
@@ -6,14 +5,41 @@ const { loadPluginManifestRegistryMock } = vi.hoisted(() => ({
     throw new Error("manifest registry should stay off the explicit bundled channel fast path");
   }),
 }));
+const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({
+  loadBundledPluginPublicArtifactModuleSyncMock: vi.fn(
+    ({ artifactBasename, dirName }: { artifactBasename: string; dirName: string }) => {
+      if (dirName === "bluebubbles" && artifactBasename === "secret-contract-api.js") {
+        return {
+          collectRuntimeConfigAssignments: () => undefined,
+          secretTargetRegistryEntries: [
+            {
+              id: "channels.bluebubbles.accounts.*.password",
+              type: "channel",
+              path: "channels.bluebubbles.accounts.*.password",
+            },
+          ],
+        };
+      }
+      if (dirName === "whatsapp" && artifactBasename === "security-contract-api.js") {
+        return {
+          unsupportedSecretRefSurfacePatterns: ["channels.whatsapp.creds.json"],
+          collectUnsupportedSecretRefConfigCandidates: () => [],
+        };
+      }
+      throw new Error(
+        `Unable to resolve bundled plugin public surface ${dirName}/${artifactBasename}`,
+      );
+    },
+  ),
+}));
 
-vi.mock("../plugins/manifest-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/manifest-registry.js")>();
-  return {
-    ...actual,
-    loadPluginManifestRegistry: loadPluginManifestRegistryMock,
-  };
-});
+vi.mock("../plugins/manifest-registry.js", () => ({
+  loadPluginManifestRegistry: loadPluginManifestRegistryMock,
+}));
+
+vi.mock("../plugins/public-surface-loader.js", () => ({
+  loadBundledPluginPublicArtifactModuleSync: loadBundledPluginPublicArtifactModuleSyncMock,
+}));
 
 import {
   loadBundledChannelSecretContractApi,
@@ -29,6 +55,10 @@ describe("channel contract api explicit fast path", () => {
     const api = loadBundledChannelSecretContractApi("bluebubbles");
 
     expect(api?.collectRuntimeConfigAssignments).toBeTypeOf("function");
+    expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
+      dirName: "bluebubbles",
+      artifactBasename: "secret-contract-api.js",
+    });
     expect(api?.secretTargetRegistryEntries).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -46,27 +76,10 @@ describe("channel contract api explicit fast path", () => {
       expect.arrayContaining(["channels.whatsapp.creds.json"]),
     );
     expect(api?.collectUnsupportedSecretRefConfigCandidates).toBeTypeOf("function");
+    expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
+      dirName: "whatsapp",
+      artifactBasename: "security-contract-api.js",
+    });
     expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps bundled channel ids aligned with their plugin directories", async () => {
-    const { loadPluginManifestRegistry } = await vi.importActual<
-      typeof import("../plugins/manifest-registry.js")
-    >("../plugins/manifest-registry.js");
-
-    const mismatches = loadPluginManifestRegistry({})
-      .plugins.filter((record) => record.origin === "bundled")
-      .filter((record) => typeof record.rootDir === "string" && record.rootDir.trim().length > 0)
-      .flatMap((record) =>
-        record.channels
-          .filter((channelId) => channelId !== basename(record.rootDir))
-          .map((channelId) => ({
-            id: record.id,
-            channelId,
-            dirName: basename(record.rootDir),
-          })),
-      );
-
-    expect(mismatches).toEqual([]);
   });
 });

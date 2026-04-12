@@ -5,7 +5,6 @@ import type {
   ThinkLevel,
   VerboseLevel,
 } from "../../auto-reply/thinking.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import {
   loadSessionStore,
@@ -13,6 +12,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSessionModelIdentityRef } from "../../gateway/session-utils.js";
 import {
   buildAgentMainSessionKey,

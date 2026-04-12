@@ -58,6 +58,27 @@ function mockCredsJsonSpies(readContents: string) {
   };
 }
 
+function mockLogWebSelfIdCreds(me: Record<string, string>) {
+  const existsSpy = vi.spyOn(fsSync, "existsSync").mockImplementation((p) => {
+    if (typeof p !== "string") {
+      return false;
+    }
+    return p.endsWith("creds.json");
+  });
+  const readSpy = vi.spyOn(fsSync, "readFileSync").mockImplementation((p) => {
+    if (typeof p === "string" && p.endsWith("creds.json")) {
+      return JSON.stringify({ me });
+    }
+    throw new Error(`unexpected readFileSync path: ${String(p)}`);
+  });
+  return {
+    restore() {
+      existsSpy.mockRestore();
+      readSpy.mockRestore();
+    },
+  };
+}
+
 describe("web session", () => {
   beforeAll(async () => {
     ({ createWaSocket, formatError, logWebSelfId, waitForWaConnection, waitForCredsSaveQueue } =
@@ -153,18 +174,7 @@ describe("web session", () => {
   });
 
   it("logWebSelfId prints cached E.164 when creds exist", () => {
-    const existsSpy = vi.spyOn(fsSync, "existsSync").mockImplementation((p) => {
-      if (typeof p !== "string") {
-        return false;
-      }
-      return p.endsWith("creds.json");
-    });
-    const readSpy = vi.spyOn(fsSync, "readFileSync").mockImplementation((p) => {
-      if (typeof p === "string" && p.endsWith("creds.json")) {
-        return JSON.stringify({ me: { id: "12345@s.whatsapp.net" } });
-      }
-      throw new Error(`unexpected readFileSync path: ${String(p)}`);
-    });
+    const creds = mockLogWebSelfIdCreds({ id: "12345@s.whatsapp.net" });
     const runtime = {
       log: vi.fn(),
       error: vi.fn(),
@@ -176,24 +186,13 @@ describe("web session", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       expect.stringContaining("Web Channel: +12345 (jid 12345@s.whatsapp.net)"),
     );
-    existsSpy.mockRestore();
-    readSpy.mockRestore();
+    creds.restore();
   });
 
   it("logWebSelfId prints cached lid details when creds include a lid", () => {
-    const existsSpy = vi.spyOn(fsSync, "existsSync").mockImplementation((p) => {
-      if (typeof p !== "string") {
-        return false;
-      }
-      return p.endsWith("creds.json");
-    });
-    const readSpy = vi.spyOn(fsSync, "readFileSync").mockImplementation((p) => {
-      if (typeof p === "string" && p.endsWith("creds.json")) {
-        return JSON.stringify({
-          me: { id: "12345@s.whatsapp.net", lid: "777@lid" },
-        });
-      }
-      throw new Error(`unexpected readFileSync path: ${String(p)}`);
+    const creds = mockLogWebSelfIdCreds({
+      id: "12345@s.whatsapp.net",
+      lid: "777@lid",
     });
     const runtime = {
       log: vi.fn(),
@@ -206,8 +205,7 @@ describe("web session", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       expect.stringContaining("Web Channel: +12345 (jid 12345@s.whatsapp.net, lid 777@lid)"),
     );
-    existsSpy.mockRestore();
-    readSpy.mockRestore();
+    creds.restore();
   });
 
   it("formatError prints Boom-like payload message", () => {

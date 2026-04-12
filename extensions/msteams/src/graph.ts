@@ -37,7 +37,7 @@ export function escapeOData(value: string): string {
 async function requestGraph(params: {
   token: string;
   path: string;
-  method?: "GET" | "POST" | "DELETE";
+  method?: "GET" | "POST" | "PATCH" | "DELETE";
   root?: string;
   headers?: Record<string, string>;
   body?: unknown;
@@ -64,7 +64,9 @@ async function requestGraph(params: {
 }
 
 async function readOptionalGraphJson<T>(res: Response): Promise<T> {
-  if (res.status === 204 || res.headers.get("content-length") === "0") {
+  // Use optional chaining to stay resilient to partial test mocks that do not
+  // provide a status or Headers instance (they only shim `ok` + `json()`).
+  if (res.status === 204 || res.headers?.get?.("content-length") === "0") {
     return undefined as T;
   }
   return (await res.json()) as T;
@@ -74,21 +76,24 @@ export async function fetchGraphJson<T>(params: {
   token: string;
   path: string;
   headers?: Record<string, string>;
+  /** HTTP method; defaults to "GET" */
+  method?: string;
+  /** Request body (serialized as JSON). Only used for non-GET methods. */
+  body?: unknown;
 }): Promise<T> {
   const res = await requestGraph({
     token: params.token,
     path: params.path,
+    method: params.method as "GET" | "POST" | "DELETE" | undefined,
+    body: params.body,
     headers: params.headers,
   });
-  return (await res.json()) as T;
+  return await readOptionalGraphJson<T>(res);
 }
 
 /**
- * Fetch JSON from an absolute Graph API URL (e.g. @odata.nextLink pagination URLs).
- * Unlike {@link fetchGraphJson}, this does not prepend GRAPH_ROOT.
- *
- * Routed through `fetchWithSsrFGuard` so absolute-URL pagination follow-ups
- * honor the same SSRF policy as other Graph calls.
+ * Fetch JSON from an absolute Graph API URL (for example @odata.nextLink
+ * pagination URLs) without prepending GRAPH_ROOT.
  */
 export async function fetchGraphAbsoluteUrl<T>(params: {
   token: string;
@@ -119,13 +124,94 @@ export async function fetchGraphAbsoluteUrl<T>(params: {
   }
 }
 
-export async function resolveGraphToken(cfg: unknown): Promise<string> {
-  const creds = resolveMSTeamsCredentials(
-    (cfg as { channels?: { msteams?: unknown } })?.channels?.msteams as MSTeamsConfig | undefined,
-  );
+/** Graph collection response with optional pagination link. */
+export type GraphPagedResponse<T> = {
+  value?: T[];
+  "@odata.nextLink"?: string;
+};
+
+/** Result of a paginated Graph API fetch. */
+export type PaginatedResult<T> = {
+  items: T[];
+  truncated: boolean;
+  found?: T;
+};
+
+/**
+ * Fetch all pages of a Graph API collection, following @odata.nextLink.
+ * Optionally stop early when `findOne` matches an item.
+ */
+export async function fetchAllGraphPages<T>(params: {
+  token: string;
+  path: string;
+  headers?: Record<string, string>;
+  /** Max pages to fetch before stopping. Default: 50. */
+  maxPages?: number;
+  /** Stop pagination early when this predicate returns true. */
+  findOne?: (item: T) => boolean;
+}): Promise<PaginatedResult<T>> {
+  const maxPages = params.maxPages ?? 50;
+  const items: T[] = [];
+  let nextPath: string | undefined = params.path;
+
+  for (let page = 0; page < maxPages && nextPath; page++) {
+    const res: GraphPagedResponse<T> = await fetchGraphJson<GraphPagedResponse<T>>({
+      token: params.token,
+      path: nextPath,
+      headers: params.headers,
+    });
+
+    const pageItems = res.value ?? [];
+
+    if (params.findOne) {
+      const match = pageItems.find(params.findOne);
+      if (match) {
+        items.push(...pageItems);
+        return { items, truncated: false, found: match };
+      }
+    }
+
+    items.push(...pageItems);
+
+    // @odata.nextLink is an absolute URL; strip the Graph root to get a relative path
+    const rawNext: string | undefined = res["@odata.nextLink"];
+    if (rawNext) {
+      nextPath = rawNext
+        .replace("https://graph.microsoft.com/v1.0", "")
+        .replace("https://graph.microsoft.com/beta", "");
+    } else {
+      nextPath = undefined;
+    }
+  }
+
+  return { items, truncated: Boolean(nextPath) };
+}
+
+export async function resolveGraphToken(
+  cfg: unknown,
+  options?: { preferDelegated?: boolean },
+): Promise<string> {
+  const msteamsCfg = (cfg as { channels?: { msteams?: MSTeamsConfig } })?.channels?.msteams;
+  const creds = resolveMSTeamsCredentials(msteamsCfg);
   if (!creds) {
     throw new Error("MS Teams credentials missing");
   }
+
+  // Try delegated token if requested and configured
+  if (options?.preferDelegated && msteamsCfg?.delegatedAuth?.enabled && creds.type === "secret") {
+    // Dynamic import to avoid circular dependency (token.ts imports from graph.ts indirectly)
+    const { resolveDelegatedAccessToken } = await import("./token.js");
+    const delegated = await resolveDelegatedAccessToken({
+      tenantId: creds.tenantId,
+      clientId: creds.appId,
+      clientSecret: creds.appPassword,
+    });
+    if (delegated) {
+      return delegated;
+    }
+    // Fall through to app-only token
+  }
+
   const { app } = await loadMSTeamsSdkWithAuth(creds);
   const tokenProvider = createMSTeamsTokenProvider(app);
   const graphTokenValue = await tokenProvider.getAccessToken("https://graph.microsoft.com");
@@ -140,8 +226,8 @@ export async function listTeamsByName(token: string, query: string): Promise<Gra
   const escaped = escapeOData(query);
   const filter = `resourceProvisioningOptions/Any(x:x eq 'Team') and startsWith(displayName,'${escaped}')`;
   const path = `/groups?$filter=${encodeURIComponent(filter)}&$select=id,displayName`;
-  const res = await fetchGraphJson<GraphResponse<GraphGroup>>({ token, path });
-  return res.value ?? [];
+  const { items } = await fetchAllGraphPages<GraphGroup>({ token, path, maxPages: 5 });
+  return items;
 }
 
 export async function postGraphJson<T>(params: {
@@ -184,8 +270,26 @@ export async function deleteGraphRequest(params: { token: string; path: string }
   });
 }
 
+export async function patchGraphJson<T>(params: {
+  token: string;
+  path: string;
+  body?: unknown;
+}): Promise<T> {
+  const res = await requestGraph({
+    token: params.token,
+    path: params.path,
+    method: "PATCH",
+    body: params.body,
+    errorPrefix: "Graph PATCH",
+  });
+  if (res.status === 204 || res.headers.get("content-length") === "0") {
+    return undefined as T;
+  }
+  return (await res.json()) as T;
+}
+
 export async function listChannelsForTeam(token: string, teamId: string): Promise<GraphChannel[]> {
   const path = `/teams/${encodeURIComponent(teamId)}/channels?$select=id,displayName`;
-  const res = await fetchGraphJson<GraphResponse<GraphChannel>>({ token, path });
-  return res.value ?? [];
+  const { items } = await fetchAllGraphPages<GraphChannel>({ token, path, maxPages: 10 });
+  return items;
 }

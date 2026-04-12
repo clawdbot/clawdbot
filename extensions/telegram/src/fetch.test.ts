@@ -103,6 +103,8 @@ beforeAll(async () => {
 beforeEach(() => {
   vi.unstubAllEnvs();
   for (const key of [
+    "OPENCLAW_DEBUG_PROXY_ENABLED",
+    "OPENCLAW_DEBUG_PROXY_URL",
     "ALL_PROXY",
     "all_proxy",
     "HTTP_PROXY",
@@ -116,6 +118,10 @@ beforeEach(() => {
   }
   loggerInfo.mockReset();
   loggerDebug.mockReset();
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 function resolveTelegramFetchOrThrow(
@@ -358,6 +364,22 @@ describe("resolveTelegramFetch", () => {
       expect.objectContaining({
         autoSelectFamily: false,
         autoSelectFamilyAttemptTimeout: 300,
+      }),
+    );
+  });
+
+  it("uses the OpenClaw debug proxy URL when no explicit proxy fetch is provided", async () => {
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "1");
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_URL", "http://127.0.0.1:7777");
+    undiciFetch.mockResolvedValue({ ok: true } as Response);
+
+    const resolved = resolveTelegramFetch(undefined);
+    await resolved("https://api.telegram.org/botTOKEN/getMe");
+
+    expect(ProxyAgentCtor).toHaveBeenCalledTimes(1);
+    expect(ProxyAgentCtor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        uri: "http://127.0.0.1:7777",
       }),
     );
   });

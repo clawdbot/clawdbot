@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   extractChangelogSection,
   normalizeGatewayVersionToPinnedIosVersion,
@@ -9,39 +9,9 @@ import {
   resolveGatewayVersionForIosRelease,
   resolveIosVersion,
 } from "../../scripts/lib/ios-version.ts";
-import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
+import { installIosFixtureCleanup, writeIosFixture } from "./ios-version.test-support.ts";
 
-const tempDirs: string[] = [];
-
-function writeIosFixture(params: { version: string; changelog: string; packageVersion?: string }) {
-  const rootDir = makeTempDir(tempDirs, "openclaw-ios-version-");
-  fs.mkdirSync(path.join(rootDir, "apps", "ios", "Config"), { recursive: true });
-  fs.mkdirSync(path.join(rootDir, "apps", "ios", "fastlane", "metadata", "en-US"), {
-    recursive: true,
-  });
-  fs.writeFileSync(
-    path.join(rootDir, "package.json"),
-    `${JSON.stringify({ version: params.packageVersion ?? "2026.4.6" }, null, 2)}\n`,
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(rootDir, "apps", "ios", "version.json"),
-    `${JSON.stringify({ version: params.version }, null, 2)}\n`,
-    "utf8",
-  );
-  fs.writeFileSync(path.join(rootDir, "apps", "ios", "CHANGELOG.md"), params.changelog, "utf8");
-  fs.writeFileSync(path.join(rootDir, "apps", "ios", "Config", "Version.xcconfig"), "", "utf8");
-  fs.writeFileSync(
-    path.join(rootDir, "apps", "ios", "fastlane", "metadata", "en-US", "release_notes.txt"),
-    "",
-    "utf8",
-  );
-  return rootDir;
-}
-
-afterEach(() => {
-  cleanupTempDirs(tempDirs);
-});
+installIosFixtureCleanup();
 
 describe("resolveIosVersion", () => {
   it("parses pinned CalVer versions and derives Apple marketing fields", () => {

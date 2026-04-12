@@ -1,6 +1,6 @@
 import { extractAssistantTextForPhase } from "../../shared/chat-message-content.js";
 import { sanitizeAssistantVisibleTextWithProfile } from "../../shared/text/assistant-visible-text.js";
-import { sanitizeUserFacingText } from "../pi-embedded-helpers.js";
+import { sanitizeUserFacingText } from "../pi-embedded-helpers/sanitize-user-facing-text.js";
 
 export function stripToolMessages(messages: unknown[]): unknown[] {
   return messages.filter((msg) => {

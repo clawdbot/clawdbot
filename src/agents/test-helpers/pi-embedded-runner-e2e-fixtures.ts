@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildAttemptReplayMetadata } from "../pi-embedded-runner/run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "../pi-embedded-runner/run/types.js";
 
@@ -102,6 +102,7 @@ export function makeEmbeddedRunnerAttempt(
   const successfulCronAdds = overrides.successfulCronAdds;
   return {
     aborted: false,
+    externalAbort: false,
     timedOut: false,
     idleTimedOut: false,
     timedOutDuringCompaction: false,

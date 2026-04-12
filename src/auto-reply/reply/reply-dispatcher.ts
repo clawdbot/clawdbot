@@ -5,10 +5,11 @@ import { sleep } from "../../utils.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { registerDispatcher } from "./dispatcher-registry.js";
 import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
+import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
 
-export type ReplyDispatchKind = "tool" | "block" | "final";
+export type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 
 type ReplyDispatchErrorHandler = (err: unknown, info: { kind: ReplyDispatchKind }) => void;
 
@@ -73,16 +74,6 @@ type ReplyDispatcherWithTypingResult = {
   markDispatchIdle: () => void;
   /** Signal that the model run is complete so the typing controller can stop. */
   markRunComplete: () => void;
-};
-
-export type ReplyDispatcher = {
-  sendToolResult: (payload: ReplyPayload) => boolean;
-  sendBlockReply: (payload: ReplyPayload) => boolean;
-  sendFinalReply: (payload: ReplyPayload) => boolean;
-  waitForIdle: () => Promise<void>;
-  getQueuedCounts: () => Record<ReplyDispatchKind, number>;
-  getFailedCounts: () => Record<ReplyDispatchKind, number>;
-  markComplete: () => void;
 };
 
 type NormalizeReplyPayloadInternalOptions = Pick<

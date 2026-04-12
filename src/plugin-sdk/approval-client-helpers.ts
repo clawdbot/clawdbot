@@ -1,4 +1,4 @@
-import type { ReplyPayload } from "../auto-reply/types.js";
+import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ExecApprovalForwardTarget } from "../config/types.approvals.js";
 import { matchesApprovalRequestFilters } from "../infra/approval-request-filters.js";
 import { getExecApprovalReplyMetadata } from "../infra/exec-approval-reply.js";

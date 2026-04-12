@@ -7,7 +7,7 @@ import {
   listRegisteredAgentHarnesses,
   restoreRegisteredAgentHarnesses,
 } from "../agents/harness/registry.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -39,6 +39,7 @@ import { discoverOpenClawPlugins } from "./discovery.js";
 import { initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { clearPluginInteractiveHandlers } from "./interactive-registry.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import type { PluginBundleFormat, PluginDiagnostic, PluginFormat } from "./manifest-types.js";
 import type { PluginManifestContracts } from "./manifest.js";
 import {
   clearMemoryEmbeddingProviders,
@@ -54,6 +55,7 @@ import {
   listMemoryPromptSupplements,
   restoreMemoryPluginState,
 } from "./memory-state.js";
+import { unwrapDefaultModuleExport } from "./module-export.js";
 import { isPathInside, safeStatSync } from "./path-safety.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import { resolvePluginCacheInputs } from "./roots.js";
@@ -64,7 +66,7 @@ import {
   recordImportedPluginId,
   setActivePluginRegistry,
 } from "./runtime.js";
-import type { CreatePluginRuntimeOptions } from "./runtime/index.js";
+import type { CreatePluginRuntimeOptions } from "./runtime/types.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
 import {
@@ -81,14 +83,7 @@ import {
   shouldPreferNativeJiti,
 } from "./sdk-alias.js";
 import { hasKind, kindsEqual } from "./slots.js";
-import type {
-  OpenClawPluginDefinition,
-  OpenClawPluginModule,
-  PluginDiagnostic,
-  PluginBundleFormat,
-  PluginFormat,
-  PluginLogger,
-} from "./types.js";
+import type { OpenClawPluginDefinition, OpenClawPluginModule, PluginLogger } from "./types.js";
 
 export type PluginLoadResult = PluginRegistry;
 
@@ -608,12 +603,7 @@ function resolvePluginModuleExport(moduleExport: unknown): {
   definition?: OpenClawPluginDefinition;
   register?: OpenClawPluginDefinition["register"];
 } {
-  const resolved =
-    moduleExport &&
-    typeof moduleExport === "object" &&
-    "default" in (moduleExport as Record<string, unknown>)
-      ? (moduleExport as { default: unknown }).default
-      : moduleExport;
+  const resolved = unwrapDefaultModuleExport(moduleExport);
   if (typeof resolved === "function") {
     return {
       register: resolved as OpenClawPluginDefinition["register"],
@@ -630,12 +620,7 @@ function resolvePluginModuleExport(moduleExport: unknown): {
 function resolveSetupChannelRegistration(moduleExport: unknown): {
   plugin?: ChannelPlugin;
 } {
-  const resolved =
-    moduleExport &&
-    typeof moduleExport === "object" &&
-    "default" in (moduleExport as Record<string, unknown>)
-      ? (moduleExport as { default: unknown }).default
-      : moduleExport;
+  const resolved = unwrapDefaultModuleExport(moduleExport);
   if (!resolved || typeof resolved !== "object") {
     return {};
   }

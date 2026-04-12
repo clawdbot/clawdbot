@@ -16,9 +16,10 @@ import {
   setJobTtlMs,
 } from "./bash-process-registry.js";
 import { describeProcessTool } from "./bash-tools.descriptions.js";
+import { handleProcessSendKeys, type WritableStdin } from "./bash-tools.process-send-keys.js";
 import { deriveSessionName, pad, sliceLogLines, truncateMiddle } from "./bash-tools.shared.js";
 import { recordCommandPoll, resetCommandPollCount } from "./command-poll-backoff.js";
-import { encodeKeySequence, encodePaste, hasCursorModeSensitiveKeys } from "./pty-keys.js";
+import { encodePaste } from "./pty-keys.js";
 import { PROCESS_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import type { AgentToolWithMeta } from "./tools/common.js";
 
@@ -28,11 +29,6 @@ export type ProcessToolDefaults = {
   scopeKey?: string;
 };
 
-type WritableStdin = {
-  write: (data: string, cb?: (err?: Error | null) => void) => void;
-  end: () => void;
-  destroyed?: boolean;
-};
 const DEFAULT_LOG_TAIL_LINES = 200;
 
 function resolveLogSliceWindow(offset?: number, limit?: number) {
@@ -480,38 +476,14 @@ export function createProcessTool(
           if (!resolved.ok) {
             return resolved.result;
           }
-          const request = {
+          return await handleProcessSendKeys({
+            sessionId: params.sessionId,
+            session: resolved.session,
+            stdin: resolved.stdin,
             keys: params.keys,
             hex: params.hex,
             literal: params.literal,
-          };
-          if (resolved.session.cursorKeyMode === "unknown" && hasCursorModeSensitiveKeys(request)) {
-            return failText(
-              `Session ${params.sessionId} cursor key mode is not known yet. Poll or log until startup output appears, then retry send-keys.`,
-            );
-          }
-          const cursorKeyMode =
-            resolved.session.cursorKeyMode === "unknown"
-              ? undefined
-              : resolved.session.cursorKeyMode;
-          const { data, warnings } = encodeKeySequence(request, cursorKeyMode);
-          if (!data) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: "No key data provided.",
-                },
-              ],
-              details: { status: "failed" },
-            };
-          }
-          await writeToStdin(resolved.stdin, data);
-          return runningSessionResult(
-            resolved.session,
-            `Sent ${data.length} bytes to session ${params.sessionId}.` +
-              (warnings.length ? `\nWarnings:\n- ${warnings.join("\n- ")}` : ""),
-          );
+          });
         }
 
         case "submit": {

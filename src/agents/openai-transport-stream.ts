@@ -19,8 +19,8 @@ import type {
   ResponseInput,
   ResponseInputMessageContentList,
 } from "openai/resources/responses/responses.js";
+import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
-import type { ProviderRuntimeModel } from "../plugins/types.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import { flattenCompletionMessagesToStringContent } from "./openai-completions-string-content.js";

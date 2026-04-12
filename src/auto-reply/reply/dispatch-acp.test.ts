@@ -9,6 +9,7 @@ import type { SessionBindingRecord } from "../../infra/outbound/session-binding-
 import type { MediaUnderstandingSkipError } from "../../media-understanding/errors.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { resolveAcpAttachments } from "./dispatch-acp-attachments.js";
+import { tryDispatchAcpReply } from "./dispatch-acp.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createAcpSessionMeta, createAcpTestConfig } from "./test-fixtures/acp-runtime.js";
@@ -79,10 +80,88 @@ const bindingServiceMocks = vi.hoisted(() => ({
   unbind: vi.fn<(input: unknown) => Promise<SessionBindingRecord[]>>(async () => []),
 }));
 
+vi.mock("./dispatch-acp-manager.runtime.js", () => ({
+  getAcpSessionManager: () => managerMocks,
+  getSessionBindingService: () => ({
+    listBySession: (targetSessionKey: string) =>
+      bindingServiceMocks.listBySession(targetSessionKey),
+    unbind: (input: unknown) => bindingServiceMocks.unbind(input),
+  }),
+}));
+
+vi.mock("../../acp/policy.js", () => ({
+  resolveAcpDispatchPolicyError: (cfg: OpenClawConfig) =>
+    policyMocks.resolveAcpDispatchPolicyError(cfg),
+  resolveAcpAgentPolicyError: (cfg: OpenClawConfig, agent: string) =>
+    policyMocks.resolveAcpAgentPolicyError(cfg, agent),
+}));
+
+vi.mock("./route-reply.runtime.js", () => ({
+  routeReply: (params: unknown) => routeMocks.routeReply(params),
+}));
+
+vi.mock("../../channels/plugins/index.js", () => ({
+  getChannelPlugin: (channelId: string) => channelPluginMocks.getChannelPlugin(channelId),
+  getLoadedChannelPlugin: (channelId: string) => channelPluginMocks.getChannelPlugin(channelId),
+  normalizeChannelId: (channelId?: string | null) => channelId?.trim().toLowerCase() || null,
+}));
+
+vi.mock("../../infra/outbound/message-action-runner.js", () => ({
+  runMessageAction: (params: unknown) => messageActionMocks.runMessageAction(params),
+}));
+
+vi.mock("./dispatch-acp-tts.runtime.js", () => ({
+  maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
+}));
+
+vi.mock("../../tts/status-config.js", () => ({
+  resolveStatusTtsSnapshot: () => ({
+    autoMode: "always",
+    provider: "auto",
+    maxLength: 1500,
+    summarize: true,
+  }),
+}));
+
+vi.mock("./dispatch-acp-media.runtime.js", () => ({
+  applyMediaUnderstanding: (params: unknown) =>
+    mediaUnderstandingMocks.applyMediaUnderstanding(params),
+  isMediaUnderstandingSkipError: (error: unknown): error is MediaUnderstandingSkipError =>
+    error instanceof Error && error.name === "MediaUnderstandingSkipError",
+  normalizeAttachments: (ctx: { MediaPath?: string; MediaType?: string }) =>
+    ctx.MediaPath
+      ? [
+          {
+            path: ctx.MediaPath,
+            mime: ctx.MediaType,
+            index: 0,
+          },
+        ]
+      : [],
+  resolveMediaAttachmentLocalRoots: (params: {
+    cfg: { channels?: Record<string, { attachmentRoots?: string[] } | undefined> };
+    ctx: { Provider?: string; Surface?: string };
+  }) => {
+    const channel = params.ctx.Provider ?? params.ctx.Surface ?? "";
+    return params.cfg.channels?.[channel]?.attachmentRoots ?? [];
+  },
+  MediaAttachmentCache: class {
+    async getBuffer(): Promise<never> {
+      const error = new Error("outside allowed roots");
+      error.name = "MediaUnderstandingSkipError";
+      throw error;
+    }
+  },
+}));
+
+vi.mock("./dispatch-acp-session.runtime.js", () => ({
+  readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
+    sessionMetaMocks.readAcpSessionEntry(params),
+}));
+
 const sessionKey = "agent:codex-acp:session-1";
 const originalFetch = globalThis.fetch;
 type MockTtsReply = Awaited<ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>>;
-let tryDispatchAcpReply: typeof import("./dispatch-acp.js").tryDispatchAcpReply;
 
 function createDispatcher(): {
   dispatcher: ReplyDispatcher;
@@ -246,68 +325,7 @@ function expectRoutedPayload(callIndex: number, payload: Partial<MockTtsReply>) 
 }
 
 describe("tryDispatchAcpReply", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.doMock("../../acp/control-plane/manager.js", () => ({
-      getAcpSessionManager: () => managerMocks,
-    }));
-    vi.doMock("../../acp/policy.js", () => ({
-      resolveAcpDispatchPolicyError: (cfg: OpenClawConfig) =>
-        policyMocks.resolveAcpDispatchPolicyError(cfg),
-      resolveAcpAgentPolicyError: (cfg: OpenClawConfig, agent: string) =>
-        policyMocks.resolveAcpAgentPolicyError(cfg, agent),
-    }));
-    vi.doMock("./route-reply.js", () => ({
-      routeReply: (params: unknown) => routeMocks.routeReply(params),
-    }));
-    vi.doMock("../../channels/plugins/index.js", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("../../channels/plugins/index.js")>();
-      return {
-        ...actual,
-        getChannelPlugin: (channelId: string) => channelPluginMocks.getChannelPlugin(channelId),
-      };
-    });
-    vi.doMock("../../infra/outbound/message-action-runner.js", () => ({
-      runMessageAction: (params: unknown) => messageActionMocks.runMessageAction(params),
-    }));
-    vi.doMock("../../tts/tts.js", () => ({
-      maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
-      resolveTtsConfig: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg),
-    }));
-    vi.doMock("../../tts/tts.runtime.js", () => ({
-      maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
-    }));
-    vi.doMock("../../tts/status-config.js", () => ({
-      resolveStatusTtsSnapshot: () => ({
-        autoMode: "always",
-        provider: "auto",
-        maxLength: 1500,
-        summarize: true,
-      }),
-    }));
-    vi.doMock("./dispatch-acp-tts.runtime.js", () => ({
-      maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
-    }));
-    vi.doMock("../../media-understanding/apply.js", () => ({
-      applyMediaUnderstanding: (params: unknown) =>
-        mediaUnderstandingMocks.applyMediaUnderstanding(params),
-    }));
-    vi.doMock("../../acp/runtime/session-meta.js", () => ({
-      readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
-        sessionMetaMocks.readAcpSessionEntry(params),
-    }));
-    vi.doMock("./dispatch-acp-session.runtime.js", () => ({
-      readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
-        sessionMetaMocks.readAcpSessionEntry(params),
-    }));
-    vi.doMock("../../infra/outbound/session-binding-service.js", () => ({
-      getSessionBindingService: () => ({
-        listBySession: (targetSessionKey: string) =>
-          bindingServiceMocks.listBySession(targetSessionKey),
-        unbind: (input: unknown) => bindingServiceMocks.unbind(input),
-      }),
-    }));
-    ({ tryDispatchAcpReply } = await import("./dispatch-acp.js"));
+  beforeEach(() => {
     managerMocks.resolveSession.mockReset();
     managerMocks.runTurn.mockReset();
     managerMocks.runTurn.mockImplementation(
@@ -747,12 +765,8 @@ describe("tryDispatchAcpReply", () => {
   it("does not unbind valid bindings on generic ACP runTurn init failure", async () => {
     setReadyAcpResolution();
     // Match the post-reset module instance so dispatch-acp preserves the ACP error code.
-    const { AcpRuntimeError: FreshAcpRuntimeError } = await import("../../acp/runtime/errors.js");
     managerMocks.runTurn.mockRejectedValueOnce(
-      new FreshAcpRuntimeError(
-        "ACP_SESSION_INIT_FAILED",
-        "Could not initialize ACP session runtime.",
-      ),
+      new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "Could not initialize ACP session runtime."),
     );
     const { dispatcher } = createDispatcher();
 
@@ -778,9 +792,8 @@ describe("tryDispatchAcpReply", () => {
       sessionKey: canonicalSessionKey,
       meta: createAcpSessionMeta(),
     });
-    const { AcpRuntimeError: FreshAcpRuntimeError } = await import("../../acp/runtime/errors.js");
     managerMocks.runTurn.mockRejectedValueOnce(
-      new FreshAcpRuntimeError(
+      new AcpRuntimeError(
         "ACP_SESSION_INIT_FAILED",
         `ACP metadata is missing for ${canonicalSessionKey}. Recreate this ACP session with /acp spawn and rebind the thread.`,
       ),

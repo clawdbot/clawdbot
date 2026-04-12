@@ -31,14 +31,38 @@ async function createWorkspaceSkillDirs() {
 
 describe("buildWorkspaceSkillsPrompt — .agents/skills/ directories", () => {
   let fakeHome: string;
+  let previousHome: string | undefined;
+  let previousOpenClawHome: string | undefined;
+  let previousUserProfile: string | undefined;
 
   beforeEach(async () => {
     fakeHome = await createTempDir("openclaw-home-");
+    previousHome = process.env.HOME;
+    previousOpenClawHome = process.env.OPENCLAW_HOME;
+    previousUserProfile = process.env.USERPROFILE;
+    process.env.HOME = fakeHome;
+    delete process.env.OPENCLAW_HOME;
+    delete process.env.USERPROFILE;
     vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
   });
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
+    if (previousOpenClawHome === undefined) {
+      delete process.env.OPENCLAW_HOME;
+    } else {
+      process.env.OPENCLAW_HOME = previousOpenClawHome;
+    }
+    if (previousUserProfile === undefined) {
+      delete process.env.USERPROFILE;
+    } else {
+      process.env.USERPROFILE = previousUserProfile;
+    }
     await Promise.all(
       tempDirs
         .splice(0, tempDirs.length)

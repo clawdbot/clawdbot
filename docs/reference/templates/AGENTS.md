@@ -15,14 +15,19 @@ If `BOOTSTRAP.md` exists, that's your birth certificate. Follow it, figure out w
 
 ## Session Startup
 
-Before doing anything else:
+Use runtime-provided startup context first.
 
-1. Read `SOUL.md` — this is who you are
-2. Read `USER.md` — this is who you're helping
-3. Read `memory/YYYY-MM-DD.md` (today + yesterday) for recent context
-4. **If in MAIN SESSION** (direct chat with your human): Also read `MEMORY.md`
+That context may already include:
 
-Don't ask permission. Just do it.
+- `AGENTS.md`, `SOUL.md`, and `USER.md`
+- recent daily memory such as `memory/YYYY-MM-DD.md`
+- `MEMORY.md` when this is the main session
+
+Do not manually reread startup files unless:
+
+1. The user explicitly asks
+2. The provided context is missing something you need
+3. You need a deeper follow-up read beyond the provided startup context
 
 ## Memory
 

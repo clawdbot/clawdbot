@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
-import type { GetReplyOptions } from "../auto-reply/types.js";
+import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import { clearConfigCache } from "../config/config.js";
 import { __setMaxChatHistoryMessagesBytesForTest } from "./server-constants.js";
 import {

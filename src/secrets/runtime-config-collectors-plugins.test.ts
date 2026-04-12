@@ -52,6 +52,12 @@ describe("collectPluginConfigAssignments", () => {
             },
           },
         },
+        {
+          id: "other",
+          origin: "config",
+          providers: [],
+          legacyPluginIds: [],
+        },
       ],
       diagnostics: [],
     });

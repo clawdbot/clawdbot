@@ -18,7 +18,7 @@ import {
   normalizeOptionalLowercaseString,
 } from "../../../shared/string-coerce.js";
 import type { EmbeddedContextFile } from "../../pi-embedded-helpers.js";
-import type { MessagingToolSend } from "../../pi-embedded-messaging.js";
+import type { MessagingToolSend } from "../../pi-embedded-messaging.types.js";
 import type { WorkspaceBootstrapFile } from "../../workspace.js";
 
 type SubscribeEmbeddedPiSessionFn =

@@ -1,11 +1,11 @@
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import type { OpenClawConfig } from "./config.js";
 import {
   configMayNeedPluginAutoEnable,
   resolveConfiguredPluginAutoEnableCandidates,
   resolvePluginAutoEnableManifestRegistry,
 } from "./plugin-auto-enable.shared.js";
 import type { PluginAutoEnableCandidate } from "./plugin-auto-enable.types.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 
 export function detectPluginAutoEnableCandidates(params: {
   config?: OpenClawConfig;

@@ -1,10 +1,10 @@
 import { Chalk } from "chalk";
 import type { Logger as TsLogger } from "tslog";
+import { normalizeChatChannelId } from "../channels/ids.js";
 import { isVerbose } from "../global-state.js";
 import { defaultRuntime, type OutputRuntimeEnv, type RuntimeEnv } from "../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { clearActiveProgressLine } from "../terminal/progress-line.js";
-import { normalizeMessageChannel } from "../utils/message-channel.js";
 import {
   formatConsoleTimestamp,
   getConsoleSettings,
@@ -104,7 +104,11 @@ const SUBSYSTEM_PREFIXES_TO_DROP = ["gateway", "channels", "providers"] as const
 const SUBSYSTEM_MAX_SEGMENTS = 2;
 
 function isChannelSubsystemPrefix(value: string): boolean {
-  return normalizeMessageChannel(value) === value;
+  const normalized = normalizeLowercaseStringOrEmpty(value);
+  if (!normalized) {
+    return false;
+  }
+  return normalizeChatChannelId(normalized) === normalized || normalized === "webchat";
 }
 
 function pickSubsystemColor(color: ChalkInstance, subsystem: string): ChalkInstance {

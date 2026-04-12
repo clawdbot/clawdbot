@@ -4,10 +4,15 @@ import type { OpenClawPluginApi, PluginRuntime } from "../runtime-api.js";
 
 const createFeishuToolClientMock = vi.hoisted(() => vi.fn());
 const resolveAnyEnabledFeishuToolsConfigMock = vi.hoisted(() => vi.fn());
+const cleanupAmbientCommentTypingReactionMock = vi.hoisted(() => vi.fn(async () => false));
 
 vi.mock("./tool-account.js", () => ({
   createFeishuToolClient: createFeishuToolClientMock,
   resolveAnyEnabledFeishuToolsConfig: resolveAnyEnabledFeishuToolsConfigMock,
+}));
+
+vi.mock("./comment-reaction.js", () => ({
+  cleanupAmbientCommentTypingReaction: cleanupAmbientCommentTypingReactionMock,
 }));
 
 let registerFeishuDriveTools: typeof import("./drive.js").registerFeishuDriveTools;
@@ -51,6 +56,7 @@ describe("registerFeishuDriveTools", () => {
     createFeishuToolClientMock.mockReturnValue({
       request: requestMock,
     });
+    cleanupAmbientCommentTypingReactionMock.mockResolvedValue(false);
   });
 
   it("registers feishu_drive and handles comment actions", async () => {
@@ -491,7 +497,7 @@ describe("registerFeishuDriveTools", () => {
     );
   });
 
-  it("defaults reply_comment target fields from the ambient Feishu comment delivery context", async () => {
+  it("does not wait for ambient typing cleanup before reply_comment sends visible output", async () => {
     const registerTool = vi.fn();
     registerFeishuDriveTools(
       createDriveToolApi({
@@ -515,6 +521,7 @@ describe("registerFeishuDriveTools", () => {
       deliveryContext: {
         channel: "feishu",
         to: "comment:docx:doc_1:c1",
+        threadId: "reply_ambient_1",
       },
     });
 
@@ -530,11 +537,24 @@ describe("registerFeishuDriveTools", () => {
         data: { reply_id: "r6" },
       });
 
-    const replyCommentResult = await tool.execute("call-ambient", {
+    let resolveCleanup: ((value: boolean) => void) | undefined;
+    cleanupAmbientCommentTypingReactionMock.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveCleanup = resolve;
+        }),
+    );
+
+    const replyCommentPromise = tool.execute("call-ambient", {
       action: "reply_comment",
       content: "ambient success",
     });
+    const status = await Promise.race([
+      replyCommentPromise.then(() => "done"),
+      new Promise<string>((resolve) => setTimeout(() => resolve("pending"), 0)),
+    ]);
 
+    expect(status).toBe("done");
     expect(requestMock).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
@@ -565,9 +585,97 @@ describe("registerFeishuDriveTools", () => {
         },
       }),
     );
+    expect(cleanupAmbientCommentTypingReactionMock).toHaveBeenCalledWith({
+      client: expect.anything(),
+      deliveryContext: {
+        channel: "feishu",
+        to: "comment:docx:doc_1:c1",
+        threadId: "reply_ambient_1",
+      },
+    });
+    const replyCommentResult = await replyCommentPromise;
     expect(replyCommentResult.details).toEqual(
       expect.objectContaining({ success: true, reply_id: "r6" }),
     );
+
+    resolveCleanup?.(false);
+  });
+
+  it("does not wait for ambient typing cleanup before add_comment sends visible output", async () => {
+    const registerTool = vi.fn();
+    registerFeishuDriveTools(
+      createDriveToolApi({
+        config: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "app_id",
+              appSecret: "app_secret", // pragma: allowlist secret
+              tools: { drive: true },
+            },
+          },
+        },
+        registerTool,
+      }),
+    );
+
+    const toolFactory = registerTool.mock.calls[0]?.[0];
+    const tool = toolFactory?.({
+      agentAccountId: undefined,
+      deliveryContext: {
+        channel: "feishu",
+        to: "comment:docx:doc_1:c1",
+        threadId: "reply_ambient_1",
+      },
+    });
+
+    requestMock.mockResolvedValueOnce({
+      code: 0,
+      data: { comment_id: "c_add" },
+    });
+
+    let resolveCleanup: ((value: boolean) => void) | undefined;
+    cleanupAmbientCommentTypingReactionMock.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveCleanup = resolve;
+        }),
+    );
+
+    const addCommentPromise = tool.execute("call-add-ambient", {
+      action: "add_comment",
+      content: "ambient top-level comment",
+    });
+    const status = await Promise.race([
+      addCommentPromise.then(() => "done"),
+      new Promise<string>((resolve) => setTimeout(() => resolve("pending"), 0)),
+    ]);
+
+    expect(status).toBe("done");
+    expect(requestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "POST",
+        url: "/open-apis/drive/v1/files/doc_1/new_comments",
+        data: {
+          file_type: "docx",
+          reply_elements: [{ type: "text", text: "ambient top-level comment" }],
+        },
+      }),
+    );
+    expect(cleanupAmbientCommentTypingReactionMock).toHaveBeenCalledWith({
+      client: expect.anything(),
+      deliveryContext: {
+        channel: "feishu",
+        to: "comment:docx:doc_1:c1",
+        threadId: "reply_ambient_1",
+      },
+    });
+    const addCommentResult = await addCommentPromise;
+    expect(addCommentResult.details).toEqual(
+      expect.objectContaining({ success: true, comment_id: "c_add" }),
+    );
+
+    resolveCleanup?.(false);
   });
 
   it("does not inherit non-doc ambient file types for add_comment", async () => {

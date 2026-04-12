@@ -1,4 +1,4 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
+import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig, SlackSlashCommandConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { SlackFile, SlackMessageEvent } from "../types.js";
@@ -10,7 +10,7 @@ export type MonitorSlackOpts = {
   mode?: "socket" | "http";
   config?: OpenClawConfig;
   runtime?: RuntimeEnv;
-  channelRuntime?: PluginRuntime["channel"];
+  channelRuntime?: ChannelRuntimeSurface;
   abortSignal?: AbortSignal;
   mediaMaxMb?: number;
   slashCommand?: SlackSlashCommandConfig;

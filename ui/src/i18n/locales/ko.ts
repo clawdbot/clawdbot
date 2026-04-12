@@ -296,8 +296,10 @@ export const ko: TranslationMap = {
     },
     scene: {
       backfill: "채우기",
+      dedupeDiary: "중복 제거 일지",
       reset: "재설정",
       clearGrounded: "근거 항목 지우기",
+      repairCache: "Dream Cache 복구",
       working: "작업 중…",
     },
     phase: {

@@ -981,7 +981,7 @@ console.log("ok");
 NODE
 
 echo "Running bundle MCP CLI-agent e2e..."
-pnpm exec vitest run --config test/vitest/vitest.e2e.config.ts src/agents/cli-runner.bundle-mcp.e2e.test.ts
+node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts src/agents/cli-runner.bundle-mcp.e2e.test.ts
 EOF
 then
   cat "$RUN_LOG"

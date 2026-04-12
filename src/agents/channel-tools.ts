@@ -5,9 +5,12 @@ import {
   resolveMessageActionDiscoveryChannelId,
   __testing as messageActionTesting,
 } from "../channels/plugins/message-action-discovery.js";
-import type { ChannelAgentTool, ChannelMessageActionName } from "../channels/plugins/types.js";
+import type {
+  ChannelAgentTool,
+  ChannelMessageActionName,
+} from "../channels/plugins/types.public.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 type ChannelAgentToolMeta = {
   channelId: string;

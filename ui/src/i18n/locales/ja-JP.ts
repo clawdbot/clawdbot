@@ -301,8 +301,10 @@ export const ja_JP: TranslationMap = {
     },
     scene: {
       backfill: "バックフィル",
+      dedupeDiary: "重複排除日記",
       reset: "リセット",
       clearGrounded: "グラウンデッドをクリア",
+      repairCache: "Dream Cache を修復",
       working: "処理中…",
     },
     phase: {

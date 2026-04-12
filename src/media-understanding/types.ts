@@ -1,3 +1,5 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+
 export type MediaUnderstandingKind =
   | "audio.transcription"
   | "video.description"
@@ -123,7 +125,7 @@ export type ImageDescriptionRequest = {
   profile?: string;
   preferredProfile?: string;
   agentDir: string;
-  cfg: import("../config/config.js").OpenClawConfig;
+  cfg: OpenClawConfig;
   model: string;
   provider: string;
 };
@@ -144,7 +146,7 @@ export type ImagesDescriptionRequest = {
   profile?: string;
   preferredProfile?: string;
   agentDir: string;
-  cfg: import("../config/config.js").OpenClawConfig;
+  cfg: OpenClawConfig;
 };
 
 export type ImageDescriptionResult = {

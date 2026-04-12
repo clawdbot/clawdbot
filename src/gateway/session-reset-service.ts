@@ -22,6 +22,7 @@ import {
 } from "../config/sessions.js";
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
@@ -133,7 +134,7 @@ export function archiveSessionTranscriptsForSessionDetailed(params: {
 }
 
 export function emitGatewaySessionEndPluginHook(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   sessionKey: string;
   sessionId?: string;
   storePath: string;
@@ -174,7 +175,7 @@ export function emitGatewaySessionEndPluginHook(params: {
 }
 
 export function emitGatewaySessionStartPluginHook(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   sessionKey: string;
   sessionId?: string;
   resumedFrom?: string;
@@ -231,7 +232,7 @@ export async function emitSessionUnboundLifecycleEvent(params: {
 }
 
 async function ensureSessionRuntimeCleanup(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   key: string;
   target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
   sessionId?: string;
@@ -293,7 +294,7 @@ async function runAcpCleanupStep(params: {
 }
 
 async function closeAcpRuntimeForSession(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   sessionKey: string;
   entry?: SessionEntry;
   reason: "session-reset" | "session-delete";
@@ -379,7 +380,7 @@ function buildPendingAcpMeta(base: SessionAcpMeta, now: number): SessionAcpMeta 
 }
 
 async function ensureFreshAcpResetState(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   sessionKey: string;
   reason: "session-reset" | "session-delete";
   entry?: SessionEntry;
@@ -425,7 +426,7 @@ async function ensureFreshAcpResetState(params: {
 }
 
 export async function cleanupSessionBeforeMutation(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   key: string;
   target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
   entry: SessionEntry | undefined;
@@ -451,7 +452,7 @@ export async function cleanupSessionBeforeMutation(params: {
 }
 
 function emitGatewayBeforeResetPluginHook(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   key: string;
   target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
   storePath: string;

@@ -282,7 +282,279 @@ openclaw gateway
   </Tab>
 </Tabs>
 
+### Additional manifest settings
+
+Surface different features that extend the above defaults.
+
 <AccordionGroup>
+  <Accordion title="Optional native slash commands">
+
+    Multiple [native slash commands](#commands-and-slash-behavior) can be used instead of a single configured command with nuance:
+
+    - Use `/agentstatus` instead of `/status` because the `/status` command is reserved.
+    - No more than 25 slash commands can be made available at once.
+
+    Replace your existing `features.slash_commands` section with a subset of [available commands](/tools/slash-commands#command-list):
+
+    <Tabs>
+      <Tab title="Socket Mode (default)">
+
+```json
+    "slash_commands": [
+      {
+        "command": "/new",
+        "description": "Start a new session",
+        "usage_hint": "[model]"
+      },
+      {
+        "command": "/reset",
+        "description": "Reset the current session"
+      },
+      {
+        "command": "/compact",
+        "description": "Compact the session context",
+        "usage_hint": "[instructions]"
+      },
+      {
+        "command": "/stop",
+        "description": "Stop the current run"
+      },
+      {
+        "command": "/session",
+        "description": "Manage thread-binding expiry",
+        "usage_hint": "idle <duration|off> or max-age <duration|off>"
+      },
+      {
+        "command": "/think",
+        "description": "Set the thinking level",
+        "usage_hint": "<off|minimal|low|medium|high|xhigh>"
+      },
+      {
+        "command": "/verbose",
+        "description": "Toggle verbose output",
+        "usage_hint": "on|off|full"
+      },
+      {
+        "command": "/fast",
+        "description": "Show or set fast mode",
+        "usage_hint": "[status|on|off]"
+      },
+      {
+        "command": "/reasoning",
+        "description": "Toggle reasoning visibility",
+        "usage_hint": "[on|off|stream]"
+      },
+      {
+        "command": "/elevated",
+        "description": "Toggle elevated mode",
+        "usage_hint": "[on|off|ask|full]"
+      },
+      {
+        "command": "/exec",
+        "description": "Show or set exec defaults",
+        "usage_hint": "host=<auto|sandbox|gateway|node> security=<deny|allowlist|full> ask=<off|on-miss|always> node=<id>"
+      },
+      {
+        "command": "/model",
+        "description": "Show or set the model",
+        "usage_hint": "[name|#|status]"
+      },
+      {
+        "command": "/models",
+        "description": "List providers or models for a provider",
+        "usage_hint": "[provider] [page] [limit=<n>|size=<n>|all]"
+      },
+      {
+        "command": "/help",
+        "description": "Show the short help summary"
+      },
+      {
+        "command": "/commands",
+        "description": "Show the generated command catalog"
+      },
+      {
+        "command": "/tools",
+        "description": "Show what the current agent can use right now",
+        "usage_hint": "[compact|verbose]"
+      },
+      {
+        "command": "/agentstatus",
+        "description": "Show runtime status, including provider usage/quota when available"
+      },
+      {
+        "command": "/tasks",
+        "description": "List active/recent background tasks for the current session"
+      },
+      {
+        "command": "/context",
+        "description": "Explain how context is assembled",
+        "usage_hint": "[list|detail|json]"
+      },
+      {
+        "command": "/whoami",
+        "description": "Show your sender identity"
+      },
+      {
+        "command": "/skill",
+        "description": "Run a skill by name",
+        "usage_hint": "<name> [input]"
+      },
+      {
+        "command": "/btw",
+        "description": "Ask a side question without changing session context",
+        "usage_hint": "<question>"
+      },
+      {
+        "command": "/usage",
+        "description": "Control the usage footer or show cost summary",
+        "usage_hint": "off|tokens|full|cost"
+      }
+    ]
+```
+
+      </Tab>
+      <Tab title="HTTP Request URLs">
+
+```json
+    "slash_commands": [
+      {
+        "command": "/new",
+        "description": "Start a new session",
+        "usage_hint": "[model]",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/reset",
+        "description": "Reset the current session",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/compact",
+        "description": "Compact the session context",
+        "usage_hint": "[instructions]",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/stop",
+        "description": "Stop the current run",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/session",
+        "description": "Manage thread-binding expiry",
+        "usage_hint": "idle <duration|off> or max-age <duration|off>",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/think",
+        "description": "Set the thinking level",
+        "usage_hint": "<off|minimal|low|medium|high|xhigh>",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/verbose",
+        "description": "Toggle verbose output",
+        "usage_hint": "on|off|full",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/fast",
+        "description": "Show or set fast mode",
+        "usage_hint": "[status|on|off]",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/reasoning",
+        "description": "Toggle reasoning visibility",
+        "usage_hint": "[on|off|stream]",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/elevated",
+        "description": "Toggle elevated mode",
+        "usage_hint": "[on|off|ask|full]",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/exec",
+        "description": "Show or set exec defaults",
+        "usage_hint": "host=<auto|sandbox|gateway|node> security=<deny|allowlist|full> ask=<off|on-miss|always> node=<id>",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/model",
+        "description": "Show or set the model",
+        "usage_hint": "[name|#|status]",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/models",
+        "description": "List providers or models for a provider",
+        "usage_hint": "[provider] [page] [limit=<n>|size=<n>|all]",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/help",
+        "description": "Show the short help summary",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/commands",
+        "description": "Show the generated command catalog",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/tools",
+        "description": "Show what the current agent can use right now",
+        "usage_hint": "[compact|verbose]",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/agentstatus",
+        "description": "Show runtime status, including provider usage/quota when available",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/tasks",
+        "description": "List active/recent background tasks for the current session",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/context",
+        "description": "Explain how context is assembled",
+        "usage_hint": "[list|detail|json]",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/whoami",
+        "description": "Show your sender identity",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/skill",
+        "description": "Run a skill by name",
+        "usage_hint": "<name> [input]",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/btw",
+        "description": "Ask a side question without changing session context",
+        "usage_hint": "<question>",
+        "url": "https://gateway-host.example.com/slack/events"
+      },
+      {
+        "command": "/usage",
+        "description": "Control the usage footer or show cost summary",
+        "usage_hint": "off|tokens|full|cost",
+        "url": "https://gateway-host.example.com/slack/events"
+      }
+    ]
+```
+
+      </Tab>
+    </Tabs>
+
+  </Accordion>
   <Accordion title="Optional authorship scopes (write operations)">
     Add the `chat:write.customize` bot scope if you want outgoing messages to use the active agent identity (custom username and icon) instead of the default Slack app identity.
 
@@ -536,30 +808,37 @@ Notes:
 
 ## Commands and slash behavior
 
-- Native command auto-mode is **off** for Slack (`commands.native: "auto"` does not enable Slack native commands).
-- Enable native Slack command handlers with `channels.slack.commands.native: true` (or global `commands.native: true`).
-- When native commands are enabled, register matching slash commands in Slack (`/<command>` names), with one exception:
-  - register `/agentstatus` for the status command (Slack reserves `/status`)
-- If native commands are not enabled, you can run a single configured slash command via `channels.slack.slashCommand`.
-- Native arg menus now adapt their rendering strategy:
-  - up to 5 options: button blocks
-  - 6-100 options: static select menu
-  - more than 100 options: external select with async option filtering when interactivity options handlers are available
-  - if encoded option values exceed Slack limits, the flow falls back to buttons
-- For long option payloads, Slash command argument menus use a confirm dialog before dispatching a selected value.
-
-Default slash command settings:
+Slash commands appear in Slack as either a single configured command or multiple native commands. Configure `channels.slack.slashCommand` to change command defaults:
 
 - `enabled: false`
 - `name: "openclaw"`
 - `sessionPrefix: "slack:slash"`
 - `ephemeral: true`
 
-Slash sessions use isolated keys:
+```txt
+/openclaw /help
+```
 
-- `agent:<agentId>:slack:slash:<userId>`
+Native commands require [additional manifest settings](#additional-manifest-settings) in your Slack app and are enabled with `channels.slack.commands.native: true` or `commands.native: true` in global configurations instead.
 
-and still route command execution against the target conversation session (`CommandTargetSessionKey`).
+- Native command auto-mode is **off** for Slack so `commands.native: "auto"` does not enable Slack native commands.
+
+```txt
+/help
+```
+
+Native argument menus use an adaptive rendering strategy that shows a confirmation modal before dispatching a selected option value:
+
+- up to 5 options: button blocks
+- 6-100 options: static select menu
+- more than 100 options: external select with async option filtering when interactivity options handlers are available
+- exceeded Slack limits: encoded option values fall back to buttons
+
+```txt
+/think
+```
+
+Slash sessions use isolated keys like `agent:<agentId>:slack:slash:<userId>` and still route command executions to the target conversation session using `CommandTargetSessionKey`.
 
 ## Interactive replies
 

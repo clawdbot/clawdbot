@@ -1,6 +1,6 @@
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { MemorySearchManager } from "../memory-host-sdk/runtime-files.js";
+import type { MemorySearchManager } from "../memory-host-sdk/host/types.js";
 
 export type MemoryPromptSectionBuilder = (params: {
   availableTools: Set<string>;

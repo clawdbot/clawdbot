@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   acquireLocalHeavyCheckLockSync,
   applyLocalTsgoPolicy,
+  shouldAcquireLocalHeavyCheckLockForTsgo,
 } from "./lib/local-heavy-check-runtime.mjs";
 
 const { args: finalArgs, env } = applyLocalTsgoPolicy(process.argv.slice(2), process.env);
@@ -13,11 +14,13 @@ const tsBuildInfoFile = readFlagValue(finalArgs, "--tsBuildInfoFile");
 if (tsBuildInfoFile) {
   fs.mkdirSync(path.dirname(path.resolve(tsBuildInfoFile)), { recursive: true });
 }
-const releaseLock = acquireLocalHeavyCheckLockSync({
-  cwd: process.cwd(),
-  env,
-  toolName: "tsgo",
-});
+const releaseLock = shouldAcquireLocalHeavyCheckLockForTsgo(finalArgs, env)
+  ? acquireLocalHeavyCheckLockSync({
+      cwd: process.cwd(),
+      env,
+      toolName: "tsgo",
+    })
+  : () => {};
 
 try {
   const result = spawnSync(tsgoPath, finalArgs, {

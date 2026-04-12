@@ -298,8 +298,10 @@ export const pl: TranslationMap = {
     },
     scene: {
       backfill: "Uzupełnij",
+      dedupeDiary: "Dziennik deduplikacji",
       reset: "Resetuj",
       clearGrounded: "Wyczyść uziemione",
+      repairCache: "Napraw pamięć podręczną snów",
       working: "Przetwarzanie…",
     },
     phase: {

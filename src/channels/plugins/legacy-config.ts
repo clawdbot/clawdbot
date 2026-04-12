@@ -1,7 +1,7 @@
 import type { LegacyConfigRule } from "../../config/legacy.shared.js";
 import { listPluginDoctorLegacyConfigRules } from "../../plugins/doctor-contract-registry.js";
 import { getBootstrapChannelPlugin } from "./bootstrap-registry.js";
-import type { ChannelId } from "./types.js";
+import type { ChannelId } from "./types.public.js";
 
 function collectConfiguredChannelIds(raw: unknown): ChannelId[] {
   if (!raw || typeof raw !== "object") {

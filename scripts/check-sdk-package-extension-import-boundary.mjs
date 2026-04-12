@@ -47,6 +47,10 @@ function shouldSkipFile(filePath) {
   return relativeFile.startsWith("packages/plugin-sdk/dist/");
 }
 
+function shouldParseSource(source) {
+  return source.includes(BUNDLED_PLUGIN_PATH_PREFIX);
+}
+
 function scanImportBoundaryViolations(sourceFile, filePath) {
   const entries = [];
   const relativeFile = normalizeRepoPath(repoRoot, filePath);
@@ -87,6 +91,7 @@ export async function collectSdkPackageExtensionImportBoundaryInventory() {
       collectEntries(sourceFile, filePath) {
         return scanImportBoundaryViolations(sourceFile, filePath);
       },
+      shouldParseSource,
     });
   })();
 

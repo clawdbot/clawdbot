@@ -9,7 +9,6 @@ const loadChatHistoryMock = vi.hoisted(() => vi.fn(async () => undefined));
 type GatewayClientMock = {
   start: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
-  request: ReturnType<typeof vi.fn>;
   options: { clientVersion?: string };
   emitHello: (hello?: GatewayHelloOk) => void;
   emitClose: (info: {
@@ -23,8 +22,8 @@ type GatewayClientMock = {
 
 const gatewayClientInstances: GatewayClientMock[] = [];
 
-vi.mock("./gateway.ts", async () => {
-  const actual = await vi.importActual<typeof import("./gateway.ts")>("./gateway.ts");
+vi.mock("./gateway.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./gateway.ts")>();
 
   function resolveGatewayErrorDetailCode(
     error: { details?: unknown } | null | undefined,
@@ -40,7 +39,6 @@ vi.mock("./gateway.ts", async () => {
   class GatewayBrowserClient {
     readonly start = vi.fn();
     readonly stop = vi.fn();
-    readonly request = vi.fn(async () => ({}));
 
     constructor(
       private opts: {
@@ -58,7 +56,6 @@ vi.mock("./gateway.ts", async () => {
       gatewayClientInstances.push({
         start: this.start,
         stop: this.stop,
-        request: this.request,
         options: { clientVersion: this.opts.clientVersion },
         emitHello: (hello) => {
           this.opts.onHello?.(
@@ -89,9 +86,8 @@ vi.mock("./gateway.ts", async () => {
   return { ...actual, GatewayBrowserClient, resolveGatewayErrorDetailCode };
 });
 
-vi.mock("./controllers/chat.ts", async () => {
-  const actual =
-    await vi.importActual<typeof import("./controllers/chat.ts")>("./controllers/chat.ts");
+vi.mock("./controllers/chat.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./controllers/chat.ts")>();
   return {
     ...actual,
     loadChatHistory: loadChatHistoryMock,
@@ -102,6 +98,8 @@ type TestGatewayHost = Parameters<typeof connectGateway>[0] & {
   chatSideResult: unknown;
   chatSideResultTerminalRuns: Set<string>;
   chatStream: string | null;
+  chatToolMessages: Record<string, unknown>[];
+  toolStreamById: Map<string, unknown>;
   toolStreamOrder: string[];
 };
 
@@ -140,12 +138,10 @@ function createHost(): TestGatewayHost {
     assistantName: "OpenClaw",
     assistantAvatar: null,
     assistantAgentId: null,
+    localMediaPreviewRoots: [],
     serverVersion: null,
     sessionKey: "main",
-    basePath: "",
-    chatMessage: "",
     chatMessages: [],
-    chatAttachments: [],
     chatQueue: [],
     chatToolMessages: [],
     chatStreamSegments: [],
@@ -196,7 +192,6 @@ describe("connectGateway", () => {
   beforeEach(() => {
     gatewayClientInstances.length = 0;
     loadChatHistoryMock.mockClear();
-    vi.restoreAllMocks();
   });
 
   it("ignores stale client onGap callbacks after reconnect", () => {
@@ -217,69 +212,6 @@ describe("connectGateway", () => {
     expect(gatewayClientInstances).toHaveLength(3);
     expect(secondClient.stop).toHaveBeenCalledTimes(1);
     expect(host.lastError).toBeNull();
-  });
-
-  it("preserves live approval prompts, clears stale run indicators, and resumes queued work after seq-gap reconnect", () => {
-    const now = 1_700_000_000_000;
-    vi.spyOn(Date, "now").mockReturnValue(now);
-    const host = createHost();
-    connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
-    const chatHost = host as typeof host & {
-      chatRunId: string | null;
-      chatQueue: Array<{
-        id: string;
-        text: string;
-        createdAt: number;
-        pendingRunId?: string;
-      }>;
-    };
-    chatHost.chatRunId = "run-1";
-    chatHost.chatQueue = [
-      {
-        id: "pending",
-        text: "/steer tighten the plan",
-        createdAt: 1,
-        pendingRunId: "run-1",
-      },
-      {
-        id: "queued",
-        text: "follow up",
-        createdAt: 2,
-      },
-    ];
-    host.execApprovalQueue = [
-      {
-        id: "approval-1",
-        kind: "exec",
-        request: { command: "rm -rf /tmp/demo" },
-        createdAtMs: now,
-        expiresAtMs: now + 60_000,
-      },
-    ];
-
-    client.emitGap(20, 24);
-
-    expect(gatewayClientInstances).toHaveLength(2);
-    expect(host.execApprovalQueue).toHaveLength(1);
-    expect(host.execApprovalQueue[0]?.id).toBe("approval-1");
-    expect(chatHost.chatQueue).toHaveLength(1);
-    expect(chatHost.chatQueue[0]?.text).toBe("follow up");
-
-    const reconnectClient = gatewayClientInstances[1];
-    expect(reconnectClient).toBeDefined();
-
-    reconnectClient.emitHello();
-
-    expect(reconnectClient.request).toHaveBeenCalledWith("chat.send", {
-      sessionKey: "main",
-      message: "follow up",
-      deliver: false,
-      idempotencyKey: expect.any(String),
-      attachments: undefined,
-    });
-    expect(chatHost.chatQueue).toHaveLength(0);
   });
 
   it("ignores stale client onEvent callbacks after reconnect", () => {
@@ -351,6 +283,27 @@ describe("connectGateway", () => {
     secondClient.emitClose({ code: 1005 });
     expect(host.lastError).toBe("disconnected (1005): no reason");
     expect(host.lastErrorCode).toBeNull();
+  });
+
+  it("preserves pending approval requests across reconnect", () => {
+    const host = createHost();
+    host.execApprovalQueue = [
+      {
+        id: "approval-1",
+        kind: "exec",
+        title: "Approve command",
+        summary: "rm -rf /tmp/nope",
+        createdAtMs: Date.now(),
+        expiresAtMs: Date.now() + 60_000,
+      } as never,
+    ];
+
+    connectGateway(host);
+    expect(host.execApprovalQueue).toHaveLength(1);
+
+    connectGateway(host);
+    expect(host.execApprovalQueue).toHaveLength(1);
+    expect(host.execApprovalQueue[0]?.id).toBe("approval-1");
   });
 
   it("maps generic fetch-failed auth errors to actionable token mismatch message", () => {

@@ -1,7 +1,7 @@
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { enqueueCommand } from "../../process/command-queue.js";
-import type { ExecElevatedDefaults } from "../bash-tools.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { CommandQueueEnqueueFn } from "../../process/command-queue.types.js";
+import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { SkillSnapshot } from "../skills.js";
 
 export type CompactEmbeddedPiSessionParams = {
@@ -50,7 +50,7 @@ export type CompactEmbeddedPiSessionParams = {
   attempt?: number;
   maxAttempts?: number;
   lane?: string;
-  enqueue?: typeof enqueueCommand;
+  enqueue?: CommandQueueEnqueueFn;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
   abortSignal?: AbortSignal;

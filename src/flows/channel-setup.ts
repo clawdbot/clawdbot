@@ -1,4 +1,5 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listChatChannels } from "../channels/chat-meta.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import {
   getChannelSetupPlugin,
@@ -8,7 +9,6 @@ import type {
   ChannelSetupPlugin,
   ChannelSetupWizardAdapter,
 } from "../channels/plugins/setup-wizard-types.js";
-import { listChatChannels } from "../channels/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
   resolveChannelSetupEntries,
@@ -28,7 +28,7 @@ import type {
 } from "../commands/channel-setup/types.js";
 import type { ChannelChoice } from "../commands/onboard-types.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";

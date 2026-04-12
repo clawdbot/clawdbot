@@ -1,9 +1,9 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import type {
   PluginWebSearchProviderEntry,
   WebSearchProviderToolDefinition,
-} from "../plugins/types.js";
+} from "../plugins/web-provider-types.js";
 import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
 import { resolveRuntimeWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
 import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
@@ -20,24 +20,22 @@ import {
   resolveWebProviderConfig,
   resolveWebProviderDefinition,
 } from "../web/provider-runtime-shared.js";
+import type {
+  ResolveWebSearchDefinitionParams,
+  RunWebSearchParams,
+  RunWebSearchResult,
+  RuntimeWebSearchConfig as WebSearchConfig,
+} from "./runtime-types.js";
 
-type WebSearchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
-  ? Web extends { search?: infer Search }
-    ? Search
-    : undefined
-  : undefined;
-
-export type ResolveWebSearchDefinitionParams = {
-  config?: OpenClawConfig;
-  sandboxed?: boolean;
-  runtimeWebSearch?: RuntimeWebSearchMetadata;
-  providerId?: string;
-  preferRuntimeProviders?: boolean;
-};
-
-export type RunWebSearchParams = ResolveWebSearchDefinitionParams & {
-  args: Record<string, unknown>;
-};
+export type {
+  ListWebSearchProvidersParams,
+  ResolveWebSearchDefinitionParams,
+  RunWebSearchParams,
+  RunWebSearchResult,
+  RuntimeWebSearchConfig,
+  RuntimeWebSearchProviderEntry,
+  RuntimeWebSearchToolDefinition,
+} from "./runtime-types.js";
 
 function resolveSearchConfig(cfg?: OpenClawConfig): WebSearchConfig {
   return resolveWebProviderConfig<"search", NonNullable<WebSearchConfig>>(cfg, "search");
@@ -296,9 +294,7 @@ function hasExplicitWebSearchSelection(params: {
   return false;
 }
 
-export async function runWebSearch(
-  params: RunWebSearchParams,
-): Promise<{ provider: string; result: Record<string, unknown> }> {
+export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSearchResult> {
   const search = resolveSearchConfig(params.config);
   const runtimeWebSearch = params.runtimeWebSearch ?? getActiveRuntimeWebToolsMetadata()?.search;
   const candidates = resolveWebSearchCandidates({

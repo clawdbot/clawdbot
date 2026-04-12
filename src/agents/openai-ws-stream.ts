@@ -30,11 +30,12 @@ import * as piAi from "@mariozechner/pi-ai";
  * @see src/agents/openai-ws-connection.ts for the connection manager
  */
 import { formatErrorMessage } from "../infra/errors.js";
+import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import {
   resolveProviderTransportTurnStateWithPlugin,
   resolveProviderWebSocketSessionPolicyWithPlugin,
 } from "../plugins/provider-runtime.js";
-import type { ProviderRuntimeModel, ProviderTransportTurnState } from "../plugins/types.js";
+import type { ProviderTransportTurnState } from "../plugins/types.js";
 import {
   encodeAssistantTextSignature,
   normalizeAssistantPhase,

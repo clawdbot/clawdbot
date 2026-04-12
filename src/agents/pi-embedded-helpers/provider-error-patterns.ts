@@ -84,8 +84,6 @@ type ProviderRuntimeHooks = {
   }) => boolean;
 };
 
-type ProviderRuntimeModule = typeof import("../../plugins/provider-runtime.js");
-
 const requireProviderRuntime = resolveNodeRequireFromMeta(import.meta.url);
 let cachedProviderRuntimeHooks: ProviderRuntimeHooks | null | undefined;
 
@@ -105,7 +103,7 @@ function resolveProviderRuntimeHooks(): ProviderRuntimeHooks | null {
   try {
     const loaded = requireProviderRuntime(
       "../../plugins/provider-runtime.js",
-    ) as unknown as ProviderRuntimeModule;
+    ) as unknown as ProviderRuntimeHooks;
     cachedProviderRuntimeHooks = {
       classifyProviderFailoverReasonWithPlugin: ({ context }) =>
         loaded.classifyProviderFailoverReasonWithPlugin({ context }) ?? null,

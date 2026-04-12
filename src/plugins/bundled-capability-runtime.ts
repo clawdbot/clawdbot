@@ -12,6 +12,7 @@ import { createCapturedPluginRegistration } from "./captured-registration.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { unwrapDefaultModuleExport } from "./module-export.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import {
@@ -95,12 +96,7 @@ function resolvePluginModuleExport(moduleExport: unknown): {
   definition?: OpenClawPluginDefinition;
   register?: OpenClawPluginDefinition["register"];
 } {
-  const resolved =
-    moduleExport &&
-    typeof moduleExport === "object" &&
-    "default" in (moduleExport as Record<string, unknown>)
-      ? (moduleExport as { default: unknown }).default
-      : moduleExport;
+  const resolved = unwrapDefaultModuleExport(moduleExport);
   if (typeof resolved === "function") {
     return {
       register: resolved as OpenClawPluginDefinition["register"],

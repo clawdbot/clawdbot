@@ -9,7 +9,7 @@ title: "Microsoft Teams"
 
 > "Abandon all hope, ye who enter here."
 
-Updated: 2026-01-21
+Updated: 2026-03-25
 
 Status: text + DM attachments are supported; channel/group file sending requires `sharePointSiteId` + Graph permissions (see [Sending files in group chats](#sending-files-in-group-chats)). Polls are sent via Adaptive Cards. Message actions expose explicit `upload-file` for file-first sends.
 
@@ -43,7 +43,7 @@ Details: [Plugins](/tools/plugin)
 4. Expose `/api/messages` (port 3978 by default) via a public URL or tunnel.
 5. Install the Teams app package and start the gateway.
 
-Minimal config:
+Minimal config (client secret):
 
 ```json5
 {
@@ -58,6 +58,8 @@ Minimal config:
   },
 }
 ```
+
+For production deployments, consider using [federated authentication](#federated-authentication-certificate--managed-identity) (certificate or managed identity) instead of client secrets.
 
 Note: group chats are blocked by default (`channels.msteams.groupPolicy: "allowlist"`). To allow group replies, set `channels.msteams.groupAllowFrom` (or use `groupPolicy: "open"` to allow any member, mention-gated).
 
@@ -190,6 +192,148 @@ Before configuring OpenClaw, you need to create an Azure Bot resource.
 2. Click **Microsoft Teams** → Configure → Save
 3. Accept the Terms of Service
 
+## Federated Authentication (Certificate + Managed Identity)
+
+> Added in 2026.3.24
+
+For production deployments, OpenClaw supports **federated authentication** as a more secure alternative to client secrets. Two methods are available:
+
+### Option A: Certificate-based authentication
+
+Use a PEM certificate registered with your Entra ID app registration.
+
+**Setup:**
+
+1. Generate or obtain a certificate (PEM format with private key).
+2. In Entra ID → App Registration → **Certificates & secrets** → **Certificates** → Upload the public certificate.
+
+**Config:**
+
+```json5
+{
+  channels: {
+    msteams: {
+      enabled: true,
+      appId: "<APP_ID>",
+      tenantId: "<TENANT_ID>",
+      authType: "federated",
+      certificatePath: "/path/to/cert.pem",
+      webhook: { port: 3978, path: "/api/messages" },
+    },
+  },
+}
+```
+
+**Env vars:**
+
+- `MSTEAMS_AUTH_TYPE=federated`
+- `MSTEAMS_CERTIFICATE_PATH=/path/to/cert.pem`
+
+### Option B: Azure Managed Identity
+
+Use Azure Managed Identity for passwordless authentication. This is ideal for deployments on Azure infrastructure (AKS, App Service, Azure VMs) where a managed identity is available.
+
+**How it works:**
+
+1. The bot pod/VM has a managed identity (system-assigned or user-assigned).
+2. A **federated identity credential** links the managed identity to the Entra ID app registration.
+3. At runtime, OpenClaw uses `@azure/identity` to acquire tokens from the Azure IMDS endpoint (`169.254.169.254`).
+4. The token is passed to the Teams SDK for bot authentication.
+
+**Prerequisites:**
+
+- Azure infrastructure with managed identity enabled (AKS workload identity, App Service, VM)
+- Federated identity credential created on the Entra ID app registration
+- Network access to IMDS (`169.254.169.254:80`) from the pod/VM
+
+**Config (system-assigned managed identity):**
+
+```json5
+{
+  channels: {
+    msteams: {
+      enabled: true,
+      appId: "<APP_ID>",
+      tenantId: "<TENANT_ID>",
+      authType: "federated",
+      useManagedIdentity: true,
+      webhook: { port: 3978, path: "/api/messages" },
+    },
+  },
+}
+```
+
+**Config (user-assigned managed identity):**
+
+```json5
+{
+  channels: {
+    msteams: {
+      enabled: true,
+      appId: "<APP_ID>",
+      tenantId: "<TENANT_ID>",
+      authType: "federated",
+      useManagedIdentity: true,
+      managedIdentityClientId: "<MI_CLIENT_ID>",
+      webhook: { port: 3978, path: "/api/messages" },
+    },
+  },
+}
+```
+
+**Env vars:**
+
+- `MSTEAMS_AUTH_TYPE=federated`
+- `MSTEAMS_USE_MANAGED_IDENTITY=true`
+- `MSTEAMS_MANAGED_IDENTITY_CLIENT_ID=<client-id>` (only for user-assigned)
+
+### AKS Workload Identity Setup
+
+For AKS deployments using workload identity:
+
+1. **Enable workload identity** on your AKS cluster.
+2. **Create a federated identity credential** on the Entra ID app registration:
+
+   ```bash
+   az ad app federated-credential create --id <APP_OBJECT_ID> --parameters '{
+     "name": "my-bot-workload-identity",
+     "issuer": "<AKS_OIDC_ISSUER_URL>",
+     "subject": "system:serviceaccount:<NAMESPACE>:<SERVICE_ACCOUNT>",
+     "audiences": ["api://AzureADTokenExchange"]
+   }'
+   ```
+
+3. **Annotate the Kubernetes service account** with the app client ID:
+
+   ```yaml
+   apiVersion: v1
+   kind: ServiceAccount
+   metadata:
+     name: my-bot-sa
+     annotations:
+       azure.workload.identity/client-id: "<APP_CLIENT_ID>"
+   ```
+
+4. **Label the pod** for workload identity injection:
+
+   ```yaml
+   metadata:
+     labels:
+       azure.workload.identity/use: "true"
+   ```
+
+5. **Ensure network access** to IMDS (`169.254.169.254`) — if using NetworkPolicy, add an egress rule allowing traffic to `169.254.169.254/32` on port 80.
+
+### Auth type comparison
+
+| Method               | Config                                         | Pros                               | Cons                                  |
+| -------------------- | ---------------------------------------------- | ---------------------------------- | ------------------------------------- |
+| **Client secret**    | `appPassword`                                  | Simple setup                       | Secret rotation required, less secure |
+| **Certificate**      | `authType: "federated"` + `certificatePath`    | No shared secret over network      | Certificate management overhead       |
+| **Managed Identity** | `authType: "federated"` + `useManagedIdentity` | Passwordless, no secrets to manage | Azure infrastructure required         |
+
+**Default behavior:** When `authType` is not set, OpenClaw defaults to client secret authentication. Existing configurations continue to work without changes.
+
 ## Local Development (Tunneling)
 
 Teams can't reach `localhost`. Use a tunnel for local development:
@@ -279,6 +423,11 @@ This is often easier than hand-editing JSON manifests.
    - `MSTEAMS_APP_ID`
    - `MSTEAMS_APP_PASSWORD`
    - `MSTEAMS_TENANT_ID`
+   - `MSTEAMS_AUTH_TYPE` (optional: `"secret"` or `"federated"`)
+   - `MSTEAMS_CERTIFICATE_PATH` (federated + certificate)
+   - `MSTEAMS_CERTIFICATE_THUMBPRINT` (optional, not required for auth)
+   - `MSTEAMS_USE_MANAGED_IDENTITY` (federated + managed identity)
+   - `MSTEAMS_MANAGED_IDENTITY_CLIENT_ID` (user-assigned MI only)
 
 5. **Bot endpoint**
    - Set the Azure Bot Messaging Endpoint to:
@@ -492,6 +641,11 @@ Key settings (see `/gateway/configuration` for shared channel patterns):
 - `toolsBySender` keys should use explicit prefixes:
   `id:`, `e164:`, `username:`, `name:` (legacy unprefixed keys still map to `id:` only).
 - `channels.msteams.actions.memberInfo`: enable or disable the Graph-backed member info action (default: enabled when Graph credentials are available).
+- `channels.msteams.authType`: authentication type — `"secret"` (default) or `"federated"`.
+- `channels.msteams.certificatePath`: path to PEM certificate file (federated + certificate auth).
+- `channels.msteams.certificateThumbprint`: certificate thumbprint (optional, not required for auth).
+- `channels.msteams.useManagedIdentity`: enable managed identity auth (federated mode).
+- `channels.msteams.managedIdentityClientId`: client ID for user-assigned managed identity.
 - `channels.msteams.sharePointSiteId`: SharePoint site ID for file uploads in group chats/channels (see [Sending files in group chats](#sending-files-in-group-chats)).
 
 ## Routing & Sessions

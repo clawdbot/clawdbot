@@ -9,7 +9,11 @@ import {
 } from "../gateway/call.js";
 import { GatewayClient } from "../gateway/client.js";
 import { isLoopbackHost } from "../gateway/net.js";
-import { GATEWAY_CLIENT_CAPS } from "../gateway/protocol/client-info.js";
+import {
+  GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../gateway/protocol/client-info.js";
 import {
   type HelloOk,
   PROTOCOL_VERSION,
@@ -18,7 +22,6 @@ import {
   type SessionsPatchParams,
 } from "../gateway/protocol/index.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
 import type { ResponseUsageMode, SessionInfo, SessionScope } from "./tui-types.js";
 

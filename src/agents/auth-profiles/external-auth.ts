@@ -1,5 +1,5 @@
+import type { ProviderExternalAuthProfile } from "../../plugins/provider-external-auth.types.js";
 import { resolveExternalAuthProfilesWithPlugins } from "../../plugins/provider-runtime.js";
-import type { ProviderExternalAuthProfile } from "../../plugins/types.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 type ExternalAuthProfileMap = Map<string, ProviderExternalAuthProfile>;

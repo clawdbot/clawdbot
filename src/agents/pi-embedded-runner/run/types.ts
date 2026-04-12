@@ -5,13 +5,13 @@ import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
 import type { ContextEngine, ContextEnginePromptCacheInfo } from "../../../context-engine/types.js";
 import type { PluginHookBeforeAgentStartResult } from "../../../plugins/hook-before-agent-start.types.js";
-import type { MessagingToolSend } from "../../pi-embedded-messaging.js";
+import type { MessagingToolSend } from "../../pi-embedded-messaging.types.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import type { NormalizedUsage } from "../../usage.js";
 import type { EmbeddedRunReplayMetadata, EmbeddedRunReplayState } from "../replay-state.js";
 import type { EmbeddedRunLivenessState } from "../types.js";
 import type { RunEmbeddedPiAgentParams } from "./params.js";
-import type { PreemptiveCompactionRoute } from "./preemptive-compaction.js";
+import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
 
 type EmbeddedRunAttemptBase = Omit<
   RunEmbeddedPiAgentParams,
@@ -41,6 +41,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
 
 export type EmbeddedRunAttemptResult = {
   aborted: boolean;
+  /** True when the abort originated from the caller-provided abortSignal. */
+  externalAbort: boolean;
   timedOut: boolean;
   /** True when the no-response LLM idle watchdog caused the timeout. */
   idleTimedOut: boolean;
@@ -75,6 +77,7 @@ export type EmbeddedRunAttemptResult = {
   assistantTexts: string[];
   toolMetas: Array<{ toolName: string; meta?: string }>;
   lastAssistant: AssistantMessage | undefined;
+  currentAttemptAssistant?: AssistantMessage | undefined;
   lastToolError?: ToolErrorSummary;
   didSendViaMessagingTool: boolean;
   didSendDeterministicApprovalPrompt?: boolean;

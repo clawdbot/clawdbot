@@ -1,11 +1,11 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginEntryConfig } from "../config/types.plugins.js";
 import { hasExplicitPluginConfig } from "./config-policy.js";
-import type { PluginLoadOptions } from "./loader.js";
 
 export function withBundledPluginAllowlistCompat(params: {
-  config: PluginLoadOptions["config"];
+  config: OpenClawConfig | undefined;
   pluginIds: readonly string[];
-}): PluginLoadOptions["config"] {
+}): OpenClawConfig | undefined {
   const allow = params.config?.plugins?.allow;
   if (!Array.isArray(allow) || allow.length === 0) {
     return params.config;
@@ -34,9 +34,9 @@ export function withBundledPluginAllowlistCompat(params: {
 }
 
 export function withBundledPluginEnablementCompat(params: {
-  config: PluginLoadOptions["config"];
+  config: OpenClawConfig | undefined;
   pluginIds: readonly string[];
-}): PluginLoadOptions["config"] {
+}): OpenClawConfig | undefined {
   const existingEntries = params.config?.plugins?.entries ?? {};
   const forcePluginsEnabled = params.config?.plugins?.enabled === false;
   let changed = false;
@@ -70,10 +70,10 @@ export function withBundledPluginEnablementCompat(params: {
 }
 
 export function withBundledPluginVitestCompat(params: {
-  config: PluginLoadOptions["config"];
+  config: OpenClawConfig | undefined;
   pluginIds: readonly string[];
-  env?: PluginLoadOptions["env"];
-}): PluginLoadOptions["config"] {
+  env?: NodeJS.ProcessEnv;
+}): OpenClawConfig | undefined {
   const env = params.env ?? process.env;
   const isVitest = Boolean(env.VITEST);
   if (

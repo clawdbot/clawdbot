@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RegisteredMemorySearchManager } from "../plugins/memory-state.js";
 
 type ActiveMemorySearchPurpose = "default" | "status";

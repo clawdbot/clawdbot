@@ -297,8 +297,10 @@ export const id: TranslationMap = {
     },
     scene: {
       backfill: "Isi ulang",
+      dedupeDiary: "Buku Harian Dedupe",
       reset: "Setel ulang",
       clearGrounded: "Hapus yang Ditahankan",
+      repairCache: "Perbaiki Cache Mimpi",
       working: "Sedang bekerja…",
     },
     phase: {

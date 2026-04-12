@@ -1,10 +1,11 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { listChatChannels } from "../../channels/chat-meta.js";
 import { type ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import { isChannelVisibleInSetup } from "../../channels/plugins/exposure.js";
-import type { ChannelMeta, ChannelPlugin } from "../../channels/plugins/types.js";
-import { listChatChannels } from "../../channels/registry.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { ChannelMeta } from "../../channels/plugins/types.public.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import type { ChannelChoice } from "../onboard-types.js";
 import {

@@ -54,16 +54,21 @@ const loadPluginManifestRegistry = vi.hoisted(() =>
   })),
 );
 const resolveManifestContractOwnerPluginId = vi.hoisted(() => vi.fn<() => undefined>());
+const resolveProviderSyntheticAuthWithPlugin = vi.hoisted(() => vi.fn(() => undefined));
 
 vi.mock("../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistry,
   resolveManifestContractOwnerPluginId,
+}));
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveProviderSyntheticAuthWithPlugin,
 }));
 
 describe("provider auth aliases", () => {
   beforeEach(() => {
     loadPluginManifestRegistry.mockReset();
     loadPluginManifestRegistry.mockReturnValue(createFixtureProviderRegistry());
+    resolveProviderSyntheticAuthWithPlugin.mockReset();
   });
 
   it("shares manifest env vars across aliased providers", () => {

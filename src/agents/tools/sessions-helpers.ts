@@ -33,7 +33,8 @@ export {
   sanitizeTextContent,
   stripToolMessages,
 } from "./chat-history-text.js";
-import { type OpenClawConfig, loadConfig } from "../../config/config.js";
+import { loadConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 export type SessionKind = "main" | "group" | "cron" | "hook" | "node" | "other";

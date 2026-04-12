@@ -19,7 +19,6 @@ const allowedNonExtensionTests = new Set<string>([
   "src/commands/onboard-channels.e2e.test.ts",
   "src/gateway/hooks.test.ts",
   "src/infra/outbound/deliver.test.ts",
-  "src/media-generation/provider-capabilities.contract.test.ts",
   "src/plugins/interactive.test.ts",
   "src/plugins/contracts/discovery.contract.test.ts",
   "src/plugin-sdk/telegram-command-config.test.ts",

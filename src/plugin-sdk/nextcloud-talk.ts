@@ -36,7 +36,7 @@ export {
   patchScopedAccountConfig,
 } from "../channels/plugins/setup-helpers.js";
 export { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
-export type { ChannelGroupContext, ChannelSetupInput } from "../channels/plugins/types.js";
+export type { ChannelGroupContext, ChannelSetupInput } from "../channels/plugins/types.public.js";
 export type { ChannelSetupDmPolicy } from "../channels/plugins/setup-wizard-types.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type { ChannelSetupWizard } from "../channels/plugins/setup-wizard.js";

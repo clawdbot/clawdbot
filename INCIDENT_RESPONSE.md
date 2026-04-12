@@ -6,7 +6,6 @@ We monitor security signals from:
 
 - GitHub Security Advisories (GHSA) and private vulnerability reports.
 - Public GitHub issues/discussions when reports are not sensitive.
-- Official plublic discussion groups and channels (i.e. Discord and X).
 - Automated signals (for example Dependabot, CodeQL, npm advisories, and secret scanning).
 
 Initial triage:

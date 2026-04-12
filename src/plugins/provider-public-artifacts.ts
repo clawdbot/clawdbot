@@ -1,12 +1,12 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadBundledPluginPublicArtifactModuleSync } from "./public-surface-loader.js";
 import type {
   ProviderApplyConfigDefaultsContext,
   ProviderNormalizeConfigContext,
   ProviderResolveConfigApiKeyContext,
-} from "./types.js";
+} from "./provider-config-context.types.js";
+import { loadBundledPluginPublicArtifactModuleSync } from "./public-surface-loader.js";
 
 const PROVIDER_POLICY_ARTIFACT_CANDIDATES = ["provider-policy-api.js"] as const;
 

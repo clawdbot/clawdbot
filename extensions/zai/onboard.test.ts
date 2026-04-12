@@ -1,5 +1,6 @@
 import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
 import { describe, expect, it } from "vitest";
+import { expectProviderOnboardPreservesPrimary } from "../../test/helpers/plugins/provider-onboard.js";
 import { ZAI_CODING_CN_BASE_URL, ZAI_GLOBAL_BASE_URL } from "./model-definitions.js";
 import { applyZaiConfig, applyZaiProviderConfig } from "./onboard.js";
 
@@ -27,11 +28,9 @@ describe("zai onboard", () => {
   });
 
   it("does not overwrite existing primary model in provider-only mode", () => {
-    const cfg = applyZaiProviderConfig({
-      agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
+    expectProviderOnboardPreservesPrimary({
+      applyProviderConfig: applyZaiProviderConfig,
+      primaryModelRef: "anthropic/claude-opus-4-5",
     });
-    expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(
-      "anthropic/claude-opus-4-5",
-    );
   });
 });

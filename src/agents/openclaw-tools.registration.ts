@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isStrictAgenticExecutionContractActive } from "./execution-contract.js";
 import type { AnyAgentTool } from "./tools/common.js";
 

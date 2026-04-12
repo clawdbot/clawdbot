@@ -1,5 +1,5 @@
 import { normalizeAnyChannelId } from "../channels/registry.js";
-import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
+import type { OutboundSendDeps } from "../infra/outbound/send-deps.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 /**

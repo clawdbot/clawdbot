@@ -30,7 +30,9 @@ import { createRuntimeMedia } from "./runtime-media.js";
 import { createRuntimeSystem } from "./runtime-system.js";
 import { createRuntimeTaskFlow } from "./runtime-taskflow.js";
 import { createRuntimeTasks } from "./runtime-tasks.js";
-import type { PluginRuntime } from "./types.js";
+import type { CreatePluginRuntimeOptions, PluginRuntime } from "./types.js";
+
+export type { CreatePluginRuntimeOptions } from "./types.js";
 
 const loadTtsRuntime = createLazyRuntimeModule(() => import("../../tts/tts.js"));
 const loadMediaUnderstandingRuntime = createLazyRuntimeModule(
@@ -197,11 +199,6 @@ function createLateBindingSubagent(
     },
   });
 }
-
-export type CreatePluginRuntimeOptions = {
-  subagent?: PluginRuntime["subagent"];
-  allowGatewaySubagentBinding?: boolean;
-};
 
 export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): PluginRuntime {
   const mediaUnderstanding = createRuntimeMediaUnderstandingFacade();

@@ -1,5 +1,5 @@
 import { getChannelPlugin } from "../channels/plugins/index.js";
-import type { ChannelId } from "../channels/plugins/types.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,

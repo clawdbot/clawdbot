@@ -11,8 +11,8 @@ import {
   createExecApprovalChannelRuntime,
   type ExecApprovalChannelRuntime,
   type ExecApprovalChannelRuntimeAdapter,
-  type ExecApprovalChannelRuntimeEventKind,
 } from "./exec-approval-channel-runtime.js";
+import type { ExecApprovalChannelRuntimeEventKind } from "./exec-approval-channel-runtime.types.js";
 import type { ExecApprovalResolved } from "./exec-approvals.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import type { PluginApprovalResolved } from "./plugin-approvals.js";

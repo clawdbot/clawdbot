@@ -8,14 +8,15 @@ import {
   type TextContent,
 } from "@mariozechner/pi-ai";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
+import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
-import type { GetReplyOptions, ReplyPayload } from "../auto-reply/types.js";
-import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   type SessionEntry,
 } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { diagnosticLogger as diag } from "../logging/diagnostic.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";

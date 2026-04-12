@@ -1,3 +1,6 @@
+import { mkdtempSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   isValidOpenAIModel,
@@ -10,10 +13,26 @@ import {
 
 describe("openai tts", () => {
   const originalFetch = globalThis.fetch;
+  const proxyEnvKeys = [
+    "OPENCLAW_DEBUG_PROXY_ENABLED",
+    "OPENCLAW_DEBUG_PROXY_DB_PATH",
+    "OPENCLAW_DEBUG_PROXY_BLOB_DIR",
+    "OPENCLAW_DEBUG_PROXY_SESSION_ID",
+  ] as const;
+  let priorProxyEnv: Partial<Record<(typeof proxyEnvKeys)[number], string | undefined>> = {};
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
     vi.restoreAllMocks();
+    for (const key of proxyEnvKeys) {
+      const value = priorProxyEnv[key];
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+    priorProxyEnv = {};
   });
 
   describe("isValidOpenAIVoice", () => {
@@ -182,6 +201,102 @@ describe("openai tts", () => {
       ).rejects.toThrow("OpenAI TTS API error (503)");
 
       expect(streamed.getReadCount()).toBeLessThan(200);
+    });
+
+    it("records TTS exchanges in debug proxy capture mode", async () => {
+      const tempDir = mkdtempSync(path.join(os.tmpdir(), "openai-tts-capture-"));
+      priorProxyEnv = Object.fromEntries(
+        proxyEnvKeys.map((key) => [key, process.env[key]]),
+      ) as typeof priorProxyEnv;
+      process.env.OPENCLAW_DEBUG_PROXY_ENABLED = "1";
+      process.env.OPENCLAW_DEBUG_PROXY_DB_PATH = path.join(tempDir, "capture.sqlite");
+      process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR = path.join(tempDir, "blobs");
+      process.env.OPENCLAW_DEBUG_PROXY_SESSION_ID = "tts-session";
+
+      globalThis.fetch = vi
+        .fn()
+        .mockResolvedValue(
+          new Response(Buffer.from("audio-bytes"), { status: 200 }),
+        ) as unknown as typeof globalThis.fetch;
+
+      const { getDebugProxyCaptureStore } = await import("../../src/proxy-capture/store.sqlite.js");
+      const store = getDebugProxyCaptureStore(
+        process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
+        process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,
+      );
+      store.upsertSession({
+        id: "tts-session",
+        startedAt: Date.now(),
+        mode: "test",
+        sourceScope: "openclaw",
+        sourceProcess: "openclaw",
+        dbPath: process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
+        blobDir: process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,
+      });
+
+      await openaiTTS({
+        text: "hello",
+        apiKey: "test-key",
+        baseUrl: "https://api.openai.com/v1",
+        model: "gpt-4o-mini-tts",
+        voice: "alloy",
+        responseFormat: "mp3",
+        timeoutMs: 5_000,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      const events = store.getSessionEvents("tts-session", 10);
+      expect(
+        events.some((event) => event.kind === "request" && event.host === "api.openai.com"),
+      ).toBe(true);
+      expect(
+        events.some((event) => event.kind === "response" && event.host === "api.openai.com"),
+      ).toBe(true);
+    });
+
+    it("does not double-capture TTS exchanges when the global fetch patch is installed", async () => {
+      const tempDir = mkdtempSync(path.join(os.tmpdir(), "openai-tts-patched-capture-"));
+      priorProxyEnv = Object.fromEntries(
+        proxyEnvKeys.map((key) => [key, process.env[key]]),
+      ) as typeof priorProxyEnv;
+      process.env.OPENCLAW_DEBUG_PROXY_ENABLED = "1";
+      process.env.OPENCLAW_DEBUG_PROXY_DB_PATH = path.join(tempDir, "capture.sqlite");
+      process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR = path.join(tempDir, "blobs");
+      process.env.OPENCLAW_DEBUG_PROXY_SESSION_ID = "tts-patched-session";
+
+      globalThis.fetch = vi
+        .fn()
+        .mockResolvedValue(
+          new Response(Buffer.from("audio-bytes"), { status: 200 }),
+        ) as unknown as typeof globalThis.fetch;
+
+      const runtime = await import("../../src/proxy-capture/runtime.js");
+      const { getDebugProxyCaptureStore } = await import("../../src/proxy-capture/store.sqlite.js");
+      runtime.initializeDebugProxyCapture("test");
+
+      await openaiTTS({
+        text: "hello",
+        apiKey: "test-key",
+        baseUrl: "https://api.openai.com/v1",
+        model: "gpt-4o-mini-tts",
+        voice: "alloy",
+        responseFormat: "mp3",
+        timeoutMs: 5_000,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      runtime.finalizeDebugProxyCapture();
+
+      const store = getDebugProxyCaptureStore(
+        process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
+        process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,
+      );
+      const events = store
+        .getSessionEvents("tts-patched-session", 10)
+        .filter((event) => event.host === "api.openai.com");
+      expect(events).toHaveLength(2);
+      const kinds = events.map((event) => String(event.kind)).toSorted();
+      expect(kinds).toEqual(["request", "response"]);
+      store.close();
     });
   });
 });

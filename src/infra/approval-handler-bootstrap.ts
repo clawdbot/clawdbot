@@ -1,8 +1,8 @@
 import { resolveChannelApprovalCapability } from "../channels/plugins/approvals.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ChannelRuntimeSurface } from "../channels/plugins/channel-runtime-surface.types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { PluginRuntime } from "../plugins/runtime/types.js";
 import {
   CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
   createChannelApprovalHandlerFromCapability,
@@ -20,7 +20,7 @@ export async function startChannelApprovalHandlerBootstrap(params: {
   plugin: Pick<ChannelPlugin, "id" | "meta" | "approvalCapability">;
   cfg: OpenClawConfig;
   accountId: string;
-  channelRuntime?: PluginRuntime["channel"];
+  channelRuntime?: ChannelRuntimeSurface;
   logger?: ReturnType<typeof createSubsystemLogger>;
 }): Promise<() => Promise<void>> {
   const capability = resolveChannelApprovalCapability(params.plugin);

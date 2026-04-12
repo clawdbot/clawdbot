@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import {
@@ -173,7 +174,7 @@ function loadSubagentConfig() {
 }
 
 async function persistInitialChildSessionRuntimeModel(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   childSessionKey: string;
   resolvedModel?: string;
 }): Promise<string | undefined> {

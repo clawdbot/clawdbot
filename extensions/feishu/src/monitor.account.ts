@@ -292,6 +292,16 @@ function parseFeishuCardActionEventPayload(value: unknown): FeishuCardActionEven
   };
 }
 
+function buildCommentNoticeQueueKey(event: {
+  notice_meta?: {
+    file_type?: string;
+    file_token?: string;
+  };
+}): string {
+  const fileType = event.notice_meta?.file_type?.trim() || "unknown";
+  const fileToken = event.notice_meta?.file_token?.trim() || "unknown";
+  return `comment-doc:${fileType}:${fileToken}`;
+}
 function mergeFeishuDebounceMentions(
   entries: FeishuMessageEvent[],
 ): FeishuMessageEvent["message"]["mentions"] | undefined {
@@ -619,12 +629,14 @@ function registerEventHandlers(
               `mentioned=${event.is_mentioned === true ? "yes" : "no"}`,
           );
           try {
-            await handleFeishuCommentEvent({
-              cfg,
-              accountId,
-              event,
-              botOpenId: botOpenIds.get(accountId),
-              runtime,
+            await enqueue(buildCommentNoticeQueueKey(event), async () => {
+              await handleFeishuCommentEvent({
+                cfg,
+                accountId,
+                event,
+                botOpenId: botOpenIds.get(accountId),
+                runtime,
+              });
             });
             if (syntheticMessageId) {
               await recordProcessedFeishuMessage(syntheticMessageId, accountId, log);

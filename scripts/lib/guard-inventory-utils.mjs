@@ -1,6 +1,8 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
+const parsedTypeScriptSourceCache = new Map();
+
 export function normalizeRepoPath(repoRoot, filePath) {
   return path.relative(repoRoot, filePath).split(path.sep).join("/");
 }
@@ -74,16 +76,25 @@ export function writeLine(stream, text) {
 
 export async function collectTypeScriptInventory(params) {
   const inventory = [];
+  const scriptKind = params.scriptKind ?? params.ts.ScriptKind.TS;
 
   for (const filePath of params.files) {
-    const source = await fs.readFile(filePath, "utf8");
-    const sourceFile = params.ts.createSourceFile(
-      filePath,
-      source,
-      params.ts.ScriptTarget.Latest,
-      true,
-      params.scriptKind ?? params.ts.ScriptKind.TS,
-    );
+    const cacheKey = `${scriptKind}:${filePath}`;
+    let sourceFile = parsedTypeScriptSourceCache.get(cacheKey);
+    if (!sourceFile) {
+      const source = await fs.readFile(filePath, "utf8");
+      if (params.shouldParseSource && !params.shouldParseSource(source, filePath)) {
+        continue;
+      }
+      sourceFile = params.ts.createSourceFile(
+        filePath,
+        source,
+        params.ts.ScriptTarget.Latest,
+        true,
+        scriptKind,
+      );
+      parsedTypeScriptSourceCache.set(cacheKey, sourceFile);
+    }
     inventory.push(...params.collectEntries(sourceFile, filePath));
   }
 

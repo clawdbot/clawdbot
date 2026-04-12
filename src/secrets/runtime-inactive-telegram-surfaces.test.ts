@@ -1,55 +1,10 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
-import { createEmptyPluginRegistry } from "../plugins/registry.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { loadBundledChannelSecretContractApi } from "./channel-contract-api.js";
+import { describe, expect, it } from "vitest";
+import "./runtime-telegram.test-support.ts";
+import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
 
-const telegramSecrets = loadBundledChannelSecretContractApi("telegram");
-if (!telegramSecrets?.collectRuntimeConfigAssignments) {
-  throw new Error("Missing Telegram secret contract api");
-}
-
-vi.mock("../channels/plugins/bootstrap-registry.js", () => {
-  return {
-    getBootstrapChannelPlugin: (id: string) =>
-      id === "telegram"
-        ? {
-            secrets: {
-              collectRuntimeConfigAssignments: telegramSecrets.collectRuntimeConfigAssignments,
-            },
-          }
-        : undefined,
-    getBootstrapChannelSecrets: (id: string) =>
-      id === "telegram"
-        ? {
-            collectRuntimeConfigAssignments: telegramSecrets.collectRuntimeConfigAssignments,
-          }
-        : undefined,
-  };
-});
-
-function asConfig(value: unknown): OpenClawConfig {
-  return value as OpenClawConfig;
-}
-
-let clearConfigCache: typeof import("../config/config.js").clearConfigCache;
-let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
-let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
-let prepareSecretsRuntimeSnapshot: typeof import("./runtime.js").prepareSecretsRuntimeSnapshot;
+const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 
 describe("secrets runtime snapshot inactive telegram surfaces", () => {
-  beforeAll(async () => {
-    ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
-    ({ clearSecretsRuntimeSnapshot, prepareSecretsRuntimeSnapshot } = await import("./runtime.js"));
-  });
-
-  afterEach(() => {
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    clearSecretsRuntimeSnapshot();
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
-  });
-
   it("skips inactive Telegram refs and emits diagnostics", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({

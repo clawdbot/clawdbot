@@ -3,7 +3,7 @@
 
 import { createOptionalChannelSetupSurface } from "./channel-setup.js";
 
-export type { ReplyPayload } from "../auto-reply/types.js";
+export type { ReplyPayload } from "../auto-reply/reply-payload.js";
 export { mergeAllowlist, summarizeMapping } from "../channels/allowlists/resolve-utils.js";
 export {
   resolveMentionGating,
@@ -35,7 +35,7 @@ export type {
   ChannelGroupContext,
   ChannelMessageActionAdapter,
   ChannelStatusIssue,
-} from "../channels/plugins/types.js";
+} from "../channels/plugins/types.public.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 export type { OpenClawConfig } from "../config/config.js";

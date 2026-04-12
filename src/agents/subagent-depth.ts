@@ -1,6 +1,6 @@
 import fs from "node:fs";
-import type { OpenClawConfig } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getSubagentDepth, parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { resolveDefaultAgentId } from "./agent-scope.js";

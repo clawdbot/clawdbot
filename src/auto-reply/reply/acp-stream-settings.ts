@@ -1,5 +1,5 @@
 import type { AcpSessionUpdateTag } from "../../acp/runtime/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clampPositiveInteger, resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 
 const DEFAULT_ACP_STREAM_COALESCE_IDLE_MS = 350;

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildSubagentsSendContext } from "./commands-subagents.test-helpers.js";
+import { buildSubagentsDispatchContext } from "./commands-subagents-send-steer.test-support.js";
 import { handleSubagentsSendAction } from "./commands-subagents/action-send.js";
 
 const sendControlledSubagentMessageMock = vi.hoisted(() => vi.fn());
@@ -11,7 +11,7 @@ vi.mock("./commands-subagents-control.runtime.js", () => ({
 }));
 
 const buildContext = () =>
-  buildSubagentsSendContext({
+  buildSubagentsDispatchContext({
     handledPrefix: "/steer",
     restTokens: ["1", "check", "timer.ts", "instead"],
   });

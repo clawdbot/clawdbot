@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectExplicitVideoGenerationCapabilities } from "../../test/helpers/media-generation/provider-capability-assertions.js";
 import {
   _setComfyFetchGuardForTesting,
   buildComfyVideoGenerationProvider,
@@ -34,6 +35,10 @@ describe("comfy video-generation provider", () => {
   afterEach(() => {
     _setComfyFetchGuardForTesting(null);
     vi.restoreAllMocks();
+  });
+
+  it("declares explicit mode capabilities", () => {
+    expectExplicitVideoGenerationCapabilities(buildComfyVideoGenerationProvider());
   });
 
   it("treats local comfy video workflows as configured without an API key", () => {

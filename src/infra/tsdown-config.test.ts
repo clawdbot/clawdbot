@@ -7,8 +7,28 @@ type TsdownConfigEntry = {
     neverBundle?: string[] | ((id: string) => boolean);
   };
   entry?: Record<string, string> | string[];
+  inputOptions?: TsdownInputOptions;
   outDir?: string;
 };
+
+type TsdownLog = {
+  code?: string;
+  message?: string;
+  id?: string;
+  importer?: string;
+};
+
+type TsdownOnLog = (
+  level: string,
+  log: TsdownLog,
+  defaultHandler: (level: string, log: TsdownLog) => void,
+) => void;
+
+type TsdownInputOptions = (
+  options: { onLog?: TsdownOnLog },
+  format?: unknown,
+  context?: unknown,
+) => { onLog?: TsdownOnLog } | undefined;
 
 function asConfigArray(config: unknown): TsdownConfigEntry[] {
   return Array.isArray(config) ? (config as TsdownConfigEntry[]) : [config as TsdownConfigEntry];
@@ -23,6 +43,10 @@ function entryKeys(config: TsdownConfigEntry): string[] {
 
 function bundledEntry(pluginId: string): string {
   return `${bundledPluginRoot(pluginId)}/index`;
+}
+
+function unifiedDistGraph(): TsdownConfigEntry | undefined {
+  return asConfigArray(tsdownConfig).find((config) => entryKeys(config).includes("index"));
 }
 
 describe("tsdown config", () => {
@@ -76,8 +100,7 @@ describe("tsdown config", () => {
   });
 
   it("externalizes staged bundled plugin runtime dependencies", () => {
-    const configs = asConfigArray(tsdownConfig);
-    const unifiedGraph = configs.find((config) => entryKeys(config).includes("index"));
+    const unifiedGraph = unifiedDistGraph();
     const neverBundle = unifiedGraph?.deps?.neverBundle;
 
     if (typeof neverBundle === "function") {
@@ -88,5 +111,34 @@ describe("tsdown config", () => {
     } else {
       expect(neverBundle).toEqual(expect.arrayContaining(["silk-wasm", "ws"]));
     }
+  });
+
+  it("suppresses unresolved imports from extension source", () => {
+    const configured = unifiedDistGraph()?.inputOptions?.({})?.onLog;
+    const handled: TsdownLog[] = [];
+
+    configured?.(
+      "warn",
+      {
+        code: "UNRESOLVED_IMPORT",
+        message: "Could not resolve '@azure/identity' in extensions/msteams/src/sdk.ts",
+      },
+      (_level, log) => handled.push(log),
+    );
+
+    expect(handled).toEqual([]);
+  });
+
+  it("keeps unresolved imports outside extension source visible", () => {
+    const configured = unifiedDistGraph()?.inputOptions?.({})?.onLog;
+    const handled: TsdownLog[] = [];
+    const log = {
+      code: "UNRESOLVED_IMPORT",
+      message: "Could not resolve 'missing-dependency' in src/index.ts",
+    };
+
+    configured?.("warn", log, (_level, forwardedLog) => handled.push(forwardedLog));
+
+    expect(handled).toEqual([log]);
   });
 });

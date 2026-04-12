@@ -194,6 +194,13 @@ jobs:
           push: false
           provenance: false
 
+      - name: Setup Node environment for local pack smoke
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          install-deps: "true"
+          use-sticky-disk: "false"
+
       - name: Run installer docker tests
         env:
           OPENCLAW_INSTALL_URL: https://openclaw.ai/install.sh

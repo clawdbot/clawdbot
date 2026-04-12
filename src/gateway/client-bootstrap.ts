@@ -1,7 +1,7 @@
-import type { OpenClawConfig } from "../config/config.js";
-import { buildGatewayConnectionDetails } from "./call.js";
-import type { ExplicitGatewayAuth } from "./call.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayConnectionAuth } from "./connection-auth.js";
+import { buildGatewayConnectionDetailsWithResolvers } from "./connection-details.js";
+import type { ExplicitGatewayAuth } from "./credentials.js";
 
 export function resolveGatewayUrlOverrideSource(urlSource: string): "cli" | "env" | undefined {
   if (urlSource === "cli --url") {
@@ -26,7 +26,7 @@ export async function resolveGatewayClientBootstrap(params: {
     password?: string;
   };
 }> {
-  const connection = buildGatewayConnectionDetails({
+  const connection = buildGatewayConnectionDetailsWithResolvers({
     config: params.config,
     url: params.gatewayUrl,
   });

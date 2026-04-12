@@ -1,8 +1,8 @@
-import type { OpenClawConfig } from "../config/config.js";
 import type { SessionMaintenanceWarning } from "../config/sessions/store-maintenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { deliveryContextFromSession } from "../utils/delivery-context.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
 import { enqueueSystemEvent } from "./system-events.js";
@@ -33,7 +33,7 @@ function loadDeliverRuntime() {
 }
 
 function shouldSendWarning(): boolean {
-  return !process.env.VITEST && process.env.NODE_ENV !== "test";
+  return process.env.NODE_ENV !== "test";
 }
 
 function buildWarningContext(params: WarningParams): string {

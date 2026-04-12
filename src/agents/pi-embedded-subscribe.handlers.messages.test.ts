@@ -178,12 +178,14 @@ describe("buildAssistantStreamData", () => {
         delta: "he",
         replace: true,
         mediaUrl: "https://example.com/a.png",
+        phase: "final_answer",
       }),
     ).toEqual({
       text: "hello",
       delta: "he",
       replace: true,
       mediaUrls: ["https://example.com/a.png"],
+      phase: "final_answer",
     });
   });
 });

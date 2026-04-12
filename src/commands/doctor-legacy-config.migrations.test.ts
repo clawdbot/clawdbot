@@ -1,10 +1,16 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { clearPluginSetupRegistryCache } from "../plugins/setup-registry.js";
 import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
+
+vi.mock("../plugins/setup-registry.js", () => ({
+  runPluginSetupConfigMigrations: ({ config }: { config: OpenClawConfig }) => ({
+    config,
+    changes: [],
+  }),
+}));
 
 function asLegacyConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
@@ -38,7 +44,6 @@ describe("normalizeCompatibilityConfigValues", () => {
     previousOauthDir = process.env.OPENCLAW_OAUTH_DIR;
     tempOauthDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-oauth-"));
     process.env.OPENCLAW_OAUTH_DIR = tempOauthDir;
-    clearPluginSetupRegistryCache();
   });
 
   beforeEach(() => {
@@ -53,7 +58,6 @@ describe("normalizeCompatibilityConfigValues", () => {
       process.env.OPENCLAW_OAUTH_DIR = previousOauthDir;
     }
     fs.rmSync(tempOauthDir, { recursive: true, force: true });
-    clearPluginSetupRegistryCache();
   });
 
   it("does not add whatsapp config when missing and no auth exists", () => {

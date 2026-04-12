@@ -9,6 +9,7 @@ import {
   resolveNpmDistTagMirrorAuth as resolveNpmDistTagMirrorAuthBase,
   parseReleaseVersion as parseReleaseVersionBase,
 } from "./lib/npm-publish-plan.mjs";
+import { NPM_UPDATE_COMPAT_SIDECAR_PATHS } from "./lib/npm-update-compat-sidecars.mjs";
 
 type PackageJson = {
   name?: string;
@@ -56,7 +57,23 @@ const EXPECTED_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 const MAX_CALVER_DISTANCE_DAYS = 2;
 const REQUIRED_PACKED_PATHS = ["dist/control-ui/index.html"];
 const CONTROL_UI_ASSET_PREFIX = "dist/control-ui/assets/";
-const FORBIDDEN_PACKED_PATH_PREFIXES = ["docs/.generated/"] as const;
+const FORBIDDEN_PACKED_PATH_RULES = [
+  {
+    prefix: "docs/.generated/",
+    describe: (packedPath: string) =>
+      `npm package must not include generated docs artifact "${packedPath}".`,
+  },
+  {
+    prefix: "dist/extensions/qa-channel/",
+    describe: (packedPath: string) =>
+      `npm package must not include private QA channel artifact "${packedPath}".`,
+  },
+  {
+    prefix: "dist/extensions/qa-lab/",
+    describe: (packedPath: string) =>
+      `npm package must not include private QA lab artifact "${packedPath}".`,
+  },
+] as const;
 const NPM_PACK_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 const skipPackValidationEnv = "OPENCLAW_NPM_RELEASE_SKIP_PACK_CHECK";
 
@@ -447,10 +464,16 @@ function collectPackedTarballErrors(): string[] {
 export function collectForbiddenPackedPathErrors(paths: Iterable<string>): string[] {
   const errors: string[] = [];
   for (const packedPath of paths) {
-    if (!FORBIDDEN_PACKED_PATH_PREFIXES.some((prefix) => packedPath.startsWith(prefix))) {
+    if (NPM_UPDATE_COMPAT_SIDECAR_PATHS.has(packedPath)) {
       continue;
     }
-    errors.push(`npm package must not include generated docs artifact "${packedPath}".`);
+    const matchedRule = FORBIDDEN_PACKED_PATH_RULES.find((rule) =>
+      packedPath.startsWith(rule.prefix),
+    );
+    if (!matchedRule) {
+      continue;
+    }
+    errors.push(matchedRule.describe(packedPath));
   }
   return errors.toSorted((left, right) => left.localeCompare(right));
 }

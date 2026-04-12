@@ -1,5 +1,6 @@
 import os from "node:os";
 import path from "node:path";
+import { isMainThread, threadId } from "node:worker_threads";
 import { resolveStateDir } from "../config/paths.js";
 
 export function resolveTaskStateDir(env: NodeJS.ProcessEnv = process.env): string {
@@ -8,7 +9,14 @@ export function resolveTaskStateDir(env: NodeJS.ProcessEnv = process.env): strin
     return resolveStateDir(env);
   }
   if (env.VITEST || env.NODE_ENV === "test") {
-    return path.join(os.tmpdir(), "openclaw-test-state", String(process.pid));
+    const workerIdRaw = env.VITEST_WORKER_ID ?? env.VITEST_POOL_ID ?? "";
+    const workerId = Number.parseInt(workerIdRaw, 10);
+    const shardSuffix = Number.isFinite(workerId)
+      ? `${process.pid}-${workerId}`
+      : isMainThread
+        ? String(process.pid)
+        : `${process.pid}-${threadId}`;
+    return path.join(os.tmpdir(), "openclaw-test-state", shardSuffix);
   }
   return resolveStateDir(env);
 }

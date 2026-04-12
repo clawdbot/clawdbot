@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 let listSandboxBrowsers: typeof import("./manage.js").listSandboxBrowsers;
 let removeSandboxBrowserContainer: typeof import("./manage.js").removeSandboxBrowserContainer;
@@ -19,14 +19,13 @@ const backendMocks = vi.hoisted(() => ({
   removeRuntime: vi.fn(),
 }));
 
-vi.mock("../../config/config.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
-  return {
-    ...actual,
-    loadConfig: configMocks.loadConfig,
-  };
-});
+vi.mock("../../config/config.js", () => ({
+  loadConfig: configMocks.loadConfig,
+}));
+
+vi.mock("../../plugin-sdk/browser-bridge.js", () => ({
+  stopBrowserBridgeServer: vi.fn(async () => undefined),
+}));
 
 vi.mock("./registry.js", () => ({
   readBrowserRegistry: registryMocks.readBrowserRegistry,
@@ -43,10 +42,13 @@ vi.mock("./docker-backend.js", () => ({
   },
 }));
 
-async function loadFreshModule() {
-  vi.resetModules();
+vi.mock("./browser-bridges.js", () => ({
+  BROWSER_BRIDGES: new Map(),
+}));
+
+beforeAll(async () => {
   ({ listSandboxBrowsers, removeSandboxBrowserContainer } = await import("./manage.js"));
-}
+});
 
 describe("listSandboxBrowsers", () => {
   beforeEach(async () => {
@@ -94,8 +96,6 @@ describe("listSandboxBrowsers", () => {
       actualConfigLabel: "openclaw-sandbox-browser:bookworm-slim",
       configLabelMatch: true,
     });
-
-    await loadFreshModule();
   });
 
   it("compares browser runtimes against sandbox.browser.image", async () => {

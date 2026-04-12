@@ -1,6 +1,6 @@
 // Shared image-generation implementation helpers for bundled and third-party plugins.
 
-export type { AuthProfileStore } from "../agents/auth-profiles.js";
+export type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 export type { FallbackAttempt } from "../agents/model-fallback.types.js";
 export type { ImageGenerationProviderPlugin } from "../plugins/types.js";
 export type {
@@ -12,7 +12,7 @@ export type {
   ImageGenerationResult,
   ImageGenerationSourceImage,
 } from "../image-generation/types.js";
-export type { OpenClawConfig } from "../config/config.js";
+export type { OpenClawConfig } from "../config/types.openclaw.js";
 
 export { describeFailoverError, isFailoverError } from "../agents/failover-error.js";
 export {

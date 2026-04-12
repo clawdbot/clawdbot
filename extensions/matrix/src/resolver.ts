@@ -3,8 +3,8 @@ import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import type { ResolvedMatrixAccount } from "./matrix/accounts.js";
 
 const loadMatrixChannelRuntime = createLazyRuntimeNamedExport(
-  () => import("./channel.runtime.js"),
-  "matrixChannelRuntime",
+  () => import("./resolver.runtime.js"),
+  "matrixResolverRuntime",
 );
 
 type MatrixResolver = NonNullable<ChannelPlugin<ResolvedMatrixAccount>["resolver"]>;

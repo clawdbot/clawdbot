@@ -31,7 +31,7 @@ export async function registerPluginCliCommandGroups(
   entries: readonly PluginCliCommandGroupEntry[],
   params: {
     mode: PluginCliCommandGroupMode;
-    primary: string | null;
+    primary?: string;
     existingCommands: Set<string>;
     logger: PluginLogger;
   },

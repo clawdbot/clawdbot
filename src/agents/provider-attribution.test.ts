@@ -8,6 +8,7 @@ import {
   resolveProviderRequestAttributionHeaders,
   resolveProviderRequestCapabilities,
   resolveProviderRequestPolicy,
+  describeProviderRequestRoutingSummary,
 } from "./provider-attribution.js";
 
 describe("provider attribution", () => {
@@ -301,6 +302,77 @@ describe("provider attribution", () => {
         capability: "llm",
       }),
     ).toBeUndefined();
+  });
+
+  it("summarizes proxy-like, local, invalid, default, and native routing compactly", () => {
+    expect(
+      describeProviderRequestRoutingSummary({
+        provider: "openai",
+        api: "openai-responses",
+      }),
+    ).toBe("provider=openai api=openai-responses endpoint=default route=default policy=none");
+
+    expect(
+      describeProviderRequestRoutingSummary({
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "javascript:alert(1)",
+      }),
+    ).toBe("provider=openai api=openai-responses endpoint=invalid route=invalid policy=none");
+
+    expect(
+      describeProviderRequestRoutingSummary({
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://proxy.example.com/v1",
+        transport: "stream",
+        capability: "llm",
+      }),
+    ).toBe("provider=openai api=openai-responses endpoint=custom route=proxy-like policy=none");
+
+    expect(
+      describeProviderRequestRoutingSummary({
+        provider: "qwen",
+        api: "openai-responses",
+        baseUrl: "http://localhost:1234/v1",
+        transport: "stream",
+        capability: "llm",
+      }),
+    ).toBe("provider=qwen api=openai-responses endpoint=local route=local policy=none");
+
+    expect(
+      describeProviderRequestRoutingSummary({
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        transport: "stream",
+        capability: "llm",
+      }),
+    ).toBe(
+      "provider=openai api=openai-responses endpoint=openai-public route=native policy=hidden",
+    );
+
+    expect(
+      describeProviderRequestRoutingSummary({
+        provider: "openrouter",
+        api: "openai-responses",
+        baseUrl: "https://openrouter.ai/api/v1",
+        transport: "stream",
+        capability: "llm",
+      }),
+    ).toBe(
+      "provider=openrouter api=openai-responses endpoint=openrouter route=proxy-like policy=documented",
+    );
+
+    expect(
+      describeProviderRequestRoutingSummary({
+        provider: "groq",
+        api: "openai-completions",
+        baseUrl: "https://api.groq.com/openai/v1",
+        transport: "stream",
+        capability: "llm",
+      }),
+    ).toBe("provider=groq api=openai-completions endpoint=groq-native route=native policy=none");
   });
 
   it("models other provider families without enabling hidden attribution", () => {

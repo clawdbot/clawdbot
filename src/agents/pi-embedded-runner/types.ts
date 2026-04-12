@@ -1,5 +1,5 @@
 import type { CliSessionBinding, SessionSystemPromptReport } from "../../config/sessions/types.js";
-import type { MessagingToolSend } from "../pi-embedded-messaging.js";
+import type { MessagingToolSend } from "../pi-embedded-messaging.types.js";
 
 export type EmbeddedPiAgentMeta = {
   sessionId: string;

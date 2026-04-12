@@ -47,6 +47,7 @@ type RetryLimitDecisionParams = {
 type PromptDecisionParams = {
   stage: "prompt";
   aborted: boolean;
+  externalAbort: boolean;
   fallbackConfigured: boolean;
   failoverFailure: boolean;
   failoverReason: FailoverReason | null;
@@ -56,6 +57,7 @@ type PromptDecisionParams = {
 type AssistantDecisionParams = {
   stage: "assistant";
   aborted: boolean;
+  externalAbort: boolean;
   fallbackConfigured: boolean;
   failoverFailure: boolean;
   failoverReason: FailoverReason | null;
@@ -120,6 +122,12 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
   }
 
   if (params.stage === "prompt") {
+    if (params.externalAbort) {
+      return {
+        action: "surface_error",
+        reason: params.failoverReason,
+      };
+    }
     if (!params.profileRotated && shouldRotatePrompt(params)) {
       return {
         action: "rotate_profile",
@@ -138,6 +146,12 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
     };
   }
 
+  if (params.externalAbort) {
+    return {
+      action: "surface_error",
+      reason: params.failoverReason,
+    };
+  }
   const assistantShouldRotate = shouldRotateAssistant(params);
   if (!params.profileRotated && assistantShouldRotate) {
     return {

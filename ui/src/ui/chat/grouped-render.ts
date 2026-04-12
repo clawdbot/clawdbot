@@ -2,12 +2,18 @@ import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { AssistantIdentity } from "../assistant-identity.ts";
+import type { EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
 import { openExternalUrlSafe } from "../open-external-url.ts";
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
+import type { SidebarContent } from "../sidebar-content.ts";
 import { detectTextDirection } from "../text-direction.ts";
-import type { MessageGroup, ToolCard } from "../types/chat-types.ts";
+import type {
+  MessageContentItem,
+  MessageGroup,
+  NormalizedMessage,
+  ToolCard,
+} from "../types/chat-types.ts";
 import { agentLogoUrl } from "../views/agents-utils.ts";
 import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
 import {
@@ -15,17 +21,35 @@ import {
   extractThinkingCached,
   formatReasoningMarkdown,
 } from "./message-extract.ts";
-import { isToolResultMessage, normalizeRoleForGrouping } from "./message-normalizer.ts";
+import {
+  isToolResultMessage,
+  normalizeMessage,
+  normalizeRoleForGrouping,
+} from "./message-normalizer.ts";
 import { isTtsSupported, speakText, stopTts, isTtsSpeaking } from "./speech.ts";
-import { extractToolCards, renderToolCardSidebar } from "./tool-cards.ts";
+import {
+  extractToolCards,
+  renderExpandedToolCardContent,
+  renderRawOutputToggle,
+  renderToolCard,
+  renderToolPreview,
+} from "./tool-cards.ts";
+
+type AssistantAttachmentAvailability =
+  | { status: "checking" }
+  | { status: "available" }
+  | { status: "unavailable"; reason: string; checkedAt: number };
+
+const assistantAttachmentAvailabilityCache = new Map<string, AssistantAttachmentAvailability>();
+const ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS = 5_000;
+
+export function resetAssistantAttachmentAvailabilityCacheForTest() {
+  assistantAttachmentAvailabilityCache.clear();
+}
 
 type ImageBlock = {
   url: string;
   alt?: string;
-};
-
-type AudioClip = {
-  url: string;
 };
 
 function extractImages(message: unknown): ImageBlock[] {
@@ -65,32 +89,6 @@ function extractImages(message: unknown): ImageBlock[] {
   return images;
 }
 
-function extractAudioClips(message: unknown): AudioClip[] {
-  const m = message as Record<string, unknown>;
-  const content = m.content;
-  const clips: AudioClip[] = [];
-  if (!Array.isArray(content)) {
-    return clips;
-  }
-  for (const block of content) {
-    if (typeof block !== "object" || block === null) {
-      continue;
-    }
-    const b = block as Record<string, unknown>;
-    if (b.type !== "audio") {
-      continue;
-    }
-    const source = b.source as Record<string, unknown> | undefined;
-    if (source?.type === "base64" && typeof source.data === "string") {
-      const data = source.data;
-      const mediaType = (source.media_type as string) || "audio/mpeg";
-      const url = data.startsWith("data:") ? data : `data:${mediaType};base64,${data}`;
-      clips.push({ url });
-    }
-  }
-  return clips;
-}
-
 export function renderReadingIndicatorGroup(assistant?: AssistantIdentity, basePath?: string) {
   return html`
     <div class="chat-group assistant">
@@ -109,7 +107,7 @@ export function renderReadingIndicatorGroup(assistant?: AssistantIdentity, baseP
 export function renderStreamingGroup(
   text: string,
   startedAt: number,
-  onOpenSidebar?: (content: string) => void,
+  onOpenSidebar?: (content: SidebarContent) => void,
   assistant?: AssistantIdentity,
   basePath?: string,
 ) {
@@ -129,6 +127,7 @@ export function renderStreamingGroup(
             content: [{ type: "text", text }],
             timestamp: startedAt,
           },
+          `stream:${startedAt}`,
           { isStreaming: true, showReasoning: false },
           onOpenSidebar,
         )}
@@ -144,12 +143,23 @@ export function renderStreamingGroup(
 export function renderMessageGroup(
   group: MessageGroup,
   opts: {
-    onOpenSidebar?: (content: string) => void;
+    onOpenSidebar?: (content: SidebarContent) => void;
     showReasoning: boolean;
     showToolCalls?: boolean;
+    autoExpandToolCalls?: boolean;
+    isToolMessageExpanded?: (messageId: string) => boolean;
+    onToggleToolMessageExpanded?: (messageId: string) => void;
+    isToolExpanded?: (toolCardId: string) => boolean;
+    onToggleToolExpanded?: (toolCardId: string) => void;
+    onRequestUpdate?: () => void;
     assistantName?: string;
     assistantAvatar?: string | null;
     basePath?: string;
+    localMediaPreviewRoots?: readonly string[];
+    assistantAttachmentAuthToken?: string | null;
+    canvasHostUrl?: string | null;
+    embedSandboxMode?: EmbedSandboxMode;
+    allowExternalEmbedUrls?: boolean;
     contextWindow?: number | null;
     onDelete?: () => void;
   },
@@ -195,10 +205,22 @@ export function renderMessageGroup(
         ${group.messages.map((item, index) =>
           renderGroupedMessage(
             item.message,
+            item.key,
             {
               isStreaming: group.isStreaming && index === group.messages.length - 1,
               showReasoning: opts.showReasoning,
               showToolCalls: opts.showToolCalls ?? true,
+              autoExpandToolCalls: opts.autoExpandToolCalls ?? false,
+              isToolMessageExpanded: opts.isToolMessageExpanded,
+              onToggleToolMessageExpanded: opts.onToggleToolMessageExpanded,
+              isToolExpanded: opts.isToolExpanded,
+              onToggleToolExpanded: opts.onToggleToolExpanded,
+              onRequestUpdate: opts.onRequestUpdate,
+              canvasHostUrl: opts.canvasHostUrl,
+              basePath: opts.basePath,
+              localMediaPreviewRoots: opts.localMediaPreviewRoots,
+              assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
+              embedSandboxMode: opts.embedSandboxMode,
             },
             opts.onOpenSidebar,
           ),
@@ -346,15 +368,9 @@ function extractGroupText(group: MessageGroup): string {
   return parts.join("\n\n");
 }
 
-export const SKIP_DELETE_CONFIRM_KEY = "openclaw:skipDeleteConfirm";
+const SKIP_DELETE_CONFIRM_KEY = "openclaw:skipDeleteConfirm";
 
 type DeleteConfirmSide = "left" | "right";
-type DeleteConfirmPopover = {
-  popover: HTMLDivElement;
-  cancel: HTMLButtonElement;
-  yes: HTMLButtonElement;
-  check: HTMLInputElement;
-};
 
 function shouldSkipDeleteConfirm(): boolean {
   try {
@@ -362,45 +378,6 @@ function shouldSkipDeleteConfirm(): boolean {
   } catch {
     return false;
   }
-}
-
-function createDeleteConfirmPopover(side: DeleteConfirmSide): DeleteConfirmPopover {
-  const popover = document.createElement("div");
-  popover.className = `chat-delete-confirm chat-delete-confirm--${side}`;
-
-  const text = document.createElement("p");
-  text.className = "chat-delete-confirm__text";
-  text.textContent = "Delete this message?";
-
-  const remember = document.createElement("label");
-  remember.className = "chat-delete-confirm__remember";
-
-  const check = document.createElement("input");
-  check.className = "chat-delete-confirm__check";
-  check.type = "checkbox";
-
-  const rememberText = document.createElement("span");
-  rememberText.textContent = "Don't ask again";
-
-  remember.append(check, rememberText);
-
-  const actions = document.createElement("div");
-  actions.className = "chat-delete-confirm__actions";
-
-  const cancel = document.createElement("button");
-  cancel.className = "chat-delete-confirm__cancel";
-  cancel.type = "button";
-  cancel.textContent = "Cancel";
-
-  const yes = document.createElement("button");
-  yes.className = "chat-delete-confirm__yes";
-  yes.type = "button";
-  yes.textContent = "Delete";
-
-  actions.append(cancel, yes);
-  popover.append(text, remember, actions);
-
-  return { popover, cancel, yes, check };
 }
 
 function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
@@ -422,31 +399,43 @@ function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
             existing.remove();
             return;
           }
-          const { popover, cancel, yes, check } = createDeleteConfirmPopover(side);
+          const popover = document.createElement("div");
+          popover.className = `chat-delete-confirm chat-delete-confirm--${side}`;
+          popover.innerHTML = `
+            <p class="chat-delete-confirm__text">Delete this message?</p>
+            <label class="chat-delete-confirm__remember">
+              <input type="checkbox" class="chat-delete-confirm__check" />
+              <span>Don't ask again</span>
+            </label>
+            <div class="chat-delete-confirm__actions">
+              <button class="chat-delete-confirm__cancel" type="button">Cancel</button>
+              <button class="chat-delete-confirm__yes" type="button">Delete</button>
+            </div>
+          `;
           wrap.appendChild(popover);
 
-          const removePopover = () => {
-            popover.remove();
-            document.removeEventListener("click", closeOnOutside, true);
-          };
+          const cancel = popover.querySelector(".chat-delete-confirm__cancel")!;
+          const yes = popover.querySelector(".chat-delete-confirm__yes")!;
+          const check = popover.querySelector(".chat-delete-confirm__check") as HTMLInputElement;
 
-          // Close on click outside.
-          const closeOnOutside = (evt: MouseEvent) => {
-            if (!popover.contains(evt.target as Node) && evt.target !== btn) {
-              removePopover();
-            }
-          };
-
-          cancel.addEventListener("click", removePopover);
+          cancel.addEventListener("click", () => popover.remove());
           yes.addEventListener("click", () => {
             if (check.checked) {
               try {
                 getSafeLocalStorage()?.setItem(SKIP_DELETE_CONFIRM_KEY, "1");
               } catch {}
             }
-            removePopover();
+            popover.remove();
             onDelete();
           });
+
+          // Close on click outside
+          const closeOnOutside = (evt: MouseEvent) => {
+            if (!popover.contains(evt.target as Node) && evt.target !== btn) {
+              popover.remove();
+              document.removeEventListener("click", closeOnOutside, true);
+            }
+          };
           requestAnimationFrame(() => document.addEventListener("click", closeOnOutside, true));
         }}
       >
@@ -611,52 +600,372 @@ function renderMessageImages(images: ImageBlock[]) {
   `;
 }
 
-function renderMessageAudio(clips: AudioClip[]) {
-  if (clips.length === 0) {
+function renderReplyPill(replyTarget: NormalizedMessage["replyTarget"]) {
+  if (!replyTarget) {
     return nothing;
   }
   return html`
-    <div class="chat-message-audio">
-      ${clips.map(
-        (clip) =>
-          html`<audio
-            class="chat-message-audio-el"
-            controls
-            preload="metadata"
-            src=${clip.url}
-          ></audio>`,
-      )}
+    <div class="chat-reply-pill">
+      <span class="chat-reply-pill__icon">${icons.messageSquare}</span>
+      <span class="chat-reply-pill__label">
+        ${replyTarget.kind === "current"
+          ? "Replying to current message"
+          : `Replying to ${replyTarget.id}`}
+      </span>
     </div>
   `;
 }
 
-/** Render tool cards inside a collapsed `<details>` element. */
-function renderCollapsedToolCards(
-  toolCards: ToolCard[],
-  onOpenSidebar?: (content: string) => void,
-) {
-  const calls = toolCards.filter((c) => c.kind === "call");
-  const results = toolCards.filter((c) => c.kind === "result");
-  const totalTools = Math.max(calls.length, results.length) || toolCards.length;
-  const toolNames = [...new Set(toolCards.map((c) => c.name))];
-  const summaryLabel =
-    toolNames.length <= 3
-      ? toolNames.join(", ")
-      : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`;
+function isLocalAssistantAttachmentSource(source: string): boolean {
+  const trimmed = source.trim();
+  if (/^\/(?:__openclaw__|media)\//.test(trimmed)) {
+    return false;
+  }
+  return (
+    trimmed.startsWith("file://") ||
+    trimmed.startsWith("~") ||
+    trimmed.startsWith("/") ||
+    /^[a-zA-Z]:[\\/]/.test(trimmed)
+  );
+}
 
+function normalizeLocalAttachmentPath(source: string): string | null {
+  const trimmed = source.trim();
+  if (!isLocalAssistantAttachmentSource(trimmed)) {
+    return null;
+  }
+  if (trimmed.startsWith("file://")) {
+    try {
+      const url = new URL(trimmed);
+      const pathname = decodeURIComponent(url.pathname);
+      if (/^\/[a-zA-Z]:\//.test(pathname)) {
+        return pathname.slice(1);
+      }
+      return pathname;
+    } catch {
+      return null;
+    }
+  }
+  if (trimmed.startsWith("~")) {
+    return null;
+  }
+  return trimmed;
+}
+
+function resolveHomeCandidatesFromRoots(localMediaPreviewRoots: readonly string[]): string[] {
+  const candidates = new Set<string>();
+  for (const root of localMediaPreviewRoots) {
+    const normalized = canonicalizeLocalPathForComparison(root.trim());
+    const unixHome = normalized.match(/^(\/Users\/[^/]+|\/home\/[^/]+)(?:\/|$)/);
+    if (unixHome?.[1]) {
+      candidates.add(unixHome[1]);
+      continue;
+    }
+    const windowsHome = normalized.match(/^([a-z]:\/Users\/[^/]+)(?:\/|$)/i);
+    if (windowsHome?.[1]) {
+      candidates.add(windowsHome[1]);
+    }
+  }
+  return [...candidates];
+}
+
+function canonicalizeLocalPathForComparison(value: string): string {
+  let slashNormalized = value.replace(/\\/g, "/").replace(/\/+$/, "");
+  if (/^\/[a-zA-Z]:\//.test(slashNormalized)) {
+    slashNormalized = slashNormalized.slice(1);
+  }
+  if (/^[a-zA-Z]:\//.test(slashNormalized)) {
+    return slashNormalized.toLowerCase();
+  }
+  return slashNormalized;
+}
+
+function isLocalAttachmentPreviewAllowed(
+  source: string,
+  localMediaPreviewRoots: readonly string[],
+): boolean {
+  const normalizedSource = normalizeLocalAttachmentPath(source);
+  const comparableSources = normalizedSource
+    ? [canonicalizeLocalPathForComparison(normalizedSource)]
+    : source.trim().startsWith("~")
+      ? resolveHomeCandidatesFromRoots(localMediaPreviewRoots).map((home) =>
+          canonicalizeLocalPathForComparison(source.trim().replace(/^~(?=$|[\\/])/, home)),
+        )
+      : [];
+  if (comparableSources.length === 0) {
+    return false;
+  }
+  return localMediaPreviewRoots.some((root) => {
+    const normalizedRoot = canonicalizeLocalPathForComparison(root.trim());
+    return (
+      normalizedRoot.length > 0 &&
+      comparableSources.some(
+        (comparableSource) =>
+          comparableSource === normalizedRoot || comparableSource.startsWith(`${normalizedRoot}/`),
+      )
+    );
+  });
+}
+
+function buildAssistantAttachmentUrl(
+  source: string,
+  basePath?: string,
+  authToken?: string | null,
+): string {
+  if (!isLocalAssistantAttachmentSource(source)) {
+    return source;
+  }
+  const normalizedBasePath =
+    basePath && basePath !== "/" ? (basePath.endsWith("/") ? basePath.slice(0, -1) : basePath) : "";
+  const params = new URLSearchParams({ source });
+  const normalizedToken = authToken?.trim();
+  if (normalizedToken) {
+    params.set("token", normalizedToken);
+  }
+  return `${normalizedBasePath}/__openclaw__/assistant-media?${params.toString()}`;
+}
+
+function buildAssistantAttachmentMetaUrl(
+  source: string,
+  basePath?: string,
+  authToken?: string | null,
+): string {
+  const attachmentUrl = buildAssistantAttachmentUrl(source, basePath, authToken);
+  return `${attachmentUrl}${attachmentUrl.includes("?") ? "&" : "?"}meta=1`;
+}
+
+function resolveAssistantAttachmentAvailability(
+  source: string,
+  localMediaPreviewRoots: readonly string[],
+  basePath: string | undefined,
+  authToken: string | null | undefined,
+  onRequestUpdate: (() => void) | undefined,
+): AssistantAttachmentAvailability {
+  if (!isLocalAssistantAttachmentSource(source)) {
+    return { status: "available" };
+  }
+  if (!isLocalAttachmentPreviewAllowed(source, localMediaPreviewRoots)) {
+    return { status: "unavailable", reason: "Outside allowed folders", checkedAt: Date.now() };
+  }
+  const normalizedAuthToken = authToken?.trim() ?? "";
+  const cacheKey = `${basePath ?? ""}::${normalizedAuthToken}::${source}`;
+  const cached = assistantAttachmentAvailabilityCache.get(cacheKey);
+  if (cached) {
+    if (
+      cached.status === "unavailable" &&
+      Date.now() - cached.checkedAt >= ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS
+    ) {
+      assistantAttachmentAvailabilityCache.delete(cacheKey);
+    } else {
+      return cached;
+    }
+  }
+  assistantAttachmentAvailabilityCache.set(cacheKey, { status: "checking" });
+  if (typeof fetch === "function") {
+    void fetch(buildAssistantAttachmentMetaUrl(source, basePath, authToken), {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      credentials: "same-origin",
+    })
+      .then(async (res) => {
+        const payload = (await res.json().catch(() => null)) as {
+          available?: boolean;
+          reason?: string;
+        } | null;
+        if (payload?.available === true) {
+          assistantAttachmentAvailabilityCache.set(cacheKey, { status: "available" });
+        } else {
+          assistantAttachmentAvailabilityCache.set(cacheKey, {
+            status: "unavailable",
+            reason: payload?.reason?.trim() || "Attachment unavailable",
+            checkedAt: Date.now(),
+          });
+        }
+      })
+      .catch(() => {
+        assistantAttachmentAvailabilityCache.set(cacheKey, {
+          status: "unavailable",
+          reason: "Attachment unavailable",
+          checkedAt: Date.now(),
+        });
+      })
+      .finally(() => {
+        onRequestUpdate?.();
+      });
+  }
+  return { status: "checking" };
+}
+
+function renderAssistantAttachmentStatusCard(params: {
+  kind: "image" | "audio" | "video" | "document";
+  label: string;
+  badge: string;
+  reason?: string;
+}) {
+  const icon =
+    params.kind === "image"
+      ? icons.image
+      : params.kind === "audio"
+        ? icons.mic
+        : params.kind === "video"
+          ? icons.monitor
+          : icons.paperclip;
   return html`
-    <details class="chat-tools-collapse">
-      <summary class="chat-tools-summary">
-        <span class="chat-tools-summary__icon">${icons.zap}</span>
-        <span class="chat-tools-summary__count"
-          >${totalTools} tool${totalTools === 1 ? "" : "s"}</span
+    <div class="chat-assistant-attachment-card chat-assistant-attachment-card--blocked">
+      <div class="chat-assistant-attachment-card__header">
+        <span class="chat-assistant-attachment-card__icon">${icon}</span>
+        <span class="chat-assistant-attachment-card__title">${params.label}</span>
+        <span class="chat-assistant-attachment-badge chat-assistant-attachment-badge--muted"
+          >${params.badge}</span
         >
-        <span class="chat-tools-summary__names">${summaryLabel}</span>
-      </summary>
-      <div class="chat-tools-collapse__body">
-        ${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}
       </div>
-    </details>
+      ${params.reason
+        ? html`<div class="chat-assistant-attachment-card__reason">${params.reason}</div>`
+        : nothing}
+    </div>
+  `;
+}
+
+function renderAssistantAttachments(
+  attachments: Array<Extract<MessageContentItem, { type: "attachment" }>>,
+  localMediaPreviewRoots: readonly string[],
+  basePath?: string,
+  authToken?: string | null,
+  onRequestUpdate?: () => void,
+) {
+  if (attachments.length === 0) {
+    return nothing;
+  }
+  return html`
+    <div class="chat-assistant-attachments">
+      ${attachments.map(({ attachment }) => {
+        const availability = resolveAssistantAttachmentAvailability(
+          attachment.url,
+          localMediaPreviewRoots,
+          basePath,
+          authToken,
+          onRequestUpdate,
+        );
+        const attachmentUrl =
+          availability.status === "available"
+            ? buildAssistantAttachmentUrl(attachment.url, basePath, authToken)
+            : null;
+        if (attachment.kind === "image") {
+          if (!attachmentUrl) {
+            return renderAssistantAttachmentStatusCard({
+              kind: "image",
+              label: attachment.label,
+              badge: availability.status === "checking" ? "Checking..." : "Unavailable",
+              reason: availability.status === "unavailable" ? availability.reason : undefined,
+            });
+          }
+          return html`
+            <img
+              src=${attachmentUrl}
+              alt=${attachment.label}
+              class="chat-message-image"
+              @click=${() => openExternalUrlSafe(attachmentUrl, { allowDataImage: true })}
+            />
+          `;
+        }
+        if (attachment.kind === "audio") {
+          return html`
+            <div class="chat-assistant-attachment-card chat-assistant-attachment-card--audio">
+              <div class="chat-assistant-attachment-card__header">
+                <span class="chat-assistant-attachment-card__title">${attachment.label}</span>
+                ${!attachmentUrl
+                  ? html`<span
+                      class="chat-assistant-attachment-badge chat-assistant-attachment-badge--muted"
+                      >${availability.status === "checking" ? "Checking..." : "Unavailable"}</span
+                    >`
+                  : attachment.isVoiceNote
+                    ? html`<span class="chat-assistant-attachment-badge">Voice note</span>`
+                    : nothing}
+              </div>
+              ${attachmentUrl
+                ? html`<audio controls preload="metadata" src=${attachmentUrl}></audio>`
+                : availability.status === "unavailable"
+                  ? html`<div class="chat-assistant-attachment-card__reason">
+                      ${availability.reason}
+                    </div>`
+                  : nothing}
+            </div>
+          `;
+        }
+        if (attachment.kind === "video") {
+          if (!attachmentUrl) {
+            return renderAssistantAttachmentStatusCard({
+              kind: "video",
+              label: attachment.label,
+              badge: availability.status === "checking" ? "Checking..." : "Unavailable",
+              reason: availability.status === "unavailable" ? availability.reason : undefined,
+            });
+          }
+          return html`
+            <div class="chat-assistant-attachment-card chat-assistant-attachment-card--video">
+              <video controls preload="metadata" src=${attachmentUrl}></video>
+              <a
+                class="chat-assistant-attachment-card__link"
+                href=${attachmentUrl}
+                target="_blank"
+                rel="noreferrer"
+                >${attachment.label}</a
+              >
+            </div>
+          `;
+        }
+        if (!attachmentUrl) {
+          return renderAssistantAttachmentStatusCard({
+            kind: "document",
+            label: attachment.label,
+            badge: availability.status === "checking" ? "Checking..." : "Unavailable",
+            reason: availability.status === "unavailable" ? availability.reason : undefined,
+          });
+        }
+        return html`
+          <div class="chat-assistant-attachment-card">
+            <span class="chat-assistant-attachment-card__icon">${icons.paperclip}</span>
+            <a
+              class="chat-assistant-attachment-card__link"
+              href=${attachmentUrl}
+              target="_blank"
+              rel="noreferrer"
+              >${attachment.label}</a
+            >
+          </div>
+        `;
+      })}
+    </div>
+  `;
+}
+
+function renderInlineToolCards(
+  toolCards: ToolCard[],
+  opts: {
+    messageKey: string;
+    onOpenSidebar?: (content: SidebarContent) => void;
+    isToolExpanded?: (toolCardId: string) => boolean;
+    onToggleToolExpanded?: (toolCardId: string) => void;
+    canvasHostUrl?: string | null;
+    embedSandboxMode?: EmbedSandboxMode;
+    allowExternalEmbedUrls?: boolean;
+  },
+) {
+  return html`
+    <div class="chat-tools-inline">
+      ${toolCards.map((card, index) =>
+        renderToolCard(card, {
+          expanded: opts.isToolExpanded?.(`${opts.messageKey}:toolcard:${index}`) ?? false,
+          onToggleExpanded: opts.onToggleToolExpanded
+            ? () => opts.onToggleToolExpanded?.(`${opts.messageKey}:toolcard:${index}`)
+            : () => undefined,
+          onOpenSidebar: opts.onOpenSidebar,
+          canvasHostUrl: opts.canvasHostUrl,
+          embedSandboxMode: opts.embedSandboxMode ?? "scripts",
+          allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
+        }),
+      )}
+    </div>
   `;
 }
 
@@ -705,14 +1014,14 @@ function jsonSummaryLabel(parsed: unknown): string {
   return "JSON";
 }
 
-function renderExpandButton(markdown: string, onOpenSidebar: (content: string) => void) {
+function renderExpandButton(markdown: string, onOpenSidebar: (content: SidebarContent) => void) {
   return html`
     <button
       class="btn btn--xs chat-expand-btn"
       type="button"
       title="Open in canvas"
       aria-label="Open in canvas"
-      @click=${() => onOpenSidebar(markdown)}
+      @click=${() => onOpenSidebar({ kind: "markdown", content: markdown })}
     >
       <span class="chat-expand-btn__icon" aria-hidden="true">${icons.panelRightOpen}</span>
     </button>
@@ -721,28 +1030,58 @@ function renderExpandButton(markdown: string, onOpenSidebar: (content: string) =
 
 function renderGroupedMessage(
   message: unknown,
-  opts: { isStreaming: boolean; showReasoning: boolean; showToolCalls?: boolean },
-  onOpenSidebar?: (content: string) => void,
+  messageKey: string,
+  opts: {
+    isStreaming: boolean;
+    showReasoning: boolean;
+    showToolCalls?: boolean;
+    autoExpandToolCalls?: boolean;
+    isToolMessageExpanded?: (messageId: string) => boolean;
+    onToggleToolMessageExpanded?: (messageId: string) => void;
+    isToolExpanded?: (toolCardId: string) => boolean;
+    onToggleToolExpanded?: (toolCardId: string) => void;
+    onRequestUpdate?: () => void;
+    canvasHostUrl?: string | null;
+    basePath?: string;
+    localMediaPreviewRoots?: readonly string[];
+    assistantAttachmentAuthToken?: string | null;
+    embedSandboxMode?: EmbedSandboxMode;
+    allowExternalEmbedUrls?: boolean;
+  },
+  onOpenSidebar?: (content: SidebarContent) => void,
 ) {
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "unknown";
   const normalizedRole = normalizeRoleForGrouping(role);
-  const normalizedRawRole = normalizeLowercaseStringOrEmpty(role);
   const isToolResult =
     isToolResultMessage(message) ||
-    normalizedRawRole === "toolresult" ||
-    normalizedRawRole === "tool_result" ||
+    role.toLowerCase() === "toolresult" ||
+    role.toLowerCase() === "tool_result" ||
     typeof m.toolCallId === "string" ||
     typeof m.tool_call_id === "string";
 
-  const toolCards = (opts.showToolCalls ?? true) ? extractToolCards(message) : [];
+  const toolCards = (opts.showToolCalls ?? true) ? extractToolCards(message, messageKey) : [];
   const hasToolCards = toolCards.length > 0;
   const images = extractImages(message);
   const hasImages = images.length > 0;
-  const audioClips = extractAudioClips(message);
-  const hasAudio = audioClips.length > 0;
 
-  const extractedText = extractTextCached(message);
+  const normalizedMessage = normalizeMessage(message);
+  const extractedText = normalizedMessage.content
+    .reduce<string[]>((lines, item) => {
+      if (item.type === "text" && typeof item.text === "string") {
+        lines.push(item.text);
+      }
+      return lines;
+    }, [])
+    .join("\n")
+    .trim();
+  const assistantAttachments = normalizedMessage.content.filter(
+    (item): item is Extract<MessageContentItem, { type: "attachment" }> =>
+      item.type === "attachment",
+  );
+  const assistantViewBlocks = normalizedMessage.content.filter(
+    (item): item is Extract<MessageContentItem, { type: "canvas" }> => item.type === "canvas",
+  );
   const extractedThinking =
     opts.showReasoning && role === "assistant" ? extractThinkingCached(message) : null;
   const markdownBase = extractedText?.trim() ? extractedText : null;
@@ -754,26 +1093,26 @@ function renderGroupedMessage(
   // Detect pure-JSON messages and render as collapsible block
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
 
-  const bubbleClasses = [
-    "chat-bubble",
-    opts.isStreaming ? "streaming" : "",
-    "fade-in",
-    canCopyMarkdown ? "has-copy" : "",
-  ]
+  const bubbleClasses = ["chat-bubble", opts.isStreaming ? "streaming" : "", "fade-in"]
     .filter(Boolean)
     .join(" ");
 
-  if (!markdown && hasToolCards && isToolResult) {
-    return renderCollapsedToolCards(toolCards, onOpenSidebar);
-  }
-
   // Suppress empty bubbles when tool cards are the only content and toggle is off
   const visibleToolCards = hasToolCards && (opts.showToolCalls ?? true);
-  if (!markdown && !visibleToolCards && !hasImages && !hasAudio) {
+  if (
+    !markdown &&
+    !visibleToolCards &&
+    !hasImages &&
+    assistantAttachments.length === 0 &&
+    assistantViewBlocks.length === 0 &&
+    !normalizedMessage.replyTarget
+  ) {
     return nothing;
   }
 
   const isToolMessage = normalizedRole === "tool" || isToolResult;
+  const toolMessageDisclosureId = `toolmsg:${messageKey}`;
+  const toolMessageExpanded = opts.isToolMessageExpanded?.(toolMessageDisclosureId) ?? false;
   const toolNames = [...new Set(toolCards.map((c) => c.name))];
   const toolSummaryLabel =
     toolNames.length <= 3
@@ -781,11 +1120,19 @@ function renderGroupedMessage(
       : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`;
   const toolPreview =
     markdown && !toolSummaryLabel ? markdown.trim().replace(/\s+/g, " ").slice(0, 120) : "";
+  const singleToolCard = toolCards.length === 1 ? toolCards[0] : null;
+  const toolMessageLabel =
+    singleToolCard && !markdown && !hasImages
+      ? singleToolCard.outputText?.trim()
+        ? "Tool output"
+        : "Tool call"
+      : "Tool output";
 
   const hasActions = canCopyMarkdown || canExpand;
 
   return html`
     <div class="${bubbleClasses}">
+      ${renderReplyPill(normalizedMessage.replyTarget)}
       ${hasActions
         ? html`<div class="chat-bubble-actions">
             ${canExpand ? renderExpandButton(markdown!, onOpenSidebar!) : nothing}
@@ -794,46 +1141,107 @@ function renderGroupedMessage(
         : nothing}
       ${isToolMessage
         ? html`
-            <details class="chat-tool-msg-collapse">
-              <summary class="chat-tool-msg-summary">
+            <div
+              class="chat-tool-msg-collapse chat-tool-msg-collapse--manual ${toolMessageExpanded
+                ? "is-open"
+                : ""}"
+            >
+              <button
+                class="chat-tool-msg-summary"
+                type="button"
+                aria-expanded=${String(toolMessageExpanded)}
+                @click=${() => opts.onToggleToolMessageExpanded?.(toolMessageDisclosureId)}
+              >
                 <span class="chat-tool-msg-summary__icon">${icons.zap}</span>
-                <span class="chat-tool-msg-summary__label">Tool output</span>
+                <span class="chat-tool-msg-summary__label">${toolMessageLabel}</span>
                 ${toolSummaryLabel
                   ? html`<span class="chat-tool-msg-summary__names">${toolSummaryLabel}</span>`
                   : toolPreview
                     ? html`<span class="chat-tool-msg-summary__preview">${toolPreview}</span>`
                     : nothing}
-              </summary>
-              <div class="chat-tool-msg-body">
-                ${renderMessageImages(images)} ${renderMessageAudio(audioClips)}
-                ${reasoningMarkdown
-                  ? html`<div class="chat-thinking">
-                      ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
-                    </div>`
-                  : nothing}
-                ${jsonResult
-                  ? html`<details class="chat-json-collapse">
-                      <summary class="chat-json-summary">
-                        <span class="chat-json-badge">JSON</span>
-                        <span class="chat-json-label">${jsonSummaryLabel(jsonResult.parsed)}</span>
-                      </summary>
-                      <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
-                    </details>`
-                  : markdown
-                    ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
-                        ${unsafeHTML(toSanitizedMarkdownHtml(markdown))}
-                      </div>`
-                    : nothing}
-                ${hasToolCards ? renderCollapsedToolCards(toolCards, onOpenSidebar) : nothing}
-              </div>
-            </details>
+              </button>
+              ${toolMessageExpanded
+                ? html`
+                    <div class="chat-tool-msg-body">
+                      ${renderMessageImages(images)}
+                      ${renderAssistantAttachments(
+                        assistantAttachments,
+                        opts.localMediaPreviewRoots ?? [],
+                        opts.basePath,
+                        opts.assistantAttachmentAuthToken,
+                        opts.onRequestUpdate,
+                      )}
+                      ${reasoningMarkdown
+                        ? html`<div class="chat-thinking">
+                            ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
+                          </div>`
+                        : nothing}
+                      ${jsonResult
+                        ? html`<details
+                            class="chat-json-collapse"
+                            ?open=${Boolean(opts.autoExpandToolCalls)}
+                          >
+                            <summary class="chat-json-summary">
+                              <span class="chat-json-badge">JSON</span>
+                              <span class="chat-json-label"
+                                >${jsonSummaryLabel(jsonResult.parsed)}</span
+                              >
+                            </summary>
+                            <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
+                          </details>`
+                        : markdown
+                          ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
+                              ${unsafeHTML(toSanitizedMarkdownHtml(markdown))}
+                            </div>`
+                          : nothing}
+                      ${hasToolCards
+                        ? singleToolCard && !markdown && !hasImages
+                          ? renderExpandedToolCardContent(
+                              singleToolCard,
+                              onOpenSidebar,
+                              opts.canvasHostUrl,
+                              opts.embedSandboxMode ?? "scripts",
+                              opts.allowExternalEmbedUrls ?? false,
+                            )
+                          : renderInlineToolCards(toolCards, {
+                              messageKey,
+                              onOpenSidebar,
+                              isToolExpanded: opts.isToolExpanded,
+                              onToggleToolExpanded: opts.onToggleToolExpanded,
+                              canvasHostUrl: opts.canvasHostUrl,
+                              embedSandboxMode: opts.embedSandboxMode ?? "scripts",
+                              allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
+                            })
+                        : nothing}
+                    </div>
+                  `
+                : nothing}
+            </div>
           `
         : html`
-            ${renderMessageImages(images)} ${renderMessageAudio(audioClips)}
+            ${renderMessageImages(images)}
+            ${renderAssistantAttachments(
+              assistantAttachments,
+              opts.localMediaPreviewRoots ?? [],
+              opts.basePath,
+              opts.assistantAttachmentAuthToken,
+              opts.onRequestUpdate,
+            )}
             ${reasoningMarkdown
               ? html`<div class="chat-thinking">
                   ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
                 </div>`
+              : nothing}
+            ${normalizedRole === "assistant" && assistantViewBlocks.length > 0
+              ? html`${assistantViewBlocks.map(
+                  (block) => html`${renderToolPreview(block.preview, "chat_message", {
+                    onOpenSidebar,
+                    rawText: block.rawText ?? null,
+                    canvasHostUrl: opts.canvasHostUrl,
+                    embedSandboxMode: opts.embedSandboxMode ?? "scripts",
+                  })}
+                  ${block.rawText ? renderRawOutputToggle(block.rawText) : nothing}`,
+                )}`
               : nothing}
             ${jsonResult
               ? html`<details class="chat-json-collapse">
@@ -848,7 +1256,17 @@ function renderGroupedMessage(
                     ${unsafeHTML(toSanitizedMarkdownHtml(markdown))}
                   </div>`
                 : nothing}
-            ${hasToolCards ? renderCollapsedToolCards(toolCards, onOpenSidebar) : nothing}
+            ${hasToolCards
+              ? renderInlineToolCards(toolCards, {
+                  messageKey,
+                  onOpenSidebar,
+                  isToolExpanded: opts.isToolExpanded,
+                  onToggleToolExpanded: opts.onToggleToolExpanded,
+                  canvasHostUrl: opts.canvasHostUrl,
+                  embedSandboxMode: opts.embedSandboxMode ?? "scripts",
+                  allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
+                })
+              : nothing}
           `}
     </div>
   `;

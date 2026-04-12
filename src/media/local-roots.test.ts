@@ -1,8 +1,8 @@
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  appendLocalMediaParentRoots,
   buildMediaLocalRoots,
   getAgentScopedMediaLocalRoots,
   getAgentScopedMediaLocalRootsForSources,
@@ -53,14 +53,6 @@ describe("local media roots", () => {
     expect(normalizedRoots).not.toContain(picturesRoot);
   }
 
-  function expectPicturesRootAbsent(roots: readonly string[], picturesRoot?: string) {
-    expectPicturesRootPresence({
-      roots,
-      shouldContainPictures: false,
-      picturesRoot,
-    });
-  }
-
   function expectAgentMediaRootsCase(params: {
     stateDir: string;
     getRoots: () => readonly string[];
@@ -86,12 +78,12 @@ describe("local media roots", () => {
 
   it.each([
     {
-      name: "keeps temp, media cache, and workspace roots by default",
+      name: "keeps temp, media cache, canvas, and workspace roots by default",
       stateDir: path.join("/tmp", "openclaw-media-roots-state"),
       getRoots: () => getDefaultMediaLocalRoots(),
-      expectedContained: ["media", "workspace", "sandboxes"],
+      expectedContained: ["media", "canvas", "workspace", "sandboxes"],
       expectedExcluded: ["agents"],
-      minLength: 3,
+      minLength: 4,
     },
     {
       name: "adds the active agent workspace without re-opening broad agent state roots",
@@ -110,12 +102,38 @@ describe("local media roots", () => {
     });
   });
 
+  it("adds concrete parent roots for local media sources without widening to filesystem root", () => {
+    const picturesDir =
+      process.platform === "win32" ? "C:\\Users\\peter\\Pictures" : "/Users/peter/Pictures";
+    const moviesDir =
+      process.platform === "win32" ? "C:\\Users\\peter\\Movies" : "/Users/peter/Movies";
+
+    const roots = appendLocalMediaParentRoots(
+      ["/tmp/base"],
+      [
+        path.join(picturesDir, "photo.png"),
+        pathToFileURL(path.join(moviesDir, "clip.mp4")).href,
+        "https://example.com/remote.png",
+        "/top-level-file.png",
+      ],
+    );
+
+    expect(roots.map(normalizeHostPath)).toEqual(
+      expect.arrayContaining([
+        normalizeHostPath("/tmp/base"),
+        normalizeHostPath(picturesDir),
+        normalizeHostPath(moviesDir),
+      ]),
+    );
+    expect(roots.map(normalizeHostPath)).not.toContain(normalizeHostPath("/"));
+  });
+
   it.each([
     {
-      name: "does not widen agent media roots for concrete local sources when workspaceOnly is disabled",
+      name: "widens agent media roots for concrete local sources when workspaceOnly is disabled",
       stateDir: path.join("/tmp", "openclaw-flexible-media-roots-state"),
       cfg: {},
-      shouldContainPictures: false,
+      shouldContainPictures: true,
     },
     {
       name: "does not widen agent media roots when workspaceOnly is enabled",
@@ -130,7 +148,7 @@ describe("local media roots", () => {
       shouldContainPictures: false,
     },
     {
-      name: "does not widen media roots even when messaging-profile agents explicitly enable filesystem tools",
+      name: "widens media roots again when messaging-profile agents explicitly enable filesystem tools",
       stateDir: path.join("/tmp", "openclaw-messaging-fs-media-roots-state"),
       cfg: {
         tools: {
@@ -138,7 +156,7 @@ describe("local media roots", () => {
           fs: { workspaceOnly: false },
         },
       },
-      shouldContainPictures: false,
+      shouldContainPictures: true,
     },
   ] as const)("$name", ({ stateDir, cfg, shouldContainPictures }) => {
     const roots = withStateDir(stateDir, () =>
@@ -151,47 +169,14 @@ describe("local media roots", () => {
     expectPicturesRootPresence({ roots, shouldContainPictures });
   });
 
-  it("keeps agent-scoped defaults even when mediaSources include file URLs and top-level paths", () => {
-    const stateDir = path.join("/tmp", "openclaw-file-url-media-roots-state");
-    const picturesDir =
-      process.platform === "win32" ? "C:\\Users\\peter\\Pictures" : "/Users/peter/Pictures";
-    const moviesDir =
-      process.platform === "win32" ? "C:\\Users\\peter\\Movies" : "/Users/peter/Movies";
-
-    const roots = withStateDir(stateDir, () =>
-      getAgentScopedMediaLocalRootsForSources({
-        cfg: {},
-        agentId: "ops",
-        mediaSources: [
-          path.join(picturesDir, "photo.png"),
-          pathToFileURL(path.join(moviesDir, "clip.mp4")).href,
-          "/top-level-file.png",
-        ],
-      }),
-    );
+  it("keeps the config-dir media cache root when state and config paths differ", () => {
+    const stateDir = path.join("/tmp", "openclaw-legacy-state");
+    const configDir = path.join("/tmp", "openclaw-current-config");
+    const roots = buildMediaLocalRoots(stateDir, configDir);
 
     expectNormalizedRootsContain(roots, [
       path.join(stateDir, "media"),
-      path.join(stateDir, "workspace"),
-      path.join(stateDir, "workspace-ops"),
-    ]);
-    expectPicturesRootAbsent(roots, picturesDir);
-    expectPicturesRootAbsent(roots, moviesDir);
-    expect(roots.map(normalizeHostPath)).not.toContain(normalizeHostPath("/"));
-  });
-
-  it("includes the config media root when legacy state and config dirs diverge", () => {
-    const homeRoot = path.join(os.tmpdir(), "openclaw-legacy-home-test");
-    const roots = buildMediaLocalRoots(
-      path.join(homeRoot, ".clawdbot"),
-      path.join(homeRoot, ".openclaw"),
-    );
-
-    expectNormalizedRootsContain(roots, [
-      path.join(homeRoot, ".clawdbot", "media"),
-      path.join(homeRoot, ".clawdbot", "workspace"),
-      path.join(homeRoot, ".clawdbot", "sandboxes"),
-      path.join(homeRoot, ".openclaw", "media"),
+      path.join(configDir, "media"),
     ]);
   });
 });

@@ -1538,6 +1538,11 @@ export const MSTeamsConfigSchema = z
     appId: z.string().optional(),
     appPassword: SecretInputSchema.optional().register(sensitive),
     tenantId: z.string().optional(),
+    authType: z.enum(["secret", "federated"]).optional(),
+    certificatePath: z.string().optional(),
+    certificateThumbprint: z.string().optional(),
+    useManagedIdentity: z.boolean().optional(),
+    managedIdentityClientId: z.string().optional(),
     webhook: z
       .object({
         port: z.number().int().positive().optional(),
@@ -1577,6 +1582,13 @@ export const MSTeamsConfigSchema = z
     feedbackEnabled: z.boolean().optional(),
     feedbackReflection: z.boolean().optional(),
     feedbackReflectionCooldownMs: z.number().int().min(0).optional(),
+    delegatedAuth: z
+      .object({
+        enabled: z.boolean().optional(),
+        scopes: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
     sso: z
       .object({
         enabled: z.boolean().optional(),
@@ -1611,4 +1623,9 @@ export const MSTeamsConfigSchema = z
           "channels.msteams.sso.enabled=true requires channels.msteams.sso.connectionName to identify the Bot Framework OAuth connection",
       });
     }
+
+    // Federated auth fields (appId, tenantId, certificatePath,
+    // useManagedIdentity) may come from MSTEAMS_* environment variables,
+    // so we cannot require them in the config object itself.
+    // Runtime validation happens in resolveMSTeamsCredentials().
   });

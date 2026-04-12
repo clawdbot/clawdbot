@@ -1,6 +1,9 @@
 // Manual facade. Keep loader boundary explicit.
 type FacadeModule = typeof import("@openclaw/telegram/contract-api.js");
-import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
+import {
+  createLazyFacadeArrayValue,
+  loadBundledPluginPublicSurfaceModuleSync,
+} from "./facade-loader.js";
 
 function loadFacadeModule(): FacadeModule {
   return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({
@@ -17,7 +20,7 @@ export const parseTelegramTopicConversation: FacadeModule["parseTelegramTopicCon
   )) as FacadeModule["parseTelegramTopicConversation"];
 
 export const singleAccountKeysToMove: FacadeModule["singleAccountKeysToMove"] =
-  loadFacadeModule().singleAccountKeysToMove;
+  createLazyFacadeArrayValue(() => loadFacadeModule().singleAccountKeysToMove);
 
 export const collectTelegramSecurityAuditFindings: FacadeModule["collectTelegramSecurityAuditFindings"] =
   ((...args) =>

@@ -42,6 +42,12 @@ async function loadFreshHealthModulesForTest() {
     recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
     updateLastRoute: vi.fn().mockResolvedValue(undefined),
   }));
+  vi.doMock("../config/sessions/paths.js", () => ({
+    resolveStorePath: () => "/tmp/sessions.json",
+  }));
+  vi.doMock("../config/sessions/store.js", () => ({
+    loadSessionStore: () => testStore,
+  }));
   vi.doMock("../plugins/runtime/runtime-web-channel-plugin.js", () => ({
     webAuthExists: vi.fn(async () => true),
     getWebAuthAgeMs: vi.fn(() => 1234),

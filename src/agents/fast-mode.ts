@@ -1,6 +1,6 @@
 import { normalizeFastMode } from "../auto-reply/thinking.shared.js";
-import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 
 export type FastModeState = {

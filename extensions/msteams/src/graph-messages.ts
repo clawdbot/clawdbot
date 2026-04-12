@@ -64,7 +64,7 @@ function stripTargetPrefix(raw: string): string {
  * actual `19:xxx@thread.*` chat ID that Graph API requires.
  * Conversation IDs and `teamId/channelId` pairs pass through unchanged.
  */
-async function resolveGraphConversationId(to: string): Promise<string> {
+export async function resolveGraphConversationId(to: string): Promise<string> {
   const trimmed = to.trim();
   const isUserTarget = /^user:/i.test(trimmed);
   const cleaned = stripTargetPrefix(trimmed);
@@ -99,7 +99,7 @@ async function resolveGraphConversationId(to: string): Promise<string> {
   );
 }
 
-function resolveConversationPath(to: string): {
+export function resolveConversationPath(to: string): {
   kind: "chat" | "channel";
   basePath: string;
   chatId?: string;
@@ -381,12 +381,17 @@ function normalizeReactionType(raw: string): string {
 
 /**
  * Add an emoji reaction to a message via Graph API (beta).
+ *
+ * Writes (setReaction) require a Delegated token, so we pass
+ * `preferDelegated: true`. The resolver falls back to the app-only token when
+ * delegated auth is not configured, preserving today's behavior while letting
+ * delegated-auth-enabled deployments hit the user-scoped endpoint.
  */
 export async function reactMessageMSTeams(
   params: ReactMessageMSTeamsParams,
 ): Promise<{ ok: true }> {
   const reactionType = normalizeReactionType(params.reactionType);
-  const token = await resolveGraphToken(params.cfg);
+  const token = await resolveGraphToken(params.cfg, { preferDelegated: true });
   const conversationId = await resolveGraphConversationId(params.to);
   const { basePath } = resolveConversationPath(conversationId);
   const path = `${basePath}/messages/${encodeURIComponent(params.messageId)}/setReaction`;
@@ -396,12 +401,15 @@ export async function reactMessageMSTeams(
 
 /**
  * Remove an emoji reaction from a message via Graph API (beta).
+ *
+ * Writes (unsetReaction) require a Delegated token, so we pass
+ * `preferDelegated: true`. See `reactMessageMSTeams` for fallback rules.
  */
 export async function unreactMessageMSTeams(
   params: ReactMessageMSTeamsParams,
 ): Promise<{ ok: true }> {
   const reactionType = normalizeReactionType(params.reactionType);
-  const token = await resolveGraphToken(params.cfg);
+  const token = await resolveGraphToken(params.cfg, { preferDelegated: true });
   const conversationId = await resolveGraphConversationId(params.to);
   const { basePath } = resolveConversationPath(conversationId);
   const path = `${basePath}/messages/${encodeURIComponent(params.messageId)}/unsetReaction`;

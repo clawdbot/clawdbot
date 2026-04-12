@@ -73,16 +73,31 @@ vi.mock("../gateway/client.js", () => ({
   },
 }));
 
-vi.mock("./onboard-helpers.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("./onboard-helpers.js")>("./onboard-helpers.js");
+vi.mock("./onboard-helpers.js", () => {
+  const normalizeGatewayTokenInput = (value: unknown): string => {
+    if (typeof value !== "string") {
+      return "";
+    }
+    const trimmed = value.trim();
+    return trimmed === "undefined" || trimmed === "null" ? "" : trimmed;
+  };
   return {
-    ...actual,
+    DEFAULT_WORKSPACE: "/tmp/openclaw-workspace",
+    applyWizardMetadata: (cfg: unknown) => cfg,
     ensureWorkspaceAndSessions: ensureWorkspaceAndSessionsMock,
-    waitForGatewayReachable: (...args: Parameters<typeof actual.waitForGatewayReachable>) =>
-      waitForGatewayReachableMock
-        ? waitForGatewayReachableMock(args[0])
-        : actual.waitForGatewayReachable(...args),
+    normalizeGatewayTokenInput,
+    randomToken: () => "tok_generated_gateway_test_token",
+    resolveControlUiLinks: ({ port }: { port: number }) => ({
+      httpUrl: `http://127.0.0.1:${port}`,
+      wsUrl: `ws://127.0.0.1:${port}`,
+    }),
+    waitForGatewayReachable: (params: {
+      url: string;
+      token?: string;
+      password?: string;
+      deadlineMs?: number;
+      probeTimeoutMs?: number;
+    }) => waitForGatewayReachableMock?.(params) ?? Promise.resolve({ ok: true }),
   };
 });
 
@@ -104,15 +119,17 @@ vi.mock("../daemon/diagnostics.js", () => ({
 
 let runNonInteractiveSetup: typeof import("./onboard-non-interactive.js").runNonInteractiveSetup;
 let resolveStateConfigPath: typeof import("../config/paths.js").resolveConfigPath;
-let resolveConfigPath: typeof import("../config/config.js").resolveConfigPath;
-let callGateway: typeof import("../gateway/call.js").callGateway;
+let callGateway: typeof import("../gateway/call.js").callGateway | undefined;
 
 async function loadGatewayOnboardModules(): Promise<void> {
   vi.resetModules();
   ({ runNonInteractiveSetup } = await import("./onboard-non-interactive.js"));
   ({ resolveConfigPath: resolveStateConfigPath } = await import("../config/paths.js"));
-  ({ resolveConfigPath } = await import("../config/config.js"));
-  ({ callGateway } = await import("../gateway/call.js"));
+}
+
+async function loadCallGateway(): Promise<typeof import("../gateway/call.js").callGateway> {
+  callGateway ??= (await import("../gateway/call.js")).callGateway;
+  return callGateway;
 }
 
 function getPseudoPort(base: number): number {
@@ -429,7 +446,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
   }, 60_000);
 
   it("writes gateway.remote url/token and callGateway uses them", async () => {
-    await withStateDir("state-remote-", async () => {
+    await withStateDir("state-remote-", async (stateDir) => {
       const port = getPseudoPort(30_000);
       const token = "tok_remote_123";
       await runNonInteractiveSetup(
@@ -446,14 +463,14 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
       const cfg = await readJsonFile<{
         gateway?: { mode?: string; remote?: { url?: string; token?: string } };
-      }>(resolveConfigPath());
+      }>(resolveStateConfigPath(process.env, stateDir));
 
       expect(cfg.gateway?.mode).toBe("remote");
       expect(cfg.gateway?.remote?.url).toBe(`ws://127.0.0.1:${port}`);
       expect(cfg.gateway?.remote?.token).toBe(token);
 
       gatewayClientCalls.length = 0;
-      const health = await callGateway({ method: "health" });
+      const health = await (await loadCallGateway())({ method: "health" });
       expect(health?.ok).toBe(true);
       const lastCall = gatewayClientCalls[gatewayClientCalls.length - 1];
       expect(lastCall?.url).toBe(`ws://127.0.0.1:${port}`);

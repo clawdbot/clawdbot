@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { prepareSecretsRuntimeSnapshot } from "./runtime.js";
+import {
+  loadAuthStoreWithProfiles,
+  setupSecretsRuntimeSnapshotTestHooks,
+} from "./runtime.test-support.ts";
+
+const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 
 function withAuthProfileMode(mode: "api_key" | "oauth" | "token"): OpenClawConfig {
   return {
@@ -23,16 +27,13 @@ function withAuthProfileMode(mode: "api_key" | "oauth" | "token"): OpenClawConfi
 
 describe("secrets runtime oauth auth-profile SecretRef policy", () => {
   it("fails startup snapshot when oauth mode profile uses token SecretRef", async () => {
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "anthropic:default": {
-          type: "token",
-          provider: "anthropic",
-          tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_TOKEN" },
-        },
+    const store = loadAuthStoreWithProfiles({
+      "anthropic:default": {
+        type: "token",
+        provider: "anthropic",
+        tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_TOKEN" },
       },
-    };
+    });
 
     await expect(
       prepareSecretsRuntimeSnapshot({
@@ -46,16 +47,13 @@ describe("secrets runtime oauth auth-profile SecretRef policy", () => {
   });
 
   it("keeps token SecretRef support when the profile mode is token", async () => {
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "anthropic:default": {
-          type: "token",
-          provider: "anthropic",
-          tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_TOKEN" },
-        },
+    const store = loadAuthStoreWithProfiles({
+      "anthropic:default": {
+        type: "token",
+        provider: "anthropic",
+        tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_TOKEN" },
       },
-    };
+    });
 
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: withAuthProfileMode("token"),

@@ -3,8 +3,8 @@ import type {
   ChannelId,
   ChannelThreadingAdapter,
   ChannelThreadingToolContext,
-} from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+} from "../../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   OutboundSessionRoute,
   ResolveOutboundSessionRouteParams,

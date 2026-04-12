@@ -616,3 +616,58 @@ export function resolveProviderRequestCapabilities(
     compatibilityFamily,
   };
 }
+
+function describeProviderRequestRoutingPolicy(
+  policy: ProviderRequestPolicyResolution,
+): "hidden" | "documented" | "sdk-hook-only" | "none" {
+  if (!policy.attributionProvider) {
+    return "none";
+  }
+  switch (policy.policy?.verification) {
+    case "vendor-hidden-api-spec":
+      return "hidden";
+    case "vendor-documented":
+      return "documented";
+    case "vendor-sdk-hook-only":
+      return "sdk-hook-only";
+    default:
+      return "none";
+  }
+}
+
+function describeProviderRequestRouteClass(
+  policy: ProviderRequestPolicyResolution,
+): "default" | "native" | "proxy-like" | "local" | "invalid" {
+  if (policy.endpointClass === "default") {
+    return "default";
+  }
+  if (policy.endpointClass === "invalid") {
+    return "invalid";
+  }
+  if (policy.endpointClass === "local") {
+    return "local";
+  }
+  if (policy.endpointClass === "custom" || policy.endpointClass === "openrouter") {
+    return "proxy-like";
+  }
+  return "native";
+}
+
+export function describeProviderRequestRoutingSummary(
+  input: ProviderRequestPolicyInput,
+  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
+): string {
+  const policy = resolveProviderRequestPolicy(input, env);
+  const api = normalizeOptionalLowercaseString(input.api) ?? "unknown";
+  const provider = policy.provider ?? "unknown";
+  const routeClass = describeProviderRequestRouteClass(policy);
+  const routingPolicy = describeProviderRequestRoutingPolicy(policy);
+
+  return [
+    `provider=${provider}`,
+    `api=${api}`,
+    `endpoint=${policy.endpointClass}`,
+    `route=${routeClass}`,
+    `policy=${routingPolicy}`,
+  ].join(" ");
+}

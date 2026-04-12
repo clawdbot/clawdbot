@@ -5,23 +5,31 @@
  * inside the owning plugin package instead of hanging off core runtime slots
  * like `channel.discord` or `channel.slack`.
  */
-type ReadChannelAllowFromStore =
-  typeof import("../../pairing/pairing-store.js").readChannelAllowFromStore;
-type UpsertChannelPairingRequest =
-  typeof import("../../pairing/pairing-store.js").upsertChannelPairingRequest;
-
-type ReadChannelAllowFromStoreForAccount = (params: {
-  channel: Parameters<ReadChannelAllowFromStore>[0];
-  accountId: string;
-  env?: Parameters<ReadChannelAllowFromStore>[1];
-}) => ReturnType<ReadChannelAllowFromStore>;
-
-type UpsertChannelPairingRequestForAccount = (
-  params: Omit<Parameters<UpsertChannelPairingRequest>[0], "accountId"> & { accountId: string },
-) => ReturnType<UpsertChannelPairingRequest>;
+import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
+import type { CreateReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.runtime-types.js";
+import type {
+  ReadChannelAllowFromStoreForAccount,
+  UpsertChannelPairingRequestForAccount,
+} from "../../pairing/pairing-store.types.js";
+type ShouldHandleTextCommands =
+  import("../../auto-reply/commands-registry.runtime-types.js").ShouldHandleTextCommands;
+type IsControlCommandMessage =
+  import("../../auto-reply/command-detection.runtime-types.js").IsControlCommandMessage;
+type ShouldComputeCommandAuthorized =
+  import("../../auto-reply/command-detection.runtime-types.js").ShouldComputeCommandAuthorized;
+type BuildMentionRegexes = import("../../auto-reply/reply/mentions.types.js").BuildMentionRegexes;
+type MatchesMentionPatterns =
+  import("../../auto-reply/reply/mentions.types.js").MatchesMentionPatterns;
+type MatchesMentionWithExplicit =
+  import("../../auto-reply/reply/mentions.types.js").MatchesMentionWithExplicit;
+type ReadSessionUpdatedAt = import("../../config/sessions/runtime-types.js").ReadSessionUpdatedAt;
+type RecordSessionMetaFromInbound =
+  import("../../config/sessions/runtime-types.js").RecordSessionMetaFromInbound;
+type UpdateLastRoute = import("../../config/sessions/runtime-types.js").UpdateLastRoute;
+type RecordInboundSession = import("../../channels/session.types.js").RecordInboundSession;
 
 export type RuntimeThreadBindingLifecycleRecord =
-  | import("../../infra/outbound/session-binding-service.js").SessionBindingRecord
+  | import("../../infra/outbound/session-binding.types.js").SessionBindingRecord
   | {
       boundAt: number;
       lastActivityAt: number;
@@ -71,16 +79,16 @@ export type PluginRuntimeChannel = {
     resolveChunkMode: typeof import("../../auto-reply/chunk.js").resolveChunkMode;
     resolveTextChunkLimit: typeof import("../../auto-reply/chunk.js").resolveTextChunkLimit;
     hasControlCommand: typeof import("../../auto-reply/command-detection.js").hasControlCommand;
-    resolveMarkdownTableMode: typeof import("../../config/markdown-tables.js").resolveMarkdownTableMode;
+    resolveMarkdownTableMode: import("../../config/markdown-tables.types.js").ResolveMarkdownTableMode;
     convertMarkdownTables: typeof import("../../markdown/tables.js").convertMarkdownTables;
   };
   reply: {
-    dispatchReplyWithBufferedBlockDispatcher: typeof import("../../auto-reply/reply/provider-dispatcher.js").dispatchReplyWithBufferedBlockDispatcher;
-    createReplyDispatcherWithTyping: typeof import("../../auto-reply/reply/reply-dispatcher.js").createReplyDispatcherWithTyping;
+    dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher;
+    createReplyDispatcherWithTyping: CreateReplyDispatcherWithTyping;
     resolveEffectiveMessagesConfig: typeof import("../../agents/identity.js").resolveEffectiveMessagesConfig;
     resolveHumanDelayConfig: typeof import("../../agents/identity.js").resolveHumanDelayConfig;
-    dispatchReplyFromConfig: typeof import("../../auto-reply/reply/dispatch-from-config.js").dispatchReplyFromConfig;
-    withReplyDispatcher: typeof import("../../auto-reply/dispatch.js").withReplyDispatcher;
+    dispatchReplyFromConfig: import("../../auto-reply/reply/dispatch-from-config.types.js").DispatchReplyFromConfig;
+    withReplyDispatcher: typeof import("../../auto-reply/dispatch-dispatcher.js").withReplyDispatcher;
     finalizeInboundContext: typeof import("../../auto-reply/reply/inbound-context.js").finalizeInboundContext;
     formatAgentEnvelope: typeof import("../../auto-reply/envelope.js").formatAgentEnvelope;
     /** @deprecated Prefer `BodyForAgent` + structured user-context blocks (do not build plaintext envelopes for prompts). */
@@ -105,16 +113,16 @@ export type PluginRuntimeChannel = {
     get: typeof import("../../infra/channel-activity.js").getChannelActivity;
   };
   session: {
-    resolveStorePath: typeof import("../../config/sessions.js").resolveStorePath;
-    readSessionUpdatedAt: typeof import("../../config/sessions.js").readSessionUpdatedAt;
-    recordSessionMetaFromInbound: typeof import("../../config/sessions.js").recordSessionMetaFromInbound;
-    recordInboundSession: typeof import("../../channels/session.js").recordInboundSession;
-    updateLastRoute: typeof import("../../config/sessions.js").updateLastRoute;
+    resolveStorePath: typeof import("../../config/sessions/paths.js").resolveStorePath;
+    readSessionUpdatedAt: ReadSessionUpdatedAt;
+    recordSessionMetaFromInbound: RecordSessionMetaFromInbound;
+    recordInboundSession: RecordInboundSession;
+    updateLastRoute: UpdateLastRoute;
   };
   mentions: {
-    buildMentionRegexes: typeof import("../../auto-reply/reply/mentions.js").buildMentionRegexes;
-    matchesMentionPatterns: typeof import("../../auto-reply/reply/mentions.js").matchesMentionPatterns;
-    matchesMentionWithExplicit: typeof import("../../auto-reply/reply/mentions.js").matchesMentionWithExplicit;
+    buildMentionRegexes: BuildMentionRegexes;
+    matchesMentionPatterns: MatchesMentionPatterns;
+    matchesMentionWithExplicit: MatchesMentionWithExplicit;
     implicitMentionKindWhen: typeof import("../../channels/mention-gating.js").implicitMentionKindWhen;
     resolveInboundMentionDecision: typeof import("../../channels/mention-gating.js").resolveInboundMentionDecision;
   };
@@ -132,12 +140,12 @@ export type PluginRuntimeChannel = {
   };
   commands: {
     resolveCommandAuthorizedFromAuthorizers: typeof import("../../channels/command-gating.js").resolveCommandAuthorizedFromAuthorizers;
-    isControlCommandMessage: typeof import("../../auto-reply/command-detection.js").isControlCommandMessage;
-    shouldComputeCommandAuthorized: typeof import("../../auto-reply/command-detection.js").shouldComputeCommandAuthorized;
-    shouldHandleTextCommands: typeof import("../../auto-reply/commands-registry.js").shouldHandleTextCommands;
+    isControlCommandMessage: IsControlCommandMessage;
+    shouldComputeCommandAuthorized: ShouldComputeCommandAuthorized;
+    shouldHandleTextCommands: ShouldHandleTextCommands;
   };
   outbound: {
-    loadAdapter: typeof import("../../channels/plugins/outbound/load.js").loadChannelOutboundAdapter;
+    loadAdapter: import("../../channels/plugins/outbound/load.types.js").LoadChannelOutboundAdapter;
   };
   threadBindings: {
     setIdleTimeoutBySessionKey: (params: {

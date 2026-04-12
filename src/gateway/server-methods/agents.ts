@@ -29,6 +29,7 @@ import {
 import { loadConfig, writeConfigFile } from "../../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
 import type { IdentityConfig } from "../../config/types.base.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sameFileIdentity } from "../../infra/file-identity.js";
 import { SafeOpenError, readLocalFileSafely, writeFileWithinRoot } from "../../infra/fs-safe.js";
 import { assertNoPathAliasEscape } from "../../infra/path-alias-guards.js";
@@ -98,7 +99,7 @@ function resolveAgentWorkspaceFileOrRespondError(
   params: Record<string, unknown>,
   respond: RespondFn,
 ): {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   agentId: string;
   workspaceDir: string;
   name: string;
@@ -377,7 +378,7 @@ async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: 
   return files;
 }
 
-function resolveAgentIdOrError(agentIdRaw: string, cfg: ReturnType<typeof loadConfig>) {
+function resolveAgentIdOrError(agentIdRaw: string, cfg: OpenClawConfig) {
   const agentId = normalizeAgentId(agentIdRaw);
   const allowed = new Set(listAgentIds(cfg));
   if (!allowed.has(agentId)) {
@@ -409,7 +410,7 @@ function respondInvalidMethodParams(
   );
 }
 
-function isConfiguredAgent(cfg: ReturnType<typeof loadConfig>, agentId: string): boolean {
+function isConfiguredAgent(cfg: OpenClawConfig, agentId: string): boolean {
   return findAgentEntryIndex(listAgentEntries(cfg), agentId) >= 0;
 }
 

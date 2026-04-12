@@ -2,6 +2,10 @@ import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  expectRealExitWinsOverSigkillFallback,
+  expectWaitStaysPendingUntilSigkillFallback,
+} from "./test-support.js";
 
 const { spawnWithFallbackMock, killProcessTreeMock } = vi.hoisted(() => ({
   spawnWithFallbackMock: vi.fn(),
@@ -135,20 +139,9 @@ describe("createChildAdapter", () => {
     vi.useFakeTimers();
     const { adapter } = await createAdapterHarness({ pid: 4567 });
 
-    const waitPromise = adapter.wait();
-    const settled = vi.fn();
-    void waitPromise.then(() => settled());
-
-    adapter.kill();
-
-    await Promise.resolve();
-    expect(settled).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(3999);
-    expect(settled).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(1);
-    await expect(waitPromise).resolves.toEqual({ code: null, signal: "SIGKILL" });
+    await expectWaitStaysPendingUntilSigkillFallback(adapter.wait(), () => {
+      adapter.kill();
+    });
   });
 
   it("prefers real child close over the SIGKILL fallback settle", async () => {
@@ -166,14 +159,16 @@ describe("createChildAdapter", () => {
       return { ...stub, adapter };
     })();
 
-    const waitPromise = adapter.wait();
-    adapter.kill();
-    emitClose(0, "SIGKILL");
-
-    await expect(waitPromise).resolves.toEqual({ code: 0, signal: "SIGKILL" });
-
-    await vi.advanceTimersByTimeAsync(4_001);
-    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: "SIGKILL" });
+    await expectRealExitWinsOverSigkillFallback({
+      waitPromise: adapter.wait(),
+      triggerKill: () => {
+        adapter.kill();
+      },
+      emitExit: () => {
+        emitClose(0, "SIGKILL");
+      },
+      expected: { code: 0, signal: "SIGKILL" },
+    });
     expect(killMock).toHaveBeenCalledWith("SIGKILL");
   });
 

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
 import { type PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import {

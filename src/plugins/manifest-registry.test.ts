@@ -423,6 +423,60 @@ describe("loadPluginManifestRegistry", () => {
     ]);
   });
 
+  it("preserves activation and setup descriptors from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "openai",
+      providers: ["openai"],
+      activation: {
+        onProviders: ["openai"],
+        onCommands: ["models"],
+        onChannels: ["web"],
+        onRoutes: ["gateway-webhook"],
+        onCapabilities: ["provider", "tool"],
+      },
+      setup: {
+        providers: [
+          {
+            id: "openai",
+            authMethods: ["api-key"],
+            envVars: ["OPENAI_API_KEY"],
+          },
+        ],
+        cliBackends: ["openai-cli"],
+        configMigrations: ["legacy-openai-auth"],
+        requiresRuntime: false,
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "openai",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.activation).toEqual({
+      onProviders: ["openai"],
+      onCommands: ["models"],
+      onChannels: ["web"],
+      onRoutes: ["gateway-webhook"],
+      onCapabilities: ["provider", "tool"],
+    });
+    expect(registry.plugins[0]?.setup).toEqual({
+      providers: [
+        {
+          id: "openai",
+          authMethods: ["api-key"],
+          envVars: ["OPENAI_API_KEY"],
+        },
+      ],
+      cliBackends: ["openai-cli"],
+      configMigrations: ["legacy-openai-auth"],
+      requiresRuntime: false,
+    });
+  });
+
   it("preserves channel env metadata from plugin manifests", () => {
     const dir = makeTempDir();
     writeManifest(dir, {

@@ -43,21 +43,18 @@ const channelPluginMocks = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("../../tts/tts.js", () => ({
+vi.mock("./dispatch-acp-tts.runtime.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
 }));
 
-vi.mock("./route-reply.js", () => ({
+vi.mock("./route-reply.runtime.js", () => ({
   routeReply: (params: unknown) => deliveryMocks.routeReply(params),
 }));
 
-vi.mock("../../channels/plugins/index.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../channels/plugins/index.js")>();
-  return {
-    ...actual,
-    getChannelPlugin: (channelId: string) => channelPluginMocks.getChannelPlugin(channelId),
-  };
-});
+vi.mock("../../channels/plugins/index.js", () => ({
+  getChannelPlugin: (channelId: string) => channelPluginMocks.getChannelPlugin(channelId),
+  normalizeChannelId: (channelId?: string | null) => channelId?.trim().toLowerCase() || null,
+}));
 
 vi.mock("../../infra/outbound/message-action-runner.js", () => ({
   runMessageAction: (params: unknown) => deliveryMocks.runMessageAction(params),

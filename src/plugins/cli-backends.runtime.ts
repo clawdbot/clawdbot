@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import type { CliBackendPlugin } from "./types.js";
+import type { CliBackendPlugin } from "./cli-backend.types.js";
 
 export type PluginCliBackendEntry = CliBackendPlugin & {
   pluginId: string;

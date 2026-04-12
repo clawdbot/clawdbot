@@ -16,7 +16,13 @@ import { validateExecApprovalRequestParams } from "../protocol/index.js";
 import { waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
-import { sanitizeChatSendMessageInput } from "./chat.js";
+import {
+  DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+  augmentChatHistoryWithCanvasBlocks,
+  resolveEffectiveChatHistoryMaxChars,
+  sanitizeChatHistoryMessages,
+  sanitizeChatSendMessageInput,
+} from "./chat.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
 import { logsHandlers } from "./logs.js";
 
@@ -108,6 +114,39 @@ describe("waitForAgentJob", () => {
     expect(fresh?.status).toBe("ok");
     expect(fresh?.startedAt).toBe(200);
     expect(fresh?.endedAt).toBe(210);
+  });
+});
+
+describe("augmentChatHistoryWithCanvasBlocks", () => {
+  it("ignores user messages that merely contain canvas-shaped text", () => {
+    const previewJson = JSON.stringify({
+      kind: "canvas",
+      view: {
+        backend: "canvas",
+        id: "cv_user_text",
+        url: "/__openclaw__/canvas/documents/cv_user_text/index.html",
+        title: "User pasted preview",
+        preferred_height: 240,
+      },
+      presentation: {
+        target: "assistant_message",
+      },
+    });
+
+    const messages = [
+      {
+        role: "user",
+        content: previewJson,
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: "Plain assistant reply",
+        timestamp: 2,
+      },
+    ];
+
+    expect(augmentChatHistoryWithCanvasBlocks(messages)).toEqual(messages);
   });
 });
 
@@ -220,6 +259,73 @@ describe("injectTimestamp", () => {
     });
 
     expect(result).toMatch(/^\[Fri 2025-07-04 12:00 EDT\]/);
+  });
+});
+
+describe("sanitizeChatHistoryMessages", () => {
+  it("drops commentary-only assistant entries when phase exists only in textSignature", () => {
+    const result = sanitizeChatHistoryMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "hello" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "thinking like caveman",
+            textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "real reply" }],
+        timestamp: 3,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "hello" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "real reply" }],
+        timestamp: 3,
+      },
+    ]);
+  });
+});
+
+describe("resolveEffectiveChatHistoryMaxChars", () => {
+  it("uses gateway.webchat.chatHistoryMaxChars when RPC maxChars is absent", () => {
+    expect(
+      resolveEffectiveChatHistoryMaxChars(
+        { gateway: { webchat: { chatHistoryMaxChars: 123 } } },
+        undefined,
+      ),
+    ).toBe(123);
+  });
+
+  it("prefers RPC maxChars over config", () => {
+    expect(
+      resolveEffectiveChatHistoryMaxChars(
+        { gateway: { webchat: { chatHistoryMaxChars: 123 } } },
+        45,
+      ),
+    ).toBe(45);
+  });
+
+  it("falls back to the default hardcoded limit", () => {
+    expect(resolveEffectiveChatHistoryMaxChars({}, undefined)).toBe(
+      DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+    );
   });
 });
 

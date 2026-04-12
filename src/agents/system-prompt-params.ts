@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
+import { resolveStateDir } from "../config/paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { findGitRoot } from "../infra/git-root.js";
+import { resolveHomeRelativePath } from "../infra/home-dir.js";
 import {
   formatUserTime,
   resolveUserTimeFormat,
@@ -23,6 +25,7 @@ export type RuntimeInfoInput = {
   /** Supported message actions for the current channel (e.g., react, edit, unsend) */
   channelActions?: string[];
   repoRoot?: string;
+  canvasRootDir?: string;
 };
 
 export type SystemPromptRuntimeParams = {
@@ -47,16 +50,34 @@ export function buildSystemPromptParams(params: {
   const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
   const userTimeFormat = resolveUserTimeFormat(params.config?.agents?.defaults?.timeFormat);
   const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
+  const stateDir = resolveStateDir(process.env);
+  const canvasRootDir = resolveCanvasRootDir({
+    config: params.config,
+    stateDir,
+  });
   return {
     runtimeInfo: {
       agentId: params.agentId,
       ...params.runtime,
       repoRoot,
+      canvasRootDir,
     },
     userTimezone,
     userTime,
     userTimeFormat,
   };
+}
+
+function resolveCanvasRootDir(params: { config?: OpenClawConfig; stateDir: string }): string {
+  const configured = params.config?.canvasHost?.root?.trim();
+  if (configured) {
+    return path.resolve(
+      resolveHomeRelativePath(configured, {
+        env: process.env,
+      }),
+    );
+  }
+  return path.resolve(path.join(params.stateDir, "canvas"));
 }
 
 function resolveRepoRoot(params: {

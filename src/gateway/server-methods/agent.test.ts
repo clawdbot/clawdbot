@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
 import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
@@ -64,6 +65,8 @@ vi.mock("../../config/config.js", async () => {
 
 vi.mock("../../agents/agent-scope.js", () => ({
   listAgentIds: () => ["main"],
+  resolveAgentWorkspaceDir: (cfg: { agents?: { defaults?: { workspace?: string } } }) =>
+    cfg?.agents?.defaults?.workspace ?? "/tmp/workspace",
 }));
 
 vi.mock("../../infra/agent-events.js", () => ({
@@ -1049,10 +1052,52 @@ describe("gateway agent handler", () => {
     expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(1);
     const call = readLastAgentCommandCall();
     // Message is now dynamically built with current date — check key substrings
-    expect(call?.message).toContain("Run your Session Startup sequence");
+    expect(call?.message).toContain(
+      "If runtime-provided startup context is included for this first turn",
+    );
     expect(call?.message).toContain("Current time:");
     expect(call?.message).not.toBe(BARE_SESSION_RESET_PROMPT);
     expect(call?.sessionId).toBe("reset-session-id");
+  });
+
+  it("prepends runtime-loaded startup memory to bare /new agent runs", async () => {
+    await withTempDir({ prefix: "openclaw-gateway-reset-startup-" }, async (workspaceDir) => {
+      await fs.mkdir(`${workspaceDir}/memory`, { recursive: true });
+      await fs.writeFile(`${workspaceDir}/memory/2026-01-28.md`, "today gateway note", "utf-8");
+      await fs.writeFile(`${workspaceDir}/memory/2026-01-27.md`, "yesterday gateway note", "utf-8");
+      setupNewYorkTimeConfig("2026-01-28T20:30:00.000Z");
+      mocks.loadConfigReturn = {
+        agents: {
+          defaults: {
+            userTimezone: "America/New_York",
+            workspace: workspaceDir,
+          },
+        },
+      };
+      mockSessionResetSuccess({ reason: "new" });
+      primeMainAgentRun({ sessionId: "reset-session-id", cfg: mocks.loadConfigReturn });
+
+      await invokeAgent(
+        {
+          message: "/new",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "test-idem-new-startup-context",
+        },
+        {
+          reqId: "4-startup",
+          client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+        },
+      );
+
+      await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+      const call = readLastAgentCommandCall();
+      expect(call?.message).toContain("[Startup context loaded by runtime]");
+      expect(call?.message).toContain("[Untrusted daily memory: memory/2026-01-28.md]");
+      expect(call?.message).toContain("today gateway note");
+      expect(call?.message).toContain("[Untrusted daily memory: memory/2026-01-27.md]");
+      expect(call?.message).toContain("yesterday gateway note");
+      resetTimeConfig();
+    });
   });
 
   it("uses /reset suffix as the post-reset message and still injects timestamp", async () => {

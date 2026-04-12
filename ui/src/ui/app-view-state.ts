@@ -10,8 +10,10 @@ import type {
   ClawHubSkillDetail,
   SkillMessage,
 } from "./controllers/skills.ts";
+import type { EmbedSandboxMode } from "./embed-sandbox.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
+import type { SidebarContent } from "./sidebar-content.ts";
 import type { UiSettings } from "./storage.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
 import type { ResolvedTheme, ThemeMode, ThemeName } from "./theme.ts";
@@ -34,6 +36,7 @@ import type {
   CostUsageSummary,
   SessionUsageTimeSeries,
   SessionsListResult,
+  SessionCompactionCheckpoint,
   SkillStatusReport,
   StatusSummary,
   ToolsCatalogResult,
@@ -62,6 +65,9 @@ export type AppViewState = {
   assistantName: string;
   assistantAvatar: string | null;
   assistantAgentId: string | null;
+  localMediaPreviewRoots: string[];
+  embedSandboxMode: EmbedSandboxMode;
+  allowExternalEmbedUrls: boolean;
   sessionKey: string;
   chatLoading: boolean;
   chatSending: boolean;
@@ -89,7 +95,7 @@ export type AppViewState = {
   chatNewMessagesBelow: boolean;
   navDrawerOpen: boolean;
   sidebarOpen: boolean;
-  sidebarContent: string | null;
+  sidebarContent: SidebarContent | null;
   sidebarError: string | null;
   splitRatio: number;
   scrollToBottom: (opts?: { smooth?: boolean }) => void;
@@ -130,6 +136,8 @@ export type AppViewState = {
   dreamingModeSaving: boolean;
   dreamDiaryLoading: boolean;
   dreamDiaryActionLoading: boolean;
+  dreamDiaryActionMessage: { kind: "success" | "error"; text: string } | null;
+  dreamDiaryActionArchivePath: string | null;
   dreamDiaryError: string | null;
   dreamDiaryPath: string | null;
   dreamDiaryContent: string | null;
@@ -208,6 +216,9 @@ export type AppViewState = {
   sessionsLoading: boolean;
   sessionsResult: SessionsListResult | null;
   sessionsError: string | null;
+  threadsLoading: boolean;
+  threadsResult: SessionsListResult | null;
+  threadsError: string | null;
   sessionsFilterActive: string;
   sessionsFilterLimit: string;
   sessionsIncludeGlobal: boolean;
@@ -220,7 +231,7 @@ export type AppViewState = {
   sessionsPageSize: number;
   sessionsSelectedKeys: Set<string>;
   sessionsExpandedCheckpointKey: string | null;
-  sessionsCheckpointItemsByKey: Record<string, import("./types.ts").SessionCompactionCheckpoint[]>;
+  sessionsCheckpointItemsByKey: Record<string, SessionCompactionCheckpoint[]>;
   sessionsCheckpointLoadingKey: string | null;
   sessionsCheckpointBusyKey: string | null;
   sessionsCheckpointErrorByKey: Record<string, string>;
@@ -410,7 +421,7 @@ export type AppViewState = {
     resetChatScroll: () => void;
     exportLogs: (lines: string[], label: string) => void;
     handleLogsScroll: (event: Event) => void;
-    handleOpenSidebar: (content: string) => void;
+    handleOpenSidebar: (content: SidebarContent) => void;
     handleCloseSidebar: () => void;
     handleSplitRatioChange: (ratio: number) => void;
   };

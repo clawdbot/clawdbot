@@ -457,6 +457,37 @@ describe("runQaCharacterEval", () => {
     });
   });
 
+  it("marks leaked harness coordination transcripts as failed output", async () => {
+    const runSuite = vi.fn(async (params: CharacterRunSuiteParams) =>
+      makeSuiteResult({
+        outputDir: params.outputDir,
+        model: params.primaryModel,
+        transcript:
+          "ASSISTANT OpenClaw QA: checking thread context; then post a tight progress reply here.\nQA_LEAK_OK",
+      }),
+    );
+    const runJudge = vi.fn(async (_params: CharacterRunJudgeParams) =>
+      JSON.stringify({
+        rankings: [{ model: "codex/gpt-5.4", rank: 1, score: 0.5, summary: "failed" }],
+      }),
+    );
+
+    const result = await runQaCharacterEval({
+      repoRoot: tempRoot,
+      outputDir: path.join(tempRoot, "character"),
+      models: ["codex/gpt-5.4"],
+      judgeModels: ["openai/gpt-5.4"],
+      runSuite,
+      runJudge,
+    });
+
+    expect(result.runs[0]).toMatchObject({
+      model: "codex/gpt-5.4",
+      status: "fail",
+      error: "internal harness/meta text leaked into transcript",
+    });
+  });
+
   it("lets explicit candidate thinking override the default panel", async () => {
     const runSuite = vi.fn(async (params: CharacterRunSuiteParams) =>
       makeSuiteResult({

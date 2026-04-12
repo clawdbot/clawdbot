@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { executeStatusScanFromOverview } from "./status.scan-execute.ts";
 import type { StatusScanOverviewResult } from "./status.scan-overview.ts";
 import type { MemoryStatusSnapshot } from "./status.scan.shared.js";
 
@@ -11,21 +12,20 @@ const { resolveStatusSummaryFromOverview, resolveMemoryPluginStatus } = vi.hoist
   })),
 }));
 
+vi.mock("./status.scan-overview.ts", () => ({
+  resolveStatusSummaryFromOverview,
+}));
+
+vi.mock("./status.scan.shared.js", () => ({
+  resolveMemoryPluginStatus,
+}));
+
 describe("executeStatusScanFromOverview", () => {
   beforeEach(() => {
-    vi.resetModules();
     vi.clearAllMocks();
-    vi.doMock("./status.scan-overview.ts", () => ({
-      resolveStatusSummaryFromOverview,
-    }));
-    vi.doMock("./status.scan.shared.js", () => ({
-      resolveMemoryPluginStatus,
-    }));
   });
 
   it("resolves memory and summary, then builds the final scan result", async () => {
-    const { executeStatusScanFromOverview } = await import("./status.scan-execute.ts");
-
     const overview = {
       cfg: { channels: {} },
       sourceConfig: { channels: {} },

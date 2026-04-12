@@ -12,6 +12,35 @@ const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-service-ops-seam",
 });
 
+function withStateDirForStorePath(storePath: string) {
+  const stateRoot = path.dirname(path.dirname(storePath));
+  const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+  process.env.OPENCLAW_STATE_DIR = stateRoot;
+  resetTaskRegistryForTests();
+  return () => {
+    if (originalStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = originalStateDir;
+    }
+    resetTaskRegistryForTests();
+  };
+}
+
+function createTimedOutIsolatedCronState(params: { storePath: string; now: number }) {
+  return createCronServiceState({
+    storePath: params.storePath,
+    cronEnabled: true,
+    log: logger,
+    nowMs: () => params.now,
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeatNow: vi.fn(),
+    runIsolatedAgentJob: vi.fn(async () => {
+      throw new Error("cron: job execution timed out");
+    }),
+  });
+}
+
 function createInterruptedMainJob(now: number): CronJob {
   return {
     id: "startup-interrupted",
@@ -118,27 +147,17 @@ describe("cron service ops seam coverage", () => {
 
   it("records timed out manual runs as timed_out in the shared task registry", async () => {
     const { storePath } = await makeStorePath();
-    const stateRoot = path.dirname(path.dirname(storePath));
     const now = Date.parse("2026-03-23T12:00:00.000Z");
-    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = stateRoot;
-    resetTaskRegistryForTests();
+    const restoreStateDir = withStateDirForStorePath(storePath);
 
     await writeCronStoreSnapshot({
       storePath,
       jobs: [createDueIsolatedJob(now)],
     });
 
-    const state = createCronServiceState({
+    const state = createTimedOutIsolatedCronState({
       storePath,
-      cronEnabled: true,
-      log: logger,
-      nowMs: () => now,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => {
-        throw new Error("cron: job execution timed out");
-      }),
+      now,
     });
 
     await run(state, "isolated-timeout");
@@ -149,12 +168,7 @@ describe("cron service ops seam coverage", () => {
       sourceId: "isolated-timeout",
     });
 
-    if (originalStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = originalStateDir;
-    }
-    resetTaskRegistryForTests();
+    restoreStateDir();
   });
 
   it("keeps manual cron runs progressing when task ledger creation fails", async () => {
@@ -327,27 +341,17 @@ describe("cron service ops seam coverage", () => {
 
   it("records startup catch-up timeouts as timed_out in the shared task registry", async () => {
     const { storePath } = await makeStorePath();
-    const stateRoot = path.dirname(path.dirname(storePath));
     const now = Date.parse("2026-03-23T12:00:00.000Z");
-    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = stateRoot;
-    resetTaskRegistryForTests();
+    const restoreStateDir = withStateDirForStorePath(storePath);
 
     await writeCronStoreSnapshot({
       storePath,
       jobs: [createMissedIsolatedJob(now)],
     });
 
-    const state = createCronServiceState({
+    const state = createTimedOutIsolatedCronState({
       storePath,
-      cronEnabled: true,
-      log: logger,
-      nowMs: () => now,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => {
-        throw new Error("cron: job execution timed out");
-      }),
+      now,
     });
 
     await start(state);
@@ -358,12 +362,7 @@ describe("cron service ops seam coverage", () => {
       sourceId: "startup-timeout",
     });
 
-    if (originalStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = originalStateDir;
-    }
-    resetTaskRegistryForTests();
+    restoreStateDir();
     stop(state);
   });
 });

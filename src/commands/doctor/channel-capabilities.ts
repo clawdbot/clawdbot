@@ -20,6 +20,12 @@ const DEFAULT_DOCTOR_CHANNEL_CAPABILITIES: DoctorChannelCapabilities = {
 };
 
 const STATIC_DOCTOR_CHANNEL_CAPABILITIES: Readonly<Record<string, DoctorChannelCapabilities>> = {
+  googlechat: {
+    dmAllowFromMode: "nestedOnly",
+    groupModel: "route",
+    groupAllowFromFallbackToAllowFrom: false,
+    warnOnEmptyGroupSenderAllowlist: false,
+  },
   matrix: {
     dmAllowFromMode: "nestedOnly",
     groupModel: "sender",

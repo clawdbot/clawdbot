@@ -1,6 +1,6 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  drainPendingDeliveries,
+  drainPendingDeliveries as coreDrainPendingDeliveries,
   type DeliverFn,
   type RecoveryLogger,
 } from "../infra/outbound/delivery-queue.js";
@@ -12,6 +12,29 @@ function normalizeWhatsAppReconnectAccountId(accountId?: string): string {
 }
 
 const WHATSAPP_NO_LISTENER_ERROR_RE = /No active WhatsApp Web listener/i;
+
+type OutboundDeliverRuntimeModule = typeof import("../infra/outbound/deliver-runtime.js");
+type DrainPendingDeliveriesOptions = Omit<
+  Parameters<typeof coreDrainPendingDeliveries>[0],
+  "deliver"
+> & {
+  deliver?: DeliverFn;
+};
+
+let outboundDeliverRuntimePromise: Promise<OutboundDeliverRuntimeModule> | null = null;
+
+async function loadOutboundDeliverRuntime(): Promise<OutboundDeliverRuntimeModule> {
+  outboundDeliverRuntimePromise ??= import("../infra/outbound/deliver-runtime.js");
+  return await outboundDeliverRuntimePromise;
+}
+
+export async function drainPendingDeliveries(opts: DrainPendingDeliveriesOptions): Promise<void> {
+  const deliver = opts.deliver ?? (await loadOutboundDeliverRuntime()).deliverOutboundPayloads;
+  await coreDrainPendingDeliveries({
+    ...opts,
+    deliver,
+  });
+}
 
 /**
  * @deprecated Prefer plugin-owned reconnect policy wired through
@@ -76,7 +99,6 @@ export * from "../infra/net/proxy-env.js";
 export * from "../infra/net/proxy-fetch.js";
 export * from "../infra/net/undici-global-dispatcher.js";
 export * from "../infra/net/ssrf.js";
-export { drainPendingDeliveries };
 export * from "../infra/outbound/identity.js";
 export * from "../infra/outbound/sanitize-text.js";
 export * from "../infra/parse-finite-number.js";

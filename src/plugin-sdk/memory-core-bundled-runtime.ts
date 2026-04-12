@@ -33,6 +33,10 @@ export const removeGroundedShortTermCandidates: RuntimeFacadeModule["removeGroun
     loadRuntimeFacadeModule().removeGroundedShortTermCandidates(
       ...args,
     )) as RuntimeFacadeModule["removeGroundedShortTermCandidates"];
+export const repairDreamingArtifacts: RuntimeFacadeModule["repairDreamingArtifacts"] = ((...args) =>
+  loadRuntimeFacadeModule().repairDreamingArtifacts(
+    ...args,
+  )) as RuntimeFacadeModule["repairDreamingArtifacts"];
 
 export const previewGroundedRemMarkdown: ApiFacadeModule["previewGroundedRemMarkdown"] = ((
   ...args
@@ -40,6 +44,11 @@ export const previewGroundedRemMarkdown: ApiFacadeModule["previewGroundedRemMark
   loadApiFacadeModule().previewGroundedRemMarkdown(
     ...args,
   )) as ApiFacadeModule["previewGroundedRemMarkdown"];
+
+export const dedupeDreamDiaryEntries: ApiFacadeModule["dedupeDreamDiaryEntries"] = ((...args) =>
+  loadApiFacadeModule().dedupeDreamDiaryEntries(
+    ...args,
+  )) as ApiFacadeModule["dedupeDreamDiaryEntries"];
 
 export const writeBackfillDiaryEntries: ApiFacadeModule["writeBackfillDiaryEntries"] = ((...args) =>
   loadApiFacadeModule().writeBackfillDiaryEntries(

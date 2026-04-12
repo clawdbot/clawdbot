@@ -7,23 +7,6 @@ import {
 } from "./bot-framework.js";
 import type { MSTeamsAccessTokenProvider } from "./types.js";
 
-vi.mock("../../runtime-api.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../runtime-api.js")>("../../runtime-api.js");
-  return {
-    ...actual,
-    fetchWithSsrFGuard: async (params: {
-      url: string;
-      init?: RequestInit;
-      fetchImpl?: typeof fetch;
-    }) => ({
-      response: await (params.fetchImpl ?? fetch)(params.url, params.init),
-      finalUrl: params.url,
-      release: async () => {},
-    }),
-  };
-});
-
 type SavedCall = {
   buffer: Buffer;
   contentType?: string;
@@ -241,6 +224,150 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
     });
     expect(media).toBeUndefined();
     expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  describe("Node 24+ dispatcher bypass (issue #63396)", () => {
+    it("drives the caller's fetchFn directly without the pinned undici dispatcher", async () => {
+      // Regression: before the fix, fetchBotFrameworkAttachment* routed
+      // through `fetchWithSsrFGuard`, which installs a `createPinnedDispatcher`
+      // incompatible with Node 24+'s built-in undici v7. Downloads failed with
+      // "invalid onRequestStart method". The fix switches to
+      // `safeFetchWithPolicy`, which calls the supplied `fetchFn` directly
+      // and never attaches a pinned dispatcher. Verify the caller's `fetchFn`
+      // is invoked (no dispatcher in init).
+      const fileBytes = Buffer.from("BFBYTES", "utf-8");
+      const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+      const fetchFn: typeof fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        fetchCalls.push({ url, init });
+        if (url.endsWith("/v3/attachments/att-1")) {
+          return new Response(
+            JSON.stringify({
+              name: "doc.pdf",
+              type: "application/pdf",
+              views: [{ viewId: "original", size: fileBytes.byteLength }],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        if (url.endsWith("/v3/attachments/att-1/views/original")) {
+          return new Response(fileBytes, {
+            status: 200,
+            headers: { "content-length": String(fileBytes.byteLength) },
+          });
+        }
+        return new Response("not found", { status: 404 });
+      }) as typeof fetch;
+
+      const media = await downloadMSTeamsBotFrameworkAttachment({
+        serviceUrl: "https://smba.trafficmanager.net/amer",
+        attachmentId: "att-1",
+        tokenProvider: buildTokenProvider(),
+        maxBytes: 10_000_000,
+        fetchFn,
+      });
+
+      expect(media).toBeDefined();
+      // Both the attachment info call and the view call should be observed,
+      // confirming the direct fetch path was taken (no dispatcher interception).
+      expect(fetchCalls).toHaveLength(2);
+      expect(fetchCalls[0].url.endsWith("/v3/attachments/att-1")).toBe(true);
+      expect(fetchCalls[1].url.endsWith("/v3/attachments/att-1/views/original")).toBe(true);
+      // Verify no pinned undici dispatcher is attached on either request.
+      for (const call of fetchCalls) {
+        const init = call.init as RequestInit & { dispatcher?: unknown };
+        expect(init?.dispatcher).toBeUndefined();
+      }
+    });
+
+    it("logs a warning when the attachmentInfo fetch throws (no longer silently swallowed)", async () => {
+      const warn = vi.fn();
+      const logger = { warn };
+      const error = new TypeError("fetch failed | invalid onRequestStart method");
+      const fetchFn: typeof fetch = (async () => {
+        throw error;
+      }) as typeof fetch;
+
+      const media = await downloadMSTeamsBotFrameworkAttachment({
+        serviceUrl: "https://smba.trafficmanager.net/amer",
+        attachmentId: "att-1",
+        tokenProvider: buildTokenProvider(),
+        maxBytes: 10_000_000,
+        fetchFn,
+        logger,
+      });
+
+      expect(media).toBeUndefined();
+      expect(warn).toHaveBeenCalledWith(
+        "msteams botFramework attachmentInfo fetch failed",
+        expect.objectContaining({
+          error: expect.stringContaining("invalid onRequestStart method"),
+        }),
+      );
+    });
+
+    it("logs a warning when the attachmentView fetch throws", async () => {
+      const warn = vi.fn();
+      const logger = { warn };
+      const fetchFn: typeof fetch = (async (input: RequestInfo | URL) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        if (url.endsWith("/v3/attachments/att-1")) {
+          return new Response(
+            JSON.stringify({
+              name: "doc.pdf",
+              type: "application/pdf",
+              views: [{ viewId: "original", size: 10 }],
+            }),
+            { status: 200 },
+          );
+        }
+        throw new TypeError("fetch failed");
+      }) as typeof fetch;
+
+      const media = await downloadMSTeamsBotFrameworkAttachment({
+        serviceUrl: "https://smba.trafficmanager.net/amer",
+        attachmentId: "att-1",
+        tokenProvider: buildTokenProvider(),
+        maxBytes: 10_000_000,
+        fetchFn,
+        logger,
+      });
+
+      expect(media).toBeUndefined();
+      expect(warn).toHaveBeenCalledWith(
+        "msteams botFramework attachmentView fetch failed",
+        expect.objectContaining({
+          error: expect.stringContaining("fetch failed"),
+        }),
+      );
+    });
+
+    it("logs a warning on non-ok attachmentInfo response", async () => {
+      const warn = vi.fn();
+      const fetchFn = createMockFetch([
+        {
+          match: /\/v3\/attachments\/att-1$/,
+          response: new Response("server error", { status: 500 }),
+        },
+      ]);
+
+      const media = await downloadMSTeamsBotFrameworkAttachment({
+        serviceUrl: "https://smba.trafficmanager.net/amer",
+        attachmentId: "att-1",
+        tokenProvider: buildTokenProvider(),
+        maxBytes: 10_000_000,
+        fetchFn,
+        logger: { warn },
+      });
+
+      expect(media).toBeUndefined();
+      expect(warn).toHaveBeenCalledWith(
+        "msteams botFramework attachmentInfo non-ok",
+        expect.objectContaining({ status: 500 }),
+      );
+    });
   });
 });
 

@@ -133,6 +133,8 @@ function createOAuthHandler(region: MiniMaxRegion) {
             providers: {
               [PORTAL_PROVIDER_ID]: {
                 baseUrl,
+                api: "anthropic-messages",
+                authHeader: true,
                 models: [],
               },
             },

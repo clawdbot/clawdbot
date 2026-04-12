@@ -15,6 +15,7 @@ import {
   type MemoryEmbeddingProbeResult,
   type MemoryProviderStatus,
   type MemorySearchManager,
+  type MemorySearchRuntimeDebug,
   type MemorySearchResult,
   type MemorySource,
   type MemorySyncProgressUpdate,
@@ -291,8 +292,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       maxResults?: number;
       minScore?: number;
       sessionKey?: string;
+      qmdSearchModeOverride?: "query" | "search" | "vsearch";
+      onDebug?: (debug: MemorySearchRuntimeDebug) => void;
     },
   ): Promise<MemorySearchResult[]> {
+    opts?.onDebug?.({ backend: "builtin" });
     let hasIndexedContent = this.hasIndexedContent();
     if (!hasIndexedContent) {
       try {

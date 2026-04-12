@@ -15,12 +15,15 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("../plugin-sdk/media-runtime.js", () => ({
+vi.mock("./runner.js", () => ({
   buildProviderRegistry: mocks.buildProviderRegistry,
   createMediaAttachmentCache: mocks.createMediaAttachmentCache,
   normalizeMediaAttachments: mocks.normalizeMediaAttachments,
-  normalizeMediaProviderId: mocks.normalizeMediaProviderId,
   runCapability: mocks.runCapability,
+}));
+
+vi.mock("./provider-registry.js", () => ({
+  normalizeMediaProviderId: mocks.normalizeMediaProviderId,
 }));
 
 describe("media-understanding runtime", () => {

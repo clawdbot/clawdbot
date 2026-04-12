@@ -758,6 +758,26 @@ async function collectSessionIngestionBatches(params: {
     if (!entry) {
       continue;
     }
+    if (entry.generatedByDreamingNarrative) {
+      nextFiles[stateKey] = {
+        mtimeMs: fingerprint.mtimeMs,
+        size: fingerprint.size,
+        contentHash: entry.hash.trim(),
+        lineCount: entry.lineMap.length,
+        lastContentLine: entry.lineMap.length,
+      };
+      if (
+        !previous ||
+        previous.mtimeMs !== fingerprint.mtimeMs ||
+        previous.size !== fingerprint.size ||
+        previous.contentHash !== entry.hash.trim() ||
+        previous.lineCount !== entry.lineMap.length ||
+        previous.lastContentLine !== entry.lineMap.length
+      ) {
+        changed = true;
+      }
+      continue;
+    }
     const contentHash = entry.hash.trim();
     if (
       previous &&

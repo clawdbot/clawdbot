@@ -89,6 +89,10 @@ describe("installTestEnv", () => {
     );
     writeFile(path.join(realHome, ".openclaw", "credentials", "token.txt"), "secret\n");
     writeFile(
+      path.join(realHome, ".openclaw", "external-plugins", "glueclaw", "openclaw.plugin.json"),
+      '{"id":"glueclaw"}\n',
+    );
+    writeFile(
       path.join(realHome, ".openclaw", "agents", "main", "agent", "auth-profiles.json"),
       JSON.stringify({ version: 1, profiles: { default: { provider: "openai" } } }, null, 2),
     );
@@ -142,6 +146,17 @@ describe("installTestEnv", () => {
 
     expect(
       fs.existsSync(path.join(testEnv.tempHome, ".openclaw", "credentials", "token.txt")),
+    ).toBe(true);
+    expect(
+      fs.existsSync(
+        path.join(
+          testEnv.tempHome,
+          ".openclaw",
+          "external-plugins",
+          "glueclaw",
+          "openclaw.plugin.json",
+        ),
+      ),
     ).toBe(true);
     expect(
       fs.existsSync(

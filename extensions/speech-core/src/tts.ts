@@ -14,14 +14,15 @@ import type {
   OpenClawConfig,
   TtsAutoMode,
   TtsConfig,
-  TtsMode,
   TtsModelOverrideConfig,
   TtsProvider,
 } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  resolveSendableOutboundReplyParts,
+  type ReplyPayload,
+} from "openclaw/plugin-sdk/reply-payload";
 import { isVerbose, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
 import {
@@ -39,9 +40,10 @@ import {
   normalizeSpeechProviderId,
   normalizeTtsAutoMode,
   parseTtsDirectives,
+  type ResolvedTtsConfig,
+  type ResolvedTtsModelOverrides,
   scheduleCleanup,
   summarizeText,
-  type SpeechModelOverridePolicy,
   type SpeechProviderConfig,
   type SpeechProviderOverrides,
   type SpeechVoiceOption,
@@ -49,27 +51,17 @@ import {
   type TtsDirectiveParseResult,
 } from "../api.js";
 
-export type { TtsDirectiveOverrides, TtsDirectiveParseResult };
+export type {
+  ResolvedTtsConfig,
+  ResolvedTtsModelOverrides,
+  TtsDirectiveOverrides,
+  TtsDirectiveParseResult,
+};
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_TTS_MAX_LENGTH = 1500;
 const DEFAULT_TTS_SUMMARIZE = true;
 const DEFAULT_MAX_TEXT_LENGTH = 4096;
-
-export type ResolvedTtsConfig = {
-  auto: TtsAutoMode;
-  mode: TtsMode;
-  provider: TtsProvider;
-  providerSource: "config" | "default";
-  summaryModel?: string;
-  modelOverrides: ResolvedTtsModelOverrides;
-  providerConfigs: Record<string, SpeechProviderConfig>;
-  prefsPath?: string;
-  maxTextLength: number;
-  timeoutMs: number;
-  rawConfig?: TtsConfig;
-  sourceConfig?: OpenClawConfig;
-};
 
 type TtsUserPrefs = {
   tts?: {
@@ -80,8 +72,6 @@ type TtsUserPrefs = {
     summarize?: boolean;
   };
 };
-
-export type ResolvedTtsModelOverrides = SpeechModelOverridePolicy;
 
 export type TtsAttemptReasonCode =
   | "success"

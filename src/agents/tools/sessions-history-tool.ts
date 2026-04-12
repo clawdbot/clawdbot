@@ -1,5 +1,6 @@
 import { Type } from "@sinclair/typebox";
-import { type OpenClawConfig, loadConfig } from "../../config/config.js";
+import { loadConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { capArrayByJsonBytes } from "../../gateway/session-utils.fs.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";

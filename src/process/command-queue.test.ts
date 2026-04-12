@@ -12,7 +12,7 @@ const diagnosticMocks = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("../logging/diagnostic.js", () => ({
+vi.mock("../logging/diagnostic-runtime.js", () => ({
   logLaneEnqueue: diagnosticMocks.logLaneEnqueue,
   logLaneDequeue: diagnosticMocks.logLaneDequeue,
   diagnosticLogger: diagnosticMocks.diag,

@@ -22,8 +22,6 @@
   "dist/extensions/nostr/runtime-api.js",
   "dist/extensions/ollama/runtime-api.js",
   "dist/extensions/open-prose/runtime-api.js",
-  "dist/extensions/qa-channel/runtime-api.js",
-  "dist/extensions/qa-lab/runtime-api.js",
   "dist/extensions/qqbot/runtime-api.js",
   "dist/extensions/signal/runtime-api.js",
   "dist/extensions/slack/runtime-api.js",

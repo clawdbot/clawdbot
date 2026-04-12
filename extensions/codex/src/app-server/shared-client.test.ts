@@ -1,38 +1,8 @@
-import { EventEmitter } from "node:events";
-import { PassThrough, Writable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerClient, MIN_CODEX_APP_SERVER_VERSION } from "./client.js";
 import { listCodexAppServerModels } from "./models.js";
 import { resetSharedCodexAppServerClientForTests } from "./shared-client.js";
-
-function createClientHarness() {
-  const stdout = new PassThrough();
-  const writes: string[] = [];
-  const stdin = new Writable({
-    write(chunk, _encoding, callback) {
-      writes.push(chunk.toString());
-      callback();
-    },
-  });
-  const process = Object.assign(new EventEmitter(), {
-    stdin,
-    stdout,
-    stderr: new PassThrough(),
-    killed: false,
-    kill: vi.fn(() => {
-      process.killed = true;
-    }),
-  });
-  const client = CodexAppServerClient.fromTransportForTests(process);
-  return {
-    client,
-    process,
-    writes,
-    send(message: unknown) {
-      stdout.write(`${JSON.stringify(message)}\n`);
-    },
-  };
-}
+import { createClientHarness } from "./test-support.js";
 
 describe("shared Codex app-server client", () => {
   afterEach(() => {

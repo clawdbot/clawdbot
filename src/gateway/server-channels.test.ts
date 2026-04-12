@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type ChannelId, type ChannelPlugin } from "../channels/plugins/types.js";
+import {
+  type ChannelGatewayContext,
+  type ChannelId,
+  type ChannelPlugin,
+} from "../channels/plugins/types.js";
 import {
   createSubsystemLogger,
   type SubsystemLogger,
@@ -225,7 +229,7 @@ describe("server-channels auto restart", () => {
       ...createRuntimeChannel(),
       marker: "channel-runtime",
     } as PluginRuntime["channel"] & { marker: string };
-    const startAccount = vi.fn(async (_ctx: { channelRuntime?: PluginRuntime["channel"] }) => {});
+    const startAccount = vi.fn(async (_ctx: ChannelGatewayContext<TestAccount>) => {});
 
     installTestRegistry(createTestPlugin({ startAccount }));
     const manager = createManager({ channelRuntime });
@@ -289,7 +293,7 @@ describe("server-channels auto restart", () => {
       marker: "lazy-channel-runtime",
     } as PluginRuntime["channel"] & { marker: string };
     const resolveChannelRuntime = vi.fn(() => channelRuntime);
-    const startAccount = vi.fn(async (_ctx: { channelRuntime?: PluginRuntime["channel"] }) => {});
+    const startAccount = vi.fn(async (_ctx: ChannelGatewayContext<TestAccount>) => {});
 
     installTestRegistry(createTestPlugin({ startAccount }));
     const manager = createManager({ resolveChannelRuntime });
@@ -335,16 +339,14 @@ describe("server-channels auto restart", () => {
         }),
       },
     };
-    const startAccount = vi.fn(
-      async ({ channelRuntime }: { channelRuntime?: PluginRuntime["channel"] }) => {
-        channelRuntime?.runtimeContexts.register({
-          channelId: "discord",
-          accountId: DEFAULT_ACCOUNT_ID,
-          capability: "approval.native",
-          context: { token: "tracked" },
-        });
-      },
-    );
+    const startAccount = vi.fn(async ({ channelRuntime }: ChannelGatewayContext<TestAccount>) => {
+      channelRuntime?.runtimeContexts.register({
+        channelId: "discord",
+        accountId: DEFAULT_ACCOUNT_ID,
+        capability: "approval.native",
+        context: { token: "tracked" },
+      });
+    });
 
     installTestRegistry(createTestPlugin({ startAccount }));
     const manager = createManager({ channelRuntime });

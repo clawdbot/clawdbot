@@ -12,6 +12,7 @@
         "items": { "type": "string" }
       },
       "model": { "type": "string" },
+      "modelFallback": { "type": "string" },
       "modelFallbackPolicy": {
         "type": "string",
         "enum": ["default-remote", "resolved-only"]
@@ -53,7 +54,17 @@
       "logging": { "type": "boolean" },
       "persistTranscripts": { "type": "boolean" },
       "transcriptDir": { "type": "string" },
-      "cacheTtlMs": { "type": "integer", "minimum": 1000, "maximum": 120000 }
+      "cacheTtlMs": { "type": "integer", "minimum": 1000, "maximum": 120000 },
+      "qmd": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "searchMode": {
+            "type": "string",
+            "enum": ["inherit", "search", "vsearch", "query"]
+          }
+        }
+      }
     }
   },
   "uiHints": {
@@ -69,9 +80,13 @@
       "label": "Memory Model",
       "help": "Provider/model used for the blocking memory sub-agent."
     },
+    "modelFallback": {
+      "label": "Fallback Memory Model",
+      "help": "Optional provider/model to use if no explicit plugin model, session model, or agent primary model resolves."
+    },
     "modelFallbackPolicy": {
       "label": "Model Fallback Policy",
-      "help": "Choose whether Active Memory falls back to the built-in remote default model when no explicit or inherited model is available."
+      "help": "Deprecated compatibility field. Active Memory no longer uses a built-in fallback model; set modelFallback explicitly if you want a fallback."
     },
     "allowedChatTypes": {
       "label": "Allowed Chat Types",
@@ -115,6 +130,10 @@
     "transcriptDir": {
       "label": "Transcript Directory",
       "help": "Relative directory under the agent sessions folder used when transcript persistence is enabled."
+    },
+    "qmd.searchMode": {
+      "label": "QMD Search Mode",
+      "help": "Override the QMD search mode used by the blocking memory sub-agent. Defaults to fast lexical search; use inherit to match the main memory backend setting."
     }
   }
 }

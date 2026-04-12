@@ -16,9 +16,11 @@ const resolveMemorySearchConfig = vi.hoisted(() =>
 );
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
 const previewGroundedRemMarkdown = vi.hoisted(() => vi.fn());
+const dedupeDreamDiaryEntries = vi.hoisted(() => vi.fn());
 const writeBackfillDiaryEntries = vi.hoisted(() => vi.fn());
 const removeBackfillDiaryEntries = vi.hoisted(() => vi.fn());
 const removeGroundedShortTermCandidates = vi.hoisted(() => vi.fn());
+const repairDreamingArtifacts = vi.hoisted(() => vi.fn());
 
 vi.mock("../../config/config.js", () => ({
   loadConfig,
@@ -38,10 +40,12 @@ vi.mock("../../plugins/memory-runtime.js", () => ({
 }));
 
 vi.mock("./doctor.memory-core-runtime.js", () => ({
+  dedupeDreamDiaryEntries,
   previewGroundedRemMarkdown,
   writeBackfillDiaryEntries,
   removeBackfillDiaryEntries,
   removeGroundedShortTermCandidates,
+  repairDreamingArtifacts,
 }));
 
 import { doctorHandlers } from "./doctor.js";
@@ -113,6 +117,28 @@ const invokeDoctorMemoryResetGroundedShortTerm = async (respond: ReturnType<type
   });
 };
 
+const invokeDoctorMemoryRepairDreamingArtifacts = async (respond: ReturnType<typeof vi.fn>) => {
+  await doctorHandlers["doctor.memory.repairDreamingArtifacts"]({
+    req: {} as never,
+    params: {} as never,
+    respond: respond as never,
+    context: {} as never,
+    client: null,
+    isWebchatConnect: () => false,
+  });
+};
+
+const invokeDoctorMemoryDedupeDreamDiary = async (respond: ReturnType<typeof vi.fn>) => {
+  await doctorHandlers["doctor.memory.dedupeDreamDiary"]({
+    req: {} as never,
+    params: {} as never,
+    respond: respond as never,
+    context: {} as never,
+    client: null,
+    isWebchatConnect: () => false,
+  });
+};
+
 const expectEmbeddingErrorResponse = (respond: ReturnType<typeof vi.fn>, error: string) => {
   expect(respond).toHaveBeenCalledWith(
     true,
@@ -135,9 +161,11 @@ describe("doctor.memory.status", () => {
     resolveMemorySearchConfig.mockReset().mockReturnValue({ enabled: true });
     getMemorySearchManager.mockReset();
     previewGroundedRemMarkdown.mockReset();
+    dedupeDreamDiaryEntries.mockReset();
     writeBackfillDiaryEntries.mockReset();
     removeBackfillDiaryEntries.mockReset();
     removeGroundedShortTermCandidates.mockReset();
+    repairDreamingArtifacts.mockReset();
   });
 
   it("returns gateway embedding probe status for the default agent", async () => {
@@ -738,6 +766,69 @@ describe("doctor.memory dream actions", () => {
         agentId: "main",
         action: "resetGroundedShortTerm",
         removedShortTermEntries: 3,
+      },
+      undefined,
+    );
+  });
+
+  it("repairs contaminated dreaming artifacts for control-ui callers", async () => {
+    resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw");
+    repairDreamingArtifacts.mockResolvedValue({
+      changed: true,
+      archiveDir: "/tmp/openclaw/.openclaw-repair/dreaming/2026-04-11T22-00-00-000Z",
+      archivedDreamsDiary: false,
+      archivedSessionCorpus: true,
+      archivedSessionIngestion: true,
+      archivedPaths: [],
+      warnings: [],
+    });
+    const respond = vi.fn();
+
+    await invokeDoctorMemoryRepairDreamingArtifacts(respond);
+
+    expect(repairDreamingArtifacts).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/openclaw",
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        agentId: "main",
+        action: "repairDreamingArtifacts",
+        changed: true,
+        archiveDir: "/tmp/openclaw/.openclaw-repair/dreaming/2026-04-11T22-00-00-000Z",
+        archivedDreamsDiary: false,
+        archivedSessionCorpus: true,
+        archivedSessionIngestion: true,
+        warnings: [],
+      },
+      undefined,
+    );
+  });
+
+  it("dedupes exact dream diary duplicates for control-ui callers", async () => {
+    resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw");
+    dedupeDreamDiaryEntries.mockResolvedValue({
+      dreamsPath: "/tmp/openclaw/DREAMS.md",
+      removed: 2,
+      kept: 7,
+    });
+    const respond = vi.fn();
+
+    await invokeDoctorMemoryDedupeDreamDiary(respond);
+
+    expect(dedupeDreamDiaryEntries).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/openclaw",
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        agentId: "main",
+        action: "dedupeDreamDiary",
+        path: "DREAMS.md",
+        found: false,
+        removedEntries: 2,
+        dedupedEntries: 2,
+        keptEntries: 7,
       },
       undefined,
     );

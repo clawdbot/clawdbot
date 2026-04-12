@@ -11,18 +11,20 @@ import type {
   ChannelPairingAdapter,
   ChannelSecurityAdapter,
 } from "../channels/plugins/types.adapters.js";
+import type { ChannelConfigSchema, ChannelConfigUiHint } from "../channels/plugins/types.config.js";
 import type {
   ChannelMessagingAdapter,
   ChannelOutboundSessionRoute,
   ChannelPollResult,
   ChannelThreadingAdapter,
 } from "../channels/plugins/types.core.js";
-import type { ChannelMeta } from "../channels/plugins/types.js";
-import type { ChannelConfigSchema, ChannelPlugin } from "../channels/plugins/types.plugin.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { ChannelMeta } from "../channels/plugins/types.public.js";
 import type { ReplyToMode } from "../config/types.base.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
+import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { OpenClawPluginApi } from "../plugins/types.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -77,13 +79,13 @@ export type {
   ProviderTransportTurnState,
   ProviderToolSchemaDiagnostic,
   ProviderResolveUsageAuthContext,
-  ProviderRuntimeModel,
   ProviderThinkingPolicyContext,
   ProviderValidateReplayTurnsContext,
   ProviderWebSocketSessionPolicy,
   ProviderWrapStreamFnContext,
   SpeechProviderPlugin,
 } from "./plugin-entry.js";
+export type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 export type { OpenClawPluginToolContext, OpenClawPluginToolFactory } from "../plugins/types.js";
 export type {
   MemoryPluginCapability,
@@ -98,7 +100,7 @@ export type {
 export type { OpenClawConfig } from "../config/config.js";
 export type { OutboundIdentity } from "../infra/outbound/identity.js";
 export type { HistoryEntry } from "../auto-reply/reply/history.js";
-export type { ReplyPayload } from "../auto-reply/types.js";
+export type { ReplyPayload } from "../auto-reply/reply-payload.js";
 export type { AllowlistMatch } from "../channels/allowlist-match.js";
 export type {
   BaseProbeResult,
@@ -107,7 +109,7 @@ export type {
   ChannelMessageActionName,
   ChannelMeta,
   ChannelSetupInput,
-} from "../channels/plugins/types.js";
+} from "../channels/plugins/types.public.js";
 export type { ChatType } from "../channels/chat-type.js";
 export type { NormalizedLocation } from "../channels/location.js";
 export type { ChannelDirectoryEntry } from "../channels/plugins/types.core.js";
@@ -143,8 +145,9 @@ export type {
   UsageProviderId,
   UsageWindow,
 } from "../infra/provider-usage.types.js";
-export type { ChannelMessageActionContext } from "../channels/plugins/types.js";
-export type { ChannelConfigUiHint, ChannelPlugin } from "../channels/plugins/types.plugin.js";
+export type { ChannelMessageActionContext } from "../channels/plugins/types.public.js";
+export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+export type { ChannelConfigUiHint } from "../channels/plugins/types.config.js";
 export type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 

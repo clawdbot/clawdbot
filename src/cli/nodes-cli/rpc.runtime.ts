@@ -1,5 +1,5 @@
 import { callGateway } from "../../gateway/call.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../gateway/protocol/client-info.js";
 import { withProgress } from "../progress.js";
 import type { NodesRpcOpts } from "./types.js";
 

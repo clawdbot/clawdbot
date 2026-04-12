@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 export const TALK_TEST_PROVIDER_ID = "acme-speech";
 export const TALK_TEST_PROVIDER_LABEL = "Acme Speech";

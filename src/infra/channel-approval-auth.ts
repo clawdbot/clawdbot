@@ -1,5 +1,5 @@
 import { getChannelPlugin, resolveChannelApprovalCapability } from "../channels/plugins/index.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 
 export type ApprovalCommandAuthorization = {

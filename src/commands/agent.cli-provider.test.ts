@@ -22,13 +22,25 @@ import {
 } from "./agent-command.test-support.js";
 import { agentCommand } from "./agent.js";
 
-vi.mock("../agents/auth-profiles/store.js", async () => {
-  const actual = await vi.importActual<typeof import("../agents/auth-profiles/store.js")>(
-    "../agents/auth-profiles/store.js",
-  );
+vi.mock("../agents/auth-profiles.js", () => {
   return {
-    ...actual,
     ensureAuthProfileStore: vi.fn(() => ({ version: 1, profiles: {} })),
+  };
+});
+
+vi.mock("../agents/auth-profiles/store.js", () => {
+  const createEmptyStore = () => ({ version: 1, profiles: {} });
+  return {
+    clearRuntimeAuthProfileStoreSnapshots: vi.fn(),
+    ensureAuthProfileStore: vi.fn(createEmptyStore),
+    ensureAuthProfileStoreForLocalUpdate: vi.fn(createEmptyStore),
+    hasAnyAuthProfileStoreSource: vi.fn(() => false),
+    loadAuthProfileStore: vi.fn(createEmptyStore),
+    loadAuthProfileStoreForRuntime: vi.fn(createEmptyStore),
+    loadAuthProfileStoreForSecretsRuntime: vi.fn(createEmptyStore),
+    replaceRuntimeAuthProfileStoreSnapshots: vi.fn(),
+    saveAuthProfileStore: vi.fn(),
+    updateAuthProfileStoreWithLock: vi.fn(async () => createEmptyStore()),
   };
 });
 

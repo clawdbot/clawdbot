@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginCliCommandDescriptors } from "../../plugins/cli.js";
 import type { PluginLoadOptions } from "../../plugins/loader.js";
 import { VERSION } from "../../version.js";

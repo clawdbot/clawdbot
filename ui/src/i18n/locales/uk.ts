@@ -299,8 +299,10 @@ export const uk: TranslationMap = {
     },
     scene: {
       backfill: "Заповнити пропуски",
+      dedupeDiary: "Щоденник дедуплікації",
       reset: "Скинути",
       clearGrounded: "Очистити заземлене",
+      repairCache: "Відновити кеш сновидінь",
       working: "Обробка…",
     },
     phase: {

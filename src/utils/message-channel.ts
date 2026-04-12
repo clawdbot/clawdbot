@@ -1,6 +1,6 @@
+import { getChatChannelMeta } from "../channels/chat-meta.js";
 import {
   CHANNEL_IDS,
-  getChatChannelMeta,
   getRegisteredChannelPluginMeta,
   listRegisteredChannelPluginAliases,
   listRegisteredChannelPluginIds,

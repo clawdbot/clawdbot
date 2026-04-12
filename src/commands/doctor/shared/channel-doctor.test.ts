@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { collectChannelDoctorCompatibilityMutations } from "./channel-doctor.js";
 
 const mocks = vi.hoisted(() => ({
   getChannelPlugin: vi.fn(),
@@ -21,12 +22,8 @@ vi.mock("../../../channels/plugins/bundled.js", () => ({
     mocks.listBundledChannelPlugins(...args),
 }));
 
-let collectChannelDoctorCompatibilityMutations: typeof import("./channel-doctor.js").collectChannelDoctorCompatibilityMutations;
-
 describe("channel doctor compatibility mutations", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ collectChannelDoctorCompatibilityMutations } = await import("./channel-doctor.js"));
+  beforeEach(() => {
     mocks.getChannelPlugin.mockReset();
     mocks.getBundledChannelPlugin.mockReset();
     mocks.listChannelPlugins.mockReset();

@@ -297,8 +297,10 @@ export const pt_BR: TranslationMap = {
     },
     scene: {
       backfill: "Preencher retroativamente",
+      dedupeDiary: "Diário de deduplicação",
       reset: "Redefinir",
       clearGrounded: "Limpar Grounded",
+      repairCache: "Reparar cache de sonhos",
       working: "Trabalhando…",
     },
     phase: {

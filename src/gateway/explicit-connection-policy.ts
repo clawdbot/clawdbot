@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { trimToUndefined, type ExplicitGatewayAuth } from "./credentials.js";
 
 export function hasExplicitGatewayConnectionAuth(auth?: ExplicitGatewayAuth): boolean {

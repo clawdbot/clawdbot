@@ -12,6 +12,7 @@ import {
   collectForbiddenPackPaths,
   collectMissingPackPaths,
   collectPackUnpackedSizeErrors,
+  listRequiredQaScenarioPackPaths,
   packageNameFromSpecifier,
 } from "../scripts/release-check.ts";
 import { bundledDistPluginFile, bundledPluginFile } from "./helpers/bundled-plugin-paths.js";
@@ -26,6 +27,7 @@ function makePackResult(filename: string, unpackedSize: number) {
 
 const requiredPluginSdkPackPaths = [...listPluginSdkDistArtifacts(), "dist/plugin-sdk/compat.js"];
 const requiredBundledPluginPackPaths = listBundledPluginPackArtifacts();
+const requiredQaScenarioPackPaths = listRequiredQaScenarioPackPaths();
 
 describe("collectAppcastSparkleVersionErrors", () => {
   it("accepts legacy 9-digit calver builds before lane-floor cutover", () => {
@@ -291,6 +293,7 @@ describe("collectMissingPackPaths", () => {
       expect.arrayContaining([
         "dist/channel-catalog.json",
         "dist/control-ui/index.html",
+        "qa/scenarios/index.md",
         "scripts/npm-runner.mjs",
         "scripts/postinstall-bundled-plugins.mjs",
         bundledDistPluginFile("diffs", "assets/viewer-runtime.js"),
@@ -305,6 +308,9 @@ describe("collectMissingPackPaths", () => {
         bundledDistPluginFile("whatsapp", "package.json"),
       ]),
     );
+    expect(
+      missing.some((path) => path.startsWith("qa/scenarios/") && path !== "qa/scenarios/index.md"),
+    ).toBe(true);
   });
 
   it("accepts the shipped upgrade surface when optional bundled metadata is present", () => {
@@ -316,6 +322,7 @@ describe("collectMissingPackPaths", () => {
         "dist/extensions/acpx/mcp-proxy.mjs",
         bundledDistPluginFile("diffs", "assets/viewer-runtime.js"),
         ...requiredBundledPluginPackPaths,
+        ...requiredQaScenarioPackPaths,
         ...requiredPluginSdkPackPaths,
         "scripts/npm-runner.mjs",
         "scripts/postinstall-bundled-plugins.mjs",
@@ -336,6 +343,15 @@ describe("collectMissingPackPaths", () => {
         bundledDistPluginFile("whatsapp", "runtime-api.js"),
       ]),
     );
+  });
+
+  it("requires the authored qa scenario pack files in npm pack output", () => {
+    expect(requiredQaScenarioPackPaths).toContain("qa/scenarios/index.md");
+    expect(
+      requiredQaScenarioPackPaths.some(
+        (path) => path.startsWith("qa/scenarios/") && path !== "qa/scenarios/index.md",
+      ),
+    ).toBe(true);
   });
 });
 

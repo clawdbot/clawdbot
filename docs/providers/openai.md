@@ -3,6 +3,7 @@ summary: "Use OpenAI via API keys or Codex subscription in OpenClaw"
 read_when:
   - You want to use OpenAI models in OpenClaw
   - You want Codex subscription auth instead of API keys
+  - You need stricter GPT-5 agent execution behavior
 title: "OpenAI"
 ---
 
@@ -476,6 +477,33 @@ behavior, but it does not receive the hidden OpenAI/Codex attribution headers.
 
 This preserves current native OpenAI Responses behavior without forcing older
 OpenAI-compatible shims onto third-party `/v1` backends.
+
+### Strict-agentic GPT mode
+
+For `openai/*` and `openai-codex/*` GPT-5-family runs, OpenClaw can use a
+stricter embedded Pi execution contract:
+
+```json5
+{
+  agents: {
+    defaults: {
+      embeddedPi: {
+        executionContract: "strict-agentic",
+      },
+    },
+  },
+}
+```
+
+With `strict-agentic`, OpenClaw no longer treats a plan-only assistant turn as
+successful progress when a concrete tool action is available. It retries the
+turn with an act-now steer, auto-enables the structured `update_plan` tool for
+substantial work, and surfaces an explicit blocked state if the model keeps
+planning without acting.
+
+The mode is scoped to OpenAI and OpenAI Codex GPT-5-family runs. Other providers
+and older model families keep the default embedded Pi behavior unless you opt
+them into other runtime settings.
 
 ### OpenAI Responses server-side compaction
 

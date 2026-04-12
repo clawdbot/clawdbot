@@ -126,14 +126,16 @@ export function deriveGroupSessionPatch(params: {
   const subject = params.ctx.GroupSubject?.trim();
   const space = params.ctx.GroupSpace?.trim();
   const explicitChannel = params.ctx.GroupChannel?.trim();
-  const normalizedChannel = normalizeChannelId(channel);
+  const subjectLooksChannel = Boolean(subject?.startsWith("#"));
+  const normalizedChannel =
+    subjectLooksChannel && resolution.chatType !== "channel" ? normalizeChannelId(channel) : null;
   const isChannelProvider = Boolean(
     normalizedChannel &&
     getChannelPlugin(normalizedChannel)?.capabilities.chatTypes.includes("channel"),
   );
   const nextGroupChannel =
     explicitChannel ??
-    ((resolution.chatType === "channel" || isChannelProvider) && subject && subject.startsWith("#")
+    (subjectLooksChannel && subject && (resolution.chatType === "channel" || isChannelProvider)
       ? subject
       : undefined);
   const nextSubject = nextGroupChannel ? undefined : subject;

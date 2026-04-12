@@ -24,7 +24,7 @@ import {
 } from "./compact.hooks.harness.js";
 
 let compactEmbeddedPiSessionDirect: typeof import("./compact.js").compactEmbeddedPiSessionDirect;
-let compactEmbeddedPiSession: typeof import("./compact.js").compactEmbeddedPiSession;
+let compactEmbeddedPiSession: typeof import("./compact.queued.js").compactEmbeddedPiSession;
 let compactTesting: typeof import("./compact.js").__testing;
 let onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 

@@ -8,6 +8,27 @@ import {
 
 describe("bundled plugin build entries", () => {
   const bundledChannelEntrySources = ["index.ts", "channel-entry.ts", "setup-entry.ts"];
+  const forEachBundledChannelEntry = (
+    visit: (params: { entryPath: string; entry: string; pluginId: string }) => void,
+  ) => {
+    for (const dirent of fs.readdirSync("extensions", { withFileTypes: true })) {
+      if (!dirent.isDirectory()) {
+        continue;
+      }
+
+      for (const sourceEntry of bundledChannelEntrySources) {
+        const entryPath = path.join("extensions", dirent.name, sourceEntry);
+        if (!fs.existsSync(entryPath)) {
+          continue;
+        }
+        visit({
+          entryPath,
+          entry: fs.readFileSync(entryPath, "utf8"),
+          pluginId: dirent.name,
+        });
+      }
+    }
+  };
 
   it("includes manifest-less runtime core support packages in dist build entries", () => {
     const entries = listBundledPluginBuildEntries();
@@ -52,32 +73,32 @@ describe("bundled plugin build entries", () => {
     expect(artifacts).toContain("dist/extensions/matrix/plugin-entry.handlers.runtime.js");
   });
 
+  it("keeps private QA bundles out of required npm pack artifacts", () => {
+    const artifacts = listBundledPluginPackArtifacts();
+
+    expect(artifacts.some((artifact) => artifact.startsWith("dist/extensions/qa-channel/"))).toBe(
+      false,
+    );
+    expect(artifacts.some((artifact) => artifact.startsWith("dist/extensions/qa-lab/"))).toBe(
+      false,
+    );
+  });
+
   it("keeps bundled channel secret contracts on packed top-level sidecars", () => {
     const artifacts = listBundledPluginPackArtifacts();
     const offenders: string[] = [];
     const secretBackedPluginIds = new Set<string>();
 
-    for (const dirent of fs.readdirSync("extensions", { withFileTypes: true })) {
-      if (!dirent.isDirectory()) {
-        continue;
+    forEachBundledChannelEntry(({ entryPath, entry, pluginId }) => {
+      if (!entry.includes('exportName: "channelSecrets"')) {
+        return;
       }
-
-      for (const sourceEntry of bundledChannelEntrySources) {
-        const entryPath = path.join("extensions", dirent.name, sourceEntry);
-        if (!fs.existsSync(entryPath)) {
-          continue;
-        }
-        const entry = fs.readFileSync(entryPath, "utf8");
-        if (!entry.includes('exportName: "channelSecrets"')) {
-          continue;
-        }
-        secretBackedPluginIds.add(dirent.name);
-        if (entry.includes("./src/secret-contract.js")) {
-          offenders.push(entryPath);
-        }
-        expect(entry).toContain('specifier: "./secret-contract-api.js"');
+      secretBackedPluginIds.add(pluginId);
+      if (entry.includes("./src/secret-contract.js")) {
+        offenders.push(entryPath);
       }
-    }
+      expect(entry).toContain('specifier: "./secret-contract-api.js"');
+    });
 
     expect(offenders).toEqual([]);
 
@@ -91,28 +112,17 @@ describe("bundled plugin build entries", () => {
   it("keeps bundled channel entry metadata on packed top-level sidecars", () => {
     const offenders: string[] = [];
 
-    for (const dirent of fs.readdirSync("extensions", { withFileTypes: true })) {
-      if (!dirent.isDirectory()) {
-        continue;
+    forEachBundledChannelEntry(({ entryPath, entry }) => {
+      if (
+        !entry.includes("defineBundledChannelEntry") &&
+        !entry.includes("defineBundledChannelSetupEntry")
+      ) {
+        return;
       }
-
-      for (const sourceEntry of bundledChannelEntrySources) {
-        const entryPath = path.join("extensions", dirent.name, sourceEntry);
-        if (!fs.existsSync(entryPath)) {
-          continue;
-        }
-        const entry = fs.readFileSync(entryPath, "utf8");
-        if (
-          !entry.includes("defineBundledChannelEntry") &&
-          !entry.includes("defineBundledChannelSetupEntry")
-        ) {
-          continue;
-        }
-        if (/specifier:\s*["']\.\/src\//u.test(entry)) {
-          offenders.push(entryPath);
-        }
+      if (/specifier:\s*["']\.\/src\//u.test(entry)) {
+        offenders.push(entryPath);
       }
-    }
+    });
 
     expect(offenders).toEqual([]);
   });

@@ -11,7 +11,7 @@ import {
   isExecDeniedResultText,
   parseExecApprovalResultText,
 } from "./exec-approval-result.js";
-import { sanitizeUserFacingText } from "./pi-embedded-helpers/errors.js";
+import { sanitizeUserFacingText } from "./pi-embedded-helpers/sanitize-user-facing-text.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 type ExecApprovalFollowupParams = {

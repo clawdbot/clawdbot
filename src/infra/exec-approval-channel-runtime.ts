@@ -1,16 +1,23 @@
-import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayClient } from "../gateway/client.js";
 import { createOperatorApprovalsGatewayClient } from "../gateway/operator-approvals-client.js";
 import type { EventFrame } from "../gateway/protocol/index.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { formatErrorMessage } from "./errors.js";
+import type {
+  ExecApprovalChannelRuntime,
+  ExecApprovalChannelRuntimeAdapter,
+  ExecApprovalChannelRuntimeEventKind,
+} from "./exec-approval-channel-runtime.types.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals.js";
 import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
+export type {
+  ExecApprovalChannelRuntime,
+  ExecApprovalChannelRuntimeAdapter,
+  ExecApprovalChannelRuntimeEventKind,
+} from "./exec-approval-channel-runtime.types.js";
 
 type ApprovalRequestEvent = ExecApprovalRequest | PluginApprovalRequest;
 type ApprovalResolvedEvent = ExecApprovalResolved | PluginApprovalResolved;
-
-export type ExecApprovalChannelRuntimeEventKind = "exec" | "plugin";
 
 type PendingApprovalEntry<
   TPending,
@@ -22,42 +29,6 @@ type PendingApprovalEntry<
   timeoutId: NodeJS.Timeout | null;
   delivering: boolean;
   pendingResolution: TResolved | null;
-};
-
-export type ExecApprovalChannelRuntimeAdapter<
-  TPending,
-  TRequest extends ApprovalRequestEvent = ExecApprovalRequest,
-  TResolved extends ApprovalResolvedEvent = ExecApprovalResolved,
-> = {
-  label: string;
-  clientDisplayName: string;
-  cfg: OpenClawConfig;
-  gatewayUrl?: string;
-  eventKinds?: readonly ExecApprovalChannelRuntimeEventKind[];
-  isConfigured: () => boolean;
-  shouldHandle: (request: TRequest) => boolean;
-  deliverRequested: (request: TRequest) => Promise<TPending[]>;
-  beforeGatewayClientStart?: () => Promise<void> | void;
-  finalizeResolved: (params: {
-    request: TRequest;
-    resolved: TResolved;
-    entries: TPending[];
-  }) => Promise<void>;
-  finalizeExpired?: (params: { request: TRequest; entries: TPending[] }) => Promise<void>;
-  onStopped?: () => Promise<void> | void;
-  nowMs?: () => number;
-};
-
-export type ExecApprovalChannelRuntime<
-  TRequest extends ApprovalRequestEvent = ExecApprovalRequest,
-  TResolved extends ApprovalResolvedEvent = ExecApprovalResolved,
-> = {
-  start: () => Promise<void>;
-  stop: () => Promise<void>;
-  handleRequested: (request: TRequest) => Promise<void>;
-  handleResolved: (resolved: TResolved) => Promise<void>;
-  handleExpired: (approvalId: string) => Promise<void>;
-  request: <T = unknown>(method: string, params: Record<string, unknown>) => Promise<T>;
 };
 
 function resolveApprovalReplayMethods(

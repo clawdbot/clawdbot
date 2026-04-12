@@ -1,6 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { getChannelPlugin } from "./index.js";
-import type { ChannelMessageActionContext } from "./types.js";
+import type { ChannelMessageActionContext } from "./types.public.js";
 
 function requiresTrustedRequesterSender(ctx: ChannelMessageActionContext): boolean {
   const plugin = getChannelPlugin(ctx.channel);

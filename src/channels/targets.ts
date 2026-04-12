@@ -1,7 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 export type { DirectoryConfigParams } from "./plugins/directory-types.js";
-export type { ChannelDirectoryEntry } from "./plugins/types.js";
+export type { ChannelDirectoryEntry } from "./plugins/types.public.js";
 
 export type MessagingTargetKind = "user" | "channel";
 

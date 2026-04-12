@@ -1,27 +1,6 @@
 import { logVerbose } from "../../globals.js";
 import { requireGatewayClientScopeForInternalChannel } from "./command-gates.js";
 import {
-  handleAcpDoctorAction,
-  handleAcpInstallAction,
-  handleAcpSessionsAction,
-} from "./commands-acp/diagnostics.js";
-import {
-  handleAcpCancelAction,
-  handleAcpCloseAction,
-  handleAcpSpawnAction,
-  handleAcpSteerAction,
-} from "./commands-acp/lifecycle.js";
-import {
-  handleAcpCwdAction,
-  handleAcpModelAction,
-  handleAcpPermissionsAction,
-  handleAcpResetOptionsAction,
-  handleAcpSetAction,
-  handleAcpSetModeAction,
-  handleAcpStatusAction,
-  handleAcpTimeoutAction,
-} from "./commands-acp/runtime-options.js";
-import {
   COMMAND,
   type AcpAction,
   resolveAcpAction,
@@ -39,23 +18,57 @@ type AcpActionHandler = (
   tokens: string[],
 ) => Promise<CommandHandlerResult>;
 
-const ACP_ACTION_HANDLERS: Record<Exclude<AcpAction, "help">, AcpActionHandler> = {
-  spawn: handleAcpSpawnAction,
-  cancel: handleAcpCancelAction,
-  steer: handleAcpSteerAction,
-  close: handleAcpCloseAction,
-  status: handleAcpStatusAction,
-  "set-mode": handleAcpSetModeAction,
-  set: handleAcpSetAction,
-  cwd: handleAcpCwdAction,
-  permissions: handleAcpPermissionsAction,
-  timeout: handleAcpTimeoutAction,
-  model: handleAcpModelAction,
-  "reset-options": handleAcpResetOptionsAction,
-  doctor: handleAcpDoctorAction,
-  install: async (params, tokens) => handleAcpInstallAction(params, tokens),
-  sessions: async (params, tokens) => handleAcpSessionsAction(params, tokens),
-};
+let lifecycleHandlersPromise: Promise<typeof import("./commands-acp/lifecycle.js")> | undefined;
+let runtimeOptionHandlersPromise:
+  | Promise<typeof import("./commands-acp/runtime-options.js")>
+  | undefined;
+let diagnosticHandlersPromise: Promise<typeof import("./commands-acp/diagnostics.js")> | undefined;
+
+async function loadAcpActionHandler(action: Exclude<AcpAction, "help">): Promise<AcpActionHandler> {
+  if (action === "spawn" || action === "cancel" || action === "steer" || action === "close") {
+    lifecycleHandlersPromise ??= import("./commands-acp/lifecycle.js");
+    const handlers = await lifecycleHandlersPromise;
+    return {
+      spawn: handlers.handleAcpSpawnAction,
+      cancel: handlers.handleAcpCancelAction,
+      steer: handlers.handleAcpSteerAction,
+      close: handlers.handleAcpCloseAction,
+    }[action];
+  }
+
+  if (
+    action === "status" ||
+    action === "set-mode" ||
+    action === "set" ||
+    action === "cwd" ||
+    action === "permissions" ||
+    action === "timeout" ||
+    action === "model" ||
+    action === "reset-options"
+  ) {
+    runtimeOptionHandlersPromise ??= import("./commands-acp/runtime-options.js");
+    const handlers = await runtimeOptionHandlersPromise;
+    return {
+      status: handlers.handleAcpStatusAction,
+      "set-mode": handlers.handleAcpSetModeAction,
+      set: handlers.handleAcpSetAction,
+      cwd: handlers.handleAcpCwdAction,
+      permissions: handlers.handleAcpPermissionsAction,
+      timeout: handlers.handleAcpTimeoutAction,
+      model: handlers.handleAcpModelAction,
+      "reset-options": handlers.handleAcpResetOptionsAction,
+    }[action];
+  }
+
+  diagnosticHandlersPromise ??= import("./commands-acp/diagnostics.js");
+  const handlers = await diagnosticHandlersPromise;
+  const diagnosticHandlers: Record<"doctor" | "install" | "sessions", AcpActionHandler> = {
+    doctor: handlers.handleAcpDoctorAction,
+    install: async (params, tokens) => handlers.handleAcpInstallAction(params, tokens),
+    sessions: async (params, tokens) => handlers.handleAcpSessionsAction(params, tokens),
+  };
+  return diagnosticHandlers[action];
+}
 
 const ACP_MUTATING_ACTIONS = new Set<AcpAction>([
   "spawn",
@@ -105,6 +118,6 @@ export const handleAcpCommand: CommandHandler = async (params, allowTextCommands
     }
   }
 
-  const handler = ACP_ACTION_HANDLERS[action];
-  return handler ? await handler(params, tokens) : stopWithText(resolveAcpHelpText());
+  const handler = await loadAcpActionHandler(action);
+  return await handler(params, tokens);
 };

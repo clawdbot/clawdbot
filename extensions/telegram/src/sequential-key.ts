@@ -1,4 +1,5 @@
 import { type Message, type UserFromGetMe } from "@grammyjs/types";
+import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/infra-runtime";
 import { isAbortRequestText } from "openclaw/plugin-sdk/reply-runtime";
 import { isBtwRequestText } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveTelegramForumThreadId } from "./bot/helpers.js";
@@ -14,7 +15,7 @@ export type TelegramSequentialKeyContext = {
     edited_message?: Message;
     channel_post?: Message;
     edited_channel_post?: Message;
-    callback_query?: { message?: Message };
+    callback_query?: { message?: Message; data?: string };
     message_reaction?: { chat?: { id?: number } };
   };
 };
@@ -51,6 +52,13 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
       return `telegram:${chatId}:btw`;
     }
     return "telegram:btw";
+  }
+  const callbackData = ctx.update?.callback_query?.data;
+  if (callbackData && parseExecApprovalCommandText(callbackData) !== null) {
+    if (typeof chatId === "number") {
+      return `telegram:${chatId}:approval`;
+    }
+    return "telegram:approval";
   }
   const isGroup = msg?.chat?.type === "group" || msg?.chat?.type === "supergroup";
   const messageThreadId = msg?.message_thread_id;

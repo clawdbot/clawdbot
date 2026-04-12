@@ -93,6 +93,58 @@ describe("ui.seamColor", () => {
   });
 });
 
+describe("gateway.controlUi.embedSandbox", () => {
+  it("accepts strict, scripts, and trusted modes", () => {
+    for (const mode of ["strict", "scripts", "trusted"] as const) {
+      const result = OpenClawSchema.safeParse({
+        gateway: {
+          controlUi: {
+            embedSandbox: mode,
+          },
+        },
+      });
+      expect(result.success).toBe(true);
+    }
+  });
+
+  it("rejects unsupported values", () => {
+    const result = OpenClawSchema.safeParse({
+      gateway: {
+        controlUi: {
+          embedSandbox: "yolo",
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("gateway.controlUi.allowExternalEmbedUrls", () => {
+  it("accepts boolean values", () => {
+    for (const value of [true, false]) {
+      const result = OpenClawSchema.safeParse({
+        gateway: {
+          controlUi: {
+            allowExternalEmbedUrls: value,
+          },
+        },
+      });
+      expect(result.success).toBe(true);
+    }
+  });
+
+  it("rejects non-boolean values", () => {
+    const result = OpenClawSchema.safeParse({
+      gateway: {
+        controlUi: {
+          allowExternalEmbedUrls: "yes",
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
 describe("plugins.entries.*.hooks.allowPromptInjection", () => {
   it("accepts boolean values", () => {
     const result = OpenClawSchema.safeParse({

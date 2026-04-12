@@ -1,13 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  namedAccountPromotionKeys as matrixNamedAccountPromotionKeys,
-  resolveSingleAccountPromotionTarget as resolveMatrixSingleAccountPromotionTarget,
-  singleAccountKeysToMove as matrixSingleAccountKeysToMove,
-} from "../../plugin-sdk/matrix.js";
-import { singleAccountKeysToMove as telegramSingleAccountKeysToMove } from "../../plugin-sdk/telegram.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -25,7 +19,41 @@ function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
 
-beforeEach(() => {
+const matrixSingleAccountKeysToMove = [
+  "allowBots",
+  "deviceId",
+  "deviceName",
+  "encryption",
+] as const;
+const matrixNamedAccountPromotionKeys = [
+  "accessToken",
+  "deviceId",
+  "deviceName",
+  "encryption",
+  "homeserver",
+  "userId",
+] as const;
+const telegramSingleAccountKeysToMove = ["streaming"] as const;
+
+function resolveMatrixSingleAccountPromotionTarget(params: {
+  channel: { defaultAccount?: string; accounts?: Record<string, unknown> };
+}): string {
+  const accounts = params.channel.accounts ?? {};
+  const normalizedDefaultAccount = params.channel.defaultAccount?.trim()
+    ? normalizeAccountId(params.channel.defaultAccount)
+    : undefined;
+  if (normalizedDefaultAccount) {
+    return (
+      Object.keys(accounts).find(
+        (accountId) => normalizeAccountId(accountId) === normalizedDefaultAccount,
+      ) ?? DEFAULT_ACCOUNT_ID
+    );
+  }
+  const namedAccounts = Object.keys(accounts).filter(Boolean);
+  return namedAccounts.length === 1 ? namedAccounts[0] : DEFAULT_ACCOUNT_ID;
+}
+
+beforeAll(() => {
   setActivePluginRegistry(
     createTestRegistry([
       {
@@ -54,7 +82,7 @@ beforeEach(() => {
   );
 });
 
-afterEach(() => {
+afterAll(() => {
   clearSetupPromotionRuntimeModuleCache();
   resetPluginRuntimeStateForTest();
 });

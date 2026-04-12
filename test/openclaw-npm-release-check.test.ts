@@ -308,6 +308,20 @@ describe("collectForbiddenPackedPathErrors", () => {
       'npm package must not include generated docs artifact "docs/.generated/config-baseline.plugin.json".',
     ]);
   });
+
+  it("rejects private qa artifacts in npm pack output", () => {
+    expect(
+      collectForbiddenPackedPathErrors([
+        "dist/extensions/qa-channel/runtime-api.js",
+        "dist/extensions/qa-channel/package.json",
+        "dist/extensions/qa-lab/runtime-api.js",
+        "dist/extensions/qa-lab/src/cli.js",
+      ]),
+    ).toEqual([
+      'npm package must not include private QA channel artifact "dist/extensions/qa-channel/package.json".',
+      'npm package must not include private QA lab artifact "dist/extensions/qa-lab/src/cli.js".',
+    ]);
+  });
 });
 
 describe("collectReleaseTagErrors", () => {

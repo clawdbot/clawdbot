@@ -239,6 +239,91 @@ describe("Ollama provider", () => {
     expectDiscoveryCallCounts(fetchMock, { tags: 1, show: 2 });
   });
 
+  it("auto-registers ollama provider when models are discovered locally", async () => {
+    await withoutAmbientOllamaEnv(async () => {
+      enableDiscoveryEnv();
+      const fetchMock = vi.fn(async (input: unknown) => {
+        const url = String(input);
+        if (url.endsWith("/api/tags")) {
+          return tagsResponse(["deepseek-r1:latest", "llama3.3:latest"]);
+        }
+        if (url.endsWith("/api/show")) {
+          return {
+            ok: true,
+            json: async () => ({ model_info: {} }),
+          };
+        }
+        return notFoundJsonResponse();
+      });
+      vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
+
+      const provider = await runOllamaCatalog({
+        env: { VITEST: "", NODE_ENV: "development" },
+      });
+
+      expect(provider?.apiKey).toBe(OLLAMA_LOCAL_AUTH_MARKER);
+      expect(provider?.api).toBe("ollama");
+      expect(provider?.baseUrl).toBe("http://127.0.0.1:11434");
+      expect(provider?.models).toHaveLength(2);
+      expect(provider?.models?.[0]?.id).toBe("deepseek-r1:latest");
+      expect(provider?.models?.[0]?.reasoning).toBe(true);
+      expect(provider?.models?.[1]?.reasoning).toBe(false);
+      expectDiscoveryCallCounts(fetchMock, { tags: 1, show: 2 });
+    });
+  });
+
+  it("does not warn when Ollama is unreachable and not explicitly configured", async () => {
+    await withoutAmbientOllamaEnv(async () => {
+      enableDiscoveryEnv();
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const fetchMock = vi
+        .fn()
+        .mockRejectedValue(new Error("connect ECONNREFUSED 127.0.0.1:11434"));
+      vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
+
+      const provider = await runOllamaCatalog({
+        env: { VITEST: "", NODE_ENV: "development" },
+      });
+
+      expect(provider).toBeUndefined();
+      expect(
+        warnSpy.mock.calls.filter(([message]) => String(message).includes("Ollama")),
+      ).toHaveLength(0);
+      warnSpy.mockRestore();
+    });
+  });
+
+  it("warns when Ollama is unreachable and explicitly configured", async () => {
+    await withoutAmbientOllamaEnv(async () => {
+      enableDiscoveryEnv();
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const fetchMock = vi
+        .fn()
+        .mockRejectedValue(new Error("connect ECONNREFUSED 127.0.0.1:11434"));
+      vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
+
+      await runOllamaCatalog({
+        config: {
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "http://127.0.0.1:11435/v1",
+                api: "openai-completions",
+                models: [],
+              },
+            },
+          },
+        },
+        env: { VITEST: "", NODE_ENV: "development" },
+      });
+
+      expect(
+        warnSpy.mock.calls.filter(([message]) => String(message).includes("Ollama")).length,
+      ).toBeGreaterThan(0);
+      warnSpy.mockRestore();
+    });
+  });
+
   it("falls back to default context window when /api/show fails", async () => {
     const agentDir = createAgentDir();
     enableDiscoveryEnv();

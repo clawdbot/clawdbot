@@ -3,7 +3,7 @@ import type { PluginPackageChannel } from "../plugins/manifest.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { CHAT_CHANNEL_ORDER, type ChatChannelId } from "./ids.js";
 import { resolveChannelExposure } from "./plugins/exposure.js";
-import type { ChannelMeta } from "./plugins/types.js";
+import type { ChannelMeta } from "./plugins/types.core.js";
 
 export type ChatChannelMeta = ChannelMeta;
 

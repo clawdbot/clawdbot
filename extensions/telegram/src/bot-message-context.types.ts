@@ -44,6 +44,28 @@ export type ResolveGroupActivation = (params: {
 
 export type ResolveGroupRequireMention = (chatId: string | number) => boolean;
 
+export type TelegramMessageContextRuntimeOverrides = Partial<
+  Pick<
+    typeof import("./bot-message-context.runtime.js"),
+    | "createStatusReactionController"
+    | "ensureConfiguredBindingRouteReady"
+    | "loadConfig"
+    | "recordChannelActivity"
+  >
+>;
+
+export type TelegramMessageContextSessionRuntimeOverrides = Partial<
+  Pick<
+    typeof import("./bot-message-context.session.runtime.js"),
+    | "finalizeInboundContext"
+    | "readSessionUpdatedAt"
+    | "recordInboundSession"
+    | "resolveInboundLastRouteSessionKey"
+    | "resolvePinnedMainDmOwnerFromAllowlist"
+    | "resolveStorePath"
+  >
+>;
+
 export type BuildTelegramMessageContextParams = {
   primaryCtx: TelegramContext;
   allMedia: TelegramMediaRef[];
@@ -64,6 +86,8 @@ export type BuildTelegramMessageContextParams = {
   resolveGroupRequireMention: ResolveGroupRequireMention;
   resolveTelegramGroupConfig: ResolveTelegramGroupConfig;
   loadFreshConfig?: () => OpenClawConfig;
+  runtime?: TelegramMessageContextRuntimeOverrides;
+  sessionRuntime?: TelegramMessageContextSessionRuntimeOverrides;
   upsertPairingRequest?: typeof import("openclaw/plugin-sdk/conversation-runtime").upsertChannelPairingRequest;
   /** Global (per-account) handler for sendChatAction 401 backoff (#27092). */
   sendChatActionHandler: import("./sendchataction-401-backoff.js").TelegramSendChatActionHandler;

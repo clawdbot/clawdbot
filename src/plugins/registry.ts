@@ -5,7 +5,7 @@ import {
 } from "../agents/harness/registry.js";
 import type { AgentHarness } from "../agents/harness/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { registerContextEngineForOwner } from "../context-engine/registry.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
@@ -32,6 +32,7 @@ import {
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
 import { registerPluginInteractiveHandler } from "./interactive-registry.js";
+import type { PluginDiagnostic } from "./manifest-types.js";
 import {
   getRegisteredMemoryEmbeddingProvider,
   registerMemoryEmbeddingProvider,
@@ -93,7 +94,6 @@ import type {
   OpenClawPluginService,
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
-  PluginDiagnostic,
   PluginHookHandlerMap,
   PluginHookName,
   PluginHookRegistration as TypedPluginHookRegistration,

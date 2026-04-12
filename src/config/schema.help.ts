@@ -380,6 +380,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional URL prefix where the Control UI is served (e.g. /openclaw).",
   "gateway.controlUi.root":
     "Optional filesystem root for Control UI assets (defaults to dist/control-ui).",
+  "gateway.controlUi.embedSandbox":
+    'Iframe sandbox policy for hosted Control UI embeds. "strict" disables scripts, "scripts" allows interactive embeds while keeping origin isolation (default), and "trusted" adds `allow-same-origin` for same-site documents that intentionally need stronger privileges.',
+  "gateway.controlUi.allowExternalEmbedUrls":
+    "DANGEROUS toggle that allows hosted embeds to load absolute external http(s) URLs. Keep this off unless your Control UI intentionally embeds trusted third-party pages; hosted /__openclaw__/canvas and /__openclaw__/a2ui documents do not need it.",
   "gateway.controlUi.allowedOrigins":
     'Allowed browser origins for Control UI/WebChat websocket connections (full origins only, e.g. https://control.example.com). Required for non-loopback Control UI deployments unless dangerous Host-header fallback is explicitly enabled. Setting ["*"] means allow any browser origin and should be avoided outside tightly controlled local testing.',
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback":
@@ -844,6 +848,20 @@ export const FIELD_HELP: Record<string, string> = {
     "Max total characters across all injected workspace bootstrap files (default: 150000).",
   "agents.defaults.bootstrapPromptTruncationWarning":
     'Inject agent-visible warning text when bootstrap files are truncated: "off", "once" (default), or "always".',
+  "agents.defaults.startupContext":
+    'Runtime-owned first-turn prelude for bare "/new" and "/reset". Use this to control whether recent daily memory files are preloaded into the first prompt instead of asking the model to decide what to read.',
+  "agents.defaults.startupContext.enabled":
+    "Enable the startup-context prelude for bare session resets (default: true). Disable this to fall back to prompt-only behavior with no runtime-loaded daily memory.",
+  "agents.defaults.startupContext.applyOn":
+    'Chooses which bare reset commands get startup context: include "new", "reset", or both (default: ["new","reset"]).',
+  "agents.defaults.startupContext.dailyMemoryDays":
+    "Number of dated memory files to load counting backward from today in the configured user timezone (default: 2 for today + yesterday).",
+  "agents.defaults.startupContext.maxFileBytes":
+    "Maximum bytes allowed per daily memory file when building startup context (default: 16384). Files over this boundary-safe read limit are skipped.",
+  "agents.defaults.startupContext.maxFileChars":
+    "Maximum characters retained from each loaded daily memory file in the startup prelude (default: 2000).",
+  "agents.defaults.startupContext.maxTotalChars":
+    "Maximum total characters retained across all loaded daily memory files in the startup prelude (default: 4500). Additional files are truncated from the prelude once this cap is reached.",
   "agents.defaults.repoRoot":
     "Optional repository root shown in the system prompt runtime line (overrides auto-detect).",
   "agents.defaults.envelopeTimezone":

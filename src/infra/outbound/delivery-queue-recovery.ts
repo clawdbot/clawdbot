@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../errors.js";
 import {
   ackDelivery,
@@ -62,15 +62,6 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
 
 const drainInProgress = new Map<string, boolean>();
 const entriesInProgress = new Set<string>();
-
-type DeliverRuntimeModule = typeof import("./deliver-runtime.js");
-
-let deliverRuntimePromise: Promise<DeliverRuntimeModule> | null = null;
-
-function loadDeliverRuntime() {
-  deliverRuntimePromise ??= import("./deliver-runtime.js");
-  return deliverRuntimePromise;
-}
 
 function getErrnoCode(err: unknown): string | null {
   return err && typeof err === "object" && "code" in err
@@ -225,7 +216,7 @@ export async function drainPendingDeliveries(opts: {
   cfg: OpenClawConfig;
   log: RecoveryLogger;
   stateDir?: string;
-  deliver?: DeliverFn;
+  deliver: DeliverFn;
   selectEntry: (entry: QueuedDelivery, now: number) => PendingDeliveryDrainDecision;
 }): Promise<void> {
   if (drainInProgress.get(opts.drainKey)) {
@@ -236,7 +227,7 @@ export async function drainPendingDeliveries(opts: {
   drainInProgress.set(opts.drainKey, true);
   try {
     const now = Date.now();
-    const deliver = opts.deliver ?? (await loadDeliverRuntime()).deliverOutboundPayloads;
+    const deliver = opts.deliver;
     const matchingEntries = (await loadPendingDeliveries(opts.stateDir))
       .map((entry) => ({
         entry,

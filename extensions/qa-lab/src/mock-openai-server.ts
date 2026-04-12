@@ -452,6 +452,17 @@ function buildAssistantText(input: ResponsesInputItem[], body: Record<string, un
     }
     return `Protocol note: Lobster Invaders built at lobster-invaders.html.`;
   }
+  if (toolOutput && /compaction retry mutating tool check/i.test(prompt)) {
+    if (
+      toolOutput.includes("Replay safety: unsafe after write.") ||
+      /compaction-retry-summary\.txt/i.test(toolOutput) ||
+      /successfully (?:wrote|replaced)/i.test(toolOutput) ||
+      /\bwrote\b.*\bcompaction-retry-summary\.txt\b/i.test(toolOutput)
+    ) {
+      return "Protocol note: replay unsafe after write.";
+    }
+    return "";
+  }
   if (toolOutput) {
     const snippet = toolOutput.replace(/\s+/g, " ").trim().slice(0, 220);
     return `Protocol note: I reviewed the requested material. Evidence snippet: ${snippet || "no content"}`;
@@ -538,6 +549,17 @@ async function buildResponsesPayload(body: Record<string, unknown>) {
   <head><meta charset="utf-8" /><title>Lobster Invaders</title></head>
   <body><h1>Lobster Invaders</h1><p>Tiny playable stub.</p></body>
 </html>`,
+      });
+    }
+  }
+  if (/compaction retry mutating tool check/i.test(prompt)) {
+    if (!toolOutput) {
+      return buildToolCallEventsWithArgs("read", { path: "COMPACTION_RETRY_CONTEXT.md" });
+    }
+    if (toolOutput.includes("compaction retry evidence")) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "compaction-retry-summary.txt",
+        content: "Replay safety: unsafe after write.\n",
       });
     }
   }

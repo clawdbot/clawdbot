@@ -4,7 +4,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
 import { emptyChannelConfigSchema } from "../channels/plugins/config-schema.js";
-import type { ChannelConfigSchema, ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { ChannelConfigSchema } from "../channels/plugins/types.config.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import {

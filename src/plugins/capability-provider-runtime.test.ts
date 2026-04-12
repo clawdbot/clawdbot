@@ -18,6 +18,16 @@ const mocks = vi.hoisted(() => ({
   loadPluginManifestRegistry: vi.fn<() => MockManifestRegistry>(() =>
     createEmptyMockManifestRegistry(),
   ),
+  withBundledPluginAllowlistCompat: vi.fn(
+    ({ config, pluginIds }: { config?: OpenClawConfig; pluginIds: string[] }) =>
+      ({
+        ...config,
+        plugins: {
+          ...config?.plugins,
+          allow: Array.from(new Set([...(config?.plugins?.allow ?? []), ...pluginIds])),
+        },
+      }) as OpenClawConfig,
+  ),
   withBundledPluginEnablementCompat: vi.fn(({ config }) => config),
   withBundledPluginVitestCompat: vi.fn(({ config }) => config),
 }));
@@ -30,14 +40,11 @@ vi.mock("./manifest-registry.js", () => ({
   loadPluginManifestRegistry: mocks.loadPluginManifestRegistry,
 }));
 
-vi.mock("./bundled-compat.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./bundled-compat.js")>();
-  return {
-    ...actual,
-    withBundledPluginEnablementCompat: mocks.withBundledPluginEnablementCompat,
-    withBundledPluginVitestCompat: mocks.withBundledPluginVitestCompat,
-  };
-});
+vi.mock("./bundled-compat.js", () => ({
+  withBundledPluginAllowlistCompat: mocks.withBundledPluginAllowlistCompat,
+  withBundledPluginEnablementCompat: mocks.withBundledPluginEnablementCompat,
+  withBundledPluginVitestCompat: mocks.withBundledPluginVitestCompat,
+}));
 
 let resolvePluginCapabilityProviders: typeof import("./capability-provider-runtime.js").resolvePluginCapabilityProviders;
 
@@ -150,6 +157,17 @@ describe("resolvePluginCapabilityProviders", () => {
     mocks.resolveRuntimePluginRegistry.mockReturnValue(undefined);
     mocks.loadPluginManifestRegistry.mockReset();
     mocks.loadPluginManifestRegistry.mockReturnValue(createEmptyMockManifestRegistry());
+    mocks.withBundledPluginAllowlistCompat.mockClear();
+    mocks.withBundledPluginAllowlistCompat.mockImplementation(
+      ({ config, pluginIds }: { config?: OpenClawConfig; pluginIds: string[] }) =>
+        ({
+          ...config,
+          plugins: {
+            ...config?.plugins,
+            allow: Array.from(new Set([...(config?.plugins?.allow ?? []), ...pluginIds])),
+          },
+        }) as OpenClawConfig,
+    );
     mocks.withBundledPluginEnablementCompat.mockReset();
     mocks.withBundledPluginEnablementCompat.mockImplementation(({ config }) => config);
     mocks.withBundledPluginVitestCompat.mockReset();

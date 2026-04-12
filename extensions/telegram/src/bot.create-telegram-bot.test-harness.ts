@@ -1,4 +1,3 @@
-import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   createReplyDispatcher,
@@ -7,7 +6,6 @@ import {
   type MsgContext,
 } from "openclaw/plugin-sdk/reply-runtime";
 import type { MockFn } from "openclaw/plugin-sdk/testing";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { beforeEach, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
 
@@ -51,9 +49,6 @@ export function getLoadWebMediaMock(): AnyMock {
   return loadWebMedia;
 }
 
-vi.mock("openclaw/plugin-sdk/web-media", () => ({
-  loadWebMedia,
-}));
 vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia,
 }));
@@ -206,6 +201,25 @@ function parseModelRef(raw: string): { provider?: string; model: string } {
   return { model: trimmed };
 }
 
+function normalizeLowercaseStringOrEmptyForTest(value: string | undefined): string {
+  return value?.trim().toLowerCase() ?? "";
+}
+
+function resolveDefaultModelForAgentForTest(params: { cfg: OpenClawConfig }): {
+  provider: string;
+  model: string;
+} {
+  const modelConfig = params.cfg.agents?.defaults?.model;
+  const rawModel =
+    typeof modelConfig === "string" ? modelConfig : (modelConfig?.primary ?? "openai/gpt-5.4");
+  const parsed = parseModelRef(rawModel);
+  const provider = normalizeLowercaseStringOrEmptyForTest(parsed.provider) || "openai";
+  return {
+    provider: provider === "bedrock" ? "amazon-bedrock" : provider,
+    model: parsed.model || "gpt-5.4",
+  };
+}
+
 function createModelsProviderDataFromConfig(cfg: OpenClawConfig): {
   byProvider: Map<string, Set<string>>;
   providers: string[];
@@ -214,7 +228,7 @@ function createModelsProviderDataFromConfig(cfg: OpenClawConfig): {
 } {
   const byProvider = new Map<string, Set<string>>();
   const add = (providerRaw: string | undefined, modelRaw: string | undefined) => {
-    const provider = normalizeLowercaseStringOrEmpty(providerRaw);
+    const provider = normalizeLowercaseStringOrEmptyForTest(providerRaw);
     const model = modelRaw?.trim();
     if (!provider || !model) {
       return;
@@ -224,7 +238,7 @@ function createModelsProviderDataFromConfig(cfg: OpenClawConfig): {
     byProvider.set(provider, existing);
   };
 
-  const resolvedDefault = resolveDefaultModelForAgent({ cfg });
+  const resolvedDefault = resolveDefaultModelForAgentForTest({ cfg });
   add(resolvedDefault.provider, resolvedDefault.model);
 
   for (const raw of Object.keys(cfg.agents?.defaults?.models ?? {})) {

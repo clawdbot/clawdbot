@@ -6,6 +6,13 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
 import { hasWebCredsSync } from "./src/creds-files.js";
 
+type WhatsAppAuthPresenceParams =
+  | {
+      cfg: OpenClawConfig;
+      env?: NodeJS.ProcessEnv;
+    }
+  | OpenClawConfig;
+
 function addAccountAuthDirs(
   authDirs: Set<string>,
   accountId: string,
@@ -63,8 +70,11 @@ function listWhatsAppAuthDirs(
 }
 
 export function hasAnyWhatsAppAuth(
-  cfg: OpenClawConfig,
+  params: WhatsAppAuthPresenceParams,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  return listWhatsAppAuthDirs(cfg, env).some((authDir) => hasWebCredsSync(authDir));
+  const cfg = params && typeof params === "object" && "cfg" in params ? params.cfg : params;
+  const resolvedEnv =
+    params && typeof params === "object" && "cfg" in params ? (params.env ?? env) : env;
+  return listWhatsAppAuthDirs(cfg, resolvedEnv).some((authDir) => hasWebCredsSync(authDir));
 }

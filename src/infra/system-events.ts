@@ -10,8 +10,8 @@ import {
 import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
-  type DeliveryContext,
-} from "../utils/delivery-context.js";
+} from "../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
 export type SystemEvent = {
   text: string;
@@ -126,6 +126,58 @@ export function drainSystemEventEntries(sessionKey: string): SystemEvent[] {
   entry.lastContextKey = null;
   queues.delete(key);
   return out;
+}
+
+function areDeliveryContextsEqual(left?: DeliveryContext, right?: DeliveryContext): boolean {
+  if (!left && !right) {
+    return true;
+  }
+  if (!left || !right) {
+    return false;
+  }
+  return (
+    (left.channel ?? undefined) === (right.channel ?? undefined) &&
+    (left.to ?? undefined) === (right.to ?? undefined) &&
+    (left.threadId ?? undefined) === (right.threadId ?? undefined)
+  );
+}
+
+function areSystemEventsEqual(left: SystemEvent, right: SystemEvent): boolean {
+  return (
+    left.text === right.text &&
+    left.ts === right.ts &&
+    (left.contextKey ?? null) === (right.contextKey ?? null) &&
+    (left.trusted ?? true) === (right.trusted ?? true) &&
+    areDeliveryContextsEqual(left.deliveryContext, right.deliveryContext)
+  );
+}
+
+export function consumeSystemEventEntries(
+  sessionKey: string,
+  consumedEntries: readonly SystemEvent[],
+): SystemEvent[] {
+  const key = requireSessionKey(sessionKey);
+  const entry = getSessionQueue(key);
+  if (!entry || entry.queue.length === 0 || consumedEntries.length === 0) {
+    return [];
+  }
+  if (
+    consumedEntries.length > entry.queue.length ||
+    !consumedEntries.every((event, index) => areSystemEventsEqual(entry.queue[index], event))
+  ) {
+    return [];
+  }
+  const removed = entry.queue.splice(0, consumedEntries.length).map(cloneSystemEvent);
+  if (entry.queue.length === 0) {
+    entry.lastText = null;
+    entry.lastContextKey = null;
+    queues.delete(key);
+  } else {
+    const newest = entry.queue[entry.queue.length - 1];
+    entry.lastText = newest.text;
+    entry.lastContextKey = newest.contextKey ?? null;
+  }
+  return removed;
 }
 
 export function drainSystemEvents(sessionKey: string): string[] {

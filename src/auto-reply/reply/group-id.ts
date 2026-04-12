@@ -1,5 +1,6 @@
-import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
-import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import { getLoadedChannelPluginById } from "../../channels/plugins/registry-loaded.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import { normalizeAnyChannelId } from "../../channels/registry.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -19,10 +20,9 @@ export function extractExplicitGroupId(raw: string | undefined | null): string |
   }
   const firstPart = trimmed.split(":").find(Boolean);
   const channelId =
-    normalizeChannelId(firstPart ?? "") ?? normalizeOptionalLowercaseString(firstPart);
+    normalizeAnyChannelId(firstPart ?? "") ?? normalizeOptionalLowercaseString(firstPart);
   const messaging = channelId
-    ? (getLoadedChannelPlugin(channelId)?.messaging ??
-      getBundledChannelPlugin(channelId)?.messaging)
+    ? (getLoadedChannelPluginById(channelId) as ChannelPlugin | undefined)?.messaging
     : undefined;
   const parsed = messaging?.parseExplicitTarget?.({ raw: trimmed }) ?? null;
   if (parsed && parsed.chatType && parsed.chatType !== "direct") {

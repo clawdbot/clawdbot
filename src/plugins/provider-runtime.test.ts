@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../config/types.js";
+import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import {
   expectAugmentedCodexCatalog,
   expectCodexBuiltInSuppression,
@@ -12,7 +13,6 @@ import type {
   ProviderExternalAuthProfile,
   ProviderNormalizeToolSchemasContext,
   ProviderPlugin,
-  ProviderRuntimeModel,
   ProviderSanitizeReplayHistoryContext,
   ProviderValidateReplayTurnsContext,
 } from "./types.js";

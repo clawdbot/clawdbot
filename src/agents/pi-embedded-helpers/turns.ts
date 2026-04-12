@@ -15,24 +15,42 @@ function isToolCallBlock(block: AnthropicContentBlock): boolean {
   return block.type === "toolUse" || block.type === "toolCall" || block.type === "functionCall";
 }
 
+function isThinkingLikeBlock(block: unknown): boolean {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const type = (block as { type?: unknown }).type;
+  return type === "thinking" || type === "redacted_thinking";
+}
+
 function isAbortedAssistantTurn(message: AgentMessage): boolean {
   const stopReason = (message as { stopReason?: unknown }).stopReason;
   return stopReason === "aborted" || stopReason === "error";
 }
 
-function extractToolResultIdsFromRecord(record: Record<string, unknown>): string[] {
-  const ids = [
-    normalizeOptionalString(record.toolUseId),
-    normalizeOptionalString(record.toolCallId),
-    normalizeOptionalString(record.tool_use_id),
-    normalizeOptionalString(record.tool_call_id),
-    normalizeOptionalString(record.callId),
-    normalizeOptionalString(record.call_id),
-  ].filter((value): value is string => typeof value === "string");
-  return [...new Set(ids)];
+function extractToolResultMatchIds(record: Record<string, unknown>): Set<string> {
+  const ids = new Set<string>();
+  for (const value of [
+    record.toolUseId,
+    record.toolCallId,
+    record.tool_use_id,
+    record.tool_call_id,
+    record.callId,
+    record.call_id,
+  ]) {
+    const id = normalizeOptionalString(value);
+    if (id) {
+      ids.add(id);
+    }
+  }
+  return ids;
 }
 
-function collectMatchingToolResultIds(message: AgentMessage): Set<string> {
+function extractToolResultMatchName(record: Record<string, unknown>): string | null {
+  return normalizeOptionalString(record.toolName) ?? normalizeOptionalString(record.name) ?? null;
+}
+
+function collectAnyToolResultIds(message: AgentMessage): Set<string> {
   const ids = new Set<string>();
   const role = (message as { role?: unknown }).role;
   if (role === "toolResult") {
@@ -43,9 +61,8 @@ function collectMatchingToolResultIds(message: AgentMessage): Set<string> {
       ids.add(toolResultId);
     }
   } else if (role === "tool") {
-    for (const id of extractToolResultIdsFromRecord(
-      message as unknown as Record<string, unknown>,
-    )) {
+    const record = message as unknown as Record<string, unknown>;
+    for (const id of extractToolResultMatchIds(record)) {
       ids.add(id);
     }
   }
@@ -63,12 +80,71 @@ function collectMatchingToolResultIds(message: AgentMessage): Set<string> {
     if (record.type !== "toolResult" && record.type !== "tool") {
       continue;
     }
-    for (const id of extractToolResultIdsFromRecord(record)) {
+    for (const id of extractToolResultMatchIds(record)) {
       ids.add(id);
     }
   }
 
   return ids;
+}
+
+function collectTrustedToolResultMatches(message: AgentMessage): Map<string, Set<string>> {
+  const matches = new Map<string, Set<string>>();
+  const role = (message as { role?: unknown }).role;
+  const addMatch = (ids: Iterable<string>, toolName: string | null) => {
+    for (const id of ids) {
+      const bucket = matches.get(id) ?? new Set<string>();
+      if (toolName) {
+        bucket.add(toolName);
+      }
+      matches.set(id, bucket);
+    }
+  };
+
+  if (role === "toolResult") {
+    const record = message as unknown as Record<string, unknown>;
+    addMatch(
+      [
+        ...extractToolResultMatchIds(record),
+        ...(() => {
+          const canonicalId = extractToolResultId(
+            message as Extract<AgentMessage, { role: "toolResult" }>,
+          );
+          return canonicalId ? [canonicalId] : [];
+        })(),
+      ],
+      extractToolResultMatchName(record),
+    );
+  } else if (role === "tool") {
+    const record = message as unknown as Record<string, unknown>;
+    addMatch(extractToolResultMatchIds(record), extractToolResultMatchName(record));
+  }
+
+  return matches;
+}
+
+function collectFutureToolResultMatches(
+  messages: AgentMessage[],
+  startIndex: number,
+): Map<string, Set<string>> {
+  const matches = new Map<string, Set<string>>();
+  for (let index = startIndex + 1; index < messages.length; index += 1) {
+    const candidate = messages[index];
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    if ((candidate as { role?: unknown }).role === "assistant") {
+      break;
+    }
+    for (const [id, toolNames] of collectTrustedToolResultMatches(candidate)) {
+      const bucket = matches.get(id) ?? new Set<string>();
+      for (const toolName of toolNames) {
+        bucket.add(toolName);
+      }
+      matches.set(id, bucket);
+    }
+  }
+  return matches;
 }
 
 function collectFutureToolResultIds(messages: AgentMessage[], startIndex: number): Set<string> {
@@ -81,7 +157,7 @@ function collectFutureToolResultIds(messages: AgentMessage[], startIndex: number
     if ((candidate as { role?: unknown }).role === "assistant") {
       break;
     }
-    for (const id of collectMatchingToolResultIds(candidate)) {
+    for (const id of collectAnyToolResultIds(candidate)) {
       ids.add(id);
     }
   }
@@ -124,7 +200,38 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
       result.push(msg);
       continue;
     }
+    const hasThinking = originalContent.some((block) => isThinkingLikeBlock(block));
+    const validToolResultMatches = collectFutureToolResultMatches(messages, i);
     const validToolUseIds = collectFutureToolResultIds(messages, i);
+
+    if (hasThinking) {
+      const allToolCallsResolvable = originalContent.every((block) => {
+        if (!block || !isToolCallBlock(block)) {
+          return true;
+        }
+        const blockId = normalizeOptionalString(block.id);
+        const blockName = normalizeOptionalString(block.name);
+        if (!blockId || !blockName) {
+          return false;
+        }
+        const matchingToolNames = validToolResultMatches.get(blockId);
+        if (!matchingToolNames) {
+          return false;
+        }
+        return matchingToolNames.size === 0 || matchingToolNames.has(blockName);
+      });
+      if (allToolCallsResolvable) {
+        result.push(msg);
+      } else {
+        result.push({
+          ...assistantMsg,
+          content: isAbortedAssistantTurn(msg)
+            ? []
+            : ([{ type: "text", text: "[tool calls omitted]" }] as AnthropicContentBlock[]),
+        } as AgentMessage);
+      }
+      continue;
+    }
 
     const filteredContent = originalContent.filter((block) => {
       if (!block) {

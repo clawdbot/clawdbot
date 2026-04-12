@@ -44,6 +44,14 @@ type ChatRefreshHost = AppViewState & {
   updateComplete?: Promise<unknown>;
 };
 
+export function resolveAssistantAttachmentAuthToken(
+  state: Pick<AppViewState, "settings" | "password">,
+) {
+  return (
+    normalizeOptionalString(state.settings.token) ?? normalizeOptionalString(state.password) ?? null
+  );
+}
+
 function resolveSidebarChatSessionKey(state: AppViewState): string {
   const snapshot = state.hello?.snapshot as
     | { sessionDefaults?: SessionDefaultsSnapshot }

@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { MemoryCitationsMode } from "../../../config/types.memory.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../../context-engine/types.js";
 import type { NormalizedUsage } from "../../usage.js";
@@ -95,11 +96,11 @@ export function buildContextEnginePromptCacheInfo(params: {
 export function findCurrentAttemptAssistantMessage(params: {
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;
-}): AgentMessage | undefined {
+}): AssistantMessage | undefined {
   return params.messagesSnapshot
     .slice(Math.max(0, params.prePromptMessageCount))
     .toReversed()
-    .find((message) => message.role === "assistant");
+    .find((message): message is AssistantMessage => message.role === "assistant");
 }
 
 export async function runAttemptContextEngineBootstrap(params: {

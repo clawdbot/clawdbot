@@ -17,7 +17,7 @@ import {
   mergeBundlePathLists,
   normalizeBundlePathList,
 } from "./bundle-manifest.js";
-import type { PluginBundleFormat } from "./types.js";
+import type { PluginBundleFormat } from "./manifest-types.js";
 
 export type BundleMcpServerConfig = Record<string, unknown>;
 

@@ -5,8 +5,7 @@ import {
   resolveAgentMaxConcurrent,
   resolveSubagentMaxConcurrent,
 } from "./agent-limits.js";
-import { loadConfig } from "./config.js";
-import { withTempHome, writeOpenClawConfig } from "./test-helpers.js";
+import { applyAgentDefaults } from "./defaults.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 describe("agent concurrency defaults", () => {
@@ -44,14 +43,10 @@ describe("agent concurrency defaults", () => {
     expect(parsed.agents?.defaults?.subagents?.maxChildrenPerAgent).toBe(7);
   });
 
-  it("injects defaults on load", async () => {
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {});
+  it("injects missing agent defaults", () => {
+    const cfg = applyAgentDefaults({});
 
-      const cfg = loadConfig();
-
-      expect(cfg.agents?.defaults?.maxConcurrent).toBe(DEFAULT_AGENT_MAX_CONCURRENT);
-      expect(cfg.agents?.defaults?.subagents?.maxConcurrent).toBe(DEFAULT_SUBAGENT_MAX_CONCURRENT);
-    });
+    expect(cfg.agents?.defaults?.maxConcurrent).toBe(DEFAULT_AGENT_MAX_CONCURRENT);
+    expect(cfg.agents?.defaults?.subagents?.maxConcurrent).toBe(DEFAULT_SUBAGENT_MAX_CONCURRENT);
   });
 });

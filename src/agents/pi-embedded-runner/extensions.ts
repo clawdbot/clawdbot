@@ -1,6 +1,6 @@
 import type { ExtensionFactory, SessionManager } from "@mariozechner/pi-coding-agent";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { ProviderRuntimeModel } from "../../plugins/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { setCompactionSafeguardRuntime } from "../pi-hooks/compaction-safeguard-runtime.js";

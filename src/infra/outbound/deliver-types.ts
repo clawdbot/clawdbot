@@ -1,7 +1,7 @@
-import type { OutboundChannel } from "./targets.js";
+import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 
 export type OutboundDeliveryResult = {
-  channel: Exclude<OutboundChannel, "none">;
+  channel: Exclude<ChannelId, "none">;
   messageId: string;
   chatId?: string;
   channelId?: string;

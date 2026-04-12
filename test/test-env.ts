@@ -382,6 +382,10 @@ function stageLiveTestState(params: {
   }
 
   copyDirIfExists(path.join(realStateDir, "credentials"), path.join(tempStateDir, "credentials"));
+  copyDirIfExists(
+    path.join(realStateDir, "external-plugins"),
+    path.join(tempStateDir, "external-plugins"),
+  );
   copyLiveAuthProfiles(realStateDir, tempStateDir);
 
   for (const authDir of LIVE_EXTERNAL_AUTH_DIRS) {

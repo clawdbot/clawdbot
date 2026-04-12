@@ -1,3 +1,9 @@
+import { randomUUID } from "node:crypto";
+import {
+  captureWsEvent,
+  createDebugProxyWebSocketAgent,
+  resolveDebugProxySettings,
+} from "openclaw/plugin-sdk/proxy-capture";
 import type {
   RealtimeTranscriptionProviderConfig,
   RealtimeTranscriptionProviderPlugin,
@@ -64,6 +70,7 @@ class OpenAIRealtimeTranscriptionSession implements RealtimeTranscriptionSession
   private closed = false;
   private reconnectAttempts = 0;
   private pendingTranscript = "";
+  private readonly flowId = randomUUID();
 
   constructor(private readonly config: OpenAIRealtimeTranscriptionSessionConfig) {}
 
@@ -98,11 +105,15 @@ class OpenAIRealtimeTranscriptionSession implements RealtimeTranscriptionSession
 
   private async doConnect(): Promise<void> {
     await new Promise<void>((resolve, reject) => {
-      this.ws = new WebSocket("wss://api.openai.com/v1/realtime?intent=transcription", {
+      const url = "wss://api.openai.com/v1/realtime?intent=transcription";
+      const debugProxy = resolveDebugProxySettings();
+      const proxyAgent = createDebugProxyWebSocketAgent(debugProxy);
+      this.ws = new WebSocket(url, {
         headers: {
           Authorization: `Bearer ${this.config.apiKey}`,
           "OpenAI-Beta": "realtime=v1",
         },
+        ...(proxyAgent ? { agent: proxyAgent } : {}),
       });
 
       const connectTimeout = setTimeout(() => {
@@ -113,6 +124,16 @@ class OpenAIRealtimeTranscriptionSession implements RealtimeTranscriptionSession
         clearTimeout(connectTimeout);
         this.connected = true;
         this.reconnectAttempts = 0;
+        captureWsEvent({
+          url,
+          direction: "local",
+          kind: "ws-open",
+          flowId: this.flowId,
+          meta: {
+            provider: "openai",
+            capability: "realtime-transcription",
+          },
+        });
         this.sendEvent({
           type: "transcription_session.update",
           session: {
@@ -132,6 +153,17 @@ class OpenAIRealtimeTranscriptionSession implements RealtimeTranscriptionSession
       });
 
       this.ws.on("message", (data: Buffer) => {
+        captureWsEvent({
+          url,
+          direction: "inbound",
+          kind: "ws-frame",
+          flowId: this.flowId,
+          payload: data,
+          meta: {
+            provider: "openai",
+            capability: "realtime-transcription",
+          },
+        });
         try {
           this.handleEvent(JSON.parse(data.toString()) as RealtimeEvent);
         } catch (error) {
@@ -140,6 +172,17 @@ class OpenAIRealtimeTranscriptionSession implements RealtimeTranscriptionSession
       });
 
       this.ws.on("error", (error) => {
+        captureWsEvent({
+          url,
+          direction: "local",
+          kind: "error",
+          flowId: this.flowId,
+          errorText: error instanceof Error ? error.message : String(error),
+          meta: {
+            provider: "openai",
+            capability: "realtime-transcription",
+          },
+        });
         if (!this.connected) {
           clearTimeout(connectTimeout);
           reject(error);
@@ -148,7 +191,22 @@ class OpenAIRealtimeTranscriptionSession implements RealtimeTranscriptionSession
         this.config.onError?.(error instanceof Error ? error : new Error(String(error)));
       });
 
-      this.ws.on("close", () => {
+      this.ws.on("close", (code, reasonBuffer) => {
+        captureWsEvent({
+          url,
+          direction: "local",
+          kind: "ws-close",
+          flowId: this.flowId,
+          closeCode: typeof code === "number" ? code : undefined,
+          meta: {
+            provider: "openai",
+            capability: "realtime-transcription",
+            reason:
+              Buffer.isBuffer(reasonBuffer) && reasonBuffer.length > 0
+                ? reasonBuffer.toString("utf8")
+                : undefined,
+          },
+        });
         this.connected = false;
         if (this.closed) {
           return;
@@ -215,7 +273,19 @@ class OpenAIRealtimeTranscriptionSession implements RealtimeTranscriptionSession
 
   private sendEvent(event: unknown): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(event));
+      const payload = JSON.stringify(event);
+      captureWsEvent({
+        url: "wss://api.openai.com/v1/realtime?intent=transcription",
+        direction: "outbound",
+        kind: "ws-frame",
+        flowId: this.flowId,
+        payload,
+        meta: {
+          provider: "openai",
+          capability: "realtime-transcription",
+        },
+      });
+      this.ws.send(payload);
     }
   }
 }

@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "../config/config.js";
 import { loadSessionStore, updateSessionStore } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {

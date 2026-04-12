@@ -1,7 +1,24 @@
+import type {
+  RunEmbeddedAgentFn,
+  RunEmbeddedPiAgentFn,
+} from "../../agents/pi-embedded-runtime.types.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type { LogLevel } from "../../logging/levels.js";
+import type { MediaUnderstandingRuntime } from "../../media-understanding/runtime-types.js";
+import type {
+  ListSpeechVoices,
+  TextToSpeech,
+  TextToSpeechTelephony,
+} from "../../plugin-sdk/tts-runtime.types.js";
+import type { PluginRuntimeTaskFlows, PluginRuntimeTaskRuns } from "./runtime-tasks.types.js";
 
 export type { HeartbeatRunResult };
+
+type RuntimeWriteConfigOptions = {
+  envSnapshotForRestore?: Record<string, string | undefined>;
+  expectedConfigPath?: string;
+  unsetPaths?: string[][];
+};
 
 /** Structured logger surface injected into runtime-backed plugin helpers. */
 export type RuntimeLogger = {
@@ -23,8 +40,11 @@ export type RunHeartbeatOnceOptions = {
 export type PluginRuntimeCore = {
   version: string;
   config: {
-    loadConfig: typeof import("../../config/config.js").loadConfig;
-    writeConfigFile: typeof import("../../config/config.js").writeConfigFile;
+    loadConfig: () => import("../../config/types.openclaw.js").OpenClawConfig;
+    writeConfigFile: (
+      cfg: import("../../config/types.openclaw.js").OpenClawConfig,
+      options?: RuntimeWriteConfigOptions,
+    ) => Promise<void>;
   };
   agent: {
     defaults: {
@@ -34,16 +54,21 @@ export type PluginRuntimeCore = {
     resolveAgentDir: typeof import("../../agents/agent-scope.js").resolveAgentDir;
     resolveAgentWorkspaceDir: typeof import("../../agents/agent-scope.js").resolveAgentWorkspaceDir;
     resolveAgentIdentity: typeof import("../../agents/identity.js").resolveAgentIdentity;
-    resolveThinkingDefault: typeof import("../../agents/model-selection.js").resolveThinkingDefault;
-    runEmbeddedAgent: typeof import("../../agents/embedded-agent.js").runEmbeddedAgent;
-    runEmbeddedPiAgent: typeof import("../../agents/pi-embedded.js").runEmbeddedPiAgent;
+    resolveThinkingDefault: (params: {
+      cfg: import("../../config/types.openclaw.js").OpenClawConfig;
+      provider: string;
+      model: string;
+      catalog?: import("../../agents/model-catalog.types.js").ModelCatalogEntry[];
+    }) => import("../../auto-reply/thinking.js").ThinkLevel;
+    runEmbeddedAgent: RunEmbeddedAgentFn;
+    runEmbeddedPiAgent: RunEmbeddedPiAgentFn;
     resolveAgentTimeoutMs: typeof import("../../agents/timeout.js").resolveAgentTimeoutMs;
     ensureAgentWorkspace: typeof import("../../agents/workspace.js").ensureAgentWorkspace;
     session: {
-      resolveStorePath: typeof import("../../config/sessions.js").resolveStorePath;
-      loadSessionStore: typeof import("../../config/sessions.js").loadSessionStore;
-      saveSessionStore: typeof import("../../config/sessions.js").saveSessionStore;
-      resolveSessionFilePath: typeof import("../../config/sessions.js").resolveSessionFilePath;
+      resolveStorePath: typeof import("../../config/sessions/paths.js").resolveStorePath;
+      loadSessionStore: typeof import("../../config/sessions/store-load.js").loadSessionStore;
+      saveSessionStore: import("../../config/sessions/runtime-types.js").SaveSessionStore;
+      resolveSessionFilePath: typeof import("../../config/sessions/paths.js").resolveSessionFilePath;
     };
   };
   system: {
@@ -68,35 +93,51 @@ export type PluginRuntimeCore = {
     resizeToJpeg: typeof import("../../media/image-ops.js").resizeToJpeg;
   };
   tts: {
-    textToSpeech: typeof import("../../tts/tts.js").textToSpeech;
-    textToSpeechTelephony: typeof import("../../tts/tts.js").textToSpeechTelephony;
-    listVoices: typeof import("../../tts/tts.js").listSpeechVoices;
+    textToSpeech: TextToSpeech;
+    textToSpeechTelephony: TextToSpeechTelephony;
+    listVoices: ListSpeechVoices;
   };
   mediaUnderstanding: {
-    runFile: typeof import("../../media-understanding/runtime.js").runMediaUnderstandingFile;
-    describeImageFile: typeof import("../../media-understanding/runtime.js").describeImageFile;
-    describeImageFileWithModel: typeof import("../../media-understanding/runtime.js").describeImageFileWithModel;
-    describeVideoFile: typeof import("../../media-understanding/runtime.js").describeVideoFile;
-    transcribeAudioFile: typeof import("../../media-understanding/runtime.js").transcribeAudioFile;
+    runFile: MediaUnderstandingRuntime["runMediaUnderstandingFile"];
+    describeImageFile: MediaUnderstandingRuntime["describeImageFile"];
+    describeImageFileWithModel: MediaUnderstandingRuntime["describeImageFileWithModel"];
+    describeVideoFile: MediaUnderstandingRuntime["describeVideoFile"];
+    transcribeAudioFile: MediaUnderstandingRuntime["transcribeAudioFile"];
   };
   imageGeneration: {
-    generate: typeof import("../../image-generation/runtime.js").generateImage;
-    listProviders: typeof import("../../image-generation/runtime.js").listRuntimeImageGenerationProviders;
+    generate: (
+      params: import("../../image-generation/runtime-types.js").GenerateImageParams,
+    ) => Promise<import("../../image-generation/runtime-types.js").GenerateImageRuntimeResult>;
+    listProviders: (
+      params?: import("../../image-generation/runtime-types.js").ListRuntimeImageGenerationProvidersParams,
+    ) => import("../../image-generation/runtime-types.js").RuntimeImageGenerationProvider[];
   };
   videoGeneration: {
-    generate: typeof import("../../video-generation/runtime.js").generateVideo;
-    listProviders: typeof import("../../video-generation/runtime.js").listRuntimeVideoGenerationProviders;
+    generate: (
+      params: import("../../video-generation/runtime-types.js").GenerateVideoParams,
+    ) => Promise<import("../../video-generation/runtime-types.js").GenerateVideoRuntimeResult>;
+    listProviders: (
+      params?: import("../../video-generation/runtime-types.js").ListRuntimeVideoGenerationProvidersParams,
+    ) => import("../../video-generation/runtime-types.js").RuntimeVideoGenerationProvider[];
   };
   musicGeneration: {
-    generate: typeof import("../../music-generation/runtime.js").generateMusic;
-    listProviders: typeof import("../../music-generation/runtime.js").listRuntimeMusicGenerationProviders;
+    generate: (
+      params: import("../../music-generation/runtime-types.js").GenerateMusicParams,
+    ) => Promise<import("../../music-generation/runtime-types.js").GenerateMusicRuntimeResult>;
+    listProviders: (
+      params?: import("../../music-generation/runtime-types.js").ListRuntimeMusicGenerationProvidersParams,
+    ) => import("../../music-generation/runtime-types.js").RuntimeMusicGenerationProvider[];
   };
   webSearch: {
-    listProviders: typeof import("../../web-search/runtime.js").listWebSearchProviders;
-    search: typeof import("../../web-search/runtime.js").runWebSearch;
+    listProviders: (
+      params?: import("../../web-search/runtime-types.js").ListWebSearchProvidersParams,
+    ) => import("../../web-search/runtime-types.js").RuntimeWebSearchProviderEntry[];
+    search: (
+      params: import("../../web-search/runtime-types.js").RunWebSearchParams,
+    ) => Promise<import("../../web-search/runtime-types.js").RunWebSearchResult>;
   };
   stt: {
-    transcribeAudioFile: typeof import("../../media-understanding/transcribe-audio.js").transcribeAudioFile;
+    transcribeAudioFile: MediaUnderstandingRuntime["transcribeAudioFile"];
   };
   events: {
     onAgentEvent: typeof import("../../infra/agent-events.js").onAgentEvent;
@@ -113,29 +154,29 @@ export type PluginRuntimeCore = {
     resolveStateDir: typeof import("../../config/paths.js").resolveStateDir;
   };
   tasks: {
-    runs: import("./runtime-tasks.js").PluginRuntimeTaskRuns;
-    flows: import("./runtime-tasks.js").PluginRuntimeTaskFlows;
+    runs: PluginRuntimeTaskRuns;
+    flows: PluginRuntimeTaskFlows;
     /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
-    flow: import("./runtime-taskflow.js").PluginRuntimeTaskFlow;
+    flow: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
   };
   /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
-  taskFlow: import("./runtime-taskflow.js").PluginRuntimeTaskFlow;
+  taskFlow: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
   modelAuth: {
     /** Resolve auth for a model. Only provider/model and optional cfg are used. */
     getApiKeyForModel: (params: {
       model: import("@mariozechner/pi-ai").Model<import("@mariozechner/pi-ai").Api>;
-      cfg?: import("../../config/config.js").OpenClawConfig;
-    }) => Promise<import("../../agents/model-auth.js").ResolvedProviderAuth>;
+      cfg?: import("../../config/types.openclaw.js").OpenClawConfig;
+    }) => Promise<import("../../agents/model-auth-runtime-shared.js").ResolvedProviderAuth>;
     /** Resolve request-ready auth for a model, including provider runtime exchanges. */
     getRuntimeAuthForModel: (params: {
       model: import("@mariozechner/pi-ai").Model<import("@mariozechner/pi-ai").Api>;
-      cfg?: import("../../config/config.js").OpenClawConfig;
+      cfg?: import("../../config/types.openclaw.js").OpenClawConfig;
       workspaceDir?: string;
     }) => Promise<import("./model-auth-types.js").ResolvedProviderRuntimeAuth>;
     /** Resolve auth for a provider by name. Only provider and optional cfg are used. */
     resolveApiKeyForProvider: (params: {
       provider: string;
-      cfg?: import("../../config/config.js").OpenClawConfig;
-    }) => Promise<import("../../agents/model-auth.js").ResolvedProviderAuth>;
+      cfg?: import("../../config/types.openclaw.js").OpenClawConfig;
+    }) => Promise<import("../../agents/model-auth-runtime-shared.js").ResolvedProviderAuth>;
   };
 };

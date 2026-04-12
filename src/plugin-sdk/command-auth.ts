@@ -3,7 +3,7 @@ import {
   buildCommandsMessagePaginated as buildCommandsMessagePaginatedCompat,
   buildHelpMessage as buildHelpMessageCompat,
 } from "../auto-reply/command-status-builders.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDmGroupAccessWithLists } from "../security/dm-policy-shared.js";
 export { buildCommandsPaginationKeyboard } from "./telegram-command-ui.js";
 export {

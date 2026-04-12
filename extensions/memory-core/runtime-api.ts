@@ -15,12 +15,17 @@ export {
 } from "openclaw/plugin-sdk/memory-core-host-status";
 export { checkQmdBinaryAvailability } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 export { hasConfiguredMemorySecretInput } from "openclaw/plugin-sdk/memory-core-host-secret";
+export { auditDreamingArtifacts, repairDreamingArtifacts } from "./src/dreaming-repair.js";
 export {
   auditShortTermPromotionArtifacts,
   removeGroundedShortTermCandidates,
   repairShortTermPromotionArtifacts,
 } from "./src/short-term-promotion.js";
 export type { BuiltinMemoryEmbeddingProviderDoctorMetadata } from "./src/memory/provider-adapters.js";
+export type {
+  DreamingArtifactsAuditSummary,
+  RepairDreamingArtifactsResult,
+} from "./src/dreaming-repair.js";
 export type {
   RepairShortTermPromotionArtifactsResult,
   ShortTermAuditSummary,

@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/testing";
-import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
@@ -30,9 +30,11 @@ export function installMaybePersistResolvedTelegramTargetTests(params?: {
   describe("maybePersistResolvedTelegramTarget", () => {
     let maybePersistResolvedTelegramTarget: typeof import("./target-writeback.js").maybePersistResolvedTelegramTarget;
 
-    beforeEach(async () => {
-      vi.resetModules();
+    beforeAll(async () => {
       ({ maybePersistResolvedTelegramTarget } = await import("./target-writeback.js"));
+    });
+
+    beforeEach(() => {
       readConfigFileSnapshotForWrite.mockReset();
       writeConfigFile.mockReset();
       loadCronStore.mockReset();

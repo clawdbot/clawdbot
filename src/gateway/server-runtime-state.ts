@@ -2,7 +2,7 @@ import type { Server as HttpServer } from "node:http";
 import { WebSocketServer } from "ws";
 import { CANVAS_HOST_PATH } from "../canvas-host/a2ui.js";
 import { type CanvasHostHandler, createCanvasHostHandler } from "../canvas-host/server.js";
-import type { CliDeps } from "../cli/deps.js";
+import type { CliDeps } from "../cli/deps.types.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import {
@@ -19,11 +19,8 @@ import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import type { HooksConfigResolved } from "./hooks.js";
 import { isLoopbackHost, resolveGatewayListenHosts } from "./net.js";
-import {
-  createGatewayBroadcaster,
-  type GatewayBroadcastFn,
-  type GatewayBroadcastToConnIdsFn,
-} from "./server-broadcast.js";
+import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
+import { createGatewayBroadcaster } from "./server-broadcast.js";
 import {
   type ChatRunEntry,
   createChatRunState,

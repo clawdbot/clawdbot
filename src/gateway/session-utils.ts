@@ -24,7 +24,7 @@ import {
   listSubagentRunsForController,
   resolveSubagentSessionStatus,
 } from "../agents/subagent-registry-read.js";
-import { type OpenClawConfig, loadConfig } from "../config/config.js";
+import { loadConfig } from "../config/config.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -38,6 +38,7 @@ import {
   type SessionStoreTarget,
   type SessionScope,
 } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import {
   normalizeAgentId,
@@ -58,7 +59,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { normalizeSessionDeliveryFields } from "../utils/delivery-context.js";
+import { normalizeSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
 import {
   canonicalizeSessionKeyForAgent,
@@ -513,7 +514,7 @@ export function pruneLegacyStoreKeys(params: {
 }
 
 export function migrateAndPruneGatewaySessionStoreKey(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   key: string;
   store: Record<string, SessionEntry>;
 }) {

@@ -9,7 +9,7 @@ import type {
   ChannelCapabilitiesDiagnostics,
   ChannelCapabilitiesDisplayLine,
   ChannelPlugin,
-} from "../../channels/plugins/types.js";
+} from "../../channels/plugins/types.public.js";
 import {
   readConfigFileSnapshot,
   replaceConfigFile,

@@ -96,9 +96,6 @@ function mockGraphMediaFetch(options: {
         return guardedFetchResult(params, response);
       }
     }
-    if (url.endsWith("/attachments")) {
-      return guardedFetchResult(params, mockFetchResponse({ value: [] }));
-    }
     return guardedFetchResult(params, mockFetchResponse({}, 404));
   });
 }
@@ -265,5 +262,155 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
     const requestInit = vi.mocked(safeFetchWithPolicy).mock.calls[0]?.[0]?.requestInit;
     const headers = requestInit?.headers as Headers;
     expect(headers.get("User-Agent")).toMatch(/^teams\.ts\[apps\]\/.+ OpenClaw\/.+$/);
+  });
+});
+
+describe("downloadMSTeamsGraphMedia attachment sourcing and error logging", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("does NOT call the nonexistent ${messageUrl}/attachments sub-resource", async () => {
+    // The Graph v1.0 API does not expose a `/attachments` sub-resource on
+    // channel or chat messages. Issue #58617 documented that the old code
+    // path called this endpoint and recorded a 404 in diagnostics. After
+    // this fix, the helper must source attachments from the main message
+    // resource's inline `attachments` array instead.
+    const fetchCalls: string[] = [];
+
+    mockGraphMediaFetch({
+      messageId: "msg-no-sub",
+      messageResponse: {
+        body: { content: "hi" },
+        attachments: [],
+      },
+      fetchCalls,
+    });
+
+    await downloadMSTeamsGraphMedia({
+      messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-no-sub",
+      tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
+      maxBytes: 10 * 1024 * 1024,
+    });
+
+    const calledSubResource = fetchCalls.some((u) =>
+      u.endsWith("/messages/msg-no-sub/attachments"),
+    );
+    expect(calledSubResource).toBe(false);
+  });
+
+  it("sources reference attachments from the message body's attachments array", async () => {
+    // Before the fix, the helper fetched `/attachments` and used that list.
+    // After the fix, it must use `msgData.attachments` from the main fetch.
+    mockGraphMediaFetch({
+      messageId: "msg-inline",
+      messageResponse: {
+        body: {},
+        attachments: [
+          {
+            contentType: "reference",
+            contentUrl: "https://tenant.sharepoint.com/inline.pdf",
+            name: "inline.pdf",
+          },
+        ],
+      },
+    });
+    vi.mocked(safeFetchWithPolicy).mockResolvedValue(new Response(null, { status: 200 }));
+    vi.mocked(downloadAndStoreMSTeamsRemoteMedia).mockResolvedValue({
+      path: "/tmp/inline.pdf",
+      contentType: "application/pdf",
+      placeholder: "[file]",
+    });
+
+    const result = await downloadMSTeamsGraphMedia({
+      messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-inline",
+      tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
+      maxBytes: 10 * 1024 * 1024,
+    });
+
+    expect(result.media).toHaveLength(1);
+    expect(result.media[0]?.path).toBe("/tmp/inline.pdf");
+    // Regression guard: attachmentCount now reflects real inline attachments,
+    // not the imaginary `/attachments` sub-resource count.
+    expect(result.attachmentCount).toBe(1);
+  });
+
+  it("logs a debug event when the message fetch throws instead of swallowing it", async () => {
+    // Regression test for #51749: empty `catch {}` blocks used to hide the
+    // real error, producing misleading `graph media fetch empty` diagnostics
+    // without surfacing the underlying cause.
+    vi.mocked(fetchWithSsrFGuard).mockImplementation(async (params: GuardedFetchParams) => {
+      if (params.url.endsWith("/messages/msg-err")) {
+        throw new Error("network boom");
+      }
+      // hostedContents and any other paths succeed so the error branch under
+      // test is the only one that fires.
+      return guardedFetchResult(params, mockFetchResponse({ value: [] }));
+    });
+    const log = { debug: vi.fn() };
+
+    const result = await downloadMSTeamsGraphMedia({
+      messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-err",
+      tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
+      maxBytes: 10 * 1024 * 1024,
+      log,
+    });
+
+    expect(result.media).toHaveLength(0);
+    expect(log.debug).toHaveBeenCalledWith(
+      "graph media message fetch failed",
+      expect.objectContaining({ error: "network boom" }),
+    );
+  });
+
+  it("logs a debug event when the message fetch returns non-ok", async () => {
+    // If the message endpoint returns 403/404, we want that recorded so
+    // operators can distinguish auth issues from empty result sets.
+    vi.mocked(fetchWithSsrFGuard).mockImplementation(async (params: GuardedFetchParams) => {
+      const url = params.url;
+      if (url.endsWith("/hostedContents")) {
+        return guardedFetchResult(params, mockFetchResponse({ value: [] }));
+      }
+      return guardedFetchResult(params, mockFetchResponse({ error: "forbidden" }, 403));
+    });
+    const log = { debug: vi.fn() };
+
+    const result = await downloadMSTeamsGraphMedia({
+      messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-403",
+      tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
+      maxBytes: 10 * 1024 * 1024,
+      log,
+    });
+
+    expect(result.media).toHaveLength(0);
+    expect(result.attachmentStatus).toBe(403);
+    expect(log.debug).toHaveBeenCalledWith(
+      "graph media message fetch not ok",
+      expect.objectContaining({ status: 403 }),
+    );
+  });
+
+  it("logs a debug event when token acquisition fails", async () => {
+    vi.mocked(fetchWithSsrFGuard).mockImplementation(async (params: GuardedFetchParams) =>
+      guardedFetchResult(params, mockFetchResponse({})),
+    );
+    const log = { debug: vi.fn() };
+
+    const result = await downloadMSTeamsGraphMedia({
+      messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-token",
+      tokenProvider: {
+        getAccessToken: vi.fn(async () => {
+          throw new Error("token expired");
+        }),
+      },
+      maxBytes: 10 * 1024 * 1024,
+      log,
+    });
+
+    expect(result.tokenError).toBe(true);
+    expect(log.debug).toHaveBeenCalledWith(
+      "graph media token acquisition failed",
+      expect.objectContaining({ error: "token expired" }),
+    );
   });
 });

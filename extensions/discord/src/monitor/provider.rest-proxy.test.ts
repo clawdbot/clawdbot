@@ -30,6 +30,7 @@ describe("resolveDiscordRestFetch", () => {
   });
 
   beforeEach(() => {
+    vi.unstubAllEnvs();
     undiciFetchMock.mockReset();
     proxyAgentSpy.mockReset();
   });
@@ -99,5 +100,22 @@ describe("resolveDiscordRestFetch", () => {
 
     expect(proxyAgentSpy).toHaveBeenCalledWith("http://[::1]:8080");
     expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("uses debug proxy env when no discord proxy URL is configured", async () => {
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "1");
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_URL", "http://127.0.0.1:7777");
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    } as const;
+    undiciFetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
+
+    const fetcher = resolveDiscordRestFetch(undefined, runtime);
+    await fetcher("https://discord.com/api/v10/oauth2/applications/@me");
+
+    expect(proxyAgentSpy).toHaveBeenCalledWith("http://127.0.0.1:7777");
+    expect(runtime.log).toHaveBeenCalledWith("discord: rest proxy enabled");
   });
 });

@@ -1,9 +1,7 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-
 export type ToolContentBlock = Record<string, unknown>;
 
 export function normalizeToolContentType(value: unknown): string {
-  return normalizeLowercaseStringOrEmpty(value);
+  return typeof value === "string" ? value.toLowerCase() : "";
 }
 
 export function isToolCallContentType(value: unknown): boolean {

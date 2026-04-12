@@ -1,9 +1,9 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import type { OpenClawConfig } from "../config/config.js";
 import {
   canonicalizeMainSessionAlias,
   resolveMainSessionKey,
 } from "../config/sessions/main-session.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   normalizeAgentId,
   normalizeMainKey,

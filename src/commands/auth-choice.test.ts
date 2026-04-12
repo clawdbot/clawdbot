@@ -37,13 +37,40 @@ vi.mock("../plugins/provider-openai-codex-oauth.js", () => ({
 
 const resolvePluginProviders = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
 const runProviderModelSelectedHook = vi.hoisted(() => vi.fn(async () => {}));
-vi.mock("../plugins/provider-auth-choice.runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("../plugins/provider-auth-choice.runtime.js")>(
-    "../plugins/provider-auth-choice.runtime.js",
-  );
+vi.mock("../plugins/provider-auth-choice.runtime.js", () => {
+  const normalizeProviderId = (value: string) => value.trim().toLowerCase();
   return {
-    ...actual,
     resolvePluginProviders,
+    resolveProviderPluginChoice: (params: { providers: ProviderPlugin[]; choice: string }) => {
+      const choice = params.choice.trim();
+      if (!choice) {
+        return null;
+      }
+      if (choice.startsWith("provider-plugin:")) {
+        const payload = choice.slice("provider-plugin:".length);
+        const separator = payload.indexOf(":");
+        const providerId = separator >= 0 ? payload.slice(0, separator) : payload;
+        const methodId = separator >= 0 ? payload.slice(separator + 1) : undefined;
+        const provider = params.providers.find(
+          (entry) => normalizeProviderId(entry.id) === normalizeProviderId(providerId),
+        );
+        const method = methodId
+          ? provider?.auth.find((entry) => entry.id === methodId)
+          : provider?.auth[0];
+        return provider && method ? { provider, method } : null;
+      }
+      for (const provider of params.providers) {
+        for (const method of provider.auth) {
+          if (method.wizard?.choiceId === choice) {
+            return { provider, method, wizard: method.wizard };
+          }
+        }
+        if (normalizeProviderId(provider.id) === normalizeProviderId(choice) && provider.auth[0]) {
+          return { provider, method: provider.auth[0] };
+        }
+      }
+      return null;
+    },
     runProviderModelSelectedHook,
   };
 });

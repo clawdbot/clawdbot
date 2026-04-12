@@ -79,12 +79,85 @@ describe("CodexAppServerEventProjector", () => {
     });
 
     expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
-    expect(onPartialReply).toHaveBeenLastCalledWith({ text: "hello" });
+    expect(onPartialReply).not.toHaveBeenCalled();
     expect(result.assistantTexts).toEqual(["hello"]);
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["user", "assistant"]);
     expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "hello" }]);
     expect(result.attemptUsage).toMatchObject({ input: 5, output: 7, cacheRead: 2, total: 12 });
     expect(result.replayMetadata.replaySafe).toBe(true);
+  });
+
+  it("keeps intermediate agentMessage items out of the final visible reply", async () => {
+    const onAssistantMessageStart = vi.fn();
+    const onPartialReply = vi.fn();
+    const params = {
+      ...createParams(),
+      onAssistantMessageStart,
+      onPartialReply,
+    };
+    const projector = new CodexAppServerEventProjector(params, "thread-1", "turn-1");
+
+    await projector.handleNotification({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "msg-commentary",
+        delta: "checking thread context; then post a tight progress reply here.",
+      },
+    });
+    await projector.handleNotification({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "msg-final",
+        delta: "release fixes first. please drop affected PRs, failing checks, and blockers here.",
+      },
+    });
+    await projector.handleNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          items: [
+            {
+              type: "agentMessage",
+              id: "msg-commentary",
+              text: "checking thread context; then post a tight progress reply here.",
+            },
+            {
+              type: "agentMessage",
+              id: "msg-final",
+              text: "release fixes first. please drop affected PRs, failing checks, and blockers here.",
+            },
+          ],
+        },
+      },
+    });
+
+    const result = projector.buildResult({
+      didSendViaMessagingTool: false,
+      messagingToolSentTexts: [],
+      messagingToolSentMediaUrls: [],
+      messagingToolSentTargets: [],
+    });
+
+    expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
+    expect(onPartialReply).not.toHaveBeenCalled();
+    expect(result.assistantTexts).toEqual([
+      "release fixes first. please drop affected PRs, failing checks, and blockers here.",
+    ]);
+    expect(result.lastAssistant?.content).toEqual([
+      {
+        type: "text",
+        text: "release fixes first. please drop affected PRs, failing checks, and blockers here.",
+      },
+    ]);
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("checking thread context");
   });
 
   it("ignores notifications for other turns", async () => {

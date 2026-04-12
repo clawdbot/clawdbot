@@ -12,40 +12,13 @@ import {
   DEEPSEEK_CHAT_MODEL,
   DEFAULT_CHAT_MODEL_CATALOG,
 } from "../chat-model.test-helpers.ts";
-import { SKIP_DELETE_CONFIRM_KEY } from "../chat/grouped-render.ts";
+import { resetAssistantAttachmentAvailabilityCacheForTest } from "../chat/grouped-render.ts";
+import { normalizeMessage } from "../chat/message-normalizer.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ModelCatalogEntry } from "../types.ts";
 import type { SessionsListResult } from "../types.ts";
 import { renderChat, type ChatProps } from "./chat.ts";
 import { renderOverview, type OverviewProps } from "./overview.ts";
-
-function readDeleteConfirmPreference(): string | null {
-  try {
-    return getSafeLocalStorage()?.getItem(SKIP_DELETE_CONFIRM_KEY) ?? null;
-  } catch {
-    return null;
-  }
-}
-
-function clearDeleteConfirmPreference(): void {
-  try {
-    getSafeLocalStorage()?.removeItem(SKIP_DELETE_CONFIRM_KEY);
-  } catch {
-    /* noop */
-  }
-}
-
-function restoreDeleteConfirmPreference(value: string | null): void {
-  try {
-    if (value === null) {
-      getSafeLocalStorage()?.removeItem(SKIP_DELETE_CONFIRM_KEY);
-      return;
-    }
-    getSafeLocalStorage()?.setItem(SKIP_DELETE_CONFIRM_KEY, value);
-  } catch {
-    /* noop */
-  }
-}
 
 function createSessions(): SessionsListResult {
   return {
@@ -61,23 +34,17 @@ function createChatHeaderState(
   overrides: {
     model?: string | null;
     modelProvider?: string | null;
-    thinkingLevel?: string | null;
     models?: ModelCatalogEntry[];
     omitSessionFromList?: boolean;
   } = {},
 ): { state: AppViewState; request: ReturnType<typeof vi.fn> } {
   let currentModel = overrides.model ?? null;
   let currentModelProvider = overrides.modelProvider ?? (currentModel ? "openai" : null);
-  let currentThinkingLevel = overrides.thinkingLevel ?? null;
   const omitSessionFromList = overrides.omitSessionFromList ?? false;
   const catalog = overrides.models ?? createModelCatalog(...DEFAULT_CHAT_MODEL_CATALOG);
   const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
     if (method === "sessions.patch") {
       const nextModel = (params.model as string | null | undefined) ?? null;
-      const nextThinkingLevel = params.thinkingLevel as string | null | undefined;
-      if ("thinkingLevel" in params) {
-        currentThinkingLevel = nextThinkingLevel ?? null;
-      }
       if (!nextModel) {
         currentModel = null;
         currentModelProvider = null;
@@ -103,15 +70,11 @@ function createChatHeaderState(
       return { messages: [], thinkingLevel: null };
     }
     if (method === "sessions.list") {
-      const result = createSessionsListResult({
+      return createSessionsListResult({
         model: currentModel,
         modelProvider: currentModelProvider,
         omitSessionFromList,
       });
-      if (result.sessions[0]) {
-        result.sessions[0].thinkingLevel = currentThinkingLevel ?? undefined;
-      }
-      return result;
     }
     if (method === "models.list") {
       return { models: catalog };
@@ -129,17 +92,11 @@ function createChatHeaderState(
     sessionKey: "main",
     connected: true,
     sessionsHideCron: true,
-    sessionsResult: (() => {
-      const result = createSessionsListResult({
-        model: currentModel,
-        modelProvider: currentModelProvider,
-        omitSessionFromList,
-      });
-      if (result.sessions[0]) {
-        result.sessions[0].thinkingLevel = currentThinkingLevel ?? undefined;
-      }
-      return result;
-    })(),
+    sessionsResult: createSessionsListResult({
+      model: currentModel,
+      modelProvider: currentModelProvider,
+      omitSessionFromList,
+    }),
     chatModelOverrides: {},
     chatModelCatalog: catalog,
     chatModelsLoading: false,
@@ -225,6 +182,7 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     focusMode: false,
     assistantName: "OpenClaw",
     assistantAvatar: null,
+    localMediaPreviewRoots: [],
     onRefresh: () => undefined,
     onToggleFocusMode: () => undefined,
     onDraftChange: () => undefined,
@@ -241,6 +199,7 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
 
 function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewProps {
   return {
+    warnQueryToken: false,
     connected: false,
     hello: null,
     settings: {
@@ -268,7 +227,6 @@ function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewPr
     cronEnabled: null,
     cronNext: null,
     lastChannelsRefresh: null,
-    warnQueryToken: false,
     usageResult: null,
     sessionsResult: null,
     skillsReport: null,
@@ -636,27 +594,6 @@ describe("chat view", () => {
     expect(indicator?.textContent).toContain("Compacting context...");
   });
 
-  it("renders retry-pending compaction indicator as a badge", () => {
-    const container = document.createElement("div");
-    render(
-      renderChat(
-        createProps({
-          compactionStatus: {
-            phase: "retrying",
-            runId: "run-1",
-            startedAt: Date.now(),
-            completedAt: null,
-          },
-        }),
-      ),
-      container,
-    );
-
-    const indicator = container.querySelector(".compaction-indicator--active");
-    expect(indicator).not.toBeNull();
-    expect(indicator?.textContent).toContain("Retrying after compaction...");
-  });
-
   it("renders completion indicator shortly after compaction", () => {
     const container = document.createElement("div");
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
@@ -708,9 +645,9 @@ describe("chat view", () => {
       renderChat(
         createProps({
           fallbackStatus: {
-            selected: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+            selected: "fireworks/minimax-m2p5",
             active: "deepinfra/moonshotai/Kimi-K2.5",
-            attempts: ["fireworks/accounts/fireworks/routers/kimi-k2p5-turbo: rate limit"],
+            attempts: ["fireworks/minimax-m2p5: rate limit"],
             occurredAt: 900,
           },
         }),
@@ -731,7 +668,7 @@ describe("chat view", () => {
       renderChat(
         createProps({
           fallbackStatus: {
-            selected: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+            selected: "fireworks/minimax-m2p5",
             active: "deepinfra/moonshotai/Kimi-K2.5",
             attempts: [],
             occurredAt: 0,
@@ -753,8 +690,8 @@ describe("chat view", () => {
         createProps({
           fallbackStatus: {
             phase: "cleared",
-            selected: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-            active: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+            selected: "fireworks/minimax-m2p5",
+            active: "fireworks/minimax-m2p5",
             previous: "deepinfra/moonshotai/Kimi-K2.5",
             attempts: [],
             occurredAt: 900,
@@ -766,9 +703,7 @@ describe("chat view", () => {
 
     const indicator = container.querySelector(".compaction-indicator--fallback-cleared");
     expect(indicator).not.toBeNull();
-    expect(indicator?.textContent).toContain(
-      "Fallback cleared: fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-    );
+    expect(indicator?.textContent).toContain("Fallback cleared: fireworks/minimax-m2p5");
     nowSpy.mockRestore();
   });
 
@@ -793,7 +728,7 @@ describe("chat view", () => {
     expect(container.textContent).not.toContain("New session");
   });
 
-  it("shows a stop button when aborting is available without an active stream", () => {
+  it("keeps the stop button visible for abortable non-streaming runs", () => {
     const container = document.createElement("div");
     render(
       renderChat(
@@ -808,9 +743,7 @@ describe("chat view", () => {
     );
 
     const stopButton = container.querySelector<HTMLButtonElement>('button[title="Stop"]');
-    const sendButton = container.querySelector<HTMLButtonElement>('button[title="Send"]');
     expect(stopButton).not.toBeNull();
-    expect(sendButton).toBeNull();
     expect(container.textContent).not.toContain("New session");
   });
 
@@ -895,122 +828,71 @@ describe("chat view", () => {
   });
 
   it("opens delete confirm on the left for user messages", () => {
-    const originalPreference = readDeleteConfirmPreference();
-    clearDeleteConfirmPreference();
-    const container = document.createElement("div");
     try {
-      render(
-        renderChat(
-          createProps({
-            messages: [
-              {
-                role: "user",
-                content: "hello from user",
-                timestamp: 1000,
-              },
-            ],
-          }),
-        ),
-        container,
-      );
-
-      const deleteButton = container.querySelector<HTMLButtonElement>(
-        ".chat-group.user .chat-group-delete",
-      );
-      expect(deleteButton).not.toBeNull();
-      deleteButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-
-      const confirm = container.querySelector<HTMLElement>(".chat-group.user .chat-delete-confirm");
-      expect(confirm).not.toBeNull();
-      expect(confirm?.classList.contains("chat-delete-confirm--left")).toBe(true);
-    } finally {
-      restoreDeleteConfirmPreference(originalPreference);
+      getSafeLocalStorage()?.removeItem("openclaw:skipDeleteConfirm");
+    } catch {
+      /* noop */
     }
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "user",
+              content: "hello from user",
+              timestamp: 1000,
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const deleteButton = container.querySelector<HTMLButtonElement>(
+      ".chat-group.user .chat-group-delete",
+    );
+    expect(deleteButton).not.toBeNull();
+    deleteButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    const confirm = container.querySelector<HTMLElement>(".chat-group.user .chat-delete-confirm");
+    expect(confirm).not.toBeNull();
+    expect(confirm?.classList.contains("chat-delete-confirm--left")).toBe(true);
   });
 
   it("opens delete confirm on the right for assistant messages", () => {
-    const originalPreference = readDeleteConfirmPreference();
-    clearDeleteConfirmPreference();
-    const container = document.createElement("div");
     try {
-      render(
-        renderChat(
-          createProps({
-            messages: [
-              {
-                role: "assistant",
-                content: "hello from assistant",
-                timestamp: 1000,
-              },
-            ],
-          }),
-        ),
-        container,
-      );
-
-      const deleteButton = container.querySelector<HTMLButtonElement>(
-        ".chat-group.assistant .chat-group-delete",
-      );
-      expect(deleteButton).not.toBeNull();
-      deleteButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-
-      const confirm = container.querySelector<HTMLElement>(
-        ".chat-group.assistant .chat-delete-confirm",
-      );
-      expect(confirm).not.toBeNull();
-      expect(confirm?.classList.contains("chat-delete-confirm--right")).toBe(true);
-    } finally {
-      restoreDeleteConfirmPreference(originalPreference);
+      getSafeLocalStorage()?.removeItem("openclaw:skipDeleteConfirm");
+    } catch {
+      /* noop */
     }
-  });
-
-  it("renders delete confirm with the expected safe structure", () => {
-    const originalPreference = readDeleteConfirmPreference();
-    clearDeleteConfirmPreference();
     const container = document.createElement("div");
-    try {
-      render(
-        renderChat(
-          createProps({
-            messages: [
-              {
-                role: "assistant",
-                content: "hello from assistant",
-                timestamp: 1000,
-              },
-            ],
-          }),
-        ),
-        container,
-      );
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "assistant",
+              content: "hello from assistant",
+              timestamp: 1000,
+            },
+          ],
+        }),
+      ),
+      container,
+    );
 
-      const deleteButton = container.querySelector<HTMLButtonElement>(
-        ".chat-group.assistant .chat-group-delete",
-      );
-      expect(deleteButton).not.toBeNull();
-      deleteButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const deleteButton = container.querySelector<HTMLButtonElement>(
+      ".chat-group.assistant .chat-group-delete",
+    );
+    expect(deleteButton).not.toBeNull();
+    deleteButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-      const confirm = container.querySelector<HTMLElement>(
-        ".chat-group.assistant .chat-delete-confirm",
-      );
-      expect(confirm?.querySelector(".chat-delete-confirm__text")?.textContent).toBe(
-        "Delete this message?",
-      );
-      expect(confirm?.querySelector(".chat-delete-confirm__remember span")?.textContent).toBe(
-        "Don't ask again",
-      );
-      expect(confirm?.querySelector<HTMLButtonElement>(".chat-delete-confirm__cancel")?.type).toBe(
-        "button",
-      );
-      expect(confirm?.querySelector<HTMLButtonElement>(".chat-delete-confirm__yes")?.type).toBe(
-        "button",
-      );
-      expect(confirm?.querySelector<HTMLInputElement>(".chat-delete-confirm__check")?.type).toBe(
-        "checkbox",
-      );
-    } finally {
-      restoreDeleteConfirmPreference(originalPreference);
-    }
+    const confirm = container.querySelector<HTMLElement>(
+      ".chat-group.assistant .chat-delete-confirm",
+    );
+    expect(confirm).not.toBeNull();
+    expect(confirm?.classList.contains("chat-delete-confirm--right")).toBe(true);
   });
 
   it("patches the current session model from the chat header picker", async () => {
@@ -1042,72 +924,6 @@ describe("chat view", () => {
     expect(state.sessionsResult?.sessions[0]?.model).toBe("gpt-5-mini");
     expect(state.sessionsResult?.sessions[0]?.modelProvider).toBe("openai");
     vi.unstubAllGlobals();
-  });
-
-  it("shows the default thinking level in the chat header picker", async () => {
-    const { state } = createChatHeaderState({
-      model: "gpt-5",
-      modelProvider: "openai",
-    });
-    const container = document.createElement("div");
-    render(renderChatSessionSelect(state), container);
-
-    const thinkingSelect = container.querySelector<HTMLSelectElement>(
-      'select[data-chat-thinking-select="true"]',
-    );
-    expect(thinkingSelect).not.toBeNull();
-    expect(thinkingSelect?.value).toBe("");
-    expect(thinkingSelect?.options[0]?.textContent?.trim()).toBe("Default (off)");
-  });
-
-  it("patches the current session thinking level from the chat header picker", async () => {
-    const { state, request } = createChatHeaderState({
-      model: "gpt-5",
-      modelProvider: "openai",
-    });
-    const container = document.createElement("div");
-    render(renderChatSessionSelect(state), container);
-
-    const thinkingSelect = container.querySelector<HTMLSelectElement>(
-      'select[data-chat-thinking-select="true"]',
-    );
-    expect(thinkingSelect).not.toBeNull();
-
-    thinkingSelect!.value = "off";
-    thinkingSelect!.dispatchEvent(new Event("change", { bubbles: true }));
-    await flushTasks();
-
-    expect(request).toHaveBeenCalledWith("sessions.patch", {
-      key: "main",
-      thinkingLevel: "off",
-    });
-    expect(state.sessionsResult?.sessions[0]?.thinkingLevel).toBe("off");
-  });
-
-  it("clears the session thinking override back to the default thinking level", async () => {
-    const { state, request } = createChatHeaderState({
-      model: "gpt-5",
-      modelProvider: "openai",
-      thinkingLevel: "high",
-    });
-    const container = document.createElement("div");
-    render(renderChatSessionSelect(state), container);
-
-    const thinkingSelect = container.querySelector<HTMLSelectElement>(
-      'select[data-chat-thinking-select="true"]',
-    );
-    expect(thinkingSelect).not.toBeNull();
-    expect(thinkingSelect?.value).toBe("high");
-
-    thinkingSelect!.value = "";
-    thinkingSelect!.dispatchEvent(new Event("change", { bubbles: true }));
-    await flushTasks();
-
-    expect(request).toHaveBeenCalledWith("sessions.patch", {
-      key: "main",
-      thinkingLevel: null,
-    });
-    expect(state.sessionsResult?.sessions[0]?.thinkingLevel).toBeUndefined();
   });
 
   it("reloads effective tools after a chat-header model switch for the active tools panel", async () => {
@@ -1486,5 +1302,1420 @@ describe("chat view", () => {
     expect(labels.filter((label) => label === "Deep Chat (alpha) / main")).toHaveLength(1);
     expect(labels).toContain("Deep Chat (alpha) / main · named-main");
     expect(labels).toContain("Coding (beta) / main");
+  });
+
+  it("keeps tool cards collapsed by default and expands them inline on demand", async () => {
+    const container = document.createElement("div");
+    const props = createProps({
+      messages: [
+        {
+          id: "assistant-1",
+          role: "assistant",
+          toolCallId: "call-1",
+          content: [
+            {
+              type: "toolcall",
+              id: "call-1",
+              name: "browser.open",
+              arguments: { url: "https://example.com" },
+            },
+            {
+              type: "toolresult",
+              id: "call-1",
+              name: "browser.open",
+              text: "Opened page",
+            },
+          ],
+          timestamp: Date.now(),
+        },
+      ],
+    });
+
+    const rerender = () => {
+      render(renderChat({ ...props, onRequestUpdate: rerender }), container);
+    };
+    rerender();
+
+    expect(container.textContent).not.toContain("Input");
+    expect(container.textContent).not.toContain("Output");
+
+    container
+      .querySelector<HTMLElement>(".chat-tool-msg-summary")
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flushTasks();
+
+    expect(container.textContent).toContain("Tool input");
+    expect(container.textContent).toContain("Tool output");
+    expect(container.textContent).toContain("https://example.com");
+    expect(container.textContent).toContain("Opened page");
+
+    container
+      .querySelector<HTMLElement>(".chat-tool-msg-summary")
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flushTasks();
+
+    expect(container.textContent).not.toContain("Tool input");
+    expect(container.textContent).not.toContain("Opened page");
+  });
+
+  it("auto-expands new tool cards inline when the preference is enabled", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          autoExpandToolCalls: true,
+          messages: [
+            {
+              id: "assistant-2",
+              role: "assistant",
+              toolCallId: "call-2",
+              content: [
+                {
+                  type: "toolcall",
+                  id: "call-2",
+                  name: "browser.open",
+                  arguments: { url: "https://example.com" },
+                },
+                {
+                  type: "toolresult",
+                  id: "call-2",
+                  name: "browser.open",
+                  text: "Opened page",
+                },
+              ],
+              timestamp: Date.now(),
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("Tool input");
+    expect(container.textContent).toContain("Tool output");
+    expect(container.textContent).toContain("https://example.com");
+  });
+
+  it("expands already-visible tool cards when auto-expand is turned on", () => {
+    const container = document.createElement("div");
+    const baseProps = createProps({
+      messages: [
+        {
+          id: "assistant-3",
+          role: "assistant",
+          toolCallId: "call-3",
+          content: [
+            {
+              type: "toolcall",
+              id: "call-3",
+              name: "browser.open",
+              arguments: { url: "https://example.com" },
+            },
+            {
+              type: "toolresult",
+              id: "call-3",
+              name: "browser.open",
+              text: "Opened page",
+            },
+          ],
+          timestamp: Date.now(),
+        },
+      ],
+    });
+
+    render(renderChat(baseProps), container);
+    expect(container.textContent).not.toContain("Input");
+
+    render(renderChat({ ...baseProps, autoExpandToolCalls: true }), container);
+    expect(container.textContent).toContain("Tool input");
+    expect(container.textContent).toContain("Tool output");
+  });
+
+  it("lets an auto-expanded tool call collapse again from the summary row", async () => {
+    const container = document.createElement("div");
+    const props = createProps({
+      autoExpandToolCalls: true,
+      messages: [
+        {
+          id: "assistant-3b",
+          role: "assistant",
+          toolCallId: "call-3b",
+          content: [
+            {
+              type: "toolcall",
+              id: "call-3b",
+              name: "browser.open",
+              arguments: { url: "https://example.com" },
+            },
+            {
+              type: "toolresult",
+              id: "call-3b",
+              name: "browser.open",
+              text: "Opened page",
+            },
+          ],
+          timestamp: Date.now(),
+        },
+      ],
+    });
+
+    const rerender = () => {
+      render(renderChat({ ...props, onRequestUpdate: rerender }), container);
+    };
+    rerender();
+
+    expect(container.textContent).toContain("Tool input");
+    expect(container.textContent).toContain("Opened page");
+
+    container
+      .querySelector<HTMLElement>(".chat-tool-msg-summary")
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flushTasks();
+
+    expect(container.textContent).not.toContain("Tool input");
+    expect(container.textContent).not.toContain("Opened page");
+  });
+
+  it("keeps expanded input-only tool calls from rendering a redundant output block", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          autoExpandToolCalls: true,
+          messages: [
+            {
+              id: "assistant-4",
+              role: "assistant",
+              toolCallId: "call-4",
+              content: [
+                {
+                  type: "toolcall",
+                  id: "call-4",
+                  name: "sessions_spawn",
+                  arguments: { mode: "session", thread: true },
+                },
+              ],
+              timestamp: Date.now(),
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("Tool input");
+    expect(container.textContent).toContain('"thread": true');
+    expect(container.textContent).not.toContain("Tool output");
+    expect(container.textContent).not.toContain("No output");
+  });
+
+  it("routes standalone tool-call rows through the same top-level disclosure as tool output", async () => {
+    const container = document.createElement("div");
+    const props = createProps({
+      messages: [
+        {
+          id: "assistant-4b",
+          role: "assistant",
+          toolCallId: "call-4b",
+          content: [
+            {
+              type: "toolcall",
+              id: "call-4b",
+              name: "sessions_spawn",
+              arguments: { mode: "session", thread: true },
+            },
+          ],
+          timestamp: Date.now(),
+        },
+      ],
+    });
+
+    const rerender = () => {
+      render(renderChat({ ...props, onRequestUpdate: rerender }), container);
+    };
+    rerender();
+
+    const summary = container.querySelector<HTMLElement>(".chat-tool-msg-summary");
+    expect(summary?.textContent).toContain("Tool call");
+    expect(container.textContent).not.toContain('"thread": true');
+
+    summary?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flushTasks();
+
+    expect(container.textContent).toContain("Tool input");
+    expect(container.textContent).toContain('"thread": true');
+
+    summary?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flushTasks();
+
+    expect(container.textContent).not.toContain("Tool input");
+    expect(container.textContent).not.toContain('"thread": true');
+  });
+
+  it("auto-expand opens separate tool output rows and their json content", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          autoExpandToolCalls: true,
+          messages: [
+            {
+              id: "assistant-5",
+              role: "assistant",
+              toolCallId: "call-5",
+              content: [
+                {
+                  type: "toolcall",
+                  id: "call-5",
+                  name: "sessions_spawn",
+                  arguments: { mode: "session", thread: true },
+                },
+              ],
+              timestamp: Date.now(),
+            },
+            {
+              id: "tool-5",
+              role: "tool",
+              toolCallId: "call-5",
+              toolName: "sessions_spawn",
+              content: JSON.stringify(
+                {
+                  status: "error",
+                  error: "Session mode is unavailable for this target.",
+                  childSessionKey: "agent:test:subagent:abc123",
+                },
+                null,
+                2,
+              ),
+              timestamp: Date.now() + 1,
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("Tool input");
+    expect(container.textContent).toContain('"thread": true');
+    expect(container.textContent).toContain("Tool output");
+    expect(container.textContent).toContain('"status": "error"');
+    expect(container.textContent).toContain('"childSessionKey": "agent:test:subagent:abc123"');
+  });
+
+  it("does not render tool-row canvas previews", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          autoExpandToolCalls: true,
+          messages: [
+            {
+              id: "tool-anki-1",
+              role: "tool",
+              toolCallId: "call-anki-1",
+              toolName: "canvas_render",
+              content: JSON.stringify({
+                kind: "canvas",
+                source: {
+                  type: "html",
+                  content: "<div>Front card</div>",
+                },
+                presentation: {
+                  target: "tool_card",
+                  title: "Status view",
+                },
+              }),
+              timestamp: Date.now(),
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-tool-card__preview-frame")).toBeNull();
+    expect(container.textContent).toContain("Status view");
+    expect(container.textContent).toContain("Tool output");
+  });
+
+  it("renders [embed] shortcodes inside the assistant bubble", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          showToolCalls: false,
+          messages: [
+            {
+              id: "assistant-anki-inline",
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: 'Still the same current card.\n[embed ref="cv_shortcode" title="Shortcode view" /]',
+                },
+              ],
+              timestamp: Date.now(),
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-tool-card__preview-frame")).not.toBeNull();
+    expect(container.textContent).toContain("Still the same current card.");
+    expect(container.textContent).toContain("Shortcode view");
+  });
+
+  it("renders canvas-only assistant bubbles", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          showToolCalls: false,
+          messages: [
+            {
+              id: "assistant-canvas-only",
+              role: "assistant",
+              content: [{ type: "text", text: '[embed ref="cv_tictactoe" title="Tic-Tac-Toe" /]' }],
+              timestamp: Date.now(),
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-bubble")).not.toBeNull();
+    expect(container.querySelector(".chat-tool-card__preview-frame")).not.toBeNull();
+    expect(container.textContent).toContain("Tic-Tac-Toe");
+  });
+
+  it("renders assistant_message canvas results inside the assistant bubble when tool rows are hidden", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          showToolCalls: false,
+          messages: [
+            {
+              id: "assistant-canvas-inline",
+              role: "assistant",
+              content: [{ type: "text", text: "Inline canvas result." }],
+              timestamp: Date.now(),
+            },
+          ],
+          toolMessages: [
+            {
+              id: "tool-artifact-inline",
+              role: "tool",
+              toolCallId: "call-artifact-inline",
+              toolName: "canvas_render",
+              content: JSON.stringify({
+                kind: "canvas",
+                view: {
+                  backend: "canvas",
+                  id: "cv_inline",
+                  url: "/__openclaw__/canvas/documents/cv_inline/index.html",
+                  title: "Inline demo",
+                  preferred_height: 360,
+                },
+                presentation: {
+                  target: "assistant_message",
+                },
+              }),
+              timestamp: Date.now() + 1,
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const iframe = container.querySelector<HTMLIFrameElement>(".chat-tool-card__preview-frame");
+    expect(iframe).not.toBeNull();
+    expect(iframe?.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(iframe?.getAttribute("src")).toBe("/__openclaw__/canvas/documents/cv_inline/index.html");
+    expect(container.textContent).toContain("Inline canvas result.");
+    expect(container.textContent).toContain("Inline demo");
+    expect(container.textContent).toContain("Raw details");
+  });
+
+  it("uses trusted embed sandbox mode when configured", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          showToolCalls: false,
+          embedSandboxMode: "trusted",
+          messages: [
+            {
+              id: "assistant-canvas-isolated",
+              role: "assistant",
+              content: [{ type: "text", text: "Inline canvas result." }],
+              timestamp: Date.now(),
+            },
+          ],
+          toolMessages: [
+            {
+              id: "tool-artifact-inline-isolated",
+              role: "tool",
+              toolCallId: "call-artifact-inline-isolated",
+              toolName: "canvas_render",
+              content: JSON.stringify({
+                kind: "canvas",
+                view: {
+                  backend: "canvas",
+                  id: "cv_inline_isolated",
+                  url: "/__openclaw__/canvas/documents/cv_inline_isolated/index.html",
+                  title: "Inline demo",
+                  preferred_height: 360,
+                },
+                presentation: {
+                  target: "assistant_message",
+                },
+              }),
+              timestamp: Date.now() + 1,
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const iframe = container.querySelector<HTMLIFrameElement>(".chat-tool-card__preview-frame");
+    expect(iframe?.getAttribute("sandbox")).toBe("allow-scripts allow-same-origin");
+  });
+
+  it("renders assistant_message canvas results in the assistant bubble even when tool rows are visible", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          showToolCalls: true,
+          autoExpandToolCalls: true,
+          messages: [
+            {
+              id: "assistant-canvas-inline-visible",
+              role: "assistant",
+              content: [{ type: "text", text: "Inline canvas result." }],
+              timestamp: Date.now(),
+            },
+          ],
+          toolMessages: [
+            {
+              id: "tool-artifact-inline-visible",
+              role: "tool",
+              toolCallId: "call-artifact-inline-visible",
+              toolName: "canvas_render",
+              content: JSON.stringify({
+                kind: "canvas",
+                view: {
+                  backend: "canvas",
+                  id: "cv_inline_visible",
+                  url: "/__openclaw__/canvas/documents/cv_inline_visible/index.html",
+                  title: "Inline demo",
+                  preferred_height: 360,
+                },
+                presentation: {
+                  target: "assistant_message",
+                },
+              }),
+              timestamp: Date.now() + 1,
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const assistantBubble = container.querySelector(".chat-group.assistant .chat-bubble");
+    const allPreviews = container.querySelectorAll(".chat-tool-card__preview-frame");
+    expect(allPreviews).toHaveLength(1);
+    expect(assistantBubble?.querySelector(".chat-tool-card__preview-frame")).not.toBeNull();
+    expect(container.textContent).toContain("Tool output");
+    expect(container.textContent).toContain("canvas_render");
+    expect(container.textContent).toContain("Inline canvas result.");
+    expect(container.textContent).toContain("Inline demo");
+  });
+
+  it("keeps lifted canvas previews attached to the nearest assistant turn", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          showToolCalls: true,
+          messages: [
+            {
+              id: "assistant-with-canvas",
+              role: "assistant",
+              content: [{ type: "text", text: "First reply." }],
+              timestamp: 1_000,
+            },
+            {
+              id: "assistant-without-canvas",
+              role: "assistant",
+              content: [{ type: "text", text: "Later unrelated reply." }],
+              timestamp: 2_000,
+            },
+          ],
+          toolMessages: [
+            {
+              id: "tool-canvas-for-first-reply",
+              role: "tool",
+              toolCallId: "call-canvas-old",
+              toolName: "canvas_render",
+              content: JSON.stringify({
+                kind: "canvas",
+                view: {
+                  backend: "canvas",
+                  id: "cv_nearest_turn",
+                  url: "/__openclaw__/canvas/documents/cv_nearest_turn/index.html",
+                  title: "Nearest turn demo",
+                  preferred_height: 320,
+                },
+                presentation: {
+                  target: "assistant_message",
+                },
+              }),
+              timestamp: 1_001,
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const assistantBubbles = Array.from(
+      container.querySelectorAll<HTMLElement>(".chat-group.assistant .chat-bubble"),
+    );
+    expect(assistantBubbles).toHaveLength(2);
+    expect(assistantBubbles[0]?.querySelector(".chat-tool-card__preview-frame")).not.toBeNull();
+    expect(assistantBubbles[1]?.querySelector(".chat-tool-card__preview-frame")).toBeNull();
+    expect(assistantBubbles[1]?.textContent).toContain("Later unrelated reply.");
+  });
+
+  it("does not auto-render generic view handles from non-canvas payloads", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          showToolCalls: true,
+          messages: [
+            {
+              id: "assistant-generic-inline",
+              role: "assistant",
+              content: [{ type: "text", text: "Rendered the item inline." }],
+              timestamp: Date.now(),
+            },
+          ],
+          toolMessages: [
+            {
+              id: "tool-generic-inline",
+              role: "tool",
+              toolCallId: "call-generic-inline",
+              toolName: "plugin_card_details",
+              content: JSON.stringify({
+                selected_item: {
+                  summary: {
+                    label: "Alpha",
+                    meaning: "Generic example",
+                  },
+                  view: {
+                    backend: "canvas",
+                    id: "cv_generic_inline",
+                    url: "/__openclaw__/canvas/documents/cv_generic_inline/index.html",
+                    title: "Inline generic preview",
+                    preferred_height: 420,
+                  },
+                },
+              }),
+              timestamp: Date.now() + 1,
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const assistantBubble = container.querySelector(".chat-group.assistant .chat-bubble");
+    const allPreviews = container.querySelectorAll(".chat-tool-card__preview-frame");
+    expect(allPreviews).toHaveLength(0);
+    expect(assistantBubble?.querySelector(".chat-tool-card__preview-frame")).toBeNull();
+    expect(container.textContent).toContain("Tool output");
+    expect(container.textContent).toContain("plugin_card_details");
+    expect(container.textContent).toContain("Rendered the item inline.");
+    expect(container.textContent).not.toContain("Inline generic preview");
+  });
+
+  it("renders assistant MEDIA attachments, voice-note badge, and reply pill", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          showToolCalls: false,
+          messages: [
+            {
+              id: "assistant-media-inline",
+              role: "assistant",
+              content:
+                "[[reply_to_current]]Here is the image.\nMEDIA:https://example.com/photo.png\nMEDIA:https://example.com/voice.ogg\n[[audio_as_voice]]",
+              timestamp: Date.now(),
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-reply-pill")?.textContent).toContain(
+      "Replying to current message",
+    );
+    expect(container.querySelector(".chat-message-image")).not.toBeNull();
+    expect(container.querySelector("audio")).not.toBeNull();
+    expect(container.querySelector(".chat-assistant-attachment-badge")?.textContent).toContain(
+      "Voice note",
+    );
+    expect(container.textContent).toContain("Here is the image.");
+    expect(container.textContent).not.toContain("[[reply_to_current]]");
+    expect(container.textContent).not.toContain("[[audio_as_voice]]");
+    expect(container.textContent).not.toContain("MEDIA:https://example.com/photo.png");
+  });
+
+  it("renders verified local assistant attachments through the Control UI media route", async () => {
+    resetAssistantAttachmentAvailabilityCacheForTest();
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("meta=1")) {
+        return {
+          ok: true,
+          json: async () => ({ available: true }),
+        };
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.createElement("div");
+    const template = () =>
+      renderChat(
+        createProps({
+          showToolCalls: false,
+          basePath: "/openclaw",
+          assistantAttachmentAuthToken: "session-token",
+          localMediaPreviewRoots: ["/tmp/openclaw"],
+          onRequestUpdate: () => render(template(), container),
+          messages: [
+            {
+              id: "assistant-local-media-inline",
+              role: "assistant",
+              content:
+                "Local image\nMEDIA:/tmp/openclaw/test image.png\nMEDIA:/tmp/openclaw/test-doc.pdf",
+              timestamp: Date.now(),
+            },
+          ],
+        }),
+      );
+
+    render(template(), container);
+    expect(container.textContent).toContain("Checking...");
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png&token=session-token&meta=1",
+      expect.objectContaining({ credentials: "same-origin", method: "GET" }),
+    );
+
+    const image = container.querySelector<HTMLImageElement>(".chat-message-image");
+    const docLink = container.querySelector<HTMLAnchorElement>(
+      ".chat-assistant-attachment-card__link",
+    );
+    expect(image?.getAttribute("src")).toBe(
+      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png&token=session-token",
+    );
+    expect(docLink?.getAttribute("href")).toBe(
+      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest-doc.pdf&token=session-token",
+    );
+    expect(container.textContent).not.toContain("test image.png");
+    vi.unstubAllGlobals();
+  });
+
+  it("rechecks local assistant attachment availability when the auth token changes", async () => {
+    resetAssistantAttachmentAvailabilityCacheForTest();
+    const fetchMock = vi.fn(async (url: string) => {
+      if (!url.includes("meta=1")) {
+        throw new Error(`Unexpected fetch: ${url}`);
+      }
+      return {
+        ok: true,
+        json: async () => ({ available: url.includes("token=fresh-token") }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.createElement("div");
+
+    const renderWithToken = (token: string | null) =>
+      render(
+        renderChat(
+          createProps({
+            showToolCalls: false,
+            basePath: "/openclaw",
+            assistantAttachmentAuthToken: token,
+            localMediaPreviewRoots: ["/tmp/openclaw"],
+            onRequestUpdate: () => renderWithToken(token),
+            messages: [
+              {
+                id: "assistant-local-media-auth-refresh",
+                role: "assistant",
+                content: "Local image\nMEDIA:/tmp/openclaw/test image.png",
+                timestamp: Date.now(),
+              },
+            ],
+          }),
+        ),
+        container,
+      );
+
+    renderWithToken(null);
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(container.textContent).toContain("Unavailable");
+
+    renderWithToken("fresh-token");
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png&meta=1",
+      expect.objectContaining({ credentials: "same-origin", method: "GET" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png&token=fresh-token&meta=1",
+      expect.objectContaining({ credentials: "same-origin", method: "GET" }),
+    );
+    expect(container.querySelector(".chat-message-image")).not.toBeNull();
+    expect(container.textContent).not.toContain("Unavailable");
+    vi.unstubAllGlobals();
+  });
+
+  it("preserves same-origin assistant attachments without local preview rewriting", () => {
+    resetAssistantAttachmentAvailabilityCacheForTest();
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          showToolCalls: false,
+          basePath: "/openclaw",
+          localMediaPreviewRoots: ["/tmp/openclaw"],
+          messages: [
+            {
+              id: "assistant-same-origin-media-inline",
+              role: "assistant",
+              content:
+                "Inline\nMEDIA:/media/inbound/test-image.png\nMEDIA:/__openclaw__/media/test-doc.pdf",
+              timestamp: Date.now(),
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const image = container.querySelector<HTMLImageElement>(".chat-message-image");
+    const docLink = container.querySelector<HTMLAnchorElement>(
+      ".chat-assistant-attachment-card__link",
+    );
+    expect(image?.getAttribute("src")).toBe("/media/inbound/test-image.png");
+    expect(docLink?.getAttribute("href")).toBe("/__openclaw__/media/test-doc.pdf");
+    expect(container.textContent).not.toContain("Unavailable");
+  });
+
+  it("renders blocked local assistant files as unavailable with a reason", () => {
+    resetAssistantAttachmentAvailabilityCacheForTest();
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          showToolCalls: false,
+          basePath: "/openclaw",
+          localMediaPreviewRoots: ["/tmp/openclaw"],
+          messages: [
+            {
+              id: "assistant-blocked-local-media",
+              role: "assistant",
+              content: "Blocked\nMEDIA:/Users/test/Documents/private.pdf\nDone",
+              timestamp: Date.now(),
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-assistant-attachment-card__link")).toBeNull();
+    expect(container.textContent).toContain("private.pdf");
+    expect(container.textContent).toContain("Unavailable");
+    expect(container.textContent).toContain("Outside allowed folders");
+    expect(container.textContent).toContain("Blocked");
+    expect(container.textContent).toContain("Done");
+  });
+
+  it("allows Windows file URLs inside allowed preview roots", async () => {
+    resetAssistantAttachmentAvailabilityCacheForTest();
+    const fetchMock = vi.fn(async (url: string) => {
+      if (!url.includes("meta=1")) {
+        throw new Error(`Unexpected fetch: ${url}`);
+      }
+      return {
+        ok: true,
+        json: async () => ({ available: true }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          showToolCalls: false,
+          basePath: "/openclaw",
+          localMediaPreviewRoots: ["C:\\tmp\\openclaw"],
+          onRequestUpdate: () => undefined,
+          messages: [
+            {
+              id: "assistant-windows-file-url",
+              role: "assistant",
+              content: "Windows image\nMEDIA:file:///C:/tmp/openclaw/test%20image.png",
+              timestamp: Date.now(),
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/openclaw/__openclaw__/assistant-media?source=%2FC%3A%2Ftmp%2Fopenclaw%2Ftest%2520image.png&meta=1",
+      expect.objectContaining({ credentials: "same-origin", method: "GET" }),
+    );
+    expect(container.textContent).not.toContain("Outside allowed folders");
+    vi.unstubAllGlobals();
+  });
+
+  it("allows Windows local assistant attachments when path casing differs", async () => {
+    resetAssistantAttachmentAvailabilityCacheForTest();
+    const fetchMock = vi.fn(async (url: string) => {
+      if (!url.includes("meta=1")) {
+        throw new Error(`Unexpected fetch: ${url}`);
+      }
+      return {
+        ok: true,
+        json: async () => ({ available: true }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          showToolCalls: false,
+          basePath: "/openclaw",
+          localMediaPreviewRoots: ["c:\\users\\test\\pictures"],
+          onRequestUpdate: () => undefined,
+          messages: [
+            {
+              id: "assistant-windows-path-case-differs",
+              role: "assistant",
+              content: "Windows image\nMEDIA:C:\\Users\\Test\\Pictures\\test image.png",
+              timestamp: Date.now(),
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/openclaw/__openclaw__/assistant-media?source=C%3A%5CUsers%5CTest%5CPictures%5Ctest+image.png&meta=1",
+      expect.objectContaining({ credentials: "same-origin", method: "GET" }),
+    );
+    expect(container.textContent).not.toContain("Outside allowed folders");
+    vi.unstubAllGlobals();
+  });
+
+  it("revalidates cached unavailable local assistant attachments after retry window", async () => {
+    resetAssistantAttachmentAvailabilityCacheForTest();
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn<(url: string) => Promise<{ ok: true; json: () => Promise<{ available: boolean }> }>>()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ available: false }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ available: true }),
+      });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.createElement("div");
+
+    const renderMessage = () =>
+      render(
+        renderChat(
+          createProps({
+            showToolCalls: false,
+            basePath: "/openclaw",
+            localMediaPreviewRoots: ["/tmp/openclaw"],
+            onRequestUpdate: renderMessage,
+            messages: [
+              {
+                id: "assistant-local-media-retry-after-unavailable",
+                role: "assistant",
+                content: "Local image\nMEDIA:/tmp/openclaw/test image.png",
+                timestamp: Date.now(),
+              },
+            ],
+          }),
+        ),
+        container,
+      );
+
+    renderMessage();
+    await vi.runAllTimersAsync();
+    await Promise.resolve();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain("Unavailable");
+
+    vi.advanceTimersByTime(5_001);
+    renderMessage();
+    await vi.runAllTimersAsync();
+    await Promise.resolve();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(container.querySelector(".chat-message-image")).not.toBeNull();
+    expect(container.textContent).not.toContain("Unavailable");
+
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("allows tilde local assistant attachments inside home-based preview roots", async () => {
+    resetAssistantAttachmentAvailabilityCacheForTest();
+    const fetchMock = vi.fn(async (url: string) => {
+      if (!url.includes("meta=1")) {
+        throw new Error(`Unexpected fetch: ${url}`);
+      }
+      return {
+        ok: true,
+        json: async () => ({ available: true }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          showToolCalls: false,
+          basePath: "/openclaw",
+          localMediaPreviewRoots: ["/Users/test/Pictures"],
+          onRequestUpdate: () => undefined,
+          messages: [
+            normalizeMessage({
+              id: "assistant-tilde-local-media",
+              role: "assistant",
+              content: [
+                { type: "text", text: "Home image" },
+                {
+                  type: "attachment",
+                  attachment: {
+                    url: "~/Pictures/test image.png",
+                    kind: "image",
+                    label: "test image.png",
+                    mimeType: "image/png",
+                  },
+                },
+              ],
+              timestamp: Date.now(),
+            }),
+          ],
+        }),
+      ),
+      container,
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/openclaw/__openclaw__/assistant-media?source=%7E%2FPictures%2Ftest+image.png&meta=1",
+      expect.objectContaining({ credentials: "same-origin", method: "GET" }),
+    );
+    expect(container.textContent).not.toContain("Outside allowed folders");
+    vi.unstubAllGlobals();
+  });
+
+  it("routes inline canvas blocks through the scoped canvas host when available", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          canvasHostUrl: "http://127.0.0.1:19003/__openclaw__/cap/cap_123",
+          messages: [
+            {
+              id: "assistant-scoped-canvas",
+              role: "assistant",
+              content: [
+                { type: "text", text: "Rendered inline." },
+                {
+                  type: "canvas",
+                  preview: {
+                    kind: "canvas",
+                    surface: "assistant_message",
+                    render: "url",
+                    viewId: "cv_inline_scoped",
+                    title: "Scoped preview",
+                    url: "/__openclaw__/canvas/documents/cv_inline_scoped/index.html",
+                    preferredHeight: 320,
+                  },
+                },
+              ],
+              timestamp: Date.now(),
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const iframe = container.querySelector(".chat-tool-card__preview-frame");
+    expect(iframe?.getAttribute("src")).toBe(
+      "http://127.0.0.1:19003/__openclaw__/cap/cap_123/__openclaw__/canvas/documents/cv_inline_scoped/index.html",
+    );
+  });
+
+  it("renders server-history canvas blocks for the live toolResult sequence after history reload", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          showToolCalls: true,
+          messages: [
+            {
+              id: "assistant-toolcall-live-shape",
+              role: "assistant",
+              content: [
+                { type: "thinking", thinking: "", thinkingSignature: "sig-1" },
+                {
+                  type: "toolCall",
+                  id: "call_live_canvas",
+                  name: "canvas_tool_result",
+                  arguments: {},
+                  partialJson: "{}",
+                },
+              ],
+              timestamp: Date.now(),
+            },
+            {
+              id: "toolresult-live-shape",
+              role: "toolResult",
+              toolCallId: "call_live_canvas",
+              toolName: "canvas_tool_result",
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({
+                    kind: "canvas",
+                    view: {
+                      backend: "canvas",
+                      id: "cv_canvas_live_history",
+                      url: "/__openclaw__/canvas/documents/cv_canvas_live_history/index.html",
+                      title: "Live history preview",
+                      preferred_height: 420,
+                    },
+                    presentation: {
+                      target: "assistant_message",
+                    },
+                  }),
+                },
+              ],
+              timestamp: Date.now() + 1,
+            },
+            {
+              id: "assistant-final-live-shape",
+              role: "assistant",
+              content: [
+                { type: "thinking", thinking: "", thinkingSignature: "sig-2" },
+                { type: "text", text: "This item is ready." },
+                {
+                  type: "canvas",
+                  preview: {
+                    kind: "canvas",
+                    surface: "assistant_message",
+                    render: "url",
+                    viewId: "cv_canvas_live_history",
+                    title: "Live history preview",
+                    url: "/__openclaw__/canvas/documents/cv_canvas_live_history/index.html",
+                    preferredHeight: 420,
+                  },
+                  rawText: JSON.stringify({
+                    kind: "canvas",
+                    view: {
+                      backend: "canvas",
+                      id: "cv_canvas_live_history",
+                      url: "/__openclaw__/canvas/documents/cv_canvas_live_history/index.html",
+                    },
+                    presentation: {
+                      target: "assistant_message",
+                    },
+                  }),
+                },
+              ],
+              timestamp: Date.now() + 2,
+            },
+          ],
+          toolMessages: [],
+        }),
+      ),
+      container,
+    );
+
+    const assistantBubbles = container.querySelectorAll(".chat-group.assistant .chat-bubble");
+    const finalAssistantBubble = assistantBubbles[assistantBubbles.length - 1];
+    const allPreviews = container.querySelectorAll(".chat-tool-card__preview-frame");
+    expect(allPreviews).toHaveLength(1);
+    expect(finalAssistantBubble?.querySelector(".chat-tool-card__preview-frame")).not.toBeNull();
+    expect(finalAssistantBubble?.textContent).toContain("This item is ready.");
+    expect(finalAssistantBubble?.textContent).toContain("Live history preview");
+  });
+
+  it("lifts streamed canvas tool messages with toolresult blocks into the assistant bubble", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          showToolCalls: true,
+          messages: [
+            {
+              id: "assistant-streamed-artifact",
+              role: "assistant",
+              content: [{ type: "text", text: "Done." }],
+              timestamp: Date.now(),
+            },
+          ],
+          toolMessages: [
+            {
+              id: "tool-streamed-artifact",
+              role: "assistant",
+              toolCallId: "call_streamed_artifact",
+              timestamp: Date.now() - 1,
+              content: [
+                {
+                  type: "toolcall",
+                  name: "canvas_render",
+                  arguments: { source: { type: "handle", id: "cv_streamed_artifact" } },
+                },
+                {
+                  type: "toolresult",
+                  name: "canvas_render",
+                  text: JSON.stringify({
+                    kind: "canvas",
+                    view: {
+                      backend: "canvas",
+                      id: "cv_streamed_artifact",
+                      url: "/__openclaw__/canvas/documents/cv_streamed_artifact/index.html",
+                      title: "Streamed demo",
+                      preferred_height: 320,
+                    },
+                    presentation: {
+                      target: "assistant_message",
+                    },
+                  }),
+                },
+              ],
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const assistantBubble = container.querySelector(".chat-group.assistant .chat-bubble");
+    expect(assistantBubble?.querySelector(".chat-tool-card__preview-frame")).not.toBeNull();
+    expect(container.textContent).toContain("Streamed demo");
+    expect(container.textContent).toContain("Done.");
+    expect(
+      Array.from(container.querySelectorAll(".chat-tool-msg-summary__label")).map((node) =>
+        node.textContent?.trim(),
+      ),
+    ).toContain("Tool output");
+  });
+
+  it("opens generic tool details instead of a canvas preview from tool rows", async () => {
+    const container = document.createElement("div");
+    const onOpenSidebar = vi.fn();
+    render(
+      renderChat(
+        createProps({
+          showToolCalls: true,
+          autoExpandToolCalls: true,
+          onOpenSidebar,
+          messages: [
+            {
+              id: "assistant-canvas-sidebar",
+              role: "assistant",
+              content: [{ type: "text", text: "Sidebar canvas result." }],
+              timestamp: Date.now(),
+            },
+          ],
+          toolMessages: [
+            {
+              id: "tool-artifact-sidebar",
+              role: "tool",
+              toolCallId: "call-artifact-sidebar",
+              toolName: "canvas_render",
+              content: JSON.stringify({
+                kind: "canvas",
+                view: {
+                  backend: "canvas",
+                  id: "cv_sidebar",
+                  url: "https://example.com/canvas",
+                  title: "Sidebar demo",
+                  preferred_height: 420,
+                },
+                presentation: {
+                  target: "tool_card",
+                },
+              }),
+              timestamp: Date.now() + 1,
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    await Promise.resolve();
+
+    const sidebarButton = container.querySelector<HTMLButtonElement>(".chat-tool-card__action-btn");
+
+    sidebarButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(container.querySelector(".chat-tool-card__preview-frame")).toBeNull();
+    expect(sidebarButton).not.toBeNull();
+    expect(onOpenSidebar).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "markdown",
+      }),
+    );
+  });
+
+  it("lets a split tool call collapse even when a separate tool output shares its toolCallId", async () => {
+    const container = document.createElement("div");
+    const props = createProps({
+      autoExpandToolCalls: true,
+      messages: [
+        {
+          id: "assistant-6",
+          role: "assistant",
+          toolCallId: "call-6",
+          content: [
+            {
+              type: "toolcall",
+              id: "call-6",
+              name: "sessions_spawn",
+              arguments: { mode: "session", thread: true },
+            },
+          ],
+          timestamp: Date.now(),
+        },
+        {
+          id: "tool-6",
+          role: "tool",
+          toolCallId: "call-6",
+          toolName: "sessions_spawn",
+          content: JSON.stringify({ status: "error" }, null, 2),
+          timestamp: Date.now() + 1,
+        },
+      ],
+    });
+
+    const rerender = () => {
+      render(renderChat({ ...props, onRequestUpdate: rerender }), container);
+    };
+    rerender();
+
+    expect(container.textContent).toContain("Tool input");
+    expect(container.textContent).toContain('"thread": true');
+    expect(container.textContent).toContain('"status": "error"');
+
+    const summaries = container.querySelectorAll<HTMLElement>(".chat-tool-msg-summary");
+    summaries[0]?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flushTasks();
+
+    expect(container.textContent).not.toContain("Tool input");
+    expect(container.textContent).toContain('"status": "error"');
+  });
+
+  it("lets a tool call collapse when the matching tool output comes from toolMessages", async () => {
+    const container = document.createElement("div");
+    const props = createProps({
+      autoExpandToolCalls: true,
+      messages: [
+        {
+          id: "assistant-7",
+          role: "assistant",
+          toolCallId: "call-7",
+          content: [
+            {
+              type: "toolcall",
+              id: "call-7",
+              name: "sessions_spawn",
+              arguments: { mode: "session", thread: true },
+            },
+          ],
+          timestamp: Date.now(),
+        },
+      ],
+      toolMessages: [
+        {
+          id: "tool-7",
+          role: "tool",
+          toolCallId: "call-7",
+          toolName: "sessions_spawn",
+          content: JSON.stringify({ status: "error" }, null, 2),
+          timestamp: Date.now() + 1,
+        },
+      ],
+    });
+
+    const rerender = () => {
+      render(renderChat({ ...props, onRequestUpdate: rerender }), container);
+    };
+    rerender();
+
+    expect(container.textContent).toContain("Tool input");
+    expect(container.textContent).toContain('"thread": true');
+    expect(container.textContent).toContain('"status": "error"');
+
+    const summaries = container.querySelectorAll<HTMLElement>(".chat-tool-msg-summary");
+    expect(summaries.length).toBeGreaterThan(1);
+    summaries[0]?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flushTasks();
+
+    expect(container.textContent).not.toContain("Tool input");
+    expect(container.textContent).toContain('"status": "error"');
   });
 });

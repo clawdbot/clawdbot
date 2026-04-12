@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { normalizeModelRef, parseModelRef } from "../agents/model-selection.js";
-import type { loadConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayStartupPluginIds } from "../plugins/channel-plugin-ids.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
@@ -104,7 +104,7 @@ function normalizeAllowedModelRef(raw: string): string | null {
   return `${normalized.provider}/${normalized.model}`;
 }
 
-export function setPluginSubagentOverridePolicies(cfg: ReturnType<typeof loadConfig>): void {
+export function setPluginSubagentOverridePolicies(cfg: OpenClawConfig): void {
   const pluginSubagentPolicyState = getPluginSubagentPolicyState();
   const normalized = normalizePluginsConfig(cfg.plugins);
   const policies: PluginSubagentPolicyState["policies"] = {};
@@ -396,8 +396,8 @@ function createGatewayPluginRegistrationLogger(params?: {
 }
 
 export function loadGatewayPlugins(params: {
-  cfg: ReturnType<typeof loadConfig>;
-  activationSourceConfig?: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
   autoEnabledReasons?: Readonly<Record<string, string[]>>;
   workspaceDir: string;
   log: {

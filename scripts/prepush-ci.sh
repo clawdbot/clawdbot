@@ -56,8 +56,8 @@ run_linux_ci_mirror() {
   run_step pnpm lint:ui:no-raw-window-open
   run_protocol_ci_mirror
   run_step pnpm canvas:a2ui:bundle
-  run_step pnpm exec vitest run --config test/vitest/vitest.extensions.config.ts --maxWorkers=1
-  run_step env CI=true pnpm exec vitest run --config test/vitest/vitest.unit.config.ts --maxWorkers=1
+  run_step node scripts/run-vitest.mjs run --config test/vitest/vitest.extensions.config.ts --maxWorkers=1
+  run_step env CI=true node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts --maxWorkers=1
 
   log_step "OPENCLAW_VITEST_MAX_WORKERS=${OPENCLAW_VITEST_MAX_WORKERS:-1} NODE_OPTIONS=${NODE_OPTIONS:---max-old-space-size=6144} pnpm test"
   OPENCLAW_VITEST_MAX_WORKERS="${OPENCLAW_VITEST_MAX_WORKERS:-1}" \

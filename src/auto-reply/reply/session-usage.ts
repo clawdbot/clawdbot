@@ -4,13 +4,13 @@ import {
   hasNonzeroUsage,
   type NormalizedUsage,
 } from "../../agents/usage.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import {
   type SessionSystemPromptReport,
   type SessionEntry,
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 

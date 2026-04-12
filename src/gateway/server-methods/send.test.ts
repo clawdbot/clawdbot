@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { jsonResult } from "../../agents/tools/common.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -148,6 +150,19 @@ async function runPollWithClient(
     context: makeContext(),
     req: { type: "req", id: "1", method: "poll" },
     client: (client ?? null) as never,
+    isWebchatConnect: () => false,
+  });
+  return { respond };
+}
+
+async function runMessageActionRequest(params: Record<string, unknown>) {
+  const respond = vi.fn();
+  await sendHandlers["message.action"]({
+    params: params as never,
+    respond,
+    context: makeContext(),
+    req: { type: "req", id: "1", method: "message.action" },
+    client: null as never,
     isWebchatConnect: () => false,
   });
   return { respond };
@@ -855,6 +870,87 @@ describe("gateway send mirroring", () => {
       expect.objectContaining({ messageId: "m-threaded" }),
       undefined,
       expect.objectContaining({ channel: "slack" }),
+    );
+  });
+
+  it("dispatches message actions through the gateway for plugin-owned channels", async () => {
+    const reactPlugin: ChannelPlugin = {
+      id: "whatsapp",
+      meta: {
+        id: "whatsapp",
+        label: "WhatsApp",
+        selectionLabel: "WhatsApp",
+        docsPath: "/channels/whatsapp",
+        blurb: "WhatsApp action dispatch test plugin.",
+      },
+      capabilities: { chatTypes: ["direct"], reactions: true },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["react"] }),
+        supportsAction: ({ action }) => action === "react",
+        handleAction: async ({ params, requesterSenderId, toolContext }) =>
+          jsonResult({
+            ok: true,
+            messageId: params.messageId,
+            requesterSenderId,
+            currentMessageId: toolContext?.currentMessageId,
+            currentGraphChannelId: toolContext?.currentGraphChannelId,
+            replyToMode: toolContext?.replyToMode,
+            hasRepliedRef: toolContext?.hasRepliedRef?.value,
+            skipCrossContextDecoration: toolContext?.skipCrossContextDecoration,
+          }),
+      },
+    };
+    mocks.getChannelPlugin.mockReturnValue(reactPlugin);
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "whatsapp",
+          source: "test",
+          plugin: reactPlugin,
+        },
+      ]),
+      "send-test-message-action",
+    );
+
+    const { respond } = await runMessageActionRequest({
+      channel: "whatsapp",
+      action: "react",
+      params: {
+        chatJid: "+15551234567",
+        messageId: "wamid.1",
+        emoji: "✅",
+      },
+      requesterSenderId: "trusted-user",
+      toolContext: {
+        currentGraphChannelId: "graph:team/chan",
+        currentChannelProvider: "whatsapp",
+        currentMessageId: "wamid.1",
+        replyToMode: "first",
+        hasRepliedRef: { value: true },
+        skipCrossContextDecoration: true,
+      },
+      idempotencyKey: "idem-message-action",
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        ok: true,
+        messageId: "wamid.1",
+        requesterSenderId: "trusted-user",
+        currentMessageId: "wamid.1",
+        currentGraphChannelId: "graph:team/chan",
+        replyToMode: "first",
+        hasRepliedRef: true,
+        skipCrossContextDecoration: true,
+      },
+      undefined,
+      { channel: "whatsapp" },
     );
   });
 });

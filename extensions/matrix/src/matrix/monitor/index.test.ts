@@ -122,6 +122,7 @@ const hoisted = vi.hoisted(() => {
     resolveSharedMatrixClient,
     resolveTextChunkLimit,
     runMatrixStartupMaintenance,
+    registeredHealthySyncGetter: undefined as undefined | (() => number | undefined),
     setActiveMatrixClient,
     setMatrixRuntime,
     setStatus,
@@ -339,10 +340,12 @@ vi.mock("./direct.js", () => ({
 vi.mock("./events.js", () => ({
   registerMatrixMonitorEvents: vi.fn(
     (params: {
+      getHealthySyncSinceMs?: () => number | undefined;
       onRoomMessage: (roomId: string, event: unknown) => Promise<void>;
       runDetachedTask?: (label: string, task: () => Promise<void>) => Promise<void>;
     }) => {
       hoisted.callOrder.push("register-events");
+      hoisted.registeredHealthySyncGetter = params.getHealthySyncSinceMs;
       hoisted.registeredOnRoomMessage = (roomId: string, event: unknown) =>
         params.runDetachedTask
           ? params.runDetachedTask("test room message", async () => {
@@ -429,6 +432,7 @@ describe("monitorMatrixProvider", () => {
     });
     hoisted.getMemberDisplayName.mockReset().mockResolvedValue("Bot");
     hoisted.registeredOnRoomMessage = null;
+    hoisted.registeredHealthySyncGetter = undefined;
     hoisted.setActiveMatrixClient.mockReset();
     hoisted.stopThreadBindingManager.mockReset();
     hoisted.client.removeAllListeners();
@@ -495,6 +499,58 @@ describe("monitorMatrixProvider", () => {
 
     abortController.abort();
     await expect(monitorPromise).resolves.toBeUndefined();
+  });
+
+  it("re-arms the healthy-sync milestone across reconnect transitions", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-10T16:21:00.000Z"));
+    const abortController = new AbortController();
+    try {
+      const monitorPromise = monitorMatrixProvider({
+        abortSignal: abortController.signal,
+        setStatus: hoisted.setStatus,
+      });
+
+      await vi.waitFor(() => {
+        expect(hoisted.callOrder).toContain("start-client");
+      });
+
+      const getHealthySyncSinceMs = hoisted.registeredHealthySyncGetter;
+      if (!getHealthySyncSinceMs) {
+        throw new Error("expected healthy sync getter to be registered");
+      }
+
+      expect(getHealthySyncSinceMs()).toBeUndefined();
+
+      hoisted.client.emit("sync.state", "SYNCING", "RECONNECTING", undefined);
+      const firstHealthySyncSinceMs = Date.now();
+      expect(getHealthySyncSinceMs()).toBe(firstHealthySyncSinceMs);
+
+      await vi.advanceTimersByTimeAsync(3_000);
+      hoisted.client.emit("sync.state", "CATCHUP", "SYNCING", undefined);
+      expect(getHealthySyncSinceMs()).toBe(firstHealthySyncSinceMs);
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      hoisted.client.emit("sync.state", "PREPARED", "CATCHUP", undefined);
+      expect(getHealthySyncSinceMs()).toBe(firstHealthySyncSinceMs);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      hoisted.client.emit("sync.state", "RECONNECTING", "SYNCING", new Error("network flap"));
+      expect(getHealthySyncSinceMs()).toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(7_000);
+      hoisted.client.emit("sync.state", "SYNCING", "RECONNECTING", undefined);
+      const rearmedHealthySyncSinceMs = Date.now();
+      expect(getHealthySyncSinceMs()).toBe(rearmedHealthySyncSinceMs);
+
+      abortController.abort();
+      await expect(monitorPromise).resolves.toBeUndefined();
+
+      hoisted.client.emit("sync.state", "RECONNECTING", "SYNCING", new Error("late noise"));
+      expect(getHealthySyncSinceMs()).toBe(rearmedHealthySyncSinceMs);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("contains room-message handler rejections inside monitor task tracking", async () => {

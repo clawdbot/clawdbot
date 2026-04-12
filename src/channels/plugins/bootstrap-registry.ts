@@ -6,7 +6,8 @@ import {
   getBundledChannelSetupPlugin,
   getBundledChannelSetupSecrets,
 } from "./bundled.js";
-import type { ChannelId, ChannelPlugin } from "./types.js";
+import type { ChannelPlugin } from "./types.plugin.js";
+import type { ChannelId } from "./types.public.js";
 
 type CachedBootstrapPlugins = {
   sortedIds: string[];

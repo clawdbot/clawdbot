@@ -2,18 +2,18 @@ import fs from "node:fs";
 import path from "node:path";
 import { createJiti } from "jiti";
 import { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
-import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.plugin.js";
+import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import {
   normalizeBundledPluginStringList,
   trimBundledPluginString,
 } from "./bundled-plugin-scan.js";
+import type { PluginConfigUiHint } from "./manifest-types.js";
 import type {
   OpenClawPackageManifest,
   PluginManifest,
   PluginManifestChannelConfig,
 } from "./manifest.js";
 import { buildPluginLoaderJitiOptions, resolvePluginLoaderJitiConfig } from "./sdk-alias.js";
-import type { PluginConfigUiHint } from "./types.js";
 
 const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"] as const;
 const SOURCE_CONFIG_SCHEMA_CANDIDATES = [

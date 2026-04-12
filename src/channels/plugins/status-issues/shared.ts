@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import { isRecord } from "../../../utils.js";
-import type { ChannelAccountSnapshot, ChannelStatusIssue } from "../types.js";
+import type { ChannelAccountSnapshot, ChannelStatusIssue } from "../types.public.js";
 export { isRecord };
 
 export function asString(value: unknown): string | undefined {

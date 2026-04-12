@@ -1,48 +1,25 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
 } from "./validation.js";
 
-type MockPluginRegistry = {
-  diagnostics: Array<Record<string, unknown>>;
-  plugins: Array<Record<string, unknown>>;
-};
-
-function createEmptyPluginRegistry(): MockPluginRegistry {
-  return { diagnostics: [], plugins: [] };
-}
-
 const mockLoadPluginManifestRegistry = vi.hoisted(() =>
-  vi.fn<(...args: unknown[]) => MockPluginRegistry>(() => createEmptyPluginRegistry()),
+  vi.fn(
+    (): PluginManifestRegistry => ({
+      diagnostics: [],
+      plugins: [],
+    }),
+  ),
 );
 
-vi.mock("../plugins/manifest-registry.js", () => {
+function createTelegramSchemaRegistry(): PluginManifestRegistry {
   return {
-    loadPluginManifestRegistry: (...args: unknown[]) => mockLoadPluginManifestRegistry(...args),
-    resolveManifestContractPluginIds: () => [],
-  };
-});
-
-vi.mock("../plugins/doctor-contract-registry.js", () => {
-  return {
-    collectRelevantDoctorPluginIds: () => [],
-    listPluginDoctorLegacyConfigRules: () => [],
-  };
-});
-
-afterEach(() => {
-  mockLoadPluginManifestRegistry.mockReset();
-  mockLoadPluginManifestRegistry.mockImplementation(createEmptyPluginRegistry);
-});
-
-function setupTelegramSchemaWithDefault() {
-  mockLoadPluginManifestRegistry.mockReturnValue({
     diagnostics: [],
     plugins: [
-      {
+      createPluginManifestRecord({
         id: "telegram",
-        origin: "bundled",
         channels: ["telegram"],
         channelCatalogMeta: {
           id: "telegram",
@@ -69,21 +46,17 @@ function setupTelegramSchemaWithDefault() {
             uiHints: {},
           },
         },
-      },
+      }),
     ],
-  });
+  };
 }
 
-function setupPluginSchemaWithRequiredDefault() {
-  mockLoadPluginManifestRegistry.mockReturnValue({
+function createPluginConfigSchemaRegistry(): PluginManifestRegistry {
+  return {
     diagnostics: [],
     plugins: [
-      {
+      createPluginManifestRecord({
         id: "opik",
-        origin: "bundled",
-        channels: [],
-        providers: [],
-        kind: ["tool"],
         configSchema: {
           type: "object",
           properties: {
@@ -95,9 +68,55 @@ function setupPluginSchemaWithRequiredDefault() {
           required: ["workspace"],
           additionalProperties: true,
         },
-      },
+      }),
     ],
-  });
+  };
+}
+
+function createPluginManifestRecord(
+  overrides: Partial<PluginManifestRecord> & Pick<PluginManifestRecord, "id">,
+): PluginManifestRecord {
+  return {
+    channels: [],
+    cliBackends: [],
+    hooks: [],
+    manifestPath: `/tmp/${overrides.id}/openclaw.plugin.json`,
+    origin: "bundled",
+    providers: [],
+    rootDir: `/tmp/${overrides.id}`,
+    skills: [],
+    source: `/tmp/${overrides.id}/index.js`,
+    ...overrides,
+  };
+}
+
+vi.mock("../plugins/manifest-registry.js", () => ({
+  loadPluginManifestRegistry: () => mockLoadPluginManifestRegistry(),
+  resolveManifestContractPluginIds: () => [],
+}));
+
+vi.mock("../plugins/doctor-contract-registry.js", () => ({
+  collectRelevantDoctorPluginIds: () => [],
+  listPluginDoctorLegacyConfigRules: () => [],
+  applyPluginDoctorCompatibilityMigrations: () => ({ next: null, changes: [] }),
+}));
+
+vi.mock("../channels/plugins/legacy-config.js", () => ({
+  collectChannelLegacyConfigRules: () => [],
+}));
+
+vi.mock("./zod-schema.js", () => ({
+  OpenClawSchema: {
+    safeParse: (raw: unknown) => ({ success: true, data: raw }),
+  },
+}));
+
+function setupTelegramSchemaWithDefault() {
+  mockLoadPluginManifestRegistry.mockReturnValue(createTelegramSchemaRegistry());
+}
+
+function setupPluginSchemaWithRequiredDefault() {
+  mockLoadPluginManifestRegistry.mockReturnValue(createPluginConfigSchemaRegistry());
 }
 
 describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)", () => {

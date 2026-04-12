@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -28,11 +29,6 @@ const TEST_MAIN_AUTH_STORE_KEY = "__main__";
 const ensureWorkspaceAndSessionsMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => {}));
 const readConfigFileSnapshotMock = vi.hoisted(() =>
   vi.fn(async () => {
-    const [{ default: fs }, { default: path }, { default: crypto }] = await Promise.all([
-      import("node:fs/promises"),
-      import("node:path"),
-      import("node:crypto"),
-    ]);
     const configPath = process.env.OPENCLAW_CONFIG_PATH;
     if (!configPath) {
       throw new Error("OPENCLAW_CONFIG_PATH must be set for provider auth onboarding tests");
@@ -61,10 +57,6 @@ const readConfigFileSnapshotMock = vi.hoisted(() =>
 );
 const replaceConfigFileMock = vi.hoisted(() =>
   vi.fn(async (params: { nextConfig: unknown }) => {
-    const [{ default: fs }, { default: path }] = await Promise.all([
-      import("node:fs/promises"),
-      import("node:path"),
-    ]);
     const configPath = process.env.OPENCLAW_CONFIG_PATH;
     if (!configPath) {
       throw new Error("OPENCLAW_CONFIG_PATH must be set for provider auth onboarding tests");
@@ -141,14 +133,12 @@ function upsertAuthProfile(params: {
   writeRuntimeAuthSnapshots();
 }
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  return {
-    ...actual,
-    readConfigFileSnapshot: readConfigFileSnapshotMock,
-    replaceConfigFile: replaceConfigFileMock,
-  };
-});
+vi.mock("../config/config.js", () => ({
+  readConfigFileSnapshot: readConfigFileSnapshotMock,
+  replaceConfigFile: replaceConfigFileMock,
+  resolveGatewayPort: (cfg?: { gateway?: { port?: unknown } }) =>
+    typeof cfg?.gateway?.port === "number" ? cfg.gateway.port : 18789,
+}));
 
 vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async () => {
   const [
@@ -826,12 +816,25 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
   };
 });
 
-vi.mock("./onboard-helpers.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("./onboard-helpers.js")>("./onboard-helpers.js");
+vi.mock("./onboard-helpers.js", () => {
+  const normalizeGatewayTokenInput = (value: unknown): string => {
+    if (typeof value !== "string") {
+      return "";
+    }
+    const trimmed = value.trim();
+    return trimmed === "undefined" || trimmed === "null" ? "" : trimmed;
+  };
   return {
-    ...actual,
+    DEFAULT_WORKSPACE: "/tmp/openclaw-workspace",
+    applyWizardMetadata: (cfg: unknown) => cfg,
     ensureWorkspaceAndSessions: ensureWorkspaceAndSessionsMock,
+    normalizeGatewayTokenInput,
+    randomToken: () => "tok_generated_provider_auth_test_token",
+    resolveControlUiLinks: ({ port }: { port: number }) => ({
+      httpUrl: `http://127.0.0.1:${port}`,
+      wsUrl: `ws://127.0.0.1:${port}`,
+    }),
+    waitForGatewayReachable: async () => ({ ok: true }),
   };
 });
 

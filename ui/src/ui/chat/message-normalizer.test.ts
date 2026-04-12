@@ -33,6 +33,19 @@ describe("message-normalizer", () => {
       });
     });
 
+    it("does not reinterpret directive-like user string content", () => {
+      const result = normalizeMessage({
+        role: "user",
+        content: "MEDIA:/tmp/example.png\n[[reply_to_current]]",
+      });
+
+      expect(result.content).toEqual([
+        { type: "text", text: "MEDIA:/tmp/example.png\n[[reply_to_current]]" },
+      ]);
+      expect(result.replyTarget).toBeUndefined();
+      expect(result.audioAsVoice).toBeUndefined();
+    });
+
     it("normalizes message with array content", () => {
       const result = normalizeMessage({
         role: "assistant",
@@ -59,6 +72,23 @@ describe("message-normalizer", () => {
       });
     });
 
+    it("does not reinterpret directive-like user text blocks inside array content", () => {
+      const result = normalizeMessage({
+        role: "user",
+        content: [{ type: "text", text: "MEDIA:/tmp/example.png\n[[audio_as_voice]]" }],
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "text",
+          text: "MEDIA:/tmp/example.png\n[[audio_as_voice]]",
+          name: undefined,
+          args: undefined,
+        },
+      ]);
+      expect(result.audioAsVoice).toBeUndefined();
+    });
+
     it("normalizes message with text field (alternative format)", () => {
       const result = normalizeMessage({
         role: "user",
@@ -66,6 +96,220 @@ describe("message-normalizer", () => {
       });
 
       expect(result.content).toEqual([{ type: "text", text: "Alternative format" }]);
+    });
+
+    it("expands [embed] shortcodes into canvas blocks", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: 'Here.\n[embed ref="cv_status" title="Status" height="320" /]',
+      });
+
+      expect(result.content).toEqual([
+        { type: "text", text: "Here." },
+        {
+          type: "canvas",
+          preview: {
+            kind: "canvas",
+            surface: "assistant_message",
+            render: "url",
+            viewId: "cv_status",
+            url: "/__openclaw__/canvas/documents/cv_status/index.html",
+            title: "Status",
+            preferredHeight: 320,
+          },
+          rawText: null,
+        },
+      ]);
+    });
+
+    it("ignores [embed] shortcodes inside fenced code blocks", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: '```text\n[embed ref="cv_status" /]\n```',
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "text",
+          text: '```text\n[embed ref="cv_status" /]\n```',
+        },
+      ]);
+    });
+
+    it("leaves block-form inline html embed shortcodes as plain text", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: '[embed content_type="html" title="Status"]\n<div>Ready</div>\n[/embed]',
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "text",
+          text: '[embed content_type="html" title="Status"]\n<div>Ready</div>\n[/embed]',
+        },
+      ]);
+    });
+
+    it("extracts MEDIA attachments and reply metadata from assistant text", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content:
+          "[[reply_to:thread-123]]Intro\nMEDIA:https://example.com/image.png\nOutro\nMEDIA:https://example.com/voice.ogg\n[[audio_as_voice]]",
+      });
+
+      expect(result.replyTarget).toEqual({ kind: "id", id: "thread-123" });
+      expect(result.audioAsVoice).toBe(true);
+      expect(result.content).toEqual([
+        { type: "text", text: "Intro" },
+        {
+          type: "attachment",
+          attachment: {
+            url: "https://example.com/image.png",
+            kind: "image",
+            label: "image.png",
+            mimeType: "image/png",
+          },
+        },
+        { type: "text", text: "Outro" },
+        {
+          type: "attachment",
+          attachment: {
+            url: "https://example.com/voice.ogg",
+            kind: "audio",
+            label: "voice.ogg",
+            mimeType: "audio/ogg",
+            isVoiceNote: true,
+          },
+        },
+      ]);
+    });
+
+    it("marks media-only audio attachments as voice notes when audio_as_voice is present", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: "MEDIA:https://example.com/voice.ogg\n[[audio_as_voice]]",
+      });
+
+      expect(result.audioAsVoice).toBe(true);
+      expect(result.content).toEqual([
+        {
+          type: "attachment",
+          attachment: {
+            url: "https://example.com/voice.ogg",
+            kind: "audio",
+            label: "voice.ogg",
+            mimeType: "audio/ogg",
+            isVoiceNote: true,
+          },
+        },
+      ]);
+    });
+
+    it("keeps valid local MEDIA paths as assistant attachments", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: "Hello\nMEDIA:/tmp/openclaw/test-image.png\nWorld",
+      });
+
+      expect(result.content).toEqual([
+        { type: "text", text: "Hello" },
+        {
+          type: "attachment",
+          attachment: {
+            url: "/tmp/openclaw/test-image.png",
+            kind: "image",
+            label: "test-image.png",
+            mimeType: "image/png",
+          },
+        },
+        { type: "text", text: "World" },
+      ]);
+    });
+
+    it("keeps spaced local filenames together instead of leaking suffix text", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: "MEDIA:/tmp/openclaw/shinkansen kato - Google Shopping.pdf",
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "attachment",
+          attachment: {
+            url: "/tmp/openclaw/shinkansen kato - Google Shopping.pdf",
+            kind: "document",
+            label: "shinkansen kato - Google Shopping.pdf",
+            mimeType: "application/pdf",
+          },
+        },
+      ]);
+    });
+
+    it("does not fall back to raw text when an invalid MEDIA line is stripped", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: "MEDIA:~/Pictures/My File.png",
+      });
+
+      expect(result.content).toEqual([]);
+    });
+
+    it("preserves relative MEDIA references as visible text instead of dropping the assistant turn", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: "MEDIA:chart.png",
+      });
+
+      expect(result.content).toEqual([{ type: "text", text: "MEDIA:chart.png" }]);
+    });
+
+    it("strips reply_to_current without rendering a quoted preview", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: "[[reply_to_current]]\nReply body",
+      });
+
+      expect(result.replyTarget).toEqual({ kind: "current" });
+      expect(result.content).toEqual([{ type: "text", text: "Reply body" }]);
+    });
+
+    it("does not restore stripped reply tags when no visible text remains", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: "[[reply_to_current]]",
+      });
+
+      expect(result.replyTarget).toEqual({ kind: "current" });
+      expect(result.content).toEqual([]);
+    });
+
+    it("preserves structured attachment content items", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: [
+          {
+            type: "attachment",
+            attachment: {
+              url: "~/Pictures/test image.png",
+              kind: "image",
+              label: "test image.png",
+              mimeType: "image/png",
+            },
+          },
+        ],
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "attachment",
+          attachment: {
+            url: "~/Pictures/test image.png",
+            kind: "image",
+            label: "test image.png",
+            mimeType: "image/png",
+          },
+        },
+      ]);
     });
 
     it("detects tool result by toolCallId", () => {
@@ -124,7 +368,7 @@ describe("message-normalizer", () => {
         content: [{ type: "tool_use", name: "test", arguments: { foo: "bar" } }],
       });
 
-      expect(result.content[0].args).toEqual({ foo: "bar" });
+      expect((result.content[0] as { args?: unknown }).args).toEqual({ foo: "bar" });
     });
 
     it("handles input field for anthropic tool_use blocks", () => {
@@ -133,7 +377,7 @@ describe("message-normalizer", () => {
         content: [{ type: "tool_use", name: "Bash", input: { command: "pwd" } }],
       });
 
-      expect(result.content[0].args).toEqual({ command: "pwd" });
+      expect((result.content[0] as { args?: unknown }).args).toEqual({ command: "pwd" });
     });
 
     it("preserves top-level sender labels", () => {

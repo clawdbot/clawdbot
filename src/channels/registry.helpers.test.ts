@@ -5,9 +5,9 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import { listChatChannels } from "./chat-meta.js";
 import {
   formatChannelSelectionLine,
-  listChatChannels,
   listRegisteredChannelPluginIds,
   normalizeAnyChannelId,
 } from "./registry.js";

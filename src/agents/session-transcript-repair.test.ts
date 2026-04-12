@@ -380,6 +380,202 @@ describe("sanitizeToolCallInputs", () => {
     expect(types).toEqual(["text", "toolUse"]);
   });
 
+  it("drops signed-thinking assistant turns when sibling tool calls are not replay-safe", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "Let me check the gateway config.",
+            thinkingSignature: "sig_gateway",
+          },
+          {
+            type: "toolCall",
+            id: "call_gateway",
+            name: "gateway",
+            arguments: {
+              action: "config.get",
+              path: "channels.telegram",
+            },
+          },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input, {
+      allowedToolNames: ["read"],
+      allowProviderOwnedThinkingReplay: true,
+    });
+
+    expect(out).toEqual([]);
+  });
+
+  it("drops signed-thinking assistant turns when sibling tool calls reuse an id", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "Let me reuse the tool id.",
+            thinkingSignature: "sig_duplicate",
+          },
+          { type: "toolCall", id: "call_shared", name: "read", arguments: { path: "a" } },
+          { type: "toolUse", id: "call_shared", name: "read", input: { path: "b" } },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input, {
+      allowedToolNames: ["read"],
+      allowProviderOwnedThinkingReplay: true,
+    });
+
+    expect(out).toEqual([]);
+  });
+
+  it("drops later signed-thinking assistant turns that reuse an earlier signed tool id", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "First signed replay turn.",
+            thinkingSignature: "sig_first",
+          },
+          { type: "toolCall", id: "call_shared", name: "read", arguments: { path: "a" } },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "Second signed replay turn.",
+            thinkingSignature: "sig_second",
+          },
+          { type: "toolUse", id: "call_shared", name: "read", input: { path: "b" } },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input, {
+      allowedToolNames: ["read"],
+      allowProviderOwnedThinkingReplay: true,
+    });
+
+    expect(out).toEqual([input[0]]);
+  });
+
+  it("drops signed-thinking assistant turns that would require attachment redaction", () => {
+    const secret = "SIGNED_THINKING_ATTACHMENT_SECRET"; // pragma: allowlist secret
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "Let me spawn a helper.",
+            thinkingSignature: "sig_spawn",
+          },
+          {
+            type: "toolUse",
+            id: "call_spawn",
+            name: "sessions_spawn",
+            input: {
+              task: "inspect attachment",
+              attachments: [{ name: "snapshot.txt", content: secret }],
+            },
+          },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input, {
+      allowedToolNames: ["sessions_spawn"],
+      allowProviderOwnedThinkingReplay: true,
+    });
+
+    expect(out).toEqual([]);
+    expect(JSON.stringify(out)).not.toContain(secret);
+  });
+
+  it("keeps signed-thinking assistant turns when sessions_spawn attachments are already redacted", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "Let me replay the helper turn.",
+            thinkingSignature: "sig_spawn_safe",
+          },
+          {
+            type: "toolUse",
+            id: "call_spawn",
+            name: "sessions_spawn",
+            input: {
+              task: "inspect attachment",
+              attachments: [
+                {
+                  name: "snapshot.txt",
+                  mimeType: "text/plain",
+                  content: "__OPENCLAW_REDACTED__",
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input, {
+      allowedToolNames: ["sessions_spawn"],
+      allowProviderOwnedThinkingReplay: true,
+    });
+
+    expect(out).toEqual(input);
+  });
+
+  it("keeps generic thinking turns mutable when immutable preservation is disabled", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "Let me normalize this tool name.",
+            thinkingSignature: "sig_generic",
+          },
+          {
+            type: "toolCall",
+            id: "call_read",
+            name: " read ",
+            arguments: { path: "README.md" },
+          },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input, { allowedToolNames: ["read"] });
+    const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(assistant.content).toEqual([
+      {
+        type: "thinking",
+        thinking: "Let me normalize this tool name.",
+        thinkingSignature: "sig_generic",
+      },
+      {
+        type: "toolCall",
+        id: "call_read",
+        name: "read",
+        arguments: { path: "README.md" },
+      },
+    ]);
+  });
+
   it.each([
     {
       name: "trims leading whitespace from tool names",

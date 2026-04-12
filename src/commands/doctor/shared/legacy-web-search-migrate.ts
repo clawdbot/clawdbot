@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "../../../config/config.js";
 import { mergeMissing } from "../../../config/legacy.shared.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   loadPluginManifestRegistry,
   resolveManifestContractOwnerPluginId,

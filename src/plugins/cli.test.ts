@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   memoryListAction: vi.fn(),
   loadOpenClawPluginCliRegistry: vi.fn(),
   loadOpenClawPlugins: vi.fn(),
+  resolveManifestActivationPluginIds: vi.fn(),
   applyPluginAutoEnable: vi.fn(),
   loadConfig: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
@@ -17,6 +18,11 @@ vi.mock("./loader.js", () => ({
   loadOpenClawPluginCliRegistry: (...args: unknown[]) =>
     mocks.loadOpenClawPluginCliRegistry(...args),
   loadOpenClawPlugins: (...args: unknown[]) => mocks.loadOpenClawPlugins(...args),
+}));
+
+vi.mock("./activation-planner.js", () => ({
+  resolveManifestActivationPluginIds: (...args: unknown[]) =>
+    mocks.resolveManifestActivationPluginIds(...args),
 }));
 
 vi.mock("../config/plugin-auto-enable.js", () => ({
@@ -144,6 +150,8 @@ describe("registerPluginCliCommands", () => {
       ...createCliRegistry(),
       diagnostics: [],
     });
+    mocks.resolveManifestActivationPluginIds.mockReset();
+    mocks.resolveManifestActivationPluginIds.mockReturnValue([]);
     mocks.applyPluginAutoEnable.mockReset();
     mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({
       config,
@@ -393,6 +401,7 @@ describe("registerPluginCliCommands", () => {
   it("registers a selected plugin primary eagerly during lazy startup", async () => {
     const program = createProgram();
     program.exitOverride();
+    mocks.resolveManifestActivationPluginIds.mockReturnValue(["memory-core"]);
 
     await registerPluginCliCommands(program, {} as OpenClawConfig, undefined, undefined, {
       mode: "lazy",
@@ -400,11 +409,32 @@ describe("registerPluginCliCommands", () => {
     });
 
     expect(program.commands.filter((command) => command.name() === "memory")).toHaveLength(1);
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["memory-core"],
+      }),
+    );
 
     await program.parseAsync(["memory", "list"], { from: "user" });
 
     expect(mocks.memoryRegister).toHaveBeenCalledTimes(1);
     expect(mocks.memoryListAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps full CLI loading when primary command planning finds no plugin match", async () => {
+    const program = createProgram();
+    program.exitOverride();
+
+    await registerPluginCliCommands(program, {} as OpenClawConfig, undefined, undefined, {
+      mode: "lazy",
+      primary: "memory",
+    });
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        onlyPluginIds: expect.anything(),
+      }),
+    );
   });
 
   it("returns null for validated plugin CLI config when the snapshot is invalid", async () => {

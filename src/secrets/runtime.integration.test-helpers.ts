@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
 import { clearPluginLoaderCache } from "../plugins/loader.js";
 import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
-import type { PluginOrigin } from "../plugins/types.js";
+import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { __testing as webFetchProvidersTesting } from "../plugins/web-fetch-providers.runtime.js";
 import { __testing as webSearchProvidersTesting } from "../plugins/web-search-providers.runtime.js";
 import { captureEnv } from "../test-utils/env.js";

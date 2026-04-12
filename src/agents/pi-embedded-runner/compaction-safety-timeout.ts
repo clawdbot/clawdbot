@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withTimeout } from "../../node-host/with-timeout.js";
 
 export const EMBEDDED_COMPACTION_TIMEOUT_MS = 900_000;

@@ -694,7 +694,7 @@ jobs:
           EOF
 
   checks-node-core-test:
-    name: checks-node-core-test
+    name: checks-node-core
     needs: [preflight, checks-node-core-test-shard]
     if: always() && needs.preflight.outputs.run_checks == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
@@ -894,6 +894,11 @@ jobs:
         continue-on-error: true
         run: pnpm check:import-cycles
 
+      - name: Run static import SCC guard
+        id: static_import_sccs
+        continue-on-error: true
+        run: pnpm check:static-import-sccs
+
       - name: Upload gateway watch regression artifacts
         if: always()
         uses: actions/upload-artifact@v7
@@ -927,6 +932,7 @@ jobs:
           CONTROL_UI_I18N_OUTCOME: ${{ steps.control_ui_i18n.outcome == 'skipped' && 'success' || steps.control_ui_i18n.outcome }}
           GATEWAY_WATCH_REGRESSION_OUTCOME: ${{ steps.gateway_watch_regression.outcome }}
           IMPORT_CYCLES_OUTCOME: ${{ steps.import_cycles.outcome }}
+          STATIC_IMPORT_SCCS_OUTCOME: ${{ steps.static_import_sccs.outcome }}
         run: |
           failures=0
           for result in \
@@ -951,7 +957,8 @@ jobs:
             "lint:ui:no-raw-window-open|$NO_RAW_WINDOW_OPEN_OUTCOME" \
             "ui:i18n:check|$CONTROL_UI_I18N_OUTCOME" \
             "gateway-watch-regression|$GATEWAY_WATCH_REGRESSION_OUTCOME" \
-            "check:import-cycles|$IMPORT_CYCLES_OUTCOME"; do
+            "check:import-cycles|$IMPORT_CYCLES_OUTCOME" \
+            "check:static-import-sccs|$STATIC_IMPORT_SCCS_OUTCOME"; do
             name="${result%%|*}"
             outcome="${result#*|}"
             if [ "$outcome" != "success" ]; then

@@ -1,4 +1,4 @@
-import type { DeliveryContext } from "../utils/delivery-context.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 function resolveControllerSessionKey(entry: SubagentRunRecord): string {

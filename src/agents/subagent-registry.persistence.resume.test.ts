@@ -11,6 +11,7 @@ import { captureEnv } from "../test-utils/env.js";
 
 const hoisted = vi.hoisted(() => ({
   announceSpy: vi.fn(async () => true),
+  allowedRunIds: undefined as Set<string> | undefined,
   registryPath: undefined as string | undefined,
 }));
 const { announceSpy } = hoisted;
@@ -46,10 +47,16 @@ vi.mock("./subagent-registry.store.js", async () => {
       runs: Map<string, import("./subagent-registry.types.js").SubagentRunRecord>,
     ) => {
       const pathname = resolvePath();
+      const persistedRuns = hoisted.allowedRunIds
+        ? new Map([...runs].filter(([runId]) => hoisted.allowedRunIds?.has(runId)))
+        : runs;
+      if (hoisted.allowedRunIds && persistedRuns.size === 0 && runs.size > 0) {
+        return;
+      }
       fsSync.mkdirSync(pathSync.dirname(pathname), { recursive: true });
       fsSync.writeFileSync(
         pathname,
-        `${JSON.stringify({ version: 2, runs: Object.fromEntries(runs) }, null, 2)}\n`,
+        `${JSON.stringify({ version: 2, runs: Object.fromEntries(persistedRuns) }, null, 2)}\n`,
         "utf8",
       );
     },
@@ -115,8 +122,16 @@ describe("subagent registry persistence resume", () => {
 
   beforeEach(async () => {
     announceSpy.mockClear();
+    vi.mocked(callGatewayModule.callGateway).mockReset();
+    vi.mocked(callGatewayModule.callGateway).mockResolvedValue({
+      status: "ok",
+      startedAt: 111,
+      endedAt: 222,
+    });
     mod.__testing.setDepsForTest({
+      callGateway: vi.mocked(callGatewayModule.callGateway),
       cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
+      captureSubagentCompletionReply: vi.fn(async () => undefined),
       ensureContextEnginesInitialized: vi.fn(),
       ensureRuntimePluginsLoaded: vi.fn(),
       loadConfig: vi.fn(() => ({})),
@@ -129,12 +144,6 @@ describe("subagent registry persistence resume", () => {
       })),
     });
     mod.resetSubagentRegistryForTests({ persist: false });
-    vi.mocked(callGatewayModule.callGateway).mockReset();
-    vi.mocked(callGatewayModule.callGateway).mockResolvedValue({
-      status: "ok",
-      startedAt: 111,
-      endedAt: 222,
-    });
     vi.mocked(agentEventsModule.onAgentEvent).mockReset();
     vi.mocked(agentEventsModule.onAgentEvent).mockReturnValue(() => undefined);
   });
@@ -150,6 +159,7 @@ describe("subagent registry persistence resume", () => {
       tempStateDir = null;
     }
     hoisted.registryPath = undefined;
+    hoisted.allowedRunIds = undefined;
     envSnapshot.restore();
   });
 
@@ -158,32 +168,30 @@ describe("subagent registry persistence resume", () => {
     process.env.OPENCLAW_STATE_DIR = tempStateDir;
     const registryPath = path.join(tempStateDir, "subagents", "runs.json");
     hoisted.registryPath = registryPath;
-
-    let releaseInitialWait:
-      | ((value: { status: "ok"; startedAt: number; endedAt: number }) => void)
-      | undefined;
-    vi.mocked(callGatewayModule.callGateway)
-      .mockImplementationOnce(
-        async () =>
-          await new Promise((resolve) => {
-            releaseInitialWait = resolve as typeof releaseInitialWait;
-          }),
-      )
-      .mockResolvedValueOnce({
-        status: "ok",
-        startedAt: 111,
-        endedAt: 222,
-      });
-
-    mod.registerSubagentRun({
-      runId: "run-1",
-      childSessionKey: "agent:main:subagent:test",
-      requesterSessionKey: "agent:main:main",
-      requesterOrigin: { channel: " whatsapp ", accountId: " acct-main " },
-      requesterDisplayKey: "main",
-      task: "do the thing",
-      cleanup: "keep",
-    });
+    await fs.mkdir(path.dirname(registryPath), { recursive: true });
+    await fs.writeFile(
+      registryPath,
+      `${JSON.stringify(
+        {
+          version: 2,
+          runs: {
+            "run-1": {
+              runId: "run-1",
+              childSessionKey: "agent:main:subagent:test",
+              requesterSessionKey: "agent:main:main",
+              requesterOrigin: { channel: "whatsapp", accountId: "acct-main" },
+              requesterDisplayKey: "main",
+              task: "do the thing",
+              cleanup: "keep",
+              createdAt: Date.now(),
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
     await writeChildSessionEntry({
       sessionKey: "agent:main:subagent:test",
       sessionId: "sess-test",
@@ -205,15 +213,13 @@ describe("subagent registry persistence resume", () => {
     expect(run?.requesterOrigin?.channel).toBe("whatsapp");
     expect(run?.requesterOrigin?.accountId).toBe("acct-main");
 
-    mod.resetSubagentRegistryForTests({ persist: false });
     mod.initSubagentRegistry();
-    releaseInitialWait?.({
-      status: "ok",
-      startedAt: 111,
-      endedAt: 222,
-    });
 
     await flushQueuedRegistryWork();
+    await vi.waitFor(() => expect(announceSpy).toHaveBeenCalled(), {
+      timeout: 1_000,
+      interval: 10,
+    });
 
     const announceCalls = announceSpy.mock.calls as unknown as Array<[unknown]>;
     const announce = (announceCalls.at(-1)?.[0] ?? undefined) as
@@ -227,20 +233,18 @@ describe("subagent registry persistence resume", () => {
           outcome?: { status?: string };
         }
       | undefined;
-    if (announce) {
-      expect(announce).toMatchObject({
-        childRunId: "run-1",
-        childSessionKey: "agent:main:subagent:test",
-        requesterSessionKey: "agent:main:main",
-        requesterOrigin: {
-          channel: "whatsapp",
-          accountId: "acct-main",
-        },
-        task: "do the thing",
-        cleanup: "keep",
-        outcome: { status: "ok" },
-      });
-    }
+    expect(announce).toMatchObject({
+      childRunId: "run-1",
+      childSessionKey: "agent:main:subagent:test",
+      requesterSessionKey: "agent:main:main",
+      requesterOrigin: {
+        channel: "whatsapp",
+        accountId: "acct-main",
+      },
+      task: "do the thing",
+      cleanup: "keep",
+      outcome: { status: "ok" },
+    });
 
     const restored = mod.listSubagentRunsForRequester("agent:main:main")[0];
     expect(restored?.childSessionKey).toBe("agent:main:subagent:test");

@@ -35,7 +35,7 @@ self-contained, safe-default setup:
           enabled: true,
           agents: ["main"],
           allowedChatTypes: ["direct"],
-          modelFallbackPolicy: "default-remote",
+          modelFallback: "google/gemini-3-flash",
           queryMode: "recent",
           promptStyle: "balanced",
           timeoutMs: 15000,
@@ -51,7 +51,7 @@ self-contained, safe-default setup:
 
 This turns the plugin on for the `main` agent, keeps it limited to direct-message
 style sessions by default, lets it inherit the current session model first, and
-still allows the built-in remote fallback if no explicit or inherited model is
+uses the configured fallback model only if no explicit or inherited model is
 available.
 
 After that, restart the gateway:
@@ -85,7 +85,7 @@ Start with this in `openclaw.json`:
         config: {
           agents: ["main"],
           allowedChatTypes: ["direct"],
-          modelFallbackPolicy: "default-remote",
+          modelFallback: "google/gemini-3-flash",
           queryMode: "recent",
           promptStyle: "balanced",
           timeoutMs: 15000,
@@ -111,7 +111,7 @@ What this means:
 - `config.agents: ["main"]` opts only the `main` agent into active memory
 - `config.allowedChatTypes: ["direct"]` keeps active memory on for direct-message style sessions only by default
 - if `config.model` is unset, active memory inherits the current session model first
-- `config.modelFallbackPolicy: "default-remote"` keeps the built-in remote fallback as the default when no explicit or inherited model is available
+- `config.modelFallback` optionally provides your own fallback provider/model for recall
 - `config.promptStyle: "balanced"` uses the default general-purpose prompt style for `recent` mode
 - active memory still runs only on eligible interactive persistent chat sessions
 
@@ -335,26 +335,22 @@ If `config.model` is unset, Active Memory tries to resolve a model in this order
 explicit plugin model
 -> current session model
 -> agent primary model
--> optional built-in remote fallback
+-> optional configured fallback model
 ```
 
-`config.modelFallbackPolicy` controls the last step.
+`config.modelFallback` controls the configured fallback step.
 
-Default:
+Optional custom fallback:
 
 ```json5
-modelFallbackPolicy: "default-remote"
+modelFallback: "google/gemini-3-flash"
 ```
 
-Other option:
+If no explicit, inherited, or configured fallback model resolves, Active Memory
+skips recall for that turn.
 
-```json5
-modelFallbackPolicy: "resolved-only"
-```
-
-Use `resolved-only` if you want Active Memory to skip recall instead of falling
-back to the built-in remote default when no explicit or inherited model is
-available.
+`config.modelFallbackPolicy` is retained only as a deprecated compatibility
+field for older configs. It no longer changes runtime behavior.
 
 ## Advanced escape hatches
 

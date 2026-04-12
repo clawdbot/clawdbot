@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
+import {
+  applyAgentDefaults,
+  applyContextPruningDefaults,
+  applyMessageDefaults,
+} from "./defaults.js";
 
 const mocks = vi.hoisted(() => ({
   applyProviderConfigDefaultsForConfig: vi.fn(),
@@ -13,15 +18,8 @@ vi.mock("./provider-policy.js", () => ({
     _params.providerConfig,
 }));
 
-let applyContextPruningDefaults: typeof import("./defaults.js").applyContextPruningDefaults;
-let applyAgentDefaults: typeof import("./defaults.js").applyAgentDefaults;
-let applyMessageDefaults: typeof import("./defaults.js").applyMessageDefaults;
-
 describe("config defaults", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ applyAgentDefaults, applyContextPruningDefaults, applyMessageDefaults } =
-      await import("./defaults.js"));
+  beforeEach(() => {
     mocks.applyProviderConfigDefaultsForConfig.mockReset();
   });
 

@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "../../config/config.js";
 import { resolvePluginWebSearchConfig } from "../../config/plugin-web-search-config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 type ConfiguredWebSearchProvider = NonNullable<
   NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"]

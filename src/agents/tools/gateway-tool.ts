@@ -1,10 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 import { Type } from "@sinclair/typebox";
-import { isRestartEnabled } from "../../config/commands.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import { isRestartEnabled } from "../../config/commands.flags.js";
 import { parseConfigJson5, resolveConfigSnapshotHash } from "../../config/io.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   formatDoctorNonInteractiveHint,
   type RestartSentinelPayload,

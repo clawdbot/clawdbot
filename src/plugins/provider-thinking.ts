@@ -3,7 +3,6 @@ import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingPolicyContext,
 } from "./provider-thinking.types.js";
-import { getActivePluginRegistry } from "./runtime.js";
 
 type ThinkingProviderPlugin = {
   id: string;
@@ -13,6 +12,16 @@ type ThinkingProviderPlugin = {
   resolveDefaultThinkingLevel?: (
     ctx: ProviderDefaultThinkingPolicyContext,
   ) => "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | null | undefined;
+};
+
+const PLUGIN_REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
+
+type ThinkingRegistryState = {
+  activeRegistry?: {
+    providers?: Array<{
+      provider: ThinkingProviderPlugin;
+    }>;
+  } | null;
 };
 
 function matchesProviderId(provider: ThinkingProviderPlugin, providerId: string): boolean {
@@ -27,7 +36,10 @@ function matchesProviderId(provider: ThinkingProviderPlugin, providerId: string)
 }
 
 function resolveActiveThinkingProvider(providerId: string): ThinkingProviderPlugin | undefined {
-  return getActivePluginRegistry()?.providers.find((entry) => {
+  const state = (
+    globalThis as typeof globalThis & { [PLUGIN_REGISTRY_STATE]?: ThinkingRegistryState }
+  )[PLUGIN_REGISTRY_STATE];
+  return state?.activeRegistry?.providers?.find((entry) => {
     return matchesProviderId(entry.provider, providerId);
   })?.provider;
 }

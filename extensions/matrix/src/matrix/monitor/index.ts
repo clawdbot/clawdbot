@@ -1,5 +1,6 @@
 import { format } from "node:util";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
+import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-lifecycle";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import {
@@ -26,6 +27,11 @@ import {
 import { releaseSharedClientInstance } from "../client/shared.js";
 import type { MatrixClient } from "../sdk.js";
 import { isMatrixStartupAbortError } from "../startup-abort.js";
+import {
+  isMatrixDisconnectedSyncState,
+  isMatrixReadySyncState,
+  type MatrixSyncState,
+} from "../sync-state.js";
 import { createMatrixThreadBindingManager } from "../thread-bindings.js";
 import { registerMatrixAutoJoin } from "./auto-join.js";
 import { resolveMatrixMonitorConfig } from "./config.js";
@@ -45,7 +51,7 @@ import { createMatrixMonitorTaskRunner } from "./task-runner.js";
 
 export type MonitorMatrixOpts = {
   runtime?: RuntimeEnv;
-  channelRuntime?: import("openclaw/plugin-sdk/channel-core").PluginRuntime["channel"];
+  channelRuntime?: ChannelRuntimeSurface;
   abortSignal?: AbortSignal;
   mediaMaxMb?: number;
   initialSyncLimit?: number;
@@ -183,6 +189,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
         await releaseSharedClientInstance(client, mode);
       }
     } finally {
+      client?.off("sync.state", onSyncState);
       syncLifecycle?.dispose();
       statusController.markStopped();
       setActiveMatrixClient(null, auth.accountId);
@@ -240,6 +247,19 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const startupGraceMs = 0;
   const warnedEncryptedRooms = new Set<string>();
   const warnedCryptoMissingRooms = new Set<string>();
+  let healthySyncSinceMs: number | undefined;
+  const noteSyncHealthState = (state: MatrixSyncState, at = Date.now()) => {
+    if (isMatrixReadySyncState(state)) {
+      healthySyncSinceMs ??= at;
+      return;
+    }
+    if (isMatrixDisconnectedSyncState(state)) {
+      healthySyncSinceMs = undefined;
+    }
+  };
+  const onSyncState = (state: MatrixSyncState) => {
+    noteSyncHealthState(state);
+  };
 
   try {
     client = await resolveSharedMatrixClient({
@@ -258,6 +278,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       statusController,
       isStopping: () => cleanedUp || opts.abortSignal?.aborted === true,
     });
+    client.on("sync.state", onSyncState);
     // Cold starts should ignore old room history, but once we have a persisted
     // /sync cursor we want restart backlogs to replay just like other channels.
     const dropPreStartupMessages = !client.hasPersistedSyncState();
@@ -357,6 +378,8 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       warnedEncryptedRooms,
       warnedCryptoMissingRooms,
       logger,
+      startupGraceMs,
+      getHealthySyncSinceMs: () => healthySyncSinceMs,
       formatNativeDependencyHint: core.system.formatNativeDependencyHint,
       onRoomMessage: handleRoomMessage,
       runDetachedTask: monitorTaskRunner.runDetachedTask,

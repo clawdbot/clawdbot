@@ -81,7 +81,7 @@ describe("discord component interactions", () => {
       ...overrides,
     }) as ComponentContext;
 
-  const createComponentButtonInteraction = (overrides: Partial<ButtonInteraction> = {}) => {
+  const createComponentInteractionBase = () => {
     const reply = vi.fn().mockResolvedValue(undefined);
     const defer = vi.fn().mockResolvedValue(undefined);
     const rest = {
@@ -90,42 +90,38 @@ describe("discord component interactions", () => {
       patch: vi.fn().mockResolvedValue({}),
       delete: vi.fn().mockResolvedValue(undefined),
     };
+    return {
+      reply,
+      defer,
+      client: { rest },
+      user: { id: "123456789", username: "AgentUser", discriminator: "0001" },
+      message: { id: "msg-1" },
+    };
+  };
+
+  const createComponentButtonInteraction = (overrides: Partial<ButtonInteraction> = {}) => {
+    const base = createComponentInteractionBase();
     const interaction = {
       rawData: { channel_id: "dm-channel", id: "interaction-1" },
-      user: { id: "123456789", username: "AgentUser", discriminator: "0001" },
       customId: "occomp:cid=btn_1",
-      message: { id: "msg-1" },
-      client: { rest },
-      defer,
-      reply,
+      ...base,
       ...overrides,
     } as unknown as ButtonInteraction;
-    return { interaction, defer, reply };
+    return { interaction, defer: base.defer, reply: base.reply };
   };
 
   const createComponentSelectInteraction = (
     overrides: Partial<StringSelectMenuInteraction> = {},
   ) => {
-    const reply = vi.fn().mockResolvedValue(undefined);
-    const defer = vi.fn().mockResolvedValue(undefined);
-    const rest = {
-      get: vi.fn().mockResolvedValue({ type: ChannelType.DM }),
-      post: vi.fn().mockResolvedValue({}),
-      patch: vi.fn().mockResolvedValue({}),
-      delete: vi.fn().mockResolvedValue(undefined),
-    };
+    const base = createComponentInteractionBase();
     const interaction = {
       rawData: { channel_id: "dm-channel", id: "interaction-select-1" },
-      user: { id: "123456789", username: "AgentUser", discriminator: "0001" },
       customId: "occomp:cid=sel_1",
-      message: { id: "msg-1" },
       values: ["alpha"],
-      client: { rest },
-      defer,
-      reply,
+      ...base,
       ...overrides,
     } as unknown as StringSelectMenuInteraction;
-    return { interaction, defer, reply };
+    return { interaction, defer: base.defer, reply: base.reply };
   };
 
   const createModalInteraction = (overrides: Partial<ModalInteraction> = {}) => {
@@ -445,72 +441,21 @@ describe("discord component interactions", () => {
     expect(dispatchReplyMock).not.toHaveBeenCalled();
   });
 
-  it("blocks buttons on disabled guild channels", async () => {
-    registerDiscordComponentEntries({
-      entries: [createButtonEntry()],
-      modals: [],
-    });
-
-    const button = createDiscordComponentButton(
-      createComponentContext({
-        cfg: {
-          channels: { discord: { replyToMode: "first", groupPolicy: "allowlist" } },
-        } as OpenClawConfig,
-        discordConfig: createDiscordConfig({ groupPolicy: "allowlist" }),
-        guildEntries: { g1: { channels: { "guild-channel": { enabled: false } } } },
-      }),
-    );
-    const { interaction, reply } = createComponentButtonInteraction({
-      rawData: {
-        channel_id: "guild-channel",
-        guild_id: "g1",
-        id: "interaction-guild-disabled",
-        member: { roles: [] },
-      } as unknown as ButtonInteraction["rawData"],
-      guild: { id: "g1", name: "Test Guild" } as unknown as ButtonInteraction["guild"],
-    });
-
-    await button.run(interaction, { cid: "btn_1" } as ComponentData);
-
-    expect(reply).toHaveBeenCalledWith({
-      content: "You are not authorized to use this button.",
-      ephemeral: true,
-    });
-    expect(dispatchReplyMock).not.toHaveBeenCalled();
-  });
-
-  it("blocks buttons on denied guild channels", async () => {
-    registerDiscordComponentEntries({
-      entries: [createButtonEntry()],
-      modals: [],
-    });
-
-    const button = createDiscordComponentButton(
-      createComponentContext({
-        cfg: {
-          channels: { discord: { replyToMode: "first", groupPolicy: "allowlist" } },
-        } as OpenClawConfig,
-        discordConfig: createDiscordConfig({ groupPolicy: "allowlist" }),
-        guildEntries: { g1: { channels: { "guild-channel": { enabled: false } } } },
-      }),
-    );
-    const { interaction, reply } = createComponentButtonInteraction({
-      rawData: {
-        channel_id: "guild-channel",
-        guild_id: "g1",
-        id: "interaction-guild-denied",
-        member: { roles: [] },
-      } as unknown as ButtonInteraction["rawData"],
-      guild: { id: "g1", name: "Test Guild" } as unknown as ButtonInteraction["guild"],
-    });
-
-    await button.run(interaction, { cid: "btn_1" } as ComponentData);
-
-    expect(reply).toHaveBeenCalledWith({
-      content: "You are not authorized to use this button.",
-      ephemeral: true,
-    });
-    expect(dispatchReplyMock).not.toHaveBeenCalled();
+  it.each([
+    {
+      title: "blocks buttons on disabled guild channels",
+      guildId: "g1",
+      interactionId: "interaction-guild-disabled",
+      guildEntries: { g1: { channels: { "guild-channel": { enabled: false } } } },
+    },
+    {
+      title: "blocks buttons on denied guild channels",
+      guildId: "g1",
+      interactionId: "interaction-guild-denied",
+      guildEntries: { g1: { channels: { "guild-channel": { enabled: false } } } },
+    },
+  ])("$title", async ({ guildId, interactionId, guildEntries }) => {
+    await expectBlockedGuildButton({ guildId, interactionId, guildEntries });
   });
 
   async function runModalSubmission(params?: { reusable?: boolean }) {
@@ -530,6 +475,83 @@ describe("discord component interactions", () => {
     return { acknowledge };
   }
 
+  async function expectBlockedGuildButton(params: {
+    guildId: string;
+    interactionId: string;
+    guildEntries: Record<string, unknown>;
+  }) {
+    registerDiscordComponentEntries({
+      entries: [createButtonEntry()],
+      modals: [],
+    });
+
+    const button = createDiscordComponentButton(
+      createComponentContext({
+        cfg: {
+          channels: { discord: { replyToMode: "first", groupPolicy: "allowlist" } },
+        } as OpenClawConfig,
+        discordConfig: createDiscordConfig({ groupPolicy: "allowlist" }),
+        guildEntries: params.guildEntries,
+      }),
+    );
+    const { interaction, reply } = createComponentButtonInteraction({
+      rawData: {
+        channel_id: "guild-channel",
+        guild_id: params.guildId,
+        id: params.interactionId,
+        member: { roles: [] },
+      } as unknown as ButtonInteraction["rawData"],
+      guild: {
+        id: params.guildId,
+        name: "Test Guild",
+      } as unknown as ButtonInteraction["guild"],
+    });
+
+    await button.run(interaction, { cid: "btn_1" } as ComponentData);
+
+    expect(reply).toHaveBeenCalledWith({
+      content: "You are not authorized to use this button.",
+      ephemeral: true,
+    });
+    expect(dispatchReplyMock).not.toHaveBeenCalled();
+  }
+
+  async function expectGuildModalAuth(params: {
+    allowFrom: string[];
+    interactionId: string;
+    expectedAuthorized: boolean;
+  }) {
+    registerDiscordComponentEntries({
+      entries: [],
+      modals: [createModalEntry()],
+    });
+
+    const modal = createDiscordComponentModal(
+      createComponentContext({
+        cfg: {
+          commands: { useAccessGroups: true },
+          channels: { discord: { replyToMode: "first" } },
+        } as OpenClawConfig,
+        allowFrom: params.allowFrom,
+      }),
+    );
+    const { interaction, acknowledge } = createModalInteraction({
+      rawData: {
+        channel_id: "guild-channel",
+        guild_id: "guild-1",
+        id: params.interactionId,
+        member: { roles: [] },
+      } as unknown as ModalInteraction["rawData"],
+      guild: { id: "guild-1", name: "Test Guild" } as unknown as ModalInteraction["guild"],
+    });
+
+    await modal.run(interaction, { mid: "mdl_1" } as ComponentData);
+
+    expect(acknowledge).toHaveBeenCalledTimes(1);
+    expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
+    expect(lastDispatchCtx?.CommandAuthorized).toBe(params.expectedAuthorized);
+  }
+
   it("routes modal submissions with field values", async () => {
     const { acknowledge } = await runModalSubmission();
 
@@ -540,68 +562,21 @@ describe("discord component interactions", () => {
     expect(resolveDiscordModalEntry({ id: "mdl_1" })).toBeNull();
   });
 
-  it("does not mark guild modal events as command-authorized for non-allowlisted users", async () => {
-    registerDiscordComponentEntries({
-      entries: [],
-      modals: [createModalEntry()],
-    });
-
-    const modal = createDiscordComponentModal(
-      createComponentContext({
-        cfg: {
-          commands: { useAccessGroups: true },
-          channels: { discord: { replyToMode: "first" } },
-        } as OpenClawConfig,
-        allowFrom: ["owner-1"],
-      }),
-    );
-    const { interaction, acknowledge } = createModalInteraction({
-      rawData: {
-        channel_id: "guild-channel",
-        guild_id: "guild-1",
-        id: "interaction-guild-1",
-        member: { roles: [] },
-      } as unknown as ModalInteraction["rawData"],
-      guild: { id: "guild-1", name: "Test Guild" } as unknown as ModalInteraction["guild"],
-    });
-
-    await modal.run(interaction, { mid: "mdl_1" } as ComponentData);
-
-    expect(acknowledge).toHaveBeenCalledTimes(1);
-    expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
-    expect(lastDispatchCtx?.CommandAuthorized).toBe(false);
-  });
-
-  it("marks guild modal events as command-authorized for allowlisted users", async () => {
-    registerDiscordComponentEntries({
-      entries: [],
-      modals: [createModalEntry()],
-    });
-
-    const modal = createDiscordComponentModal(
-      createComponentContext({
-        cfg: {
-          commands: { useAccessGroups: true },
-          channels: { discord: { replyToMode: "first" } },
-        } as OpenClawConfig,
-        allowFrom: ["123456789"],
-      }),
-    );
-    const { interaction, acknowledge } = createModalInteraction({
-      rawData: {
-        channel_id: "guild-channel",
-        guild_id: "guild-1",
-        id: "interaction-guild-2",
-        member: { roles: [] },
-      } as unknown as ModalInteraction["rawData"],
-      guild: { id: "guild-1", name: "Test Guild" } as unknown as ModalInteraction["guild"],
-    });
-
-    await modal.run(interaction, { mid: "mdl_1" } as ComponentData);
-
-    expect(acknowledge).toHaveBeenCalledTimes(1);
-    expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
-    expect(lastDispatchCtx?.CommandAuthorized).toBe(true);
+  it.each([
+    {
+      title: "does not mark guild modal events as command-authorized for non-allowlisted users",
+      allowFrom: ["owner-1"],
+      interactionId: "interaction-guild-1",
+      expectedAuthorized: false,
+    },
+    {
+      title: "marks guild modal events as command-authorized for allowlisted users",
+      allowFrom: ["123456789"],
+      interactionId: "interaction-guild-2",
+      expectedAuthorized: true,
+    },
+  ])("$title", async ({ allowFrom, interactionId, expectedAuthorized }) => {
+    await expectGuildModalAuth({ allowFrom, interactionId, expectedAuthorized });
   });
 
   it("keeps reusable modal entries active after submission", async () => {

@@ -1,4 +1,12 @@
 import type { ChannelSetupWizard, ChannelSetupWizardAdapter } from "./setup-wizard-types.js";
+import type { ChannelConfigSchema } from "./types.config.js";
+export type {
+  ChannelConfigRuntimeIssue,
+  ChannelConfigRuntimeParseResult,
+  ChannelConfigRuntimeSchema,
+  ChannelConfigSchema,
+  ChannelConfigUiHint,
+} from "./types.config.js";
 import type {
   ChannelApprovalCapability,
   ChannelAuthAdapter,
@@ -35,44 +43,6 @@ import type {
   ChannelStreamingAdapter,
   ChannelThreadingAdapter,
 } from "./types.core.js";
-
-// Channel docking: implement this contract in src/channels/plugins/<id>.ts.
-export type ChannelConfigUiHint = {
-  label?: string;
-  help?: string;
-  tags?: string[];
-  advanced?: boolean;
-  sensitive?: boolean;
-  placeholder?: string;
-  itemTemplate?: unknown;
-};
-
-export type ChannelConfigRuntimeIssue = {
-  path?: Array<string | number>;
-  message?: string;
-  code?: string;
-} & Record<string, unknown>;
-
-export type ChannelConfigRuntimeParseResult =
-  | {
-      success: true;
-      data: unknown;
-    }
-  | {
-      success: false;
-      issues: ChannelConfigRuntimeIssue[];
-    };
-
-export type ChannelConfigRuntimeSchema = {
-  safeParse: (value: unknown) => ChannelConfigRuntimeParseResult;
-};
-
-/** JSON-schema-like config description published by a channel plugin. */
-export type ChannelConfigSchema = {
-  schema: Record<string, unknown>;
-  uiHints?: Record<string, ChannelConfigUiHint>;
-  runtime?: ChannelConfigRuntimeSchema;
-};
 
 /** Full capability contract for a native channel plugin. */
 type ChannelPluginSetupWizard = ChannelSetupWizard | ChannelSetupWizardAdapter;

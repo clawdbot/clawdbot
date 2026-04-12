@@ -6,7 +6,10 @@ import { msteamsPlugin } from "./channel.js";
 const {
   editMessageMSTeamsMock,
   deleteMessageMSTeamsMock,
+  getChannelInfoMSTeamsMock,
+  getMemberInfoMSTeamsMock,
   getMessageMSTeamsMock,
+  listChannelsMSTeamsMock,
   listReactionsMSTeamsMock,
   pinMessageMSTeamsMock,
   reactMessageMSTeamsMock,
@@ -17,7 +20,10 @@ const {
 } = vi.hoisted(() => ({
   editMessageMSTeamsMock: vi.fn(),
   deleteMessageMSTeamsMock: vi.fn(),
+  getChannelInfoMSTeamsMock: vi.fn(),
+  getMemberInfoMSTeamsMock: vi.fn(),
   getMessageMSTeamsMock: vi.fn(),
+  listChannelsMSTeamsMock: vi.fn(),
   listReactionsMSTeamsMock: vi.fn(),
   pinMessageMSTeamsMock: vi.fn(),
   reactMessageMSTeamsMock: vi.fn(),
@@ -31,7 +37,10 @@ vi.mock("./channel.runtime.js", () => ({
   msTeamsChannelRuntime: {
     editMessageMSTeams: editMessageMSTeamsMock,
     deleteMessageMSTeams: deleteMessageMSTeamsMock,
+    getChannelInfoMSTeams: getChannelInfoMSTeamsMock,
+    getMemberInfoMSTeams: getMemberInfoMSTeamsMock,
     getMessageMSTeams: getMessageMSTeamsMock,
+    listChannelsMSTeams: listChannelsMSTeamsMock,
     listReactionsMSTeams: listReactionsMSTeamsMock,
     pinMessageMSTeams: pinMessageMSTeamsMock,
     reactMessageMSTeams: reactMessageMSTeamsMock,
@@ -45,7 +54,10 @@ vi.mock("./channel.runtime.js", () => ({
 const actionMocks = [
   editMessageMSTeamsMock,
   deleteMessageMSTeamsMock,
+  getChannelInfoMSTeamsMock,
+  getMemberInfoMSTeamsMock,
   getMessageMSTeamsMock,
+  listChannelsMSTeamsMock,
   listReactionsMSTeamsMock,
   pinMessageMSTeamsMock,
   reactMessageMSTeamsMock,
@@ -101,6 +113,7 @@ async function runAction(params: {
   params?: Record<string, unknown>;
   toolContext?: Record<string, unknown>;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
 }) {
   const handleAction = requireMSTeamsHandleAction();
   return await handleAction({
@@ -109,6 +122,7 @@ async function runAction(params: {
     cfg: params.cfg ?? {},
     params: params.params ?? {},
     mediaLocalRoots: params.mediaLocalRoots,
+    mediaReadFile: params.mediaReadFile,
     toolContext: params.toolContext,
   } as Parameters<ReturnType<typeof requireMSTeamsHandleAction>>[0]);
 }
@@ -167,6 +181,7 @@ async function expectSuccessfulAction(params: {
   actionParams?: Parameters<typeof runAction>[0]["params"];
   toolContext?: Parameters<typeof runAction>[0]["toolContext"];
   mediaLocalRoots?: Parameters<typeof runAction>[0]["mediaLocalRoots"];
+  mediaReadFile?: Parameters<typeof runAction>[0]["mediaReadFile"];
   runtimeParams: Record<string, unknown>;
   details: Record<string, unknown>;
   contentDetails?: Record<string, unknown>;
@@ -176,6 +191,7 @@ async function expectSuccessfulAction(params: {
     action: params.action,
     params: params.actionParams,
     mediaLocalRoots: params.mediaLocalRoots,
+    mediaReadFile: params.mediaReadFile,
     toolContext: params.toolContext,
   });
   expectActionRuntimeCall(params.mockFn, params.runtimeParams);
@@ -233,6 +249,7 @@ describe("msteamsPlugin message actions", () => {
   });
 
   it("routes upload-file through sendMessageMSTeams with filename override", async () => {
+    const mediaReadFile = vi.fn(async () => Buffer.from("pdf"));
     await expectSuccessfulAction({
       mockFn: sendMessageMSTeamsMock,
       mockResult: {
@@ -247,12 +264,14 @@ describe("msteamsPlugin message actions", () => {
         filename: "Q1-report.pdf",
       },
       mediaLocalRoots: ["/tmp"],
+      mediaReadFile,
       runtimeParams: {
         to: targetChannelId,
         text: "Quarterly report",
         mediaUrl: " /tmp/report.pdf ",
         filename: "Q1-report.pdf",
         mediaLocalRoots: ["/tmp"],
+        mediaReadFile,
       },
       details: {
         ok: true,
@@ -265,6 +284,69 @@ describe("msteamsPlugin message actions", () => {
         action: "upload-file",
         messageId: "msg-upload-1",
         conversationId: "conv-upload-1",
+      },
+    });
+  });
+
+  it("routes member-info through the Teams runtime", async () => {
+    await expectSuccessfulAction({
+      mockFn: getMemberInfoMSTeamsMock,
+      mockResult: { member: { id: "user-1" } },
+      action: "member-info",
+      actionParams: { userId: " user-1 " },
+      runtimeParams: { userId: "user-1" },
+      details: okMSTeamsActionDetails("member-info", {
+        member: { id: "user-1" },
+      }),
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "member-info",
+        member: { id: "user-1" },
+      },
+    });
+  });
+
+  it("routes channel-list through the Teams runtime", async () => {
+    await expectSuccessfulAction({
+      mockFn: listChannelsMSTeamsMock,
+      mockResult: { channels: [{ id: "channel-1" }] },
+      action: "channel-list",
+      actionParams: { teamId: " team-1 " },
+      runtimeParams: { teamId: "team-1" },
+      details: okMSTeamsActionDetails("channel-list", {
+        channels: [{ id: "channel-1" }],
+      }),
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "channel-list",
+        channels: [{ id: "channel-1" }],
+      },
+    });
+  });
+
+  it("routes channel-info through the Teams runtime", async () => {
+    await expectSuccessfulAction({
+      mockFn: getChannelInfoMSTeamsMock,
+      mockResult: { channel: { id: "channel-1" } },
+      action: "channel-info",
+      actionParams: {
+        teamId: " team-1 ",
+        channelId: " channel-1 ",
+      },
+      runtimeParams: {
+        teamId: "team-1",
+        channelId: "channel-1",
+      },
+      details: okMSTeamsActionDetails("channel-info", {
+        channelInfo: { id: "channel-1" },
+      }),
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "channel-info",
+        channelInfo: { id: "channel-1" },
       },
     });
   });

@@ -37,9 +37,15 @@ function expectPotentialConfiguredChannelCase(params: {
   env: NodeJS.ProcessEnv;
   expectedIds: string[];
   expectedConfigured: boolean;
+  options?: Parameters<typeof listPotentialConfiguredChannelIds>[2];
 }) {
-  expect(listPotentialConfiguredChannelIds(params.cfg, params.env)).toEqual(params.expectedIds);
-  expect(hasPotentialConfiguredChannels(params.cfg, params.env)).toBe(params.expectedConfigured);
+  const options = params.options ?? {};
+  expect(listPotentialConfiguredChannelIds(params.cfg, params.env, options)).toEqual(
+    params.expectedIds,
+  );
+  expect(hasPotentialConfiguredChannels(params.cfg, params.env, options)).toBe(
+    params.expectedConfigured,
+  );
 }
 
 afterEach(() => {
@@ -68,6 +74,7 @@ describe("config presence", () => {
       env,
       expectedIds: [],
       expectedConfigured: false,
+      options: { includePersistedAuthState: false },
     });
   });
 
@@ -81,6 +88,7 @@ describe("config presence", () => {
       env,
       expectedIds: ["matrix"],
       expectedConfigured: true,
+      options: { includePersistedAuthState: false },
     });
   });
 
@@ -98,6 +106,12 @@ describe("config presence", () => {
       env,
       expectedIds: ["matrix"],
       expectedConfigured: true,
+      options: {
+        persistedAuthStateProbe: {
+          listChannelIds: () => ["matrix"],
+          hasState: () => true,
+        },
+      },
     });
   });
 });

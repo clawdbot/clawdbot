@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRuntimePluginRegistry } from "../plugins/loader.js";
 import { resolveUserPath } from "../utils.js";
 

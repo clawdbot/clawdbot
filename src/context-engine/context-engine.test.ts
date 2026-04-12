@@ -8,7 +8,8 @@ import { clearMemoryPluginState, registerMemoryPromptSection } from "../plugins/
 // group when needed.  For most groups we use the shared singleton directly.
 // ---------------------------------------------------------------------------
 import { buildMemorySystemPromptAddition, delegateCompactionToRuntime } from "./delegate.js";
-import { LegacyContextEngine, registerLegacyContextEngine } from "./legacy.js";
+import { LegacyContextEngine } from "./legacy.js";
+import { registerLegacyContextEngine } from "./legacy.registration.js";
 import {
   registerContextEngine,
   registerContextEngineForOwner,

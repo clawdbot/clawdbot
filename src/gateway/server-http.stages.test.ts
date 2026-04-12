@@ -19,7 +19,7 @@ describe("runGatewayHttpRequestStages", () => {
     expect(await runGatewayHttpRequestStages(stages)).toBe(false);
   });
 
-  it("skips a throwing stage and continues to subsequent stages", async () => {
+  it("skips a throwing stage marked continueOnError and continues to subsequent stages", async () => {
     const stageC = vi.fn(() => true);
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
@@ -27,6 +27,7 @@ describe("runGatewayHttpRequestStages", () => {
       { name: "a", run: () => false },
       {
         name: "broken-facade",
+        continueOnError: true,
         run: () => {
           throw new Error("Cannot find module '@slack/bolt'");
         },
@@ -46,13 +47,14 @@ describe("runGatewayHttpRequestStages", () => {
     consoleSpy.mockRestore();
   });
 
-  it("skips a rejecting async stage and continues", async () => {
+  it("skips a rejecting async stage marked continueOnError and continues", async () => {
     const stageC = vi.fn(() => true);
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     const stages = [
       {
         name: "async-broken",
+        continueOnError: true,
         run: async () => {
           throw new Error("ERR_MODULE_NOT_FOUND");
         },
@@ -72,9 +74,7 @@ describe("runGatewayHttpRequestStages", () => {
     consoleSpy.mockRestore();
   });
 
-  it("returns false when the only non-throwing stages do not handle", async () => {
-    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
+  it("rethrows when a stage throws without continueOnError", async () => {
     const stages = [
       {
         name: "broken",
@@ -85,10 +85,6 @@ describe("runGatewayHttpRequestStages", () => {
       { name: "unmatched", run: () => false },
     ];
 
-    const result = await runGatewayHttpRequestStages(stages);
-
-    expect(result).toBe(false);
-
-    consoleSpy.mockRestore();
+    await expect(runGatewayHttpRequestStages(stages)).rejects.toThrow("load failed");
   });
 });

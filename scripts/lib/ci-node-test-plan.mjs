@@ -8,6 +8,13 @@ const EXCLUDED_FULL_SUITE_SHARDS = new Set([
 
 const EXCLUDED_PROJECT_CONFIGS = new Set(["test/vitest/vitest.channels.config.ts"]);
 
+function formatNodeTestShardCheckName(shardName) {
+  const normalizedShardName = shardName.startsWith("core-unit-")
+    ? `core-${shardName.slice("core-unit-".length)}`
+    : shardName;
+  return `checks-node-${normalizedShardName}`;
+}
+
 export function createNodeTestShards() {
   return fullSuiteVitestShards.flatMap((shard) => {
     if (EXCLUDED_FULL_SUITE_SHARDS.has(shard.config)) {
@@ -21,7 +28,7 @@ export function createNodeTestShards() {
 
     return [
       {
-        checkName: `checks-node-core-test-${shard.name}`,
+        checkName: formatNodeTestShardCheckName(shard.name),
         shardName: shard.name,
         configs,
       },

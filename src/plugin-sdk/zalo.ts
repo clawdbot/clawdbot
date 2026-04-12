@@ -2,7 +2,7 @@
 // Keep this list additive and scoped to the bundled Zalo surface.
 
 export { jsonResult, readStringParam } from "../agents/tools/common.js";
-export type { ReplyPayload } from "../auto-reply/types.js";
+export type { ReplyPayload } from "../auto-reply/reply-payload.js";
 export {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
@@ -32,7 +32,7 @@ export type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
   ChannelStatusIssue,
-} from "../channels/plugins/types.js";
+} from "../channels/plugins/types.public.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { logTypingFailure } from "../channels/logging.js";
 export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";

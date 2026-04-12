@@ -30,9 +30,9 @@ import {
   resolveThreadBindingPlacementForCurrentContext,
   resolveThreadBindingSpawnPolicy,
 } from "../../../channels/thread-bindings-policy.js";
-import type { OpenClawConfig } from "../../../config/config.js";
 import { updateSessionStore } from "../../../config/sessions.js";
 import type { SessionAcpMeta } from "../../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { normalizeConversationRef } from "../../../infra/outbound/session-binding-normalization.js";
 import {

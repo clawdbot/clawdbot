@@ -1,5 +1,5 @@
-import { listChannelPlugins } from "../channels/plugins/index.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { listLoadedChannelPlugins } from "../channels/plugins/registry-loaded.js";
+import { getActivePluginChannelRegistryVersionFromState } from "../plugins/runtime-channel-state.js";
 import {
   assertCommandRegistry,
   buildBuiltinChatCommands,
@@ -7,7 +7,7 @@ import {
 } from "./commands-registry.shared.js";
 import type { ChatCommandDefinition } from "./commands-registry.types.js";
 
-type ChannelPlugin = ReturnType<typeof listChannelPlugins>[number];
+type ChannelPlugin = ReturnType<typeof listLoadedChannelPlugins>[number];
 
 function supportsNativeCommands(plugin: ChannelPlugin): boolean {
   return plugin.capabilities?.nativeCommands === true;
@@ -24,14 +24,14 @@ function defineDockCommand(plugin: ChannelPlugin): ChatCommandDefinition {
 }
 
 let cachedCommands: ChatCommandDefinition[] | null = null;
-let cachedRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
+let cachedRegistryVersion = -1;
 let cachedNativeCommandSurfaces: Set<string> | null = null;
-let cachedNativeRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
+let cachedNativeRegistryVersion = -1;
 
 function buildChatCommands(): ChatCommandDefinition[] {
   const commands: ChatCommandDefinition[] = [
     ...buildBuiltinChatCommands(),
-    ...listChannelPlugins()
+    ...listLoadedChannelPlugins()
       .filter(supportsNativeCommands)
       .map((plugin) => defineDockCommand(plugin)),
   ];
@@ -41,27 +41,27 @@ function buildChatCommands(): ChatCommandDefinition[] {
 }
 
 export function getChatCommands(): ChatCommandDefinition[] {
-  const registry = getActivePluginRegistry();
-  if (cachedCommands && registry === cachedRegistry) {
+  const registryVersion = getActivePluginChannelRegistryVersionFromState();
+  if (cachedCommands && registryVersion === cachedRegistryVersion) {
     return cachedCommands;
   }
   const commands = buildChatCommands();
   cachedCommands = commands;
-  cachedRegistry = registry;
+  cachedRegistryVersion = registryVersion;
   cachedNativeCommandSurfaces = null;
   return commands;
 }
 
 export function getNativeCommandSurfaces(): Set<string> {
-  const registry = getActivePluginRegistry();
-  if (cachedNativeCommandSurfaces && registry === cachedNativeRegistry) {
+  const registryVersion = getActivePluginChannelRegistryVersionFromState();
+  if (cachedNativeCommandSurfaces && registryVersion === cachedNativeRegistryVersion) {
     return cachedNativeCommandSurfaces;
   }
   cachedNativeCommandSurfaces = new Set(
-    listChannelPlugins()
+    listLoadedChannelPlugins()
       .filter(supportsNativeCommands)
       .map((plugin) => plugin.id),
   );
-  cachedNativeRegistry = registry;
+  cachedNativeRegistryVersion = registryVersion;
   return cachedNativeCommandSurfaces;
 }

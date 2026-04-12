@@ -300,8 +300,10 @@ export const fr: TranslationMap = {
     },
     scene: {
       backfill: "Rattrapage",
+      dedupeDiary: "Journal de déduplication",
       reset: "Réinitialiser",
       clearGrounded: "Effacer les éléments ancrés",
+      repairCache: "Réparer le cache des rêves",
       working: "En cours…",
     },
     phase: {

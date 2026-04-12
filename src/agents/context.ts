@@ -3,7 +3,7 @@
 
 import path from "node:path";
 import { loadConfig } from "../config/config.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";

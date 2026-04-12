@@ -5,6 +5,12 @@ import {
   READ_SCOPE,
   WRITE_SCOPE,
 } from "./method-scopes.js";
+import type {
+  GatewayBroadcastFn,
+  GatewayBroadcastOpts,
+  GatewayBroadcastStateVersion,
+  GatewayBroadcastToConnIdsFn,
+} from "./server-broadcast-types.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { logWs, shouldLogWs, summarizeAgentEventForWsLog } from "./ws-log.js";
@@ -23,28 +29,12 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "session.tool": [READ_SCOPE],
 };
 
-export type GatewayBroadcastStateVersion = {
-  presence?: number;
-  health?: number;
-};
-
-export type GatewayBroadcastOpts = {
-  dropIfSlow?: boolean;
-  stateVersion?: GatewayBroadcastStateVersion;
-};
-
-export type GatewayBroadcastFn = (
-  event: string,
-  payload: unknown,
-  opts?: GatewayBroadcastOpts,
-) => void;
-
-export type GatewayBroadcastToConnIdsFn = (
-  event: string,
-  payload: unknown,
-  connIds: ReadonlySet<string>,
-  opts?: GatewayBroadcastOpts,
-) => void;
+export type {
+  GatewayBroadcastFn,
+  GatewayBroadcastOpts,
+  GatewayBroadcastStateVersion,
+  GatewayBroadcastToConnIdsFn,
+} from "./server-broadcast-types.js";
 
 function hasEventScope(client: GatewayWsClient, event: string): boolean {
   const required = EVENT_SCOPE_GUARDS[event];

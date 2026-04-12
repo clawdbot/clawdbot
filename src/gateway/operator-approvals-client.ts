@@ -1,7 +1,7 @@
-import type { OpenClawConfig } from "../config/config.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayClientBootstrap } from "./client-bootstrap.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "./protocol/client-info.js";
 
 export async function createOperatorApprovalsGatewayClient(
   params: Pick<

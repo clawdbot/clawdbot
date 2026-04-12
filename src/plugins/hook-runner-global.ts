@@ -7,13 +7,13 @@
 
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { GlobalHookRunnerRegistry } from "./hook-registry.types.js";
+import type { PluginHookGatewayContext, PluginHookGatewayStopEvent } from "./hook-types.js";
 import { createHookRunner, type HookRunner } from "./hooks.js";
-import type { PluginRegistry } from "./registry.js";
-import type { PluginHookGatewayContext, PluginHookGatewayStopEvent } from "./types.js";
 
 type HookRunnerGlobalState = {
   hookRunner: HookRunner | null;
-  registry: PluginRegistry | null;
+  registry: GlobalHookRunnerRegistry | null;
 };
 
 const hookRunnerGlobalStateKey = Symbol.for("openclaw.plugins.hook-runner-global-state");
@@ -29,7 +29,7 @@ const getLog = () => createSubsystemLogger("plugins");
  * Initialize the global hook runner with a plugin registry.
  * Called once when plugins are loaded during gateway startup.
  */
-export function initializeGlobalHookRunner(registry: PluginRegistry): void {
+export function initializeGlobalHookRunner(registry: GlobalHookRunnerRegistry): void {
   const state = getState();
   const log = getLog();
   state.registry = registry;
@@ -63,7 +63,7 @@ export function getGlobalHookRunner(): HookRunner | null {
  * Get the global plugin registry.
  * Returns null if plugins haven't been loaded yet.
  */
-export function getGlobalPluginRegistry(): PluginRegistry | null {
+export function getGlobalPluginRegistry(): GlobalHookRunnerRegistry | null {
   return getState().registry;
 }
 

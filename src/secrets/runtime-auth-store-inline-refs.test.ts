@@ -1,35 +1,18 @@
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
-import type { AuthProfileStore } from "../agents/auth-profiles.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import { describe, expect, it } from "vitest";
+import { activateSecretsRuntimeSnapshot } from "./runtime.js";
 import {
-  activateSecretsRuntimeSnapshot,
-  clearSecretsRuntimeSnapshot,
-  prepareSecretsRuntimeSnapshot,
-} from "./runtime.js";
+  asConfig,
+  loadAuthStoreWithProfiles,
+  setupSecretsRuntimeSnapshotTestHooks,
+} from "./runtime.test-support.ts";
 
 const EMPTY_LOADABLE_PLUGIN_ORIGINS = new Map();
-
-function loadAuthStoreWithProfiles(profiles: AuthProfileStore["profiles"]): AuthProfileStore {
-  return {
-    version: 1,
-    profiles,
-  };
-}
+const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 
 describe("secrets runtime snapshot inline auth-store refs", () => {
-  beforeAll(() => {});
-
-  afterEach(() => {
-    clearSecretsRuntimeSnapshot();
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
-  });
-
   it("normalizes inline SecretRef object on token to tokenRef", async () => {
-    const config: OpenClawConfig = { models: {}, secrets: {} };
     const snapshot = await prepareSecretsRuntimeSnapshot({
-      config,
+      config: asConfig({ models: {}, secrets: {} }),
       env: { MY_TOKEN: "resolved-token-value" },
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
@@ -53,9 +36,8 @@ describe("secrets runtime snapshot inline auth-store refs", () => {
   });
 
   it("normalizes inline SecretRef object on key to keyRef", async () => {
-    const config: OpenClawConfig = { models: {}, secrets: {} };
     const snapshot = await prepareSecretsRuntimeSnapshot({
-      config,
+      config: asConfig({ models: {}, secrets: {} }),
       env: { MY_KEY: "resolved-key-value" },
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
@@ -79,9 +61,8 @@ describe("secrets runtime snapshot inline auth-store refs", () => {
   });
 
   it("keeps explicit keyRef when inline key SecretRef is also present", async () => {
-    const config: OpenClawConfig = { models: {}, secrets: {} };
     const snapshot = await prepareSecretsRuntimeSnapshot({
-      config,
+      config: asConfig({ models: {}, secrets: {} }),
       env: {
         PRIMARY_KEY: "primary-key-value",
         SHADOW_KEY: "shadow-key-value",

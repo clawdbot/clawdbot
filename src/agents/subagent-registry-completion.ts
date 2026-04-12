@@ -1,5 +1,5 @@
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import type { SubagentRunOutcome } from "./subagent-announce.js";
+import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import {
   SUBAGENT_ENDED_OUTCOME_ERROR,
   SUBAGENT_ENDED_OUTCOME_OK,

@@ -14,6 +14,7 @@ import {
   resolveStateDir,
   resolveGatewayPort,
 } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
 import { defaultGatewayBindMode, isContainerEnvironment } from "../../gateway/net.js";
@@ -158,7 +159,7 @@ function formatModeErrorList<T extends string>(modes: readonly T[]): string {
   return `${quoted.slice(0, -1).join(", ")}, or ${quoted[quoted.length - 1]}`;
 }
 
-function maybeLogPendingControlUiBuild(cfg: ReturnType<typeof loadConfig>): void {
+function maybeLogPendingControlUiBuild(cfg: OpenClawConfig): void {
   if (cfg.gateway?.controlUi?.enabled === false) {
     return;
   }

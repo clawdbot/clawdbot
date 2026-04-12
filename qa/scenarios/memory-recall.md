@@ -51,7 +51,7 @@ steps:
               expr: liveTurnTimeoutMs(env, 60000)
       - set: rememberAckAny
         value:
-          expr: config.rememberAckAny.map((needle) => needle.toLowerCase())
+          expr: config.rememberAckAny.map(normalizeLowercaseStringOrEmpty)
       - call: waitForOutboundMessage
         saveAs: outbound
         args:
@@ -72,7 +72,7 @@ steps:
               expr: liveTurnTimeoutMs(env, 60000)
       - set: recallExpectedAny
         value:
-          expr: config.recallExpectedAny.map((needle) => needle.toLowerCase())
+          expr: config.recallExpectedAny.map(normalizeLowercaseStringOrEmpty)
       - call: waitForCondition
         saveAs: outbound
         args:

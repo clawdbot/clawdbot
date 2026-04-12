@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -15,7 +15,7 @@ import {
   type NormalizedPluginsConfig as SharedNormalizedPluginsConfig,
 } from "./config-normalization-shared.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
-import type { PluginOrigin } from "./types.js";
+import type { PluginOrigin } from "./plugin-origin.types.js";
 
 export type PluginActivationSource = "disabled" | "explicit" | "auto" | "default";
 

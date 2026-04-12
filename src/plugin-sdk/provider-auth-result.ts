@@ -1,6 +1,6 @@
 import { buildAuthProfileId } from "../agents/auth-profiles/identity.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
 
 /** Build the standard auth result payload for OAuth-style provider login flows. */

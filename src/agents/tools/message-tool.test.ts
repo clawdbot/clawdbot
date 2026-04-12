@@ -287,6 +287,7 @@ describe("message tool secret scoping", () => {
       currentChannelProvider: "discord",
       agentAccountId: "ops",
       loadConfig: mocks.loadConfig as never,
+      getScopedChannelsCommandSecretTargets: mocks.getScopedChannelsCommandSecretTargets as never,
       resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway as never,
       runMessageAction: mocks.runMessageAction as never,
     });

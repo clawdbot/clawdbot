@@ -1,6 +1,6 @@
 import { afterEach, beforeEach } from "vitest";
 import type { MsgContext } from "../../auto-reply/templating.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,

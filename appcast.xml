@@ -3,6 +3,49 @@
     <channel>
         <title>OpenClaw</title>
         <item>
+            <title>2026.4.11</title>
+            <pubDate>Sun, 12 Apr 2026 00:37:09 +0000</pubDate>
+            <link>https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml</link>
+            <sparkle:version>2026041190</sparkle:version>
+            <sparkle:shortVersionString>2026.4.11</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<h2>OpenClaw 2026.4.11</h2>
+<h3>Changes</h3>
+<ul>
+<li>Dreaming/memory-wiki: add ChatGPT import ingestion plus new <code>Imported Insights</code> and <code>Memory Palace</code> diary subtabs so Dreaming can inspect imported source chats, compiled wiki pages, and full source pages directly from the UI. (#64505)</li>
+<li>Control UI/webchat: render assistant media/reply/voice directives as structured chat bubbles, add the <code>[embed ...]</code> rich output tag, and gate external embed URLs behind config. (#64104)</li>
+<li>Tools/video_generate: add URL-only generated asset delivery, typed <code>providerOptions</code>, reference audio inputs, per-asset role hints, <code>adaptive</code> aspect-ratio support, and a higher image-input cap so video providers can expose richer generation modes without forcing large files into memory. (#61987, #61988) Thanks @xieyongliang.</li>
+<li>Feishu: improve document comment sessions with richer context parsing, comment reactions, and typing feedback so document-thread conversations behave more like chat conversations. (#63785)</li>
+<li>Microsoft Teams: add reaction support, reaction listing, Graph pagination, and delegated OAuth setup for sending reactions while preserving application-auth read paths. (#51646)</li>
+<li>Plugins: allow plugin manifests to declare activation and setup descriptors so plugin setup flows can describe required auth, pairing, and configuration steps without hardcoded core special cases. (#64780)</li>
+<li>Ollama: cache <code>/api/show</code> context-window and capability metadata during model discovery so repeated picker refreshes stop refetching unchanged models, while still retrying after empty responses and invalidating on digest changes. (#64753) Thanks @ImLukeF.</li>
+<li>Models/providers: surface how configured OpenAI-compatible endpoints are classified in embedded-agent debug logs, so local and proxy routing issues are easier to diagnose. (#64754) Thanks @ImLukeF.</li>
+<li>QA/parity: add the GPT-5.4 vs Opus 4.6 agentic parity report gate with shared scenario coverage checks, stricter evidence heuristics, and skipped-scenario accounting for maintainer review. (#64441) Thanks @100yenadmin.</li>
+</ul>
+<h3>Fixes</h3>
+<ul>
+<li>OpenAI/Codex OAuth: stop rewriting the upstream authorize URL scopes so new Codex sign-ins do not fail with <code>invalid_scope</code> before returning an authorization code. (#64713) Thanks @fuller-stack-dev.</li>
+<li>Audio transcription: disable pinned DNS only for OpenAI-compatible multipart requests, while still validating hostnames, so OpenAI, Groq, and Mistral transcription works again without weakening other request paths. (#64766) Thanks @GodsBoy.</li>
+<li>macOS/Talk Mode: after granting microphone permission on first enable, continue starting Talk Mode instead of requiring a second toggle. (#62459) Thanks @ggarber.</li>
+<li>Control UI/webchat: persist agent-run TTS audio replies into webchat history and preserve interleaved tool card pairing so generated audio and mixed tool output stay attached to the right messages. (#63514) Thanks @bittoby.</li>
+<li>WhatsApp: honor the configured default account when the active listener helper is used without an explicit account id, so named default accounts do not get registered under <code>default</code>. (#53918) Thanks @yhyatt.</li>
+<li>ACP/agents: suppress commentary-phase child assistant relay text in ACP parent stream updates, so spawned child runs stop leaking internal progress chatter into the parent session. Thanks @vincentkoc.</li>
+<li>Agents/timeouts: honor explicit run timeouts in the LLM idle watchdog and align default timeout config so slow models can keep working until the configured limit instead of using the wrong idle window.</li>
+<li>Config: include <code>asyncCompletion</code> in the generated zod schema so documented async completion config no longer fails with an unrecognized-key error. (#63618)</li>
+<li>Google/Veo: stop sending the unsupported <code>numberOfVideos</code> request field so Gemini Developer API Veo runs do not fail before OpenClaw can complete the intended Google video generation path. (#64723) Thanks @velvet-shark.</li>
+<li>QA/packaging: stop packaged CLI startup and completion cache generation from reading repo-only QA scenario markdown, ship the bundled QA scenario pack in npm releases, and keep <code>openclaw completion --write-state</code> working even if QA setup is broken. (#64648) Thanks @obviyus.</li>
+<li>Codex/QA: keep Codex app-server coordination chatter out of visible replies, add a live QA leak scenario, and classify leaked harness meta text as a QA failure instead of a successful reply. Thanks @vincentkoc.</li>
+<li>WhatsApp: route <code>message react</code> through the gateway-owned action path so reactions use the live WhatsApp listener in both DM and group chats, matching <code>message send</code> and <code>message poll</code>. Thanks @mcaxtr.</li>
+<li>Auto-reply/WhatsApp: preserve inbound image attachment notes after media understanding so image edits keep the real saved media path instead of hallucinating a missing local path. (#64918) Thanks @ngutman.</li>
+<li>Telegram/sessions: keep topic-scoped session initialization on the canonical topic transcript path when inbound turns omit <code>MessageThreadId</code>, so one topic session no longer alternates between bare and topic-qualified transcript files. (#64869) Thanks @jalehman.</li>
+<li>Agents/failover: scope assistant-side fallback classification and surfaced provider errors to the current attempt instead of stale session history, so cross-provider fallback runs stop inheriting the previous provider's failure. (#62907) Thanks @stainlu.</li>
+<li>MiniMax/OAuth: write <code>api: "anthropic-messages"</code> and <code>authHeader: true</code> into the <code>minimax-portal</code> config patch during <code>openclaw configure</code>, so re-authenticated portal setups keep Bearer auth routing working. (#64964) Thanks @ryanlee666.</li>
+</ul>
+<p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
+]]></description>
+            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.4.11/OpenClaw-2026.4.11.zip" length="47317969" type="application/octet-stream" sparkle:edSignature="v9bUsh1mBBPtpMn7kKYAvO8MNJHAeMj7UkmkkuDSC8NvwPx2Fo3+NEeyAyA9s9Vax6L7i+eHSpwzAmtwpnHcCA=="/>
+        </item>
+        <item>
             <title>2026.4.10</title>
             <pubDate>Sat, 11 Apr 2026 03:17:02 +0000</pubDate>
             <link>https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml</link>
@@ -202,29 +245,6 @@
 <p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
             <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.4.9/OpenClaw-2026.4.9.zip" length="25336730" type="application/octet-stream" sparkle:edSignature="zFKTcKpejPyGEHj6Bdop3EBDfRrHyQMtJzrpVKsIkBq3I/jbTNvsxQveKEy9r7dqkZVsldFYv7eSunP3SUmaAw=="/>
-        </item>
-        <item>
-            <title>2026.4.8</title>
-            <pubDate>Wed, 08 Apr 2026 06:12:50 +0000</pubDate>
-            <link>https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml</link>
-            <sparkle:version>2026040890</sparkle:version>
-            <sparkle:shortVersionString>2026.4.8</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description><![CDATA[<h2>OpenClaw 2026.4.8</h2>
-<h3>Fixes</h3>
-<ul>
-<li>Telegram/setup: load setup and secret contracts through packaged top-level sidecars so installed npm builds no longer try to import missing <code>dist/extensions/telegram/src/*</code> files during gateway startup.</li>
-<li>Bundled channels/setup: load shared secret contracts through packaged top-level sidecars across BlueBubbles, Feishu, Google Chat, IRC, Matrix, Mattermost, Microsoft Teams, Nextcloud Talk, Slack, and Zalo so installed npm builds no longer rely on missing <code>dist/extensions/*/src/*</code> files during gateway startup.</li>
-<li>Bundled plugins: align packaged plugin compatibility metadata with the release version so bundled channels and providers load on OpenClaw 2026.4.8.</li>
-<li>Agents/progress: keep <code>update_plan</code> available for OpenAI-family runs while returning compact success payloads and allowing <code>tools.experimental.planTool=false</code> to opt out.</li>
-<li>Agents/exec: keep <code>/exec</code> current-default reporting aligned with real runtime behavior so <code>host=auto</code> sessions surface the correct host-aware fallback policy (<code>full/off</code> on gateway or node, <code>deny/off</code> on sandbox) instead of stale stricter defaults.</li>
-<li>Slack: honor ambient HTTP(S) proxy settings for Socket Mode WebSocket connections, including NO_PROXY exclusions, so proxy-only deployments can connect without a monkey patch. (#62878) Thanks @mjamiv.</li>
-<li>Slack/actions: pass the already resolved read token into <code>downloadFile</code> so SecretRef-backed bot tokens no longer fail after a raw config re-read. (#62097) Thanks @martingarramon.</li>
-<li>Network/fetch guard: skip target DNS pinning when trusted env-proxy mode is active so proxy-only sandboxes can let the trusted proxy resolve outbound hosts. (#59007) Thanks @cluster2600.</li>
-</ul>
-<p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
-]]></description>
-            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.4.8/OpenClaw-2026.4.8.zip" length="25324810" type="application/octet-stream" sparkle:edSignature="aogl3hJf+FeRvQj0W4WDGMQnIRPpxXPQam50U7SBT3ljA1CeSbIGsnaj20aLF0Qc9DikPEXt5AEg7LMOen4+BQ=="/>
         </item>
     </channel>
 </rss>

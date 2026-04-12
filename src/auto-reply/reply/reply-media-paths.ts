@@ -5,7 +5,7 @@ import { resolvePathFromInput } from "../../agents/path-policy.js";
 import { assertMediaNotDataUrl, resolveSandboxedMediaSource } from "../../agents/sandbox-paths.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../agents/tool-fs-policy.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { saveMediaSource } from "../../media/store.js";
 import { resolveConfigDir } from "../../utils.js";

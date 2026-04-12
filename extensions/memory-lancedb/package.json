@@ -18,7 +18,7 @@
     "install": {
       "npmSpec": "@openclaw/memory-lancedb",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.4.11"
+      "minHostVersion": ">=2026.4.10"
     },
     "compat": {
       "pluginApi": ">=2026.4.11"

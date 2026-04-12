@@ -293,8 +293,10 @@ export const en: TranslationMap = {
     },
     scene: {
       backfill: "Backfill",
+      dedupeDiary: "Dedupe Diary",
       reset: "Reset",
       clearGrounded: "Clear Replayed",
+      repairCache: "Repair Dream Cache",
       working: "Working…",
     },
     phase: {

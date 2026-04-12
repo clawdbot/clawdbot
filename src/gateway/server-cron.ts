@@ -1,6 +1,6 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
-import type { CliDeps } from "../cli/deps.js";
+import type { CliDeps } from "../cli/deps.types.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import { loadConfig } from "../config/config.js";
 import {
@@ -9,6 +9,7 @@ import {
   resolveAgentMainSessionKey,
 } from "../config/sessions.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveCronDeliveryPlan,
   resolveFailureDestination,
@@ -144,7 +145,7 @@ async function postCronWebhook(params: {
 }
 
 export function buildGatewayCronService(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   deps: CliDeps;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
 }): GatewayCronState {
@@ -168,7 +169,7 @@ export function buildGatewayCronService(params: {
   };
 
   const resolveCronSessionKey = (params: {
-    runtimeConfig: ReturnType<typeof loadConfig>;
+    runtimeConfig: OpenClawConfig;
     agentId: string;
     requestedSessionKey?: string | null;
   }) => {

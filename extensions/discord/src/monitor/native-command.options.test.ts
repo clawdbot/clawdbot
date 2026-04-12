@@ -108,6 +108,54 @@ function readChoices(option: CommandOption | undefined): unknown[] | undefined {
   return Array.isArray(value) ? value : undefined;
 }
 
+function requireAutocomplete(option: CommandOption, errorMessage: string) {
+  const autocomplete = readAutocomplete(option);
+  if (typeof autocomplete !== "function") {
+    throw new Error(errorMessage);
+  }
+  return autocomplete as (interaction: unknown) => Promise<unknown>;
+}
+
+async function runAutocomplete(
+  autocomplete: (interaction: unknown) => Promise<unknown>,
+  params: {
+    userId: string;
+    username?: string;
+    globalName?: string;
+    channelType: ChannelType;
+    channelId: string;
+    channelName: string;
+    guildId?: string;
+    focusedValue: string;
+  },
+) {
+  const respond = vi.fn(async (_choices: unknown[]) => undefined);
+
+  await autocomplete({
+    user: {
+      id: params.userId,
+      username: params.username ?? params.userId,
+      globalName: params.globalName ?? params.userId,
+    },
+    channel: {
+      type: params.channelType,
+      id: params.channelId,
+      name: params.channelName,
+    },
+    guild: params.guildId ? { id: params.guildId } : undefined,
+    rawData: {
+      member: { roles: [] },
+    },
+    options: {
+      getFocused: () => ({ value: params.focusedValue }),
+    },
+    respond,
+    client: {},
+  } as never);
+
+  return respond;
+}
+
 describe("createDiscordNativeCommand option wiring", () => {
   beforeAll(async () => {
     ({ listNativeCommandSpecs } = await import("openclaw/plugin-sdk/command-auth"));
@@ -123,31 +171,18 @@ describe("createDiscordNativeCommand option wiring", () => {
   it("uses autocomplete for /acp action so inline action values are accepted", async () => {
     const command = createNativeCommand("acp");
     const action = requireOption(command, "action");
-    const autocomplete = readAutocomplete(action);
-    if (typeof autocomplete !== "function") {
-      throw new Error("acp action option did not wire autocomplete");
-    }
-    const respond = vi.fn(async (_choices: unknown[]) => undefined);
+    const autocomplete = requireAutocomplete(action, "acp action option did not wire autocomplete");
 
     expect(readChoices(action)).toBeUndefined();
-    await autocomplete({
-      user: {
-        id: "owner",
-        username: "tester",
-        globalName: "Tester",
-      },
-      channel: {
-        type: ChannelType.DM,
-        id: "dm-1",
-      },
-      guild: undefined,
-      rawData: {},
-      options: {
-        getFocused: () => ({ value: "st" }),
-      },
-      respond,
-      client: {},
-    } as never);
+    const respond = await runAutocomplete(autocomplete, {
+      userId: "owner",
+      username: "tester",
+      globalName: "Tester",
+      channelType: ChannelType.DM,
+      channelId: "dm-1",
+      channelName: "dm-1",
+      focusedValue: "st",
+    });
     expect(respond).toHaveBeenCalledWith([
       { name: "steer", value: "steer" },
       { name: "status", value: "status" },
@@ -179,35 +214,17 @@ describe("createDiscordNativeCommand option wiring", () => {
       } as ReturnType<typeof loadConfig>,
     });
     const level = requireOption(command, "level");
-    const autocomplete = readAutocomplete(level);
-    if (typeof autocomplete !== "function") {
-      throw new Error("think level option did not wire autocomplete");
-    }
-    const respond = vi.fn(async (_choices: unknown[]) => undefined);
-
-    await autocomplete({
-      user: {
-        id: "blocked-user",
-        username: "blocked",
-        globalName: "Blocked",
-      },
-      channel: {
-        type: ChannelType.GuildText,
-        id: "channel-1",
-        name: "general",
-      },
-      guild: {
-        id: "guild-1",
-      },
-      rawData: {
-        member: { roles: [] },
-      },
-      options: {
-        getFocused: () => ({ value: "" }),
-      },
-      respond,
-      client: {},
-    } as never);
+    const autocomplete = requireAutocomplete(level, "think level option did not wire autocomplete");
+    const respond = await runAutocomplete(autocomplete, {
+      userId: "blocked-user",
+      username: "blocked",
+      globalName: "Blocked",
+      channelType: ChannelType.GuildText,
+      channelId: "channel-1",
+      channelName: "general",
+      guildId: "guild-1",
+      focusedValue: "",
+    });
 
     expect(respond).toHaveBeenCalledWith([]);
   });
@@ -236,35 +253,17 @@ describe("createDiscordNativeCommand option wiring", () => {
       } as ReturnType<typeof loadConfig>,
     });
     const level = requireOption(command, "level");
-    const autocomplete = readAutocomplete(level);
-    if (typeof autocomplete !== "function") {
-      throw new Error("think level option did not wire autocomplete");
-    }
-    const respond = vi.fn(async (_choices: unknown[]) => undefined);
-
-    await autocomplete({
-      user: {
-        id: "allowed-user",
-        username: "allowed",
-        globalName: "Allowed",
-      },
-      channel: {
-        type: ChannelType.GuildText,
-        id: "channel-1",
-        name: "general",
-      },
-      guild: {
-        id: "guild-1",
-      },
-      rawData: {
-        member: { roles: [] },
-      },
-      options: {
-        getFocused: () => ({ value: "xh" }),
-      },
-      respond,
-      client: {},
-    } as never);
+    const autocomplete = requireAutocomplete(level, "think level option did not wire autocomplete");
+    const respond = await runAutocomplete(autocomplete, {
+      userId: "allowed-user",
+      username: "allowed",
+      globalName: "Allowed",
+      channelType: ChannelType.GuildText,
+      channelId: "channel-1",
+      channelName: "general",
+      guildId: "guild-1",
+      focusedValue: "xh",
+    });
 
     expect(respond).toHaveBeenCalledWith([]);
   });
@@ -289,33 +288,16 @@ describe("createDiscordNativeCommand option wiring", () => {
       discordConfig,
     });
     const level = requireOption(command, "level");
-    const autocomplete = readAutocomplete(level);
-    if (typeof autocomplete !== "function") {
-      throw new Error("think level option did not wire autocomplete");
-    }
-    const respond = vi.fn(async (_choices: unknown[]) => undefined);
-
-    await autocomplete({
-      user: {
-        id: "allowed-user",
-        username: "allowed",
-        globalName: "Allowed",
-      },
-      channel: {
-        type: ChannelType.GroupDM,
-        id: "blocked-group",
-        name: "Blocked Group",
-      },
-      guild: undefined,
-      rawData: {
-        member: { roles: [] },
-      },
-      options: {
-        getFocused: () => ({ value: "xh" }),
-      },
-      respond,
-      client: {},
-    } as never);
+    const autocomplete = requireAutocomplete(level, "think level option did not wire autocomplete");
+    const respond = await runAutocomplete(autocomplete, {
+      userId: "allowed-user",
+      username: "allowed",
+      globalName: "Allowed",
+      channelType: ChannelType.GroupDM,
+      channelId: "blocked-group",
+      channelName: "Blocked Group",
+      focusedValue: "xh",
+    });
 
     expect(respond).toHaveBeenCalledWith([]);
   });

@@ -11,8 +11,8 @@ import {
   parseIdentityMarkdown as parseIdentityMarkdownFile,
 } from "../agents/identity-file.js";
 import { listRouteBindings } from "../config/bindings.js";
-import type { OpenClawConfig } from "../config/config.js";
 import type { IdentityConfig } from "../config/types.base.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { normalizeOptionalString, resolvePrimaryStringValue } from "../shared/string-coerce.js";
 

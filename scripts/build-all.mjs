@@ -10,6 +10,11 @@ export const BUILD_ALL_STEPS = [
   { label: "canvas:a2ui:bundle", kind: "pnpm", pnpmArgs: ["canvas:a2ui:bundle"] },
   { label: "tsdown", kind: "node", args: ["scripts/tsdown-build.mjs"] },
   { label: "runtime-postbuild", kind: "node", args: ["scripts/runtime-postbuild.mjs"] },
+  {
+    label: "write-npm-update-compat-sidecars",
+    kind: "node",
+    args: ["scripts/write-npm-update-compat-sidecars.mjs"],
+  },
   { label: "build-stamp", kind: "node", args: ["scripts/build-stamp.mjs"] },
   {
     label: "build:plugin-sdk:dts",

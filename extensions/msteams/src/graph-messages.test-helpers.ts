@@ -3,6 +3,7 @@ import { beforeEach, vi } from "vitest";
 const graphMessagesMockState = vi.hoisted(() => ({
   resolveGraphToken: vi.fn(),
   fetchGraphJson: vi.fn(),
+  fetchGraphAbsoluteUrl: vi.fn(),
   postGraphJson: vi.fn(),
   postGraphBetaJson: vi.fn(),
   deleteGraphRequest: vi.fn(),
@@ -13,6 +14,7 @@ vi.mock("./graph.js", () => {
   return {
     resolveGraphToken: graphMessagesMockState.resolveGraphToken,
     fetchGraphJson: graphMessagesMockState.fetchGraphJson,
+    fetchGraphAbsoluteUrl: graphMessagesMockState.fetchGraphAbsoluteUrl,
     postGraphJson: graphMessagesMockState.postGraphJson,
     postGraphBetaJson: graphMessagesMockState.postGraphBetaJson,
     deleteGraphRequest: graphMessagesMockState.deleteGraphRequest,

@@ -1,9 +1,9 @@
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
-import type { CliDeps } from "../cli/deps.js";
+import type { CliDeps } from "../cli/deps.types.js";
 import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
-import { isRestartEnabled } from "../config/commands.js";
-import type { loadConfig } from "../config/config.js";
+import { isRestartEnabled } from "../config/commands.flags.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { startGmailWatcherWithLogs } from "../hooks/gmail-watcher-lifecycle.js";
 import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -65,12 +65,9 @@ export function createGatewayReloadHandlers(params: {
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   logCron: { error: (msg: string) => void };
   logReload: { info: (msg: string) => void; warn: (msg: string) => void };
-  createHealthMonitor: (config: ReturnType<typeof loadConfig>) => ChannelHealthMonitor | null;
+  createHealthMonitor: (config: OpenClawConfig) => ChannelHealthMonitor | null;
 }) {
-  const applyHotReload = async (
-    plan: GatewayReloadPlan,
-    nextConfig: ReturnType<typeof loadConfig>,
-  ) => {
+  const applyHotReload = async (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => {
     setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
     const state = params.getState();
     const nextState = { ...state };
@@ -153,10 +150,7 @@ export function createGatewayReloadHandlers(params: {
 
   let restartPending = false;
 
-  const requestGatewayRestart = (
-    plan: GatewayReloadPlan,
-    nextConfig: ReturnType<typeof loadConfig>,
-  ): boolean => {
+  const requestGatewayRestart = (plan: GatewayReloadPlan, nextConfig: OpenClawConfig): boolean => {
     setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
     const reasons = plan.restartReasons.length
       ? plan.restartReasons.join(", ")
@@ -252,7 +246,7 @@ export function createGatewayReloadHandlers(params: {
 
 export function startManagedGatewayConfigReloader(params: {
   minimalTestGateway: boolean;
-  initialConfig: ReturnType<typeof loadConfig>;
+  initialConfig: OpenClawConfig;
   initialInternalWriteHash: string | null;
   watchPath: string;
   readSnapshot: typeof import("../config/config.js").readConfigFileSnapshot;
@@ -277,9 +271,7 @@ export function startManagedGatewayConfigReloader(params: {
   };
   channelManager: GatewayChannelManager;
   activateRuntimeSecrets: ActivateRuntimeSecrets;
-  resolveSharedGatewaySessionGenerationForConfig: (
-    config: ReturnType<typeof loadConfig>,
-  ) => string | undefined;
+  resolveSharedGatewaySessionGenerationForConfig: (config: OpenClawConfig) => string | undefined;
   sharedGatewaySessionGenerationState: SharedGatewaySessionGenerationState;
   clients: Iterable<SharedGatewayAuthClient>;
 }) {

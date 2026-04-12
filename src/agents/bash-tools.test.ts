@@ -206,18 +206,18 @@ const requireRunningSessionId = (result: { details: unknown }) => {
   return requireSessionId(result.details as { sessionId?: string });
 };
 
-function hasNotifyEventForPrefix(prefix: string): boolean {
-  return peekSystemEvents(DEFAULT_NOTIFY_SESSION_KEY).some((event) => event.includes(prefix));
+function hasNotifyEventForPrefix(prefix: string, sessionKey = DEFAULT_NOTIFY_SESSION_KEY): boolean {
+  return peekSystemEvents(sessionKey).some((event) => event.includes(prefix));
 }
 
-async function waitForNotifyEvent(sessionId: string) {
+async function waitForNotifyEvent(sessionId: string, sessionKey = DEFAULT_NOTIFY_SESSION_KEY) {
   const prefix = sessionId.slice(0, 8);
   let finished = getFinishedSession(sessionId);
-  let hasEvent = hasNotifyEventForPrefix(prefix);
+  let hasEvent = hasNotifyEventForPrefix(prefix, sessionKey);
   await expect
     .poll(() => {
       finished = getFinishedSession(sessionId);
-      hasEvent = hasNotifyEventForPrefix(prefix);
+      hasEvent = hasNotifyEventForPrefix(prefix, sessionKey);
       return Boolean(finished && hasEvent);
     }, NOTIFY_POLL_OPTIONS)
     .toBe(true);
@@ -577,6 +577,32 @@ describe("exec notifyOnExit", () => {
     expect(hasEvent).toBe(true);
     expect(queuedEvent).toMatchObject({ trusted: false });
     expect(formatted).toContain("System (untrusted):");
+  });
+
+  it("preserves the origin delivery context on background exec completion events", async () => {
+    const sessionKey = "agent:main:telegram:group:-1003774691294:topic:47";
+    const tool = createNotifyOnExitExecTool({
+      sessionKey,
+      messageProvider: "telegram",
+      currentChannelId: "telegram:-1003774691294:topic:47",
+      currentThreadTs: "47",
+    });
+
+    const sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify"));
+
+    await waitForNotifyEvent(sessionId, sessionKey);
+    const queuedEvent = peekSystemEventEntries(sessionKey).find((event) =>
+      event.text.includes(sessionId.slice(0, 8)),
+    );
+
+    expect(queuedEvent).toMatchObject({
+      trusted: false,
+      deliveryContext: {
+        channel: "telegram",
+        to: "telegram:-1003774691294:topic:47",
+        threadId: "47",
+      },
+    });
   });
 
   it("scopes notifyOnExit heartbeat wake to the exec session key", async () => {

@@ -24,18 +24,44 @@ type SpeechProvider = Parameters<typeof withSpeechProviders>[0][number]["provide
 
 const ALIAS_STUB_VOICE_ID = "VoiceAlias1234567890";
 
-async function writeAcmeTalkConfig() {
-  const { writeConfigFile } = await import("../config/config.js");
-  await writeConfigFile({
-    talk: {
-      provider: "acme",
-      providers: {
-        acme: {
-          voiceId: "plugin-voice",
+async function setTalkConfig(talk: Record<string, unknown>) {
+  const { setRuntimeConfigSnapshot } = await import("../config/config.js");
+  const config = {
+    commands: {
+      ownerDisplaySecret: "openclaw-test-owner-display-secret",
+    },
+    talk,
+  };
+  setRuntimeConfigSnapshot(config, config);
+}
+
+async function setAcmeTalkConfig() {
+  await setTalkConfig({
+    provider: "acme",
+    providers: {
+      acme: {
+        voiceId: "plugin-voice",
+      },
+    },
+  });
+}
+
+async function setElevenLabsTalkConfig() {
+  await setTalkConfig({
+    provider: "elevenlabs",
+    providers: {
+      elevenlabs: {
+        voiceId: "stub-default-voice",
+        voiceAliases: {
+          Clawd: ALIAS_STUB_VOICE_ID,
         },
       },
     },
   });
+}
+
+async function setEmptyTalkConfig() {
+  await setTalkConfig({});
 }
 
 async function withAcmeSpeechProvider(
@@ -73,17 +99,7 @@ describe("gateway talk runtime", () => {
   });
 
   it("allows extension speech providers through the talk setup", async () => {
-    const { writeConfigFile } = await import("../config/config.js");
-    await writeConfigFile({
-      talk: {
-        provider: "acme",
-        providers: {
-          acme: {
-            voiceId: "plugin-voice",
-          },
-        },
-      },
-    });
+    await setAcmeTalkConfig();
 
     await withSpeechProviders(
       [
@@ -134,7 +150,7 @@ describe("gateway talk runtime", () => {
   });
 
   it("allows extension speech providers through talk.speak", async () => {
-    await writeAcmeTalkConfig();
+    await setAcmeTalkConfig();
 
     await withAcmeSpeechProvider(
       async () => ({
@@ -157,20 +173,7 @@ describe("gateway talk runtime", () => {
   });
 
   it("resolves talk voice aliases case-insensitively and forwards provider overrides", async () => {
-    const { writeConfigFile } = await import("../config/config.js");
-    await writeConfigFile({
-      talk: {
-        provider: "elevenlabs",
-        providers: {
-          elevenlabs: {
-            voiceId: "stub-default-voice",
-            voiceAliases: {
-              Clawd: ALIAS_STUB_VOICE_ID,
-            },
-          },
-        },
-      },
-    });
+    await setElevenLabsTalkConfig();
 
     await withSpeechProviders(
       [
@@ -242,8 +245,7 @@ describe("gateway talk runtime", () => {
   });
 
   it("returns fallback-eligible details when talk provider is not configured", async () => {
-    const { writeConfigFile } = await import("../config/config.js");
-    await writeConfigFile({ talk: {} });
+    await setEmptyTalkConfig();
 
     const res = await invokeTalkSpeakDirect({ text: "Hello from talk mode." });
     expect(res?.ok).toBe(false);
@@ -255,7 +257,7 @@ describe("gateway talk runtime", () => {
   });
 
   it("returns synthesis_failed details when the provider rejects synthesis", async () => {
-    await writeAcmeTalkConfig();
+    await setAcmeTalkConfig();
 
     await withAcmeSpeechProvider(
       async () => ({}) as never,
@@ -275,7 +277,7 @@ describe("gateway talk runtime", () => {
   });
 
   it("rejects empty audio results as invalid_audio_result", async () => {
-    await writeAcmeTalkConfig();
+    await setAcmeTalkConfig();
 
     await withAcmeSpeechProvider(
       async () => ({}) as never,

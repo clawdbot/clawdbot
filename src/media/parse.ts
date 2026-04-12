@@ -6,6 +6,16 @@ import { parseAudioTag } from "./audio-tags.js";
 // Allow optional wrapping backticks and punctuation after the token; capture the core token.
 export const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n]+)`?/gi;
 
+export type ParsedMediaOutputSegment =
+  | {
+      type: "text";
+      text: string;
+    }
+  | {
+      type: "media";
+      url: string;
+    };
+
 export function normalizeMediaSource(src: string) {
   return src.startsWith("file://") ? src.replace("file://", "") : src;
 }
@@ -125,6 +135,7 @@ export function splitMediaFromOutput(raw: string): {
   mediaUrls?: string[];
   mediaUrl?: string; // legacy first item for backward compatibility
   audioAsVoice?: boolean; // true if [[audio_as_voice]] tag was found
+  segments?: ParsedMediaOutputSegment[];
 } {
   // KNOWN: Leading whitespace is semantically meaningful in Markdown (lists, indented fences).
   // We only trim the end; token cleanup below handles removing `MEDIA:` lines.
@@ -140,6 +151,19 @@ export function splitMediaFromOutput(raw: string): {
 
   const media: string[] = [];
   let foundMediaToken = false;
+  const segments: ParsedMediaOutputSegment[] = [];
+
+  const pushTextSegment = (text: string) => {
+    if (!text) {
+      return;
+    }
+    const last = segments[segments.length - 1];
+    if (last?.type === "text") {
+      last.text = `${last.text}\n${text}`;
+      return;
+    }
+    segments.push({ type: "text", text });
+  };
 
   // Parse fenced code blocks to avoid extracting MEDIA tokens from inside them
   const hasFenceMarkers = mayContainFenceMarkers(trimmedRaw);
@@ -154,6 +178,7 @@ export function splitMediaFromOutput(raw: string): {
     // Skip MEDIA extraction if this line is inside a fenced code block
     if (hasFenceMarkers && isInsideFence(fenceSpans, lineOffset)) {
       keptLines.push(line);
+      pushTextSegment(line);
       lineOffset += line.length + 1; // +1 for newline
       continue;
     }
@@ -161,6 +186,7 @@ export function splitMediaFromOutput(raw: string): {
     const trimmedStart = line.trimStart();
     if (!trimmedStart.startsWith("MEDIA:")) {
       keptLines.push(line);
+      pushTextSegment(line);
       lineOffset += line.length + 1; // +1 for newline
       continue;
     }
@@ -168,11 +194,13 @@ export function splitMediaFromOutput(raw: string): {
     const matches = Array.from(line.matchAll(MEDIA_TOKEN_RE));
     if (matches.length === 0) {
       keptLines.push(line);
+      pushTextSegment(line);
       lineOffset += line.length + 1; // +1 for newline
       continue;
     }
 
     const pieces: string[] = [];
+    const lineSegments: ParsedMediaOutputSegment[] = [];
     let cursor = 0;
 
     for (const match of matches) {
@@ -219,6 +247,17 @@ export function splitMediaFromOutput(raw: string): {
         }
       }
 
+      if (!hasValidMedia && !unwrapped && /\s/.test(payloadValue)) {
+        const spacedFallback = normalizeMediaSource(cleanCandidate(payloadValue));
+        if (isValidMedia(spacedFallback, { allowSpaces: true, allowBareFilename: true })) {
+          media.splice(mediaStartIndex, media.length - mediaStartIndex, spacedFallback);
+          hasValidMedia = true;
+          foundMediaToken = true;
+          validCount = 1;
+          invalidParts.length = 0;
+        }
+      }
+
       if (!hasValidMedia) {
         const fallback = normalizeMediaSource(cleanCandidate(payloadValue));
         if (isValidMedia(fallback, { allowSpaces: true, allowBareFilename: true })) {
@@ -230,6 +269,17 @@ export function splitMediaFromOutput(raw: string): {
       }
 
       if (hasValidMedia) {
+        const beforeText = pieces
+          .join("")
+          .replace(/[ \t]{2,}/g, " ")
+          .trim();
+        if (beforeText) {
+          lineSegments.push({ type: "text", text: beforeText });
+        }
+        pieces.length = 0;
+        for (const url of media.slice(mediaStartIndex, mediaStartIndex + validCount)) {
+          lineSegments.push({ type: "media", url });
+        }
         if (invalidParts.length > 0) {
           pieces.push(invalidParts.join(" "));
         }
@@ -255,6 +305,14 @@ export function splitMediaFromOutput(raw: string): {
     // If the line becomes empty, drop it.
     if (cleanedLine) {
       keptLines.push(cleanedLine);
+      lineSegments.push({ type: "text", text: cleanedLine });
+    }
+    for (const segment of lineSegments) {
+      if (segment.type === "text") {
+        pushTextSegment(segment.text);
+        continue;
+      }
+      segments.push(segment);
     }
     lineOffset += line.length + 1; // +1 for newline
   }
@@ -274,9 +332,10 @@ export function splitMediaFromOutput(raw: string): {
   }
 
   if (media.length === 0) {
+    const parsedText = foundMediaToken || hasAudioAsVoice ? cleanedText : trimmedRaw;
     const result: ReturnType<typeof splitMediaFromOutput> = {
-      // Return cleaned text if we found a media token OR audio tag, otherwise original
-      text: foundMediaToken || hasAudioAsVoice ? cleanedText : trimmedRaw,
+      text: parsedText,
+      segments: parsedText ? [{ type: "text", text: parsedText }] : [],
     };
     if (hasAudioAsVoice) {
       result.audioAsVoice = true;
@@ -288,6 +347,7 @@ export function splitMediaFromOutput(raw: string): {
     text: cleanedText,
     mediaUrls: media,
     mediaUrl: media[0],
+    segments: segments.length > 0 ? segments : [{ type: "text", text: cleanedText }],
     ...(hasAudioAsVoice ? { audioAsVoice: true } : {}),
   };
 }

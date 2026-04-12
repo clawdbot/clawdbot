@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
+import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
 import {
   isSessionStoreCacheEnabled,

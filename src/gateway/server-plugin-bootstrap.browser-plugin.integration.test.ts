@@ -52,6 +52,7 @@ describe("loadGatewayStartupPlugins browser plugin integration", () => {
       log: createTestLog(),
       coreGatewayHandlers,
       baseMethods: listGatewayMethods(),
+      pluginIds: ["browser"],
       logDiagnostics: false,
     });
 
@@ -79,6 +80,7 @@ describe("loadGatewayStartupPlugins browser plugin integration", () => {
       log: createTestLog(),
       coreGatewayHandlers,
       baseMethods: listGatewayMethods(),
+      pluginIds: ["browser"],
       logDiagnostics: false,
     });
 

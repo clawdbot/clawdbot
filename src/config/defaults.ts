@@ -6,8 +6,8 @@ import {
   normalizeProviderConfigForConfigDefaults,
 } from "./provider-policy.js";
 import { normalizeTalkConfig } from "./talk.js";
-import type { OpenClawConfig } from "./types.js";
 import type { ModelDefinitionConfig } from "./types.models.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 
 type WarnState = { warned: boolean };
 

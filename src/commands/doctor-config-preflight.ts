@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
-import { readConfigFileSnapshot } from "../config/config.js";
+import { readConfigFileSnapshot } from "../config/io.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { note } from "../terminal/note.js";
 import { resolveHomeDir } from "../utils.js";
 import { noteIncludeConfinementWarning } from "./doctor-config-analysis.js";

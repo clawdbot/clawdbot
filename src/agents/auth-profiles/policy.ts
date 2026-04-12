@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../../config/types.secrets.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 

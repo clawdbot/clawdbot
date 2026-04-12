@@ -1,1 +1,1 @@
-export { registerQaLabCli } from "./src/cli.js";
+export { isQaLabCliAvailable, registerQaLabCli } from "./src/cli.js";

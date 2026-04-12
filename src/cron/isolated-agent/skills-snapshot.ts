@@ -1,7 +1,7 @@
 import { canExecRequestNode } from "../../agents/exec-defaults.js";
 import type { SkillSnapshot } from "../../agents/skills.js";
 import { matchesSkillFilter } from "../../agents/skills/filter.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   buildWorkspaceSkillSnapshot,
   getRemoteSkillEligibility,

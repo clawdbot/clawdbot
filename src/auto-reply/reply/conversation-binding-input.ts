@@ -1,6 +1,6 @@
 import { normalizeConversationText } from "../../acp/conversation-id.js";
 import { resolveConversationBindingContext } from "../../channels/conversation-binding-context.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getActivePluginChannelRegistry } from "../../plugins/runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import type { MsgContext } from "../templating.js";

@@ -10,7 +10,7 @@ export {
   recordPendingHistoryEntryIfEnabled,
 } from "../auto-reply/reply/history.js";
 export { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
-export type { ReplyPayload } from "../auto-reply/types.js";
+export type { ReplyPayload } from "../auto-reply/reply-payload.js";
 export type { ChatType } from "../channels/chat-type.js";
 export { resolveControlCommandGate } from "../channels/command-gating.js";
 export { logInboundDrop, logTypingFailure } from "../channels/logging.js";
@@ -49,7 +49,7 @@ export type {
   ChannelGroupContext,
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
-} from "../channels/plugins/types.js";
+} from "../channels/plugins/types.public.js";
 export type { ChannelDirectoryEntry } from "../channels/plugins/types.core.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";

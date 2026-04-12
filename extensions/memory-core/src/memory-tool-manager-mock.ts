@@ -1,12 +1,20 @@
+import type { MemorySearchRuntimeDebug } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { vi } from "vitest";
 
-export type SearchImpl = () => Promise<unknown[]>;
+export type SearchImpl = (opts?: {
+  maxResults?: number;
+  minScore?: number;
+  sessionKey?: string;
+  qmdSearchModeOverride?: "query" | "search" | "vsearch";
+  onDebug?: (debug: MemorySearchRuntimeDebug) => void;
+}) => Promise<unknown[]>;
 export type MemoryReadParams = { relPath: string; from?: number; lines?: number };
 export type MemoryReadResult = { text: string; path: string };
 type MemoryBackend = "builtin" | "qmd";
 
 let backend: MemoryBackend = "builtin";
 let workspaceDir = "/workspace";
+let customStatus: Record<string, unknown> | undefined;
 let searchImpl: SearchImpl = async () => [];
 let readFileImpl: (params: MemoryReadParams) => Promise<MemoryReadResult> = async (params) => ({
   text: "",
@@ -14,7 +22,7 @@ let readFileImpl: (params: MemoryReadParams) => Promise<MemoryReadResult> = asyn
 });
 
 const stubManager = {
-  search: vi.fn(async () => await searchImpl()),
+  search: vi.fn(async (_query: string, opts?: Parameters<SearchImpl>[0]) => await searchImpl(opts)),
   readFile: vi.fn(async (params: MemoryReadParams) => await readFileImpl(params)),
   status: () => ({
     backend,
@@ -28,6 +36,7 @@ const stubManager = {
     requestedProvider: "builtin",
     sources: ["memory" as const],
     sourceCounts: [{ source: "memory" as const, files: 1, chunks: 1 }],
+    custom: customStatus,
   }),
   sync: vi.fn(),
   probeVectorAvailability: vi.fn(async () => true),
@@ -60,6 +69,10 @@ export function setMemoryWorkspaceDir(next: string): void {
   workspaceDir = next;
 }
 
+export function setMemoryStatusCustom(next: Record<string, unknown> | undefined): void {
+  customStatus = next;
+}
+
 export function setMemorySearchImpl(next: SearchImpl): void {
   searchImpl = next;
 }
@@ -77,6 +90,7 @@ export function resetMemoryToolMockState(overrides?: {
 }): void {
   backend = overrides?.backend ?? "builtin";
   workspaceDir = "/workspace";
+  customStatus = undefined;
   searchImpl = overrides?.searchImpl ?? (async () => []);
   readFileImpl =
     overrides?.readFileImpl ??

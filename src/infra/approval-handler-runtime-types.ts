@@ -6,8 +6,8 @@ import type {
   ExpiredApprovalView,
   PendingApprovalView,
   ResolvedApprovalView,
-} from "./approval-view-model.js";
-import type { ExecApprovalChannelRuntimeEventKind } from "./exec-approval-channel-runtime.js";
+} from "./approval-view-model.types.js";
+import type { ExecApprovalChannelRuntimeEventKind } from "./exec-approval-channel-runtime.types.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals.js";
 import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
 

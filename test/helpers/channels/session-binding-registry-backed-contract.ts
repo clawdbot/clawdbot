@@ -28,18 +28,14 @@ type MatrixTestApiSurface = typeof import("@openclaw/matrix/test-api.js");
 type TelegramApiSurface = typeof import("@openclaw/telegram/api.js");
 type TelegramTestApiSurface = typeof import("@openclaw/telegram/test-api.js");
 
-const { bluebubblesPlugin } = loadBundledPluginApiSync<BluebubblesApiSurface>("bluebubbles");
-const { discordPlugin, discordThreadBindingTesting } =
-  loadBundledPluginTestApiSync<DiscordTestApiSurface>("discord");
-const { feishuPlugin, feishuThreadBindingTesting } =
-  loadBundledPluginApiSync<FeishuApiSurface>("feishu");
-const { imessagePlugin } = loadBundledPluginApiSync<IMessageApiSurface>("imessage");
-const { resetMatrixThreadBindingsForTests } = loadBundledPluginApiSync<MatrixApiSurface>("matrix");
-const { matrixPlugin, setMatrixRuntime } =
-  loadBundledPluginTestApiSync<MatrixTestApiSurface>("matrix");
-const { telegramPlugin } = loadBundledPluginApiSync<TelegramApiSurface>("telegram");
-const { resetTelegramThreadBindingsForTests } =
-  loadBundledPluginTestApiSync<TelegramTestApiSurface>("telegram");
+let bluebubblesApi: BluebubblesApiSurface | undefined;
+let discordTestApi: DiscordTestApiSurface | undefined;
+let feishuApi: FeishuApiSurface | undefined;
+let imessageApi: IMessageApiSurface | undefined;
+let matrixApi: MatrixApiSurface | undefined;
+let matrixTestApi: MatrixTestApiSurface | undefined;
+let telegramApi: TelegramApiSurface | undefined;
+let telegramTestApi: TelegramTestApiSurface | undefined;
 
 type DiscordThreadBindingTesting = {
   resetThreadBindingsForTests: () => void;
@@ -48,47 +44,58 @@ type DiscordThreadBindingTesting = {
 type ResetTelegramThreadBindingsForTests = () => Promise<void>;
 
 function getBluebubblesPlugin(): ChannelPlugin {
-  return bluebubblesPlugin as unknown as ChannelPlugin;
+  bluebubblesApi ??= loadBundledPluginApiSync<BluebubblesApiSurface>("bluebubbles");
+  return bluebubblesApi.bluebubblesPlugin as unknown as ChannelPlugin;
 }
 
 function getDiscordPlugin(): ChannelPlugin {
-  return discordPlugin as unknown as ChannelPlugin;
+  discordTestApi ??= loadBundledPluginTestApiSync<DiscordTestApiSurface>("discord");
+  return discordTestApi.discordPlugin as unknown as ChannelPlugin;
 }
 
 function getFeishuPlugin(): ChannelPlugin {
-  return feishuPlugin as unknown as ChannelPlugin;
+  feishuApi ??= loadBundledPluginApiSync<FeishuApiSurface>("feishu");
+  return feishuApi.feishuPlugin as unknown as ChannelPlugin;
 }
 
 function getIMessagePlugin(): ChannelPlugin {
-  return imessagePlugin as unknown as ChannelPlugin;
+  imessageApi ??= loadBundledPluginApiSync<IMessageApiSurface>("imessage");
+  return imessageApi.imessagePlugin as unknown as ChannelPlugin;
 }
 
 function getMatrixPlugin(): ChannelPlugin {
-  return matrixPlugin as unknown as ChannelPlugin;
+  matrixTestApi ??= loadBundledPluginTestApiSync<MatrixTestApiSurface>("matrix");
+  return matrixTestApi.matrixPlugin as unknown as ChannelPlugin;
 }
 
 function getSetMatrixRuntime(): (runtime: PluginRuntime) => void {
-  return setMatrixRuntime;
+  matrixTestApi ??= loadBundledPluginTestApiSync<MatrixTestApiSurface>("matrix");
+  return matrixTestApi.setMatrixRuntime;
 }
 
 function getTelegramPlugin(): ChannelPlugin {
-  return telegramPlugin as unknown as ChannelPlugin;
+  telegramApi ??= loadBundledPluginApiSync<TelegramApiSurface>("telegram");
+  return telegramApi.telegramPlugin as unknown as ChannelPlugin;
 }
 
 function getDiscordThreadBindingTesting(): DiscordThreadBindingTesting {
-  return discordThreadBindingTesting;
+  discordTestApi ??= loadBundledPluginTestApiSync<DiscordTestApiSurface>("discord");
+  return discordTestApi.discordThreadBindingTesting;
 }
 
 function getResetTelegramThreadBindingsForTests(): ResetTelegramThreadBindingsForTests {
-  return resetTelegramThreadBindingsForTests;
+  telegramTestApi ??= loadBundledPluginTestApiSync<TelegramTestApiSurface>("telegram");
+  return telegramTestApi.resetTelegramThreadBindingsForTests;
 }
 
 async function getFeishuThreadBindingTesting() {
-  return feishuThreadBindingTesting;
+  feishuApi ??= loadBundledPluginApiSync<FeishuApiSurface>("feishu");
+  return feishuApi.feishuThreadBindingTesting;
 }
 
 async function getResetMatrixThreadBindingsForTests() {
-  return resetMatrixThreadBindingsForTests;
+  matrixApi ??= loadBundledPluginApiSync<MatrixApiSurface>("matrix");
+  return matrixApi.resetMatrixThreadBindingsForTests;
 }
 
 function resolveSessionBindingContractRuntimeConfig(id: string) {
@@ -106,21 +113,51 @@ function resolveSessionBindingContractRuntimeConfig(id: string) {
   };
 }
 
-function setSessionBindingPluginRegistryForTests(): void {
-  getSetMatrixRuntime()({
-    state: {
-      resolveStateDir: (_env, homeDir) => (homeDir ?? (() => "/tmp"))(),
-    },
-  } as PluginRuntime);
+function getSessionBindingPlugin(id: string): ChannelPlugin {
+  switch (id) {
+    case "bluebubbles":
+      return getBluebubblesPlugin();
+    case "discord":
+      return getDiscordPlugin();
+    case "feishu":
+      return getFeishuPlugin();
+    case "imessage":
+      return getIMessagePlugin();
+    case "matrix":
+      getSetMatrixRuntime()({
+        state: {
+          resolveStateDir: (_env, homeDir) => (homeDir ?? (() => "/tmp"))(),
+        },
+      } as PluginRuntime);
+      return getMatrixPlugin();
+    case "telegram":
+      return getTelegramPlugin();
+    default:
+      throw new Error(`missing session binding plugin fixture for ${id}`);
+  }
+}
 
-  const channels = [
-    getBluebubblesPlugin(),
-    getDiscordPlugin(),
-    getFeishuPlugin(),
-    getIMessagePlugin(),
-    getMatrixPlugin(),
-    getTelegramPlugin(),
-  ].map((plugin) => ({
+async function resetSessionBindingPluginFixtureForTests(id: string): Promise<void> {
+  switch (id) {
+    case "discord":
+      getDiscordThreadBindingTesting().resetThreadBindingsForTests();
+      return;
+    case "feishu":
+      (await getFeishuThreadBindingTesting()).resetFeishuThreadBindingsForTests();
+      return;
+    case "matrix":
+      (await getResetMatrixThreadBindingsForTests())();
+      return;
+    case "telegram":
+      await getResetTelegramThreadBindingsForTests()();
+      return;
+    default:
+      return;
+  }
+}
+
+function setSessionBindingPluginRegistryForTests(id: string): void {
+  const channels = [getSessionBindingPlugin(id)].map((plugin) => ({
     pluginId: plugin.id,
     plugin,
     source: "test" as const,
@@ -182,12 +219,9 @@ export function describeSessionBindingRegistryBackedContract(id: string) {
       setRuntimeConfigSnapshot(runtimeConfig);
       // These suites only exercise the session-binding channels, so avoid the broader
       // default registry helper and seed only the six plugins this contract lane needs.
-      setSessionBindingPluginRegistryForTests();
+      setSessionBindingPluginRegistryForTests(entry.id);
       sessionBindingTesting.resetSessionBindingAdaptersForTests();
-      getDiscordThreadBindingTesting().resetThreadBindingsForTests();
-      (await getFeishuThreadBindingTesting()).resetFeishuThreadBindingsForTests();
-      (await getResetMatrixThreadBindingsForTests())();
-      await getResetTelegramThreadBindingsForTests()();
+      await resetSessionBindingPluginFixtureForTests(entry.id);
     });
     afterEach(() => {
       clearRuntimeConfigSnapshot();

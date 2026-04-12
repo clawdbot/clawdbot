@@ -5,19 +5,19 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
-import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   loadAuthProfileStoreForSecretsRuntime,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "../agents/auth-profiles.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshotRefreshHandler,
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../config/config.js";
-import type { PluginOrigin } from "../plugins/types.js";
+import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { resolveUserPath } from "../utils.js";
 import { type SecretResolverWarning } from "./runtime-shared.js";
 import {

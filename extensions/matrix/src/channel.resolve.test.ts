@@ -3,8 +3,10 @@ import { createNonExitingRuntimeEnv } from "../../../test/helpers/plugins/runtim
 
 const resolveMatrixTargetsMock = vi.hoisted(() => vi.fn(async () => []));
 
-vi.mock("./resolve-targets.js", () => ({
-  resolveMatrixTargets: resolveMatrixTargetsMock,
+vi.mock("./resolver.runtime.js", () => ({
+  matrixResolverRuntime: {
+    resolveMatrixTargets: resolveMatrixTargetsMock,
+  },
 }));
 
 import { matrixResolverAdapter } from "./resolver.js";

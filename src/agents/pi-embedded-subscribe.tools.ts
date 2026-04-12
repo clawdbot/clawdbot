@@ -9,7 +9,7 @@ import {
 } from "../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
-import { type MessagingToolSend } from "./pi-embedded-messaging.js";
+import type { MessagingToolSend } from "./pi-embedded-messaging.types.js";
 import { normalizeToolName } from "./tool-policy.js";
 
 const TOOL_RESULT_MAX_CHARS = 8000;

@@ -12,13 +12,9 @@ import {
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { flowsCancelCommand, flowsListCommand, flowsShowCommand } from "./flows.js";
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  return {
-    ...actual,
-    loadConfig: vi.fn(() => ({})),
-  };
-});
+vi.mock("../config/config.js", () => ({
+  loadConfig: vi.fn(() => ({})),
+}));
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 

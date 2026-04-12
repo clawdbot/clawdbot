@@ -1,12 +1,8 @@
 import { getChannelPlugin } from "../channels/plugins/index.js";
-import type { ChannelId } from "../channels/plugins/types.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
 import { normalizeChannelId } from "../channels/registry.js";
-import { isPlainObject } from "../infra/plain-object.js";
-import type { CommandsConfig, NativeCommandsSetting } from "./types.js";
-
-export type CommandFlagKey = {
-  [K in keyof CommandsConfig]-?: Exclude<CommandsConfig[K], undefined> extends boolean ? K : never;
-}[keyof CommandsConfig];
+import type { NativeCommandsSetting } from "./types.js";
+export { isCommandFlagEnabled, isRestartEnabled, type CommandFlagKey } from "./commands.flags.js";
 
 function resolveAutoDefault(
   providerId: ChannelId | undefined,
@@ -71,26 +67,4 @@ export function isNativeCommandsExplicitlyDisabled(params: {
     return globalSetting === false;
   }
   return false;
-}
-
-function getOwnCommandFlagValue(
-  config: { commands?: unknown } | undefined,
-  key: CommandFlagKey,
-): unknown {
-  const { commands } = config ?? {};
-  if (!isPlainObject(commands) || !Object.hasOwn(commands, key)) {
-    return undefined;
-  }
-  return commands[key];
-}
-
-export function isCommandFlagEnabled(
-  config: { commands?: unknown } | undefined,
-  key: CommandFlagKey,
-): boolean {
-  return getOwnCommandFlagValue(config, key) === true;
-}
-
-export function isRestartEnabled(config?: { commands?: unknown }): boolean {
-  return getOwnCommandFlagValue(config, "restart") !== false;
 }

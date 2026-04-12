@@ -1,7 +1,7 @@
 import type { ConfigWriteTarget } from "../channels/plugins/config-writes.js";
 import type { ChannelAllowlistAdapter } from "../channels/plugins/types.adapters.js";
-import type { ChannelId } from "../channels/plugins/types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 

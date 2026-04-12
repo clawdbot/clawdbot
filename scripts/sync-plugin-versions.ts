@@ -37,20 +37,6 @@ function syncOpenClawDependencyRange(
   return true;
 }
 
-function syncMinHostVersion(pkg: PackageJson, targetVersion: string): boolean {
-  const installConfig = pkg.openclaw?.install;
-  const current = installConfig?.minHostVersion;
-  if (!current || !OPENCLAW_VERSION_RANGE_RE.test(current)) {
-    return false;
-  }
-  const next = `>=${targetVersion}`;
-  if (current === next) {
-    return false;
-  }
-  installConfig.minHostVersion = next;
-  return true;
-}
-
 function syncPluginApiVersion(pkg: PackageJson, targetVersion: string): boolean {
   const compat = pkg.openclaw?.compat;
   const current = compat?.pluginApi;
@@ -136,14 +122,14 @@ export function syncPluginVersions(rootDir = resolve(".")) {
     const versionChanged = pkg.version !== targetVersion;
     const devDependencyChanged = syncOpenClawDependencyRange(pkg.devDependencies, targetVersion);
     const peerDependencyChanged = syncOpenClawDependencyRange(pkg.peerDependencies, targetVersion);
-    const minHostVersionChanged = syncMinHostVersion(pkg, targetVersion);
+    // minHostVersion is a compatibility floor, not release alignment metadata.
+    // Keep it stable unless the owning plugin intentionally raises it.
     const pluginApiChanged = syncPluginApiVersion(pkg, targetVersion);
     const buildOpenClawVersionChanged = syncBuildOpenClawVersion(pkg, targetVersion);
     const packageChanged =
       versionChanged ||
       devDependencyChanged ||
       peerDependencyChanged ||
-      minHostVersionChanged ||
       pluginApiChanged ||
       buildOpenClawVersionChanged;
     if (!packageChanged) {

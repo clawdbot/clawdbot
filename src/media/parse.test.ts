@@ -91,4 +91,16 @@ describe("splitMediaFromOutput", () => {
       expectStableAudioAsVoiceDetectionCase(input);
     }
   });
+
+  it("returns ordered text and media segments while ignoring fenced MEDIA lines", () => {
+    const result = splitMediaFromOutput(
+      "Before\nMEDIA:https://example.com/a.png\n```text\nMEDIA:https://example.com/ignored.png\n```\nAfter",
+    );
+
+    expect(result.segments).toEqual([
+      { type: "text", text: "Before" },
+      { type: "media", url: "https://example.com/a.png" },
+      { type: "text", text: "```text\nMEDIA:https://example.com/ignored.png\n```\nAfter" },
+    ]);
+  });
 });

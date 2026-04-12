@@ -1,5 +1,6 @@
 import {
-  listBundledChannelPlugins,
+  getBundledChannelPlugin,
+  listBundledChannelPluginIds,
   setBundledChannelRuntime,
 } from "../channels/plugins/bundled.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -7,8 +8,11 @@ import type { PluginRuntime } from "../plugins/runtime/index.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 
 function resolveChannelPluginsForTests(onlyPluginIds?: readonly string[]) {
-  const scopedIds = onlyPluginIds ? new Set(onlyPluginIds) : null;
-  return listBundledChannelPlugins().filter((plugin) => !scopedIds || scopedIds.has(plugin.id));
+  const ids = onlyPluginIds ?? listBundledChannelPluginIds();
+  return ids.flatMap((id) => {
+    const plugin = getBundledChannelPlugin(id);
+    return plugin ? [plugin] : [];
+  });
 }
 
 function createChannelTestRuntime(): PluginRuntime {

@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import type { Mock } from "vitest";
 import { vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;

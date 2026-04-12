@@ -3,8 +3,8 @@ import path from "node:path";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { modelKey, normalizeModelRef, normalizeProviderId } from "../agents/model-selection.js";
 import type { NormalizedUsage } from "../agents/usage.js";
-import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getCachedGatewayModelPricing } from "../gateway/model-pricing-cache.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 

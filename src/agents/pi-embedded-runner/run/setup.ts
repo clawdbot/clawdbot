@@ -1,8 +1,6 @@
-import type { OpenClawConfig } from "../../../config/config.js";
-import type {
-  PluginHookBeforeAgentStartResult,
-  ProviderRuntimeModel,
-} from "../../../plugins/types.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
+import type { PluginHookBeforeAgentStartResult } from "../../../plugins/types.js";
 import {
   CONTEXT_WINDOW_HARD_MIN_TOKENS,
   CONTEXT_WINDOW_WARN_BELOW_TOKENS,

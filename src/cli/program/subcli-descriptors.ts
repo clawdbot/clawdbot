@@ -1,3 +1,4 @@
+import { isQaLabCliAvailable } from "../../plugin-sdk/qa-lab.js";
 import { defineCommandDescriptorCatalog } from "./command-descriptor-utils.js";
 import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
 
@@ -88,6 +89,11 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
+    name: "proxy",
+    description: "Run the OpenClaw debug proxy and inspect captured traffic",
+    hasSubcommands: true,
+  },
+  {
     name: "hooks",
     description: "Manage internal agent hooks",
     hasSubcommands: true,
@@ -157,9 +163,17 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
 export const SUB_CLI_DESCRIPTORS = subCliCommandCatalog.descriptors;
 
 export function getSubCliEntries(): ReadonlyArray<SubCliDescriptor> {
-  return subCliCommandCatalog.getDescriptors();
+  const descriptors = subCliCommandCatalog.getDescriptors();
+  if (isQaLabCliAvailable()) {
+    return descriptors;
+  }
+  return descriptors.filter((descriptor) => descriptor.name !== "qa");
 }
 
 export function getSubCliCommandsWithSubcommands(): string[] {
-  return subCliCommandCatalog.getCommandsWithSubcommands();
+  const commands = subCliCommandCatalog.getCommandsWithSubcommands();
+  if (isQaLabCliAvailable()) {
+    return commands;
+  }
+  return commands.filter((command) => command !== "qa");
 }

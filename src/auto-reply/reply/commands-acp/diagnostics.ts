@@ -12,12 +12,12 @@ import {
 } from "../../../shared/string-coerce.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import { resolveAcpCommandBindingContext } from "./context.js";
+import { resolveAcpInstallCommandHint } from "./install-hints.js";
 import {
   ACP_DOCTOR_USAGE,
   ACP_INSTALL_USAGE,
   ACP_SESSIONS_USAGE,
   formatAcpCapabilitiesText,
-  resolveAcpInstallCommandHint,
   stopWithText,
 } from "./shared.js";
 import { resolveBoundAcpThreadSessionKey } from "./targets.js";

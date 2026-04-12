@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { isCronSystemEvent } from "./heartbeat-runner.js";
 import {
+  consumeSystemEventEntries,
   drainSystemEventEntries,
   enqueueSystemEvent,
   hasSystemEvents,
@@ -107,6 +108,16 @@ describe("system events (session routing)", () => {
     expect(hasSystemEvents(key)).toBe(false);
 
     expect(enqueueSystemEvent("Node connected", { sessionKey: key })).toBe(true);
+  });
+
+  it("consumes only the inspected prefix and leaves later queued events intact", () => {
+    const key = "agent:main:test-consume-prefix";
+    enqueueSystemEvent("first", { sessionKey: key, contextKey: "cron:first" });
+    const inspected = peekSystemEventEntries(key);
+    enqueueSystemEvent("second", { sessionKey: key, contextKey: "cron:second" });
+
+    expect(consumeSystemEventEntries(key, inspected).map((entry) => entry.text)).toEqual(["first"]);
+    expect(peekSystemEvents(key)).toEqual(["second"]);
   });
 
   it("resolves the newest effective delivery context from queued events", () => {

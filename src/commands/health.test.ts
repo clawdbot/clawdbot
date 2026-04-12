@@ -87,7 +87,7 @@ describe("healthCommand", () => {
     });
     callGatewayMock.mockResolvedValueOnce(snapshot);
 
-    await healthCommand({ json: true, timeoutMs: 5000 }, runtime as never);
+    await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime as never);
 
     expect(runtime.exit).not.toHaveBeenCalled();
     const logged = runtime.log.mock.calls[0]?.[0] as string;
@@ -114,7 +114,7 @@ describe("healthCommand", () => {
       }),
     );
 
-    await healthCommand({ json: false }, runtime as never);
+    await healthCommand({ json: false, config: {} }, runtime as never);
 
     expect(runtime.exit).not.toHaveBeenCalled();
     expect(runtime.log).toHaveBeenCalled();

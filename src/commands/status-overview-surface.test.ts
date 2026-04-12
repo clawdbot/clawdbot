@@ -5,86 +5,47 @@ import {
   buildStatusOverviewSurfaceFromOverview,
   buildStatusOverviewSurfaceFromScan,
 } from "./status-overview-surface.ts";
-
-const baseCfg = { update: { channel: "stable" }, gateway: { bind: "loopback" } } as const;
-const baseUpdate = { installKind: "git", git: { branch: "main", tag: "v1.2.3" } } as never;
-const baseGatewaySnapshot = {
-  gatewayMode: "remote",
-  remoteUrlMissing: false,
-  gatewayConnection: {
-    url: "wss://gateway.example.com",
-    urlSource: "config",
-    message: "Gateway target: wss://gateway.example.com",
-  },
-  gatewayReachable: true,
-  gatewayProbe: { connectLatencyMs: 42, error: null } as never,
-  gatewayProbeAuth: { token: "tok" },
-  gatewayProbeAuthWarning: "warn-text",
-  gatewaySelf: { host: "gateway", version: "1.2.3" },
-} as const;
-const baseScanFields = {
-  cfg: baseCfg,
-  update: baseUpdate,
-  tailscaleMode: "serve",
-  tailscaleDns: "box.tail.ts.net",
-  tailscaleHttpsUrl: "https://box.tail.ts.net",
-  ...baseGatewaySnapshot,
-};
-const baseGatewayService = {
-  label: "LaunchAgent",
-  installed: true,
-  managedByOpenClaw: true,
-  loadedText: "loaded",
-  runtimeShort: "running",
-};
-const baseNodeService = {
-  label: "node",
-  installed: true,
-  loadedText: "loaded",
-  runtime: { status: "running", pid: 42 },
-};
-const baseServices = {
-  gatewayService: baseGatewayService,
-  nodeService: baseNodeService,
-  nodeOnlyGateway: null,
-};
-const baseOverviewSurface = {
-  ...baseScanFields,
-  ...baseServices,
-};
+import {
+  baseStatusCfg,
+  baseStatusGatewaySnapshot,
+  baseStatusOverviewScanFields,
+  baseStatusOverviewSurface,
+  baseStatusServices,
+  baseStatusUpdate,
+} from "./status.test-support.ts";
 
 describe("status-overview-surface", () => {
   it("builds the shared overview surface from a status scan result", () => {
     expect(
       buildStatusOverviewSurfaceFromScan({
-        scan: baseScanFields,
-        ...baseServices,
+        scan: baseStatusOverviewScanFields,
+        ...baseStatusServices,
       }),
-    ).toEqual(baseOverviewSurface);
+    ).toEqual(baseStatusOverviewSurface);
   });
 
   it("builds the shared overview surface from scan overview data", () => {
     expect(
       buildStatusOverviewSurfaceFromOverview({
         overview: {
-          cfg: baseCfg,
-          update: baseUpdate,
+          cfg: baseStatusCfg,
+          update: baseStatusUpdate,
           tailscaleMode: "serve",
           tailscaleDns: "box.tail.ts.net",
           tailscaleHttpsUrl: "https://box.tail.ts.net",
-          gatewaySnapshot: baseGatewaySnapshot,
+          gatewaySnapshot: baseStatusGatewaySnapshot,
         } as never,
-        ...baseServices,
+        ...baseStatusServices,
       }),
-    ).toEqual(baseOverviewSurface);
+    ).toEqual(baseStatusOverviewSurface);
   });
 
   it("builds overview rows from the shared surface bundle", () => {
     expect(
       buildStatusOverviewRowsFromSurface({
         surface: {
-          ...baseOverviewSurface,
-          cfg: baseCfg,
+          ...baseStatusOverviewSurface,
+          cfg: baseStatusCfg,
           update: {
             installKind: "git",
             git: {

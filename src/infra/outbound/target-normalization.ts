@@ -1,7 +1,7 @@
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import type { ChannelDirectoryEntryKind, ChannelId } from "../../channels/plugins/types.js";
+import type { ChannelDirectoryEntryKind, ChannelId } from "../../channels/plugins/types.public.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getActivePluginChannelRegistryVersion } from "../../plugins/runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 

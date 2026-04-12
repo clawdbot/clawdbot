@@ -4,6 +4,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runQaManualLane } from "./manual-lane.runtime.js";
 import { isQaFastModeModelRef, type QaProviderMode } from "./model-selection.js";
 import { type QaThinkingLevel } from "./qa-gateway-config.js";
+import { extractQaVisibleReplyLeakText } from "./reply-failure.js";
 import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
 import type { QaSuiteResult } from "./suite.js";
 
@@ -234,6 +235,9 @@ function collectTranscriptStats(transcript: string) {
 }
 
 function detectTranscriptFailure(transcript: string): string | undefined {
+  if (extractQaVisibleReplyLeakText(transcript)) {
+    return "internal harness/meta text leaked into transcript";
+  }
   const checks: Array<[RegExp, string]> = [
     [/\bmodel `[^`]+` is not supported\b/i, "model unsupported error leaked into transcript"],
     [/\binsufficient account balance\b/i, "account balance error leaked into transcript"],

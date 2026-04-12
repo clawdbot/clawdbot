@@ -4,8 +4,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { buildPluginSdkEntrySources, pluginSdkEntrypoints } from "../../plugin-sdk/entrypoints.js";
-import { loadPluginManifestRegistry } from "../manifest-registry.js";
 import { createSuiteTempRootTracker } from "../test-helpers/fs-fixtures.js";
+import { resolveBundledPluginFile } from "./test-helpers/bundled-plugin-roots.js";
 
 const require = createRequire(import.meta.url);
 const tsdownModuleUrl = pathToFileURL(require.resolve("tsdown")).href;
@@ -14,22 +14,11 @@ const bundleTempRootTracker = createSuiteTempRootTracker(
   "openclaw-plugin-sdk-build",
   path.join(process.cwd(), "node_modules", ".cache"),
 );
-const bundledPluginRoots = new Map(
-  loadPluginManifestRegistry({ cache: true, config: {} })
-    .plugins.filter((plugin) => plugin.origin === "bundled")
-    .map((plugin) => [plugin.id, plugin.rootDir] as const),
-);
-
-function bundledPluginFile(pluginId: string, relativePath: string): string {
-  const rootDir = bundledPluginRoots.get(pluginId);
-  if (!rootDir) {
-    throw new Error(`missing bundled plugin root for ${pluginId}`);
-  }
-  return path.join(rootDir, relativePath);
-}
-
 const matrixRuntimeCoverageEntries = {
-  "matrix-runtime-sdk": bundledPluginFile("matrix", "src/matrix/sdk.ts"),
+  "matrix-runtime-sdk": resolveBundledPluginFile({
+    pluginId: "matrix",
+    relativePath: "src/matrix/sdk.ts",
+  }),
 } as const;
 const bundledCoverageEntrySources = {
   ...buildPluginSdkEntrySources(bundledRepresentativeEntrypoints),

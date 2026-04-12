@@ -1,5 +1,5 @@
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
 import type { SkillSnapshot } from "../skills.js";
 

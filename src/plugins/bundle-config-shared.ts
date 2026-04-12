@@ -6,7 +6,7 @@ import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/bou
 import { isRecord } from "../utils.js";
 import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
-import type { PluginBundleFormat } from "./types.js";
+import type { PluginBundleFormat } from "./manifest-types.js";
 
 type ReadBundleJsonResult =
   | { ok: true; raw: Record<string, unknown> }

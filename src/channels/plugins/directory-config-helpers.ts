@@ -4,7 +4,7 @@ import {
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
 import type { DirectoryConfigParams } from "./directory-types.js";
-import type { ChannelDirectoryEntry } from "./types.js";
+import type { ChannelDirectoryEntry } from "./types.public.js";
 
 function resolveDirectoryQuery(query?: string | null): string {
   return normalizeLowercaseStringOrEmpty(query);

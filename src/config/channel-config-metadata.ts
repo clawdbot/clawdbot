@@ -1,5 +1,5 @@
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import type { PluginOrigin } from "../plugins/types.js";
+import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import type { ChannelUiMetadata, PluginUiMetadata } from "./schema.js";
 
 type ChannelMetadataRecord = ChannelUiMetadata & {

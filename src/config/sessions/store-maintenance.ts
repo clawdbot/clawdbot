@@ -133,13 +133,9 @@ function resolveHighWaterBytes(
  * Resolve maintenance settings from openclaw.json (`session.maintenance`).
  * Falls back to built-in defaults when config is missing or unset.
  */
-export function resolveMaintenanceConfig(): ResolvedSessionMaintenanceConfig {
-  let maintenance: SessionMaintenanceConfig | undefined;
-  try {
-    maintenance = loadConfig().session?.maintenance;
-  } catch {
-    // Config may not be available (e.g. in tests). Use defaults.
-  }
+export function resolveMaintenanceConfigFromInput(
+  maintenance?: SessionMaintenanceConfig,
+): ResolvedSessionMaintenanceConfig {
   const pruneAfterMs = resolvePruneAfterMs(maintenance);
   const maxDiskBytes = resolveMaxDiskBytes(maintenance);
   return {
@@ -151,6 +147,16 @@ export function resolveMaintenanceConfig(): ResolvedSessionMaintenanceConfig {
     maxDiskBytes,
     highWaterBytes: resolveHighWaterBytes(maintenance, maxDiskBytes),
   };
+}
+
+export function resolveMaintenanceConfig(): ResolvedSessionMaintenanceConfig {
+  let maintenance: SessionMaintenanceConfig | undefined;
+  try {
+    maintenance = loadConfig().session?.maintenance;
+  } catch {
+    // Config may not be available (e.g. in tests). Use defaults.
+  }
+  return resolveMaintenanceConfigFromInput(maintenance);
 }
 
 /**

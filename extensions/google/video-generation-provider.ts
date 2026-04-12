@@ -238,7 +238,6 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
         image: resolveInputImage(req),
         video: resolveInputVideo(req),
         config: {
-          numberOfVideos: 1,
           ...(typeof durationSeconds === "number" ? { durationSeconds } : {}),
           ...(resolveAspectRatio({ aspectRatio: req.aspectRatio, size: req.size })
             ? { aspectRatio: resolveAspectRatio({ aspectRatio: req.aspectRatio, size: req.size }) }

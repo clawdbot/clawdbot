@@ -1,5 +1,6 @@
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { loadConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOpenClawVersionBase } from "../config/version.js";
 import { listImportedBundledPluginFacadeIds } from "../plugin-sdk/facade-runtime.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
@@ -11,6 +12,7 @@ import {
 } from "./bundled-compat.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { loadOpenClawPlugins } from "./loader.js";
+import type { PluginDiagnostic } from "./manifest-types.js";
 import { resolveBundledProviderCompatPluginIds } from "./providers.js";
 import type { PluginRegistry } from "./registry.js";
 import { listImportedRuntimePluginIds } from "./runtime.js";
@@ -19,7 +21,7 @@ import {
   resolvePluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
 import { loadPluginMetadataRegistrySnapshot } from "./runtime/metadata-registry-loader.js";
-import type { PluginDiagnostic, PluginHookName } from "./types.js";
+import type { PluginHookName } from "./types.js";
 
 export type PluginStatusReport = PluginRegistry & {
   workspaceDir?: string;
@@ -142,7 +144,7 @@ function resolveReportedPluginVersion(
 }
 
 type PluginReportParams = {
-  config?: ReturnType<typeof loadConfig>;
+  config?: OpenClawConfig;
   workspaceDir?: string;
   /** Use an explicit env when plugin roots should resolve independently from process.env. */
   env?: NodeJS.ProcessEnv;
@@ -284,7 +286,7 @@ function deriveInspectShape(params: {
 
 export function buildPluginInspectReport(params: {
   id: string;
-  config?: ReturnType<typeof loadConfig>;
+  config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   report?: PluginStatusReport;
@@ -422,7 +424,7 @@ export function buildPluginInspectReport(params: {
 }
 
 export function buildAllPluginInspectReports(params?: {
-  config?: ReturnType<typeof loadConfig>;
+  config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   report?: PluginStatusReport;
@@ -448,7 +450,7 @@ export function buildAllPluginInspectReports(params?: {
 }
 
 export function buildPluginCompatibilityWarnings(params?: {
-  config?: ReturnType<typeof loadConfig>;
+  config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   report?: PluginStatusReport;
@@ -457,7 +459,7 @@ export function buildPluginCompatibilityWarnings(params?: {
 }
 
 export function buildPluginCompatibilityNotices(params?: {
-  config?: ReturnType<typeof loadConfig>;
+  config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   report?: PluginStatusReport;

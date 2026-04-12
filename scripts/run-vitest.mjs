@@ -2,6 +2,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { spawnPnpmRunner } from "./pnpm-runner.mjs";
 import {
+  forwardSignalToVitestProcessGroup,
   installVitestProcessGroupCleanup,
   shouldUseDetachedVitestProcessGroup,
 } from "./vitest-process-group.mjs";
@@ -12,6 +13,11 @@ const require = createRequire(import.meta.url);
 
 function isTruthyEnvValue(value) {
   return TRUTHY_ENV_VALUES.has(value?.trim().toLowerCase() ?? "");
+}
+
+function parsePositiveInt(value) {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
 export function resolveVitestNodeArgs(env = process.env) {
@@ -27,6 +33,10 @@ export function resolveVitestCliEntry() {
   return path.join(path.dirname(vitestPackageJson), "vitest.mjs");
 }
 
+export function resolveVitestNoOutputTimeoutMs(env = process.env) {
+  return parsePositiveInt(env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS);
+}
+
 export function resolveVitestSpawnParams(env = process.env, platform = process.platform) {
   return {
     env,
@@ -39,7 +49,94 @@ export function shouldSuppressVitestStderrLine(line) {
   return SUPPRESSED_VITEST_STDERR_PATTERNS.some((pattern) => line.includes(pattern));
 }
 
-function forwardVitestOutput(stream, target, shouldSuppressLine = () => false) {
+export function installVitestNoOutputWatchdog(params) {
+  const timeoutMs = params.timeoutMs;
+  if (!timeoutMs || timeoutMs <= 0) {
+    return () => {};
+  }
+
+  const setTimeoutFn = params.setTimeoutFn ?? setTimeout;
+  const clearTimeoutFn = params.clearTimeoutFn ?? clearTimeout;
+  const forceKillAfterMs = params.forceKillAfterMs ?? 5_000;
+  const streams = params.streams?.filter(Boolean) ?? [];
+  const label = params.label?.trim();
+  const suffix = label ? ` (${label})` : "";
+
+  let active = true;
+  let silenceTimer = null;
+  let forceKillTimer = null;
+
+  const clearForceKillTimer = () => {
+    if (forceKillTimer !== null) {
+      clearTimeoutFn(forceKillTimer);
+      forceKillTimer = null;
+    }
+  };
+
+  const clearSilenceTimer = () => {
+    if (silenceTimer !== null) {
+      clearTimeoutFn(silenceTimer);
+      silenceTimer = null;
+    }
+  };
+
+  const resetSilenceTimer = () => {
+    if (!active) {
+      return;
+    }
+    clearSilenceTimer();
+    silenceTimer = setTimeoutFn(() => {
+      if (!active) {
+        return;
+      }
+      params.log?.(
+        `[vitest] no output for ${timeoutMs}ms; terminating stalled Vitest process group${suffix}.`,
+      );
+      params.onTimeout?.();
+      if (forceKillAfterMs > 0) {
+        clearForceKillTimer();
+        forceKillTimer = setTimeoutFn(() => {
+          if (!active) {
+            return;
+          }
+          params.log?.(
+            `[vitest] process group still alive after ${forceKillAfterMs}ms; sending SIGKILL${suffix}.`,
+          );
+          params.onForceKill?.();
+        }, forceKillAfterMs);
+      }
+    }, timeoutMs);
+  };
+
+  const handleActivity = () => {
+    clearForceKillTimer();
+    resetSilenceTimer();
+  };
+
+  const listeners = streams.map((stream) => {
+    const handler = () => {
+      handleActivity();
+    };
+    stream.on("data", handler);
+    return { stream, handler };
+  });
+
+  resetSilenceTimer();
+
+  return () => {
+    if (!active) {
+      return;
+    }
+    active = false;
+    clearSilenceTimer();
+    clearForceKillTimer();
+    for (const { stream, handler } of listeners) {
+      stream.off("data", handler);
+    }
+  };
+}
+
+export function forwardVitestOutput(stream, target, shouldSuppressLine = () => false) {
   if (!stream) {
     return;
   }
@@ -79,11 +176,34 @@ function main(argv = process.argv.slice(2), env = process.env) {
     ...spawnParams,
   });
   const teardownChildCleanup = installVitestProcessGroupCleanup({ child });
+  const teardownNoOutputWatchdog = installVitestNoOutputWatchdog({
+    streams: [child.stdout, child.stderr],
+    timeoutMs: resolveVitestNoOutputTimeoutMs(env),
+    label: argv.join(" "),
+    log: (message) => {
+      console.error(message);
+    },
+    onTimeout: () => {
+      forwardSignalToVitestProcessGroup({
+        child,
+        signal: "SIGTERM",
+        kill: process.kill.bind(process),
+      });
+    },
+    onForceKill: () => {
+      forwardSignalToVitestProcessGroup({
+        child,
+        signal: "SIGKILL",
+        kill: process.kill.bind(process),
+      });
+    },
+  });
   forwardVitestOutput(child.stdout, process.stdout);
   forwardVitestOutput(child.stderr, process.stderr, shouldSuppressVitestStderrLine);
 
   child.on("exit", (code, signal) => {
     teardownChildCleanup();
+    teardownNoOutputWatchdog();
     if (signal) {
       process.kill(process.pid, signal);
       return;
@@ -93,6 +213,7 @@ function main(argv = process.argv.slice(2), env = process.env) {
 
   child.on("error", (error) => {
     teardownChildCleanup();
+    teardownNoOutputWatchdog();
     console.error(error);
     process.exit(1);
   });

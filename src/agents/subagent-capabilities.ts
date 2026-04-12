@@ -1,6 +1,6 @@
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSubagentSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";

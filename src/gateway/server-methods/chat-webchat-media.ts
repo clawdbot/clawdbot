@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ReplyPayload } from "../../auto-reply/types.js";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { isAudioFileName } from "../../media/mime.js";
 import { resolveSendableOutboundReplyParts } from "../../plugin-sdk/reply-payload.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";

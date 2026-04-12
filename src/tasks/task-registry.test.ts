@@ -33,9 +33,11 @@ import {
   markTaskRunningByRunId,
   markTaskTerminalById,
   recordTaskProgressByRunId,
+  resetTaskRegistryControlRuntimeForTests,
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
   resolveTaskForLookupToken,
+  setTaskRegistryControlRuntimeForTests,
   setTaskRegistryDeliveryRuntimeForTests,
   setTaskProgressById,
   setTaskTimingById,
@@ -205,6 +207,12 @@ describe("task-registry", () => {
     setTaskRegistryDeliveryRuntimeForTests({
       sendMessage: hoisted.sendMessageMock,
     });
+    setTaskRegistryControlRuntimeForTests({
+      getAcpSessionManager: () => ({
+        cancelSession: hoisted.cancelSessionMock,
+      }),
+      killSubagentRunAdmin: async (params) => hoisted.killSubagentRunAdminMock(params),
+    });
   });
 
   afterEach(() => {
@@ -218,6 +226,7 @@ describe("task-registry", () => {
     resetHeartbeatWakeStateForTests();
     resetAgentRunContextForTest();
     resetCronActiveJobsForTests();
+    resetTaskRegistryControlRuntimeForTests();
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryMaintenanceRuntimeForTests();
     resetTaskRegistryForTests({ persist: false });

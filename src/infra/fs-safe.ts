@@ -307,12 +307,16 @@ export async function readLocalFileSafely(params: {
   filePath: string;
   maxBytes?: number;
 }): Promise<SafeLocalReadResult> {
-  const opened = await openVerifiedLocalFile(params.filePath);
+  const opened = await openLocalFileSafely({ filePath: params.filePath });
   try {
     return await readOpenedFileSafely({ opened, maxBytes: params.maxBytes });
   } finally {
     await opened.handle.close().catch(() => {});
   }
+}
+
+export async function openLocalFileSafely(params: { filePath: string }): Promise<SafeOpenResult> {
+  return await openVerifiedLocalFile(params.filePath);
 }
 
 async function readOpenedFileSafely(params: {

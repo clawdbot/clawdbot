@@ -11,6 +11,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ImageContent } from "../agents/command/types.js";
 import type { ClientToolDefinition } from "../agents/pi-embedded-runner/run/params.js";
 import { createDefaultDeps } from "../cli/deps.js";
+import type { CliDeps } from "../cli/deps.types.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
 import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
@@ -406,7 +407,7 @@ async function runResponsesAgentCommand(params: {
   runId: string;
   messageChannel: string;
   senderIsOwner: boolean;
-  deps: ReturnType<typeof createDefaultDeps>;
+  deps: CliDeps;
   abortSignal?: AbortSignal;
 }) {
   return agentCommandFromIngress(

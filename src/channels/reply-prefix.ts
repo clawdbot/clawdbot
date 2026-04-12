@@ -1,10 +1,10 @@
 import { resolveAgentIdentity, resolveEffectiveMessagesConfig } from "../agents/identity.js";
+import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import {
   extractShortModelName,
   type ResponsePrefixContext,
 } from "../auto-reply/reply/response-prefix-template.js";
-import type { GetReplyOptions } from "../auto-reply/types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 type ModelSelectionContext = Parameters<NonNullable<GetReplyOptions["onModelSelected"]>>[0];

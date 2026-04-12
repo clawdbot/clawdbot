@@ -7,6 +7,7 @@ Use this when tuning the harness on frontier models before the small-model pass.
 - verify tool-first behavior on short approval turns
 - verify model switching does not kill tool use
 - verify repo-reading / discovery still finishes with a concrete report
+- verify mutating work keeps replay-unsafety explicit under compaction pressure
 - collect manual notes on personality without letting style hide execution regressions
 
 ## Frontier subset
@@ -19,6 +20,7 @@ Run this subset first on every harness tweak:
 
 Longer spot-check after that:
 
+- `compaction-retry-mutating-tool`
 - `subagent-handoff`
 
 ## Baseline order
@@ -84,6 +86,7 @@ Use the QA Lab runner catalog or `openclaw models list --all` to pick the curren
 - empty-promise rate
 - tool continuity after model switch
 - discovery report completeness and specificity
+- replay-safety truth after a mutating write
 - scope drift: unrelated scenario updates, grand wrap-ups, or invented completion tallies
 - latency / obvious stall behavior
 - token cost notes if a change makes the prompt materially heavier
@@ -126,4 +129,4 @@ Score it on:
 
 ## Deferred
 
-- post-compaction next-action continuity should become an executable lane once we have a deterministic compaction trigger in QA
+- deterministic mock compaction triggering is still deferred; the current replay-safety lane is a live-frontier-first executable scenario

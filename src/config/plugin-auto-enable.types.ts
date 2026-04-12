@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "./config.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 
 export type PluginAutoEnableCandidate =
   | {

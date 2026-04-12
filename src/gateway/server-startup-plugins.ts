@@ -1,8 +1,8 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { initSubagentRegistry } from "../agents/subagent-registry.js";
 import { runChannelPluginStartupMaintenance } from "../channels/plugins/lifecycle-startup.js";
-import type { loadConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveConfiguredDeferredChannelPluginIds,
   resolveGatewayStartupPluginIds,
@@ -22,8 +22,8 @@ type GatewayPluginBootstrapLog = {
 };
 
 export async function prepareGatewayPluginBootstrap(params: {
-  cfgAtStart: ReturnType<typeof loadConfig>;
-  startupRuntimeConfig: ReturnType<typeof loadConfig>;
+  cfgAtStart: OpenClawConfig;
+  startupRuntimeConfig: OpenClawConfig;
   minimalTestGateway: boolean;
   log: GatewayPluginBootstrapLog;
 }) {

@@ -1,8 +1,10 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import { resolveDebugProxySettings } from "../proxy-capture/env.js";
 import {
   buildProviderRequestDispatcherPolicy,
   getModelProviderRequestTransport,
+  mergeModelProviderRequestOverrides,
   resolveProviderRequestPolicyConfig,
 } from "./provider-request-config.js";
 
@@ -55,7 +57,25 @@ function buildManagedResponse(response: Response, release: () => Promise<void>):
 }
 
 function resolveModelRequestPolicy(model: Model<Api>) {
-  const request = getModelProviderRequestTransport(model);
+  const debugProxy = resolveDebugProxySettings();
+  let explicitDebugProxyUrl: string | undefined;
+  if (debugProxy.enabled && debugProxy.proxyUrl) {
+    try {
+      if (new URL(model.baseUrl).protocol === "https:") {
+        explicitDebugProxyUrl = debugProxy.proxyUrl;
+      }
+    } catch {
+      // Non-URL provider base URLs cannot use the debug proxy override safely.
+    }
+  }
+  const request = mergeModelProviderRequestOverrides(getModelProviderRequestTransport(model), {
+    proxy: explicitDebugProxyUrl
+      ? {
+          mode: "explicit-proxy",
+          url: explicitDebugProxyUrl,
+        }
+      : undefined,
+  });
   return resolveProviderRequestPolicyConfig({
     provider: model.provider,
     api: model.api,
@@ -94,6 +114,13 @@ export function buildGuardedModelFetch(model: Model<Api>): typeof fetch {
     const result = await fetchWithSsrFGuard({
       url,
       init: requestInit ?? init,
+      capture: {
+        meta: {
+          provider: model.provider,
+          api: model.api,
+          model: model.id,
+        },
+      },
       dispatcherPolicy,
       // Provider transport intentionally keeps the secure default and never
       // replays unsafe request bodies across cross-origin redirects.

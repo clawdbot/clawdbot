@@ -4,8 +4,14 @@ import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import type { ResolvedGatewayAuth } from "./auth.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "./control-ui-contract.js";
-import { handleControlUiAvatarRequest, handleControlUiHttpRequest } from "./control-ui.js";
+import {
+  handleControlUiAssistantMediaRequest,
+  handleControlUiAvatarRequest,
+  handleControlUiHttpRequest,
+} from "./control-ui.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 describe("handleControlUiHttpRequest", () => {
@@ -27,6 +33,8 @@ describe("handleControlUiHttpRequest", () => {
       basePath: string;
       assistantName: string;
       assistantAvatar: string;
+      assistantAgentId: string;
+      localMediaPreviewRoots?: string[];
     };
   }
 
@@ -77,6 +85,33 @@ describe("handleControlUiHttpRequest", () => {
     return { res, end, handled };
   }
 
+  async function runAssistantMediaRequest(params: {
+    url: string;
+    method: "GET" | "HEAD";
+    basePath?: string;
+    auth?: ResolvedGatewayAuth;
+    headers?: IncomingMessage["headers"];
+    trustedProxies?: string[];
+    remoteAddress?: string;
+  }) {
+    const { res, end } = makeMockHttpResponse();
+    const handled = await handleControlUiAssistantMediaRequest(
+      {
+        url: params.url,
+        method: params.method,
+        headers: params.headers ?? {},
+        socket: { remoteAddress: params.remoteAddress ?? "127.0.0.1" },
+      } as IncomingMessage,
+      res,
+      {
+        ...(params.basePath ? { basePath: params.basePath } : {}),
+        ...(params.auth ? { auth: params.auth } : {}),
+        ...(params.trustedProxies ? { trustedProxies: params.trustedProxies } : {}),
+      },
+    );
+    return { res, end, handled };
+  }
+
   async function writeAssetFile(rootPath: string, filename: string, contents: string) {
     const assetsDir = path.join(rootPath, "assets");
     await fs.mkdir(assetsDir, { recursive: true });
@@ -90,6 +125,18 @@ describe("handleControlUiHttpRequest", () => {
     const hardlinkPath = path.join(path.dirname(filePath), "app.hl.js");
     await fs.link(filePath, hardlinkPath);
     return hardlinkPath;
+  }
+
+  async function withAllowedAssistantMediaRoot<T>(params: {
+    prefix: string;
+    fn: (tmpRoot: string) => Promise<T>;
+  }) {
+    const tmpRoot = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), params.prefix));
+    try {
+      return await params.fn(tmpRoot);
+    } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
   }
 
   async function withBasePathRootFixture<T>(params: {
@@ -127,6 +174,122 @@ describe("handleControlUiHttpRequest", () => {
         expect(String(csp)).toContain("frame-ancestors 'none'");
         expect(String(csp)).toContain("script-src 'self'");
         expect(String(csp)).not.toContain("script-src 'self' 'unsafe-inline'");
+      },
+    });
+  });
+
+  it("serves assistant local media through the control ui media route", async () => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, "photo.png");
+        await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+        const { res, handled } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+      },
+    });
+  });
+
+  it("rejects assistant local media outside allowed preview roots", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-media-blocked-"));
+    try {
+      const filePath = path.join(tmp, "photo.png");
+      await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+      const { res, handled, end } = await runAssistantMediaRequest({
+        url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+        method: "GET",
+        auth: { mode: "token", token: "test-token", allowTailscale: false },
+      });
+      expectNotFoundResponse({ handled, res, end });
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("reports assistant local media availability metadata", async () => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-meta-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, "photo.png");
+        await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+        const { res, handled, end } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent(filePath)}&token=test-token`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(String(end.mock.calls[0]?.[0] ?? ""))).toEqual({ available: true });
+      },
+    });
+  });
+
+  it("reports assistant local media availability failures with a reason", async () => {
+    const { res, handled, end } = await runAssistantMediaRequest({
+      url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent("/Users/test/Documents/private.pdf")}&token=test-token`,
+      method: "GET",
+      auth: { mode: "token", token: "test-token", allowTailscale: false },
+    });
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(String(end.mock.calls[0]?.[0] ?? ""))).toEqual({
+      available: false,
+      code: "outside-allowed-folders",
+      reason: "Outside allowed folders",
+    });
+  });
+
+  it("rejects assistant local media without a valid auth token when auth is enabled", async () => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-auth-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, "photo.png");
+        await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+        const { res, handled, end } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(401);
+        expect(String(end.mock.calls[0]?.[0] ?? "")).toContain("Unauthorized");
+      },
+    });
+  });
+
+  it("rejects trusted-proxy assistant media requests from disallowed browser origins", async () => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-proxy-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, "photo.png");
+        await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+        const { res, handled, end } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}`,
+          method: "GET",
+          auth: {
+            mode: "trusted-proxy",
+            allowTailscale: false,
+            trustedProxy: {
+              userHeader: "x-forwarded-user",
+            },
+          },
+          trustedProxies: ["10.0.0.1"],
+          remoteAddress: "10.0.0.1",
+          headers: {
+            host: "gateway.example.com",
+            origin: "https://evil.example",
+            "x-forwarded-user": "nick@example.com",
+            "x-forwarded-proto": "https",
+          },
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(401);
+        expect(String(end.mock.calls[0]?.[0] ?? "")).toContain("Unauthorized");
       },
     });
   });
@@ -195,8 +358,8 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.basePath).toBe("");
         expect(parsed.assistantName).toBe("</script><script>alert(1)//");
         expect(parsed.assistantAvatar).toBe("/avatar/main");
-        expect(parsed).not.toHaveProperty("assistantAgentId");
-        expect(parsed).not.toHaveProperty("serverVersion");
+        expect(parsed.assistantAgentId).toBe("main");
+        expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
       },
     });
   });
@@ -222,8 +385,8 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.basePath).toBe("/openclaw");
         expect(parsed.assistantName).toBe("Ops");
         expect(parsed.assistantAvatar).toBe("/openclaw/avatar/main");
-        expect(parsed).not.toHaveProperty("assistantAgentId");
-        expect(parsed).not.toHaveProperty("serverVersion");
+        expect(parsed.assistantAgentId).toBe("main");
+        expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
       },
     });
   });

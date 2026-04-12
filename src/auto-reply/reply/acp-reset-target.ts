@@ -5,7 +5,7 @@ import {
 } from "../../acp/persistent-bindings.types.js";
 import { resolveConfiguredBindingRecord } from "../../channels/plugins/binding-registry.js";
 import { listAcpBindings } from "../../config/bindings.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { DEFAULT_ACCOUNT_ID, isAcpSessionKey } from "../../routing/session-key.js";
 import {

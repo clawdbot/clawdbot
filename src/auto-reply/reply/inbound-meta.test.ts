@@ -5,8 +5,8 @@ import { withEnv } from "../../test-utils/env.js";
 import type { TemplateContext } from "../templating.js";
 import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
 
-vi.mock("../../channels/plugins/index.js", () => ({
-  getChannelPlugin: (channelId: string) =>
+vi.mock("../../channels/plugins/registry-loaded.js", () => ({
+  getLoadedChannelPluginById: (channelId: string) =>
     channelId === "slack"
       ? {
           agentPrompt: {
@@ -23,24 +23,10 @@ vi.mock("../../channels/plugins/index.js", () => ({
           },
         }
       : undefined,
-  getLoadedChannelPlugin: (channelId: string) =>
-    channelId === "slack"
-      ? {
-          agentPrompt: {
-            inboundFormattingHints: () => ({
-              text_markup: "slack_mrkdwn",
-              rules: [
-                "Use Slack mrkdwn, not standard Markdown.",
-                "Bold uses *single asterisks*.",
-                "Links use <url|label>.",
-                "Code blocks use triple backticks without a language identifier.",
-                "Do not use markdown headings or pipe tables.",
-              ],
-            }),
-          },
-        }
-      : undefined,
-  normalizeChannelId: (channelId?: string) => channelId?.trim().toLowerCase(),
+}));
+
+vi.mock("../../channels/registry.js", () => ({
+  normalizeAnyChannelId: (channelId?: string) => channelId?.trim().toLowerCase(),
 }));
 
 function parseInboundMetaPayload(text: string): Record<string, unknown> {

@@ -16,6 +16,7 @@ extract_openclaw_semver() {
 quiet_npm() {
   npm \
     --loglevel=error \
+    --logs-max=0 \
     --no-update-notifier \
     --no-fund \
     --no-audit \

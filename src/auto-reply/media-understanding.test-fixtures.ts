@@ -1,6 +1,10 @@
-export function createSuccessfulImageMediaDecision() {
+import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
+
+function createSuccessfulMediaDecision(
+  capability: "audio" | "image" | "video",
+): MediaUnderstandingDecision {
   return {
-    capability: "image",
+    capability,
     outcome: "success",
     attachments: [
       {
@@ -21,5 +25,17 @@ export function createSuccessfulImageMediaDecision() {
         },
       },
     ],
-  } as const;
+  };
+}
+
+export function createSuccessfulAudioMediaDecision() {
+  return createSuccessfulMediaDecision("audio");
+}
+
+export function createSuccessfulImageMediaDecision() {
+  return createSuccessfulMediaDecision("image");
+}
+
+export function createSuccessfulVideoMediaDecision() {
+  return createSuccessfulMediaDecision("video");
 }

@@ -1,4 +1,5 @@
-import type { GatewayAuthConfig, OpenClawConfig } from "../config/config.js";
+import type { GatewayAuthConfig } from "../config/types.gateway.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { resolveRequiredConfiguredSecretRefInputString } from "./resolve-configured-secret-input-string.js";
 import {
