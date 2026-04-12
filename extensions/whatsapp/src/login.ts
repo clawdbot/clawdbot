@@ -1,20 +1,11 @@
-import { DisconnectReason } from "@whiskeysockets/baileys";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { danger, info, success } from "openclaw/plugin-sdk/runtime-env";
+import { danger, success } from "openclaw/plugin-sdk/runtime-env";
 import { defaultRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { logInfo } from "openclaw/plugin-sdk/text-runtime";
 import { resolveWhatsAppAccount } from "./accounts.js";
-import {
-  createWaSocket,
-  formatError,
-  getStatusCode,
-  logoutWeb,
-  waitForCredsSaveQueueWithTimeout,
-  waitForWaConnection,
-} from "./session.js";
-
-const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
+import { closeWaSocketSoon, waitForWhatsAppLoginResult } from "./connection-controller.js";
+import { createWaSocket, waitForWaConnection } from "./session.js";
 
 export async function loginWeb(
   verbose: boolean,
@@ -22,63 +13,50 @@ export async function loginWeb(
   runtime: RuntimeEnv = defaultRuntime,
   accountId?: string,
 ) {
-  const wait = waitForConnection ?? waitForWaConnection;
   const cfg = loadConfig();
   const account = resolveWhatsAppAccount({ cfg, accountId });
-  const sock = await createWaSocket(true, verbose, {
+  let sock = await createWaSocket(true, verbose, {
     authDir: account.authDir,
   });
   logInfo("Waiting for WhatsApp connection...", runtime);
   try {
-    await wait(sock);
-    console.log(success("✅ Linked! Credentials saved for future sends."));
-  } catch (err) {
-    const code = getStatusCode(err);
-    if (code === 515) {
+    const result = await waitForWhatsAppLoginResult({
+      sock,
+      authDir: account.authDir,
+      isLegacyAuthDir: account.isLegacyAuthDir,
+      verbose,
+      runtime,
+      waitForConnection,
+      onSocketReplaced: (replacementSock) => {
+        sock = replacementSock;
+      },
+    });
+    if (result.outcome === "connected") {
       console.log(
-        info("WhatsApp asked for a restart after pairing (code 515); waiting for creds to save…"),
+        success(
+          result.restarted
+            ? "✅ Linked after restart; web session ready."
+            : "✅ Linked! Credentials saved for future sends.",
+        ),
       );
-      try {
-        sock.ws?.close();
-      } catch {
-        // ignore
-      }
-      await waitForCredsSaveQueueWithTimeout(account.authDir);
-      const retry = await createWaSocket(false, verbose, {
-        authDir: account.authDir,
-      });
-      try {
-        await wait(retry);
-        console.log(success("✅ Linked after restart; web session ready."));
-        return;
-      } finally {
-        setTimeout(() => retry.ws?.close(), 500);
-      }
+      return;
     }
-    if (code === LOGGED_OUT_STATUS) {
-      await logoutWeb({
-        authDir: account.authDir,
-        isLegacyAuthDir: account.isLegacyAuthDir,
-        runtime,
-      });
+
+    if (result.outcome === "logged-out") {
       console.error(
         danger(
           `WhatsApp reported the session is logged out. Cleared cached web session; please rerun ${formatCliCommand("openclaw channels login")} and scan the QR again.`,
         ),
       );
-      throw new Error("Session logged out; cache cleared. Re-run login.", { cause: err });
+      throw new Error("Session logged out; cache cleared. Re-run login.", {
+        cause: result.error,
+      });
     }
-    const formatted = formatError(err);
-    console.error(danger(`WhatsApp Web connection ended before fully opening. ${formatted}`));
-    throw new Error(formatted, { cause: err });
+
+    console.error(danger(`WhatsApp Web connection ended before fully opening. ${result.message}`));
+    throw new Error(result.message, { cause: result.error });
   } finally {
     // Let Baileys flush any final events before closing the socket.
-    setTimeout(() => {
-      try {
-        sock.ws?.close();
-      } catch {
-        // ignore
-      }
-    }, 500);
+    closeWaSocketSoon(sock);
   }
 }

@@ -67,6 +67,8 @@ flowchart LR
 
 If only one path is available (no embeddings or no FTS), the other runs alone.
 
+When embeddings are unavailable, OpenClaw still uses lexical ranking over FTS results instead of falling back to raw exact-match ordering only. That degraded mode boosts chunks with stronger query-term coverage and relevant file paths, which keeps recall useful even without `sqlite-vec` or an embedding provider.
+
 ## Improving search quality
 
 Two optional features help when you have a large note history:

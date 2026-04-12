@@ -3,13 +3,13 @@
     <channel>
         <title>OpenClaw</title>
         <item>
-            <title>2026.4.11</title>
-            <pubDate>Sun, 12 Apr 2026 00:37:09 +0000</pubDate>
+            <title>2026.4.12</title>
+            <pubDate>Sun, 12 Apr 2026 12:00:00 +0000</pubDate>
             <link>https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml</link>
-            <sparkle:version>2026041190</sparkle:version>
-            <sparkle:shortVersionString>2026.4.11</sparkle:shortVersionString>
+            <sparkle:version>2026041290</sparkle:version>
+            <sparkle:shortVersionString>2026.4.12</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description><![CDATA[<h2>OpenClaw 2026.4.11</h2>
+            <description><![CDATA[<h2>OpenClaw 2026.4.12</h2>
 <h3>Changes</h3>
 <ul>
 <li>Dreaming/memory-wiki: add ChatGPT import ingestion plus new <code>Imported Insights</code> and <code>Memory Palace</code> diary subtabs so Dreaming can inspect imported source chats, compiled wiki pages, and full source pages directly from the UI. (#64505)</li>
@@ -43,7 +43,7 @@
 </ul>
 <p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
-            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.4.11/OpenClaw-2026.4.11.zip" length="47317969" type="application/octet-stream" sparkle:edSignature="v9bUsh1mBBPtpMn7kKYAvO8MNJHAeMj7UkmkkuDSC8NvwPx2Fo3+NEeyAyA9s9Vax6L7i+eHSpwzAmtwpnHcCA=="/>
+            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.4.12/OpenClaw-2026.4.12.zip" length="47317969" type="application/octet-stream" sparkle:edSignature="v9bUsh1mBBPtpMn7kKYAvO8MNJHAeMj7UkmkkuDSC8NvwPx2Fo3+NEeyAyA9s9Vax6L7i+eHSpwzAmtwpnHcCA=="/>
         </item>
         <item>
             <title>2026.4.10</title>

@@ -5,6 +5,8 @@ import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../../runtime-ap
 import { setFeishuRuntime } from "../runtime.js";
 import type { ResolvedFeishuAccount } from "../types.js";
 
+const FEISHU_LIFECYCLE_WAIT_TIMEOUT_MS = 10_000;
+
 type InboundDebouncerParams<T> = {
   onFlush?: (items: T[]) => Promise<void>;
   onError?: (err: unknown, items: T[]) => void;
@@ -303,9 +305,11 @@ export async function replayFeishuLifecycleEvent(params: {
   waitForSecond?: () => void | Promise<void>;
 }) {
   await params.handler(params.event);
-  await vi.waitFor(params.waitForFirst);
+  await vi.waitFor(params.waitForFirst, { timeout: FEISHU_LIFECYCLE_WAIT_TIMEOUT_MS });
   await params.handler(params.event);
-  await vi.waitFor(params.waitForSecond ?? params.waitForFirst);
+  await vi.waitFor(params.waitForSecond ?? params.waitForFirst, {
+    timeout: FEISHU_LIFECYCLE_WAIT_TIMEOUT_MS,
+  });
 }
 
 export async function runFeishuLifecycleSequence(
@@ -314,7 +318,9 @@ export async function runFeishuLifecycleSequence(
 ) {
   for (const [index, deliver] of deliveries.entries()) {
     await deliver();
-    await vi.waitFor(waits[index] ?? waits.at(-1) ?? (() => {}));
+    await vi.waitFor(waits[index] ?? waits.at(-1) ?? (() => {}), {
+      timeout: FEISHU_LIFECYCLE_WAIT_TIMEOUT_MS,
+    });
   }
 }
 
@@ -341,7 +347,7 @@ export async function expectFeishuReplyPipelineDedupedAcrossReplay(params: {
   createFeishuReplyDispatcherMock: ReturnType<typeof vi.fn>;
   waitTimeoutMs?: number;
 }) {
-  const waitTimeoutMs = params.waitTimeoutMs;
+  const waitTimeoutMs = params.waitTimeoutMs ?? FEISHU_LIFECYCLE_WAIT_TIMEOUT_MS;
   await replayFeishuLifecycleEvent({
     handler: params.handler,
     event: params.event,

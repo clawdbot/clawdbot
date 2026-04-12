@@ -87,6 +87,78 @@ transport coverage matrix.
 | Matrix   | x      | x              | x               | x               | x              | x                | x                | x                    |              |
 | Telegram | x      |                |                 |                 |                |                  |                  |                      | x            |
 
+### Adding a channel to QA
+
+Adding a channel to the markdown QA system requires exactly two things:
+
+1. A transport adapter for the channel.
+2. A scenario pack that exercises the channel contract.
+
+Do not add a channel-specific QA runner when the shared `qa-lab` runner can
+own the flow.
+
+`qa-lab` owns the shared mechanics:
+
+- suite startup and teardown
+- worker concurrency
+- artifact writing
+- report generation
+- scenario execution
+- compatibility aliases for older `qa-channel` scenarios
+
+The channel adapter owns the transport contract:
+
+- how the gateway is configured for that transport
+- how readiness is checked
+- how inbound events are injected
+- how outbound messages are observed
+- how transcripts and normalized transport state are exposed
+- how transport-backed actions are executed
+- how transport-specific reset or cleanup is handled
+
+The minimum adoption bar for a new channel is:
+
+1. Implement the transport adapter on the shared `qa-lab` seam.
+2. Register the adapter in the transport registry.
+3. Keep transport-specific mechanics inside the adapter or the channel harness.
+4. Author or adapt markdown scenarios under `qa/scenarios/`.
+5. Use the generic scenario helpers for new scenarios.
+6. Keep existing compatibility aliases working unless the repo is doing an intentional migration.
+
+The decision rule is strict:
+
+- If behavior can be expressed once in `qa-lab`, put it in `qa-lab`.
+- If behavior depends on one channel transport, keep it in that adapter or plugin harness.
+- If a scenario needs a new capability that more than one channel can use, add a generic helper instead of a channel-specific branch in `suite.ts`.
+- If a behavior is only meaningful for one transport, keep the scenario transport-specific and make that explicit in the scenario contract.
+
+Preferred generic helper names for new scenarios are:
+
+- `waitForTransportReady`
+- `waitForChannelReady`
+- `injectInboundMessage`
+- `injectOutboundMessage`
+- `waitForTransportOutboundMessage`
+- `waitForChannelOutboundMessage`
+- `waitForNoTransportOutbound`
+- `getTransportSnapshot`
+- `readTransportMessage`
+- `readTransportTranscript`
+- `formatTransportTranscript`
+- `resetTransport`
+
+Compatibility aliases remain available for existing scenarios, including:
+
+- `waitForQaChannelReady`
+- `waitForOutboundMessage`
+- `waitForNoOutbound`
+- `formatConversationTranscript`
+- `resetBus`
+
+New channel work should use the generic helper names.
+Compatibility aliases exist to avoid a flag day migration, not as the model for
+new scenario authoring.
+
 ## Test suites (what runs where)
 
 Think of the suites as “increasing realism” (and increasing flakiness/cost):

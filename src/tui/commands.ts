@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 const VERBOSE_LEVELS = ["on", "off"];
+const TRACE_LEVELS = ["on", "off"];
 const FAST_LEVELS = ["status", "on", "off"];
 const REASONING_LEVELS = ["on", "off"];
 const ELEVATED_LEVELS = ["on", "off", "ask", "full"];
@@ -55,6 +56,7 @@ export function parseCommand(input: string): ParsedCommand {
 export function getSlashCommands(options: SlashCommandOptions = {}): SlashCommand[] {
   const thinkLevels = listThinkingLevelLabels(options.provider, options.model);
   const verboseCompletions = createLevelCompletion(VERBOSE_LEVELS);
+  const traceCompletions = createLevelCompletion(TRACE_LEVELS);
   const fastCompletions = createLevelCompletion(FAST_LEVELS);
   const reasoningCompletions = createLevelCompletion(REASONING_LEVELS);
   const usageCompletions = createLevelCompletion(USAGE_FOOTER_LEVELS);
@@ -90,6 +92,11 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
       name: "verbose",
       description: "Set verbose on/off",
       getArgumentCompletions: verboseCompletions,
+    },
+    {
+      name: "trace",
+      description: "Set trace on/off",
+      getArgumentCompletions: traceCompletions,
     },
     {
       name: "reasoning",
@@ -156,6 +163,7 @@ export function helpText(options: SlashCommandOptions = {}): string {
     `/think <${thinkLevels}>`,
     "/fast <status|on|off>",
     "/verbose <on|off>",
+    "/trace <on|off>",
     "/reasoning <on|off>",
     "/usage <off|tokens|full>",
     "/elevated <on|off|ask|full>",

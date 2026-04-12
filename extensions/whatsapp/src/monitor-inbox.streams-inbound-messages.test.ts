@@ -333,6 +333,47 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
+  it("flushes pending debounced inbound batches after close", async () => {
+    vi.useFakeTimers();
+    try {
+      const onMessage = vi.fn(async () => undefined);
+      const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+        debounceMs: 50,
+      });
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("debounce-close-1"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "first",
+          timestamp: 1_700_000_000,
+          pushName: "Tester",
+        }),
+      );
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("debounce-close-2"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "second",
+          timestamp: 1_700_000_001,
+          pushName: "Tester",
+        }),
+      );
+
+      await listener.close();
+      await vi.advanceTimersByTimeAsync(50);
+      await waitForMessageCalls(onMessage, 1);
+      expect(onMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: "first\nsecond",
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("retries timed-out sends on the same socket without clearing the socket ref", async () => {
     const onMessage = vi.fn(async () => undefined);
     const socketRef = createSocketRef();

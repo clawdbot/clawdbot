@@ -1,12 +1,10 @@
 import fs from "node:fs/promises";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
-import { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth.js";
-import { providerApiKeyAuthRuntime } from "../plugins/provider-api-key-auth.runtime.js";
 import type { ProviderAuthMethod, ProviderAuthResult, ProviderPlugin } from "../plugins/types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
@@ -22,6 +20,23 @@ import {
 } from "./test-wizard-helpers.js";
 
 type DetectZaiEndpoint = typeof import("../plugins/provider-zai-endpoint.js").detectZaiEndpoint;
+
+let providerApiKeyAuthModulePromise:
+  | Promise<typeof import("../plugins/provider-api-key-auth.js")>
+  | undefined;
+let providerApiKeyAuthRuntimeModulePromise:
+  | Promise<typeof import("../plugins/provider-api-key-auth.runtime.js")>
+  | undefined;
+
+async function getProviderApiKeyAuthModule() {
+  providerApiKeyAuthModulePromise ??= import("../plugins/provider-api-key-auth.js");
+  return await providerApiKeyAuthModulePromise;
+}
+
+async function getProviderApiKeyAuthRuntimeModule() {
+  providerApiKeyAuthRuntimeModulePromise ??= import("../plugins/provider-api-key-auth.runtime.js");
+  return await providerApiKeyAuthRuntimeModulePromise;
+}
 
 const GOOGLE_GEMINI_DEFAULT_MODEL = "google/gemini-3.1-pro-preview";
 const MINIMAX_CN_API_BASE_URL = "https://api.minimax.chat/v1";
@@ -110,7 +125,7 @@ function providerConfigPatch(
   };
 }
 
-function createApiKeyProvider(params: {
+async function createApiKeyProvider(params: {
   providerId: string;
   label: string;
   choiceId: string;
@@ -125,7 +140,8 @@ function createApiKeyProvider(params: {
   noteMessage?: string;
   noteTitle?: string;
   applyConfig?: Partial<OpenClawConfig>;
-}): ProviderPlugin {
+}): Promise<ProviderPlugin> {
+  const { createProviderApiKeyAuthMethod } = await getProviderApiKeyAuthModule();
   return {
     id: params.providerId,
     label: params.label,
@@ -179,7 +195,8 @@ function createFixedChoiceProvider(params: {
   };
 }
 
-function createDefaultProviderPlugins() {
+async function createDefaultProviderPlugins(): Promise<ProviderPlugin[]> {
+  const { providerApiKeyAuthRuntime } = await getProviderApiKeyAuthRuntimeModule();
   const buildApiKeyCredential = providerApiKeyAuthRuntime.buildApiKeyCredential;
   const ensureApiKeyFromOptionEnvOrPrompt =
     providerApiKeyAuthRuntime.ensureApiKeyFromOptionEnvOrPrompt;
@@ -344,7 +361,7 @@ function createDefaultProviderPlugins() {
   };
 
   return [
-    createApiKeyProvider({
+    await createApiKeyProvider({
       providerId: "anthropic",
       label: "Anthropic API key",
       choiceId: "apiKey",
@@ -353,7 +370,7 @@ function createDefaultProviderPlugins() {
       envVar: "ANTHROPIC_API_KEY",
       promptMessage: "Enter Anthropic API key",
     }),
-    createApiKeyProvider({
+    await createApiKeyProvider({
       providerId: "google",
       label: "Gemini API key",
       choiceId: "gemini-api-key",
@@ -363,7 +380,7 @@ function createDefaultProviderPlugins() {
       promptMessage: "Enter Gemini API key",
       defaultModel: GOOGLE_GEMINI_DEFAULT_MODEL,
     }),
-    createApiKeyProvider({
+    await createApiKeyProvider({
       providerId: "huggingface",
       label: "Hugging Face API key",
       choiceId: "huggingface-api-key",
@@ -373,7 +390,7 @@ function createDefaultProviderPlugins() {
       promptMessage: "Enter Hugging Face API key",
       defaultModel: "huggingface/Qwen/Qwen3-Coder-480B-A35B-Instruct",
     }),
-    createApiKeyProvider({
+    await createApiKeyProvider({
       providerId: "litellm",
       label: "LiteLLM API key",
       choiceId: "litellm-api-key",
@@ -383,7 +400,7 @@ function createDefaultProviderPlugins() {
       promptMessage: "Enter LiteLLM API key",
       defaultModel: "litellm/anthropic/claude-opus-4.6",
     }),
-    createApiKeyProvider({
+    await createApiKeyProvider({
       providerId: "minimax",
       label: "MiniMax API key (Global)",
       choiceId: "minimax-global-api",
@@ -394,7 +411,7 @@ function createDefaultProviderPlugins() {
       profileId: "minimax:global",
       defaultModel: "minimax/MiniMax-M2.7",
     }),
-    createApiKeyProvider({
+    await createApiKeyProvider({
       providerId: "minimax",
       label: "MiniMax API key (CN)",
       choiceId: "minimax-cn-api",
@@ -407,7 +424,7 @@ function createDefaultProviderPlugins() {
       applyConfig: providerConfigPatch("minimax", { baseUrl: MINIMAX_CN_API_BASE_URL }),
       expectedProviders: ["minimax", "minimax-cn"],
     }),
-    createApiKeyProvider({
+    await createApiKeyProvider({
       providerId: "mistral",
       label: "Mistral API key",
       choiceId: "mistral-api-key",
@@ -417,7 +434,7 @@ function createDefaultProviderPlugins() {
       promptMessage: "Enter Mistral API key",
       defaultModel: "mistral/mistral-large-latest",
     }),
-    createApiKeyProvider({
+    await createApiKeyProvider({
       providerId: "moonshot",
       label: "Moonshot API key",
       choiceId: "moonshot-api-key",
@@ -438,7 +455,7 @@ function createDefaultProviderPlugins() {
         run: async () => ({ profiles: [] }),
       },
     }),
-    createApiKeyProvider({
+    await createApiKeyProvider({
       providerId: "openai",
       label: "OpenAI API key",
       choiceId: "openai-api-key",
@@ -448,7 +465,7 @@ function createDefaultProviderPlugins() {
       promptMessage: "Enter OpenAI API key",
       defaultModel: "openai/gpt-5.4",
     }),
-    createApiKeyProvider({
+    await createApiKeyProvider({
       providerId: "opencode",
       label: "OpenCode Zen",
       choiceId: "opencode-zen",
@@ -462,7 +479,7 @@ function createDefaultProviderPlugins() {
       noteMessage: "OpenCode uses one API key across the Zen and Go catalogs.",
       noteTitle: "OpenCode",
     }),
-    createApiKeyProvider({
+    await createApiKeyProvider({
       providerId: "opencode-go",
       label: "OpenCode Go",
       choiceId: "opencode-go",
@@ -476,7 +493,7 @@ function createDefaultProviderPlugins() {
       noteMessage: "OpenCode uses one API key across the Zen and Go catalogs.",
       noteTitle: "OpenCode",
     }),
-    createApiKeyProvider({
+    await createApiKeyProvider({
       providerId: "openrouter",
       label: "OpenRouter API key",
       choiceId: "openrouter-api-key",
@@ -486,7 +503,7 @@ function createDefaultProviderPlugins() {
       promptMessage: "Enter OpenRouter API key",
       defaultModel: "openrouter/auto",
     }),
-    createApiKeyProvider({
+    await createApiKeyProvider({
       providerId: "qianfan",
       label: "Qianfan API key",
       choiceId: "qianfan-api-key",
@@ -496,7 +513,7 @@ function createDefaultProviderPlugins() {
       promptMessage: "Enter Qianfan API key",
       defaultModel: "qianfan/ernie-4.5-8k",
     }),
-    createApiKeyProvider({
+    await createApiKeyProvider({
       providerId: "synthetic",
       label: "Synthetic API key",
       choiceId: "synthetic-api-key",
@@ -506,7 +523,7 @@ function createDefaultProviderPlugins() {
       promptMessage: "Enter Synthetic API key",
       defaultModel: "synthetic/Synthetic-1",
     }),
-    createApiKeyProvider({
+    await createApiKeyProvider({
       providerId: "together",
       label: "Together API key",
       choiceId: "together-api-key",
@@ -516,7 +533,7 @@ function createDefaultProviderPlugins() {
       promptMessage: "Enter Together API key",
       defaultModel: "together/meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8",
     }),
-    createApiKeyProvider({
+    await createApiKeyProvider({
       providerId: "venice",
       label: "Venice AI",
       choiceId: "venice-api-key",
@@ -528,7 +545,7 @@ function createDefaultProviderPlugins() {
       noteMessage: "Venice is a privacy-focused inference service.",
       noteTitle: "Venice AI",
     }),
-    createApiKeyProvider({
+    await createApiKeyProvider({
       providerId: "vercel-ai-gateway",
       label: "AI Gateway API key",
       choiceId: "ai-gateway-api-key",
@@ -538,7 +555,7 @@ function createDefaultProviderPlugins() {
       promptMessage: "Enter AI Gateway API key",
       defaultModel: "vercel-ai-gateway/anthropic/claude-opus-4.6",
     }),
-    createApiKeyProvider({
+    await createApiKeyProvider({
       providerId: "xai",
       label: "xAI API key",
       choiceId: "xai-api-key",
@@ -548,7 +565,7 @@ function createDefaultProviderPlugins() {
       promptMessage: "Enter xAI API key",
       defaultModel: "xai/grok-4",
     }),
-    createApiKeyProvider({
+    await createApiKeyProvider({
       providerId: "xiaomi",
       label: "Xiaomi API key",
       choiceId: "xiaomi-api-key",
@@ -573,7 +590,7 @@ function createDefaultProviderPlugins() {
       label: "Chutes",
       auth: [chutesOAuthMethod],
     },
-    createApiKeyProvider({
+    await createApiKeyProvider({
       providerId: "kimi",
       label: "Kimi Code API key",
       choiceId: "kimi-code-api-key",
@@ -667,10 +684,17 @@ describe("applyAuthChoice", () => {
     return (await readAuthProfiles()).profiles?.[profileId];
   }
 
+  let defaultProviderPlugins: ProviderPlugin[] = [];
+
+  beforeAll(async () => {
+    defaultProviderPlugins = await createDefaultProviderPlugins();
+    resolvePluginProviders.mockReturnValue(defaultProviderPlugins);
+  });
+
   afterEach(async () => {
     vi.unstubAllGlobals();
     resolvePluginProviders.mockReset();
-    resolvePluginProviders.mockReturnValue(createDefaultProviderPlugins());
+    resolvePluginProviders.mockReturnValue(defaultProviderPlugins);
     runProviderModelSelectedHook.mockClear();
     detectZaiEndpoint.mockReset();
     detectZaiEndpoint.mockResolvedValue(null);
@@ -679,8 +703,6 @@ describe("applyAuthChoice", () => {
     await lifecycle.cleanup();
     activeStateDir = null;
   });
-
-  resolvePluginProviders.mockReturnValue(createDefaultProviderPlugins());
 
   it("applies Anthropic setup-token auth when the provider exposes the setup flow", async () => {
     await setupTempState();

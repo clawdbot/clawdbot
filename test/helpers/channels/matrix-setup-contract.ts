@@ -2,7 +2,36 @@ import { loadBundledPluginContractApiSync } from "../../../src/test-utils/bundle
 
 type MatrixContractSurface = typeof import("@openclaw/matrix/contract-api.js");
 
-const { matrixSetupAdapter, matrixSetupWizard } =
-  loadBundledPluginContractApiSync<MatrixContractSurface>("matrix");
+let matrixContractSurface: MatrixContractSurface | undefined;
 
-export { matrixSetupAdapter, matrixSetupWizard };
+function createLazyObjectSurface<T extends object>(loadSurface: () => T): T {
+  return new Proxy({} as T, {
+    get(_target, property) {
+      const surface = loadSurface();
+      const value = Reflect.get(surface, property, surface);
+      return typeof value === "function" ? value.bind(surface) : value;
+    },
+    has(_target, property) {
+      return property in loadSurface();
+    },
+    ownKeys() {
+      return Reflect.ownKeys(loadSurface());
+    },
+    getOwnPropertyDescriptor(_target, property) {
+      return Reflect.getOwnPropertyDescriptor(loadSurface(), property);
+    },
+  });
+}
+
+function getMatrixContractSurface(): MatrixContractSurface {
+  matrixContractSurface ??= loadBundledPluginContractApiSync<MatrixContractSurface>("matrix");
+  return matrixContractSurface;
+}
+
+export const matrixSetupAdapter = createLazyObjectSurface(
+  () => getMatrixContractSurface().matrixSetupAdapter,
+);
+
+export const matrixSetupWizard = createLazyObjectSurface(
+  () => getMatrixContractSurface().matrixSetupWizard,
+);

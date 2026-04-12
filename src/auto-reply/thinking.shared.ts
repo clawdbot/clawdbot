@@ -5,6 +5,7 @@ import {
 
 export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
 export type VerboseLevel = "off" | "on" | "full";
+export type TraceLevel = "off" | "on";
 export type NoticeLevel = "off" | "on" | "full";
 export type ElevatedLevel = "off" | "on" | "ask" | "full";
 export type ElevatedMode = "off" | "ask" | "full";
@@ -133,6 +134,20 @@ function normalizeOnOffFullLevel(raw?: string | null): OnOffFullLevel | undefine
 
 export function normalizeVerboseLevel(raw?: string | null): VerboseLevel | undefined {
   return normalizeOnOffFullLevel(raw);
+}
+
+export function normalizeTraceLevel(raw?: string | null): TraceLevel | undefined {
+  const key = normalizeOptionalLowercaseString(raw);
+  if (!key) {
+    return undefined;
+  }
+  if (["off", "false", "no", "0"].includes(key)) {
+    return "off";
+  }
+  if (["on", "true", "yes", "1"].includes(key)) {
+    return "on";
+  }
+  return undefined;
 }
 
 export function normalizeNoticeLevel(raw?: string | null): NoticeLevel | undefined {

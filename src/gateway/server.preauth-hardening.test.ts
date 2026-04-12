@@ -26,6 +26,58 @@ afterEach(async () => {
   }
 });
 
+function setEnvForTest(name: string, value: string) {
+  const previous = process.env[name];
+  process.env[name] = value;
+  cleanupEnv.push(() => {
+    if (previous === undefined) {
+      delete process.env[name];
+      return;
+    }
+    process.env[name] = previous;
+  });
+}
+
+function setGatewayAuthNoneForTest() {
+  const previousAuth = testState.gatewayAuth;
+  testState.gatewayAuth = { mode: "none" };
+  cleanupEnv.push(() => {
+    testState.gatewayAuth = previousAuth;
+  });
+}
+
+async function requestUpgradeRejection(port: number): Promise<{ status: number; body: string }> {
+  return await new Promise<{ status: number; body: string }>((resolve, reject) => {
+    const req = http.request({
+      host: "127.0.0.1",
+      port,
+      path: "/",
+      headers: {
+        Connection: "Upgrade",
+        Upgrade: "websocket",
+        "Sec-WebSocket-Key": "dGVzdC1rZXktMDEyMzQ1Ng==",
+        "Sec-WebSocket-Version": "13",
+      },
+    });
+    req.once("upgrade", (_res, socket) => {
+      socket.destroy();
+      reject(new Error("expected websocket upgrade to be rejected"));
+    });
+    req.once("response", (res) => {
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", (chunk) => {
+        body += chunk;
+      });
+      res.once("end", () => {
+        resolve({ status: res.statusCode ?? 0, body });
+      });
+    });
+    req.once("error", reject);
+    req.end();
+  });
+}
+
 describe("gateway pre-auth hardening", () => {
   it("rejects upgrades before websocket handlers attach (pre-auth budget enforced, then released)", async () => {
     const clients = new Set<GatewayWsClient>();
@@ -53,43 +105,13 @@ describe("gateway pre-auth hardening", () => {
     await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", resolve));
     const address = httpServer.address();
     const port = typeof address === "object" && address ? address.port : 0;
-    const requestUpgrade = async () =>
-      await new Promise<{ status: number; body: string }>((resolve, reject) => {
-        const req = http.request({
-          host: "127.0.0.1",
-          port,
-          path: "/",
-          headers: {
-            Connection: "Upgrade",
-            Upgrade: "websocket",
-            "Sec-WebSocket-Key": "dGVzdC1rZXktMDEyMzQ1Ng==",
-            "Sec-WebSocket-Version": "13",
-          },
-        });
-        req.once("upgrade", (_res, socket) => {
-          socket.destroy();
-          reject(new Error("expected websocket upgrade to be rejected"));
-        });
-        req.once("response", (res) => {
-          let body = "";
-          res.setEncoding("utf8");
-          res.on("data", (chunk) => {
-            body += chunk;
-          });
-          res.once("end", () => {
-            resolve({ status: res.statusCode ?? 0, body });
-          });
-        });
-        req.once("error", reject);
-        req.end();
-      });
 
     try {
-      await expect(requestUpgrade()).resolves.toEqual({
+      await expect(requestUpgradeRejection(port)).resolves.toEqual({
         status: 503,
         body: "Gateway websocket handlers unavailable",
       });
-      await expect(requestUpgrade()).resolves.toEqual({
+      await expect(requestUpgradeRejection(port)).resolves.toEqual({
         status: 503,
         body: "Gateway websocket handlers unavailable",
       });
@@ -102,15 +124,7 @@ describe("gateway pre-auth hardening", () => {
   });
 
   it("closes idle unauthenticated sockets after the handshake timeout", async () => {
-    const previous = process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
-    process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS = "200";
-    cleanupEnv.push(() => {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS;
-      } else {
-        process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS = previous;
-      }
-    });
+    setEnvForTest("OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS", "200");
 
     const harness = await createGatewaySuiteHarness({
       serverOptions: { auth: { mode: "none" } },
@@ -168,20 +182,8 @@ describe("gateway pre-auth hardening", () => {
   });
 
   it("rejects excess simultaneous unauthenticated sockets from the same client ip", async () => {
-    const previous = process.env.OPENCLAW_TEST_MAX_PREAUTH_CONNECTIONS_PER_IP;
-    process.env.OPENCLAW_TEST_MAX_PREAUTH_CONNECTIONS_PER_IP = "1";
-    cleanupEnv.push(() => {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_TEST_MAX_PREAUTH_CONNECTIONS_PER_IP;
-      } else {
-        process.env.OPENCLAW_TEST_MAX_PREAUTH_CONNECTIONS_PER_IP = previous;
-      }
-    });
-    const previousAuth = testState.gatewayAuth;
-    testState.gatewayAuth = { mode: "none" };
-    cleanupEnv.push(() => {
-      testState.gatewayAuth = previousAuth;
-    });
+    setEnvForTest("OPENCLAW_TEST_MAX_PREAUTH_CONNECTIONS_PER_IP", "1");
+    setGatewayAuthNoneForTest();
 
     const harness = await createGatewaySuiteHarness();
     try {
@@ -220,20 +222,8 @@ describe("gateway pre-auth hardening", () => {
   });
 
   it("rejects excess simultaneous unauthenticated sockets when trusted proxy headers are missing", async () => {
-    const previous = process.env.OPENCLAW_TEST_MAX_PREAUTH_CONNECTIONS_PER_IP;
-    process.env.OPENCLAW_TEST_MAX_PREAUTH_CONNECTIONS_PER_IP = "1";
-    cleanupEnv.push(() => {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_TEST_MAX_PREAUTH_CONNECTIONS_PER_IP;
-      } else {
-        process.env.OPENCLAW_TEST_MAX_PREAUTH_CONNECTIONS_PER_IP = previous;
-      }
-    });
-    const previousAuth = testState.gatewayAuth;
-    testState.gatewayAuth = { mode: "none" };
-    cleanupEnv.push(() => {
-      testState.gatewayAuth = previousAuth;
-    });
+    setEnvForTest("OPENCLAW_TEST_MAX_PREAUTH_CONNECTIONS_PER_IP", "1");
+    setGatewayAuthNoneForTest();
 
     await withTempConfig({
       cfg: {
@@ -248,37 +238,7 @@ describe("gateway pre-auth hardening", () => {
           const firstWs = await harness.openWs();
           await readConnectChallengeNonce(firstWs);
 
-          const rejected = await new Promise<{ status: number; body: string }>(
-            (resolve, reject) => {
-              const req = http.request({
-                host: "127.0.0.1",
-                port: harness.port,
-                path: "/",
-                headers: {
-                  Connection: "Upgrade",
-                  Upgrade: "websocket",
-                  "Sec-WebSocket-Key": "dGVzdC1rZXktMDEyMzQ1Ng==",
-                  "Sec-WebSocket-Version": "13",
-                },
-              });
-              req.once("upgrade", (_res, socket) => {
-                socket.destroy();
-                reject(new Error("expected websocket upgrade to be rejected"));
-              });
-              req.once("response", (res) => {
-                let body = "";
-                res.setEncoding("utf8");
-                res.on("data", (chunk) => {
-                  body += chunk;
-                });
-                res.once("end", () => {
-                  resolve({ status: res.statusCode ?? 0, body });
-                });
-              });
-              req.once("error", reject);
-              req.end();
-            },
-          );
+          const rejected = await requestUpgradeRejection(harness.port);
           expect(rejected).toEqual({
             status: 503,
             body: "Too many unauthenticated sockets",

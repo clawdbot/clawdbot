@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
+import {
+  createQaChannelGatewayConfig,
+  QA_CHANNEL_REQUIRED_PLUGIN_IDS,
+} from "./qa-channel-transport.js";
 import { buildQaGatewayConfig } from "./qa-gateway-config.js";
 
 const QA_LAB_INTERNAL_PORT = 43123;
@@ -257,9 +261,12 @@ export async function writeQaDockerHarnessFiles(params: {
     gatewayPort: 18789,
     gatewayToken,
     providerBaseUrl,
-    qaBusBaseUrl,
     workspaceDir: "/tmp/openclaw/workspace",
     controlUiRoot: "/app/dist/control-ui",
+    transportPluginIds: QA_CHANNEL_REQUIRED_PLUGIN_IDS,
+    transportConfig: createQaChannelGatewayConfig({
+      baseUrl: qaBusBaseUrl,
+    }),
   });
 
   const files = [

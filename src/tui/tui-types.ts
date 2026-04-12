@@ -41,6 +41,7 @@ export type SessionInfo = {
   thinkingLevel?: string;
   fastMode?: boolean;
   verboseLevel?: string;
+  traceLevel?: string;
   reasoningLevel?: string;
   model?: string;
   modelProvider?: string;

@@ -121,6 +121,50 @@ export function shouldWarnOnOrphanedUserRepair(
   return trigger === "user" || trigger === "manual";
 }
 
+function extractUserMessagePlainText(content: unknown): string | undefined {
+  if (typeof content === "string") {
+    const trimmed = content.trim();
+    return trimmed || undefined;
+  }
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  const text = content
+    .flatMap((part) =>
+      part && typeof part === "object" && "type" in part && part.type === "text"
+        ? [typeof part.text === "string" ? part.text : ""]
+        : [],
+    )
+    .join("\n")
+    .trim();
+  return text || undefined;
+}
+
+export function mergeOrphanedTrailingUserPrompt(params: {
+  prompt: string;
+  trigger: EmbeddedRunAttemptParams["trigger"];
+  leafMessage: { content?: unknown };
+}): { prompt: string; merged: boolean } {
+  if (!shouldWarnOnOrphanedUserRepair(params.trigger)) {
+    return { prompt: params.prompt, merged: false };
+  }
+
+  const orphanText = extractUserMessagePlainText(params.leafMessage.content);
+  if (!orphanText || orphanText.length < 4 || params.prompt.includes(orphanText)) {
+    return { prompt: params.prompt, merged: false };
+  }
+
+  return {
+    prompt: [
+      "[Queued user message that arrived while the previous turn was still active]",
+      orphanText,
+      "",
+      params.prompt,
+    ].join("\n"),
+    merged: true,
+  };
+}
+
 export function resolveAttemptFsWorkspaceOnly(params: {
   config?: OpenClawConfig;
   sessionAgentId: string;

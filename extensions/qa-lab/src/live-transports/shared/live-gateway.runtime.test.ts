@@ -15,6 +15,29 @@ vi.mock("../../mock-openai-server.js", () => ({
 
 import { startQaLiveLaneGateway } from "./live-gateway.runtime.js";
 
+function createStubTransport(baseUrl = "http://127.0.0.1:43123") {
+  return {
+    requiredPluginIds: ["qa-channel"],
+    createGatewayConfig: () => ({
+      channels: {
+        "qa-channel": {
+          enabled: true,
+          baseUrl,
+          botUserId: "openclaw",
+          botDisplayName: "OpenClaw QA",
+          allowFrom: ["*"],
+          pollTimeoutMs: 250,
+        },
+      },
+      messages: {
+        groupChat: {
+          mentionPatterns: ["\\b@?openclaw\\b"],
+        },
+      },
+    }),
+  };
+}
+
 describe("startQaLiveLaneGateway", () => {
   const gatewayStop = vi.fn();
   const mockStop = vi.fn();
@@ -41,7 +64,8 @@ describe("startQaLiveLaneGateway", () => {
   it("threads the mock provider base url into the gateway child", async () => {
     const harness = await startQaLiveLaneGateway({
       repoRoot: "/tmp/openclaw-repo",
-      qaBusBaseUrl: "http://127.0.0.1:43123",
+      transport: createStubTransport(),
+      transportBaseUrl: "http://127.0.0.1:43123",
       providerMode: "mock-openai",
       primaryModel: "mock-openai/gpt-5.4",
       alternateModel: "mock-openai/gpt-5.4-alt",
@@ -54,7 +78,7 @@ describe("startQaLiveLaneGateway", () => {
     });
     expect(startQaGatewayChild).toHaveBeenCalledWith(
       expect.objectContaining({
-        includeQaChannel: false,
+        transportBaseUrl: "http://127.0.0.1:43123",
         providerBaseUrl: "http://127.0.0.1:44080/v1",
         providerMode: "mock-openai",
       }),
@@ -68,7 +92,8 @@ describe("startQaLiveLaneGateway", () => {
   it("skips mock bootstrap for live frontier runs", async () => {
     const harness = await startQaLiveLaneGateway({
       repoRoot: "/tmp/openclaw-repo",
-      qaBusBaseUrl: "http://127.0.0.1:43123",
+      transport: createStubTransport(),
+      transportBaseUrl: "http://127.0.0.1:43123",
       providerMode: "live-frontier",
       primaryModel: "openai/gpt-5.4",
       alternateModel: "openai/gpt-5.4",
@@ -78,7 +103,7 @@ describe("startQaLiveLaneGateway", () => {
     expect(startQaMockOpenAiServer).not.toHaveBeenCalled();
     expect(startQaGatewayChild).toHaveBeenCalledWith(
       expect.objectContaining({
-        includeQaChannel: false,
+        transportBaseUrl: "http://127.0.0.1:43123",
         providerBaseUrl: undefined,
         providerMode: "live-frontier",
       }),
@@ -92,7 +117,8 @@ describe("startQaLiveLaneGateway", () => {
     gatewayStop.mockRejectedValueOnce(new Error("gateway down"));
     const harness = await startQaLiveLaneGateway({
       repoRoot: "/tmp/openclaw-repo",
-      qaBusBaseUrl: "http://127.0.0.1:43123",
+      transport: createStubTransport(),
+      transportBaseUrl: "http://127.0.0.1:43123",
       providerMode: "mock-openai",
       primaryModel: "mock-openai/gpt-5.4",
       alternateModel: "mock-openai/gpt-5.4-alt",
@@ -111,7 +137,8 @@ describe("startQaLiveLaneGateway", () => {
     mockStop.mockRejectedValueOnce(new Error("mock down"));
     const harness = await startQaLiveLaneGateway({
       repoRoot: "/tmp/openclaw-repo",
-      qaBusBaseUrl: "http://127.0.0.1:43123",
+      transport: createStubTransport(),
+      transportBaseUrl: "http://127.0.0.1:43123",
       providerMode: "mock-openai",
       primaryModel: "mock-openai/gpt-5.4",
       alternateModel: "mock-openai/gpt-5.4-alt",

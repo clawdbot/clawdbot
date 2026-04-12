@@ -135,6 +135,8 @@ const qaSeedScenarioSchema = z.object({
   surface: z.string().trim().min(1),
   objective: z.string().trim().min(1),
   successCriteria: z.array(z.string().trim().min(1)).min(1),
+  plugins: z.array(z.string().trim().min(1)).optional(),
+  gatewayConfigPatch: z.record(z.string(), z.unknown()).optional(),
   docsRefs: z.array(z.string().trim().min(1)).optional(),
   codeRefs: z.array(z.string().trim().min(1)).optional(),
   execution: qaScenarioExecutionSchema.optional(),

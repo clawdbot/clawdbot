@@ -438,6 +438,9 @@ Controls which sessions can receive QMD search results. Same schema as
 }
 ```
 
+The shipped default allows direct and channel sessions, while still denying
+groups.
+
 Default is DM-only. `match.keyPrefix` matches the normalized session key;
 `match.rawKeyPrefix` matches the raw key including `agent:<id>:`.
 

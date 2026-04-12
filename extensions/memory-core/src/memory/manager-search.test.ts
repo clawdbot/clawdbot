@@ -25,6 +25,7 @@ describe("searchKeyword trigram fallback", () => {
   async function runSearch(params: {
     rows: Array<{ id: string; path: string; text: string }>;
     query: string;
+    boostFallbackRanking?: boolean;
   }) {
     const db = createTrigramDb();
     try {
@@ -45,6 +46,7 @@ describe("searchKeyword trigram fallback", () => {
         sourceFilter: { sql: "", params: [] },
         buildFtsQuery,
         bm25RankToScore,
+        boostFallbackRanking: params.boostFallbackRanking,
       });
     } finally {
       db.close();
@@ -84,5 +86,65 @@ describe("searchKeyword trigram fallback", () => {
     });
     expect(results.map((row) => row.id)).toEqual(["match"]);
     expect(results[0]?.textScore).toBeGreaterThan(0);
+  });
+
+  it("applies fallback lexical boosts without exceeding bounded scores", async () => {
+    const results = await runSearch({
+      rows: [
+        {
+          id: "strong",
+          path: "memory/project-memory-notes.md",
+          text: "Project memory notes covering workspace context and retrieval behavior.",
+        },
+        {
+          id: "weak",
+          path: "memory/notes.md",
+          text: "Project memory context.",
+        },
+      ],
+      query: "project memory context",
+      boostFallbackRanking: true,
+    });
+    expect(results.map((row) => row.id)).toEqual(["weak", "strong"]);
+    const rawResults = await runSearch({
+      rows: [
+        {
+          id: "strong",
+          path: "memory/project-memory-notes.md",
+          text: "Project memory notes covering workspace context and retrieval behavior.",
+        },
+        {
+          id: "weak",
+          path: "memory/notes.md",
+          text: "Project memory context.",
+        },
+      ],
+      query: "project memory context",
+      boostFallbackRanking: false,
+    });
+
+    const boostedById = new Map(results.map((row) => [row.id, row]));
+    const rawById = new Map(rawResults.map((row) => [row.id, row]));
+    expect(rawById.get("strong")?.textScore).toBeLessThan(rawById.get("weak")?.textScore ?? 0);
+    expect(boostedById.get("strong")?.score).toBeGreaterThan(boostedById.get("weak")?.score ?? 0);
+    expect(boostedById.get("strong")?.textScore).toBe(rawById.get("strong")?.textScore);
+    expect(boostedById.get("weak")?.textScore).toBe(rawById.get("weak")?.textScore);
+    expect(boostedById.get("strong")?.score).toBeLessThanOrEqual(1);
+    expect(boostedById.get("weak")?.score).toBeLessThanOrEqual(1);
+  });
+
+  it("does not overweight repeated query tokens in fallback scoring", async () => {
+    const unique = await runSearch({
+      rows: [{ id: "1", path: "memory/project.md", text: "Project memory context." }],
+      query: "project memory context",
+      boostFallbackRanking: true,
+    });
+    const repeated = await runSearch({
+      rows: [{ id: "1", path: "memory/project.md", text: "Project memory context." }],
+      query: "project project project memory context",
+      boostFallbackRanking: true,
+    });
+
+    expect(repeated[0]?.score).toBe(unique[0]?.score);
   });
 });

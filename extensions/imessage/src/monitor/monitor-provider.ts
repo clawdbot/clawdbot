@@ -33,7 +33,7 @@ import { danger, logVerbose, shouldLogVerbose, warn } from "openclaw/plugin-sdk/
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
-import { createIMessageRpcClient } from "../client.js";
+import { createIMessageRpcClient, type IMessageRpcClient } from "../client.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "../constants.js";
 import {
   resolveIMessageAttachmentRoots,
@@ -54,6 +54,10 @@ import { parseIMessageNotification } from "./parse-notification.js";
 import { normalizeAllowList, resolveRuntime } from "./runtime.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
 import type { IMessagePayload, MonitorIMessageOpts } from "./types.js";
+import { sanitizeIMessageWatchErrorPayload } from "./watch-error-log.js";
+
+const WATCH_SUBSCRIBE_MAX_ATTEMPTS = 3;
+const WATCH_SUBSCRIBE_RETRY_DELAY_MS = 1_000;
 
 /**
  * Try to detect remote host from an SSH wrapper script like:
@@ -81,6 +85,33 @@ async function detectRemoteHostFromCliPath(cliPath: string): Promise<string | un
   } catch {
     return undefined;
   }
+}
+
+function isRetriableWatchSubscribeStartupError(error: unknown): boolean {
+  return /imsg rpc timeout \(watch\.subscribe\)|imsg rpc (closed|exited|not running)/i.test(
+    String(error),
+  );
+}
+
+async function waitForWatchSubscribeRetryDelay(params: {
+  ms: number;
+  abortSignal?: AbortSignal;
+}): Promise<void> {
+  if (params.ms <= 0) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(() => {
+      params.abortSignal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, params.ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      params.abortSignal?.removeEventListener("abort", onAbort);
+      resolve();
+    };
+    params.abortSignal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): Promise<void> {
@@ -203,6 +234,15 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     },
   });
 
+  let client: IMessageRpcClient | undefined;
+  let detachAbortHandler = () => {};
+  const getActiveClient = () => {
+    if (!client) {
+      throw new Error("imessage monitor client not initialized");
+    }
+    return client;
+  };
+
   async function handleMessageNow(message: IMessagePayload) {
     const messageText = (message.text ?? "").trim();
 
@@ -312,7 +352,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         },
         sendPairingReply: async (text) => {
           await sendMessageIMessage(sender, text, {
-            client,
+            client: getActiveClient(),
             maxBytes: mediaMaxBytes,
             accountId: accountInfo.accountId,
             ...(chatId ? { chatId } : {}),
@@ -412,7 +452,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         await deliverReplies({
           replies: [payload],
           target,
-          client,
+          client: getActiveClient(),
           accountId: accountInfo.accountId,
           runtime,
           maxBytes: mediaMaxBytes,
@@ -489,36 +529,104 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   if (opts.abortSignal?.aborted) {
     return;
   }
-
-  const client = await createIMessageRpcClient({
-    cliPath,
-    dbPath,
-    runtime,
-    onNotification: (msg) => {
-      if (msg.method === "message") {
-        void handleMessage(msg.params).catch((err) => {
-          runtime.error?.(`imessage: handler failed: ${String(err)}`);
-        });
-      } else if (msg.method === "error") {
-        runtime.error?.(`imessage: watch error ${JSON.stringify(msg.params)}`);
-      }
-    },
-  });
-
-  let subscriptionId: number | null = null;
   const abort = opts.abortSignal;
-  const detachAbortHandler = attachIMessageMonitorAbortHandler({
-    abortSignal: abort,
-    client,
-    getSubscriptionId: () => subscriptionId,
-  });
+  const createWatchClient = async () =>
+    await createIMessageRpcClient({
+      cliPath,
+      dbPath,
+      runtime,
+      onNotification: (msg) => {
+        if (msg.method === "message") {
+          void handleMessage(msg.params).catch((err) => {
+            runtime.error?.(`imessage: handler failed: ${String(err)}`);
+          });
+        } else if (msg.method === "error") {
+          runtime.error?.(
+            `imessage: watch error ${JSON.stringify(sanitizeIMessageWatchErrorPayload(msg.params))}`,
+          );
+        }
+      },
+    });
+
+  const requireWatchClient = (
+    watchClient: IMessageRpcClient | null | undefined,
+  ): IMessageRpcClient => {
+    if (!watchClient) {
+      throw new Error("imessage monitor client not initialized");
+    }
+    return watchClient;
+  };
+
+  for (let attempt = 1; attempt <= WATCH_SUBSCRIBE_MAX_ATTEMPTS; attempt++) {
+    if (abort?.aborted) {
+      return;
+    }
+    let attemptClient: IMessageRpcClient | undefined;
+    let attemptDetachAbortHandler = () => {};
+    let keepAttemptClient = false;
+    try {
+      attemptClient = requireWatchClient(await createWatchClient());
+      let attemptSubscriptionId: number | null = null;
+      attemptDetachAbortHandler = attachIMessageMonitorAbortHandler({
+        abortSignal: abort,
+        client: attemptClient,
+        getSubscriptionId: () => attemptSubscriptionId,
+      });
+      const result = await attemptClient.request<{ subscription?: number }>(
+        "watch.subscribe",
+        {
+          attachments: includeAttachments,
+        },
+        { timeoutMs: probeTimeoutMs },
+      );
+      attemptSubscriptionId = result?.subscription ?? null;
+      client = attemptClient;
+      detachAbortHandler = attemptDetachAbortHandler;
+      keepAttemptClient = true;
+      break;
+    } catch (err) {
+      if (abort?.aborted) {
+        return;
+      }
+      const shouldRetry =
+        attempt < WATCH_SUBSCRIBE_MAX_ATTEMPTS && isRetriableWatchSubscribeStartupError(err);
+      if (!shouldRetry) {
+        runtime.error?.(danger(`imessage: monitor failed: ${String(err)}`));
+        throw err;
+      }
+      runtime.log?.(
+        warn(
+          `imessage: watch.subscribe startup failed (attempt ${attempt}/${WATCH_SUBSCRIBE_MAX_ATTEMPTS}): ${String(err)}; retrying`,
+        ),
+      );
+      // Tear down the failed client before waiting so a slow subscribe attempt
+      // cannot keep emitting notifications into the next retry window.
+      attemptDetachAbortHandler();
+      attemptDetachAbortHandler = () => {};
+      await attemptClient?.stop();
+      attemptClient = undefined;
+      await waitForWatchSubscribeRetryDelay({
+        ms: WATCH_SUBSCRIBE_RETRY_DELAY_MS,
+        abortSignal: abort,
+      });
+      if (abort?.aborted) {
+        return;
+      }
+    } finally {
+      if (!keepAttemptClient) {
+        attemptDetachAbortHandler();
+        await attemptClient?.stop();
+      }
+    }
+  }
+
+  const activeClient = client;
+  if (!activeClient) {
+    return;
+  }
 
   try {
-    const result = await client.request<{ subscription?: number }>("watch.subscribe", {
-      attachments: includeAttachments,
-    });
-    subscriptionId = result?.subscription ?? null;
-    await client.waitForClose();
+    await activeClient.waitForClose();
   } catch (err) {
     if (abort?.aborted) {
       return;
@@ -527,7 +635,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     throw err;
   } finally {
     detachAbortHandler();
-    await client.stop();
+    await activeClient.stop();
   }
 }
 

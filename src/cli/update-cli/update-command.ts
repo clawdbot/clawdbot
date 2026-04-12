@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import path from "node:path";
 import { confirm, isCancel } from "@clack/prompts";
 import {
@@ -75,6 +76,8 @@ import { suppressDeprecations } from "./suppress-deprecations.js";
 
 const CLI_NAME = resolveCliName();
 const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
+const POST_CORE_UPDATE_ENV = "OPENCLAW_UPDATE_POST_CORE";
+const POST_CORE_UPDATE_CHANNEL_ENV = "OPENCLAW_UPDATE_POST_CORE_CHANNEL";
 const SERVICE_REFRESH_PATH_ENV_KEYS = [
   "OPENCLAW_HOME",
   "OPENCLAW_STATE_DIR",
@@ -106,6 +109,10 @@ const UPDATE_QUIPS = [
 
 function pickUpdateQuip(): string {
   return UPDATE_QUIPS[Math.floor(Math.random() * UPDATE_QUIPS.length)] ?? "Update complete.";
+}
+
+function isPackageManagerUpdateMode(mode: UpdateRunResult["mode"]): mode is "npm" | "pnpm" | "bun" {
+  return mode === "npm" || mode === "pnpm" || mode === "bun";
 }
 
 function resolveGatewayInstallEntrypointCandidates(root?: string): string[] {
@@ -759,9 +766,73 @@ async function maybeRestartService(params: {
   }
 }
 
+async function runPostCorePluginUpdate(params: {
+  root: string;
+  channel: "stable" | "beta" | "dev";
+  configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
+  opts: UpdateCommandOptions;
+}): Promise<void> {
+  await updatePluginsAfterCoreUpdate({
+    root: params.root,
+    channel: params.channel,
+    configSnapshot: params.configSnapshot,
+    opts: params.opts,
+  });
+}
+
+async function continuePostCoreUpdateInFreshProcess(params: {
+  root: string;
+  channel: "stable" | "beta" | "dev";
+  opts: UpdateCommandOptions;
+}): Promise<boolean> {
+  const entryPath = path.join(params.root, "dist", "entry.js");
+  if (!(await pathExists(entryPath))) {
+    return false;
+  }
+
+  const argv = [entryPath, "update"];
+  if (params.opts.json) {
+    argv.push("--json");
+  }
+  if (params.opts.restart === false) {
+    argv.push("--no-restart");
+  }
+  if (params.opts.yes) {
+    argv.push("--yes");
+  }
+
+  const child = spawn(resolveNodeRunner(), argv, {
+    stdio: "inherit",
+    env: {
+      ...process.env,
+      [POST_CORE_UPDATE_ENV]: "1",
+      [POST_CORE_UPDATE_CHANNEL_ENV]: params.channel,
+    },
+  });
+
+  const exitCode = await new Promise<number>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", (code, signal) => {
+      if (signal) {
+        reject(new Error(`post-update process terminated by signal ${signal}`));
+        return;
+      }
+      resolve(code ?? 1);
+    });
+  });
+
+  if (exitCode !== 0) {
+    defaultRuntime.exit(exitCode);
+    throw new Error(`post-update process exited with code ${exitCode}`);
+  }
+  return true;
+}
+
 export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   suppressDeprecations();
   const invocationCwd = tryResolveInvocationCwd();
+  const postCoreUpdateResume = process.env[POST_CORE_UPDATE_ENV] === "1";
+  const postCoreUpdateChannel = process.env[POST_CORE_UPDATE_CHANNEL_ENV]?.trim();
 
   const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
   const shouldRestart = opts.restart !== false;
@@ -770,6 +841,26 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   }
 
   const root = await resolveUpdateRoot();
+  if (postCoreUpdateResume) {
+    if (
+      postCoreUpdateChannel !== "stable" &&
+      postCoreUpdateChannel !== "beta" &&
+      postCoreUpdateChannel !== "dev"
+    ) {
+      defaultRuntime.error("Missing post-core update channel context.");
+      defaultRuntime.exit(1);
+      return;
+    }
+
+    await runPostCorePluginUpdate({
+      root,
+      channel: postCoreUpdateChannel,
+      configSnapshot: await readConfigFileSnapshot(),
+      opts,
+    });
+    return;
+  }
+
   const updateStatus = await checkUpdateStatus({
     root,
     timeoutMs: timeoutMs ?? 3500,
@@ -960,24 +1051,6 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   const { progress, stop } = createUpdateProgress(showProgress);
   const startedAt = Date.now();
 
-  let restartScriptPath: string | null = null;
-  let refreshGatewayServiceEnv = false;
-  const gatewayPort = resolveGatewayPort(
-    configSnapshot.valid ? configSnapshot.config : undefined,
-    process.env,
-  );
-  if (shouldRestart) {
-    try {
-      const loaded = await resolveGatewayService().isLoaded({ env: process.env });
-      if (loaded) {
-        restartScriptPath = await prepareRestartScript(process.env, gatewayPort);
-        refreshGatewayServiceEnv = true;
-      }
-    } catch {
-      // Ignore errors during pre-check; fallback to standard restart
-    }
-  }
-
   const result =
     updateInstallKind === "package"
       ? await runPackageInstallUpdate({
@@ -1089,11 +1162,15 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
 
   const postUpdateRoot = result.root ?? root;
 
-  // A package -> git switch still runs inside the pre-update CLI process.
-  // Any follow-up work that re-enters the CLI can then compare new bundled
-  // plugin minima against the old host version and fail even though the
-  // install itself succeeded. Leave the switched checkout alone and let the
-  // new git install handle follow-up commands in a fresh process.
+  let pluginsUpdatedInFreshProcess = false;
+  if (isPackageManagerUpdateMode(result.mode)) {
+    pluginsUpdatedInFreshProcess = await continuePostCoreUpdateInFreshProcess({
+      root: postUpdateRoot,
+      channel,
+      opts,
+    });
+  }
+
   const deferOldProcessPostUpdateWork = switchToGit && result.mode === "git";
   if (deferOldProcessPostUpdateWork) {
     if (!opts.json) {
@@ -1103,13 +1180,31 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
         ),
       );
     }
-  } else {
-    await updatePluginsAfterCoreUpdate({
+  } else if (!pluginsUpdatedInFreshProcess) {
+    await runPostCorePluginUpdate({
       root: postUpdateRoot,
       channel,
       configSnapshot: postUpdateConfigSnapshot,
       opts,
     });
+  }
+
+  let restartScriptPath: string | null = null;
+  let refreshGatewayServiceEnv = false;
+  const gatewayPort = resolveGatewayPort(
+    postUpdateConfigSnapshot.valid ? postUpdateConfigSnapshot.config : undefined,
+    process.env,
+  );
+  if (shouldRestart) {
+    try {
+      const loaded = await resolveGatewayService().isLoaded({ env: process.env });
+      if (loaded) {
+        restartScriptPath = await prepareRestartScript(process.env, gatewayPort);
+        refreshGatewayServiceEnv = true;
+      }
+    } catch {
+      // Ignore errors during pre-check; fallback to standard restart
+    }
   }
 
   if (deferOldProcessPostUpdateWork) {

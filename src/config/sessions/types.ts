@@ -163,6 +163,7 @@ export type SessionEntry = {
   thinkingLevel?: string;
   fastMode?: boolean;
   verboseLevel?: string;
+  traceLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
   ttsAuto?: TtsAutoMode;
@@ -257,14 +258,39 @@ export type SessionEntry = {
   acp?: SessionAcpMeta;
 };
 
-export function resolveSessionPluginDebugLines(
+function isSessionPluginTraceLine(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.startsWith("🔎 ") || /(?:^|\s)(?:Debug|Trace):/.test(trimmed);
+}
+
+export function resolveSessionPluginStatusLines(
   entry: Pick<SessionEntry, "pluginDebugEntries"> | undefined,
 ): string[] {
   return Array.isArray(entry?.pluginDebugEntries)
     ? entry.pluginDebugEntries.flatMap((pluginEntry) =>
         Array.isArray(pluginEntry?.lines)
           ? pluginEntry.lines.filter(
-              (line): line is string => typeof line === "string" && line.trim().length > 0,
+              (line): line is string =>
+                typeof line === "string" &&
+                line.trim().length > 0 &&
+                !isSessionPluginTraceLine(line),
+            )
+          : [],
+      )
+    : [];
+}
+
+export function resolveSessionPluginTraceLines(
+  entry: Pick<SessionEntry, "pluginDebugEntries"> | undefined,
+): string[] {
+  return Array.isArray(entry?.pluginDebugEntries)
+    ? entry.pluginDebugEntries.flatMap((pluginEntry) =>
+        Array.isArray(pluginEntry?.lines)
+          ? pluginEntry.lines.filter(
+              (line): line is string =>
+                typeof line === "string" &&
+                line.trim().length > 0 &&
+                isSessionPluginTraceLine(line),
             )
           : [],
       )

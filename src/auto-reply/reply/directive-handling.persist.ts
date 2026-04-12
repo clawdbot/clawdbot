@@ -10,7 +10,7 @@ import { updateSessionStore } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { applyVerboseOverride } from "../../sessions/level-overrides.js";
+import { applyTraceOverride, applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
@@ -103,6 +103,10 @@ export async function persistInlineDirectives(params: {
       allowInternalVerbosePersistence
     ) {
       applyVerboseOverride(sessionEntry, directives.verboseLevel);
+      updated = true;
+    }
+    if (directives.hasTraceDirective && directives.traceLevel) {
+      applyTraceOverride(sessionEntry, directives.traceLevel);
       updated = true;
     }
     if (directives.hasReasoningDirective && directives.reasoningLevel) {

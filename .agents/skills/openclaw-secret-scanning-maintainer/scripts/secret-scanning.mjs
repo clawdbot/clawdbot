@@ -53,9 +53,18 @@ function cmdFetchAlert(alertNumber) {
 
   const alert = gh(["api", `repos/${REPO}/secret-scanning/alerts/${alertNumber}?hide_secret=true`]);
 
-  const locations = gh(["api", `repos/${REPO}/secret-scanning/alerts/${alertNumber}/locations`, "--paginate", "--slurp"]);
+  const locations = gh([
+    "api",
+    `repos/${REPO}/secret-scanning/alerts/${alertNumber}/locations`,
+    "--paginate",
+    "--slurp",
+  ]);
   // --paginate + --slurp 确保多页结果合并为一个 JSON 数组
-  const flatLocations = Array.isArray(locations?.[0]) ? locations.flat() : Array.isArray(locations) ? locations : [];
+  const flatLocations = Array.isArray(locations?.[0])
+    ? locations.flat()
+    : Array.isArray(locations)
+      ? locations
+      : [];
 
   const result = {
     number: alert.number,
@@ -452,9 +461,7 @@ function cmdSummary(jsonFile) {
       : r.location_label;
     const history = r.history_cleared ? "Cleared" : "⚠️ History remains";
 
-    lines.push(
-      `| ${alertLink} | ${r.secret_type} | ${locationLink} | ${r.actions} | ${history} |`,
-    );
+    lines.push(`| ${alertLink} | ${r.secret_type} | ${locationLink} | ${r.actions} | ${history} |`);
 
     if (!r.history_cleared && r.location_url) {
       needsPurge.push(r);

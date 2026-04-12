@@ -90,12 +90,29 @@ const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
 
 const log = createSubsystemLogger("memory");
 
-function shouldIgnoreMemoryWatchPath(watchPath: string): boolean {
+function shouldIgnoreMemoryWatchPath(
+  watchPath: string,
+  stats?: { isDirectory?: () => boolean },
+  multimodalSettings?: ResolvedMemorySearchConfig["multimodal"],
+): boolean {
   const normalized = path.normalize(watchPath);
   const parts = normalized
     .split(path.sep)
     .map((segment) => normalizeLowercaseStringOrEmpty(segment));
-  return parts.some((segment) => IGNORED_MEMORY_WATCH_DIR_NAMES.has(segment));
+  if (parts.some((segment) => IGNORED_MEMORY_WATCH_DIR_NAMES.has(segment))) {
+    return true;
+  }
+  if (stats?.isDirectory?.()) {
+    return false;
+  }
+  const extension = normalizeLowercaseStringOrEmpty(path.extname(normalized));
+  if (extension.length === 0 || extension === ".md") {
+    return false;
+  }
+  if (!multimodalSettings) {
+    return true;
+  }
+  return classifyMemoryMultimodalPath(normalized, multimodalSettings) === null;
 }
 
 export function runDetachedMemorySync(sync: () => Promise<void>, reason: "interval" | "watch") {
@@ -345,7 +362,7 @@ export abstract class MemoryManagerSyncOps {
     const watchPaths = new Set<string>([
       path.join(this.workspaceDir, "MEMORY.md"),
       path.join(this.workspaceDir, "memory.md"),
-      path.join(this.workspaceDir, "memory", "**", "*.md"),
+      path.join(this.workspaceDir, "memory"),
     ]);
     const additionalPaths = normalizeExtraMemoryPaths(this.workspaceDir, this.settings.extraPaths);
     for (const entry of additionalPaths) {
@@ -380,7 +397,8 @@ export abstract class MemoryManagerSyncOps {
     }
     this.watcher = chokidar.watch(Array.from(watchPaths), {
       ignoreInitial: true,
-      ignored: (watchPath) => shouldIgnoreMemoryWatchPath(watchPath),
+      ignored: (watchPath, stats) =>
+        shouldIgnoreMemoryWatchPath(watchPath, stats, this.settings.multimodal),
       awaitWriteFinish: {
         stabilityThreshold: this.settings.sync.watchDebounceMs,
         pollInterval: 100,

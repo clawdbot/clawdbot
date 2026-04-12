@@ -43,6 +43,78 @@ function createLegacyRuntimeStore(model: string): Record<string, SessionEntry> {
   };
 }
 
+function withTranscriptStoreFixture<T>(params: {
+  prefix: string;
+  transcriptId: string;
+  provider: string;
+  model: string;
+  input: number;
+  output: number;
+  cacheRead: number;
+  costTotal: number;
+  run: (fixture: { storePath: string; now: number }) => T;
+}): T {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), params.prefix));
+  const storePath = path.join(tmpDir, "sessions.json");
+  const now = Date.now();
+  fs.writeFileSync(
+    path.join(tmpDir, `${params.transcriptId}.jsonl`),
+    [
+      JSON.stringify({ type: "session", version: 1, id: params.transcriptId }),
+      JSON.stringify({
+        message: {
+          role: "assistant",
+          provider: params.provider,
+          model: params.model,
+          usage: {
+            input: params.input,
+            output: params.output,
+            cacheRead: params.cacheRead,
+            cost: { total: params.costTotal },
+          },
+        },
+      }),
+    ].join("\n"),
+    "utf-8",
+  );
+
+  try {
+    return params.run({ storePath, now });
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+function createAnthropicContext1mConfig(): OpenClawConfig {
+  return {
+    session: { mainKey: "main" },
+    agents: {
+      list: [{ id: "main", default: true }],
+      defaults: {
+        models: {
+          "anthropic/claude-sonnet-4-6": { params: { context1m: true } },
+        },
+      },
+    },
+  } as unknown as OpenClawConfig;
+}
+
+function listSingleSession(params: {
+  cfg: OpenClawConfig;
+  storePath: string;
+  key: string;
+  entry: SessionEntry;
+}) {
+  return listSessionsFromStore({
+    cfg: params.cfg,
+    storePath: params.storePath,
+    store: {
+      [params.key]: params.entry,
+    },
+    opts: {},
+  });
+}
+
 describe("listSessionsFromStore search", () => {
   afterEach(() => {
     resetSubagentRegistryForTests({ persist: false });
@@ -255,52 +327,35 @@ describe("listSessionsFromStore search", () => {
   });
 
   test("prefers persisted estimated session cost from the store", () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-utils-store-cost-"));
-    const storePath = path.join(tmpDir, "sessions.json");
-    fs.writeFileSync(
-      path.join(tmpDir, "sess-main.jsonl"),
-      [
-        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
-        JSON.stringify({
-          message: {
-            role: "assistant",
-            provider: "anthropic",
-            model: "claude-sonnet-4-6",
-            usage: {
-              input: 2_000,
-              output: 500,
-              cacheRead: 1_200,
-              cost: { total: 0.007725 },
-            },
-          },
-        }),
-      ].join("\n"),
-      "utf-8",
-    );
-
-    try {
-      const result = listSessionsFromStore({
-        cfg: baseCfg,
-        storePath,
-        store: {
-          "agent:main:main": {
+    withTranscriptStoreFixture({
+      prefix: "openclaw-session-utils-store-cost-",
+      transcriptId: "sess-main",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      input: 2_000,
+      output: 500,
+      cacheRead: 1_200,
+      costTotal: 0.007725,
+      run: ({ storePath, now }) => {
+        const result = listSingleSession({
+          cfg: baseCfg,
+          storePath,
+          key: "agent:main:main",
+          entry: {
             sessionId: "sess-main",
-            updatedAt: Date.now(),
+            updatedAt: now,
             modelProvider: "anthropic",
             model: "claude-sonnet-4-6",
             estimatedCostUsd: 0.1234,
             totalTokens: 0,
             totalTokensFresh: false,
           } as SessionEntry,
-        },
-        opts: {},
-      });
+        });
 
-      expect(result.sessions[0]?.estimatedCostUsd).toBe(0.1234);
-      expect(result.sessions[0]?.totalTokens).toBe(3_200);
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
+        expect(result.sessions[0]?.estimatedCostUsd).toBe(0.1234);
+        expect(result.sessions[0]?.totalTokens).toBe(3_200);
+      },
+    });
   });
 
   test("keeps zero estimated session cost when configured model pricing resolves to free", () => {
@@ -344,37 +399,23 @@ describe("listSessionsFromStore search", () => {
   });
 
   test("falls back to transcript usage for totalTokens and zero estimatedCostUsd", () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-utils-zero-cost-"));
-    const storePath = path.join(tmpDir, "sessions.json");
-    fs.writeFileSync(
-      path.join(tmpDir, "sess-main.jsonl"),
-      [
-        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
-        JSON.stringify({
-          message: {
-            role: "assistant",
-            provider: "openai-codex",
-            model: "gpt-5.3-codex-spark",
-            usage: {
-              input: 5_107,
-              output: 1_827,
-              cacheRead: 1_536,
-              cost: { total: 0 },
-            },
-          },
-        }),
-      ].join("\n"),
-      "utf-8",
-    );
-
-    try {
-      const result = listSessionsFromStore({
-        cfg: baseCfg,
-        storePath,
-        store: {
-          "agent:main:main": {
+    withTranscriptStoreFixture({
+      prefix: "openclaw-session-utils-zero-cost-",
+      transcriptId: "sess-main",
+      provider: "openai-codex",
+      model: "gpt-5.3-codex-spark",
+      input: 5_107,
+      output: 1_827,
+      cacheRead: 1_536,
+      costTotal: 0,
+      run: ({ storePath, now }) => {
+        const result = listSingleSession({
+          cfg: baseCfg,
+          storePath,
+          key: "agent:main:main",
+          entry: {
             sessionId: "sess-main",
-            updatedAt: Date.now(),
+            updatedAt: now,
             modelProvider: "openai-codex",
             model: "gpt-5.3-codex-spark",
             totalTokens: 0,
@@ -384,61 +425,33 @@ describe("listSessionsFromStore search", () => {
             cacheRead: 0,
             cacheWrite: 0,
           } as SessionEntry,
-        },
-        opts: {},
-      });
+        });
 
-      expect(result.sessions[0]?.totalTokens).toBe(6_643);
-      expect(result.sessions[0]?.totalTokensFresh).toBe(true);
-      expect(result.sessions[0]?.estimatedCostUsd).toBe(0);
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
+        expect(result.sessions[0]?.totalTokens).toBe(6_643);
+        expect(result.sessions[0]?.totalTokensFresh).toBe(true);
+        expect(result.sessions[0]?.estimatedCostUsd).toBe(0);
+      },
+    });
   });
 
   test("falls back to transcript usage for totalTokens and estimatedCostUsd, and derives contextTokens from the resolved model", () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-utils-"));
-    const storePath = path.join(tmpDir, "sessions.json");
-    const cfg = {
-      session: { mainKey: "main" },
-      agents: {
-        list: [{ id: "main", default: true }],
-        defaults: {
-          models: {
-            "anthropic/claude-sonnet-4-6": { params: { context1m: true } },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-    fs.writeFileSync(
-      path.join(tmpDir, "sess-main.jsonl"),
-      [
-        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
-        JSON.stringify({
-          message: {
-            role: "assistant",
-            provider: "anthropic",
-            model: "claude-sonnet-4-6",
-            usage: {
-              input: 2_000,
-              output: 500,
-              cacheRead: 1_200,
-              cost: { total: 0.007725 },
-            },
-          },
-        }),
-      ].join("\n"),
-      "utf-8",
-    );
-
-    try {
-      const result = listSessionsFromStore({
-        cfg,
-        storePath,
-        store: {
-          "agent:main:main": {
+    withTranscriptStoreFixture({
+      prefix: "openclaw-session-utils-",
+      transcriptId: "sess-main",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      input: 2_000,
+      output: 500,
+      cacheRead: 1_200,
+      costTotal: 0.007725,
+      run: ({ storePath, now }) => {
+        const result = listSingleSession({
+          cfg: createAnthropicContext1mConfig(),
+          storePath,
+          key: "agent:main:main",
+          entry: {
             sessionId: "sess-main",
-            updatedAt: Date.now(),
+            updatedAt: now,
             modelProvider: "anthropic",
             model: "claude-sonnet-4-6",
             totalTokens: 0,
@@ -448,223 +461,132 @@ describe("listSessionsFromStore search", () => {
             cacheRead: 0,
             cacheWrite: 0,
           } as SessionEntry,
-        },
-        opts: {},
-      });
+        });
 
-      expect(result.sessions[0]?.totalTokens).toBe(3_200);
-      expect(result.sessions[0]?.totalTokensFresh).toBe(true);
-      expect(result.sessions[0]?.contextTokens).toBe(1_048_576);
-      expect(result.sessions[0]?.estimatedCostUsd).toBeCloseTo(0.007725, 8);
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
+        expect(result.sessions[0]?.totalTokens).toBe(3_200);
+        expect(result.sessions[0]?.totalTokensFresh).toBe(true);
+        expect(result.sessions[0]?.contextTokens).toBe(1_048_576);
+        expect(result.sessions[0]?.estimatedCostUsd).toBeCloseTo(0.007725, 8);
+      },
+    });
   });
 
   test("uses subagent run model immediately for child sessions while transcript usage fills live totals", () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-utils-subagent-"));
-    const storePath = path.join(tmpDir, "sessions.json");
-    const now = Date.now();
-    const cfg = {
-      session: { mainKey: "main" },
-      agents: {
-        list: [{ id: "main", default: true }],
-        defaults: {
-          models: {
-            "anthropic/claude-sonnet-4-6": { params: { context1m: true } },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-    fs.writeFileSync(
-      path.join(tmpDir, "sess-child.jsonl"),
-      [
-        JSON.stringify({ type: "session", version: 1, id: "sess-child" }),
-        JSON.stringify({
-          message: {
-            role: "assistant",
-            provider: "anthropic",
-            model: "claude-sonnet-4-6",
-            usage: {
-              input: 2_000,
-              output: 500,
-              cacheRead: 1_200,
-              cost: { total: 0.007725 },
-            },
-          },
-        }),
-      ].join("\n"),
-      "utf-8",
-    );
+    withTranscriptStoreFixture({
+      prefix: "openclaw-session-utils-subagent-",
+      transcriptId: "sess-child",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      input: 2_000,
+      output: 500,
+      cacheRead: 1_200,
+      costTotal: 0.007725,
+      run: ({ storePath, now }) => {
+        addSubagentRunForTests({
+          runId: "run-child-live",
+          childSessionKey: "agent:main:subagent:child-live",
+          controllerSessionKey: "agent:main:main",
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          task: "child task",
+          cleanup: "keep",
+          createdAt: now - 5_000,
+          startedAt: now - 4_000,
+          model: "anthropic/claude-sonnet-4-6",
+        });
 
-    addSubagentRunForTests({
-      runId: "run-child-live",
-      childSessionKey: "agent:main:subagent:child-live",
-      controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "child task",
-      cleanup: "keep",
-      createdAt: now - 5_000,
-      startedAt: now - 4_000,
-      model: "anthropic/claude-sonnet-4-6",
-    });
-
-    try {
-      const result = listSessionsFromStore({
-        cfg,
-        storePath,
-        store: {
-          "agent:main:subagent:child-live": {
+        const result = listSingleSession({
+          cfg: createAnthropicContext1mConfig(),
+          storePath,
+          key: "agent:main:subagent:child-live",
+          entry: {
             sessionId: "sess-child",
             updatedAt: now,
             spawnedBy: "agent:main:main",
             totalTokens: 0,
             totalTokensFresh: false,
           } as SessionEntry,
-        },
-        opts: {},
-      });
+        });
 
-      expect(result.sessions[0]).toMatchObject({
-        key: "agent:main:subagent:child-live",
-        status: "running",
-        modelProvider: "anthropic",
-        model: "claude-sonnet-4-6",
-        totalTokens: 3_200,
-        totalTokensFresh: true,
-        contextTokens: 1_048_576,
-      });
-      expect(result.sessions[0]?.estimatedCostUsd).toBeCloseTo(0.007725, 8);
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
+        expect(result.sessions[0]).toMatchObject({
+          key: "agent:main:subagent:child-live",
+          status: "running",
+          modelProvider: "anthropic",
+          model: "claude-sonnet-4-6",
+          totalTokens: 3_200,
+          totalTokensFresh: true,
+          contextTokens: 1_048_576,
+        });
+        expect(result.sessions[0]?.estimatedCostUsd).toBeCloseTo(0.007725, 8);
+      },
+    });
   });
 
   test("keeps a running subagent model when transcript fallback still reflects an older run", () => {
-    const tmpDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), "openclaw-session-utils-subagent-stale-model-"),
-    );
-    const storePath = path.join(tmpDir, "sessions.json");
-    const now = Date.now();
-    const cfg = {
-      session: { mainKey: "main" },
-      agents: {
-        list: [{ id: "main", default: true }],
-        defaults: {
-          models: {
-            "anthropic/claude-sonnet-4-6": { params: { context1m: true } },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-    fs.writeFileSync(
-      path.join(tmpDir, "sess-child-stale.jsonl"),
-      [
-        JSON.stringify({ type: "session", version: 1, id: "sess-child-stale" }),
-        JSON.stringify({
-          message: {
-            role: "assistant",
-            provider: "anthropic",
-            model: "claude-sonnet-4-6",
-            usage: {
-              input: 2_000,
-              output: 500,
-              cacheRead: 1_200,
-              cost: { total: 0.007725 },
-            },
-          },
-        }),
-      ].join("\n"),
-      "utf-8",
-    );
+    withTranscriptStoreFixture({
+      prefix: "openclaw-session-utils-subagent-stale-model-",
+      transcriptId: "sess-child-stale",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      input: 2_000,
+      output: 500,
+      cacheRead: 1_200,
+      costTotal: 0.007725,
+      run: ({ storePath, now }) => {
+        addSubagentRunForTests({
+          runId: "run-child-live-new-model",
+          childSessionKey: "agent:main:subagent:child-live-stale-transcript",
+          controllerSessionKey: "agent:main:main",
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          task: "child task",
+          cleanup: "keep",
+          createdAt: now - 5_000,
+          startedAt: now - 4_000,
+          model: "openai/gpt-5.4",
+        });
 
-    addSubagentRunForTests({
-      runId: "run-child-live-new-model",
-      childSessionKey: "agent:main:subagent:child-live-stale-transcript",
-      controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "child task",
-      cleanup: "keep",
-      createdAt: now - 5_000,
-      startedAt: now - 4_000,
-      model: "openai/gpt-5.4",
-    });
-
-    try {
-      const result = listSessionsFromStore({
-        cfg,
-        storePath,
-        store: {
-          "agent:main:subagent:child-live-stale-transcript": {
+        const result = listSingleSession({
+          cfg: createAnthropicContext1mConfig(),
+          storePath,
+          key: "agent:main:subagent:child-live-stale-transcript",
+          entry: {
             sessionId: "sess-child-stale",
             updatedAt: now,
             spawnedBy: "agent:main:main",
             totalTokens: 0,
             totalTokensFresh: false,
           } as SessionEntry,
-        },
-        opts: {},
-      });
+        });
 
-      expect(result.sessions[0]).toMatchObject({
-        key: "agent:main:subagent:child-live-stale-transcript",
-        status: "running",
-        modelProvider: "openai",
-        model: "gpt-5.4",
-        totalTokens: 3_200,
-        totalTokensFresh: true,
-      });
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
+        expect(result.sessions[0]).toMatchObject({
+          key: "agent:main:subagent:child-live-stale-transcript",
+          status: "running",
+          modelProvider: "openai",
+          model: "gpt-5.4",
+          totalTokens: 3_200,
+          totalTokensFresh: true,
+        });
+      },
+    });
   });
 
   test("keeps the selected override model when runtime identity was intentionally cleared", () => {
-    const tmpDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), "openclaw-session-utils-cleared-runtime-model-"),
-    );
-    const storePath = path.join(tmpDir, "sessions.json");
-    const now = Date.now();
-    const cfg = {
-      session: { mainKey: "main" },
-      agents: {
-        list: [{ id: "main", default: true }],
-        defaults: {
-          models: {
-            "anthropic/claude-sonnet-4-6": { params: { context1m: true } },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-    fs.writeFileSync(
-      path.join(tmpDir, "sess-override.jsonl"),
-      [
-        JSON.stringify({ type: "session", version: 1, id: "sess-override" }),
-        JSON.stringify({
-          message: {
-            role: "assistant",
-            provider: "anthropic",
-            model: "claude-sonnet-4-6",
-            usage: {
-              input: 2_000,
-              output: 500,
-              cacheRead: 1_200,
-              cost: { total: 0.007725 },
-            },
-          },
-        }),
-      ].join("\n"),
-      "utf-8",
-    );
-
-    try {
-      const result = listSessionsFromStore({
-        cfg,
-        storePath,
-        store: {
-          "agent:main:main": {
+    withTranscriptStoreFixture({
+      prefix: "openclaw-session-utils-cleared-runtime-model-",
+      transcriptId: "sess-override",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      input: 2_000,
+      output: 500,
+      cacheRead: 1_200,
+      costTotal: 0.007725,
+      run: ({ storePath, now }) => {
+        const result = listSingleSession({
+          cfg: createAnthropicContext1mConfig(),
+          storePath,
+          key: "agent:main:main",
+          entry: {
             sessionId: "sess-override",
             updatedAt: now,
             providerOverride: "openai",
@@ -672,59 +594,40 @@ describe("listSessionsFromStore search", () => {
             totalTokens: 0,
             totalTokensFresh: false,
           } as SessionEntry,
-        },
-        opts: {},
-      });
+        });
 
-      expect(result.sessions[0]).toMatchObject({
-        key: "agent:main:main",
-        modelProvider: "openai",
-        model: "gpt-5.4",
-        totalTokens: 3_200,
-        totalTokensFresh: true,
-      });
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
+        expect(result.sessions[0]).toMatchObject({
+          key: "agent:main:main",
+          modelProvider: "openai",
+          model: "gpt-5.4",
+          totalTokens: 3_200,
+          totalTokensFresh: true,
+        });
+      },
+    });
   });
 
   test("does not replace the current runtime model when transcript fallback is only for missing pricing", () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-utils-pricing-"));
-    const storePath = path.join(tmpDir, "sessions.json");
-    const now = Date.now();
-    const cfg = {
-      session: { mainKey: "main" },
-      agents: {
-        list: [{ id: "main", default: true }],
-      },
-    } as unknown as OpenClawConfig;
-    fs.writeFileSync(
-      path.join(tmpDir, "sess-pricing.jsonl"),
-      [
-        JSON.stringify({ type: "session", version: 1, id: "sess-pricing" }),
-        JSON.stringify({
-          message: {
-            role: "assistant",
-            provider: "anthropic",
-            model: "claude-sonnet-4-6",
-            usage: {
-              input: 2_000,
-              output: 500,
-              cacheRead: 1_200,
-              cost: { total: 0.007725 },
+    withTranscriptStoreFixture({
+      prefix: "openclaw-session-utils-pricing-",
+      transcriptId: "sess-pricing",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      input: 2_000,
+      output: 500,
+      cacheRead: 1_200,
+      costTotal: 0.007725,
+      run: ({ storePath, now }) => {
+        const result = listSingleSession({
+          cfg: {
+            session: { mainKey: "main" },
+            agents: {
+              list: [{ id: "main", default: true }],
             },
-          },
-        }),
-      ].join("\n"),
-      "utf-8",
-    );
-
-    try {
-      const result = listSessionsFromStore({
-        cfg,
-        storePath,
-        store: {
-          "agent:main:main": {
+          } as unknown as OpenClawConfig,
+          storePath,
+          key: "agent:main:main",
+          entry: {
             sessionId: "sess-pricing",
             updatedAt: now,
             modelProvider: "openai",
@@ -736,20 +639,17 @@ describe("listSessionsFromStore search", () => {
             outputTokens: 500,
             cacheRead: 1_200,
           } as SessionEntry,
-        },
-        opts: {},
-      });
+        });
 
-      expect(result.sessions[0]).toMatchObject({
-        key: "agent:main:main",
-        modelProvider: "openai",
-        model: "gpt-5.4",
-        totalTokens: 3_200,
-        totalTokensFresh: true,
-        contextTokens: 200_000,
-      });
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
+        expect(result.sessions[0]).toMatchObject({
+          key: "agent:main:main",
+          modelProvider: "openai",
+          model: "gpt-5.4",
+          totalTokens: 3_200,
+          totalTokensFresh: true,
+          contextTokens: 200_000,
+        });
+      },
+    });
   });
 });

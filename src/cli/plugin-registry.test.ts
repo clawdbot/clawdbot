@@ -8,6 +8,25 @@ const logger = {
   debug: vi.fn(),
 };
 
+function withActivatedPluginIdsForTest<T extends Record<string, unknown>>(
+  config: T,
+  pluginIds: string[],
+): T & {
+  plugins: {
+    allow: string[];
+    entries: Record<string, { enabled: true }>;
+  };
+} {
+  return {
+    ...config,
+    plugins: {
+      ...(typeof config.plugins === "object" && config.plugins ? config.plugins : {}),
+      allow: pluginIds,
+      entries: Object.fromEntries(pluginIds.map((pluginId) => [pluginId, { enabled: true }])),
+    },
+  };
+}
+
 const mocks = vi.hoisted(() => ({
   loadOpenClawPlugins: vi.fn<typeof import("../plugins/loader.js").loadOpenClawPlugins>(),
   getActivePluginRegistry: vi.fn<typeof import("../plugins/runtime.js").getActivePluginRegistry>(),
@@ -44,6 +63,25 @@ vi.mock("../plugins/runtime/load-context.js", () => ({
   resolvePluginRuntimeLoadContext: (
     ...args: Parameters<typeof mocks.resolvePluginRuntimeLoadContext>
   ) => mocks.resolvePluginRuntimeLoadContext(...args),
+  buildPluginRuntimeLoadOptionsFromValues: (
+    values: {
+      config: unknown;
+      activationSourceConfig: unknown;
+      autoEnabledReasons: Readonly<Record<string, string[]>>;
+      workspaceDir: string | undefined;
+      env: NodeJS.ProcessEnv;
+      logger: typeof logger;
+    },
+    overrides?: Record<string, unknown>,
+  ) => ({
+    config: values.config,
+    activationSourceConfig: values.activationSourceConfig,
+    autoEnabledReasons: values.autoEnabledReasons,
+    workspaceDir: values.workspaceDir,
+    env: values.env,
+    logger: values.logger,
+    ...overrides,
+  }),
   buildPluginRuntimeLoadOptions: (
     context: {
       config: unknown;
@@ -107,16 +145,7 @@ describe("ensurePluginRegistryLoaded", () => {
         },
       },
     };
-    const autoEnabledConfig = {
-      ...baseConfig,
-      plugins: {
-        entries: {
-          "demo-chat": {
-            enabled: true,
-          },
-        },
-      },
-    };
+    const autoEnabledConfig = withActivatedPluginIdsForTest(baseConfig, ["demo-chat"]);
 
     mocks.resolvePluginRuntimeLoadContext.mockReturnValue({
       rawConfig: baseConfig,
@@ -143,7 +172,7 @@ describe("ensurePluginRegistryLoaded", () => {
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         config: autoEnabledConfig,
-        activationSourceConfig: baseConfig,
+        activationSourceConfig: autoEnabledConfig,
         autoEnabledReasons: {
           "demo-chat": ["demo-chat configured"],
         },
@@ -230,6 +259,7 @@ describe("ensurePluginRegistryLoaded", () => {
       plugins: { enabled: true },
       channels: { "demo-channel-a": { enabled: true } },
     };
+    const activatedConfig = withActivatedPluginIdsForTest(config, ["demo-channel-a"]);
 
     mocks.resolvePluginRuntimeLoadContext.mockReturnValue({
       rawConfig: config,
@@ -252,7 +282,8 @@ describe("ensurePluginRegistryLoaded", () => {
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
-        config,
+        config: activatedConfig,
+        activationSourceConfig: activatedConfig,
         onlyPluginIds: ["demo-channel-a"],
         throwOnLoadError: true,
         workspaceDir: "/tmp/workspace",
@@ -270,6 +301,7 @@ describe("ensurePluginRegistryLoaded", () => {
         },
       },
     };
+    const activatedConfig = withActivatedPluginIdsForTest(config, ["demo-channel-a"]);
 
     mocks.resolvePluginRuntimeLoadContext.mockReturnValue({
       rawConfig: config,
@@ -291,7 +323,8 @@ describe("ensurePluginRegistryLoaded", () => {
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
-        config,
+        config: activatedConfig,
+        activationSourceConfig: activatedConfig,
         onlyPluginIds: ["demo-channel-a"],
         throwOnLoadError: true,
         workspaceDir: "/tmp/workspace",

@@ -1,3 +1,4 @@
+import { ensureMcpLoopbackServer } from "../../gateway/mcp-http.js";
 import {
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
@@ -36,6 +37,7 @@ const prepareDeps = {
   makeBootstrapWarn: makeBootstrapWarnImpl,
   resolveBootstrapContextForRun: resolveBootstrapContextForRunImpl,
   getActiveMcpLoopbackRuntime,
+  ensureMcpLoopbackServer,
   createMcpLoopbackServerConfig,
   resolveOpenClawDocsPath: async (
     params: Parameters<typeof import("../docs-path.js").resolveOpenClawDocsPath>[0],
@@ -114,9 +116,17 @@ export async function prepareCliRunContext(
     config: params.config,
     agentId: params.agentId,
   });
-  const mcpLoopbackRuntime = backendResolved.bundleMcp
+  let mcpLoopbackRuntime = backendResolved.bundleMcp
     ? prepareDeps.getActiveMcpLoopbackRuntime()
     : undefined;
+  if (backendResolved.bundleMcp && !mcpLoopbackRuntime) {
+    try {
+      await prepareDeps.ensureMcpLoopbackServer();
+    } catch (error) {
+      cliBackendLog.warn(`mcp loopback server failed to start: ${String(error)}`);
+    }
+    mcpLoopbackRuntime = prepareDeps.getActiveMcpLoopbackRuntime();
+  }
   const preparedBackend = await prepareCliBundleMcpConfig({
     enabled: backendResolved.bundleMcp,
     mode: backendResolved.bundleMcpMode,

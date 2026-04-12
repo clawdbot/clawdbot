@@ -21,6 +21,7 @@ async function runQaSelfCheck(opts: { repoRoot?: string; output?: string }) {
 async function runQaSuite(opts: {
   repoRoot?: string;
   outputDir?: string;
+  transportId?: string;
   providerMode?: QaProviderModeInput;
   primaryModel?: string;
   alternateModel?: string;
@@ -70,6 +71,7 @@ async function runQaCharacterEval(opts: {
 
 async function runQaManualLane(opts: {
   repoRoot?: string;
+  transportId?: string;
   providerMode?: QaProviderModeInput;
   primaryModel?: string;
   alternateModel?: string;
@@ -160,10 +162,11 @@ export function registerQaLabCli(program: Command) {
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option("--output-dir <path>", "Suite artifact directory")
     .option("--runner <kind>", "Execution runner: host or multipass", "host")
+    .option("--transport <id>", "QA transport id", "qa-channel")
     .option(
       "--provider-mode <mode>",
       "Provider mode: mock-openai or live-frontier (legacy live-openai still works)",
-      "mock-openai",
+      "live-frontier",
     )
     .option("--model <ref>", "Primary provider/model ref")
     .option("--alt-model <ref>", "Alternate provider/model ref")
@@ -185,6 +188,7 @@ export function registerQaLabCli(program: Command) {
       async (opts: {
         repoRoot?: string;
         outputDir?: string;
+        transport?: string;
         runner?: string;
         providerMode?: QaProviderModeInput;
         model?: string;
@@ -202,6 +206,7 @@ export function registerQaLabCli(program: Command) {
         await runQaSuite({
           repoRoot: opts.repoRoot,
           outputDir: opts.outputDir,
+          transportId: opts.transport,
           runner: opts.runner,
           providerMode: opts.providerMode,
           primaryModel: opts.model,
@@ -308,6 +313,7 @@ export function registerQaLabCli(program: Command) {
     .description("Run a one-off QA agent prompt against the selected provider/model lane")
     .requiredOption("--message <text>", "Prompt to send to the QA agent")
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
+    .option("--transport <id>", "QA transport id", "qa-channel")
     .option(
       "--provider-mode <mode>",
       "Provider mode: mock-openai or live-frontier (legacy live-openai still works)",
@@ -321,6 +327,7 @@ export function registerQaLabCli(program: Command) {
       async (opts: {
         message: string;
         repoRoot?: string;
+        transport?: string;
         providerMode?: QaProviderModeInput;
         model?: string;
         altModel?: string;
@@ -329,6 +336,7 @@ export function registerQaLabCli(program: Command) {
       }) => {
         await runQaManualLane({
           repoRoot: opts.repoRoot,
+          transportId: opts.transport,
           providerMode: opts.providerMode,
           primaryModel: opts.model,
           alternateModel: opts.altModel,

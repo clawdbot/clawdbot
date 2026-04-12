@@ -1,3 +1,4 @@
+import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { generateSecureUuid } from "openclaw/plugin-sdk/core";
@@ -11,7 +12,8 @@ import {
   resolveWhatsAppAccount,
   resolveWhatsAppMediaMaxBytes,
 } from "./accounts.js";
-import { type ActiveWebSendOptions, requireActiveWebListener } from "./active-listener.js";
+import { getRegisteredWhatsAppConnectionController } from "./connection-controller-registry.js";
+import type { ActiveWebListener, ActiveWebSendOptions } from "./inbound/types.js";
 import { loadOutboundMediaFromUrl } from "./outbound-media.runtime.js";
 import { markdownToWhatsApp, toWhatsappJid } from "./text-runtime.js";
 
@@ -26,6 +28,22 @@ function resolveOutboundWhatsAppAccountId(params: {
     return explicitAccountId;
   }
   return resolveDefaultWhatsAppAccountId(params.cfg);
+}
+
+function requireOutboundActiveWebListener(params: { cfg: OpenClawConfig; accountId?: string }): {
+  accountId: string;
+  listener: ActiveWebListener;
+} {
+  const accountId = resolveOutboundWhatsAppAccountId(params);
+  const resolvedAccountId = accountId ?? resolveDefaultWhatsAppAccountId(params.cfg);
+  const listener =
+    getRegisteredWhatsAppConnectionController(resolvedAccountId)?.getActiveListener() ?? null;
+  if (!listener) {
+    throw new Error(
+      `No active WhatsApp Web listener (account: ${resolvedAccountId}). Start the gateway, then link WhatsApp with: ${formatCliCommand(`openclaw channels login --channel whatsapp --account ${resolvedAccountId}`)}.`,
+    );
+  }
+  return { accountId: resolvedAccountId, listener };
 }
 
 export async function sendMessageWhatsApp(
@@ -60,12 +78,10 @@ export async function sendMessageWhatsApp(
   const correlationId = generateSecureUuid();
   const startedAt = Date.now();
   const cfg = options.cfg ?? loadConfig();
-  const effectiveAccountId = resolveOutboundWhatsAppAccountId({
+  const { listener: active, accountId: resolvedAccountId } = requireOutboundActiveWebListener({
     cfg,
     accountId: options.accountId,
   });
-  const { listener: active, accountId: resolvedAccountId } =
-    requireActiveWebListener(effectiveAccountId);
   const account = resolveWhatsAppAccount({
     cfg,
     accountId: resolvedAccountId ?? options.accountId,
@@ -158,11 +174,10 @@ export async function sendReactionWhatsApp(
 ): Promise<void> {
   const correlationId = generateSecureUuid();
   const cfg = loadConfig();
-  const effectiveAccountId = resolveOutboundWhatsAppAccountId({
+  const { listener: active } = requireOutboundActiveWebListener({
     cfg,
     accountId: options.accountId,
   });
-  const { listener: active } = requireActiveWebListener(effectiveAccountId);
   const redactedChatJid = redactIdentifier(chatJid);
   const logger = getChildLogger({
     module: "web-outbound",
@@ -201,11 +216,10 @@ export async function sendPollWhatsApp(
   const correlationId = generateSecureUuid();
   const startedAt = Date.now();
   const cfg = options.cfg ?? loadConfig();
-  const effectiveAccountId = resolveOutboundWhatsAppAccountId({
+  const { listener: active } = requireOutboundActiveWebListener({
     cfg,
     accountId: options.accountId,
   });
-  const { listener: active } = requireActiveWebListener(effectiveAccountId);
   const redactedTo = redactIdentifier(to);
   const logger = getChildLogger({
     module: "web-outbound",

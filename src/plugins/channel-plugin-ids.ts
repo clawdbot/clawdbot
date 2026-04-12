@@ -13,6 +13,12 @@ import {
   normalizePluginsConfig,
   resolveEffectivePluginActivationState,
 } from "./config-state.js";
+import {
+  hasExplicitManifestOwnerTrust,
+  isActivatedManifestOwner,
+  isBundledManifestOwner,
+  passesManifestOwnerBasePolicy,
+} from "./manifest-owner-policy.js";
 import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
 import { hasKind } from "./slots.js";
 
@@ -54,86 +60,33 @@ function normalizeChannelIds(channelIds: Iterable<string>): string[] {
   ).toSorted((left, right) => left.localeCompare(right));
 }
 
-function isBundledChannelOwner(plugin: PluginManifestRecord): boolean {
-  return plugin.origin === "bundled";
-}
-
-function hasExplicitNonBundledChannelOwnerTrust(params: {
+function isChannelPluginEligibleForScopedOwnership(params: {
   plugin: PluginManifestRecord;
   normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
+  rootConfig: OpenClawConfig;
 }): boolean {
-  return (
-    params.normalizedConfig.allow.includes(params.plugin.id) ||
-    params.normalizedConfig.entries[params.plugin.id]?.enabled === true
-  );
-}
-
-function passesExplicitChannelOwnershipPolicy(params: {
-  plugin: PluginManifestRecord;
-  normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
-}): boolean {
-  if (!params.normalizedConfig.enabled) {
-    return false;
-  }
-  if (params.normalizedConfig.deny.includes(params.plugin.id)) {
-    return false;
-  }
-  if (params.normalizedConfig.entries[params.plugin.id]?.enabled === false) {
-    return false;
-  }
   if (
-    params.normalizedConfig.allow.length > 0 &&
-    !params.normalizedConfig.allow.includes(params.plugin.id)
+    !passesManifestOwnerBasePolicy({
+      plugin: params.plugin,
+      normalizedConfig: params.normalizedConfig,
+    })
   ) {
     return false;
   }
-  return true;
-}
-
-function isChannelPluginEligibleForSetupDiscovery(params: {
-  plugin: PluginManifestRecord;
-  normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
-  rootConfig: OpenClawConfig;
-}): boolean {
-  if (!passesExplicitChannelOwnershipPolicy(params)) {
-    return false;
-  }
-  if (isBundledChannelOwner(params.plugin)) {
+  if (isBundledManifestOwner(params.plugin)) {
     return true;
   }
   if (params.plugin.origin === "global" || params.plugin.origin === "config") {
-    return hasExplicitNonBundledChannelOwnerTrust(params);
+    return hasExplicitManifestOwnerTrust({
+      plugin: params.plugin,
+      normalizedConfig: params.normalizedConfig,
+    });
   }
-  return resolveEffectivePluginActivationState({
-    id: params.plugin.id,
-    origin: params.plugin.origin,
-    config: params.normalizedConfig,
+  return isActivatedManifestOwner({
+    plugin: params.plugin,
+    normalizedConfig: params.normalizedConfig,
     rootConfig: params.rootConfig,
-    enabledByDefault: params.plugin.enabledByDefault,
-  }).activated;
-}
-
-function isChannelPluginEligibleForRuntimeOwnerActivation(params: {
-  plugin: PluginManifestRecord;
-  normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
-  rootConfig: OpenClawConfig;
-}): boolean {
-  if (!passesExplicitChannelOwnershipPolicy(params)) {
-    return false;
-  }
-  if (isBundledChannelOwner(params.plugin)) {
-    return true;
-  }
-  if (params.plugin.origin === "global" || params.plugin.origin === "config") {
-    return hasExplicitNonBundledChannelOwnerTrust(params);
-  }
-  return resolveEffectivePluginActivationState({
-    id: params.plugin.id,
-    origin: params.plugin.origin,
-    config: params.normalizedConfig,
-    rootConfig: params.rootConfig,
-    enabledByDefault: params.plugin.enabledByDefault,
-  }).activated;
+  });
 }
 
 function resolveScopedChannelOwnerPluginIds(params: {
@@ -142,7 +95,6 @@ function resolveScopedChannelOwnerPluginIds(params: {
   channelIds: readonly string[];
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
-  mode: "runtime" | "setup";
   cache?: boolean;
 }): string[] {
   const channelIds = normalizeChannelIds(params.channelIds);
@@ -180,17 +132,11 @@ function resolveScopedChannelOwnerPluginIds(params: {
       if (!candidateIdSet.has(plugin.id)) {
         return false;
       }
-      return params.mode === "setup"
-        ? isChannelPluginEligibleForSetupDiscovery({
-            plugin,
-            normalizedConfig,
-            rootConfig: trustConfig,
-          })
-        : isChannelPluginEligibleForRuntimeOwnerActivation({
-            plugin,
-            normalizedConfig,
-            rootConfig: trustConfig,
-          });
+      return isChannelPluginEligibleForScopedOwnership({
+        plugin,
+        normalizedConfig,
+        rootConfig: trustConfig,
+      });
     })
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
@@ -204,10 +150,7 @@ export function resolveScopedChannelPluginIds(params: {
   env: NodeJS.ProcessEnv;
   cache?: boolean;
 }): string[] {
-  return resolveScopedChannelOwnerPluginIds({
-    ...params,
-    mode: "runtime",
-  });
+  return resolveScopedChannelOwnerPluginIds(params);
 }
 
 export function resolveDiscoverableScopedChannelPluginIds(params: {
@@ -218,10 +161,7 @@ export function resolveDiscoverableScopedChannelPluginIds(params: {
   env: NodeJS.ProcessEnv;
   cache?: boolean;
 }): string[] {
-  return resolveScopedChannelOwnerPluginIds({
-    ...params,
-    mode: "setup",
-  });
+  return resolveScopedChannelOwnerPluginIds(params);
 }
 
 function resolveGatewayStartupDreamingPluginIds(config: OpenClawConfig): Set<string> {
@@ -276,6 +216,7 @@ export function resolveChannelPluginIds(params: {
 
 export function resolveConfiguredChannelPluginIds(params: {
   config: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
 }): string[] {

@@ -12,8 +12,8 @@ import { ensureGlobalUndiciEnvProxyDispatcher } from "../infra/net/undici-global
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { enableConsoleCapture } from "../logging.js";
+import type { PluginManifestCommandAliasRegistry } from "../plugins/manifest-command-aliases.js";
 import { resolveManifestCommandAliasOwner } from "../plugins/manifest-command-aliases.runtime.js";
-import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { hasMemoryRuntime } from "../plugins/memory-state.js";
 import { maybeWarnAboutDebugProxyCoverage } from "../proxy-capture/coverage.js";
 import {
@@ -74,7 +74,7 @@ export function shouldUseRootHelpFastPath(argv: string[]): boolean {
 export function resolveMissingPluginCommandMessage(
   pluginId: string,
   config?: OpenClawConfig,
-  options?: { registry?: PluginManifestRegistry },
+  options?: { registry?: PluginManifestCommandAliasRegistry },
 ): string | null {
   const normalizedPluginId = normalizeLowercaseStringOrEmpty(pluginId);
   if (!normalizedPluginId) {

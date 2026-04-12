@@ -37,6 +37,12 @@ describe("runQaManualLane", () => {
       listenUrl: "http://127.0.0.1:43124",
       baseUrl: "http://127.0.0.1:58000",
       state: {
+        reset: vi.fn(),
+        addInboundMessage: vi.fn(),
+        addOutboundMessage: vi.fn(),
+        readMessage: vi.fn(),
+        searchMessages: vi.fn(() => []),
+        waitFor: vi.fn(),
         getSnapshot: () => ({
           messages: [
             {

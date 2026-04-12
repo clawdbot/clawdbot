@@ -12,6 +12,7 @@ export type SessionStatus = {
   thinkingLevel?: string;
   fastMode?: boolean;
   verboseLevel?: string;
+  traceLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
   systemSent?: boolean;

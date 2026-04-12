@@ -32,7 +32,9 @@ vi.mock("./tool-resolution.js", () => ({
 
 import {
   createMcpLoopbackServerConfig,
+  closeMcpLoopbackServer,
   getActiveMcpLoopbackRuntime,
+  ensureMcpLoopbackServer,
   startMcpLoopbackServer,
 } from "./mcp-http.js";
 
@@ -159,6 +161,19 @@ describe("mcp loopback server", () => {
 
     await server.close();
     server = undefined;
+    expect(getActiveMcpLoopbackRuntime()).toBeUndefined();
+  });
+
+  it("starts the loopback server lazily and reuses the same singleton", async () => {
+    expect(getActiveMcpLoopbackRuntime()).toBeUndefined();
+
+    const first = await ensureMcpLoopbackServer(0);
+    const second = await ensureMcpLoopbackServer(0);
+
+    expect(second).toBe(first);
+    expect(getActiveMcpLoopbackRuntime()?.port).toBe(first.port);
+
+    await closeMcpLoopbackServer();
     expect(getActiveMcpLoopbackRuntime()).toBeUndefined();
   });
 

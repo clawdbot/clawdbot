@@ -59,5 +59,10 @@ export function expectUnavailableMemorySearchDetails(
     error: params.error,
     warning: params.warning,
     action: params.action,
+    debug: {
+      warning: params.warning,
+      action: params.action,
+      error: params.error,
+    },
   });
 }

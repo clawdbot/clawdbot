@@ -22,6 +22,42 @@ export type SearchRowResult = {
   source: SearchSource;
 };
 
+function normalizeSearchTokens(raw: string): string[] {
+  return (
+    raw
+      .match(FTS_QUERY_TOKEN_RE)
+      ?.map((token) => token.trim().toLowerCase())
+      .filter(Boolean) ?? []
+  );
+}
+
+function scoreFallbackKeywordResult(params: {
+  query: string;
+  path: string;
+  text: string;
+  ftsScore: number;
+}): number {
+  const queryTokens = [...new Set(normalizeSearchTokens(params.query))];
+  if (queryTokens.length === 0) {
+    return params.ftsScore;
+  }
+
+  const textTokens = normalizeSearchTokens(params.text);
+  const textTokenSet = new Set(textTokens);
+  const pathLower = params.path.toLowerCase();
+  const overlap = queryTokens.filter((token) => textTokenSet.has(token)).length;
+  const uniqueQueryOverlap = overlap / Math.max(new Set(queryTokens).size, 1);
+  const density = overlap / Math.max(textTokenSet.size, 1);
+  const pathBoost = queryTokens.reduce(
+    (score, token) => score + (pathLower.includes(token) ? 0.18 : 0),
+    0,
+  );
+  const textLengthBoost = Math.min(params.text.length / 160, 0.18);
+
+  const lexicalBoost = uniqueQueryOverlap * 0.45 + density * 0.2 + pathBoost + textLengthBoost;
+  return Math.min(1, params.ftsScore + lexicalBoost);
+}
+
 function escapeLikePattern(term: string): string {
   return term.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_");
 }
@@ -198,6 +234,7 @@ export async function searchKeyword(params: {
   sourceFilter: { sql: string; params: SearchSource[] };
   buildFtsQuery: (raw: string) => string | null;
   bm25RankToScore: (rank: number) => number;
+  boostFallbackRanking?: boolean;
 }): Promise<Array<SearchRowResult & { textScore: number }>> {
   if (params.limit <= 0) {
     return [];
@@ -249,12 +286,20 @@ export async function searchKeyword(params: {
 
   return rows.map((row) => {
     const textScore = plan.matchQuery ? params.bm25RankToScore(row.rank) : 1;
+    const score = params.boostFallbackRanking
+      ? scoreFallbackKeywordResult({
+          query: params.query,
+          path: row.path,
+          text: row.text,
+          ftsScore: textScore,
+        })
+      : textScore;
     return {
       id: row.id,
       path: row.path,
       startLine: row.start_line,
       endLine: row.end_line,
-      score: textScore,
+      score,
       textScore,
       snippet: truncateUtf16Safe(row.text, params.snippetMaxChars),
       source: row.source,

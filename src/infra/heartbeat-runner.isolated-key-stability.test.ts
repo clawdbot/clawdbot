@@ -5,7 +5,11 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { seedSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
-import { resetSystemEventsForTest } from "./system-events.js";
+import {
+  enqueueSystemEvent,
+  peekSystemEventEntries,
+  resetSystemEventsForTest,
+} from "./system-events.js";
 
 vi.mock("./outbound/deliver.js", () => ({
   deliverOutboundPayloads: vi.fn().mockResolvedValue(undefined),
@@ -194,6 +198,62 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
       });
 
       expect(ctx?.SessionKey).toBe(`${baseSessionKey}:heartbeat`);
+    });
+  });
+
+  it("consumes base-session cron events when isolated heartbeat runs on a :heartbeat session", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      const cfg = makeIsolatedHeartbeatConfig(tmpDir, storePath);
+      const baseSessionKey = resolveMainSessionKey(cfg);
+      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+      replySpy
+        .mockResolvedValueOnce({ text: "Relay this cron update now" })
+        .mockResolvedValueOnce({ text: "HEARTBEAT_OK" });
+
+      enqueueSystemEvent("Cron: QMD maintenance completed", {
+        sessionKey: baseSessionKey,
+        contextKey: "cron:qmd-maintenance",
+      });
+
+      await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        reason: "interval",
+        deps: {
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+        },
+      });
+
+      expect(peekSystemEventEntries(baseSessionKey)).toEqual([]);
+
+      await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        reason: "interval",
+        deps: {
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+        },
+      });
+
+      expect(replySpy).toHaveBeenCalledTimes(2);
+      const firstCtx = replySpy.mock.calls[0]?.[0] as {
+        Body?: string;
+        Provider?: string;
+        SessionKey?: string;
+      };
+      const secondCtx = replySpy.mock.calls[1]?.[0] as {
+        Body?: string;
+        Provider?: string;
+        SessionKey?: string;
+      };
+
+      expect(firstCtx.SessionKey).toBe(`${baseSessionKey}:heartbeat`);
+      expect(firstCtx.Provider).toBe("cron-event");
+      expect(firstCtx.Body).toContain("Cron: QMD maintenance completed");
+      expect(secondCtx.SessionKey).toBe(`${baseSessionKey}:heartbeat`);
+      expect(secondCtx.Body).not.toContain("Cron: QMD maintenance completed");
     });
   });
 

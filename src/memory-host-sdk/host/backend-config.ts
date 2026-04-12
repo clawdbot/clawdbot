@@ -107,6 +107,10 @@ const DEFAULT_QMD_SCOPE: SessionSendPolicyConfig = {
       action: "allow",
       match: { chatType: "direct" },
     },
+    {
+      action: "allow",
+      match: { chatType: "channel" },
+    },
   ],
 };
 
@@ -240,6 +244,14 @@ function resolveSearchTool(raw?: MemoryQmdConfig["searchTool"]): string | undefi
   return value ? value : undefined;
 }
 
+function normalizeQmdCommand(command: string): string {
+  const normalized = path.normalize(command);
+  if (normalized === "/opt/homebrew/bin/qmd" || normalized === "/usr/local/bin/qmd") {
+    return "qmd";
+  }
+  return command;
+}
+
 function resolveSessionConfig(
   cfg: MemoryQmdConfig["sessions"],
   workspaceDir: string,
@@ -332,7 +344,6 @@ function resolveDefaultCollections(
   }
   const entries: Array<{ path: string; pattern: string; base: string }> = [
     { path: workspaceDir, pattern: "MEMORY.md", base: "memory-root" },
-    { path: workspaceDir, pattern: "memory.md", base: "memory-alt" },
     { path: path.join(workspaceDir, "memory"), pattern: "**/*.md", base: "memory-dir" },
   ];
   return entries.map((entry) => ({
@@ -394,7 +405,7 @@ export function resolveMemoryBackendConfig(params: {
 
   const rawCommand = normalizeOptionalString(qmdCfg?.command) || "qmd";
   const parsedCommand = splitShellArgs(rawCommand);
-  const command = parsedCommand?.[0] || rawCommand.split(/\s+/)[0] || "qmd";
+  const command = normalizeQmdCommand(parsedCommand?.[0] || rawCommand.split(/\s+/)[0] || "qmd");
   const resolved: ResolvedQmdConfig = {
     command,
     mcporter: resolveMcporterConfig(qmdCfg?.mcporter),

@@ -24,12 +24,12 @@ const scenarios = [
 ];
 
 describe("qa run config", () => {
-  it("creates a synthetic-by-default selection that arms every scenario", () => {
+  it("creates a live-by-default selection that arms every scenario", () => {
     expect(createDefaultQaRunSelection(scenarios)).toEqual({
-      providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.4",
-      alternateModel: "mock-openai/gpt-5.4-alt",
-      fastMode: false,
+      providerMode: "live-frontier",
+      primaryModel: "openai/gpt-5.4",
+      alternateModel: "openai/gpt-5.4",
+      fastMode: true,
       scenarioIds: ["dm-chat-baseline", "thread-lifecycle"],
     });
   });

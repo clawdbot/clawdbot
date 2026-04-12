@@ -40,6 +40,22 @@ type WebAutoReplyMonitorHarness = {
 
 export const TEST_NET_IP = "93.184.216.34";
 
+vi.mock("./session.js", async () => {
+  const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
+  return {
+    ...actual,
+    createWaSocket: vi.fn(async () => ({
+      ev: {
+        on: vi.fn(),
+        off: vi.fn(),
+      },
+      ws: { close: vi.fn() },
+      user: { id: "123@s.whatsapp.net" },
+    })),
+    waitForWaConnection: vi.fn().mockResolvedValue(undefined),
+  };
+});
+
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
   appendCronStyleCurrentTimeLine: (text: string) => text,

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/codex",
-  "version": "2026.4.11",
+  "version": "2026.4.12",
   "description": "OpenClaw Codex harness and model provider plugin",
   "type": "module",
   "dependencies": {

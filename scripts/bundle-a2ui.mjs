@@ -67,6 +67,18 @@ export function getLocalRolldownCliCandidates(repoRoot = rootDir) {
   ];
 }
 
+export function compareNormalizedPaths(left, right) {
+  const normalizedLeft = normalizePath(left);
+  const normalizedRight = normalizePath(right);
+  if (normalizedLeft < normalizedRight) {
+    return -1;
+  }
+  if (normalizedLeft > normalizedRight) {
+    return 1;
+  }
+  return 0;
+}
+
 async function walkFiles(entryPath, files) {
   if (!isBundleHashInputPath(entryPath)) {
     return;
@@ -106,7 +118,7 @@ async function computeHash() {
       await walkFiles(inputPath, files);
     }
   }
-  files.sort((left, right) => normalizePath(left).localeCompare(normalizePath(right)));
+  files.sort(compareNormalizedPaths);
 
   const hash = createHash("sha256");
   for (const filePath of files) {

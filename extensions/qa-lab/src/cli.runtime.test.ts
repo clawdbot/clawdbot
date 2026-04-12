@@ -172,6 +172,7 @@ describe("qa cli runtime", () => {
     expect(runQaSuiteFromRuntime).toHaveBeenCalledWith({
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       outputDir: path.resolve("/tmp/openclaw-repo", ".artifacts/qa/frontier"),
+      transportId: "qa-channel",
       providerMode: "live-frontier",
       primaryModel: "openai/gpt-5.4",
       alternateModel: "anthropic/claude-sonnet-4-6",
@@ -275,6 +276,7 @@ describe("qa cli runtime", () => {
     expect(runQaSuiteFromRuntime).toHaveBeenCalledWith(
       expect.objectContaining({
         repoRoot: path.resolve("/tmp/openclaw-repo"),
+        transportId: "qa-channel",
         providerMode: "live-frontier",
       }),
     );
@@ -290,6 +292,7 @@ describe("qa cli runtime", () => {
     expect(runQaSuiteFromRuntime).toHaveBeenCalledWith(
       expect.objectContaining({
         repoRoot: path.resolve("/tmp/openclaw-repo"),
+        transportId: "qa-channel",
         scenarioIds: ["channel-chat-baseline", "thread-follow-up"],
         concurrency: 3,
       }),
@@ -497,6 +500,7 @@ describe("qa cli runtime", () => {
 
     expect(runQaManualLane).toHaveBeenCalledWith({
       repoRoot: path.resolve("/tmp/openclaw-repo"),
+      transportId: "qa-channel",
       providerMode: "live-frontier",
       primaryModel: "openai/gpt-5.4",
       alternateModel: "openai/gpt-5.4",
@@ -523,6 +527,7 @@ describe("qa cli runtime", () => {
     expect(runQaMultipass).toHaveBeenCalledWith({
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       outputDir: path.resolve("/tmp/openclaw-repo", ".artifacts/qa-multipass"),
+      transportId: "qa-channel",
       providerMode: "mock-openai",
       primaryModel: undefined,
       alternateModel: undefined,
@@ -551,6 +556,7 @@ describe("qa cli runtime", () => {
     expect(runQaMultipass).toHaveBeenCalledWith(
       expect.objectContaining({
         repoRoot: path.resolve("/tmp/openclaw-repo"),
+        transportId: "qa-channel",
         providerMode: "live-frontier",
         primaryModel: "openai/gpt-5.4",
         alternateModel: "openai/gpt-5.4",
@@ -579,6 +585,7 @@ describe("qa cli runtime", () => {
 
     expect(runQaManualLane).toHaveBeenCalledWith({
       repoRoot: path.resolve("/tmp/openclaw-repo"),
+      transportId: "qa-channel",
       providerMode: "mock-openai",
       primaryModel: "mock-openai/gpt-5.4",
       alternateModel: "mock-openai/gpt-5.4-alt",
@@ -596,6 +603,7 @@ describe("qa cli runtime", () => {
 
     expect(runQaManualLane).toHaveBeenCalledWith({
       repoRoot: path.resolve("/tmp/openclaw-repo"),
+      transportId: "qa-channel",
       providerMode: "live-frontier",
       primaryModel: "openai/gpt-5.4",
       alternateModel: "openai/gpt-5.4",
@@ -615,6 +623,7 @@ describe("qa cli runtime", () => {
 
     expect(runQaManualLane).toHaveBeenCalledWith({
       repoRoot: path.resolve("/tmp/openclaw-repo"),
+      transportId: "qa-channel",
       providerMode: "live-frontier",
       primaryModel: "anthropic/claude-sonnet-4-6",
       alternateModel: "anthropic/claude-sonnet-4-6",
@@ -634,6 +643,7 @@ describe("qa cli runtime", () => {
     expect(runQaManualLane).toHaveBeenCalledWith(
       expect.objectContaining({
         repoRoot: path.resolve("/tmp/openclaw-repo"),
+        transportId: "qa-channel",
         providerMode: "live-frontier",
         primaryModel: "openai/gpt-5.4",
         alternateModel: "openai/gpt-5.4",

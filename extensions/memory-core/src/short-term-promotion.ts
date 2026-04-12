@@ -13,7 +13,8 @@ import {
 } from "./concept-vocabulary.js";
 import { asRecord } from "./dreaming-shared.js";
 
-const SHORT_TERM_PATH_RE = /(?:^|\/)memory\/(\d{4})-(\d{2})-(\d{2})\.md$/;
+const SHORT_TERM_PATH_RE = /(?:^|\/)memory\/(?:[^/]+\/)*(\d{4})-(\d{2})-(\d{2})\.md$/;
+const DREAMING_MEMORY_PATH_RE = /(?:^|\/)memory\/dreaming\//;
 const SHORT_TERM_SESSION_CORPUS_RE =
   /(?:^|\/)memory\/\.dreams\/session-corpus\/(\d{4})-(\d{2})-(\d{2})\.(?:md|txt)$/;
 const SHORT_TERM_BASENAME_RE = /^(\d{4})-(\d{2})-(\d{2})\.md$/;
@@ -31,8 +32,10 @@ const SHORT_TERM_LOCK_RELATIVE_PATH = path.join("memory", ".dreams", "short-term
 const SHORT_TERM_LOCK_WAIT_TIMEOUT_MS = 10_000;
 const SHORT_TERM_LOCK_STALE_MS = 60_000;
 const SHORT_TERM_LOCK_RETRY_DELAY_MS = 40;
-const PHASE_SIGNAL_LIGHT_BOOST_MAX = 0.05;
-const PHASE_SIGNAL_REM_BOOST_MAX = 0.08;
+// Repeated dreaming revisits should be able to clear the default promotion gate
+// without requiring separate organic recall traffic for the same snippet.
+const PHASE_SIGNAL_LIGHT_BOOST_MAX = 0.06;
+const PHASE_SIGNAL_REM_BOOST_MAX = 0.09;
 const PHASE_SIGNAL_HALF_LIFE_DAYS = 14;
 const inProcessShortTermLocks = new Map<string, Promise<void>>();
 const ensuredShortTermDirs = new Map<string, Promise<void>>();
@@ -797,6 +800,9 @@ async function writeStore(workspaceDir: string, store: ShortTermRecallStore): Pr
 
 export function isShortTermMemoryPath(filePath: string): boolean {
   const normalized = normalizeMemoryPath(filePath);
+  if (DREAMING_MEMORY_PATH_RE.test(normalized)) {
+    return false;
+  }
   if (SHORT_TERM_PATH_RE.test(normalized)) {
     return true;
   }

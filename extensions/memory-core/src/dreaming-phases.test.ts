@@ -41,7 +41,11 @@ const LIGHT_DREAMING_TEST_CONFIG: OpenClawConfig = {
   },
 };
 
-function createHarness(config: OpenClawConfig, workspaceDir?: string) {
+function createHarness(
+  config: OpenClawConfig,
+  workspaceDir?: string,
+  subagent?: Parameters<typeof __testing.runPhaseIfTriggered>[0]["subagent"],
+) {
   const logger = {
     info: vi.fn(),
     warn: vi.fn(),
@@ -82,6 +86,7 @@ function createHarness(config: OpenClawConfig, workspaceDir?: string) {
       workspaceDir: ctx.workspaceDir,
       cfg: resolvedConfig,
       logger,
+      subagent,
       phase: "light",
       eventText: __testing.constants.LIGHT_SLEEP_EVENT_TEXT,
       config: light,
@@ -96,12 +101,30 @@ function createHarness(config: OpenClawConfig, workspaceDir?: string) {
       workspaceDir: ctx.workspaceDir,
       cfg: resolvedConfig,
       logger,
+      subagent,
       phase: "rem",
       eventText: __testing.constants.REM_SLEEP_EVENT_TEXT,
       config: rem,
     });
   };
   return { beforeAgentReply, logger };
+}
+
+function createMockNarrativeSubagent(response = "The archive hummed softly.") {
+  const run = vi.fn(async (_params: { sessionKey: string; message: string }) => ({
+    runId: "dream-run-1",
+  }));
+  const waitForRun = vi.fn(async () => ({ status: "ok" }));
+  const getSessionMessages = vi.fn(async () => ({
+    messages: [{ role: "assistant", content: response }],
+  }));
+  const deleteSession = vi.fn(async () => {});
+  return {
+    run,
+    waitForRun,
+    getSessionMessages,
+    deleteSession,
+  };
 }
 
 function setDreamingTestTime(offsetMinutes = 0) {
@@ -381,6 +404,29 @@ describe("memory-core dreaming phases", () => {
     expect(after[0]?.endLine).toBe(4);
     expect(after[0]?.snippet).toContain("Move backups to S3 Glacier.");
     expect(after[0]?.snippet).toContain("Keep retention at 365 days.");
+  });
+
+  it("renders non-zero light-sleep confidence for dreaming-ingested candidates", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    await withDreamingTestClock(async () => {
+      await writeDailyNote(workspaceDir, [
+        `# ${DREAMING_TEST_DAY}`,
+        "",
+        "- Move backups to S3 Glacier.",
+        "- Keep retention at 365 days.",
+      ]);
+
+      const { beforeAgentReply } = createLightDreamingHarness(workspaceDir);
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+
+      const dailyContent = await fs.readFile(
+        path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}.md`),
+        "utf-8",
+      );
+      expect(dailyContent).toContain("## Light Sleep");
+      expect(dailyContent).toContain("confidence: 0.62");
+      expect(dailyContent).not.toContain("confidence: 0.00");
+    });
   });
 
   it("checkpoints session transcript ingestion and skips unchanged transcripts", async () => {
@@ -1447,5 +1493,84 @@ describe("memory-core dreaming phases", () => {
       lightHits: 1,
       remHits: 1,
     });
+  });
+
+  it("passes staged light-dreaming snippets into the narrative pipeline", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const subagent = createMockNarrativeSubagent("The backup plan glowed like cold storage.");
+    const { beforeAgentReply } = createHarness(LIGHT_DREAMING_TEST_CONFIG, workspaceDir, subagent);
+
+    await withDreamingTestClock(async () => {
+      await writeDailyNote(workspaceDir, [
+        `# ${DREAMING_TEST_DAY}`,
+        "",
+        "- Move backups to S3 Glacier.",
+        "- Keep retention at 365 days.",
+      ]);
+
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+    });
+
+    expect(subagent.run).toHaveBeenCalledTimes(1);
+    const firstRun = subagent.run.mock.calls[0]?.[0];
+    expect(firstRun?.message).toContain("Move backups to S3 Glacier.");
+    expect(firstRun?.message).toContain("Keep retention at 365 days.");
+    await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).resolves.toContain(
+      "The backup plan glowed like cold storage.",
+    );
+  });
+
+  it("passes rem-dreaming snippets into the narrative pipeline", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const subagent = createMockNarrativeSubagent("The traces braided themselves into a map.");
+    const { beforeAgentReply } = createHarness(
+      {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: {
+                    rem: {
+                      enabled: true,
+                      limit: 10,
+                      lookbackDays: 7,
+                      minPatternStrength: 0,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+      subagent,
+    );
+
+    await withDreamingTestClock(async () => {
+      await writeDailyNote(workspaceDir, [
+        `# ${DREAMING_TEST_DAY}`,
+        "",
+        "- Move backups to S3 Glacier.",
+        "- Keep retention at 365 days.",
+        "- Rotate access keys after the audit.",
+      ]);
+
+      setDreamingTestTime(5);
+      await beforeAgentReply(
+        { cleanedBody: "__openclaw_memory_core_rem_sleep__" },
+        { trigger: "heartbeat", workspaceDir },
+      );
+    });
+
+    expect(subagent.run).toHaveBeenCalledTimes(1);
+    const firstRun = subagent.run.mock.calls[0]?.[0];
+    expect(firstRun?.message).toContain("Move backups to S3 Glacier.");
+    expect(firstRun?.message).toContain("Keep retention at 365 days.");
+    await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).resolves.toContain(
+      "The traces braided themselves into a map.",
+    );
   });
 });

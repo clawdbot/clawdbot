@@ -43,7 +43,7 @@ function shouldClearSocketRefAfterSendFailure(err: unknown): boolean {
   return /closed|reset|disconnect|no active socket/i.test(formatError(err));
 }
 
-export async function monitorWebInbox(options: {
+export type MonitorWebInboxOptions = {
   verbose: boolean;
   accountId: string;
   authDir: string;
@@ -71,13 +71,16 @@ export async function monitorWebInbox(options: {
   };
   /** Abort in-flight reconnect waits when shutdown becomes terminal. */
   disconnectRetryAbortSignal?: AbortSignal;
-}) {
+};
+
+export async function attachWebInboxToSocket(
+  options: MonitorWebInboxOptions & {
+    sock: WASocket;
+  },
+) {
   const inboundLogger = getChildLogger({ module: "web-inbound" });
   const inboundConsoleLog = createSubsystemLogger("gateway/channels/whatsapp").child("inbound");
-  const sock = await createWaSocket(false, options.verbose, {
-    authDir: options.authDir,
-  });
-  await waitForWaConnection(sock);
+  const sock = options.sock;
   const connectedAtMs = Date.now();
   if (options.socketRef) {
     options.socketRef.current = sock;
@@ -653,4 +656,15 @@ export async function monitorWebInbox(options: {
     // IPC surface (sendMessage/sendPoll/sendReaction/sendComposingTo)
     ...sendApi,
   } as const;
+}
+
+export async function monitorWebInbox(options: MonitorWebInboxOptions) {
+  const sock = await createWaSocket(false, options.verbose, {
+    authDir: options.authDir,
+  });
+  await waitForWaConnection(sock);
+  return attachWebInboxToSocket({
+    ...options,
+    sock,
+  });
 }

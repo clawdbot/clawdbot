@@ -64,11 +64,11 @@ describe("startQaGatewayRpcClient", () => {
     const client = await startQaGatewayRpcClient({
       wsUrl: "ws://127.0.0.1:18789",
       token: "qa-token",
-      logs: () => "qa logs",
+      logs: () => "OPENCLAW_GATEWAY_TOKEN=secret-token\nAuthorization: Bearer secret+/token=123456",
     });
 
     await expect(client.request("health")).rejects.toThrow(
-      "gateway not connected\nGateway logs:\nqa logs",
+      "gateway not connected\nGateway logs:\nOPENCLAW_GATEWAY_TOKEN=<redacted>\nAuthorization: Bearer <redacted>",
     );
   });
 
@@ -76,13 +76,93 @@ describe("startQaGatewayRpcClient", () => {
     const client = await startQaGatewayRpcClient({
       wsUrl: "ws://127.0.0.1:18789",
       token: "qa-token",
-      logs: () => "qa logs",
+      logs: () => "url=http://127.0.0.1:18789/#token=abc123",
     });
 
     await client.stop();
 
     await expect(client.request("health")).rejects.toThrow(
-      "gateway rpc client already stopped\nGateway logs:\nqa logs",
+      "gateway rpc client already stopped\nGateway logs:\nurl=http://127.0.0.1:18789/#token=<redacted>",
     );
+  });
+
+  it("does not serialize requests across different gateway clients", async () => {
+    let resolveFirst: ((value: { ok: boolean }) => void) | null = null;
+    gatewayRpcMock.callGatewayFromCli
+      .mockImplementationOnce(
+        async () =>
+          await new Promise<{ ok: boolean }>((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockResolvedValueOnce({ ok: true });
+
+    const firstClient = await startQaGatewayRpcClient({
+      wsUrl: "ws://127.0.0.1:18789",
+      token: "qa-token-a",
+      logs: () => "qa logs a",
+    });
+    const secondClient = await startQaGatewayRpcClient({
+      wsUrl: "ws://127.0.0.1:28789",
+      token: "qa-token-b",
+      logs: () => "qa logs b",
+    });
+
+    const firstRequest = firstClient.request("health");
+    await Promise.resolve();
+
+    await expect(secondClient.request("status")).resolves.toEqual({ ok: true });
+    expect(gatewayRpcMock.callGatewayFromCli).toHaveBeenNthCalledWith(
+      2,
+      "status",
+      {
+        url: "ws://127.0.0.1:28789",
+        token: "qa-token-b",
+        timeout: "20000",
+        expectFinal: undefined,
+        json: true,
+      },
+      {},
+      {
+        expectFinal: undefined,
+        progress: false,
+      },
+    );
+
+    expect(resolveFirst).not.toBeNull();
+    resolveFirst!({ ok: true });
+    await expect(firstRequest).resolves.toEqual({ ok: true });
+  });
+
+  it("still serializes requests within the same gateway client", async () => {
+    let releaseFirst: (() => void) | null = null;
+    gatewayRpcMock.callGatewayFromCli
+      .mockImplementationOnce(
+        async () =>
+          await new Promise<{ ok: boolean }>((resolve) => {
+            releaseFirst = () => resolve({ ok: true });
+          }),
+      )
+      .mockResolvedValueOnce({ ok: true });
+
+    const client = await startQaGatewayRpcClient({
+      wsUrl: "ws://127.0.0.1:18789",
+      token: "qa-token",
+      logs: () => "qa logs",
+    });
+
+    const firstRequest = client.request("health");
+    await Promise.resolve();
+    const secondRequest = client.request("status");
+    await Promise.resolve();
+
+    expect(gatewayRpcMock.callGatewayFromCli).toHaveBeenCalledTimes(1);
+
+    expect(releaseFirst).not.toBeNull();
+    releaseFirst!();
+
+    await expect(firstRequest).resolves.toEqual({ ok: true });
+    await expect(secondRequest).resolves.toEqual({ ok: true });
+    expect(gatewayRpcMock.callGatewayFromCli).toHaveBeenCalledTimes(2);
   });
 });

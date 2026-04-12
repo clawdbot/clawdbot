@@ -6,9 +6,11 @@ import { startQaLabServer } from "./lab-server.js";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
 import { startQaMockOpenAiServer } from "./mock-openai-server.js";
 import type { QaThinkingLevel } from "./qa-gateway-config.js";
+import { createQaTransportAdapter, type QaTransportId } from "./qa-transport-registry.js";
 
 type QaManualLaneParams = {
   repoRoot: string;
+  transportId?: QaTransportId;
   providerMode: "mock-openai" | "live-frontier";
   primaryModel: string;
   alternateModel: string;
@@ -48,6 +50,10 @@ export async function runQaManualLane(params: QaManualLaneParams) {
     repoRoot: params.repoRoot,
     embeddedGateway: "disabled",
   });
+  const transport = createQaTransportAdapter({
+    id: params.transportId ?? "qa-channel",
+    state: lab.state,
+  });
   const mock =
     params.providerMode === "mock-openai"
       ? await startQaMockOpenAiServer({
@@ -58,7 +64,8 @@ export async function runQaManualLane(params: QaManualLaneParams) {
   const gateway = await startQaGatewayChild({
     repoRoot: params.repoRoot,
     providerBaseUrl: mock ? `${mock.baseUrl}/v1` : undefined,
-    qaBusBaseUrl: lab.listenUrl,
+    transport,
+    transportBaseUrl: lab.listenUrl,
     providerMode: params.providerMode,
     primaryModel: params.primaryModel,
     alternateModel: params.alternateModel,
@@ -74,6 +81,9 @@ export async function runQaManualLane(params: QaManualLaneParams) {
     timeoutMs: params.timeoutMs,
   });
   try {
+    const delivery = transport.buildAgentDelivery({
+      target: "dm:qa-operator",
+    });
     const started = (await gateway.call(
       "agent",
       {
@@ -82,10 +92,10 @@ export async function runQaManualLane(params: QaManualLaneParams) {
         sessionKey: `agent:qa:manual:${sessionSuffix}`,
         message: params.message,
         deliver: true,
-        channel: "qa-channel",
+        channel: delivery.channel,
         to: "dm:qa-operator",
-        replyChannel: "qa-channel",
-        replyTo: "dm:qa-operator",
+        replyChannel: delivery.replyChannel,
+        replyTo: delivery.replyTo,
       },
       { timeoutMs: 30_000 },
     )) as { runId?: string };

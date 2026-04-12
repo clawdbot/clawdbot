@@ -172,6 +172,9 @@ export function createSessionActions(context: SessionActionContext) {
     if (entry?.verboseLevel !== undefined) {
       next.verboseLevel = entry.verboseLevel;
     }
+    if (entry?.traceLevel !== undefined) {
+      next.traceLevel = entry.traceLevel;
+    }
     if (entry?.reasoningLevel !== undefined) {
       next.reasoningLevel = entry.reasoningLevel;
     }
@@ -292,11 +295,13 @@ export function createSessionActions(context: SessionActionContext) {
         thinkingLevel?: string;
         fastMode?: boolean;
         verboseLevel?: string;
+        traceLevel?: string;
       };
       state.currentSessionId = typeof record.sessionId === "string" ? record.sessionId : null;
       state.sessionInfo.thinkingLevel = record.thinkingLevel ?? state.sessionInfo.thinkingLevel;
       state.sessionInfo.fastMode = record.fastMode ?? state.sessionInfo.fastMode;
       state.sessionInfo.verboseLevel = record.verboseLevel ?? state.sessionInfo.verboseLevel;
+      state.sessionInfo.traceLevel = record.traceLevel ?? state.sessionInfo.traceLevel;
       const showTools = (state.sessionInfo.verboseLevel ?? "off") !== "off";
       chatLog.clearAll();
       btw.clear();

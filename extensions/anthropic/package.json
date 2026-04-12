@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/anthropic-provider",
-  "version": "2026.4.11",
+  "version": "2026.4.12",
   "private": true,
   "description": "OpenClaw Anthropic provider plugin",
   "type": "module",

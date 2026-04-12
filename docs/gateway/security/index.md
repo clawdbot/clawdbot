@@ -730,15 +730,16 @@ Recommendations:
 
 ## Reasoning & verbose output in groups
 
-`/reasoning` and `/verbose` can expose internal reasoning or tool output that
+`/reasoning`, `/verbose`, and `/trace` can expose internal reasoning, tool
+output, or plugin diagnostics that
 was not meant for a public channel. In group settings, treat them as **debug
 only** and keep them off unless you explicitly need them.
 
 Guidance:
 
-- Keep `/reasoning` and `/verbose` disabled in public rooms.
+- Keep `/reasoning`, `/verbose`, and `/trace` disabled in public rooms.
 - If you enable them, do so only in trusted DMs or tightly controlled rooms.
-- Remember: verbose output can include tool args, URLs, and data the model saw.
+- Remember: verbose and trace output can include tool args, URLs, plugin diagnostics, and data the model saw.
 
 ## Configuration Hardening (examples)
 

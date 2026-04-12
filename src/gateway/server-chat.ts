@@ -546,6 +546,7 @@ export function createAgentEventHandler({
       thinkingLevel: row?.thinkingLevel,
       fastMode: row?.fastMode,
       verboseLevel: row?.verboseLevel,
+      traceLevel: row?.traceLevel,
       reasoningLevel: row?.reasoningLevel,
       elevatedLevel: row?.elevatedLevel,
       sendPolicy: row?.sendPolicy,

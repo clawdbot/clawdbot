@@ -337,6 +337,21 @@ const invokeAgentsListAuthed = async (params: { sessionKey?: string } = {}) =>
     sessionKey: params.sessionKey,
   });
 
+const invokeAgentsListBearer = async () =>
+  await postToolsInvoke({
+    port: sharedPort,
+    headers: {
+      authorization: "Bearer secret",
+      "content-type": "application/json",
+    },
+    body: {
+      tool: "agents_list",
+      action: "json",
+      args: {},
+      sessionKey: "main",
+    },
+  });
+
 const invokeToolAuthed = async (params: {
   tool: string;
   args?: Record<string, unknown>;
@@ -453,19 +468,7 @@ describe("POST /tools/invoke", () => {
       method: "token",
     });
 
-    const res = await postToolsInvoke({
-      port: sharedPort,
-      headers: {
-        authorization: "Bearer secret",
-        "content-type": "application/json",
-      },
-      body: {
-        tool: "agents_list",
-        action: "json",
-        args: {},
-        sessionKey: "main",
-      },
-    });
+    const res = await invokeAgentsListBearer();
 
     const body = await expectOkInvokeResponse(res);
     expect(body.result).toEqual({ ok: true, result: [] });
@@ -802,19 +805,7 @@ describe("POST /tools/invoke", () => {
       method: "token",
     });
 
-    const res = await postToolsInvoke({
-      port: sharedPort,
-      headers: {
-        authorization: "Bearer secret",
-        "content-type": "application/json",
-      },
-      body: {
-        tool: "agents_list",
-        action: "json",
-        args: {},
-        sessionKey: "main",
-      },
-    });
+    const res = await invokeAgentsListBearer();
 
     const body = await expectOkInvokeResponse(res);
     expect(body.result).toEqual({ ok: true, result: [] });

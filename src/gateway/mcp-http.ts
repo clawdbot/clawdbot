@@ -23,6 +23,14 @@ export {
   getActiveMcpLoopbackRuntime,
 } from "./mcp-http.loopback-runtime.js";
 
+type McpLoopbackServer = {
+  port: number;
+  close: () => Promise<void>;
+};
+
+let activeMcpLoopbackServer: McpLoopbackServer | undefined;
+let activeMcpLoopbackServerPromise: Promise<McpLoopbackServer> | null = null;
+
 export async function startMcpLoopbackServer(port = 0): Promise<{
   port: number;
   close: () => Promise<void>;
@@ -98,13 +106,16 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
   setActiveMcpLoopbackRuntime({ port: address.port, token });
   logDebug(`mcp loopback listening on 127.0.0.1:${address.port}`);
 
-  return {
+  const server: McpLoopbackServer = {
     port: address.port,
     close: () =>
       new Promise<void>((resolve, reject) => {
         httpServer.close((error) => {
           if (!error) {
             clearActiveMcpLoopbackRuntime(token);
+            if (activeMcpLoopbackServer === server) {
+              activeMcpLoopbackServer = undefined;
+            }
           }
           if (error) {
             reject(error);
@@ -114,4 +125,33 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
         });
       }),
   };
+  return server;
+}
+
+export async function ensureMcpLoopbackServer(port = 0): Promise<McpLoopbackServer> {
+  if (activeMcpLoopbackServer) {
+    return activeMcpLoopbackServer;
+  }
+  if (!activeMcpLoopbackServerPromise) {
+    activeMcpLoopbackServerPromise = startMcpLoopbackServer(port)
+      .then((server) => {
+        activeMcpLoopbackServer = server;
+        return server;
+      })
+      .finally(() => {
+        activeMcpLoopbackServerPromise = null;
+      });
+  }
+  return activeMcpLoopbackServerPromise;
+}
+
+export async function closeMcpLoopbackServer(): Promise<void> {
+  const server =
+    activeMcpLoopbackServer ??
+    (activeMcpLoopbackServerPromise ? await activeMcpLoopbackServerPromise : undefined);
+  if (!server) {
+    return;
+  }
+  activeMcpLoopbackServer = undefined;
+  await server.close();
 }

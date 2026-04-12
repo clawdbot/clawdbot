@@ -1,5 +1,5 @@
 ---
-summary: "Directive syntax for /think, /fast, /verbose, and reasoning visibility"
+summary: "Directive syntax for /think, /fast, /verbose, /trace, and reasoning visibility"
 read_when:
   - Adjusting thinking, fast-mode, or verbose directive parsing or defaults
 title: "Thinking Levels"
@@ -71,6 +71,15 @@ title: "Thinking Levels"
 - When verbose is on, agents that emit structured tool results (Pi, other JSON agents) send each tool call back as its own metadata-only message, prefixed with `<emoji> <tool-name>: <arg>` when available (path/command). These tool summaries are sent as soon as each tool starts (separate bubbles), not as streaming deltas.
 - Tool failure summaries remain visible in normal mode, but raw error detail suffixes are hidden unless verbose is `on` or `full`.
 - When verbose is `full`, tool outputs are also forwarded after completion (separate bubble, truncated to a safe length). If you toggle `/verbose on|full|off` while a run is in-flight, subsequent tool bubbles honor the new setting.
+
+## Plugin trace directives (/trace)
+
+- Levels: `on` | `off` (default).
+- Directive-only message toggles session plugin trace output and replies `Plugin trace enabled.` / `Plugin trace disabled.`.
+- Inline directive affects only that message; session/global defaults apply otherwise.
+- Send `/trace` (or `/trace:`) with no argument to see the current trace level.
+- `/trace` is narrower than `/verbose`: it only exposes plugin-owned trace/debug lines such as Active Memory debug summaries.
+- Trace lines can appear in `/status` and as a follow-up diagnostic message after the normal assistant reply.
 
 ## Reasoning visibility (/reasoning)
 

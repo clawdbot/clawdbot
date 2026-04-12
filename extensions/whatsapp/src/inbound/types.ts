@@ -1,11 +1,38 @@
 import type { AnyMessageContent } from "@whiskeysockets/baileys";
 import type { NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
+import type { PollInput } from "openclaw/plugin-sdk/media-runtime";
 import type { WhatsAppIdentity, WhatsAppReplyContext, WhatsAppSelfIdentity } from "../identity.js";
 
 export type WebListenerCloseReason = {
   status?: number;
   isLoggedOut: boolean;
   error?: unknown;
+};
+
+export type ActiveWebSendOptions = {
+  gifPlayback?: boolean;
+  accountId?: string;
+  fileName?: string;
+};
+
+export type ActiveWebListener = {
+  sendMessage: (
+    to: string,
+    text: string,
+    mediaBuffer?: Buffer,
+    mediaType?: string,
+    options?: ActiveWebSendOptions,
+  ) => Promise<{ messageId: string }>;
+  sendPoll: (to: string, poll: PollInput) => Promise<{ messageId: string }>;
+  sendReaction: (
+    chatJid: string,
+    messageId: string,
+    emoji: string,
+    fromMe: boolean,
+    participant?: string,
+  ) => Promise<void>;
+  sendComposingTo: (to: string) => Promise<void>;
+  close?: () => Promise<void>;
 };
 
 export type WebInboundMessage = {

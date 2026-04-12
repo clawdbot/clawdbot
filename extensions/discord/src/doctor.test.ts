@@ -8,7 +8,7 @@ import {
 } from "./doctor.js";
 
 describe("discord doctor", () => {
-  it("leaves legacy discord streaming aliases untouched during doctor normalization", () => {
+  it("normalizes legacy discord streaming aliases for runtime config", () => {
     const normalize = discordDoctor.normalizeCompatibilityConfig;
     expect(normalize).toBeDefined();
     if (!normalize) {
@@ -39,22 +39,39 @@ describe("discord doctor", () => {
     });
 
     expect(result.config.channels?.discord).toEqual({
-      streamMode: "block",
-      chunkMode: "newline",
-      blockStreaming: true,
-      draftChunk: {
-        minChars: 120,
+      streaming: {
+        mode: "block",
+        chunkMode: "newline",
+        block: {
+          enabled: true,
+        },
+        preview: {
+          chunk: {
+            minChars: 120,
+          },
+        },
       },
       accounts: {
         work: {
-          streaming: false,
-          blockStreamingCoalesce: {
-            idleMs: 250,
+          streaming: {
+            mode: "off",
+            block: {
+              coalesce: {
+                idleMs: 250,
+              },
+            },
           },
         },
       },
     });
-    expect(result.changes).toEqual([]);
+    expect(result.changes).toEqual([
+      "Moved channels.discord.streamMode → channels.discord.streaming.mode (block).",
+      "Moved channels.discord.chunkMode → channels.discord.streaming.chunkMode.",
+      "Moved channels.discord.blockStreaming → channels.discord.streaming.block.enabled.",
+      "Moved channels.discord.draftChunk → channels.discord.streaming.preview.chunk.",
+      "Moved channels.discord.accounts.work.streaming (boolean) → channels.discord.accounts.work.streaming.mode (off).",
+      "Moved channels.discord.accounts.work.blockStreamingCoalesce → channels.discord.accounts.work.streaming.block.coalesce.",
+    ]);
   });
 
   it("moves account voice.tts.edge into providers.microsoft", () => {

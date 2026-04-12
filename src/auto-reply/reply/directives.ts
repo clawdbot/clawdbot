@@ -1,11 +1,12 @@
 import { escapeRegExp } from "../../utils.js";
-import type { NoticeLevel, ReasoningLevel } from "../thinking.js";
+import type { NoticeLevel, ReasoningLevel, TraceLevel } from "../thinking.js";
 import {
   type ElevatedLevel,
   normalizeFastMode,
   normalizeElevatedLevel,
   normalizeNoticeLevel,
   normalizeReasoningLevel,
+  normalizeTraceLevel,
   normalizeThinkLevel,
   normalizeVerboseLevel,
   type ThinkLevel,
@@ -125,6 +126,24 @@ export function extractVerboseDirective(body?: string): {
   };
 }
 
+export function extractTraceDirective(body?: string): {
+  cleaned: string;
+  traceLevel?: TraceLevel;
+  rawLevel?: string;
+  hasDirective: boolean;
+} {
+  if (!body) {
+    return { cleaned: "", hasDirective: false };
+  }
+  const extracted = extractLevelDirective(body, ["trace"], normalizeTraceLevel);
+  return {
+    cleaned: extracted.cleaned,
+    traceLevel: extracted.level,
+    rawLevel: extracted.rawLevel,
+    hasDirective: extracted.hasDirective,
+  };
+}
+
 export function extractFastDirective(body?: string): {
   cleaned: string;
   fastMode?: boolean;
@@ -207,5 +226,5 @@ export function extractStatusDirective(body?: string): {
   return extractSimpleDirective(body, ["status"]);
 }
 
-export type { ElevatedLevel, NoticeLevel, ReasoningLevel, ThinkLevel, VerboseLevel };
+export type { ElevatedLevel, NoticeLevel, ReasoningLevel, ThinkLevel, TraceLevel, VerboseLevel };
 export { extractExecDirective } from "./exec/directive.js";

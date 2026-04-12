@@ -116,7 +116,7 @@ describe("qa-lab server", () => {
     expect(bootstrap.scenarios.length).toBeGreaterThanOrEqual(10);
     expect(bootstrap.scenarios.some((scenario) => scenario.id === "dm-chat-baseline")).toBe(true);
     expect(bootstrap.runner.status).toBe("idle");
-    expect(bootstrap.runner.selection.providerMode).toBe("mock-openai");
+    expect(bootstrap.runner.selection.providerMode).toBe("live-frontier");
     expect(bootstrap.runner.selection.scenarioIds).toHaveLength(bootstrap.scenarios.length);
 
     const messageResponse = await fetch(`${lab.baseUrl}/api/inbound/message`, {

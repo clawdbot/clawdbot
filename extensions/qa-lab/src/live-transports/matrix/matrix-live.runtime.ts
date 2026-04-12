@@ -324,7 +324,11 @@ export async function runMatrixQaLive(params: {
   try {
     gatewayHarness = await startQaLiveLaneGateway({
       repoRoot,
-      qaBusBaseUrl: "http://127.0.0.1:43123",
+      transport: {
+        requiredPluginIds: [],
+        createGatewayConfig: () => ({}),
+      },
+      transportBaseUrl: "http://127.0.0.1:43123",
       providerMode,
       primaryModel,
       alternateModel,

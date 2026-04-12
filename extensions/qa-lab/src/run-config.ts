@@ -38,19 +38,21 @@ export function defaultQaModelForMode(mode: QaProviderMode, alternate = false) {
 }
 
 export function createDefaultQaRunSelection(scenarios: QaSeedScenario[]): QaLabRunSelection {
-  const providerMode: QaProviderMode = "mock-openai";
+  const providerMode: QaProviderMode = "live-frontier";
   return {
     providerMode,
     primaryModel: defaultQaModelForMode(providerMode),
     alternateModel: defaultQaModelForMode(providerMode, true),
-    fastMode: false,
+    fastMode: true,
     scenarioIds: scenarios.map((scenario) => scenario.id),
   };
 }
 
 export function normalizeQaProviderMode(input: unknown): QaProviderMode {
   return normalizeQaProviderModeInput(
-    input === "live-frontier" || input === "live-openai" ? input : "mock-openai",
+    input === "mock-openai" || input === "live-frontier" || input === "live-openai"
+      ? input
+      : "live-frontier",
   );
 }
 

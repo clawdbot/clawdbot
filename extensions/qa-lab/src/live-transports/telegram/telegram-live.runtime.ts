@@ -838,7 +838,11 @@ export async function runTelegramQaLive(params: {
 
   const gatewayHarness = await startQaLiveLaneGateway({
     repoRoot,
-    qaBusBaseUrl: "http://127.0.0.1:43123",
+    transport: {
+      requiredPluginIds: [],
+      createGatewayConfig: () => ({}),
+    },
+    transportBaseUrl: "http://127.0.0.1:0",
     providerMode,
     primaryModel,
     alternateModel,

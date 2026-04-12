@@ -28,7 +28,13 @@ async function stopQaLiveLaneResources(resources: {
 
 export async function startQaLiveLaneGateway(params: {
   repoRoot: string;
-  qaBusBaseUrl: string;
+  transport: {
+    requiredPluginIds: readonly string[];
+    createGatewayConfig: (params: {
+      baseUrl: string;
+    }) => Pick<OpenClawConfig, "channels" | "messages">;
+  };
+  transportBaseUrl: string;
   controlUiAllowedOrigins?: string[];
   providerMode: "mock-openai" | "live-frontier";
   primaryModel: string;
@@ -50,8 +56,8 @@ export async function startQaLiveLaneGateway(params: {
     const gateway = await startQaGatewayChild({
       repoRoot: params.repoRoot,
       providerBaseUrl: mock ? `${mock.baseUrl}/v1` : undefined,
-      qaBusBaseUrl: params.qaBusBaseUrl,
-      includeQaChannel: false,
+      transport: params.transport,
+      transportBaseUrl: params.transportBaseUrl,
       controlUiAllowedOrigins: params.controlUiAllowedOrigins,
       providerMode: params.providerMode,
       primaryModel: params.primaryModel,

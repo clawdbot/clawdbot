@@ -1,6 +1,7 @@
 export {
   extractElevatedDirective,
   extractReasoningDirective,
+  extractTraceDirective,
   extractThinkDirective,
   extractVerboseDirective,
 } from "./reply/directives.js";

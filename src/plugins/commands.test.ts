@@ -265,6 +265,23 @@ describe("registerPluginCommand", () => {
     ]);
   });
 
+  it("matches underscore aliases for hyphenated command names", () => {
+    registerPluginCommand("demo-plugin", {
+      name: "active-memory",
+      description: "Active Memory command",
+      acceptsArgs: true,
+      handler: async () => ({ text: "ok" }),
+    });
+
+    expect(matchPluginCommand("/active_memory status")).toMatchObject({
+      command: expect.objectContaining({
+        name: "active-memory",
+        pluginId: "demo-plugin",
+      }),
+      args: "status",
+    });
+  });
+
   it("supports provider-specific native command aliases", () => {
     const result = registerVoiceCommandForTest({
       nativeNames: {

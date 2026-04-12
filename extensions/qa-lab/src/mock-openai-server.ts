@@ -27,6 +27,7 @@ type MockOpenAiRequestSnapshot = {
   body: Record<string, unknown>;
   prompt: string;
   allInputText: string;
+  instructions?: string;
   toolOutput: string;
   model: string;
   imageInputCount: number;
@@ -181,6 +182,23 @@ function extractAllInputTexts(input: ResponsesInputItem[]) {
   return texts.join("\n");
 }
 
+function extractInstructionsText(body: Record<string, unknown>) {
+  return typeof body.instructions === "string" ? body.instructions.trim() : "";
+}
+
+function extractAllRequestTexts(input: ResponsesInputItem[], body: Record<string, unknown>) {
+  const texts: string[] = [];
+  const instructions = extractInstructionsText(body);
+  if (instructions) {
+    texts.push(instructions);
+  }
+  const inputText = extractAllInputTexts(input);
+  if (inputText) {
+    texts.push(inputText);
+  }
+  return texts.join("\n");
+}
+
 function countImageInputs(input: ResponsesInputItem[]) {
   let count = 0;
   for (const item of input) {
@@ -320,6 +338,33 @@ function extractOrbitCode(text: string) {
   return /\bORBIT-\d+\b/i.exec(text)?.[0]?.toUpperCase() ?? null;
 }
 
+function decodeXmlEntities(text: string) {
+  return text
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&amp;", "&")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&#39;", "'");
+}
+
+function extractActiveMemorySummary(text: string) {
+  const match = /<active_memory_plugin>\s*([\s\S]*?)\s*<\/active_memory_plugin>/i.exec(text);
+  return match?.[1] ? decodeXmlEntities(match[1]).trim() : null;
+}
+
+function isActiveMemorySubagentPrompt(text: string) {
+  return text.includes("You are a memory search agent.");
+}
+
+function extractSnackPreference(text: string) {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  const match =
+    /(lemon pepper wings(?:\s+with\s+blue cheese)?|blue cheese(?:\s+with\s+lemon pepper wings)?)/i.exec(
+      normalized,
+    );
+  return match?.[0]?.trim() ?? null;
+}
+
 function extractLastCapture(text: string, pattern: RegExp) {
   let lastMatch: RegExpExecArray | null = null;
   const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
@@ -355,7 +400,7 @@ function buildAssistantText(input: ResponsesInputItem[], body: Record<string, un
   const toolOutput = extractToolOutput(input);
   const toolJson = parseToolOutputJson(toolOutput);
   const userTexts = extractAllUserTexts(input);
-  const allInputText = extractAllInputTexts(input);
+  const allInputText = extractAllRequestTexts(input, body);
   const rememberedFact = extractRememberedFact(userTexts);
   const model = typeof body.model === "string" ? body.model : "";
   const memorySnippet =
@@ -369,6 +414,8 @@ function buildAssistantText(input: ResponsesInputItem[], body: Record<string, un
   const exactReplyDirective = extractExactReplyDirective(allInputText);
   const exactMarkerDirective = extractExactMarkerDirective(allInputText);
   const imageInputCount = countImageInputs(input);
+  const activeMemorySummary = extractActiveMemorySummary(allInputText);
+  const snackPreference = extractSnackPreference(activeMemorySummary ?? memorySnippet);
 
   if (/what was the qa canary code/i.test(prompt) && rememberedFact) {
     return `Protocol note: the QA canary code was ${rememberedFact}.`;
@@ -399,6 +446,12 @@ function buildAssistantText(input: ResponsesInputItem[], body: Record<string, un
   }
   if (/memory tools check/i.test(prompt) && orbitCode) {
     return `Protocol note: I checked memory and the project codename is ${orbitCode}.`;
+  }
+  if (/silent snack recall check/i.test(prompt) && snackPreference) {
+    return `Protocol note: you usually want ${snackPreference} for QA movie night.`;
+  }
+  if (/silent snack recall check/i.test(prompt)) {
+    return "Protocol note: I do not have enough context to say what you usually want for QA movie night.";
   }
   if (/tool continuity check/i.test(prompt) && toolOutput) {
     return `Protocol note: model switch handoff confirmed on ${model || "the requested model"}. QA mission from QA_KICKOFF_TASK.md still applies: understand this OpenClaw repo from source + docs before acting.`;
@@ -531,7 +584,7 @@ async function buildResponsesPayload(body: Record<string, unknown>) {
   const prompt = extractLastUserText(input);
   const toolOutput = extractToolOutput(input);
   const toolJson = parseToolOutputJson(toolOutput);
-  const allInputText = extractAllInputTexts(input);
+  const allInputText = extractAllRequestTexts(input, body);
   const isGroupChat = allInputText.includes('"is_group_chat": true');
   const isBaselineUnmentionedChannelChatter = /\bno bot ping here\b/i.test(prompt);
   if (isHeartbeatPrompt(prompt)) {
@@ -590,6 +643,48 @@ async function buildResponsesPayload(body: Record<string, unknown>) {
         lines: 4,
       });
     }
+  }
+  if (
+    isActiveMemorySubagentPrompt(allInputText) &&
+    /silent snack recall check/i.test(allInputText)
+  ) {
+    if (!toolOutput) {
+      return buildToolCallEventsWithArgs("memory_search", {
+        query: "QA movie night snack lemon pepper wings blue cheese",
+        maxResults: 3,
+      });
+    }
+    const results = Array.isArray(toolJson?.results)
+      ? (toolJson.results as Array<Record<string, unknown>>)
+      : [];
+    const first = results[0];
+    if (
+      typeof first?.path === "string" &&
+      (typeof first.startLine === "number" || typeof first.endLine === "number")
+    ) {
+      const from =
+        typeof first.startLine === "number"
+          ? Math.max(1, first.startLine)
+          : typeof first.endLine === "number"
+            ? Math.max(1, first.endLine)
+            : 1;
+      return buildToolCallEventsWithArgs("memory_get", {
+        path: first.path,
+        from,
+        lines: 4,
+      });
+    }
+    const memorySnippet =
+      typeof toolJson?.text === "string"
+        ? toolJson.text
+        : Array.isArray(toolJson?.results)
+          ? JSON.stringify(toolJson.results)
+          : toolOutput;
+    const snackPreference = extractSnackPreference(memorySnippet);
+    if (snackPreference) {
+      return buildAssistantEvents(`User usually wants ${snackPreference} for QA movie night.`);
+    }
+    return buildAssistantEvents("NONE");
   }
   if (/session memory ranking check/i.test(prompt)) {
     if (!toolOutput) {
@@ -798,7 +893,8 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
         raw,
         body,
         prompt: extractLastUserText(input),
-        allInputText: extractAllInputTexts(input),
+        allInputText: extractAllRequestTexts(input, body),
+        instructions: extractInstructionsText(body) || undefined,
         toolOutput: extractToolOutput(input),
         model: typeof body.model === "string" ? body.model : "",
         imageInputCount: countImageInputs(input),

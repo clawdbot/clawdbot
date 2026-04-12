@@ -51,6 +51,9 @@ legacy `--mask` collection flags and older MCP tool names when needed.
 - OpenClaw creates collections from your workspace memory files and any
   configured `memory.qmd.paths`, then runs `qmd update` + `qmd embed` on boot
   and periodically (default every 5 minutes).
+- The default workspace collection tracks `MEMORY.md` plus the `memory/`
+  tree. Lowercase `memory.md` remains a bootstrap fallback, not a separate QMD
+  collection.
 - Boot refresh runs in the background so chat startup is not blocked.
 - Searches use the configured `searchMode` (default: `search`; also supports
   `vsearch` and `query`). If a mode fails, OpenClaw retries with `qmd query`.
@@ -114,8 +117,8 @@ collection under `~/.openclaw/agents/<id>/qmd/sessions/`.
 
 ## Search scope
 
-By default, QMD search results are only surfaced in DM sessions (not groups or
-channels). Configure `memory.qmd.scope` to change this:
+By default, QMD search results are surfaced in direct and channel sessions
+(not groups). Configure `memory.qmd.scope` to change this:
 
 ```json5
 {
@@ -164,7 +167,7 @@ with `qmd query "test"` using the same XDG dirs OpenClaw uses.
 Set to `120000` for slower hardware.
 
 **Empty results in group chats?** Check `memory.qmd.scope` -- the default only
-allows DM sessions.
+allows direct and channel sessions.
 
 **Workspace-visible temp repos causing `ENAMETOOLONG` or broken indexing?**
 QMD traversal currently follows the underlying QMD scanner behavior rather than

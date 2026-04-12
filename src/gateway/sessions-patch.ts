@@ -26,7 +26,12 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import { applyVerboseOverride, parseVerboseOverride } from "../sessions/level-overrides.js";
+import {
+  applyTraceOverride,
+  applyVerboseOverride,
+  parseTraceOverride,
+  parseVerboseOverride,
+} from "../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
@@ -271,6 +276,15 @@ export async function applySessionsPatchToStore(params: {
       return invalid(parsed.error);
     }
     applyVerboseOverride(next, parsed.value);
+  }
+
+  if ("traceLevel" in patch) {
+    const raw = patch.traceLevel;
+    const parsed = parseTraceOverride(raw);
+    if (!parsed.ok) {
+      return invalid(parsed.error);
+    }
+    applyTraceOverride(next, parsed.value);
   }
 
   if ("reasoningLevel" in patch) {

@@ -257,4 +257,22 @@ describe("directive behavior", () => {
     expect(reset.sessionEntry.queueDrop).toBeUndefined();
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });
+
+  it("shows current trace level and persists trace directives", async () => {
+    const { text: currentText } = await runDirectiveStatus("/trace", {
+      sessionEntry: { sessionId: "trace", updatedAt: Date.now(), traceLevel: "on" },
+    });
+    expect(currentText).toContain("Current trace level: on");
+
+    const enabled = await runDirectiveStatus("/trace on");
+    expect(enabled.text).toContain("Plugin trace enabled.");
+    expect(enabled.sessionEntry.traceLevel).toBe("on");
+
+    const disabled = await runDirectiveStatus("/trace off", {
+      sessionEntry: { sessionId: "trace", updatedAt: Date.now(), traceLevel: "on" },
+    });
+    expect(disabled.text).toContain("Plugin trace disabled.");
+    expect(disabled.sessionEntry.traceLevel).toBe("off");
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
 });

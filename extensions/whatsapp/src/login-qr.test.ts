@@ -91,4 +91,39 @@ describe("login-qr", () => {
     expect(createWaSocketMock).toHaveBeenCalledTimes(2);
     expect(logoutWebMock).not.toHaveBeenCalled();
   });
+
+  it("clears auth and reports a relink message when WhatsApp is logged out", async () => {
+    waitForWaConnectionMock.mockRejectedValueOnce({
+      output: { statusCode: 401 },
+    });
+
+    const start = await startWebLoginWithQr({ timeoutMs: 5000 });
+    expect(start.qrDataUrl).toBe("data:image/png;base64,base64");
+
+    const result = await waitForWebLogin({ timeoutMs: 5000 });
+
+    expect(result).toEqual({
+      connected: false,
+      message:
+        "WhatsApp reported the session is logged out. Cleared cached web session; please scan a new QR.",
+    });
+    expect(logoutWebMock).toHaveBeenCalledOnce();
+  });
+
+  it("turns unexpected login cleanup failures into a normal login error", async () => {
+    waitForWaConnectionMock.mockRejectedValueOnce({
+      output: { statusCode: 401 },
+    });
+    logoutWebMock.mockRejectedValueOnce(new Error("cleanup failed"));
+
+    const start = await startWebLoginWithQr({ timeoutMs: 5000 });
+    expect(start.qrDataUrl).toBe("data:image/png;base64,base64");
+
+    const result = await waitForWebLogin({ timeoutMs: 5000 });
+
+    expect(result).toEqual({
+      connected: false,
+      message: "WhatsApp login failed: cleanup failed",
+    });
+  });
 });

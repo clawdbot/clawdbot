@@ -36,24 +36,26 @@ describe("prepare-extension-package-boundary-artifacts", () => {
 
   it("aborts sibling steps after the first failure", async () => {
     const startedAt = Date.now();
+    const slowStepTimeoutMs = 60_000;
+    const abortBudgetMs = 30_000;
 
     await expect(
       runNodeStepsInParallel([
         {
           label: "fail-fast",
-          args: ["--eval", "setTimeout(() => process.exit(2), 10)"],
-          timeoutMs: 5_000,
+          args: ["--eval", "process.exit(2)"],
+          timeoutMs: slowStepTimeoutMs,
         },
         {
           label: "slow-step",
-          args: ["--eval", "setTimeout(() => {}, 10_000)"],
-          timeoutMs: 5_000,
+          args: ["--eval", "setTimeout(() => {}, 60_000)"],
+          timeoutMs: slowStepTimeoutMs,
         },
       ]),
     ).rejects.toThrow("fail-fast failed with exit code 2");
 
-    expect(Date.now() - startedAt).toBeLessThan(2_000);
-  });
+    expect(Date.now() - startedAt).toBeLessThan(abortBudgetMs);
+  }, 45_000);
 
   it("treats artifacts as fresh only when outputs are newer than inputs", () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-prep-"));

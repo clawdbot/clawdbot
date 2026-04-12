@@ -10,7 +10,7 @@ export default defineBundledChannelEntry({
     exportName: "qaChannelPlugin",
   },
   runtime: {
-    specifier: "./runtime-api.js",
+    specifier: "./api.js",
     exportName: "setQaChannelRuntime",
   },
 });

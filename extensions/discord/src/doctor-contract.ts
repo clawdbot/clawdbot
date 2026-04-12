@@ -3,7 +3,12 @@ import type {
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { asObjectRecord, normalizeLegacyDmAliases } from "openclaw/plugin-sdk/runtime-doctor";
+import {
+  asObjectRecord,
+  normalizeLegacyDmAliases,
+  normalizeLegacyStreamingAliases,
+} from "openclaw/plugin-sdk/runtime-doctor";
+import { resolveDiscordPreviewStreamMode } from "./preview-streaming.js";
 
 const LEGACY_TTS_PROVIDER_KEYS = ["openai", "elevenlabs", "microsoft", "edge"] as const;
 
@@ -141,6 +146,16 @@ export function normalizeCompatibilityConfig({
   updated = dm.entry;
   changed = changed || dm.changed;
 
+  const streaming = normalizeLegacyStreamingAliases({
+    entry: updated,
+    pathPrefix: "channels.discord",
+    changes,
+    resolvedMode: resolveDiscordPreviewStreamMode(updated),
+    includePreviewChunk: true,
+  });
+  updated = streaming.entry;
+  changed = changed || streaming.changed;
+
   const rawAccounts = asObjectRecord(updated.accounts);
   if (rawAccounts) {
     let accountsChanged = false;
@@ -159,6 +174,15 @@ export function normalizeCompatibilityConfig({
       });
       accountEntry = accountDm.entry;
       accountChanged = accountDm.changed;
+      const accountStreaming = normalizeLegacyStreamingAliases({
+        entry: accountEntry,
+        pathPrefix: `channels.discord.accounts.${accountId}`,
+        changes,
+        resolvedMode: resolveDiscordPreviewStreamMode(accountEntry),
+        includePreviewChunk: true,
+      });
+      accountEntry = accountStreaming.entry;
+      accountChanged = accountChanged || accountStreaming.changed;
       const accountVoice = asObjectRecord(accountEntry.voice);
       if (
         accountVoice &&

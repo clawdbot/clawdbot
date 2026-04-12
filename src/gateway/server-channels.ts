@@ -26,6 +26,7 @@ const CHANNEL_RESTART_POLICY: BackoffPolicy = {
   jitter: 0.1,
 };
 const MAX_RESTART_ATTEMPTS = 10;
+const CHANNEL_STOP_ABORT_TIMEOUT_MS = 5_000;
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -70,6 +71,31 @@ function resolveDefaultRuntime(channelId: ChannelId): ChannelAccountSnapshot {
 
 function cloneDefaultRuntime(channelId: ChannelId, accountId: string): ChannelAccountSnapshot {
   return { ...resolveDefaultRuntime(channelId), accountId };
+}
+
+async function waitForChannelStopGracefully(task: Promise<unknown> | undefined, timeoutMs: number) {
+  if (!task) {
+    return true;
+  }
+  return await new Promise<boolean>((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        resolve(false);
+      }
+    }, timeoutMs);
+    timer.unref?.();
+    const resolveSettled = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      resolve(true);
+    };
+    void task.then(resolveSettled, resolveSettled);
+  });
 }
 
 function applyDescribedAccountFields(
@@ -527,6 +553,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         }
         manuallyStopped.add(restartKey(channelId, id));
         abort?.abort();
+        const log = channelLogs[channelId];
         if (plugin?.gateway?.stopAccount) {
           const account = plugin.config.resolveAccount(cfg, id);
           await plugin.gateway.stopAccount({
@@ -540,10 +567,21 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             setStatus: (next) => setRuntime(channelId, id, next),
           });
         }
-        try {
-          await task;
-        } catch {
-          // ignore
+        const stoppedCleanly = await waitForChannelStopGracefully(
+          task,
+          CHANNEL_STOP_ABORT_TIMEOUT_MS,
+        );
+        if (!stoppedCleanly) {
+          log.warn?.(
+            `[${id}] channel stop exceeded ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms after abort; continuing shutdown`,
+          );
+          setRuntime(channelId, id, {
+            accountId: id,
+            running: true,
+            restartPending: false,
+            lastError: `channel stop timed out after ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms`,
+          });
+          return;
         }
         store.aborts.delete(id);
         store.tasks.delete(id);

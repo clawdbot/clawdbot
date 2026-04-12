@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.4.11",
+  "version": "2026.4.12",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -1425,7 +1425,7 @@
     "@types/node": "25.6.0",
     "@types/qrcode-terminal": "^0.12.2",
     "@types/ws": "^8.18.1",
-    "@typescript/native-preview": "7.0.0-dev.20260410.1",
+    "@typescript/native-preview": "7.0.0-dev.20260412.1",
     "@vitest/coverage-v8": "^4.1.4",
     "jscpd": "4.0.9",
     "jsdom": "^29.0.2",

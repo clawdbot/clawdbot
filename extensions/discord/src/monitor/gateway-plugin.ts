@@ -254,6 +254,23 @@ function createGatewayPlugin(params: {
       super(params.options);
     }
 
+    public override connect(resume = false): void {
+      // Guard against stale heartbeat timers from the @buape/carbon
+      // firstHeartbeatTimeout race (openclaw/openclaw#65009, #64011, #63387).
+      // Parent connect() only calls stopHeartbeat() when isConnecting=false.
+      // If isConnecting=true it returns early — leaving a stale setInterval
+      // that fires with a closed reconnectCallback and crashes the process.
+      if (this.heartbeatInterval !== undefined) {
+        clearInterval(this.heartbeatInterval);
+        this.heartbeatInterval = undefined;
+      }
+      if (this.firstHeartbeatTimeout !== undefined) {
+        clearTimeout(this.firstHeartbeatTimeout);
+        this.firstHeartbeatTimeout = undefined;
+      }
+      super.connect(resume);
+    }
+
     override async registerClient(
       client: Parameters<carbonGateway.GatewayPlugin["registerClient"]>[0],
     ) {

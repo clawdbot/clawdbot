@@ -407,7 +407,9 @@ describe("DiscordVoiceManager", () => {
 
       await manager.join({ guildId: "g1", channelId: "1001" });
 
-      const entry = (manager as unknown as { sessions: Map<string, unknown> }).sessions.get("g1") as
+      const entry = (manager as unknown as { sessions: Map<string, unknown> }).sessions.get(
+        "g1",
+      ) as
         | {
             guildId: string;
             channelId: string;

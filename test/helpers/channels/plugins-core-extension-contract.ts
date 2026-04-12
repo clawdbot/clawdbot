@@ -25,14 +25,17 @@ type SlackContractApiSurface = Pick<
   "listSlackDirectoryPeersFromConfig" | "listSlackDirectoryGroupsFromConfig"
 >;
 type SlackProbe = import("@openclaw/slack/api.js").SlackProbe;
-type TelegramApiSurface = typeof import("@openclaw/telegram/api.js");
+type TelegramContractApiSurface = Pick<
+  typeof import("@openclaw/telegram/contract-api.js"),
+  "listTelegramDirectoryPeersFromConfig" | "listTelegramDirectoryGroupsFromConfig"
+>;
 type TelegramProbe = import("@openclaw/telegram/api.js").TelegramProbe;
 type TelegramTokenResolution = import("@openclaw/telegram/api.js").TelegramTokenResolution;
 type WhatsAppApiSurface = typeof import("@openclaw/whatsapp/api.js");
 
 let discordContractApi: DiscordContractApiSurface | undefined;
 let slackContractApi: SlackContractApiSurface | undefined;
-let telegramApi: TelegramApiSurface | undefined;
+let telegramContractApi: TelegramContractApiSurface | undefined;
 let whatsappApi: WhatsAppApiSurface | undefined;
 
 function getDiscordContractApi(): DiscordContractApiSurface {
@@ -45,9 +48,9 @@ function getSlackContractApi(): SlackContractApiSurface {
   return slackContractApi;
 }
 
-function getTelegramApi(): TelegramApiSurface {
-  telegramApi ??= loadBundledPluginApiSync<TelegramApiSurface>("telegram");
-  return telegramApi;
+function getTelegramContractApi(): TelegramContractApiSurface {
+  telegramContractApi ??= loadBundledPluginContractApiSync<TelegramContractApiSurface>("telegram");
+  return telegramContractApi;
 }
 
 function getWhatsAppApi(): WhatsAppApiSurface {
@@ -261,8 +264,8 @@ export function describeSlackPluginsCoreExtensionContract() {
 
 export function describeTelegramPluginsCoreExtensionContract() {
   describe("telegram plugins-core extension contract", () => {
-    const listPeers = () => getTelegramApi().listTelegramDirectoryPeersFromConfig;
-    const listGroups = () => getTelegramApi().listTelegramDirectoryGroupsFromConfig;
+    const listPeers = () => getTelegramContractApi().listTelegramDirectoryPeersFromConfig;
+    const listGroups = () => getTelegramContractApi().listTelegramDirectoryGroupsFromConfig;
 
     it("TelegramProbe satisfies BaseProbeResult", () => {
       expectTypeOf<TelegramProbe>().toMatchTypeOf<BaseProbeResult>();

@@ -29,6 +29,7 @@ import type {
   QaLabServerStartParams,
 } from "./lab-server.types.js";
 import type { QaRunnerModelOption } from "./model-catalog.runtime.js";
+import { createQaChannelGatewayConfig } from "./qa-channel-transport.js";
 import {
   createIdleQaRunnerSnapshot,
   createQaRunOutputDir,
@@ -510,17 +511,7 @@ function tryResolveUiAsset(
 }
 
 function createQaLabConfig(baseUrl: string): OpenClawConfig {
-  return {
-    channels: {
-      "qa-channel": {
-        enabled: true,
-        baseUrl,
-        botUserId: "openclaw",
-        botDisplayName: "OpenClaw QA",
-        allowFrom: ["*"],
-      },
-    },
-  };
+  return createQaChannelGatewayConfig({ baseUrl });
 }
 
 async function startQaGatewayLoop(params: { state: QaBusState; baseUrl: string }) {
@@ -633,6 +624,7 @@ export async function startQaLabServer(
     const result = await runQaSelfCheckAgainstState({
       state,
       cfg: gateway?.cfg ?? createQaLabConfig(listenUrl),
+      transportId: "qa-channel",
       outputPath: params?.outputPath,
       repoRoot,
     });

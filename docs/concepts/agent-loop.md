@@ -24,7 +24,7 @@ wired end-to-end.
 
 1. `agent` RPC validates params, resolves session (sessionKey/sessionId), persists session metadata, returns `{ runId, acceptedAt }` immediately.
 2. `agentCommand` runs the agent:
-   - resolves model + thinking/verbose defaults
+   - resolves model + thinking/verbose/trace defaults
    - loads skills snapshot
    - calls `runEmbeddedPiAgent` (pi-agent-core runtime)
    - emits **lifecycle end/error** if the embedded loop does not emit one

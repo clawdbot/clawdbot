@@ -6,8 +6,14 @@ type SignalContractApiSurface = Pick<
   "isSignalSenderAllowed"
 >;
 
-const { isSignalSenderAllowed } =
-  loadBundledPluginContractApiSync<SignalContractApiSurface>("signal");
+let signalContractSurface: SignalContractApiSurface | undefined;
 
-export { isSignalSenderAllowed };
+function getSignalContractSurface(): SignalContractApiSurface {
+  signalContractSurface ??= loadBundledPluginContractApiSync<SignalContractApiSurface>("signal");
+  return signalContractSurface;
+}
+
+export const isSignalSenderAllowed = (
+  ...args: Parameters<SignalContractApiSurface["isSignalSenderAllowed"]>
+) => getSignalContractSurface().isSignalSenderAllowed(...args);
 export type { SignalSender };

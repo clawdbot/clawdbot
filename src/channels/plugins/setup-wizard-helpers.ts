@@ -1377,9 +1377,9 @@ export function createNestedChannelParsedAllowFromPrompt(params: {
     getExistingAllowFrom: ({ cfg }: { cfg: OpenClawConfig }) =>
       params.getExistingAllowFrom?.(cfg) ??
       (
-        (cfg.channels?.[params.channel] as Record<string, unknown> | undefined)?.[params.section] as
-          | { allowFrom?: Array<string | number> }
-          | undefined
+        (cfg.channels?.[params.channel] as Record<string, unknown> | undefined)?.[
+          params.section
+        ] as { allowFrom?: Array<string | number> } | undefined
       )?.allowFrom ??
       [],
     ...(params.mergeEntries ? { mergeEntries: params.mergeEntries } : {}),

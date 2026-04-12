@@ -14,7 +14,7 @@ The host-only bash chat command uses `! <cmd>` (with `/bash <cmd>` as an alias).
 There are two related systems:
 
 - **Commands**: standalone `/...` messages.
-- **Directives**: `/think`, `/fast`, `/verbose`, `/reasoning`, `/elevated`, `/exec`, `/model`, `/queue`.
+- **Directives**: `/think`, `/fast`, `/verbose`, `/trace`, `/reasoning`, `/elevated`, `/exec`, `/model`, `/queue`.
   - Directives are stripped from the message before the model sees it.
   - In normal chat messages (not directive-only), they are treated as “inline hints” and do **not** persist session settings.
   - In directive-only messages (the message contains only directives), they persist to the session and reply with an acknowledgement.
@@ -95,6 +95,7 @@ Built-in commands available today:
 - `/session idle <duration|off>` and `/session max-age <duration|off>` manage thread-binding expiry.
 - `/think <off|minimal|low|medium|high|xhigh>` sets the thinking level. Aliases: `/thinking`, `/t`.
 - `/verbose on|off|full` toggles verbose output. Alias: `/v`.
+- `/trace on|off` toggles plugin trace output for the current session.
 - `/fast [status|on|off]` shows or sets fast mode.
 - `/reasoning [on|off|stream]` toggles reasoning visibility. Alias: `/reason`.
 - `/elevated [on|off|ask|full]` toggles elevated mode. Alias: `/elev`.
@@ -183,10 +184,11 @@ Notes:
 - Discord thread-binding commands (`/focus`, `/unfocus`, `/agents`, `/session idle`, `/session max-age`) require effective thread bindings to be enabled (`session.threadBindings.enabled` and/or `channels.discord.threadBindings.enabled`).
 - ACP command reference and runtime behavior: [ACP Agents](/tools/acp-agents).
 - `/verbose` is meant for debugging and extra visibility; keep it **off** in normal use.
+- `/trace` is narrower than `/verbose`: it only reveals plugin-owned trace/debug lines and keeps normal verbose tool chatter off.
 - `/fast on|off` persists a session override. Use the Sessions UI `inherit` option to clear it and fall back to config defaults.
 - `/fast` is provider-specific: OpenAI/OpenAI Codex map it to `service_tier=priority` on native Responses endpoints, while direct public Anthropic requests, including OAuth-authenticated traffic sent to `api.anthropic.com`, map it to `service_tier=auto` or `standard_only`. See [OpenAI](/providers/openai) and [Anthropic](/providers/anthropic).
 - Tool failure summaries are still shown when relevant, but detailed failure text is only included when `/verbose` is `on` or `full`.
-- `/reasoning` (and `/verbose`) are risky in group settings: they may reveal internal reasoning or tool output you did not intend to expose. Prefer leaving them off, especially in group chats.
+- `/reasoning`, `/verbose`, and `/trace` are risky in group settings: they may reveal internal reasoning, tool output, or plugin diagnostics you did not intend to expose. Prefer leaving them off, especially in group chats.
 - `/model` persists the new session model immediately.
 - If the agent is idle, the next run uses it right away.
 - If a run is already active, OpenClaw marks a live switch as pending and only restarts into the new model at a clean retry point.
@@ -267,6 +269,27 @@ Notes:
 
 - Overrides apply immediately to new config reads, but do **not** write to `openclaw.json`.
 - Use `/debug reset` to clear all overrides and return to the on-disk config.
+
+## Plugin trace output
+
+`/trace` lets you toggle **session-scoped plugin trace/debug lines** without turning on full verbose mode.
+
+Examples:
+
+```text
+/trace
+/trace on
+/trace off
+```
+
+Notes:
+
+- `/trace` with no argument shows the current session trace state.
+- `/trace on` enables plugin trace lines for the current session.
+- `/trace off` disables them again.
+- Plugin trace lines can appear in `/status` and as a follow-up diagnostic message after the normal assistant reply.
+- `/trace` does not replace `/debug`; `/debug` still manages runtime-only config overrides.
+- `/trace` does not replace `/verbose`; normal verbose tool/status output still belongs to `/verbose`.
 
 ## Config updates
 

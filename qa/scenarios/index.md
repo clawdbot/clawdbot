@@ -1,6 +1,11 @@
 # OpenClaw QA Scenario Pack
 
 Single source of truth for repo-backed QA suite bootstrap data.
+`qa-lab` should treat this directory as a generic markdown scenario pack:
+
+- `index.md` defines pack-level bootstrap data
+- each `*.md` scenario defines one runnable test via `qa-scenario` + `qa-flow`
+- scenario markdown may also define required plugins and gateway config patching
 
 - kickoff mission
 - QA operator identity

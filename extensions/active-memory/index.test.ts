@@ -1191,6 +1191,49 @@ describe("active-memory plugin", () => {
     });
   });
 
+  it("surfaces memory embedding quota warnings in plugin trace lines", async () => {
+    const sessionKey = "agent:main:memory-rate-limit";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-rate-limit",
+      updatedAt: 0,
+    };
+    runEmbeddedPiAgent.mockImplementationOnce(async () => {
+      return {
+        meta: {
+          activeMemorySearchDebug: {
+            warning:
+              "Memory search is unavailable because the embedding provider quota is exhausted.",
+            action: "Top up or switch embedding provider, then retry memory_search.",
+            error: "gemini embeddings failed: 429 rate limited",
+          },
+        },
+        payloads: [{ text: "NONE" }],
+      };
+    });
+
+    await hooks.before_prompt_build(
+      { prompt: "what should i eat tonight?", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey,
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(hoisted.sessionStore[sessionKey]?.pluginDebugEntries).toEqual([
+      {
+        pluginId: "active-memory",
+        lines: [
+          expect.stringContaining("🧩 Active Memory: empty"),
+          expect.stringContaining(
+            "🔎 Active Memory Debug: Memory search is unavailable because the embedding provider quota is exhausted. Top up or switch embedding provider, then retry memory_search.",
+          ),
+        ],
+      },
+    ]);
+  });
+
   it("prefers the resolved session channel over a wrapper channel hint", async () => {
     hoisted.sessionStore["agent:main:telegram:direct:12345"] = {
       sessionId: "session-a",

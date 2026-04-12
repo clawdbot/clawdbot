@@ -47,6 +47,21 @@ function isInboundMetaSentinelLine(line: string): boolean {
   return INBOUND_META_SENTINELS.some((sentinel) => sentinel === trimmed);
 }
 
+function restoreNeutralizedMarkdownFences(value: unknown): unknown {
+  if (typeof value === "string") {
+    return value.replaceAll("`\u200b``", "```");
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => restoreNeutralizedMarkdownFences(entry));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [key, restoreNeutralizedMarkdownFences(entry)]),
+  );
+}
+
 function parseInboundMetaBlock(lines: string[], sentinel: string): Record<string, unknown> | null {
   for (let i = 0; i < lines.length; i++) {
     if (lines[i]?.trim() !== sentinel) {
@@ -69,7 +84,8 @@ function parseInboundMetaBlock(lines: string[], sentinel: string): Record<string
     if (!jsonText) {
       return null;
     }
-    return safeParseJsonWithSchema(InboundMetaBlockSchema, jsonText);
+    const parsed = safeParseJsonWithSchema(InboundMetaBlockSchema, jsonText);
+    return parsed ? (restoreNeutralizedMarkdownFences(parsed) as Record<string, unknown>) : null;
   }
   return null;
 }

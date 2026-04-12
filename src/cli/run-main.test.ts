@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   rewriteUpdateFlagArgv,
   resolveMissingPluginCommandMessage,
@@ -6,13 +7,23 @@ import {
   shouldUseRootHelpFastPath,
 } from "./run-main.js";
 
-const memoryWikiCommandAliasRegistry = {
+const memoryWikiCommandAliasRegistry: PluginManifestRegistry = {
   plugins: [
     {
       id: "memory-wiki",
+      channels: [],
+      providers: [],
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+      origin: "bundled",
+      rootDir: "/tmp/memory-wiki",
+      source: "bundled",
+      manifestPath: "/tmp/memory-wiki/openclaw.plugin.json",
       commandAliases: [{ name: "wiki" }],
     },
   ],
+  diagnostics: [],
 };
 
 describe("rewriteUpdateFlagArgv", () => {

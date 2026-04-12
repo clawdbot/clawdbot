@@ -185,6 +185,48 @@ describe("buildStatusMessage", () => {
     expect(visible).toContain("Active Memory: ok 842ms recent 34 chars");
   });
 
+  it("shows trace lines only when trace is enabled", () => {
+    const hidden = normalizeTestText(
+      buildStatusMessage({
+        agent: {
+          model: "anthropic/pi:opus",
+        },
+        sessionEntry: {
+          sessionId: "abc",
+          updatedAt: 0,
+          verboseLevel: "on",
+          pluginDebugEntries: [
+            { pluginId: "active-memory", lines: ["🔎 Active Memory Debug: spicy ramen; tacos"] },
+          ],
+        },
+        sessionKey: "agent:main:main",
+        queue: { mode: "collect", depth: 0 },
+      }),
+    );
+    const visible = normalizeTestText(
+      buildStatusMessage({
+        agent: {
+          model: "anthropic/pi:opus",
+        },
+        sessionEntry: {
+          sessionId: "abc",
+          updatedAt: 0,
+          verboseLevel: "off",
+          traceLevel: "on",
+          pluginDebugEntries: [
+            { pluginId: "active-memory", lines: ["🔎 Active Memory Debug: spicy ramen; tacos"] },
+          ],
+        },
+        sessionKey: "agent:main:main",
+        queue: { mode: "collect", depth: 0 },
+      }),
+    );
+
+    expect(hidden).not.toContain("Active Memory Debug: spicy ramen; tacos");
+    expect(visible).toContain("Active Memory Debug: spicy ramen; tacos");
+    expect(visible).toContain("trace");
+  });
+
   it("shows fast mode when enabled", () => {
     const text = buildStatusMessage({
       agent: {
@@ -753,17 +795,17 @@ describe("buildStatusMessage", () => {
             {
               attachmentIndex: 0,
               attempts: [
-              {
-                type: "provider",
-                outcome: "skipped",
-                reason: "empty output",
-              },
-              {
-                type: "provider",
-                outcome: "failed",
-                reason: "Error: Audio transcription response missing text",
-              },
-            ],
+                {
+                  type: "provider",
+                  outcome: "skipped",
+                  reason: "empty output",
+                },
+                {
+                  type: "provider",
+                  outcome: "failed",
+                  reason: "Error: Audio transcription response missing text",
+                },
+              ],
             },
           ],
         },

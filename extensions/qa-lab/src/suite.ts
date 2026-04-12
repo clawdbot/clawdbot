@@ -15,7 +15,7 @@ import {
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
-import type { QaBusState } from "./bus-state.js";
+import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "./cli-paths.js";
 import { waitForCronRunCompletion } from "./cron-run-wait.js";
 import {
   hasDiscoveryLabels,
@@ -40,11 +40,26 @@ import {
 } from "./model-selection.js";
 import { hasModelSwitchContinuityEvidence } from "./model-switch-eval.js";
 import type { QaThinkingLevel } from "./qa-gateway-config.js";
+import {
+  createQaTransportAdapter,
+  normalizeQaTransportId,
+  type QaTransportId,
+} from "./qa-transport-registry.js";
+import type {
+  QaTransportAdapter,
+  QaTransportActionName,
+  QaTransportState,
+} from "./qa-transport.js";
+import {
+  createFailureAwareTransportWaitForCondition,
+  findFailureOutboundMessage as findTransportFailureOutboundMessage,
+} from "./qa-transport.js";
 import { extractQaFailureReplyText } from "./reply-failure.js";
 import { renderQaMarkdownReport, type QaReportCheck, type QaReportScenario } from "./report.js";
 import { qaChannelPlugin, type QaBusMessage } from "./runtime-api.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
+import { createQaScenarioRuntimeApi } from "./scenario-runtime-api.js";
 
 type QaSuiteStep = {
   name: string;
@@ -63,6 +78,7 @@ type QaSuiteEnvironment = {
   mock: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | null;
   gateway: Awaited<ReturnType<typeof startQaGatewayChild>>;
   cfg: OpenClawConfig;
+  transport: QaTransportAdapter;
   repoRoot: string;
   providerMode: "mock-openai" | "live-frontier";
   primaryModel: string;
@@ -75,6 +91,7 @@ export type QaSuiteRunParams = {
   repoRoot?: string;
   outputDir?: string;
   providerMode?: QaProviderMode | "live-openai";
+  transportId?: QaTransportId;
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;
@@ -84,6 +101,7 @@ export type QaSuiteRunParams = {
   lab?: QaLabServerHandle;
   startLab?: QaSuiteStartLabFn;
   concurrency?: number;
+  controlUiEnabled?: boolean;
 };
 
 function requireQaSuiteStartLab(startLab: QaSuiteStartLabFn | undefined): QaSuiteStartLabFn {
@@ -244,8 +262,77 @@ function selectQaSuiteScenarios(params: {
   );
 }
 
+function collectQaSuitePluginIds(
+  scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"],
+) {
+  return [
+    ...new Set(
+      scenarios.flatMap((scenario) =>
+        Array.isArray(scenario.plugins)
+          ? scenario.plugins
+              .map((pluginId) => pluginId.trim())
+              .filter((pluginId) => pluginId.length > 0)
+          : [],
+      ),
+    ),
+  ];
+}
+
+function isQaPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function applyQaMergePatch(base: unknown, patch: unknown): unknown {
+  if (!isQaPlainObject(patch)) {
+    return patch;
+  }
+  const result = isQaPlainObject(base) ? { ...base } : {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null) {
+      delete result[key];
+      continue;
+    }
+    result[key] = isQaPlainObject(value) ? applyQaMergePatch(result[key], value) : value;
+  }
+  return result;
+}
+
+function collectQaSuiteGatewayConfigPatch(
+  scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"],
+): Record<string, unknown> | undefined {
+  let merged: Record<string, unknown> | undefined;
+  for (const scenario of scenarios) {
+    if (!isQaPlainObject(scenario.gatewayConfigPatch)) {
+      continue;
+    }
+    merged = applyQaMergePatch(merged ?? {}, scenario.gatewayConfigPatch) as Record<
+      string,
+      unknown
+    >;
+  }
+  return merged;
+}
+
 function liveTurnTimeoutMs(env: QaSuiteEnvironment, fallbackMs: number) {
   return resolveQaLiveTurnTimeoutMs(env, fallbackMs);
+}
+
+async function resolveQaSuiteOutputDir(repoRoot: string, outputDir?: string) {
+  const targetDir = !outputDir
+    ? path.join(repoRoot, ".artifacts", "qa-e2e", `suite-${Date.now().toString(36)}`)
+    : outputDir;
+  if (!path.isAbsolute(targetDir)) {
+    const resolved = resolveRepoRelativeOutputDir(repoRoot, targetDir);
+    if (!resolved) {
+      throw new Error("QA suite outputDir must be set.");
+    }
+    return await ensureRepoBoundDirectory(repoRoot, resolved, "QA suite outputDir", {
+      mode: 0o700,
+    });
+  }
+  return await ensureRepoBoundDirectory(repoRoot, targetDir, "QA suite outputDir", {
+    mode: 0o700,
+  });
 }
 
 export type QaSuiteResult = {
@@ -256,20 +343,6 @@ export type QaSuiteResult = {
   scenarios: QaSuiteScenarioResult[];
   watchUrl: string;
 };
-
-function createQaActionConfig(baseUrl: string): OpenClawConfig {
-  return {
-    channels: {
-      "qa-channel": {
-        enabled: true,
-        baseUrl,
-        botUserId: "openclaw",
-        botDisplayName: "OpenClaw QA",
-        allowFrom: ["*"],
-      },
-    },
-  };
-}
 
 async function waitForCondition<T>(
   check: () => T | Promise<T | null | undefined> | null | undefined,
@@ -288,49 +361,18 @@ async function waitForCondition<T>(
 }
 
 function findFailureOutboundMessage(
-  state: QaBusState,
+  state: QaTransportState,
   options?: { sinceIndex?: number; cursorSpace?: "all" | "outbound" },
 ) {
-  const cursorSpace = options?.cursorSpace ?? "outbound";
-  const observedMessages =
-    cursorSpace === "all"
-      ? state.getSnapshot().messages.slice(options?.sinceIndex ?? 0)
-      : state
-          .getSnapshot()
-          .messages.filter((message) => message.direction === "outbound")
-          .slice(options?.sinceIndex ?? 0);
-  return observedMessages.find(
-    (message) =>
-      message.direction === "outbound" && Boolean(extractQaFailureReplyText(message.text)),
-  );
+  return findTransportFailureOutboundMessage(state, options);
 }
 
-function createScenarioWaitForCondition(state: QaBusState) {
-  const sinceIndex = state.getSnapshot().messages.length;
-  return async function waitForScenarioCondition<T>(
-    check: () => T | Promise<T | null | undefined> | null | undefined,
-    timeoutMs = 15_000,
-    intervalMs = 100,
-  ): Promise<T> {
-    return await waitForCondition(
-      async () => {
-        const failureMessage = findFailureOutboundMessage(state, {
-          sinceIndex,
-          cursorSpace: "all",
-        });
-        if (failureMessage) {
-          throw new Error(extractQaFailureReplyText(failureMessage.text) ?? failureMessage.text);
-        }
-        return await check();
-      },
-      timeoutMs,
-      intervalMs,
-    );
-  };
+function createScenarioWaitForCondition(state: QaTransportState) {
+  return createFailureAwareTransportWaitForCondition(state);
 }
 
 async function waitForOutboundMessage(
-  state: QaBusState,
+  state: QaTransportState,
   predicate: (message: QaBusMessage) => boolean,
   timeoutMs = 15_000,
   options?: { sinceIndex?: number },
@@ -356,7 +398,7 @@ async function waitForOutboundMessage(
   }, timeoutMs);
 }
 
-async function waitForNoOutbound(state: QaBusState, timeoutMs = 1_200) {
+async function waitForNoOutbound(state: QaTransportState, timeoutMs = 1_200) {
   await sleep(timeoutMs);
   const outbound = state
     .getSnapshot()
@@ -366,7 +408,7 @@ async function waitForNoOutbound(state: QaBusState, timeoutMs = 1_200) {
   }
 }
 
-function recentOutboundSummary(state: QaBusState, limit = 5) {
+function recentOutboundSummary(state: QaTransportState, limit = 5) {
   return state
     .getSnapshot()
     .messages.filter((message) => message.direction === "outbound")
@@ -376,10 +418,22 @@ function recentOutboundSummary(state: QaBusState, limit = 5) {
 }
 
 function formatConversationTranscript(
-  state: QaBusState,
+  state: QaTransportState,
   params: {
     conversationId: string;
     threadId?: string;
+    limit?: number;
+  },
+) {
+  return formatTransportTranscript(state, params);
+}
+
+function readTransportTranscript(
+  state: QaTransportState,
+  params: {
+    conversationId: string;
+    threadId?: string;
+    direction?: "inbound" | "outbound";
     limit?: number;
   },
 ) {
@@ -388,10 +442,23 @@ function formatConversationTranscript(
     .messages.filter(
       (message) =>
         message.conversation.id === params.conversationId &&
-        (params.threadId ? message.threadId === params.threadId : true),
+        (params.threadId ? message.threadId === params.threadId : true) &&
+        (params.direction ? message.direction === params.direction : true),
     );
-  const selected = params.limit ? messages.slice(-params.limit) : messages;
-  return selected
+  return params.limit ? messages.slice(-params.limit) : messages;
+}
+
+function formatTransportTranscript(
+  state: QaTransportState,
+  params: {
+    conversationId: string;
+    threadId?: string;
+    direction?: "inbound" | "outbound";
+    limit?: number;
+  },
+) {
+  const messages = readTransportTranscript(state, params);
+  return messages
     .map((message) => {
       const direction = message.direction === "inbound" ? "user" : "assistant";
       const speaker = message.senderName?.trim() || message.senderId;
@@ -404,6 +471,26 @@ function formatConversationTranscript(
       return `${direction.toUpperCase()} ${speaker}: ${message.text}${attachmentSummary}`;
     })
     .join("\n\n");
+}
+
+async function waitForTransportOutboundMessage(
+  state: QaTransportState,
+  predicate: (message: QaBusMessage) => boolean,
+  timeoutMs?: number,
+) {
+  return await waitForOutboundMessage(state, predicate, timeoutMs);
+}
+
+async function waitForChannelOutboundMessage(
+  state: QaTransportState,
+  predicate: (message: QaBusMessage) => boolean,
+  timeoutMs?: number,
+) {
+  return await waitForTransportOutboundMessage(state, predicate, timeoutMs);
+}
+
+async function waitForNoTransportOutbound(state: QaTransportState, timeoutMs = 1_200) {
+  await waitForNoOutbound(state, timeoutMs);
 }
 
 async function runScenario(name: string, steps: QaSuiteStep[]): Promise<QaSuiteScenarioResult> {
@@ -486,37 +573,17 @@ async function waitForGatewayHealthy(env: QaSuiteEnvironment, timeoutMs = 45_000
   );
 }
 
-async function waitForQaChannelReady(env: QaSuiteEnvironment, timeoutMs = 45_000) {
-  await waitForCondition(
-    async () => {
-      try {
-        const payload = (await env.gateway.call(
-          "channels.status",
-          { probe: false, timeoutMs: 2_000 },
-          { timeoutMs: 5_000 },
-        )) as {
-          channelAccounts?: Record<
-            string,
-            Array<{
-              accountId?: string;
-              running?: boolean;
-              restartPending?: boolean;
-            }>
-          >;
-        };
-        const accounts = payload.channelAccounts?.["qa-channel"] ?? [];
-        const account = accounts.find((entry) => entry.accountId === "default") ?? accounts[0];
-        if (account?.running && account.restartPending !== true) {
-          return true;
-        }
-        return undefined;
-      } catch {
-        return undefined;
-      }
-    },
+async function waitForTransportReady(env: QaSuiteEnvironment, timeoutMs = 45_000) {
+  await env.transport.waitReady({
+    gateway: env.gateway,
     timeoutMs,
-    500,
-  );
+  });
+}
+
+async function waitForQaChannelReady(env: QaSuiteEnvironment, timeoutMs = 45_000) {
+  // Compatibility alias for existing markdown scenarios while qa-channel
+  // remains the only suite transport.
+  await waitForTransportReady(env, timeoutMs);
 }
 
 async function waitForConfigRestartSettle(
@@ -613,7 +680,7 @@ async function runConfigMutation(params: {
           ...(params.note ? { note: params.note } : {}),
           restartDelayMs,
         },
-        { timeoutMs: 45_000, retryOnRestart: false },
+        { timeoutMs: 45_000 },
       );
       await waitForConfigRestartSettle(params.env, restartDelayMs);
       return result;
@@ -888,6 +955,7 @@ async function startAgentRun(
   },
 ) {
   const target = params.to ?? "dm:qa-operator";
+  const delivery = env.transport.buildAgentDelivery({ target });
   const started = (await env.gateway.call(
     "agent",
     {
@@ -896,10 +964,10 @@ async function startAgentRun(
       sessionKey: params.sessionKey,
       message: params.message,
       deliver: true,
-      channel: "qa-channel",
+      channel: delivery.channel,
       to: target,
-      replyChannel: "qa-channel",
-      replyTo: target,
+      replyChannel: delivery.replyChannel,
+      replyTo: delivery.replyTo,
       ...(params.threadId ? { threadId: params.threadId } : {}),
       ...(params.provider ? { provider: params.provider } : {}),
       ...(params.model ? { model: params.model } : {}),
@@ -961,7 +1029,7 @@ async function forceMemoryIndex(params: {
   expectedNeedle: string;
 }) {
   await waitForGatewayHealthy(params.env, 60_000);
-  await waitForQaChannelReady(params.env, 60_000);
+  await waitForTransportReady(params.env, 60_000);
   await runQaCli(params.env, ["memory", "index", "--agent", "qa", "--force"], {
     timeoutMs: liveTurnTimeoutMs(params.env, 60_000),
   });
@@ -1074,7 +1142,7 @@ async function ensureImageGenerationConfigured(env: QaSuiteEnvironment) {
       env.providerMode === "mock-openai"
         ? {
             plugins: {
-              allow: ["memory-core", "openai", "qa-channel"],
+              allow: [...new Set(["memory-core", "openai", ...env.transport.requiredPluginIds])],
               entries: {
                 openai: {
                   enabled: true,
@@ -1126,164 +1194,97 @@ async function ensureImageGenerationConfigured(env: QaSuiteEnvironment) {
           },
   });
   await waitForGatewayHealthy(env);
-  await waitForQaChannelReady(env, 60_000);
+  await waitForTransportReady(env, 60_000);
 }
-
-type QaActionName = "delete" | "edit" | "react" | "thread-create";
 
 async function handleQaAction(params: {
   env: QaSuiteEnvironment;
-  action: QaActionName;
+  action: QaTransportActionName;
   args: Record<string, unknown>;
 }) {
-  const result = await qaChannelPlugin.actions?.handleAction?.({
-    channel: "qa-channel",
+  const result = await params.env.transport.handleAction({
     action: params.action,
+    args: params.args,
     cfg: params.env.cfg,
-    accountId: "default",
-    params: params.args,
   });
-  return extractQaToolPayload(result);
+  return extractQaToolPayload(result as Parameters<typeof extractQaToolPayload>[0]);
 }
-
-type QaScenarioFlowApi = {
-  env: QaSuiteEnvironment;
-  lab: QaSuiteEnvironment["lab"];
-  state: QaBusState;
-  scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number];
-  config: Record<string, unknown>;
-  fs: typeof fs;
-  path: typeof path;
-  sleep: typeof sleep;
-  randomUUID: typeof randomUUID;
-  runScenario: typeof runScenario;
-  waitForCondition: typeof waitForCondition;
-  waitForOutboundMessage: typeof waitForOutboundMessage;
-  waitForNoOutbound: typeof waitForNoOutbound;
-  recentOutboundSummary: typeof recentOutboundSummary;
-  formatConversationTranscript: typeof formatConversationTranscript;
-  fetchJson: typeof fetchJson;
-  waitForGatewayHealthy: typeof waitForGatewayHealthy;
-  waitForQaChannelReady: typeof waitForQaChannelReady;
-  waitForConfigRestartSettle: typeof waitForConfigRestartSettle;
-  patchConfig: typeof patchConfig;
-  applyConfig: typeof applyConfig;
-  readConfigSnapshot: typeof readConfigSnapshot;
-  createSession: typeof createSession;
-  readEffectiveTools: typeof readEffectiveTools;
-  readSkillStatus: typeof readSkillStatus;
-  readRawQaSessionStore: typeof readRawQaSessionStore;
-  runQaCli: typeof runQaCli;
-  extractMediaPathFromText: typeof extractMediaPathFromText;
-  resolveGeneratedImagePath: typeof resolveGeneratedImagePath;
-  startAgentRun: typeof startAgentRun;
-  waitForAgentRun: typeof waitForAgentRun;
-  listCronJobs: typeof listCronJobs;
-  waitForCronRunCompletion: typeof waitForCronRunCompletion;
-  readDoctorMemoryStatus: typeof readDoctorMemoryStatus;
-  forceMemoryIndex: typeof forceMemoryIndex;
-  findSkill: typeof findSkill;
-  writeWorkspaceSkill: typeof writeWorkspaceSkill;
-  callPluginToolsMcp: typeof callPluginToolsMcp;
-  runAgentPrompt: typeof runAgentPrompt;
-  ensureImageGenerationConfigured: typeof ensureImageGenerationConfigured;
-  handleQaAction: typeof handleQaAction;
-  extractQaToolPayload: typeof extractQaToolPayload;
-  formatMemoryDreamingDay: typeof formatMemoryDreamingDay;
-  resolveSessionTranscriptsDirForAgent: typeof resolveSessionTranscriptsDirForAgent;
-  buildAgentSessionKey: typeof buildAgentSessionKey;
-  normalizeLowercaseStringOrEmpty: typeof normalizeLowercaseStringOrEmpty;
-  formatErrorMessage: typeof formatErrorMessage;
-  liveTurnTimeoutMs: typeof liveTurnTimeoutMs;
-  resolveQaLiveTurnTimeoutMs: typeof resolveQaLiveTurnTimeoutMs;
-  splitModelRef: typeof splitModelRef;
-  qaChannelPlugin: typeof qaChannelPlugin;
-  hasDiscoveryLabels: typeof hasDiscoveryLabels;
-  reportsDiscoveryScopeLeak: typeof reportsDiscoveryScopeLeak;
-  reportsMissingDiscoveryFiles: typeof reportsMissingDiscoveryFiles;
-  hasModelSwitchContinuityEvidence: typeof hasModelSwitchContinuityEvidence;
-  imageUnderstandingPngBase64: string;
-  imageUnderstandingLargePngBase64: string;
-  imageUnderstandingValidPngBase64: string;
-  resetBus: () => Promise<void>;
-  reset: () => Promise<void>;
-};
 
 function createScenarioFlowApi(
   env: QaSuiteEnvironment,
   scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number],
-): QaScenarioFlowApi {
-  return {
+) {
+  return createQaScenarioRuntimeApi({
     env,
-    lab: env.lab,
-    state: env.lab.state,
     scenario,
-    config: scenario.execution.config ?? {},
-    fs,
-    path,
-    sleep,
-    randomUUID,
-    runScenario,
-    waitForCondition: createScenarioWaitForCondition(env.lab.state),
-    waitForOutboundMessage,
-    waitForNoOutbound,
-    recentOutboundSummary,
-    formatConversationTranscript,
-    fetchJson,
-    waitForGatewayHealthy,
-    waitForQaChannelReady,
-    waitForConfigRestartSettle,
-    patchConfig,
-    applyConfig,
-    readConfigSnapshot,
-    createSession,
-    readEffectiveTools,
-    readSkillStatus,
-    readRawQaSessionStore,
-    runQaCli,
-    extractMediaPathFromText,
-    resolveGeneratedImagePath,
-    startAgentRun,
-    waitForAgentRun,
-    listCronJobs,
-    waitForCronRunCompletion,
-    readDoctorMemoryStatus,
-    forceMemoryIndex,
-    findSkill,
-    writeWorkspaceSkill,
-    callPluginToolsMcp,
-    runAgentPrompt,
-    ensureImageGenerationConfigured,
-    handleQaAction,
-    extractQaToolPayload,
-    formatMemoryDreamingDay,
-    resolveSessionTranscriptsDirForAgent,
-    buildAgentSessionKey,
-    normalizeLowercaseStringOrEmpty,
-    formatErrorMessage,
-    liveTurnTimeoutMs,
-    resolveQaLiveTurnTimeoutMs,
-    splitModelRef,
-    qaChannelPlugin,
-    hasDiscoveryLabels,
-    reportsDiscoveryScopeLeak,
-    reportsMissingDiscoveryFiles,
-    hasModelSwitchContinuityEvidence,
-    imageUnderstandingPngBase64: _QA_IMAGE_UNDERSTANDING_PNG_BASE64,
-    imageUnderstandingLargePngBase64: _QA_IMAGE_UNDERSTANDING_LARGE_PNG_BASE64,
-    imageUnderstandingValidPngBase64: QA_IMAGE_UNDERSTANDING_VALID_PNG_BASE64,
-    resetBus: async () => {
-      env.lab.state.reset();
-      await sleep(100);
+    deps: {
+      fs,
+      path,
+      sleep,
+      randomUUID,
+      runScenario,
+      waitForOutboundMessage,
+      waitForTransportOutboundMessage,
+      waitForChannelOutboundMessage,
+      waitForNoOutbound,
+      waitForNoTransportOutbound,
+      recentOutboundSummary,
+      formatConversationTranscript,
+      readTransportTranscript,
+      formatTransportTranscript,
+      fetchJson,
+      waitForGatewayHealthy,
+      waitForTransportReady,
+      waitForQaChannelReady,
+      waitForConfigRestartSettle,
+      patchConfig,
+      applyConfig,
+      readConfigSnapshot,
+      createSession,
+      readEffectiveTools,
+      readSkillStatus,
+      readRawQaSessionStore,
+      runQaCli,
+      extractMediaPathFromText,
+      resolveGeneratedImagePath,
+      startAgentRun,
+      waitForAgentRun,
+      listCronJobs,
+      waitForCronRunCompletion,
+      readDoctorMemoryStatus,
+      forceMemoryIndex,
+      findSkill,
+      writeWorkspaceSkill,
+      callPluginToolsMcp,
+      runAgentPrompt,
+      ensureImageGenerationConfigured,
+      handleQaAction,
+      extractQaToolPayload,
+      formatMemoryDreamingDay,
+      resolveSessionTranscriptsDirForAgent,
+      buildAgentSessionKey,
+      normalizeLowercaseStringOrEmpty,
+      formatErrorMessage,
+      liveTurnTimeoutMs,
+      resolveQaLiveTurnTimeoutMs,
+      splitModelRef,
+      qaChannelPlugin,
+      hasDiscoveryLabels,
+      reportsDiscoveryScopeLeak,
+      reportsMissingDiscoveryFiles,
+      hasModelSwitchContinuityEvidence,
     },
-    reset: async () => {
-      env.lab.state.reset();
-      await sleep(100);
+    constants: {
+      imageUnderstandingPngBase64: _QA_IMAGE_UNDERSTANDING_PNG_BASE64,
+      imageUnderstandingLargePngBase64: _QA_IMAGE_UNDERSTANDING_LARGE_PNG_BASE64,
+      imageUnderstandingValidPngBase64: QA_IMAGE_UNDERSTANDING_VALID_PNG_BASE64,
     },
-  };
+  });
 }
 
 export const qaSuiteTesting = {
+  collectQaSuiteGatewayConfigPatch,
+  collectQaSuitePluginIds,
   createScenarioWaitForCondition,
   findFailureOutboundMessage,
   getGatewayRetryAfterMs,
@@ -1292,6 +1293,11 @@ export const qaSuiteTesting = {
   normalizeQaSuiteConcurrency,
   scenarioMatchesLiveLane,
   selectQaSuiteScenarios,
+  readTransportTranscript,
+  formatTransportTranscript,
+  resolveQaSuiteOutputDir,
+  waitForTransportOutboundMessage,
+  waitForNoTransportOutbound,
   waitForOutboundMessage,
 };
 
@@ -1311,21 +1317,14 @@ async function runScenarioDefinition(
 }
 
 function createQaSuiteReportNotes(params: {
+  transport: QaTransportAdapter;
   providerMode: "mock-openai" | "live-frontier";
   primaryModel: string;
   alternateModel: string;
   fastMode: boolean;
   concurrency: number;
 }) {
-  return [
-    params.providerMode === "mock-openai"
-      ? "Runs against qa-channel + qa-lab bus + real gateway child + mock OpenAI provider."
-      : `Runs against qa-channel + qa-lab bus + real gateway child + live frontier models (${params.primaryModel}, ${params.alternateModel})${params.fastMode ? " with fast mode enabled" : ""}.`,
-    params.concurrency > 1
-      ? `Scenarios run in isolated gateway workers with concurrency ${params.concurrency}.`
-      : "Scenarios run serially in one gateway worker.",
-    "Cron uses a one-minute schedule assertion plus forced execution for fast verification.",
-  ];
+  return params.transport.createReportNotes(params);
 }
 
 async function writeQaSuiteArtifacts(params: {
@@ -1333,6 +1332,7 @@ async function writeQaSuiteArtifacts(params: {
   startedAt: Date;
   finishedAt: Date;
   scenarios: QaSuiteScenarioResult[];
+  transport: QaTransportAdapter;
   providerMode: "mock-openai" | "live-frontier";
   primaryModel: string;
   alternateModel: string;
@@ -1377,7 +1377,8 @@ async function writeQaSuiteArtifacts(params: {
 export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResult> {
   const startedAt = new Date();
   const repoRoot = path.resolve(params?.repoRoot ?? process.cwd());
-  const providerMode = normalizeQaProviderMode(params?.providerMode ?? "mock-openai");
+  const providerMode = normalizeQaProviderMode(params?.providerMode ?? "live-frontier");
+  const transportId = normalizeQaTransportId(params?.transportId);
   const primaryModel = params?.primaryModel ?? defaultQaModelForMode(providerMode);
   const alternateModel =
     params?.alternateModel ?? defaultQaModelForMode(providerMode, { alternate: true });
@@ -1385,10 +1386,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     typeof params?.fastMode === "boolean"
       ? params.fastMode
       : isQaFastModeEnabled({ primaryModel, alternateModel });
-  const outputDir =
-    params?.outputDir ??
-    path.join(repoRoot, ".artifacts", "qa-e2e", `suite-${Date.now().toString(36)}`);
-  await fs.mkdir(outputDir, { recursive: true });
+  const outputDir = await resolveQaSuiteOutputDir(repoRoot, params?.outputDir);
   const catalog = readQaBootstrapScenarioCatalog();
   const selectedCatalogScenarios = selectQaSuiteScenarios({
     scenarios: catalog.scenarios,
@@ -1397,6 +1395,8 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     primaryModel,
     claudeCliAuthMode: params?.claudeCliAuthMode,
   });
+  const enabledPluginIds = collectQaSuitePluginIds(selectedCatalogScenarios);
+  const gatewayConfigPatch = collectQaSuiteGatewayConfigPatch(selectedCatalogScenarios);
   const concurrency = normalizeQaSuiteConcurrency(
     params?.concurrency,
     selectedCatalogScenarios.length,
@@ -1413,6 +1413,10 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
         port: 0,
         embeddedGateway: "disabled",
       }));
+    const transport = createQaTransportAdapter({
+      id: transportId,
+      state: lab.state,
+    });
     const liveScenarioOutcomes: QaLabScenarioOutcome[] = selectedCatalogScenarios.map(
       (scenario) => ({
         id: scenario.id,
@@ -1447,6 +1451,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
               repoRoot,
               outputDir: scenarioOutputDir,
               providerMode,
+              transportId,
               primaryModel,
               alternateModel,
               fastMode,
@@ -1455,6 +1460,10 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
               scenarioIds: [scenario.id],
               concurrency: 1,
               startLab,
+              // Isolated workers do not need their own Control UI proxy. The
+              // outer lab already owns the watch surface, so skip per-worker
+              // Control UI asset resolution and startup overhead.
+              controlUiEnabled: false,
             });
             const scenarioResult: QaSuiteScenarioResult =
               result.scenarios[0] ??
@@ -1522,6 +1531,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
         startedAt,
         finishedAt,
         scenarios,
+        transport,
         providerMode,
         primaryModel,
         alternateModel,
@@ -1559,6 +1569,10 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       port: 0,
       embeddedGateway: "disabled",
     }));
+  const transport = createQaTransportAdapter({
+    id: transportId,
+    state: lab.state,
+  });
   const mock =
     providerMode === "mock-openai"
       ? await startQaMockOpenAiServer({
@@ -1569,7 +1583,8 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
   const gateway = await startQaGatewayChild({
     repoRoot,
     providerBaseUrl: mock ? `${mock.baseUrl}/v1` : undefined,
-    qaBusBaseUrl: lab.listenUrl,
+    transport,
+    transportBaseUrl: lab.listenUrl,
     controlUiAllowedOrigins: [lab.listenUrl],
     providerMode,
     primaryModel,
@@ -1577,7 +1592,11 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     fastMode,
     thinkingDefault: params?.thinkingDefault,
     claudeCliAuthMode: params?.claudeCliAuthMode,
-    controlUiEnabled: true,
+    controlUiEnabled: params?.controlUiEnabled ?? true,
+    enabledPluginIds,
+    mutateConfig: gatewayConfigPatch
+      ? (cfg) => applyQaMergePatch(cfg, gatewayConfigPatch) as OpenClawConfig
+      : undefined,
   });
   lab.setControlUi({
     controlUiProxyTarget: gateway.baseUrl,
@@ -1587,20 +1606,24 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     lab,
     mock,
     gateway,
-    cfg: createQaActionConfig(lab.listenUrl),
+    cfg: transport.createGatewayConfig({
+      baseUrl: lab.listenUrl,
+    }),
+    transport,
     repoRoot,
     providerMode,
     primaryModel,
     alternateModel,
   };
 
+  let preserveGatewayRuntimeDir: string | undefined;
   try {
-    // The gateway child already waits for /readyz before returning, but qa-channel
-    // can still be finishing its account startup. Pay that readiness cost once here
-    // so the first scenario does not race channel bootstrap.
-    await waitForQaChannelReady(env, 120_000).catch(async () => {
+    // The gateway child already waits for /readyz before returning, but the
+    // selected transport can still be finishing account startup. Pay that
+    // readiness cost once here so the first scenario does not race bootstrap.
+    await waitForTransportReady(env, 120_000).catch(async () => {
       await waitForGatewayHealthy(env, 120_000);
-      await waitForQaChannelReady(env, 120_000);
+      await waitForTransportReady(env, 120_000);
     });
     await sleep(1_000);
     const scenarios: QaSuiteScenarioResult[] = [];
@@ -1653,6 +1676,9 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     }
 
     const finishedAt = new Date();
+    if (scenarios.some((scenario) => scenario.status === "fail")) {
+      preserveGatewayRuntimeDir = path.join(outputDir, "artifacts", "gateway-runtime");
+    }
     lab.setScenarioRun({
       kind: "suite",
       status: "completed",
@@ -1665,6 +1691,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       startedAt,
       finishedAt,
       scenarios,
+      transport,
       providerMode,
       primaryModel,
       alternateModel,
@@ -1686,10 +1713,14 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       scenarios,
       watchUrl: lab.baseUrl,
     } satisfies QaSuiteResult;
+  } catch (error) {
+    preserveGatewayRuntimeDir = path.join(outputDir, "artifacts", "gateway-runtime");
+    throw error;
   } finally {
     const keepTemp = process.env.OPENCLAW_QA_KEEP_TEMP === "1" || false;
     await gateway.stop({
       keepTemp,
+      preserveToDir: keepTemp ? undefined : preserveGatewayRuntimeDir,
     });
     await disposeRegisteredAgentHarnesses();
     await mock?.stop();

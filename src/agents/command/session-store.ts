@@ -5,14 +5,25 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import { setCliSessionBinding, setCliSessionId } from "../cli-session.js";
-import { resolveContextTokensForModel } from "../context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { isCliProvider } from "../model-selection.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../usage.js";
 
 type RunResult = Awaited<ReturnType<(typeof import("../pi-embedded.js"))["runEmbeddedPiAgent"]>>;
+
+let usageFormatModulePromise: Promise<typeof import("../../utils/usage-format.js")> | undefined;
+let contextModulePromise: Promise<typeof import("../context.js")> | undefined;
+
+async function getUsageFormatModule() {
+  usageFormatModulePromise ??= import("../../utils/usage-format.js");
+  return await usageFormatModulePromise;
+}
+
+async function getContextModule() {
+  contextModulePromise ??= import("../context.js");
+  return await contextModulePromise;
+}
 
 function resolveNonNegativeNumber(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
@@ -49,6 +60,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const compactionsThisRun = Math.max(0, result.meta.agentMeta?.compactionCount ?? 0);
   const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
   const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider;
+  const { resolveContextTokensForModel } = await getContextModule();
   const contextTokens =
     resolveContextTokensForModel({
       cfg,
@@ -89,6 +101,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
     next.systemPromptReport = result.meta.systemPromptReport;
   }
   if (hasNonzeroUsage(usage)) {
+    const { estimateUsageCost, resolveModelCostConfig } = await getUsageFormatModule();
     const input = usage.input ?? 0;
     const output = usage.output ?? 0;
     const totalTokens = deriveSessionTotalTokens({

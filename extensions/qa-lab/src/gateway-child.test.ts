@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -345,6 +345,151 @@ describe("buildQaRuntimeEnv", () => {
     });
 
     expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+  });
+
+  it("treats bind collisions as retryable gateway startup errors", () => {
+    expect(
+      __testing.isRetryableGatewayStartupError(
+        "another gateway instance is already listening on ws://127.0.0.1:43124",
+      ),
+    ).toBe(true);
+    expect(
+      __testing.isRetryableGatewayStartupError(
+        "failed to bind gateway socket on ws://127.0.0.1:43124: Error: listen EADDRINUSE",
+      ),
+    ).toBe(true);
+    expect(__testing.isRetryableGatewayStartupError("gateway failed to become healthy")).toBe(
+      false,
+    );
+  });
+
+  it("treats startup token mismatches as retryable rpc startup errors", () => {
+    expect(
+      __testing.isRetryableRpcStartupError(
+        "unauthorized: gateway token mismatch (set gateway.remote.token to match gateway.auth.token)",
+      ),
+    ).toBe(true);
+    expect(__testing.isRetryableRpcStartupError("permission denied")).toBe(false);
+  });
+
+  it("probes gateway health with a one-shot HEAD request through the SSRF guard", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: { ok: true },
+      release,
+    });
+
+    await expect(
+      __testing.fetchLocalGatewayHealth({
+        baseUrl: "http://127.0.0.1:43124",
+        healthPath: "/readyz",
+      }),
+    ).resolves.toBe(true);
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "http://127.0.0.1:43124/readyz",
+        init: expect.objectContaining({
+          method: "HEAD",
+          headers: {
+            connection: "close",
+          },
+          signal: expect.any(AbortSignal),
+        }),
+        policy: { allowPrivateNetwork: true },
+        auditContext: "qa-lab-gateway-child-health",
+      }),
+    );
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves only sanitized gateway debug artifacts", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "qa-gateway-preserve-src-"));
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-gateway-preserve-repo-"));
+    cleanups.push(async () => {
+      await rm(tempRoot, { recursive: true, force: true });
+      await rm(repoRoot, { recursive: true, force: true });
+    });
+
+    const stdoutLogPath = path.join(tempRoot, "gateway.stdout.log");
+    const stderrLogPath = path.join(tempRoot, "gateway.stderr.log");
+    const artifactDir = path.join(repoRoot, ".artifacts", "qa-e2e", "gateway-runtime");
+    await mkdir(path.dirname(artifactDir), { recursive: true });
+    await writeFile(
+      stdoutLogPath,
+      'OPENCLAW_GATEWAY_TOKEN=qa-suite-token\nOPENAI_API_KEY="openai-live"\nurl=http://127.0.0.1:18789/#token=abc123',
+      "utf8",
+    );
+    await writeFile(stderrLogPath, "Authorization: Bearer secret+/token=123456", "utf8");
+    await mkdir(path.join(tempRoot, "state"), { recursive: true });
+    await writeFile(path.join(tempRoot, "state", "secret.txt"), "do-not-copy", "utf8");
+
+    await __testing.preserveQaGatewayDebugArtifacts({
+      preserveToDir: artifactDir,
+      stdoutLogPath,
+      stderrLogPath,
+      tempRoot,
+      repoRoot,
+    });
+
+    expect((await readdir(artifactDir)).toSorted()).toEqual([
+      "README.txt",
+      "gateway.stderr.log",
+      "gateway.stdout.log",
+    ]);
+    await expect(readFile(path.join(artifactDir, "gateway.stdout.log"), "utf8")).resolves.toBe(
+      "OPENCLAW_GATEWAY_TOKEN=<redacted>\nOPENAI_API_KEY=<redacted>\nurl=http://127.0.0.1:18789/#token=<redacted>",
+    );
+    await expect(readFile(path.join(artifactDir, "gateway.stderr.log"), "utf8")).resolves.toBe(
+      "Authorization: Bearer <redacted>",
+    );
+    await expect(readFile(path.join(artifactDir, "README.txt"), "utf8")).resolves.toContain(
+      "was not copied because it may contain credentials or auth tokens",
+    );
+  });
+
+  it("rejects preserved gateway artifacts outside the repo root", async () => {
+    await expect(
+      __testing.assertQaArtifactDirWithinRepo("/tmp/openclaw-repo", "/tmp/outside"),
+    ).rejects.toThrow("QA gateway artifact directory must stay within the repo root.");
+  });
+
+  it("rejects preserved gateway artifacts that traverse symlinks", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-gateway-guard-repo-"));
+    const outsideRoot = await mkdtemp(path.join(os.tmpdir(), "qa-gateway-guard-outside-"));
+    cleanups.push(async () => {
+      await rm(repoRoot, { recursive: true, force: true });
+      await rm(outsideRoot, { recursive: true, force: true });
+    });
+    await mkdir(path.join(repoRoot, ".artifacts"), { recursive: true });
+    await symlink(outsideRoot, path.join(repoRoot, ".artifacts", "qa-e2e"), "dir");
+
+    await expect(
+      __testing.assertQaArtifactDirWithinRepo(
+        repoRoot,
+        path.join(repoRoot, ".artifacts", "qa-e2e", "gateway-runtime"),
+      ),
+    ).rejects.toThrow("QA gateway artifact directory must not traverse symlinks.");
+  });
+
+  it("cleans startup temp roots when they are not preserved", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "qa-gateway-cleanup-src-"));
+    const stagedRoot = await mkdtemp(path.join(os.tmpdir(), "qa-gateway-cleanup-stage-"));
+    cleanups.push(async () => {
+      await rm(tempRoot, { recursive: true, force: true });
+      await rm(stagedRoot, { recursive: true, force: true });
+    });
+
+    await writeFile(path.join(tempRoot, "openclaw.json"), "{}", "utf8");
+    await writeFile(path.join(stagedRoot, "marker.txt"), "x", "utf8");
+
+    await __testing.cleanupQaGatewayTempRoots({
+      tempRoot,
+      stagedBundledPluginsRoot: stagedRoot,
+    });
+
+    await expect(lstat(tempRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(lstat(stagedRoot)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
 

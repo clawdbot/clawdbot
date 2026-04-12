@@ -139,6 +139,9 @@ type ActiveMemorySearchDebug = {
   fallback?: string;
   searchMs?: number;
   hits?: number;
+  warning?: string;
+  action?: string;
+  error?: string;
 };
 
 type ActiveRecallResult =
@@ -1016,6 +1019,9 @@ function buildPluginDebugLine(params: {
   searchDebug?: ActiveMemorySearchDebug;
 }): string | null {
   const cleaned = sanitizeDebugText(params.summary ?? "");
+  const warning = sanitizeDebugText(params.searchDebug?.warning ?? "");
+  const action = sanitizeDebugText(params.searchDebug?.action ?? "");
+  const error = sanitizeDebugText(params.searchDebug?.error ?? "");
   const debugParts: string[] = [];
   const backend = sanitizeDebugText(params.searchDebug?.backend ?? "");
   if (backend) {
@@ -1043,14 +1049,33 @@ function buildPluginDebugLine(params: {
     debugParts.push(`hits=${Math.max(0, Math.floor(params.searchDebug.hits))}`);
   }
   const prefix = debugParts.join(" ");
-  if (prefix && cleaned) {
-    return `${ACTIVE_MEMORY_DEBUG_PREFIX} ${prefix} | ${cleaned}`;
+  const warningAction =
+    warning && action && !cleaned
+      ? `${warning} ${action}`
+      : [warning, action && !cleaned ? action : ""]
+          .filter((value, index, values) => Boolean(value) && values.indexOf(value) === index)
+          .join(" | ");
+  const messages = [warningAction, cleaned]
+    .filter((value, index, values) => Boolean(value) && values.indexOf(value) === index)
+    .join(" | ");
+  const trailing = messages;
+  if (prefix && trailing) {
+    return `${ACTIVE_MEMORY_DEBUG_PREFIX} ${prefix} | ${trailing}`;
   }
   if (prefix) {
     return `${ACTIVE_MEMORY_DEBUG_PREFIX} ${prefix}`;
   }
+  if (messages) {
+    return `${ACTIVE_MEMORY_DEBUG_PREFIX} ${messages}`;
+  }
+  if (warning) {
+    return `${ACTIVE_MEMORY_DEBUG_PREFIX} ${warning}`;
+  }
   if (cleaned) {
     return `${ACTIVE_MEMORY_DEBUG_PREFIX} ${cleaned}`;
+  }
+  if (error) {
+    return `${ACTIVE_MEMORY_DEBUG_PREFIX} ${error}`;
   }
   return null;
 }
@@ -1175,20 +1200,26 @@ async function readActiveMemorySearchDebug(
       }
       const details = asRecord(message.details);
       const debug = asRecord(details?.debug);
-      if (!debug) {
+      const warning = normalizeOptionalString(details?.warning);
+      const action = normalizeOptionalString(details?.action);
+      const error = normalizeOptionalString(details?.error);
+      if (!debug && !warning && !action && !error) {
         continue;
       }
       return {
-        backend: normalizeOptionalString(debug.backend),
-        configuredMode: normalizeOptionalString(debug.configuredMode),
-        effectiveMode: normalizeOptionalString(debug.effectiveMode),
-        fallback: normalizeOptionalString(debug.fallback),
+        backend: normalizeOptionalString(debug?.backend),
+        configuredMode: normalizeOptionalString(debug?.configuredMode),
+        effectiveMode: normalizeOptionalString(debug?.effectiveMode),
+        fallback: normalizeOptionalString(debug?.fallback),
         searchMs:
-          typeof debug.searchMs === "number" && Number.isFinite(debug.searchMs)
+          typeof debug?.searchMs === "number" && Number.isFinite(debug.searchMs)
             ? debug.searchMs
             : undefined,
         hits:
-          typeof debug.hits === "number" && Number.isFinite(debug.hits) ? debug.hits : undefined,
+          typeof debug?.hits === "number" && Number.isFinite(debug.hits) ? debug.hits : undefined,
+        warning,
+        action,
+        error,
       };
     } catch {
       continue;
@@ -1212,13 +1243,19 @@ function normalizeSearchDebug(value: unknown): ActiveMemorySearchDebug | undefin
         ? debug.searchMs
         : undefined,
     hits: typeof debug.hits === "number" && Number.isFinite(debug.hits) ? debug.hits : undefined,
+    warning: normalizeOptionalString(debug.warning) ?? normalizeOptionalString(debug.reason),
+    action: normalizeOptionalString(debug.action),
+    error: normalizeOptionalString(debug.error),
   };
   return normalized.backend ||
     normalized.configuredMode ||
     normalized.effectiveMode ||
     normalized.fallback ||
     typeof normalized.searchMs === "number" ||
-    typeof normalized.hits === "number"
+    typeof normalized.hits === "number" ||
+    normalized.warning ||
+    normalized.action ||
+    normalized.error
     ? normalized
     : undefined;
 }

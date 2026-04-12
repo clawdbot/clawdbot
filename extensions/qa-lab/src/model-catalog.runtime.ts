@@ -2,6 +2,10 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import {
+  createQaChannelGatewayConfig,
+  QA_CHANNEL_REQUIRED_PLUGIN_IDS,
+} from "./qa-channel-transport.js";
 import { buildQaGatewayConfig } from "./qa-gateway-config.js";
 
 const QA_FRONTIER_PROVIDER_IDS = ["anthropic", "google", "openai"] as const;
@@ -103,7 +107,6 @@ export async function loadQaRunnerModelOptions(params: { repoRoot: string; signa
       bind: "loopback",
       gatewayPort: 0,
       gatewayToken: "qa-model-catalog",
-      qaBusBaseUrl: "http://127.0.0.1:9",
       workspaceDir,
       providerMode: "live-frontier",
       primaryModel: "openai/gpt-5.4",
@@ -111,6 +114,10 @@ export async function loadQaRunnerModelOptions(params: { repoRoot: string; signa
       enabledProviderIds: [...QA_FRONTIER_PROVIDER_IDS],
       imageGenerationModel: null,
       controlUiEnabled: false,
+      transportPluginIds: QA_CHANNEL_REQUIRED_PLUGIN_IDS,
+      transportConfig: createQaChannelGatewayConfig({
+        baseUrl: "http://127.0.0.1:9",
+      }),
     });
     await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
 

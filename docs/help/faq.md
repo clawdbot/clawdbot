@@ -3192,13 +3192,14 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
 
 <AccordionGroup>
   <Accordion title="How do I stop internal system messages from showing in chat?">
-    Most internal or tool messages only appear when **verbose** or **reasoning** is enabled
+    Most internal or tool messages only appear when **verbose**, **trace**, or **reasoning** is enabled
     for that session.
 
     Fix in the chat where you see it:
 
     ```
     /verbose off
+    /trace off
     /reasoning off
     ```
 

@@ -1743,6 +1743,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let thinkinglevel: AnyCodable?
     public let fastmode: AnyCodable?
     public let verboselevel: AnyCodable?
+    public let tracelevel: AnyCodable?
     public let reasoninglevel: AnyCodable?
     public let responseusage: AnyCodable?
     public let elevatedlevel: AnyCodable?
@@ -1765,6 +1766,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         thinkinglevel: AnyCodable?,
         fastmode: AnyCodable?,
         verboselevel: AnyCodable?,
+        tracelevel: AnyCodable?,
         reasoninglevel: AnyCodable?,
         responseusage: AnyCodable?,
         elevatedlevel: AnyCodable?,
@@ -1786,6 +1788,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.thinkinglevel = thinkinglevel
         self.fastmode = fastmode
         self.verboselevel = verboselevel
+        self.tracelevel = tracelevel
         self.reasoninglevel = reasoninglevel
         self.responseusage = responseusage
         self.elevatedlevel = elevatedlevel
@@ -1809,6 +1812,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case thinkinglevel = "thinkingLevel"
         case fastmode = "fastMode"
         case verboselevel = "verboseLevel"
+        case tracelevel = "traceLevel"
         case reasoninglevel = "reasoningLevel"
         case responseusage = "responseUsage"
         case elevatedlevel = "elevatedLevel"

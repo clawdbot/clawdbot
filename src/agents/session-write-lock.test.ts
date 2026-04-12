@@ -426,6 +426,20 @@ describe("acquireSessionWriteLock", () => {
       await expect(fs.access(lockPath)).rejects.toThrow();
     });
   });
+
+  it("does not accumulate exit listeners across reset cycles", async () => {
+    const baselineExitListeners = process.listenerCount("exit");
+
+    await withTempSessionLockFile(async ({ sessionFile }) => {
+      for (let i = 0; i < 3; i += 1) {
+        const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+        await lock.release();
+        resetSessionWriteLockStateForTest();
+        expect(process.listenerCount("exit")).toBe(baselineExitListeners);
+      }
+    });
+  });
+
   it("keeps other signal listeners registered", () => {
     const keepAlive = () => {};
     const originalKill = process.kill.bind(process);
