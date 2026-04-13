@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import type { ApiKeyCredential } from "./auth-profiles/types.js";
 import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
-import { resolveApiKeyFromCredential } from "./models-config.providers.secrets.js";
+import { resolveApiKeyFromCredential } from "./models-config.providers.secret-helpers.js";
 
 function expectedCloudflareGatewayBaseUrl(accountId: string, gatewayId: string): string {
   return `https://gateway.ai.cloudflare.com/v1/${accountId}/${gatewayId}/anthropic`;

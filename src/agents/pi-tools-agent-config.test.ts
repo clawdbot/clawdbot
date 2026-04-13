@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
+import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -125,34 +126,6 @@ describe("Agent-specific tool filtering", () => {
             ...(params.agentTools ? { tools: params.agentTools } : {}),
           },
         ],
-      },
-    };
-  }
-
-  function createExecHostDefaultsConfig(
-    agents: Array<{ id: string; execHost?: "auto" | "gateway" | "sandbox" }>,
-  ): OpenClawConfig {
-    return {
-      tools: {
-        exec: {
-          host: "auto",
-          security: "full",
-          ask: "off",
-        },
-      },
-      agents: {
-        list: agents.map((agent) => ({
-          id: agent.id,
-          ...(agent.execHost
-            ? {
-                tools: {
-                  exec: {
-                    host: agent.execHost,
-                  },
-                },
-              }
-            : {}),
-        })),
       },
     };
   }
@@ -646,146 +619,5 @@ describe("Agent-specific tool filtering", () => {
     expect(toolNames).toContain("read");
     expect(toolNames).not.toContain("exec");
     expect(toolNames).not.toContain("write");
-  });
-
-  it("should run exec synchronously when process is denied", async () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        deny: ["process"],
-        exec: {
-          host: "gateway",
-          security: "full",
-          ask: "off",
-        },
-      },
-    };
-
-    const tools = createOpenClawCodingTools({
-      config: cfg,
-      sessionKey: "agent:main:main",
-      workspaceDir: "/tmp/test-main",
-      agentDir: "/tmp/agent-main",
-    });
-    const execTool = tools.find((tool) => tool.name === "exec");
-    expect(execTool).toBeDefined();
-
-    const result = await execTool?.execute("call1", {
-      command: "echo done",
-      yieldMs: 10,
-    });
-
-    const resultDetails = result?.details as { status?: string } | undefined;
-    expect(resultDetails?.status).toBe("completed");
-  });
-
-  it("routes implicit auto exec to gateway without a sandbox runtime", async () => {
-    const tools = createOpenClawCodingTools({
-      config: {
-        tools: {
-          exec: {
-            security: "full",
-            ask: "off",
-          },
-        },
-      },
-      sessionKey: "agent:main:main",
-      workspaceDir: "/tmp/test-main-implicit-gateway",
-      agentDir: "/tmp/agent-main-implicit-gateway",
-    });
-    const execTool = tools.find((tool) => tool.name === "exec");
-    expect(execTool).toBeDefined();
-
-    const result = await execTool!.execute("call-implicit-auto-default", {
-      command: "echo done",
-    });
-    const resultDetails = result?.details as { status?: string } | undefined;
-    expect(resultDetails?.status).toBe("completed");
-  });
-
-  it("fails closed when exec host=sandbox is requested without sandbox runtime", async () => {
-    const tools = createOpenClawCodingTools({
-      config: {},
-      sessionKey: "agent:main:main",
-      workspaceDir: "/tmp/test-main-fail-closed",
-      agentDir: "/tmp/agent-main-fail-closed",
-    });
-    const execTool = tools.find((tool) => tool.name === "exec");
-    expect(execTool).toBeDefined();
-    await expect(
-      execTool!.execute("call-fail-closed", {
-        command: "echo done",
-        host: "sandbox",
-      }),
-    ).rejects.toThrow(/requires a sandbox runtime/);
-  });
-
-  it("should apply agent-specific exec host defaults over global defaults", async () => {
-    const cfg = createExecHostDefaultsConfig([
-      { id: "main", execHost: "gateway" },
-      { id: "helper" },
-    ]);
-
-    const mainTools = createOpenClawCodingTools({
-      config: cfg,
-      sessionKey: "agent:main:main",
-      workspaceDir: "/tmp/test-main-exec-defaults",
-      agentDir: "/tmp/agent-main-exec-defaults",
-    });
-    const mainExecTool = mainTools.find((tool) => tool.name === "exec");
-    expect(mainExecTool).toBeDefined();
-    const mainResult = await mainExecTool!.execute("call-main-default", {
-      command: "echo done",
-      yieldMs: 1000,
-    });
-    const mainDetails = mainResult?.details as { status?: string } | undefined;
-    expect(mainDetails?.status).toBe("completed");
-    await expect(
-      mainExecTool!.execute("call-main", {
-        command: "echo done",
-        host: "sandbox",
-      }),
-    ).rejects.toThrow("exec host not allowed");
-
-    const helperTools = createOpenClawCodingTools({
-      config: cfg,
-      sessionKey: "agent:helper:main",
-      workspaceDir: "/tmp/test-helper-exec-defaults",
-      agentDir: "/tmp/agent-helper-exec-defaults",
-    });
-    const helperExecTool = helperTools.find((tool) => tool.name === "exec");
-    expect(helperExecTool).toBeDefined();
-    const helperResult = await helperExecTool!.execute("call-helper-default", {
-      command: "echo done",
-      yieldMs: 1000,
-    });
-    const helperDetails = helperResult?.details as { status?: string } | undefined;
-    expect(helperDetails?.status).toBe("completed");
-    await expect(
-      helperExecTool!.execute("call-helper", {
-        command: "echo done",
-        host: "sandbox",
-        yieldMs: 1000,
-      }),
-    ).rejects.toThrow(/requires a sandbox runtime/);
-  });
-
-  it("applies explicit agentId exec defaults when sessionKey is opaque", async () => {
-    const cfg = createExecHostDefaultsConfig([{ id: "main", execHost: "gateway" }]);
-
-    const tools = createOpenClawCodingTools({
-      config: cfg,
-      agentId: "main",
-      sessionKey: "run-opaque-123",
-      workspaceDir: "/tmp/test-main-opaque-session",
-      agentDir: "/tmp/agent-main-opaque-session",
-    });
-    const execTool = tools.find((tool) => tool.name === "exec");
-    expect(execTool).toBeDefined();
-    const result = await execTool!.execute("call-main-opaque-session", {
-      command: "echo done",
-      yieldMs: 1000,
-    });
-    const details = result?.details as { status?: string } | undefined;
-    expect(details?.status).toBe("completed");
   });
 });

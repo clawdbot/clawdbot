@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to publish (for example v2026.3.22, v2026.3.22-beta.1, or fallback v2026.3.22-1)
+        description: Release tag to publish, or a full 40-character main commit SHA for validation-only preflight (for example v2026.3.22 or 0123456789abcdef0123456789abcdef01234567)
         required: true
         type: string
       preflight_only:
@@ -40,23 +40,31 @@ env:
   PNPM_VERSION: "10.32.1"
 
 jobs:
+  # PLEASE DON'T ADD LONG-RUNNING OR FLAKY CHECKS TO THE npm RELEASE PATH.
+  # KEEP THIS WORKFLOW SHORT AND DETERMINISTIC OR IT CAN GET STUCK AND JEOPARDIZE THE RELEASE.
+  # RELEASE-TIME LIVE OR END-TO-END VALIDATION BELONGS IN openclaw-release-checks.yml.
   preflight_openclaw_npm:
     if: ${{ inputs.preflight_only && !inputs.promote_beta_to_latest }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-32vcpu-ubuntu-2404
     permissions:
       contents: read
     steps:
-      - name: Validate tag input format
+      - name: Validate release ref input format
         env:
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_REF: ${{ inputs.tag }}
+          PREFLIGHT_ONLY: ${{ inputs.preflight_only }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
         run: |
           set -euo pipefail
-          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-beta\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]]; then
-            echo "Invalid release tag format: ${RELEASE_TAG}"
+          if [[ ! "${RELEASE_REF}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-beta\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]] && [[ ! "${RELEASE_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "Invalid release ref format: ${RELEASE_REF}"
             exit 1
           fi
-          if [[ "${RELEASE_TAG}" == *"-beta."* && "${RELEASE_NPM_DIST_TAG}" != "beta" ]]; then
+          if [[ "${RELEASE_REF}" =~ ^[0-9a-fA-F]{40}$ ]] && [[ "${PREFLIGHT_ONLY}" != "true" ]]; then
+            echo "Full commit SHA input is only supported for validation-only preflight runs."
+            exit 1
+          fi
+          if [[ "${RELEASE_REF}" == *"-beta."* && "${RELEASE_NPM_DIST_TAG}" != "beta" ]]; then
             echo "Beta prerelease tags must publish to npm dist-tag beta."
             exit 1
           fi
@@ -70,7 +78,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: refs/tags/${{ inputs.tag }}
+          ref: ${{ inputs.tag }}
           fetch-depth: 0
 
       - name: Setup Node environment
@@ -110,49 +118,41 @@ jobs:
       - name: Build Control UI
         run: pnpm ui:build
 
-      - name: Validate release tag and package metadata
+      - name: Validate release metadata
         if: ${{ inputs.preflight_run_id == '' }}
         env:
           OPENCLAW_NPM_RELEASE_SKIP_PACK_CHECK: "1"
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_REF: ${{ inputs.tag }}
+          PREFLIGHT_ONLY: ${{ inputs.preflight_only }}
           RELEASE_MAIN_REF: origin/main
           OPENCLAW_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag }}
         run: |
           set -euo pipefail
           RELEASE_SHA=$(git rev-parse HEAD)
-          export RELEASE_SHA RELEASE_TAG RELEASE_MAIN_REF
+          export RELEASE_SHA RELEASE_MAIN_REF
           # Fetch the full main ref so merge-base ancestry checks keep working
           # for older tagged commits that are still contained in main.
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if [[ "${RELEASE_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            MAIN_SHA="$(git rev-parse origin/main)"
+            if [[ "${RELEASE_SHA}" != "${MAIN_SHA}" ]]; then
+              echo "Validation-only SHA mode only supports the current origin/main HEAD." >&2
+              exit 1
+            fi
+            RELEASE_TAG="v$(node -p "require('./package.json').version")"
+            export RELEASE_TAG
+            echo "Validation-only SHA mode: using synthetic release tag ${RELEASE_TAG} for package metadata checks."
+          else
+            RELEASE_TAG="${RELEASE_REF}"
+            export RELEASE_TAG
+          fi
           pnpm release:openclaw:npm:check
 
+      # KEEP THIS LANE LIMITED TO FAST, REPEATABLE RELEASE READINESS CHECKS.
+      # IF A CHECK CAN TAKE A LONG TIME, NEEDS LIVE CREDENTIALS, OR IS KNOWN TO BE FLAKY,
+      # IT BELONGS IN openclaw-release-checks.yml INSTEAD OF BLOCKING npm PUBLISH.
       - name: Verify release contents
         run: pnpm release:check
-
-      - name: Validate live cache credentials
-        if: ${{ github.ref == 'refs/heads/main' }}
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${OPENAI_API_KEY}" ]]; then
-            echo "Missing OPENAI_API_KEY secret for release live cache validation." >&2
-            exit 1
-          fi
-          if [[ -z "${ANTHROPIC_API_KEY}" ]]; then
-            echo "Missing ANTHROPIC_API_KEY secret for release live cache validation." >&2
-            exit 1
-          fi
-
-      - name: Verify live prompt cache floors
-        if: ${{ github.ref == 'refs/heads/main' }}
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENCLAW_LIVE_CACHE_TEST: "1"
-          OPENCLAW_LIVE_TEST: "1"
-        run: pnpm test:live:cache
 
       - name: Pack prepared npm tarball
         id: packed_tarball
@@ -242,7 +242,7 @@ jobs:
 
   validate_publish_request:
     if: ${{ !inputs.preflight_only && !inputs.promote_beta_to_latest }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-32vcpu-ubuntu-2404
     permissions:
       contents: read
     steps:
@@ -267,7 +267,8 @@ jobs:
           fi
 
   publish_openclaw_npm:
-    # npm trusted publishing + provenance requires a GitHub-hosted runner.
+    # KEEP THE REAL RELEASE/PUBLISH PATH ON A GITHUB-HOSTED RUNNER.
+    # npm trusted publishing + provenance requires this to stay on ubuntu-latest.
     needs: [validate_publish_request]
     if: ${{ !inputs.preflight_only && !inputs.promote_beta_to_latest }}
     runs-on: ubuntu-latest
@@ -407,6 +408,9 @@ jobs:
           bash scripts/openclaw-npm-publish.sh --publish "${publish_target}"
 
   promote_beta_to_latest:
+    # KEEP THE MUTATING RELEASE PATH ON A GITHUB-HOSTED RUNNER TOO.
+    # This job changes the public npm dist-tags, so we keep it aligned with the
+    # real release path instead of moving it onto the larger Blacksmith runners.
     if: ${{ inputs.promote_beta_to_latest }}
     runs-on: ubuntu-latest
     environment: npm-release

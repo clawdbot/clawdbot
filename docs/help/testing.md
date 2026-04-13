@@ -69,10 +69,12 @@ These commands sit beside the main test suites when you need QA-lab realism:
   - Runs the Matrix live QA lane against a disposable Docker-backed Tuwunel homeserver.
   - Provisions three temporary Matrix users (`driver`, `sut`, `observer`) plus one private room, then starts a QA gateway child with the real Matrix plugin as the SUT transport.
   - Uses the pinned stable Tuwunel image `ghcr.io/matrix-construct/tuwunel:v1.5.1` by default. Override with `OPENCLAW_QA_MATRIX_TUWUNEL_IMAGE` when you need to test a different image.
+  - Matrix currently supports only `--credential-source env` because the lane provisions disposable users locally.
   - Writes a Matrix QA report, summary, and observed-events artifact under `.artifacts/qa-e2e/...`.
 - `pnpm openclaw qa telegram`
   - Runs the Telegram live QA lane against a real private group using the driver and SUT bot tokens from env.
   - Requires `OPENCLAW_QA_TELEGRAM_GROUP_ID`, `OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN`, and `OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN`. The group id must be the numeric Telegram chat id.
+  - Supports `--credential-source convex` for shared pooled credentials. Use env mode by default, or set `OPENCLAW_QA_CREDENTIAL_SOURCE=convex` to opt into pooled leases.
   - Requires two distinct bots in the same private group, with the SUT bot exposing a Telegram username.
   - For stable bot-to-bot observation, enable Bot-to-Bot Communication Mode in `@BotFather` for both bots and ensure the driver bot can observe group bot traffic.
   - Writes a Telegram QA report, summary, and observed-messages artifact under `.artifacts/qa-e2e/...`.
@@ -86,6 +88,80 @@ transport coverage matrix.
 | -------- | ------ | -------------- | --------------- | --------------- | -------------- | ---------------- | ---------------- | -------------------- | ------------ |
 | Matrix   | x      | x              | x               | x               | x              | x                | x                | x                    |              |
 | Telegram | x      |                |                 |                 |                |                  |                  |                      | x            |
+
+### Shared Telegram credentials via Convex (v1)
+
+When `--credential-source convex` (or `OPENCLAW_QA_CREDENTIAL_SOURCE=convex`) is enabled for
+`openclaw qa telegram`, QA lab acquires an exclusive lease from a Convex-backed pool, heartbeats
+that lease while the lane is running, and releases the lease on shutdown.
+
+Reference Convex project scaffold:
+
+- `qa/convex-credential-broker/`
+
+Required env vars:
+
+- `OPENCLAW_QA_CONVEX_SITE_URL` (for example `https://your-deployment.convex.site`)
+- One secret for the selected role:
+  - `OPENCLAW_QA_CONVEX_SECRET_MAINTAINER` for `maintainer`
+  - `OPENCLAW_QA_CONVEX_SECRET_CI` for `ci`
+- Credential role selection:
+  - CLI: `--credential-role maintainer|ci`
+  - Env default: `OPENCLAW_QA_CREDENTIAL_ROLE` (defaults to `maintainer`)
+
+Optional env vars:
+
+- `OPENCLAW_QA_CREDENTIAL_LEASE_TTL_MS` (default `1200000`)
+- `OPENCLAW_QA_CREDENTIAL_HEARTBEAT_INTERVAL_MS` (default `30000`)
+- `OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS` (default `90000`)
+- `OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS` (default `15000`)
+- `OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX` (default `/qa-credentials/v1`)
+- `OPENCLAW_QA_CREDENTIAL_OWNER_ID` (optional trace id)
+- `OPENCLAW_QA_ALLOW_INSECURE_HTTP=1` allows loopback `http://` Convex URLs for local-only development.
+
+`OPENCLAW_QA_CONVEX_SITE_URL` should use `https://` in normal operation.
+
+Maintainer admin commands (pool add/remove/list) require
+`OPENCLAW_QA_CONVEX_SECRET_MAINTAINER` specifically.
+
+CLI helpers for maintainers:
+
+```bash
+pnpm openclaw qa credentials add --kind telegram --payload-file qa/telegram-credential.json
+pnpm openclaw qa credentials list --kind telegram
+pnpm openclaw qa credentials remove --credential-id <credential-id>
+```
+
+Use `--json` for machine-readable output in scripts and CI utilities.
+
+Default endpoint contract (`OPENCLAW_QA_CONVEX_SITE_URL` + `/qa-credentials/v1`):
+
+- `POST /acquire`
+  - Request: `{ kind, ownerId, actorRole, leaseTtlMs, heartbeatIntervalMs }`
+  - Success: `{ status: "ok", credentialId, leaseToken, payload, leaseTtlMs?, heartbeatIntervalMs? }`
+  - Exhausted/retryable: `{ status: "error", code: "POOL_EXHAUSTED" | "NO_CREDENTIAL_AVAILABLE", ... }`
+- `POST /heartbeat`
+  - Request: `{ kind, ownerId, actorRole, credentialId, leaseToken, leaseTtlMs }`
+  - Success: `{ status: "ok" }` (or empty `2xx`)
+- `POST /release`
+  - Request: `{ kind, ownerId, actorRole, credentialId, leaseToken }`
+  - Success: `{ status: "ok" }` (or empty `2xx`)
+- `POST /admin/add` (maintainer secret only)
+  - Request: `{ kind, actorId, payload, note?, status? }`
+  - Success: `{ status: "ok", credential }`
+- `POST /admin/remove` (maintainer secret only)
+  - Request: `{ credentialId, actorId }`
+  - Success: `{ status: "ok", changed, credential }`
+  - Active lease guard: `{ status: "error", code: "LEASE_ACTIVE", ... }`
+- `POST /admin/list` (maintainer secret only)
+  - Request: `{ kind?, status?, includePayload?, limit? }`
+  - Success: `{ status: "ok", credentials, count }`
+
+Payload shape for Telegram kind:
+
+- `{ groupId: string, driverToken: string, sutToken: string }`
+- `groupId` must be a numeric Telegram chat id string.
+- `admin/add` validates this shape for `kind: "telegram"` and rejects malformed payloads.
 
 ### Adding a channel to QA
 

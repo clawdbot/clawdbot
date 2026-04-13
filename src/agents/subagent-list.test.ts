@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { updateSessionStore } from "../config/sessions.js";
+import { updateSessionStore } from "../config/sessions/store.js";
 import { buildSubagentList } from "./subagent-list.js";
 import {
   addSubagentRunForTests,

@@ -27,24 +27,36 @@ export type GatewayResponseFrame = {
   id: string;
   ok: boolean;
   payload?: unknown;
-  error?: { code: string; message: string; details?: unknown };
+  error?: {
+    code: string;
+    message: string;
+    details?: unknown;
+    retryable?: boolean;
+    retryAfterMs?: number;
+  };
 };
 
 export type GatewayErrorInfo = {
   code: string;
   message: string;
   details?: unknown;
+  retryable?: boolean;
+  retryAfterMs?: number;
 };
 
 export class GatewayRequestError extends Error {
   readonly gatewayCode: string;
   readonly details?: unknown;
+  readonly retryable: boolean;
+  readonly retryAfterMs?: number;
 
   constructor(error: GatewayErrorInfo) {
     super(error.message);
     this.name = "GatewayRequestError";
     this.gatewayCode = error.code;
     this.details = error.details;
+    this.retryable = error.retryable === true;
+    this.retryAfterMs = error.retryAfterMs;
   }
 }
 
@@ -478,6 +490,8 @@ export class GatewayBrowserClient {
         code: err.gatewayCode,
         message: err.message,
         details: err.details,
+        retryable: err.retryable,
+        retryAfterMs: err.retryAfterMs,
       };
     } else {
       this.pendingConnectError = undefined;
@@ -555,6 +569,8 @@ export class GatewayBrowserClient {
             code: res.error?.code ?? "UNAVAILABLE",
             message: res.error?.message ?? "request failed",
             details: res.error?.details,
+            retryable: res.error?.retryable,
+            retryAfterMs: res.error?.retryAfterMs,
           }),
         );
       }

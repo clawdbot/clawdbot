@@ -41,10 +41,29 @@ OpenClaw has three public release lanes:
   `dist/*` release artifacts and Control UI bundle exist for the pack
   validation step
 - Run `pnpm release:check` before every tagged release
-- Main-branch npm preflight also runs
+- Release checks now run in a separate manual workflow:
+  `OpenClaw Release Checks`
+- This split is intentional: keep the real npm release path short,
+  deterministic, and artifact-focused, while slower live checks stay in their
+  own lane so they do not stall or block publish
+- Release checks must be dispatched from the `main` workflow ref so the
+  workflow logic and secrets stay canonical
+- That workflow accepts either an existing release tag or the current full
+  40-character `main` commit SHA
+- In commit-SHA mode it only accepts the current `origin/main` HEAD; use a
+  release tag for older release commits
+- `OpenClaw NPM Release` validation-only preflight also accepts the current
+  full 40-character `main` commit SHA without requiring a pushed tag
+- That SHA path is validation-only and cannot be promoted into a real publish
+- In SHA mode the workflow synthesizes `v<package.json version>` only for the
+  package metadata check; real publish still requires a real release tag
+- Both workflows keep the real publish and promotion path on GitHub-hosted
+  runners, while the non-mutating validation path can use the larger
+  Blacksmith Linux runners
+- That workflow runs
   `OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_CACHE_TEST=1 pnpm test:live:cache`
-  before packaging the tarball, using both `OPENAI_API_KEY` and
-  `ANTHROPIC_API_KEY` workflow secrets
+  using both `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` workflow secrets
+- npm release preflight no longer waits on the separate release checks lane
 - Run `RELEASE_TAG=vYYYY.M.D node --import tsx scripts/openclaw-npm-release-check.ts`
   (or the matching beta/correction tag) before approval
 - After npm publish, run
@@ -85,7 +104,8 @@ OpenClaw has three public release lanes:
 `OpenClaw NPM Release` accepts these operator-controlled inputs:
 
 - `tag`: required release tag such as `v2026.4.2`, `v2026.4.2-1`, or
-  `v2026.4.2-beta.1`
+  `v2026.4.2-beta.1`; when `preflight_only=true`, it may also be the current
+  full 40-character `main` commit SHA for validation-only preflight
 - `preflight_only`: `true` for validation/build/package only, `false` for the
   real publish path
 - `preflight_run_id`: required on the real publish path so the workflow reuses
@@ -94,10 +114,17 @@ OpenClaw has three public release lanes:
 - `promote_beta_to_latest`: `true` to skip publish and move an already-published
   stable `beta` build onto `latest`
 
+`OpenClaw Release Checks` accepts these operator-controlled inputs:
+
+- `ref`: existing release tag or the current full 40-character `main` commit
+  SHA to validate
+
 Rules:
 
 - Stable and correction tags may publish to either `beta` or `latest`
 - Beta prerelease tags may publish only to `beta`
+- Full commit SHA input is allowed only when `preflight_only=true`
+- Release checks commit-SHA mode also requires the current `origin/main` HEAD
 - The real publish path must use the same `npm_dist_tag` used during preflight;
   the workflow verifies that metadata before publish continues
 - Promotion mode must use a stable or correction tag, `preflight_only=false`,
@@ -110,12 +137,18 @@ Rules:
 When cutting a stable npm release:
 
 1. Run `OpenClaw NPM Release` with `preflight_only=true`
+   - Before a tag exists, you may use the current full `main` commit SHA for a
+     validation-only dry run of the preflight workflow
 2. Choose `npm_dist_tag=beta` for the normal beta-first flow, or `latest` only
    when you intentionally want a direct stable publish
-3. Save the successful `preflight_run_id`
-4. Run `OpenClaw NPM Release` again with `preflight_only=false`, the same
+3. Run `OpenClaw Release Checks` separately with the same tag or the
+   full current `main` commit SHA when you want live prompt cache coverage
+   - This is separate on purpose so live coverage stays available without
+     recoupling long-running or flaky checks to the publish workflow
+4. Save the successful `preflight_run_id`
+5. Run `OpenClaw NPM Release` again with `preflight_only=false`, the same
    `tag`, the same `npm_dist_tag`, and the saved `preflight_run_id`
-5. If the release landed on `beta`, run `OpenClaw NPM Release` later with the
+6. If the release landed on `beta`, run `OpenClaw NPM Release` later with the
    same stable `tag`, `promote_beta_to_latest=true`, `preflight_only=false`,
    `preflight_run_id` empty, and `npm_dist_tag=beta` when you want to move that
    published build to `latest`
@@ -129,6 +162,7 @@ documented and operator-visible.
 ## Public references
 
 - [`.github/workflows/openclaw-npm-release.yml`](https://github.com/openclaw/openclaw/blob/main/.github/workflows/openclaw-npm-release.yml)
+- [`.github/workflows/openclaw-release-checks.yml`](https://github.com/openclaw/openclaw/blob/main/.github/workflows/openclaw-release-checks.yml)
 - [`scripts/openclaw-npm-release-check.ts`](https://github.com/openclaw/openclaw/blob/main/scripts/openclaw-npm-release-check.ts)
 - [`scripts/package-mac-dist.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-dist.sh)
 - [`scripts/make_appcast.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/make_appcast.sh)

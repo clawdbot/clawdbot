@@ -9,6 +9,7 @@ type ProviderRuntimeModule = typeof import("../plugins/provider-runtime.js");
 
 let NON_ENV_SECRETREF_MARKER: typeof import("./model-auth-markers.js").NON_ENV_SECRETREF_MARKER;
 let MINIMAX_OAUTH_MARKER: typeof import("./model-auth-markers.js").MINIMAX_OAUTH_MARKER;
+let CUSTOM_LOCAL_AUTH_MARKER: typeof import("./model-auth-markers.js").CUSTOM_LOCAL_AUTH_MARKER;
 let resolveApiKeyFromCredential: typeof import("./models-config.providers.secrets.js").resolveApiKeyFromCredential;
 let createProviderAuthResolver: typeof import("./models-config.providers.secrets.js").createProviderAuthResolver;
 let mockedResolveProviderSyntheticAuthWithPlugin: ReturnType<
@@ -26,6 +27,7 @@ async function loadProviderAuthModules() {
   mockedResolveProviderSyntheticAuthWithPlugin = vi.mocked(
     providerRuntimeModule.resolveProviderSyntheticAuthWithPlugin,
   );
+  CUSTOM_LOCAL_AUTH_MARKER = markersModule.CUSTOM_LOCAL_AUTH_MARKER;
   NON_ENV_SECRETREF_MARKER = markersModule.NON_ENV_SECRETREF_MARKER;
   MINIMAX_OAUTH_MARKER = markersModule.MINIMAX_OAUTH_MARKER;
   resolveApiKeyFromCredential = secretsModule.resolveApiKeyFromCredential;
@@ -158,6 +160,39 @@ describe("models-config provider auth provenance", () => {
     expect(auth("xai")).toEqual({
       apiKey: NON_ENV_SECRETREF_MARKER,
       discoveryApiKey: "xai-plugin-key",
+      mode: "api_key",
+      source: "none",
+    });
+  });
+
+  it("preserves shared non-secret synthetic auth markers from provider hooks", () => {
+    mockedResolveProviderSyntheticAuthWithPlugin.mockReturnValue({
+      apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+      mode: "api-key",
+      source: "test plugin",
+    });
+    const auth = createProviderAuthResolver(
+      {} as NodeJS.ProcessEnv,
+      {
+        version: 1,
+        profiles: {},
+      },
+      {
+        plugins: {
+          entries: {
+            lmstudio: {
+              config: {
+                models: [{ id: "qwen/qwen3.5-9b" }],
+              },
+            },
+          },
+        },
+      },
+    );
+
+    expect(auth("lmstudio")).toEqual({
+      apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+      discoveryApiKey: undefined,
       mode: "api_key",
       source: "none",
     });

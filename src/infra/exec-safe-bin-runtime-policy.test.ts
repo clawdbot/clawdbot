@@ -43,10 +43,12 @@ describe("exec safe-bin runtime policy", () => {
         "jq",
         " C:\\Tools\\Python3.EXE ",
         "myfilter",
+        "busybox",
+        "toybox",
         "/usr/bin/node",
         "/opt/homebrew/bin/gawk",
       ]),
-    ).toEqual(["gawk", "node", "python3"]);
+    ).toEqual(["busybox", "gawk", "node", "python3", "toybox"]);
   });
 
   it("merges and normalizes safe-bin profile fixtures", () => {

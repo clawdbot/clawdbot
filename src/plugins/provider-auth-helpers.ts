@@ -23,6 +23,7 @@ const resolveAuthAgentDir = (agentDir?: string) => agentDir ?? resolveOpenClawAg
 
 export type ApiKeyStorageOptions = {
   secretInputMode?: SecretInputMode;
+  config?: OpenClawConfig;
 };
 
 export type WriteOAuthCredentialsOptions = {
@@ -43,8 +44,11 @@ function parseEnvSecretRef(value: string): SecretRef | null {
   return buildEnvSecretRef(match[1]);
 }
 
-function resolveProviderDefaultEnvSecretRef(provider: string): SecretRef {
-  const envVars = getProviderEnvVars(provider);
+function resolveProviderDefaultEnvSecretRef(provider: string, config?: OpenClawConfig): SecretRef {
+  const envVars = getProviderEnvVars(provider, {
+    ...(config ? { config } : {}),
+    includeUntrustedWorkspacePlugins: false,
+  });
   const envVar = envVars?.find((candidate) => candidate.trim().length > 0);
   if (!envVar) {
     throw new Error(
@@ -69,7 +73,7 @@ function resolveApiKeySecretInput(
     return inlineEnvRef;
   }
   if (options?.secretInputMode === "ref") {
-    return resolveProviderDefaultEnvSecretRef(provider);
+    return resolveProviderDefaultEnvSecretRef(provider, options.config);
   }
   return normalized;
 }

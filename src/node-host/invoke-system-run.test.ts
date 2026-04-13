@@ -384,6 +384,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     sendNodeEvent?: HandleSystemRunInvokeOptions["sendNodeEvent"];
     skillBinsCurrent?: () => Promise<Array<{ name: string; resolvedPath: string }>>;
     isCmdExeInvocation?: HandleSystemRunInvokeOptions["isCmdExeInvocation"];
+    sanitizeEnv?: HandleSystemRunInvokeOptions["sanitizeEnv"];
   }): Promise<{
     runCommand: MockedRunCommand;
     runViaMacAppExecHost: MockedRunViaMacAppExecHost;
@@ -443,7 +444,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       resolveExecSecurity: () => params.security ?? "full",
       resolveExecAsk: () => params.ask ?? "off",
       isCmdExeInvocation: params.isCmdExeInvocation ?? (() => false),
-      sanitizeEnv: () => undefined,
+      sanitizeEnv: params.sanitizeEnv ?? (() => undefined),
       runCommand,
       runViaMacAppExecHost,
       sendNodeEvent,
@@ -1183,6 +1184,49 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     });
     expectInvokeErrorMessage(sendInvokeResult, {
       message: "CLASSPATH",
+    });
+  });
+
+  it("applies shell-wrapper env allowlist for shell executable commands without inline payload", async () => {
+    const { runCommand, sendInvokeResult } = await runSystemInvoke({
+      preferMacAppExecHost: false,
+      security: "full",
+      ask: "off",
+      command: ["/bin/sh", "./script.sh"],
+      env: {
+        OPENCLAW_TEST: "1",
+        LANG: "C",
+        LC_TIME: "C",
+      },
+      sanitizeEnv: (overrides) => overrides ?? undefined,
+    });
+
+    expect(runCommand).toHaveBeenCalledTimes(1);
+    const passedEnv = runCommand.mock.calls[0]?.[2];
+    expect(passedEnv).toEqual({
+      LANG: "C",
+      LC_TIME: "C",
+    });
+    expectInvokeOk(sendInvokeResult);
+  });
+
+  it("rejects blocked env assignment keys embedded in command argv", async () => {
+    const { runCommand, sendInvokeResult } = await runSystemInvoke({
+      preferMacAppExecHost: false,
+      security: "full",
+      ask: "off",
+      command: ["/usr/bin/env", "SHELLOPTS=xtrace", "PS4=$(id)", "bash", "-lc", "echo ok"],
+    });
+
+    expect(runCommand).not.toHaveBeenCalled();
+    expectInvokeErrorMessage(sendInvokeResult, {
+      message: "SYSTEM_RUN_DENIED: command env assignment rejected",
+    });
+    expectInvokeErrorMessage(sendInvokeResult, {
+      message: "SHELLOPTS",
+    });
+    expectInvokeErrorMessage(sendInvokeResult, {
+      message: "PS4",
     });
   });
 

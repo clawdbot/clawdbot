@@ -1,4 +1,3 @@
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
@@ -13,7 +12,10 @@ import {
   ensureOutboundSessionEntry,
   resolveOutboundSessionRoute,
 } from "../../infra/outbound/outbound-session.js";
-import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
+import {
+  createOutboundPayloadPlan,
+  projectOutboundPayloadPlanForMirror,
+} from "../../infra/outbound/payloads.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
@@ -405,16 +407,11 @@ export const sendHandlers: GatewayRequestHandlers = {
         });
         const deliveryTarget = idLikeTarget?.to ?? resolvedTarget.to;
         const outboundDeps = context.deps ? createOutboundSendDeps(context.deps) : undefined;
-        const mirrorPayloads = normalizeReplyPayloadsForDelivery([
-          { text: message, mediaUrl, mediaUrls },
-        ]);
-        const mirrorText = mirrorPayloads
-          .map((payload) => payload.text)
-          .filter(Boolean)
-          .join("\n");
-        const mirrorMediaUrls = mirrorPayloads.flatMap(
-          (payload) => resolveSendableOutboundReplyParts(payload).mediaUrls,
-        );
+        const outboundPayloads = [{ text: message, mediaUrl, mediaUrls }];
+        const outboundPayloadPlan = createOutboundPayloadPlan(outboundPayloads);
+        const mirrorProjection = projectOutboundPayloadPlanForMirror(outboundPayloadPlan);
+        const mirrorText = mirrorProjection.text;
+        const mirrorMediaUrls = mirrorProjection.mediaUrls;
         const providedSessionKey = normalizeOptionalLowercaseString(request.sessionKey);
         const explicitAgentId = normalizeOptionalString(request.agentId);
         const sessionAgentId = providedSessionKey
@@ -460,7 +457,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           channel: outboundChannel,
           to: deliveryTarget,
           accountId,
-          payloads: [{ text: message, mediaUrl, mediaUrls }],
+          payloads: outboundPayloads,
           session: outboundSession,
           gifPlayback: request.gifPlayback,
           threadId: threadId ?? null,

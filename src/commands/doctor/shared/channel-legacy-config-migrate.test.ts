@@ -1,5 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
-import { applyChannelDoctorCompatibilityMigrations } from "./channel-legacy-config-migrate.js";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 const applyPluginDoctorCompatibilityMigrations = vi.hoisted(() => vi.fn());
 
@@ -7,6 +6,16 @@ vi.mock("../../../plugins/doctor-contract-registry.js", () => ({
   applyPluginDoctorCompatibilityMigrations: (...args: unknown[]) =>
     applyPluginDoctorCompatibilityMigrations(...args),
 }));
+
+let applyChannelDoctorCompatibilityMigrations: typeof import("./channel-legacy-config-migrate.js").applyChannelDoctorCompatibilityMigrations;
+
+beforeAll(async () => {
+  // Commands runs on the shared non-isolated worker, so reload after installing
+  // this file's mock to avoid inheriting a cached real registry import.
+  vi.resetModules();
+  ({ applyChannelDoctorCompatibilityMigrations } =
+    await import("./channel-legacy-config-migrate.js"));
+});
 
 describe("bundled channel legacy config migrations", () => {
   it("normalizes legacy private-network aliases exposed through bundled contract surfaces", () => {

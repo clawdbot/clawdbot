@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createResolvedApproverActionAuthAdapter } from "../plugin-sdk/approval-auth-helpers.js";
 
 const getChannelPluginMock = vi.hoisted(() => vi.fn());
 
@@ -115,5 +116,43 @@ describe("resolveApprovalCommandAuthorization", () => {
       action: "approve",
       approvalKind: "exec",
     });
+  });
+
+  it("keeps empty approver fallback implicit without bypassing channel sender auth", () => {
+    getChannelPluginMock.mockReturnValue({
+      approvalCapability: createResolvedApproverActionAuthAdapter({
+        channelLabel: "Signal",
+        resolveApprovers: () => [],
+      }),
+    });
+
+    expect(
+      resolveApprovalCommandAuthorization({
+        cfg: {} as never,
+        channel: "signal",
+        accountId: "work",
+        senderId: "uuid:attacker",
+        kind: "exec",
+      }),
+    ).toEqual({ authorized: true, explicit: false });
+  });
+
+  it("keeps configured approvers explicit when sender matches", () => {
+    getChannelPluginMock.mockReturnValue({
+      approvalCapability: createResolvedApproverActionAuthAdapter({
+        channelLabel: "Signal",
+        resolveApprovers: () => ["uuid:owner"],
+      }),
+    });
+
+    expect(
+      resolveApprovalCommandAuthorization({
+        cfg: {} as never,
+        channel: "signal",
+        accountId: "work",
+        senderId: "uuid:owner",
+        kind: "exec",
+      }),
+    ).toEqual({ authorized: true, explicit: true });
   });
 });

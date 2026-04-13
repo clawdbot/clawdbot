@@ -107,6 +107,38 @@ export function isShellWrapperExecutable(token: string): boolean {
   return SHELL_WRAPPER_CANONICAL.has(normalizeExecutableToken(token));
 }
 
+function isShellWrapperInvocationInternal(argv: string[], depth: number): boolean {
+  if (!isWithinDispatchClassificationDepth(depth)) {
+    return false;
+  }
+  const token0 = argv[0]?.trim();
+  if (!token0) {
+    return false;
+  }
+
+  const dispatchUnwrap = unwrapKnownDispatchWrapperInvocation(argv);
+  if (dispatchUnwrap.kind === "blocked") {
+    return false;
+  }
+  if (dispatchUnwrap.kind === "unwrapped") {
+    return isShellWrapperInvocationInternal(dispatchUnwrap.argv, depth + 1);
+  }
+
+  const shellMultiplexerUnwrap = unwrapKnownShellMultiplexerInvocation(argv);
+  if (shellMultiplexerUnwrap.kind === "blocked") {
+    return false;
+  }
+  if (shellMultiplexerUnwrap.kind === "unwrapped") {
+    return isShellWrapperInvocationInternal(shellMultiplexerUnwrap.argv, depth + 1);
+  }
+
+  return isShellWrapperExecutable(token0);
+}
+
+export function isShellWrapperInvocation(argv: string[]): boolean {
+  return isShellWrapperInvocationInternal(argv, 0);
+}
+
 function normalizeRawCommand(rawCommand?: string | null): string | null {
   const trimmed = rawCommand?.trim() ?? "";
   return trimmed.length > 0 ? trimmed : null;

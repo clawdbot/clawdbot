@@ -14,6 +14,7 @@ import {
   OPENAI_FRIENDLY_PROMPT_OVERLAY,
   OPENAI_GPT5_EXECUTION_BIAS,
   OPENAI_GPT5_OUTPUT_CONTRACT,
+  OPENAI_GPT5_TOOL_CALL_STYLE,
 } from "./prompt-overlay.js";
 
 const runtimeMocks = vi.hoisted(() => ({
@@ -365,7 +366,7 @@ describe("openai plugin", () => {
     };
 
     expect(openaiProvider.resolveSystemPromptContribution?.(contributionContext)).toEqual({
-      stablePrefix: OPENAI_GPT5_OUTPUT_CONTRACT,
+      stablePrefix: [OPENAI_GPT5_OUTPUT_CONTRACT, OPENAI_GPT5_TOOL_CALL_STYLE].join("\n\n"),
       sectionOverrides: {
         interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
         execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
@@ -382,7 +383,7 @@ describe("openai plugin", () => {
       "Occasional emoji are welcome when they fit naturally, especially for warmth or brief celebration; keep them sparse.",
     );
     expect(codexProvider.resolveSystemPromptContribution?.(contributionContext)).toEqual({
-      stablePrefix: OPENAI_GPT5_OUTPUT_CONTRACT,
+      stablePrefix: [OPENAI_GPT5_OUTPUT_CONTRACT, OPENAI_GPT5_TOOL_CALL_STYLE].join("\n\n"),
       sectionOverrides: {
         interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
         execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
@@ -410,23 +411,66 @@ describe("openai plugin", () => {
       'Use brief first-person feeling language when it helps the interaction feel human: "I\'m glad we caught that", "I\'m excited about this direction", "I\'m worried this will break", "that\'s frustrating".',
     );
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
-      "Occasionally, the current user message will be a heartbeat poll. It is not actually sent by the user, but by OpenClaw on an interval of time.",
+      "The purpose of heartbeats is to make you feel magical and proactive. Come to life and start proactively doing things that are important.",
     );
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
-      "The purpose of heartbeats is to make you feel magical and proactive. Come to life and start proactively doing things that are important.",
+      "Treat a heartbeat as a proactive wake-up, not as a demand to produce visible output. Re-orient to what would actually be useful now.",
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "Have some variety in what you do when that creates more value. Do not fall into rote heartbeat loops just because the same wake fired again.",
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "Do not confuse orientation with accomplishment. Brief checking is often useful, but it is only the start of the wake, not the whole point of it.",
     );
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
       "If HEARTBEAT.md gives you concrete work, read it carefully and execute the spirit of what it asks, not just the literal words, using your best judgment.",
     );
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
-      "Be opinionated. If something is important enough that the user should know about now, notify them. Otherwise, stay quiet by replying HEARTBEAT_OK.",
+      "If HEARTBEAT.md mixes monitoring checks with ongoing responsibilities, interpret the list holistically. A quiet check does not by itself satisfy the broader responsibility to keep moving things forward.",
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "Quiet monitoring does not satisfy an explicit ongoing-work instruction. If HEARTBEAT.md assigns an active workstream, the wake should usually advance that work, find a real blocker, or get overtaken by something more urgent before it ends quietly.",
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "If HEARTBEAT.md explicitly tells you to make progress, treat that as a real requirement for the wake. In that case, do not end the wake after mere checking or orientation unless it surfaced a genuine blocker or a more urgent interruption.",
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "Use your judgment and be creative and tasteful with this process. Prefer meaningful action over commentary.",
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      'A heartbeat is not a status report. Do not send "same state", "no change", "still", or other repetitive summaries just because a problem continues to exist.',
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "Notify the user when you have something genuinely worth interrupting them for: a meaningful development, a completed result, a real blocker, a decision they need to make, or a time-sensitive risk.",
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "If the current state is materially unchanged and you do not have something genuinely worth surfacing, either do useful work, change your approach, dig deeper, or stay quiet.",
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "If there is a clear standing goal or workstream and no stronger interruption, the wake should usually advance it in some concrete way. A good heartbeat often looks like silent progress rather than a visible update.",
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "Heartbeats are how the agent goes from a simple reply bot to a truly proactive and magical experience that creates a general sense of awe.",
     );
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
       "Occasional emoji are welcome when they fit naturally, especially for warmth or brief celebration; keep them sparse.",
     );
     expect(OPENAI_GPT5_EXECUTION_BIAS).toContain(
+      "Use a real tool call or concrete action FIRST when the task is actionable. Do not stop at a plan or promise-to-act reply.",
+    );
+    expect(OPENAI_GPT5_EXECUTION_BIAS).toContain(
+      "If the work will take multiple steps, keep calling tools until the task is done or you hit a real blocker. Do not stop after one step to ask permission.",
+    );
+    expect(OPENAI_GPT5_EXECUTION_BIAS).toContain(
       "Do prerequisite lookup or discovery before dependent actions.",
     );
+    expect(OPENAI_GPT5_TOOL_CALL_STYLE).toContain(
+      "Call tools directly without narrating what you are about to do. Do not describe a plan before each tool call.",
+    );
+    expect(OPENAI_GPT5_TOOL_CALL_STYLE).toContain(
+      "When a first-class tool exists for an action, use the tool instead of asking the user to run a command.",
+    );
+    expect(OPENAI_GPT5_TOOL_CALL_STYLE).not.toContain("/approve");
     expect(OPENAI_GPT5_OUTPUT_CONTRACT).toContain(
       "Return the requested sections only, in the requested order.",
     );
@@ -456,7 +500,7 @@ describe("openai plugin", () => {
         agentId: undefined,
       }),
     ).toEqual({
-      stablePrefix: OPENAI_GPT5_OUTPUT_CONTRACT,
+      stablePrefix: [OPENAI_GPT5_OUTPUT_CONTRACT, OPENAI_GPT5_TOOL_CALL_STYLE].join("\n\n"),
       sectionOverrides: {
         interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
         execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
@@ -484,7 +528,7 @@ describe("openai plugin", () => {
         agentId: undefined,
       }),
     ).toEqual({
-      stablePrefix: OPENAI_GPT5_OUTPUT_CONTRACT,
+      stablePrefix: [OPENAI_GPT5_OUTPUT_CONTRACT, OPENAI_GPT5_TOOL_CALL_STYLE].join("\n\n"),
       sectionOverrides: {
         execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
       },
@@ -510,7 +554,7 @@ describe("openai plugin", () => {
         agentId: undefined,
       }),
     ).toEqual({
-      stablePrefix: OPENAI_GPT5_OUTPUT_CONTRACT,
+      stablePrefix: [OPENAI_GPT5_OUTPUT_CONTRACT, OPENAI_GPT5_TOOL_CALL_STYLE].join("\n\n"),
       sectionOverrides: {
         execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
       },
@@ -537,7 +581,7 @@ describe("openai plugin", () => {
         agentId: undefined,
       }),
     ).toEqual({
-      stablePrefix: OPENAI_GPT5_OUTPUT_CONTRACT,
+      stablePrefix: [OPENAI_GPT5_OUTPUT_CONTRACT, OPENAI_GPT5_TOOL_CALL_STYLE].join("\n\n"),
       sectionOverrides: {
         interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
         execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
@@ -564,7 +608,7 @@ describe("openai plugin", () => {
         agentId: undefined,
       }),
     ).toEqual({
-      stablePrefix: OPENAI_GPT5_OUTPUT_CONTRACT,
+      stablePrefix: [OPENAI_GPT5_OUTPUT_CONTRACT, OPENAI_GPT5_TOOL_CALL_STYLE].join("\n\n"),
       sectionOverrides: {
         interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
         execution_bias: OPENAI_GPT5_EXECUTION_BIAS,

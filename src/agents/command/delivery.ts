@@ -14,10 +14,11 @@ import { resolveMessageChannelSelection } from "../../infra/outbound/channel-sel
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { buildOutboundResultEnvelope } from "../../infra/outbound/envelope.js";
 import {
+  createOutboundPayloadPlan,
   formatOutboundPayloadLog,
   type NormalizedOutboundPayload,
-  normalizeOutboundPayloads,
-  normalizeOutboundPayloadsForJson,
+  projectOutboundPayloadPlanForJson,
+  projectOutboundPayloadPlanForOutbound,
 } from "../../infra/outbound/payloads.js";
 import type { OutboundSessionContext } from "../../infra/outbound/session-context.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -266,7 +267,8 @@ export async function deliverAgentCommandResult(params: {
     accountId: resolvedAccountId,
     applyChannelTransforms: deliver,
   });
-  const normalizedPayloads = normalizeOutboundPayloadsForJson(normalizedReplyPayloads);
+  const outboundPayloadPlan = createOutboundPayloadPlan(normalizedReplyPayloads);
+  const normalizedPayloads = projectOutboundPayloadPlanForJson(outboundPayloadPlan);
   if (opts.json) {
     runtime.log(
       JSON.stringify(
@@ -288,7 +290,7 @@ export async function deliverAgentCommandResult(params: {
     return { payloads: [], meta: result.meta };
   }
 
-  const deliveryPayloads = normalizeOutboundPayloads(normalizedReplyPayloads);
+  const deliveryPayloads = projectOutboundPayloadPlanForOutbound(outboundPayloadPlan);
   const logPayload = (payload: NormalizedOutboundPayload) => {
     if (opts.json) {
       return;

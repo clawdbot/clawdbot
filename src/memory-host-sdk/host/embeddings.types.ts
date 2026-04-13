@@ -17,6 +17,7 @@ export type EmbeddingProviderId =
   | "gemini"
   | "voyage"
   | "mistral"
+  | "lmstudio"
   | "ollama"
   | "bedrock";
 

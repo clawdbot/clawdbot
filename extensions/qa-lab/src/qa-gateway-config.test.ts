@@ -53,6 +53,11 @@ describe("buildQaGatewayConfig", () => {
 
     expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("mock-openai/gpt-5.4");
     expect(cfg.models?.providers?.["mock-openai"]?.baseUrl).toBe("http://127.0.0.1:44080/v1");
+    expect(cfg.models?.providers?.["mock-openai"]?.request).toEqual({ allowPrivateNetwork: true });
+    expect(cfg.models?.providers?.openai?.baseUrl).toBe("http://127.0.0.1:44080/v1");
+    expect(cfg.models?.providers?.openai?.request).toEqual({ allowPrivateNetwork: true });
+    expect(cfg.models?.providers?.anthropic?.baseUrl).toBe("http://127.0.0.1:44080");
+    expect(cfg.models?.providers?.anthropic?.request).toEqual({ allowPrivateNetwork: true });
     expect(cfg.plugins?.allow).toEqual(["memory-core", "qa-channel"]);
     expect(cfg.plugins?.entries?.["memory-core"]).toEqual({ enabled: true });
     expect(cfg.plugins?.entries?.["qa-channel"]).toEqual({ enabled: true });
@@ -64,6 +69,31 @@ describe("buildQaGatewayConfig", () => {
       pollTimeoutMs: 250,
     });
     expect(cfg.messages?.groupChat?.mentionPatterns).toEqual(["\\b@?openclaw\\b"]);
+  });
+
+  it("maps provider-qualified openai and anthropic refs through the mock provider lane", () => {
+    const cfg = buildQaGatewayConfig({
+      bind: "loopback",
+      gatewayPort: 18789,
+      gatewayToken: "token",
+      providerBaseUrl: "http://127.0.0.1:44080/v1",
+      workspaceDir: "/tmp/qa-workspace",
+      providerMode: "mock-openai",
+      primaryModel: "openai/gpt-5.4",
+      alternateModel: "anthropic/claude-opus-4-6",
+    });
+
+    expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("openai/gpt-5.4");
+    expect(cfg.models?.providers?.openai?.api).toBe("openai-responses");
+    expect(cfg.models?.providers?.openai?.request).toEqual({ allowPrivateNetwork: true });
+    expect(cfg.models?.providers?.openai?.models.map((model) => model.id)).toContain("gpt-5.4");
+    expect(cfg.models?.providers?.anthropic?.api).toBe("anthropic-messages");
+    expect(cfg.models?.providers?.anthropic?.baseUrl).toBe("http://127.0.0.1:44080");
+    expect(cfg.models?.providers?.anthropic?.request).toEqual({ allowPrivateNetwork: true });
+    expect(cfg.models?.providers?.anthropic?.models.map((model) => model.id)).toContain(
+      "claude-opus-4-6",
+    );
+    expect(cfg.plugins?.allow).toEqual(["memory-core"]);
   });
 
   it("can omit qa-channel for live transport gateway children", () => {

@@ -1,5 +1,36 @@
 # Memory recall after context switch
 
+<!--
+  This scenario deliberately stays prose-only and does NOT gate on a
+  `/debug/requests` tool-call assertion, even though it is one of the
+  scenarios in the parity pack. The adversarial review in the umbrella
+  #64227 thread called this out as a coverage gap, but the underlying
+  behavior the scenario tests is legitimately prose-shaped: the agent is
+  supposed to pull a prior-turn fact ("ALPHA-7") back across an
+  intervening context switch and reply with the code. In a real
+  conversation, the model can do this EITHER by calling a memory-search
+  tool (which the qa-lab mock server doesn't currently expose) OR by
+  reading the fact directly from prior-turn context in its own
+  conversation window. Both strategies are valid parity behavior.
+
+  Forcing a `plannedToolName` assertion here would either require
+  extending the mock with a synthetic `memory_search` tool lane (PR O
+  scope, not PR J) or fabricating a tool-call requirement the real
+  providers never implement. Either path would make this scenario test
+  the harness, not the models. So we keep it prose-only, covered by the
+  `recallExpectedAny` / `rememberAckAny` assertions above, and flag the
+  exception explicitly rather than silently.
+
+  Criterion 2 of the parity completion gate (no fake progress or fake
+  tool completion) is enforced for this scenario through the parity
+  report's failure-tone fake-success detector: a scenario marked `pass`
+  whose details text matches patterns like "timed out", "failed to",
+  "could not" gets flagged via `SUSPICIOUS_PASS_FAILURE_TONE_PATTERNS`
+  in `extensions/qa-lab/src/agentic-parity-report.ts`. Positive-tone
+  detection was removed because it false-positives on legitimate passes
+  where the details field is the model's outbound prose.
+-->
+
 ```yaml qa-scenario
 id: memory-recall
 title: Memory recall after context switch

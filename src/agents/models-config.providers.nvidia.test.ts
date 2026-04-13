@@ -4,7 +4,7 @@ import { resolveEnvApiKey } from "./model-auth-env.js";
 import {
   resolveEnvApiKeyVarName,
   resolveMissingProviderApiKey,
-} from "./models-config.providers.secrets.js";
+} from "./models-config.providers.secret-helpers.js";
 
 const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
 const MINIMAX_BASE_URL = "https://api.minimax.io/anthropic";

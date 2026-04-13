@@ -58,6 +58,13 @@ describe("tool mutation helpers", () => {
       buildToolMutationState("message", { action: "send", to: "telegram:1" }).mutatingAction,
     ).toBe(true);
     expect(buildToolMutationState("browser", { action: "list" }).mutatingAction).toBe(false);
+    expect(
+      buildToolMutationState("subagents", { action: "kill", target: "worker-1" }).mutatingAction,
+    ).toBe(true);
+    expect(
+      buildToolMutationState("subagents", { action: "steer", target: "worker-1" }).mutatingAction,
+    ).toBe(true);
+    expect(buildToolMutationState("subagents", { action: "list" }).mutatingAction).toBe(false);
   });
 
   it("matches tool actions by fingerprint and fails closed on asymmetric data", () => {
@@ -82,6 +89,7 @@ describe("tool mutation helpers", () => {
   });
 
   it("keeps legacy name-only mutating heuristics for payload fallback", () => {
+    expect(isLikelyMutatingToolName("sessions_spawn")).toBe(true);
     expect(isLikelyMutatingToolName("sessions_send")).toBe(true);
     expect(isLikelyMutatingToolName("browser_actions")).toBe(true);
     expect(isLikelyMutatingToolName("message_slack")).toBe(true);

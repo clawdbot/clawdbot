@@ -81,6 +81,49 @@ export async function upsertAuthProfileWithLock(params: {
   });
 }
 
+export async function removeProviderAuthProfilesWithLock(params: {
+  provider: string;
+  agentDir?: string;
+}): Promise<AuthProfileStore | null> {
+  const providerKey = resolveProviderIdForAuth(params.provider);
+  const storeOrderKey = normalizeProviderId(params.provider);
+  return await updateAuthProfileStoreWithLock({
+    agentDir: params.agentDir,
+    updater: (store) => {
+      const profileIds = listProfilesForProvider(store, params.provider);
+      let changed = false;
+      for (const profileId of profileIds) {
+        if (store.profiles[profileId]) {
+          delete store.profiles[profileId];
+          changed = true;
+        }
+        if (store.usageStats?.[profileId]) {
+          delete store.usageStats[profileId];
+          changed = true;
+        }
+      }
+      if (store.order?.[storeOrderKey]) {
+        delete store.order[storeOrderKey];
+        changed = true;
+        if (Object.keys(store.order).length === 0) {
+          store.order = undefined;
+        }
+      }
+      if (store.lastGood?.[providerKey]) {
+        delete store.lastGood[providerKey];
+        changed = true;
+        if (Object.keys(store.lastGood).length === 0) {
+          store.lastGood = undefined;
+        }
+      }
+      if (store.usageStats && Object.keys(store.usageStats).length === 0) {
+        store.usageStats = undefined;
+      }
+      return changed;
+    },
+  });
+}
+
 export function listProfilesForProvider(store: AuthProfileStore, provider: string): string[] {
   const providerKey = resolveProviderIdForAuth(provider);
   return Object.entries(store.profiles)

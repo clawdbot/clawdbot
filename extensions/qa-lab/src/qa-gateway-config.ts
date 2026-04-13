@@ -45,6 +45,10 @@ export function normalizeQaThinkingLevel(input: unknown): QaThinkingLevel | unde
   return undefined;
 }
 
+function trimTrailingApiV1(baseUrl: string) {
+  return baseUrl.replace(/\/v1\/?$/i, "");
+}
+
 export function mergeQaControlUiAllowedOrigins(extraOrigins?: string[]) {
   const normalizedExtra = (extraOrigins ?? [])
     .map((origin) => origin.trim())
@@ -74,10 +78,14 @@ export function buildQaGatewayConfig(params: {
   thinkingDefault?: QaThinkingLevel;
 }): OpenClawConfig {
   const mockProviderBaseUrl = params.providerBaseUrl ?? "http://127.0.0.1:44080/v1";
+  const mockAnthropicBaseUrl = trimTrailingApiV1(mockProviderBaseUrl);
   const mockOpenAiProvider: ModelProviderConfig = {
     baseUrl: mockProviderBaseUrl,
     apiKey: "test",
     api: "openai-responses",
+    request: {
+      allowPrivateNetwork: true,
+    },
     models: [
       {
         id: "gpt-5.4",
@@ -122,6 +130,50 @@ export function buildQaGatewayConfig(params: {
           cacheWrite: 0,
         },
         contextWindow: 128_000,
+        maxTokens: 4096,
+      },
+    ],
+  };
+  const mockNamedOpenAiProvider: ModelProviderConfig = {
+    ...mockOpenAiProvider,
+    models: mockOpenAiProvider.models.map((model) => ({ ...model })),
+  };
+  const mockAnthropicProvider: ModelProviderConfig = {
+    baseUrl: mockAnthropicBaseUrl,
+    apiKey: "test",
+    api: "anthropic-messages",
+    request: {
+      allowPrivateNetwork: true,
+    },
+    models: [
+      {
+        id: "claude-opus-4-6",
+        name: "claude-opus-4-6",
+        api: "anthropic-messages",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+        },
+        contextWindow: 200_000,
+        maxTokens: 4096,
+      },
+      {
+        id: "claude-sonnet-4-6",
+        name: "claude-sonnet-4-6",
+        api: "anthropic-messages",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+        },
+        contextWindow: 200_000,
         maxTokens: 4096,
       },
     ],
@@ -273,6 +325,8 @@ export function buildQaGatewayConfig(params: {
             mode: "replace",
             providers: {
               "mock-openai": mockOpenAiProvider,
+              openai: mockNamedOpenAiProvider,
+              anthropic: mockAnthropicProvider,
             },
           },
         }

@@ -6,7 +6,9 @@ import { createQaBusState, startQaBusServer } from "../../qa-lab/api.js";
 import { qaChannelPlugin } from "../api.js";
 import { setQaChannelRuntime } from "../api.js";
 
-function createMockQaRuntime(): PluginRuntime {
+function createMockQaRuntime(params?: {
+  onDispatch?: (ctx: Record<string, unknown>) => void;
+}): PluginRuntime {
   const sessionUpdatedAt = new Map<string, number>();
   return {
     channel: {
@@ -57,6 +59,7 @@ function createMockQaRuntime(): PluginRuntime {
           ctx: { BodyForAgent?: string; Body?: string };
           dispatcherOptions: { deliver: (payload: { text: string }) => Promise<void> };
         }) {
+          params?.onDispatch?.(ctx as Record<string, unknown>);
           await dispatcherOptions.deliver({
             text: `qa-echo: ${ctx.BodyForAgent ?? ctx.Body ?? ""}`,
           });
@@ -109,6 +112,86 @@ describe("qa-channel plugin", () => {
         timeoutMs: 15_000,
       });
       expect("text" in outbound && outbound.text).toContain("qa-echo: hello");
+    } finally {
+      abort.abort();
+      await task;
+      await bus.stop();
+    }
+  });
+
+  it("stages inbound image attachments into agent media payload", { timeout: 20_000 }, async () => {
+    const state = createQaBusState();
+    const bus = await startQaBusServer({ state });
+    let dispatchedCtx: Record<string, unknown> | null = null;
+    setQaChannelRuntime(
+      createMockQaRuntime({
+        onDispatch: (ctx) => {
+          dispatchedCtx = ctx;
+        },
+      }),
+    );
+
+    const cfg = {
+      channels: {
+        "qa-channel": {
+          baseUrl: bus.baseUrl,
+          botUserId: "openclaw",
+          botDisplayName: "OpenClaw QA",
+          allowFrom: ["*"],
+        },
+      },
+    };
+    const account = qaChannelPlugin.config.resolveAccount(cfg, "default");
+    const abort = new AbortController();
+    const startAccount = qaChannelPlugin.gateway?.startAccount;
+    expect(startAccount).toBeDefined();
+    const task = startAccount!(
+      createStartAccountContext({
+        account,
+        cfg,
+        abortSignal: abort.signal,
+      }),
+    );
+
+    try {
+      state.addInboundMessage({
+        conversation: { id: "alice", kind: "direct" },
+        senderId: "alice",
+        senderName: "Alice",
+        text: "describe this image",
+        attachments: [
+          {
+            id: "image-1",
+            kind: "image",
+            mimeType: "image/png",
+            fileName: "red-top-blue-bottom.png",
+            contentBase64:
+              "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR4nGP4z8Dwn4GBgYGJAQoAHxcCAr7cGDwAAAAASUVORK5CYII=",
+          },
+        ],
+      });
+
+      await state.waitFor({
+        kind: "message-text",
+        textIncludes: "qa-echo: describe this image",
+        direction: "outbound",
+        timeoutMs: 15_000,
+      });
+
+      expect(dispatchedCtx).not.toBeNull();
+      if (!dispatchedCtx) {
+        throw new Error("expected dispatched context");
+      }
+      const mediaCtx: {
+        MediaPath?: string;
+        MediaPaths?: string[];
+        MediaType?: string;
+        MediaTypes?: string[];
+      } = dispatchedCtx;
+      expect(mediaCtx.MediaPath).toEqual(expect.stringContaining("red-top-blue-bottom"));
+      expect(mediaCtx.MediaType).toBe("image/png");
+      expect(mediaCtx.MediaPaths).toEqual([mediaCtx.MediaPath]);
+      expect(mediaCtx.MediaTypes).toEqual(["image/png"]);
     } finally {
       abort.abort();
       await task;

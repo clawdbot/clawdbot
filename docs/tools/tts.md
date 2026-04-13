@@ -235,7 +235,7 @@ Then run:
 
 - `auto`: auto‑TTS mode (`off`, `always`, `inbound`, `tagged`).
   - `inbound` only sends audio after an inbound voice message.
-  - `tagged` only sends audio when the reply includes `[[tts]]` tags.
+  - `tagged` only sends audio when the reply includes `[[tts:key=value]]` directives or a `[[tts:text]]...[[/tts:text]]` block.
 - `enabled`: legacy toggle (doctor migrates this to `auto`).
 - `mode`: `"final"` (default) or `"all"` (includes tool/block replies).
 - `provider`: speech provider id such as `"elevenlabs"`, `"microsoft"`, `"minimax"`, or `"openai"` (fallback is automatic).

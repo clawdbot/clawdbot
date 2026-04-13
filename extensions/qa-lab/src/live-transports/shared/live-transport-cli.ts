@@ -11,6 +11,8 @@ export type LiveTransportQaCommandOptions = {
   fastMode?: boolean;
   scenarioIds?: string[];
   sutAccountId?: string;
+  credentialSource?: string;
+  credentialRole?: string;
 };
 
 type LiveTransportQaCommanderOptions = {
@@ -22,6 +24,8 @@ type LiveTransportQaCommanderOptions = {
   scenario?: string[];
   fast?: boolean;
   sutAccount?: string;
+  credentialSource?: string;
+  credentialRole?: string;
 };
 
 export type LiveTransportQaCliRegistration = {
@@ -49,6 +53,8 @@ export function mapLiveTransportQaCommanderOptions(
     fastMode: opts.fast,
     scenarioIds: opts.scenario,
     sutAccountId: opts.sutAccount,
+    credentialSource: opts.credentialSource,
+    credentialRole: opts.credentialRole,
   };
 }
 
@@ -76,6 +82,14 @@ export function registerLiveTransportQaCli(params: {
     .option("--scenario <id>", params.scenarioHelp, collectString, [])
     .option("--fast", "Enable provider fast mode where supported", false)
     .option("--sut-account <id>", params.sutAccountHelp, "sut")
+    .option(
+      "--credential-source <source>",
+      "Credential source for live lanes: env or convex (default: env)",
+    )
+    .option(
+      "--credential-role <role>",
+      "Credential role for convex auth: maintainer or ci (default: maintainer)",
+    )
     .action(async (opts: LiveTransportQaCommanderOptions) => {
       await params.run(mapLiveTransportQaCommanderOptions(opts));
     });

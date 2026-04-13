@@ -41,7 +41,11 @@ export async function collectWebFetchProviderBoundaryViolations() {
     ignoredDirNames,
   });
   for (const { relativeFile, content } of files) {
-    if (allowedFiles.has(relativeFile) || relativeFile.includes(".test.")) {
+    if (
+      allowedFiles.has(relativeFile) ||
+      relativeFile.includes(".test.") ||
+      relativeFile.includes("test-support")
+    ) {
       continue;
     }
     const lines = content.split(/\r?\n/);

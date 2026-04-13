@@ -283,6 +283,71 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     });
   });
 
+  it("marks successful subagents control actions as replay-invalid", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "subagents",
+        toolCallId: "tool-subagents-kill",
+        args: {
+          action: "kill",
+          target: "worker-1",
+        },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "subagents",
+        toolCallId: "tool-subagents-kill",
+        isError: false,
+        result: { status: "ok", action: "kill", target: "worker-1" },
+      } as never,
+    );
+
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
+  });
+
+  it("keeps read-only subagents list actions replay-safe", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "subagents",
+        toolCallId: "tool-subagents-list",
+        args: {
+          action: "list",
+        },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "subagents",
+        toolCallId: "tool-subagents-list",
+        isError: false,
+        result: { status: "ok", action: "list", total: 0, text: "no active subagents." },
+      } as never,
+    );
+
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: false,
+      hadPotentialSideEffects: false,
+    });
+  });
+
   it("keeps successful mutating retries replay-invalid after an earlier tool failure", async () => {
     const { ctx } = createTestContext();
 

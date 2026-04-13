@@ -24,8 +24,105 @@ async function importLoaderWithMissingBun() {
   }
 }
 
+async function importLoaderWithFailingJitiAndWorkingBun() {
+  const spawnSync = vi.fn(() => ({
+    error: undefined,
+    status: 0,
+    stdout: JSON.stringify({
+      schema: {
+        type: "object",
+        properties: {
+          ok: { type: "number" },
+        },
+      },
+    }),
+    stderr: "",
+  }));
+  const createJiti = vi.fn(() => () => {
+    throw new Error("jiti failed");
+  });
+  vi.doMock("node:child_process", () => ({ spawnSync }));
+  vi.doMock("jiti", () => ({ createJiti }));
+
+  try {
+    const imported = await importFreshModule<
+      typeof import("../../scripts/load-channel-config-surface.ts")
+    >(import.meta.url, "../../scripts/load-channel-config-surface.ts?scope=failing-jiti");
+    return {
+      loadChannelConfigSurfaceModule: imported.loadChannelConfigSurfaceModule,
+      spawnSync,
+      createJiti,
+    };
+  } finally {
+    vi.doUnmock("node:child_process");
+    vi.doUnmock("jiti");
+  }
+}
+
 describe("loadChannelConfigSurfaceModule", () => {
-  it("falls back to Jiti when bun is unavailable", async () => {
+  it("prefers the source-aware loader over bun when both succeed", async () => {
+    await withTempDir({ prefix: "openclaw-config-surface-" }, async (repoRoot) => {
+      const packageRoot = path.join(repoRoot, "extensions", "demo");
+      const modulePath = path.join(packageRoot, "src", "config-schema.js");
+
+      fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
+      fs.writeFileSync(
+        path.join(packageRoot, "package.json"),
+        JSON.stringify({ name: "@openclaw/demo", type: "module" }, null, 2),
+        "utf8",
+      );
+      fs.writeFileSync(
+        modulePath,
+        [
+          "export const DemoChannelConfigSchema = {",
+          "  schema: {",
+          "    type: 'object',",
+          "    properties: { ok: { type: 'string' } },",
+          "  },",
+          "};",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const spawnSync = vi.fn(() => ({
+        error: undefined,
+        status: 0,
+        stdout: JSON.stringify({
+          schema: {
+            type: "object",
+            properties: {
+              ok: { type: "number" },
+            },
+          },
+        }),
+        stderr: "",
+      }));
+      vi.doMock("node:child_process", () => ({ spawnSync }));
+
+      try {
+        const imported = await importFreshModule<
+          typeof import("../../scripts/load-channel-config-surface.ts")
+        >(import.meta.url, "../../scripts/load-channel-config-surface.ts?scope=prefer-jiti");
+
+        await expect(
+          imported.loadChannelConfigSurfaceModule(modulePath, { repoRoot }),
+        ).resolves.toMatchObject({
+          schema: {
+            type: "object",
+            properties: {
+              ok: { type: "string" },
+            },
+          },
+        });
+        expect(spawnSync).not.toHaveBeenCalled();
+      } finally {
+        vi.doUnmock("node:child_process");
+      }
+    });
+  });
+
+  it("does not require bun when the source-aware loader succeeds", async () => {
     await withTempDir({ prefix: "openclaw-config-surface-" }, async (repoRoot) => {
       const packageRoot = path.join(repoRoot, "extensions", "demo");
       const modulePath = path.join(packageRoot, "src", "config-schema.js");
@@ -61,6 +158,50 @@ describe("loadChannelConfigSurfaceModule", () => {
           },
         },
       });
+      expect(spawnSync).not.toHaveBeenCalled();
+    });
+  });
+
+  it("falls back to bun when the source-aware loader fails", async () => {
+    await withTempDir({ prefix: "openclaw-config-surface-" }, async (repoRoot) => {
+      const packageRoot = path.join(repoRoot, "extensions", "demo");
+      const modulePath = path.join(packageRoot, "src", "config-schema.js");
+
+      fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
+      fs.writeFileSync(
+        path.join(packageRoot, "package.json"),
+        JSON.stringify({ name: "@openclaw/demo", type: "module" }, null, 2),
+        "utf8",
+      );
+      fs.writeFileSync(
+        modulePath,
+        [
+          "export const DemoChannelConfigSchema = {",
+          "  schema: {",
+          "    type: 'object',",
+          "    properties: { ok: { type: 'string' } },",
+          "  },",
+          "};",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const {
+        loadChannelConfigSurfaceModule: loadWithFailingJiti,
+        spawnSync,
+        createJiti,
+      } = await importLoaderWithFailingJitiAndWorkingBun();
+
+      await expect(loadWithFailingJiti(modulePath, { repoRoot })).resolves.toMatchObject({
+        schema: {
+          type: "object",
+          properties: {
+            ok: { type: "number" },
+          },
+        },
+      });
+      expect(createJiti).toHaveBeenCalled();
       expect(spawnSync).toHaveBeenCalledWith("bun", expect.any(Array), expect.any(Object));
     });
   });

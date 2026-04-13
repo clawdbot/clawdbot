@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/qa-convex-credential-broker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Convex HTTP credential lease broker for OpenClaw QA lab",
+  "type": "module",
+  "scripts": {
+    "dashboard": "convex dashboard",
+    "deploy": "convex deploy",
+    "dev": "convex dev"
+  },
+  "dependencies": {
+    "convex": "^1.35.1"
+  }
+}

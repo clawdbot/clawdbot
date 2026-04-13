@@ -100,6 +100,23 @@ describe("doctor exec safe bin helpers", () => {
     expect(result.config.tools?.exec?.safeBinProfiles).toEqual({});
   });
 
+  it("warns on busybox/toybox safeBins instead of scaffolding them", () => {
+    const result = maybeRepairExecSafeBinProfiles({
+      tools: {
+        exec: {
+          safeBins: ["busybox", "toybox"],
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      "- tools.exec.safeBins includes interpreter/runtime 'busybox' without profile; remove it from safeBins or use explicit allowlist entries.",
+      "- tools.exec.safeBins includes interpreter/runtime 'toybox' without profile; remove it from safeBins or use explicit allowlist entries.",
+    ]);
+    expect(result.config.tools?.exec?.safeBinProfiles).toEqual({});
+  });
+
   it("flags safeBins that resolve outside trusted directories", () => {
     const tempDir = mkdtempSync(join(tmpdir(), "openclaw-safe-bin-"));
     const binPath = join(tempDir, "custom-safe-bin");

@@ -148,7 +148,7 @@ describe("createEmbeddedRunAuthController", () => {
 
   it("applies runtime request overrides on the first auth exchange", async () => {
     const harness = createMutableAuthControllerHarness();
-    const setRuntimeApiKey = vi.fn();
+    const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
 
     mocks.getApiKeyForModel.mockResolvedValue({
       apiKey: "source-api-key",
@@ -218,7 +218,9 @@ describe("createEmbeddedRunAuthController", () => {
         version: 1,
         profiles: {},
       } as AuthProfileStore,
-      authStorage: { setRuntimeApiKey: vi.fn() },
+      authStorage: {
+        setRuntimeApiKey: vi.fn<(provider: string, apiKey: string) => void>(),
+      },
       profileCandidates: ["default"],
       initialThinkLevel: "medium",
       attemptedThinking: new Set(),
@@ -259,7 +261,7 @@ describe("createEmbeddedRunAuthController", () => {
     vi.useFakeTimers();
     try {
       const harness = createMutableAuthControllerHarness();
-      const setRuntimeApiKey = vi.fn();
+      const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
       const staleRefresh = createDeferred<{
         apiKey: string;
         baseUrl: string;

@@ -6,7 +6,7 @@ import {
   createAcpVisibleTextAccumulator,
   resolveFallbackRetryPrompt,
   sessionFileHasContent,
-} from "./attempt-execution.js";
+} from "./attempt-execution.helpers.js";
 
 describe("resolveFallbackRetryPrompt", () => {
   const originalBody = "Summarize the quarterly earnings report and highlight key trends.";

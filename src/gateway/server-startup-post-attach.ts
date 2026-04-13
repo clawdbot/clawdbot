@@ -43,6 +43,7 @@ import {
 } from "./server-restart-sentinel.js";
 import { logGatewayStartup } from "./server-startup-log.js";
 import { startGatewayMemoryBackend } from "./server-startup-memory.js";
+import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./server-startup-unavailable-methods.js";
 import { startGatewayTailscaleExposure } from "./server-tailscale.js";
 
 const SESSION_LOCK_STALE_MS = 30 * 60 * 1000;
@@ -322,7 +323,9 @@ export async function startGatewayPostAttachRuntime(params: {
       logHooks: params.logHooks,
       logChannels: params.logChannels,
     }));
-    params.unavailableGatewayMethods.delete("chat.history");
+    for (const method of STARTUP_UNAVAILABLE_GATEWAY_METHODS) {
+      params.unavailableGatewayMethods.delete(method);
+    }
   }
 
   if (!params.minimalTestGateway) {

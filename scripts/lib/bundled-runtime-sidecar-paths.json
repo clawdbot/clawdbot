@@ -11,6 +11,7 @@
   "dist/extensions/imessage/runtime-api.js",
   "dist/extensions/irc/runtime-api.js",
   "dist/extensions/line/runtime-api.js",
+  "dist/extensions/lmstudio/runtime-api.js",
   "dist/extensions/lobster/runtime-api.js",
   "dist/extensions/matrix/helper-api.js",
   "dist/extensions/matrix/runtime-api.js",

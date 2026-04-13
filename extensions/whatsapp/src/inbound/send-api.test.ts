@@ -158,6 +158,42 @@ describe("createWebSendApi", () => {
     );
   });
 
+  it("keeps direct-chat reactions without a participant key", async () => {
+    await api.sendReaction("+1555", "msg-2", "👍", false);
+    expect(sendMessage).toHaveBeenCalledWith(
+      "1555@s.whatsapp.net",
+      expect.objectContaining({
+        react: {
+          text: "👍",
+          key: expect.objectContaining({
+            remoteJid: "1555@s.whatsapp.net",
+            id: "msg-2",
+            fromMe: false,
+            participant: undefined,
+          }),
+        },
+      }),
+    );
+  });
+
+  it("preserves LID participants in reaction keys", async () => {
+    await api.sendReaction("12345@g.us", "msg-2", "👍", false, "123@lid");
+    expect(sendMessage).toHaveBeenCalledWith(
+      "12345@g.us",
+      expect.objectContaining({
+        react: {
+          text: "👍",
+          key: expect.objectContaining({
+            remoteJid: "12345@g.us",
+            id: "msg-2",
+            fromMe: false,
+            participant: "123@lid",
+          }),
+        },
+      }),
+    );
+  });
+
   it("sends composing presence updates to the recipient JID", async () => {
     await api.sendComposingTo("+1555");
     expect(sendPresenceUpdate).toHaveBeenCalledWith("composing", "1555@s.whatsapp.net");

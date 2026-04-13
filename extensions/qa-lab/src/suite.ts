@@ -15,6 +15,13 @@ import {
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import {
+  callQaBrowserRequest,
+  qaBrowserAct,
+  qaBrowserOpenTab,
+  qaBrowserSnapshot,
+  waitForQaBrowserReady,
+} from "./browser-runtime.js";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "./cli-paths.js";
 import { waitForCronRunCompletion } from "./cron-run-wait.js";
 import {
@@ -33,7 +40,6 @@ import type {
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
 import { startQaMockOpenAiServer } from "./mock-openai-server.js";
 import {
-  defaultQaModelForMode,
   isQaFastModeEnabled,
   normalizeQaProviderMode,
   type QaProviderMode,
@@ -56,17 +62,26 @@ import {
 } from "./qa-transport.js";
 import { extractQaFailureReplyText } from "./reply-failure.js";
 import { renderQaMarkdownReport, type QaReportCheck, type QaReportScenario } from "./report.js";
+import { defaultQaModelForMode } from "./run-config.js";
 import { qaChannelPlugin, type QaBusMessage } from "./runtime-api.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
 import { createQaScenarioRuntimeApi } from "./scenario-runtime-api.js";
+import {
+  closeAllQaWebSessions,
+  qaWebEvaluate,
+  qaWebOpenPage,
+  qaWebSnapshot,
+  qaWebType,
+  qaWebWait,
+} from "./web-runtime.js";
 
 type QaSuiteStep = {
   name: string;
   run: () => Promise<string | void>;
 };
 
-type QaSuiteScenarioResult = {
+export type QaSuiteScenarioResult = {
   name: string;
   status: "pass" | "fail";
   steps: QaReportCheck[];
@@ -311,6 +326,18 @@ function collectQaSuiteGatewayConfigPatch(
     >;
   }
   return merged;
+}
+
+function collectQaSuiteGatewayRuntimeOptions(
+  scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"],
+) {
+  let forwardHostHome = false;
+  for (const scenario of scenarios) {
+    if (scenario.gatewayRuntime?.forwardHostHome === true) {
+      forwardHostHome = true;
+    }
+  }
+  return forwardHostHome ? { forwardHostHome: true } : undefined;
 }
 
 function liveTurnTimeoutMs(env: QaSuiteEnvironment, fallbackMs: number) {
@@ -1236,6 +1263,16 @@ function createScenarioFlowApi(
       waitForGatewayHealthy,
       waitForTransportReady,
       waitForQaChannelReady,
+      browserRequest: callQaBrowserRequest,
+      waitForBrowserReady: waitForQaBrowserReady,
+      browserOpenTab: qaBrowserOpenTab,
+      browserSnapshot: qaBrowserSnapshot,
+      browserAct: qaBrowserAct,
+      webOpenPage: qaWebOpenPage,
+      webWait: qaWebWait,
+      webType: qaWebType,
+      webSnapshot: qaWebSnapshot,
+      webEvaluate: qaWebEvaluate,
       waitForConfigRestartSettle,
       patchConfig,
       applyConfig,
@@ -1284,6 +1321,7 @@ function createScenarioFlowApi(
 
 export const qaSuiteTesting = {
   collectQaSuiteGatewayConfigPatch,
+  collectQaSuiteGatewayRuntimeOptions,
   collectQaSuitePluginIds,
   createScenarioWaitForCondition,
   findFailureOutboundMessage,
@@ -1327,17 +1365,105 @@ function createQaSuiteReportNotes(params: {
   return params.transport.createReportNotes(params);
 }
 
+export type QaSuiteSummaryJsonParams = {
+  scenarios: QaSuiteScenarioResult[];
+  startedAt: Date;
+  finishedAt: Date;
+  providerMode: QaProviderMode;
+  primaryModel: string;
+  alternateModel: string;
+  fastMode: boolean;
+  concurrency: number;
+  scenarioIds?: readonly string[];
+};
+
+/**
+ * Strongly-typed shape of `qa-suite-summary.json`. The GPT-5.4 parity gate
+ * (agentic-parity-report.ts, #64441) and any future parity wrapper can
+ * import this type instead of re-declaring the shape, so changes to the
+ * summary schema propagate through to every consumer at type-check time.
+ */
+export type QaSuiteSummaryJson = {
+  scenarios: QaSuiteScenarioResult[];
+  counts: {
+    total: number;
+    passed: number;
+    failed: number;
+  };
+  run: {
+    startedAt: string;
+    finishedAt: string;
+    providerMode: QaProviderMode;
+    primaryModel: string;
+    primaryProvider: string | null;
+    primaryModelName: string | null;
+    alternateModel: string;
+    alternateProvider: string | null;
+    alternateModelName: string | null;
+    fastMode: boolean;
+    concurrency: number;
+    scenarioIds: string[] | null;
+  };
+};
+
+/**
+ * Pure-ish JSON builder for qa-suite-summary.json. Exported so the GPT-5.4
+ * parity gate (agentic-parity-report.ts, #64441) and any future parity
+ * runner can assert-and-trust the provider/model that produced a given
+ * summary instead of blindly accepting the caller's candidateLabel /
+ * baselineLabel. Without the `run` block, a maintainer who swaps candidate
+ * and baseline summary paths could silently produce a mislabeled verdict.
+ *
+ * `scenarioIds` is only recorded when the caller passed a non-empty array
+ * (an explicit scenario selection). A missing or empty array means "no
+ * filter, full lane-selected catalog", which the summary encodes as `null`
+ * so parity/report tooling doesn't mistake a full run for an explicit
+ * empty selection.
+ */
+export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): QaSuiteSummaryJson {
+  const primarySplit = splitModelRef(params.primaryModel);
+  const alternateSplit = splitModelRef(params.alternateModel);
+  return {
+    scenarios: params.scenarios,
+    counts: {
+      total: params.scenarios.length,
+      passed: params.scenarios.filter((scenario) => scenario.status === "pass").length,
+      failed: params.scenarios.filter((scenario) => scenario.status === "fail").length,
+    },
+    run: {
+      startedAt: params.startedAt.toISOString(),
+      finishedAt: params.finishedAt.toISOString(),
+      providerMode: params.providerMode,
+      primaryModel: params.primaryModel,
+      primaryProvider: primarySplit?.provider ?? null,
+      primaryModelName: primarySplit?.model ?? null,
+      alternateModel: params.alternateModel,
+      alternateProvider: alternateSplit?.provider ?? null,
+      alternateModelName: alternateSplit?.model ?? null,
+      fastMode: params.fastMode,
+      concurrency: params.concurrency,
+      scenarioIds:
+        params.scenarioIds && params.scenarioIds.length > 0 ? [...params.scenarioIds] : null,
+    },
+  };
+}
+
 async function writeQaSuiteArtifacts(params: {
   outputDir: string;
   startedAt: Date;
   finishedAt: Date;
   scenarios: QaSuiteScenarioResult[];
   transport: QaTransportAdapter;
-  providerMode: "mock-openai" | "live-frontier";
+  // Reuse the canonical QaProviderMode union instead of re-declaring it
+  // inline. Loop 6 already unified `QaSuiteSummaryJsonParams.providerMode`
+  // on this type; keeping the writer in sync prevents drift when model-
+  // selection.ts adds a new provider mode.
+  providerMode: QaProviderMode;
   primaryModel: string;
   alternateModel: string;
   fastMode: boolean;
   concurrency: number;
+  scenarioIds?: readonly string[];
 }) {
   const report = renderQaMarkdownReport({
     title: "OpenClaw QA Scenario Suite",
@@ -1357,18 +1483,7 @@ async function writeQaSuiteArtifacts(params: {
   await fs.writeFile(reportPath, report, "utf8");
   await fs.writeFile(
     summaryPath,
-    `${JSON.stringify(
-      {
-        scenarios: params.scenarios,
-        counts: {
-          total: params.scenarios.length,
-          passed: params.scenarios.filter((scenario) => scenario.status === "pass").length,
-          failed: params.scenarios.filter((scenario) => scenario.status === "fail").length,
-        },
-      },
-      null,
-      2,
-    )}\n`,
+    `${JSON.stringify(buildQaSuiteSummaryJson(params), null, 2)}\n`,
     "utf8",
   );
   return { report, reportPath, summaryPath };
@@ -1380,8 +1495,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
   const providerMode = normalizeQaProviderMode(params?.providerMode ?? "live-frontier");
   const transportId = normalizeQaTransportId(params?.transportId);
   const primaryModel = params?.primaryModel ?? defaultQaModelForMode(providerMode);
-  const alternateModel =
-    params?.alternateModel ?? defaultQaModelForMode(providerMode, { alternate: true });
+  const alternateModel = params?.alternateModel ?? defaultQaModelForMode(providerMode, true);
   const fastMode =
     typeof params?.fastMode === "boolean"
       ? params.fastMode
@@ -1397,6 +1511,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
   });
   const enabledPluginIds = collectQaSuitePluginIds(selectedCatalogScenarios);
   const gatewayConfigPatch = collectQaSuiteGatewayConfigPatch(selectedCatalogScenarios);
+  const gatewayRuntimeOptions = collectQaSuiteGatewayRuntimeOptions(selectedCatalogScenarios);
   const concurrency = normalizeQaSuiteConcurrency(
     params?.concurrency,
     selectedCatalogScenarios.length,
@@ -1537,6 +1652,16 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
         alternateModel,
         fastMode,
         concurrency,
+        // When the caller supplied an explicit non-empty --scenario filter,
+        // record the executed (post-selectQaSuiteScenarios-normalized) ids
+        // so the summary matches what actually ran. When the caller passed
+        // nothing or an empty array ("no filter, full lane catalog"),
+        // preserve the unfiltered = null semantic so the summary stays
+        // distinguishable from an explicit all-scenarios selection.
+        scenarioIds:
+          params?.scenarioIds && params.scenarioIds.length > 0
+            ? selectedCatalogScenarios.map((scenario) => scenario.id)
+            : undefined,
       });
       lab.setLatestReport({
         outputPath: reportPath,
@@ -1594,6 +1719,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     claudeCliAuthMode: params?.claudeCliAuthMode,
     controlUiEnabled: params?.controlUiEnabled ?? true,
     enabledPluginIds,
+    forwardHostHome: gatewayRuntimeOptions?.forwardHostHome,
     mutateConfig: gatewayConfigPatch
       ? (cfg) => applyQaMergePatch(cfg, gatewayConfigPatch) as OpenClawConfig
       : undefined,
@@ -1606,9 +1732,9 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     lab,
     mock,
     gateway,
-    cfg: transport.createGatewayConfig({
-      baseUrl: lab.listenUrl,
-    }),
+    // Markdown scenarios should see the full staged gateway config, not just
+    // the transport fragment. Routing/session/plugin assertions depend on it.
+    cfg: gateway.cfg,
     transport,
     repoRoot,
     providerMode,
@@ -1697,6 +1823,12 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       alternateModel,
       fastMode,
       concurrency,
+      // Same "filtered → executed list, unfiltered → null" convention as
+      // the concurrent-path writeQaSuiteArtifacts call above.
+      scenarioIds:
+        params?.scenarioIds && params.scenarioIds.length > 0
+          ? selectedCatalogScenarios.map((scenario) => scenario.id)
+          : undefined,
     });
     const latestReport = {
       outputPath: reportPath,
@@ -1717,6 +1849,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     preserveGatewayRuntimeDir = path.join(outputDir, "artifacts", "gateway-runtime");
     throw error;
   } finally {
+    await closeAllQaWebSessions();
     const keepTemp = process.env.OPENCLAW_QA_KEEP_TEMP === "1" || false;
     await gateway.stop({
       keepTemp,

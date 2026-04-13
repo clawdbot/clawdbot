@@ -43,7 +43,8 @@ TIMEOUT_INSTALL_S=1200
 TIMEOUT_VERIFY_S=120
 TIMEOUT_ONBOARD_S=240
 TIMEOUT_ONBOARD_PHASE_S=$((TIMEOUT_ONBOARD_S + 60))
-TIMEOUT_GATEWAY_S=120
+# verify_gateway_reachable runs six 30s probes plus short retry sleeps.
+TIMEOUT_GATEWAY_S=240
 TIMEOUT_AGENT_S=180
 
 FRESH_MAIN_STATUS="skip"
@@ -779,11 +780,11 @@ resolve_latest_version() {
 }
 
 baseline_install_version() {
-  if [[ -n "$INSTALL_VERSION" ]]; then
-    printf '%s\n' "$INSTALL_VERSION"
+  if [[ -z "$INSTALL_VERSION" ]]; then
+    printf '%s\n' "$LATEST_VERSION"
     return
   fi
-  printf '%s\n' "$LATEST_VERSION"
+  npm view "openclaw@$INSTALL_VERSION" version --userconfig "$(mktemp)"
 }
 
 resolve_mingit_download() {
@@ -1900,7 +1901,7 @@ try {
   Write-ProgressLog 'install.download-tgz'
   Invoke-Logged 'download current tgz' { curl.exe -fsSL $TgzUrl -o $tgz }
   Write-ProgressLog 'install.install-tgz'
-  Invoke-Logged 'npm install current tgz' { npm.cmd install -g $tgz --no-fund --no-audit }
+  Invoke-Logged 'npm install current tgz' { npm.cmd install -g $tgz --omit=dev --no-fund --no-audit }
   $openclaw = Join-Path $env:APPDATA 'npm\openclaw.cmd'
   Write-ProgressLog 'install.verify-version'
   Invoke-Logged 'openclaw --version' { & $openclaw --version }
@@ -2272,7 +2273,6 @@ run_upgrade_lane() {
   local snapshot_id="$1"
   local host_ip="$2"
   local baseline_version
-  baseline_version="$(baseline_install_version)"
   phase_run "upgrade.restore-snapshot" "$TIMEOUT_SNAPSHOT_S" restore_snapshot "$snapshot_id" || return $?
   phase_run "upgrade.wait-for-user" "$TIMEOUT_SNAPSHOT_S" wait_for_guest_ready || return $?
   if ! phase_run "upgrade.ensure-git" "$TIMEOUT_INSTALL_S" ensure_guest_git "$host_ip"; then
@@ -2284,7 +2284,8 @@ run_upgrade_lane() {
     LATEST_INSTALLED_VERSION="$(extract_last_version "$(phase_log_path upgrade.install-baseline-package)")"
     phase_run "upgrade.verify-baseline-package-version" "$TIMEOUT_VERIFY_S" verify_target_version || return $?
   else
-    phase_run "upgrade.install-baseline" "$TIMEOUT_INSTALL_S" install_baseline_npm_release "$host_ip" "$baseline_version" || return $?
+    baseline_version="$(baseline_install_version)"
+    phase_run "upgrade.install-baseline" "$TIMEOUT_INSTALL_S" install_latest_release || return $?
     LATEST_INSTALLED_VERSION="$(extract_last_version "$(phase_log_path upgrade.install-baseline)")"
     phase_run "upgrade.verify-baseline-version" "$TIMEOUT_VERIFY_S" verify_version_contains "$baseline_version" || return $?
   fi

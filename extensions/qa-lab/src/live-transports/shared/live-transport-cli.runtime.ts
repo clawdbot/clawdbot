@@ -25,6 +25,8 @@ export function resolveLiveTransportQaRunOptions(
     fastMode: opts.fastMode,
     scenarioIds: opts.scenarioIds,
     sutAccountId: opts.sutAccountId,
+    credentialSource: opts.credentialSource?.trim(),
+    credentialRole: opts.credentialRole?.trim(),
   };
 }
 

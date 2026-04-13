@@ -20,22 +20,33 @@ type ChromeMcpSessionFactory = Exclude<
 type ChromeMcpSession = Awaited<ReturnType<ChromeMcpSessionFactory>>;
 
 function createFakeSession(): ChromeMcpSession {
-  const callTool = vi.fn(async ({ name }: ToolCall) => {
+  let currentUrl =
+    "https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session";
+  let createdPageOpen = false;
+  const readUrlArg = (value: unknown, fallback: string) =>
+    typeof value === "string" && value.trim() ? value : fallback;
+  const callTool = vi.fn(async ({ name, arguments: args }: ToolCall) => {
     if (name === "list_pages") {
+      const pageLines = [
+        "## Pages",
+        `1: ${currentUrl} [selected]`,
+        "2: https://github.com/openclaw/openclaw/pull/45318",
+      ];
+      if (createdPageOpen) {
+        pageLines.push(`3: ${currentUrl}`);
+      }
       return {
         content: [
           {
             type: "text",
-            text: [
-              "## Pages",
-              "1: https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session [selected]",
-              "2: https://github.com/openclaw/openclaw/pull/45318",
-            ].join("\n"),
+            text: pageLines.join("\n"),
           },
         ],
       };
     }
     if (name === "new_page") {
+      currentUrl = readUrlArg(args?.url, "about:blank");
+      createdPageOpen = true;
       return {
         content: [
           {
@@ -44,11 +55,15 @@ function createFakeSession(): ChromeMcpSession {
               "## Pages",
               "1: https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session",
               "2: https://github.com/openclaw/openclaw/pull/45318",
-              "3: https://example.com/ [selected]",
+              `3: ${currentUrl} [selected]`,
             ].join("\n"),
           },
         ],
       };
+    }
+    if (name === "navigate_page") {
+      currentUrl = readUrlArg(args?.url, currentUrl);
+      return { content: [{ type: "text", text: "navigated" }] };
     }
     if (name === "evaluate_script") {
       return {
@@ -128,6 +143,28 @@ describe("chrome MCP page parsing", () => {
       url: "https://example.com/",
       type: "page",
     });
+  });
+
+  it("opens about:blank directly without an extra navigate", async () => {
+    const session = createFakeSession();
+    const factory: ChromeMcpSessionFactory = async () => session;
+    setChromeMcpSessionFactoryForTest(factory);
+
+    const tab = await openChromeMcpTab("chrome-live", "about:blank");
+
+    expect(tab).toEqual({
+      targetId: "3",
+      title: "",
+      url: "about:blank",
+      type: "page",
+    });
+    expect(session.client.callTool).toHaveBeenCalledWith({
+      name: "new_page",
+      arguments: { url: "about:blank", timeout: 5000 },
+    });
+    expect(session.client.callTool).not.toHaveBeenCalledWith(
+      expect.objectContaining({ name: "navigate_page" }),
+    );
   });
 
   it("parses evaluate_script text responses when structuredContent is missing", async () => {

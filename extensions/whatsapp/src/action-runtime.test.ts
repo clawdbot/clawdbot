@@ -136,6 +136,25 @@ describe("handleWhatsAppAction", () => {
     });
   });
 
+  it("preserves LID participant ids when forwarding reactions", async () => {
+    await handleWhatsAppAction(
+      {
+        action: "react",
+        chatJid: "12345@g.us",
+        messageId: "msg1",
+        emoji: "🎉",
+        participant: "123@lid",
+      },
+      enabledConfig,
+    );
+    expect(sendReactionWhatsApp).toHaveBeenLastCalledWith("12345@g.us", "msg1", "🎉", {
+      verbose: false,
+      fromMe: undefined,
+      participant: "123@lid",
+      accountId: DEFAULT_ACCOUNT_ID,
+    });
+  });
+
   it("respects reaction gating", async () => {
     const cfg = {
       channels: { whatsapp: { actions: { reactions: false } } },

@@ -47,6 +47,8 @@ const GENERIC_MUTABLE_SCRIPT_RUNNERS = new Set([
   "vite-node",
 ]);
 
+const OPAQUE_MUTABLE_SCRIPT_RUNNERS = new Set(["busybox", "toybox"]);
+
 const BUN_SUBCOMMANDS = new Set([
   "add",
   "audit",
@@ -283,9 +285,14 @@ function resolvesToExistingFileSync(rawOperand: string, cwd: string | undefined)
   }
 }
 
-function unwrapArgvForMutableOperand(argv: string[]): { argv: string[]; baseIndex: number } {
+function unwrapArgvForMutableOperand(argv: string[]): {
+  argv: string[];
+  baseIndex: number;
+  opaqueMultiplexerSeen: boolean;
+} {
   let current = argv;
   let baseIndex = 0;
+  let opaqueMultiplexerSeen = false;
   while (true) {
     const dispatchUnwrap = unwrapKnownDispatchWrapperInvocation(current);
     if (dispatchUnwrap.kind === "unwrapped") {
@@ -295,6 +302,9 @@ function unwrapArgvForMutableOperand(argv: string[]): { argv: string[]; baseInde
     }
     const shellMultiplexerUnwrap = unwrapKnownShellMultiplexerInvocation(current);
     if (shellMultiplexerUnwrap.kind === "unwrapped") {
+      if (OPAQUE_MUTABLE_SCRIPT_RUNNERS.has(shellMultiplexerUnwrap.wrapper)) {
+        opaqueMultiplexerSeen = true;
+      }
       baseIndex += current.length - shellMultiplexerUnwrap.argv.length;
       current = shellMultiplexerUnwrap.argv;
       continue;
@@ -305,7 +315,7 @@ function unwrapArgvForMutableOperand(argv: string[]): { argv: string[]; baseInde
       current = packageManagerUnwrap;
       continue;
     }
-    return { argv: current, baseIndex };
+    return { argv: current, baseIndex, opaqueMultiplexerSeen };
   }
 }
 
@@ -743,13 +753,20 @@ function hasPerlUnsafeApprovalFlag(argv: string[]): boolean {
 }
 
 function isMutableScriptRunner(executable: string): boolean {
-  return GENERIC_MUTABLE_SCRIPT_RUNNERS.has(executable) || isInterpreterLikeSafeBin(executable);
+  return (
+    GENERIC_MUTABLE_SCRIPT_RUNNERS.has(executable) ||
+    OPAQUE_MUTABLE_SCRIPT_RUNNERS.has(executable) ||
+    isInterpreterLikeSafeBin(executable)
+  );
 }
 
 function resolveMutableFileOperandIndex(argv: string[], cwd: string | undefined): number | null {
   const unwrapped = unwrapArgvForMutableOperand(argv);
   const executable = normalizeExecutableToken(unwrapped.argv[0] ?? "");
   if (!executable) {
+    return null;
+  }
+  if (unwrapped.opaqueMultiplexerSeen || OPAQUE_MUTABLE_SCRIPT_RUNNERS.has(executable)) {
     return null;
   }
   if ((POSIX_SHELL_WRAPPERS as ReadonlySet<string>).has(executable)) {
@@ -823,13 +840,16 @@ function requiresStableInterpreterApprovalBindingWithShellCommand(params: {
   shellCommand: string | null;
   cwd: string | undefined;
 }): boolean {
+  const unwrapped = unwrapArgvForMutableOperand(params.argv);
+  if (unwrapped.opaqueMultiplexerSeen) {
+    return true;
+  }
   if (params.shellCommand !== null) {
     return shellPayloadNeedsStableBinding(params.shellCommand, params.cwd);
   }
   if (pnpmDlxInvocationNeedsFailClosedBinding(params.argv, params.cwd)) {
     return true;
   }
-  const unwrapped = unwrapArgvForMutableOperand(params.argv);
   const executable = normalizeExecutableToken(unwrapped.argv[0] ?? "");
   if (!executable) {
     return false;

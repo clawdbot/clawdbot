@@ -11,6 +11,10 @@ import {
 } from "./embeddings-bedrock.js";
 import { createGeminiEmbeddingProvider, type GeminiEmbeddingClient } from "./embeddings-gemini.js";
 import {
+  createLmstudioEmbeddingProvider,
+  type LmstudioEmbeddingClient,
+} from "./embeddings-lmstudio.js";
+import {
   createMistralEmbeddingProvider,
   type MistralEmbeddingClient,
 } from "./embeddings-mistral.js";
@@ -28,6 +32,7 @@ import type {
 import { importNodeLlamaCpp } from "./node-llama.js";
 
 export type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
+export type { LmstudioEmbeddingClient } from "./embeddings-lmstudio.js";
 export type { MistralEmbeddingClient } from "./embeddings-mistral.js";
 export type { OpenAiEmbeddingClient } from "./embeddings-openai.js";
 export type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
@@ -43,9 +48,9 @@ export type {
 } from "./embeddings.types.js";
 
 // Remote providers considered for auto-selection when provider === "auto".
-// Ollama is intentionally excluded here so that "auto" mode does not
-// implicitly assume a local Ollama instance is available.
-// Bedrock is included when AWS credentials are detected.
+// LM Studio and Ollama are intentionally excluded here so that "auto" mode does not
+// implicitly assume either instance is available.
+// Bedrock is handled separately when AWS credentials are detected.
 const REMOTE_EMBEDDING_PROVIDER_IDS = ["openai", "gemini", "voyage", "mistral"] as const;
 
 export type EmbeddingProviderResult = {
@@ -60,6 +65,7 @@ export type EmbeddingProviderResult = {
   mistral?: MistralEmbeddingClient;
   ollama?: OllamaEmbeddingClient;
   bedrock?: BedrockEmbeddingClient;
+  lmstudio?: LmstudioEmbeddingClient;
 };
 
 export const DEFAULT_LOCAL_MODEL =
@@ -159,6 +165,10 @@ export async function createEmbeddingProvider(
     if (id === "local") {
       const provider = await createLocalEmbeddingProvider(options);
       return { provider };
+    }
+    if (id === "lmstudio") {
+      const { provider, client } = await createLmstudioEmbeddingProvider(options);
+      return { provider, lmstudio: client };
     }
     if (id === "ollama") {
       const { provider, client } = await createOllamaEmbeddingProvider(options);

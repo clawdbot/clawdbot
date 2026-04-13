@@ -136,7 +136,7 @@ describe("resolveMSTeamsInboundMedia graph fallback trigger", () => {
     const call = vi.mocked(downloadMSTeamsGraphMedia).mock.calls[0]?.[0];
     // The monitor handler's logger is forwarded so graph.ts can report
     // message fetch failures instead of swallowing them (#51749).
-    expect(call?.log).toBe(log);
+    expect(call?.logger).toBe(log);
     expect(log.debug).toHaveBeenCalledWith(
       "graph media fetch empty",
       expect.objectContaining({ attachmentIdCount: 1 }),

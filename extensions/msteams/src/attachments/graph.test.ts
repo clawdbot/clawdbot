@@ -347,18 +347,18 @@ describe("downloadMSTeamsGraphMedia attachment sourcing and error logging", () =
       // test is the only one that fires.
       return guardedFetchResult(params, mockFetchResponse({ value: [] }));
     });
-    const log = { debug: vi.fn() };
+    const logger = { warn: vi.fn() };
 
     const result = await downloadMSTeamsGraphMedia({
       messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-err",
       tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
       maxBytes: 10 * 1024 * 1024,
-      log,
+      logger,
     });
 
     expect(result.media).toHaveLength(0);
-    expect(log.debug).toHaveBeenCalledWith(
-      "graph media message fetch failed",
+    expect(logger.warn).toHaveBeenCalledWith(
+      "msteams graph message fetch failed",
       expect.objectContaining({ error: "network boom" }),
     );
   });
@@ -394,7 +394,7 @@ describe("downloadMSTeamsGraphMedia attachment sourcing and error logging", () =
     vi.mocked(fetchWithSsrFGuard).mockImplementation(async (params: GuardedFetchParams) =>
       guardedFetchResult(params, mockFetchResponse({})),
     );
-    const log = { debug: vi.fn() };
+    const logger = { warn: vi.fn() };
 
     const result = await downloadMSTeamsGraphMedia({
       messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-token",
@@ -404,12 +404,12 @@ describe("downloadMSTeamsGraphMedia attachment sourcing and error logging", () =
         }),
       },
       maxBytes: 10 * 1024 * 1024,
-      log,
+      logger,
     });
 
     expect(result.tokenError).toBe(true);
-    expect(log.debug).toHaveBeenCalledWith(
-      "graph media token acquisition failed",
+    expect(logger.warn).toHaveBeenCalledWith(
+      "msteams graph token acquisition failed",
       expect.objectContaining({ error: "token expired" }),
     );
   });

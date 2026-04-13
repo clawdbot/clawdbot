@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
-import { resolveApiKeyFromCredential } from "./models-config.providers.secrets.js";
+import { resolveApiKeyFromCredential } from "./models-config.providers.secret-helpers.js";
 
 describe("provider discovery auth marker guardrails", () => {
   it("suppresses discovery secrets for marker-backed vLLM credentials", () => {

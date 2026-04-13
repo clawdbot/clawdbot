@@ -1,5 +1,4 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { Type } from "@sinclair/typebox";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
 import { killProcessTree } from "../process/kill-tree.js";
@@ -17,6 +16,7 @@ import {
 } from "./bash-process-registry.js";
 import { describeProcessTool } from "./bash-tools.descriptions.js";
 import { handleProcessSendKeys, type WritableStdin } from "./bash-tools.process-send-keys.js";
+import { processSchema } from "./bash-tools.schemas.js";
 import { deriveSessionName, pad, sliceLogLines, truncateMiddle } from "./bash-tools.shared.js";
 import { recordCommandPoll, resetCommandPollCount } from "./command-poll-backoff.js";
 import { encodePaste } from "./pty-keys.js";
@@ -48,28 +48,6 @@ function defaultTailNote(totalLines: number, usingDefaultTail: boolean) {
   }
   return `\n\n[showing last ${DEFAULT_LOG_TAIL_LINES} of ${totalLines} lines; pass offset/limit to page]`;
 }
-
-const processSchema = Type.Object({
-  action: Type.String({ description: "Process action" }),
-  sessionId: Type.Optional(Type.String({ description: "Session id for actions other than list" })),
-  data: Type.Optional(Type.String({ description: "Data to write for write" })),
-  keys: Type.Optional(
-    Type.Array(Type.String(), { description: "Key tokens to send for send-keys" }),
-  ),
-  hex: Type.Optional(Type.Array(Type.String(), { description: "Hex bytes to send for send-keys" })),
-  literal: Type.Optional(Type.String({ description: "Literal string for send-keys" })),
-  text: Type.Optional(Type.String({ description: "Text to paste for paste" })),
-  bracketed: Type.Optional(Type.Boolean({ description: "Wrap paste in bracketed mode" })),
-  eof: Type.Optional(Type.Boolean({ description: "Close stdin after write" })),
-  offset: Type.Optional(Type.Number({ description: "Log offset" })),
-  limit: Type.Optional(Type.Number({ description: "Log length" })),
-  timeout: Type.Optional(
-    Type.Number({
-      description: "For poll: wait up to this many milliseconds before returning",
-      minimum: 0,
-    }),
-  ),
-});
 
 const MAX_POLL_WAIT_MS = 120_000;
 

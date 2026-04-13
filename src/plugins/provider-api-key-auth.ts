@@ -141,7 +141,12 @@ export function createProviderApiKeyAuthMethod(
             normalizeOptionalString(profileId.split(":", 1)[0]) || params.providerId,
             credentialInput,
             params.metadata,
-            capturedMode ? { secretInputMode: capturedMode } : undefined,
+            capturedMode
+              ? {
+                  secretInputMode: capturedMode,
+                  config: ctx.config,
+                }
+              : undefined,
           ),
         })),
         ...(params.applyConfig ? { configPatch: params.applyConfig(ctx.config) } : {}),

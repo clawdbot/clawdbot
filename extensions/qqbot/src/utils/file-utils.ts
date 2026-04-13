@@ -16,9 +16,18 @@ export const MAX_UPLOAD_SIZE = 20 * 1024 * 1024;
 export const LARGE_FILE_THRESHOLD = 5 * 1024 * 1024;
 
 const QQBOT_MEDIA_HOSTNAME_ALLOWLIST = [
-  "*.myqcloud.com",
+  // QQ富媒体
   "*.qpic.cn",
   "*.qq.com",
+  "*.weiyun.com",
+  "*.qq.com.cn",
+
+  // QQ机器人
+  "*.ugcimg.cn",
+
+  // 腾讯云COS
+  "*.myqcloud.com",
+  "*.tencentcos.cn",
   "*.tencentcos.com",
 ];
 

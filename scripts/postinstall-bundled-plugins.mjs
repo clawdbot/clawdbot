@@ -26,6 +26,54 @@ function dependencySentinelPath(depName) {
   return join("node_modules", ...depName.split("/"), "package.json");
 }
 
+const KNOWN_NATIVE_PLATFORMS = new Set([
+  "aix",
+  "android",
+  "darwin",
+  "freebsd",
+  "linux",
+  "openbsd",
+  "sunos",
+  "win32",
+]);
+const KNOWN_NATIVE_ARCHES = new Set(["arm", "arm64", "ia32", "ppc64", "riscv64", "s390x", "x64"]);
+
+function packageNameTokens(name) {
+  return name
+    .toLowerCase()
+    .split(/[/@._-]+/u)
+    .filter(Boolean);
+}
+
+function optionalDependencyTargetsRuntime(name, params = {}) {
+  const platform = params.platform ?? process.platform;
+  const arch = params.arch ?? process.arch;
+  const tokens = new Set(packageNameTokens(name));
+  const hasNativePlatformToken = [...tokens].some((token) => KNOWN_NATIVE_PLATFORMS.has(token));
+  const hasNativeArchToken = [...tokens].some((token) => KNOWN_NATIVE_ARCHES.has(token));
+  return hasNativePlatformToken && hasNativeArchToken && tokens.has(platform) && tokens.has(arch);
+}
+
+function runtimeDepNeedsInstall(params) {
+  const packageJsonPath = join(params.packageRoot, params.dep.sentinelPath);
+  if (!params.existsSync(packageJsonPath)) {
+    return true;
+  }
+
+  try {
+    const packageJson = params.readJson(packageJsonPath);
+    return Object.keys(packageJson.optionalDependencies ?? {}).some(
+      (childName) =>
+        optionalDependencyTargetsRuntime(childName, {
+          arch: params.arch,
+          platform: params.platform,
+        }) && !params.existsSync(join(params.packageRoot, dependencySentinelPath(childName))),
+    );
+  } catch {
+    return true;
+  }
+}
+
 function collectRuntimeDeps(packageJson) {
   return {
     ...packageJson.dependencies,
@@ -184,7 +232,16 @@ export function runBundledPluginPostinstall(params = {}) {
     params.runtimeDeps ??
     discoverBundledPluginRuntimeDeps({ extensionsDir, existsSync: pathExists });
   const missingSpecs = runtimeDeps
-    .filter((dep) => !pathExists(join(packageRoot, dep.sentinelPath)))
+    .filter((dep) =>
+      runtimeDepNeedsInstall({
+        dep,
+        existsSync: pathExists,
+        packageRoot,
+        arch: params.arch,
+        platform: params.platform,
+        readJson: params.readJson ?? readJson,
+      }),
+    )
     .map((dep) => `${dep.name}@${dep.version}`);
 
   if (missingSpecs.length === 0) {
@@ -201,7 +258,14 @@ export function runBundledPluginPostinstall(params = {}) {
         existsSync: pathExists,
         platform: params.platform,
         comSpec: params.comSpec,
-        npmArgs: ["install", "--omit=dev", "--no-save", "--package-lock=false", ...missingSpecs],
+        npmArgs: [
+          "install",
+          "--omit=dev",
+          "--no-save",
+          "--package-lock=false",
+          "--legacy-peer-deps",
+          ...missingSpecs,
+        ],
       });
     const result = spawn(npmRunner.command, npmRunner.args, {
       cwd: packageRoot,

@@ -71,39 +71,50 @@ export function startGatewayRuntimeServices(params: {
   minimalTestGateway: boolean;
   cfgAtStart: OpenClawConfig;
   channelManager: GatewayChannelManager;
-  cron: { start: () => Promise<void> };
-  logCron: { error: (message: string) => void };
   log: GatewayRuntimeServiceLogger;
 }): {
   heartbeatRunner: HeartbeatRunner;
   channelHealthMonitor: ChannelHealthMonitor | null;
   stopModelPricingRefresh: () => void;
 } {
-  const heartbeatRunner = params.minimalTestGateway
-    ? createNoopHeartbeatRunner()
-    : startHeartbeatRunner({ cfg: params.cfgAtStart });
+  // Keep scheduled work inert until post-attach sidecars finish.
   const channelHealthMonitor = startGatewayChannelHealthMonitor({
     cfg: params.cfgAtStart,
     channelManager: params.channelManager,
   });
 
-  if (!params.minimalTestGateway) {
-    startGatewayCronWithLogging({
-      cron: params.cron,
-      logCron: params.logCron,
-    });
-    recoverPendingOutboundDeliveries({
-      cfg: params.cfgAtStart,
-      log: params.log,
-    });
-  }
-
   return {
-    heartbeatRunner,
+    heartbeatRunner: createNoopHeartbeatRunner(),
     channelHealthMonitor,
     stopModelPricingRefresh:
       !params.minimalTestGateway && process.env.VITEST !== "1"
         ? startGatewayModelPricingRefresh({ config: params.cfgAtStart })
         : () => {},
   };
+}
+
+/**
+ * Activate cron scheduler, heartbeat runner, and pending delivery recovery
+ * after gateway sidecars are fully started and chat.history is available.
+ */
+export function activateGatewayScheduledServices(params: {
+  minimalTestGateway: boolean;
+  cfgAtStart: OpenClawConfig;
+  cron: { start: () => Promise<void> };
+  logCron: { error: (message: string) => void };
+  log: GatewayRuntimeServiceLogger;
+}): { heartbeatRunner: HeartbeatRunner } {
+  if (params.minimalTestGateway) {
+    return { heartbeatRunner: createNoopHeartbeatRunner() };
+  }
+  const heartbeatRunner = startHeartbeatRunner({ cfg: params.cfgAtStart });
+  startGatewayCronWithLogging({
+    cron: params.cron,
+    logCron: params.logCron,
+  });
+  recoverPendingOutboundDeliveries({
+    cfg: params.cfgAtStart,
+    log: params.log,
+  });
+  return { heartbeatRunner };
 }

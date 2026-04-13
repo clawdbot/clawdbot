@@ -1199,7 +1199,7 @@ async function readActiveMemorySearchDebug(
         continue;
       }
       const details = asRecord(message.details);
-      const debug = asRecord(details?.debug);
+      const debug = asRecord(details?.debug) ?? {};
       const warning = normalizeOptionalString(details?.warning);
       const action = normalizeOptionalString(details?.action);
       const error = normalizeOptionalString(details?.error);

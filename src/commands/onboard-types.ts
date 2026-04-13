@@ -58,6 +58,7 @@ export type OnboardOptions = OnboardDynamicProviderOptions & {
   cloudflareAiGatewayGatewayId?: string;
   customBaseUrl?: string;
   customApiKey?: string;
+  lmstudioApiKey?: string;
   customModelId?: string;
   customProviderId?: string;
   customCompatibility?: "openai" | "anthropic";

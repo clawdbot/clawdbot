@@ -139,11 +139,11 @@ describe("gateway control-plane write rate limit", () => {
     };
     const context = {
       ...buildContext(),
-      unavailableGatewayMethods: new Set(["chat.history"]),
+      unavailableGatewayMethods: new Set(["chat.history", "models.list"]),
     } as Parameters<typeof handleGatewayRequest>[0]["context"];
     const client = buildClient();
 
-    const blocked = await runRequest({ method: "chat.history", context, client, handler });
+    const blocked = await runRequest({ method: "models.list", context, client, handler });
 
     expect(handlerCalls).not.toHaveBeenCalled();
     expect(blocked).toHaveBeenCalledWith(
@@ -152,6 +152,8 @@ describe("gateway control-plane write rate limit", () => {
       expect.objectContaining({
         code: "UNAVAILABLE",
         retryable: true,
+        retryAfterMs: 500,
+        details: { method: "models.list" },
       }),
     );
   });

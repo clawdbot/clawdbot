@@ -66,6 +66,30 @@ describe("telegram live qa runtime", () => {
     ).toThrow("OPENCLAW_QA_TELEGRAM_GROUP_ID must be a numeric Telegram chat id.");
   });
 
+  it("parses Telegram pooled credential payloads", () => {
+    expect(
+      __testing.parseTelegramQaCredentialPayload({
+        groupId: "-100123",
+        driverToken: "driver",
+        sutToken: "sut",
+      }),
+    ).toEqual({
+      groupId: "-100123",
+      driverToken: "driver",
+      sutToken: "sut",
+    });
+  });
+
+  it("rejects Telegram pooled credential payloads with non-numeric group ids", () => {
+    expect(() =>
+      __testing.parseTelegramQaCredentialPayload({
+        groupId: "qa-group",
+        driverToken: "driver",
+        sutToken: "sut",
+      }),
+    ).toThrow("Telegram credential payload groupId must be a numeric Telegram chat id.");
+  });
+
   it("injects a temporary Telegram account into the QA gateway config", () => {
     const baseCfg: OpenClawConfig = {
       plugins: {

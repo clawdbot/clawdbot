@@ -6,7 +6,15 @@ import {
 import { runMatrixQaLive } from "./matrix-live.runtime.js";
 
 export async function runQaMatrixCommand(opts: LiveTransportQaCommandOptions) {
-  const result = await runMatrixQaLive(resolveLiveTransportQaRunOptions(opts));
+  const runOptions = resolveLiveTransportQaRunOptions(opts);
+  const credentialSource = runOptions.credentialSource?.toLowerCase();
+  if (credentialSource && credentialSource !== "env") {
+    throw new Error(
+      "Matrix QA currently supports only --credential-source env (disposable local harness).",
+    );
+  }
+
+  const result = await runMatrixQaLive(runOptions);
   printLiveTransportQaArtifacts("Matrix QA", {
     report: result.reportPath,
     summary: result.summaryPath,

@@ -69,13 +69,22 @@ steps:
           expr: hasModelSwitchContinuityEvidence(outbound.text)
           message:
             expr: "`switch reply missed kickoff continuity: ${outbound.text}`"
-      - assert:
-          expr: "!env.mock || (((await fetchJson(`${env.mock.baseUrl}/debug/requests`)).find((request) => String(request.allInputText ?? '').includes(config.promptSnippet))?.plannedToolName) === 'read')"
-          message:
-            expr: "`expected read after switch, got ${String((await fetchJson(`${env.mock.baseUrl}/debug/requests`)).find((request) => String(request.allInputText ?? '').includes(config.promptSnippet))?.plannedToolName ?? '')}`"
-      - assert:
-          expr: "!env.mock || (((await fetchJson(`${env.mock.baseUrl}/debug/requests`)).find((request) => String(request.allInputText ?? '').includes(config.promptSnippet))?.model) === 'gpt-5.4-alt')"
-          message:
-            expr: "`expected alternate model, got ${String((await fetchJson(`${env.mock.baseUrl}/debug/requests`)).find((request) => String(request.allInputText ?? '').includes(config.promptSnippet))?.model ?? '')}`"
+      - if:
+          expr: "Boolean(env.mock)"
+          then:
+            - set: switchDebugRequests
+              value:
+                expr: "await fetchJson(`${env.mock.baseUrl}/debug/requests`)"
+            - set: switchRequest
+              value:
+                expr: "switchDebugRequests.find((request) => String(request.allInputText ?? '').includes(config.promptSnippet))"
+            - assert:
+                expr: "switchRequest?.plannedToolName === 'read'"
+                message:
+                  expr: "`expected read after switch, got ${String(switchRequest?.plannedToolName ?? '')}`"
+            - assert:
+                expr: "String(switchRequest?.model ?? '') === String(alternate?.model ?? '')"
+                message:
+                  expr: "`expected alternate model, got ${String(switchRequest?.model ?? '')}`"
     detailsExpr: outbound.text
 ```

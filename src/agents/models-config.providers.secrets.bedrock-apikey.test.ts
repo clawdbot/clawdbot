@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { ProviderConfig } from "./models-config.providers.secrets.js";
+import type { ProviderConfig } from "./models-config.providers.secret-helpers.js";
 import {
   resolveAwsSdkApiKeyVarName,
   resolveMissingProviderApiKey,
-} from "./models-config.providers.secrets.js";
+} from "./models-config.providers.secret-helpers.js";
 
 /**
  * Regression tests for #49891 / #50699 / #54274:

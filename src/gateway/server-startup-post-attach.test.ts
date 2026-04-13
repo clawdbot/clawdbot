@@ -123,8 +123,8 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.reconcilePendingSessionIdentities.mockClear();
   });
 
-  it("re-enables chat.history after post-attach sidecars start", async () => {
-    const unavailableGatewayMethods = new Set<string>(["chat.history"]);
+  it("re-enables startup-gated methods after post-attach sidecars start", async () => {
+    const unavailableGatewayMethods = new Set<string>(["chat.history", "models.list"]);
 
     await startGatewayPostAttachRuntime({
       minimalTestGateway: false,
@@ -168,7 +168,7 @@ describe("startGatewayPostAttachRuntime", () => {
       unavailableGatewayMethods,
     });
 
-    expect(unavailableGatewayMethods.has("chat.history")).toBe(false);
+    expect([...unavailableGatewayMethods]).toEqual([]);
     expect(hoisted.startPluginServices).toHaveBeenCalledTimes(1);
     expect(hoisted.setInternalHooksEnabled).toHaveBeenCalledWith(false);
     expect(hoisted.logGatewayStartup).toHaveBeenCalledWith(

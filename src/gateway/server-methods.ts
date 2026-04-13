@@ -114,6 +114,7 @@ export async function handleGatewayRequest(
       undefined,
       errorShape(ErrorCodes.UNAVAILABLE, `${req.method} unavailable during gateway startup`, {
         retryable: true,
+        retryAfterMs: 500,
         details: { method: req.method },
       }),
     );

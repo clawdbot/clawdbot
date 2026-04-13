@@ -19,10 +19,38 @@ import {
   formatValidationErrors,
   validateCommandsListParams,
 } from "../protocol/index.js";
+import {
+  COMMAND_ALIAS_MAX_ITEMS,
+  COMMAND_ARG_CHOICES_MAX_ITEMS,
+  COMMAND_ARG_DESCRIPTION_MAX_LENGTH,
+  COMMAND_ARG_NAME_MAX_LENGTH,
+  COMMAND_ARGS_MAX_ITEMS,
+  COMMAND_CHOICE_LABEL_MAX_LENGTH,
+  COMMAND_CHOICE_VALUE_MAX_LENGTH,
+  COMMAND_DESCRIPTION_MAX_LENGTH,
+  COMMAND_LIST_MAX_ITEMS,
+  COMMAND_NAME_MAX_LENGTH,
+} from "../protocol/schema/commands.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 type SerializedArg = NonNullable<CommandEntry["args"]>[number];
 type CommandNameSurface = "text" | "native";
+
+function clampString(value: string, maxLength: number): string {
+  return value.length > maxLength ? value.slice(0, maxLength) : value;
+}
+
+function trimClampNonEmpty(value: string, maxLength: number): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return clampString(trimmed, maxLength);
+}
+
+function clampDescription(value: string | undefined): string {
+  return clampString(value ?? "", COMMAND_DESCRIPTION_MAX_LENGTH);
+}
 
 function resolveAgentIdOrRespondError(rawAgentId: unknown, respond: RespondFn) {
   const cfg = loadConfig();
@@ -61,7 +89,7 @@ function resolveTextAliases(cmd: ChatCommandDefinition): string[] {
   const seen = new Set<string>();
   const aliases: string[] = [];
   for (const alias of cmd.textAliases) {
-    const trimmed = alias.trim();
+    const trimmed = trimClampNonEmpty(alias, COMMAND_NAME_MAX_LENGTH);
     if (!trimmed) {
       continue;
     }
@@ -71,11 +99,14 @@ function resolveTextAliases(cmd: ChatCommandDefinition): string[] {
     }
     seen.add(exactAlias);
     aliases.push(exactAlias);
+    if (aliases.length >= COMMAND_ALIAS_MAX_ITEMS) {
+      break;
+    }
   }
   if (aliases.length > 0) {
     return aliases;
   }
-  return [`/${cmd.key}`];
+  return [`/${clampString(cmd.key, COMMAND_NAME_MAX_LENGTH)}`];
 }
 
 function resolvePrimaryTextName(cmd: ChatCommandDefinition): string {
@@ -84,10 +115,12 @@ function resolvePrimaryTextName(cmd: ChatCommandDefinition): string {
 
 function serializeArg(arg: CommandArgDefinition): SerializedArg {
   const isDynamic = typeof arg.choices === "function";
-  const staticChoices = Array.isArray(arg.choices) ? arg.choices.map(normalizeChoice) : undefined;
+  const staticChoices = Array.isArray(arg.choices)
+    ? arg.choices.slice(0, COMMAND_ARG_CHOICES_MAX_ITEMS).map(normalizeChoice)
+    : undefined;
   return {
-    name: arg.name,
-    description: arg.description,
+    name: clampString(arg.name, COMMAND_ARG_NAME_MAX_LENGTH),
+    description: clampString(arg.description, COMMAND_ARG_DESCRIPTION_MAX_LENGTH),
     type: arg.type,
     ...(arg.required ? { required: true } : {}),
     ...(staticChoices ? { choices: staticChoices } : {}),
@@ -96,7 +129,17 @@ function serializeArg(arg: CommandArgDefinition): SerializedArg {
 }
 
 function normalizeChoice(choice: CommandArgChoice): { value: string; label: string } {
-  return typeof choice === "string" ? { value: choice, label: choice } : choice;
+  if (typeof choice === "string") {
+    const value = clampString(choice, COMMAND_CHOICE_VALUE_MAX_LENGTH);
+    return {
+      value,
+      label: clampString(choice, COMMAND_CHOICE_LABEL_MAX_LENGTH),
+    };
+  }
+  return {
+    value: clampString(choice.value, COMMAND_CHOICE_VALUE_MAX_LENGTH),
+    label: clampString(choice.label, COMMAND_CHOICE_LABEL_MAX_LENGTH),
+  };
 }
 
 function mapCommand(
@@ -109,15 +152,20 @@ function mapCommand(
   const shouldIncludeArgs = includeArgs && cmd.acceptsArgs && cmd.args?.length;
   const nativeName = cmd.scope === "text" ? undefined : resolveNativeName(cmd, provider);
   return {
-    name: nameSurface === "text" ? resolvePrimaryTextName(cmd) : (nativeName ?? cmd.key),
-    ...(nativeName ? { nativeName } : {}),
+    name: clampString(
+      nameSurface === "text" ? resolvePrimaryTextName(cmd) : (nativeName ?? cmd.key),
+      COMMAND_NAME_MAX_LENGTH,
+    ),
+    ...(nativeName ? { nativeName: clampString(nativeName, COMMAND_NAME_MAX_LENGTH) } : {}),
     ...(cmd.scope !== "native" ? { textAliases: resolveTextAliases(cmd) } : {}),
-    description: cmd.description,
+    description: clampDescription(cmd.description),
     ...(cmd.category ? { category: cmd.category } : {}),
     source,
     scope: cmd.scope,
     acceptsArgs: Boolean(cmd.acceptsArgs),
-    ...(shouldIncludeArgs ? { args: cmd.args!.map(serializeArg) } : {}),
+    ...(shouldIncludeArgs
+      ? { args: cmd.args!.slice(0, COMMAND_ARGS_MAX_ITEMS).map(serializeArg) }
+      : {}),
   };
 }
 
@@ -133,10 +181,13 @@ function buildPluginCommandEntries(params: {
     const nativeSpec = pluginNativeSpecs[index];
     const nativeName = nativeSpec?.name;
     entries.push({
-      name: params.nameSurface === "text" ? textSpec.name : (nativeName ?? textSpec.name),
-      ...(nativeName ? { nativeName } : {}),
-      textAliases: [`/${textSpec.name}`],
-      description: textSpec.description,
+      name: clampString(
+        params.nameSurface === "text" ? textSpec.name : (nativeName ?? textSpec.name),
+        COMMAND_NAME_MAX_LENGTH,
+      ),
+      ...(nativeName ? { nativeName: clampString(nativeName, COMMAND_NAME_MAX_LENGTH) } : {}),
+      textAliases: [`/${clampString(textSpec.name, COMMAND_NAME_MAX_LENGTH)}`],
+      description: clampDescription(textSpec.description),
       source: "plugin",
       scope: "both",
       acceptsArgs: textSpec.acceptsArgs,
@@ -184,7 +235,7 @@ export function buildCommandsListResult(params: {
 
   commands.push(...buildPluginCommandEntries({ provider, nameSurface }));
 
-  return { commands };
+  return { commands: commands.slice(0, COMMAND_LIST_MAX_ITEMS) };
 }
 
 export const commandsHandlers: GatewayRequestHandlers = {

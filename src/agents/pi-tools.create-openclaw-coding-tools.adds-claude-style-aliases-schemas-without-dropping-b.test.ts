@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
 
-const defaultTools = createOpenClawCodingTools({ senderIsOwner: true });
-
 describe("createOpenClawCodingTools", () => {
   it("preserves action enums in normalized schemas", () => {
+    const defaultTools = createOpenClawCodingTools({ senderIsOwner: true });
     const toolNames = ["canvas", "nodes", "cron", "gateway", "message"];
     const missingNames = toolNames.filter(
       (name) => !defaultTools.some((candidate) => candidate.name === name),
@@ -56,6 +56,7 @@ describe("createOpenClawCodingTools", () => {
     }
   });
   it("enforces apply_patch availability and canonical names across model/provider constraints", () => {
+    const defaultTools = createOpenClawCodingTools({ senderIsOwner: true });
     expect(defaultTools.some((tool) => tool.name === "exec")).toBe(true);
     expect(defaultTools.some((tool) => tool.name === "process")).toBe(true);
     expect(defaultTools.some((tool) => tool.name === "apply_patch")).toBe(false);

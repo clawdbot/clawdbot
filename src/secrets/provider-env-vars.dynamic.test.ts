@@ -4,6 +4,7 @@ type MockManifestRegistry = {
   plugins: Array<{
     id: string;
     origin: string;
+    kind?: "memory" | "context-engine" | Array<"memory" | "context-engine">;
     providerAuthEnvVars?: Record<string, string[]>;
     providerAuthAliases?: Record<string, string>;
   }>;
@@ -48,5 +49,144 @@ describe("provider env vars dynamic manifest metadata", () => {
     expect(mod.getProviderEnvVars("fireworks-plan")).toEqual(["FIREWORKS_ALT_API_KEY"]);
     expect(mod.listKnownProviderAuthEnvVarNames()).toContain("FIREWORKS_ALT_API_KEY");
     expect(mod.listKnownSecretEnvVarNames()).toContain("FIREWORKS_ALT_API_KEY");
+  });
+
+  it("keeps workspace plugin env vars in default lookups", async () => {
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "workspace-audio",
+          origin: "workspace",
+          providerAuthEnvVars: {
+            whisperx: ["WHISPERX_API_KEY"],
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    const mod = await import("./provider-env-vars.js");
+
+    expect(mod.getProviderEnvVars("whisperx")).toEqual(["WHISPERX_API_KEY"]);
+    expect(mod.listKnownProviderAuthEnvVarNames()).toContain("WHISPERX_API_KEY");
+  });
+
+  it("excludes untrusted workspace plugin env vars when requested", async () => {
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "workspace-audio",
+          origin: "workspace",
+          providerAuthEnvVars: {
+            whisperx: ["AWS_SECRET_ACCESS_KEY"],
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    const mod = await import("./provider-env-vars.js");
+
+    expect(
+      mod.getProviderEnvVars("whisperx", {
+        config: { plugins: {} },
+        includeUntrustedWorkspacePlugins: false,
+      }),
+    ).toEqual([]);
+    expect(
+      mod.listKnownProviderAuthEnvVarNames({
+        config: { plugins: {} },
+        includeUntrustedWorkspacePlugins: false,
+      }),
+    ).not.toContain("AWS_SECRET_ACCESS_KEY");
+  });
+
+  it("keeps explicitly trusted workspace plugin env vars when requested", async () => {
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "workspace-audio",
+          origin: "workspace",
+          providerAuthEnvVars: {
+            whisperx: ["WHISPERX_API_KEY"],
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    const mod = await import("./provider-env-vars.js");
+
+    expect(
+      mod.getProviderEnvVars("whisperx", {
+        config: {
+          plugins: {
+            allow: ["workspace-audio"],
+          },
+        },
+        includeUntrustedWorkspacePlugins: false,
+      }),
+    ).toEqual(["WHISPERX_API_KEY"]);
+  });
+
+  it("does not trust arbitrary workspace plugin ids from the context engine slot", async () => {
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "workspace-audio",
+          origin: "workspace",
+          providerAuthEnvVars: {
+            whisperx: ["AWS_SECRET_ACCESS_KEY"],
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    const mod = await import("./provider-env-vars.js");
+
+    expect(
+      mod.getProviderEnvVars("whisperx", {
+        config: {
+          plugins: {
+            slots: {
+              contextEngine: "workspace-audio",
+            },
+          },
+        },
+        includeUntrustedWorkspacePlugins: false,
+      }),
+    ).toEqual([]);
+  });
+
+  it("keeps selected workspace context engine env vars when requested", async () => {
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "workspace-engine",
+          origin: "workspace",
+          kind: "context-engine",
+          providerAuthEnvVars: {
+            whisperx: ["WHISPERX_API_KEY"],
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    const mod = await import("./provider-env-vars.js");
+
+    expect(
+      mod.getProviderEnvVars("whisperx", {
+        config: {
+          plugins: {
+            slots: {
+              contextEngine: "workspace-engine",
+            },
+          },
+        },
+        includeUntrustedWorkspacePlugins: false,
+      }),
+    ).toEqual(["WHISPERX_API_KEY"]);
   });
 });

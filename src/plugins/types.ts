@@ -1710,7 +1710,9 @@ export type OpenClawPluginCommandDefinition = {
    * `default` applies to all native providers unless a provider-specific
    * override exists.
    */
-  nativeProgressMessages?: Partial<Record<string, string>> & { default?: string };
+  nativeProgressMessages?: Partial<Record<string, string>> & {
+    default?: string;
+  };
   /** Description shown in /help and command menus */
   description: string;
   /** Whether this command accepts arguments */

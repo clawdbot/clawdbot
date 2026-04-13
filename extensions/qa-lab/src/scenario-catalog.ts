@@ -51,6 +51,10 @@ const qaScenarioExecutionSchema = z.object({
   config: qaScenarioConfigSchema.optional(),
 });
 
+const qaScenarioGatewayRuntimeSchema = z.object({
+  forwardHostHome: z.boolean().optional(),
+});
+
 const qaFlowCallActionSchema = z.object({
   call: z.string().trim().min(1),
   args: z.array(z.unknown()).optional(),
@@ -137,6 +141,7 @@ const qaSeedScenarioSchema = z.object({
   successCriteria: z.array(z.string().trim().min(1)).min(1),
   plugins: z.array(z.string().trim().min(1)).optional(),
   gatewayConfigPatch: z.record(z.string(), z.unknown()).optional(),
+  gatewayRuntime: qaScenarioGatewayRuntimeSchema.optional(),
   docsRefs: z.array(z.string().trim().min(1)).optional(),
   codeRefs: z.array(z.string().trim().min(1)).optional(),
   execution: qaScenarioExecutionSchema.optional(),

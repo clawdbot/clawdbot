@@ -1,4 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const { defaultQaRuntimeModelForMode } = vi.hoisted(() => ({
+  defaultQaRuntimeModelForMode: vi.fn<(mode: string, options?: { alternate?: boolean }) => string>(
+    (mode, options) =>
+      mode === "live-frontier"
+        ? "openai/gpt-5.4"
+        : options?.alternate
+          ? "mock-openai/gpt-5.4-alt"
+          : "mock-openai/gpt-5.4",
+  ),
+}));
+
+vi.mock("./model-selection.runtime.js", () => ({
+  defaultQaRuntimeModelForMode,
+}));
 import {
   createDefaultQaRunSelection,
   createIdleQaRunnerSnapshot,
@@ -24,6 +39,17 @@ const scenarios = [
 ];
 
 describe("qa run config", () => {
+  beforeEach(() => {
+    defaultQaRuntimeModelForMode.mockImplementation(
+      (mode: string, options?: { alternate?: boolean }) =>
+        mode === "live-frontier"
+          ? "openai/gpt-5.4"
+          : options?.alternate
+            ? "mock-openai/gpt-5.4-alt"
+            : "mock-openai/gpt-5.4",
+    );
+  });
+
   it("creates a live-by-default selection that arms every scenario", () => {
     expect(createDefaultQaRunSelection(scenarios)).toEqual({
       providerMode: "live-frontier",
@@ -72,5 +98,23 @@ describe("qa run config", () => {
   it("anchors generated run output dirs under the provided repo root", () => {
     const outputDir = createQaRunOutputDir("/tmp/openclaw-repo");
     expect(outputDir.startsWith("/tmp/openclaw-repo/.artifacts/qa-e2e/lab-")).toBe(true);
+  });
+
+  it("prefers the Codex OAuth default when the runtime resolver says it is available", () => {
+    defaultQaRuntimeModelForMode.mockImplementation((mode, options) =>
+      mode === "live-frontier"
+        ? "openai-codex/gpt-5.4"
+        : options?.alternate
+          ? "mock-openai/gpt-5.4-alt"
+          : "mock-openai/gpt-5.4",
+    );
+
+    expect(createDefaultQaRunSelection(scenarios)).toEqual({
+      providerMode: "live-frontier",
+      primaryModel: "openai-codex/gpt-5.4",
+      alternateModel: "openai-codex/gpt-5.4",
+      fastMode: true,
+      scenarioIds: ["dm-chat-baseline", "thread-lifecycle"],
+    });
   });
 });

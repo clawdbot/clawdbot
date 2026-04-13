@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   buildQaAgenticParityComparison,
   renderQaAgenticParityMarkdownReport,
@@ -15,6 +16,13 @@ import { startQaLabServer } from "./lab-server.js";
 import { runQaManualLane } from "./manual-lane.runtime.js";
 import { startQaMockOpenAiServer } from "./mock-openai-server.js";
 import { runQaMultipass } from "./multipass.runtime.js";
+import {
+  addQaCredentialSet,
+  listQaCredentialSets,
+  QaCredentialAdminError,
+  removeQaCredentialSet,
+  type QaCredentialRecord,
+} from "./qa-credentials-admin.runtime.js";
 import { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-gateway-config.js";
 import { normalizeQaTransportId } from "./qa-transport-registry.js";
 import {
@@ -117,6 +125,46 @@ function parseQaCliBackendAuthMode(value: string | undefined): QaCliBackendAuthM
   throw new Error("--cli-auth-mode must be one of auto, api-key, subscription");
 }
 
+function parseQaCredentialListStatus(value: string | undefined) {
+  if (value === undefined) {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "active" || normalized === "disabled" || normalized === "all") {
+    return normalized;
+  }
+  throw new Error('--status must be one of "active", "disabled", or "all".');
+}
+
+function normalizeQaCredentialAdminError(error: unknown) {
+  if (error instanceof QaCredentialAdminError) {
+    return {
+      code: error.code,
+      message: error.message,
+    };
+  }
+  return {
+    code: "UNEXPECTED_ERROR",
+    message: formatErrorMessage(error),
+  };
+}
+
+function writeQaCredentialCommandErrorJson(action: string, error: unknown) {
+  const normalized = normalizeQaCredentialAdminError(error);
+  process.stdout.write(
+    `${JSON.stringify(
+      {
+        status: "error",
+        action,
+        code: normalized.code,
+        message: normalized.message,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}
+
 function parseQaModelSpecs(label: string, entries: readonly string[] | undefined) {
   const models: string[] = [];
   const optionsByModel: Record<string, QaCharacterModelOptions> = {};
@@ -196,6 +244,55 @@ async function runInterruptibleServer(label: string, server: InterruptibleServer
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
   await new Promise(() => undefined);
+}
+
+async function readQaCredentialPayloadFile(filePath: string) {
+  const text = await fs.readFile(filePath, "utf8");
+  let payload: unknown;
+  try {
+    payload = JSON.parse(text) as unknown;
+  } catch (error) {
+    throw new Error(`Payload file must contain valid JSON: ${formatErrorMessage(error)}`, {
+      cause: error,
+    });
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("Payload file JSON must be an object.");
+  }
+  return payload as Record<string, unknown>;
+}
+
+function formatQaCredentialLeaseState(credential: QaCredentialRecord) {
+  if (!credential.lease) {
+    return "no";
+  }
+  return `yes(${credential.lease.actorRole}:${credential.lease.ownerId})`;
+}
+
+function printQaCredentialListTable(credentials: QaCredentialRecord[]) {
+  if (credentials.length === 0) {
+    process.stdout.write("No credentials matched.\n");
+    return;
+  }
+  const rows = credentials.map((credential) => ({
+    credentialId: credential.credentialId,
+    kind: credential.kind,
+    status: credential.status,
+    leased: formatQaCredentialLeaseState(credential),
+    note: credential.note ?? "",
+  }));
+  const idWidth = Math.max("credentialId".length, ...rows.map((row) => row.credentialId.length));
+  const kindWidth = Math.max("kind".length, ...rows.map((row) => row.kind.length));
+  const statusWidth = Math.max("status".length, ...rows.map((row) => row.status.length));
+  const leaseWidth = Math.max("leased".length, ...rows.map((row) => row.leased.length));
+  process.stdout.write(
+    `${"credentialId".padEnd(idWidth)}  ${"kind".padEnd(kindWidth)}  ${"status".padEnd(statusWidth)}  ${"leased".padEnd(leaseWidth)}  note\n`,
+  );
+  for (const row of rows) {
+    process.stdout.write(
+      `${row.credentialId.padEnd(idWidth)}  ${row.kind.padEnd(kindWidth)}  ${row.status.padEnd(statusWidth)}  ${row.leased.padEnd(leaseWidth)}  ${row.note}\n`,
+    );
+  }
 }
 
 export async function runQaLabSelfCheckCommand(opts: { repoRoot?: string; output?: string }) {
@@ -409,6 +506,148 @@ export async function runQaManualLaneCommand(opts: {
   });
   process.stdout.write(JSON.stringify(result, null, 2));
   process.stdout.write("\n");
+}
+
+export async function runQaCredentialsAddCommand(opts: {
+  actorId?: string;
+  endpointPrefix?: string;
+  json?: boolean;
+  kind: string;
+  note?: string;
+  payloadFile: string;
+  repoRoot?: string;
+  siteUrl?: string;
+}) {
+  const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
+  try {
+    const payloadPath = path.resolve(repoRoot, opts.payloadFile);
+    const payload = await readQaCredentialPayloadFile(payloadPath);
+    const result = await addQaCredentialSet({
+      kind: opts.kind,
+      payload,
+      note: opts.note,
+      actorId: opts.actorId,
+      siteUrl: opts.siteUrl,
+      endpointPrefix: opts.endpointPrefix,
+    });
+    if (opts.json) {
+      process.stdout.write(
+        `${JSON.stringify({ status: "ok", action: "add", credential: result.credential }, null, 2)}\n`,
+      );
+      return;
+    }
+    process.stdout.write(`QA credential added: ${result.credential.credentialId}\n`);
+    process.stdout.write(`Kind: ${result.credential.kind}\n`);
+    process.stdout.write(`Status: ${result.credential.status}\n`);
+    if (result.credential.note) {
+      process.stdout.write(`Note: ${result.credential.note}\n`);
+    }
+  } catch (error) {
+    if (opts.json) {
+      writeQaCredentialCommandErrorJson("add", error);
+      process.exitCode = 1;
+      return;
+    }
+    throw error;
+  }
+}
+
+export async function runQaCredentialsRemoveCommand(opts: {
+  actorId?: string;
+  credentialId: string;
+  endpointPrefix?: string;
+  json?: boolean;
+  siteUrl?: string;
+}) {
+  try {
+    const result = await removeQaCredentialSet({
+      credentialId: opts.credentialId,
+      actorId: opts.actorId,
+      siteUrl: opts.siteUrl,
+      endpointPrefix: opts.endpointPrefix,
+    });
+    if (opts.json) {
+      process.stdout.write(
+        `${JSON.stringify(
+          {
+            status: "ok",
+            action: "remove",
+            changed: result.changed,
+            credential: result.credential,
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      return;
+    }
+    process.stdout.write(
+      result.changed
+        ? `QA credential removed (disabled): ${result.credential.credentialId}\n`
+        : `QA credential already disabled: ${result.credential.credentialId}\n`,
+    );
+  } catch (error) {
+    if (opts.json) {
+      writeQaCredentialCommandErrorJson("remove", error);
+      process.exitCode = 1;
+      return;
+    }
+    throw error;
+  }
+}
+
+export async function runQaCredentialsListCommand(opts: {
+  actorId?: string;
+  endpointPrefix?: string;
+  json?: boolean;
+  kind?: string;
+  limit?: number;
+  showSecrets?: boolean;
+  siteUrl?: string;
+  status?: string;
+}) {
+  try {
+    const result = await listQaCredentialSets({
+      actorId: opts.actorId,
+      siteUrl: opts.siteUrl,
+      endpointPrefix: opts.endpointPrefix,
+      kind: opts.kind?.trim(),
+      status: parseQaCredentialListStatus(opts.status),
+      includePayload: opts.showSecrets,
+      limit: parseQaPositiveIntegerOption("--limit", opts.limit),
+    });
+    if (opts.json) {
+      process.stdout.write(
+        `${JSON.stringify(
+          {
+            status: "ok",
+            action: "list",
+            count: result.credentials.length,
+            credentials: result.credentials,
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      return;
+    }
+    printQaCredentialListTable(result.credentials);
+    if (opts.showSecrets && result.credentials.length > 0) {
+      process.stdout.write("\nPayloads:\n");
+      for (const credential of result.credentials) {
+        process.stdout.write(
+          `${credential.credentialId}: ${JSON.stringify(credential.payload ?? null)}\n`,
+        );
+      }
+    }
+  } catch (error) {
+    if (opts.json) {
+      writeQaCredentialCommandErrorJson("list", error);
+      process.exitCode = 1;
+      return;
+    }
+    throw error;
+  }
 }
 
 export async function runQaLabUiCommand(opts: {

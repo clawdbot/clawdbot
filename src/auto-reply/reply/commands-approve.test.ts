@@ -115,7 +115,8 @@ const signalApproveTestPlugin: ChannelPlugin = {
   approvalCapability: createResolvedApproverActionAuthAdapter({
     channelLabel: "Signal",
     resolveApprovers: ({ cfg, accountId }) => {
-      const signal = accountId ? cfg.channels?.signal?.accounts?.[accountId] : cfg.channels?.signal;
+      const scopedSignal = accountId ? cfg.channels?.signal?.accounts?.[accountId] : undefined;
+      const signal = scopedSignal ?? cfg.channels?.signal;
       return resolveApprovalApprovers({
         allowFrom: signal?.allowFrom,
         defaultTo: signal?.defaultTo,
@@ -641,6 +642,62 @@ describe("handleApproveCommand", () => {
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply).toBeUndefined();
     expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("does not allow empty helper approvers to bypass unauthorized sender checks", async () => {
+    const params = buildApproveParams(
+      "/approve abc12345 allow-once",
+      {
+        commands: { text: true },
+        channels: {
+          signal: {
+            allowFrom: [],
+          },
+        },
+      } as OpenClawConfig,
+      {
+        Provider: "signal",
+        Surface: "signal",
+        SenderId: "+15551239999",
+      },
+    );
+    params.command.isAuthorizedSender = false;
+
+    const result = await handleApproveCommand(params, true);
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply).toBeUndefined();
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps same-chat /approve available to authorized senders when helper approvers are empty", async () => {
+    callGatewayMock.mockResolvedValue({ ok: true });
+    const params = buildApproveParams(
+      "/approve abc12345 allow-once",
+      {
+        commands: { text: true },
+        channels: {
+          signal: {
+            allowFrom: [],
+          },
+        },
+      } as OpenClawConfig,
+      {
+        Provider: "signal",
+        Surface: "signal",
+        SenderId: "+15551239999",
+      },
+    );
+    params.command.isAuthorizedSender = true;
+
+    const result = await handleApproveCommand(params, true);
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("Approval allow-once submitted");
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "exec.approval.resolve",
+        params: { id: "abc12345", decision: "allow-once" },
+      }),
+    );
   });
 
   it("accepts Telegram /approve from exec target recipients when native approvals are disabled", async () => {

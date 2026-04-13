@@ -1,20 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import { applyProviderNativeStreamingUsageCompat } from "../plugin-sdk/provider-catalog-shared.js";
-import { resetProviderRuntimeHookCacheForTest } from "../plugins/provider-runtime.js";
-
-async function loadSecretsModule() {
-  vi.doUnmock("../plugins/manifest-registry.js");
-  vi.doUnmock("../secrets/provider-env-vars.js");
-  vi.resetModules();
-  return import("./models-config.providers.secrets.js");
-}
-
-beforeEach(() => {
-  resetProviderRuntimeHookCacheForTest();
-  vi.doUnmock("../plugins/manifest-registry.js");
-  vi.doUnmock("../secrets/provider-env-vars.js");
-});
+import { resolveMissingProviderApiKey } from "./models-config.providers.secret-helpers.js";
 
 const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
 const MOONSHOT_CN_BASE_URL = "https://api.moonshot.cn/v1";
@@ -70,8 +57,7 @@ describe("moonshot implicit provider (#33637)", () => {
     ).toBeUndefined();
   });
 
-  it("includes moonshot when MOONSHOT_API_KEY is configured", async () => {
-    const { resolveMissingProviderApiKey } = await loadSecretsModule();
+  it("includes moonshot when MOONSHOT_API_KEY is configured", () => {
     const provider = resolveMissingProviderApiKey({
       providerKey: "moonshot",
       provider: buildMoonshotProvider(),

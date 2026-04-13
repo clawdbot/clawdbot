@@ -54,6 +54,14 @@
       "types": "./dist/plugin-sdk/core.d.ts",
       "default": "./dist/plugin-sdk/core.js"
     },
+    "./plugin-sdk/lmstudio": {
+      "types": "./dist/plugin-sdk/lmstudio.d.ts",
+      "default": "./dist/plugin-sdk/lmstudio.js"
+    },
+    "./plugin-sdk/lmstudio-runtime": {
+      "types": "./dist/plugin-sdk/lmstudio-runtime.d.ts",
+      "default": "./dist/plugin-sdk/lmstudio-runtime.js"
+    },
     "./plugin-sdk/provider-setup": {
       "types": "./dist/plugin-sdk/provider-setup.d.ts",
       "default": "./dist/plugin-sdk/provider-setup.js"
@@ -1279,7 +1287,7 @@
     "test:docker:plugins": "bash scripts/e2e/plugins-docker.sh",
     "test:docker:qr": "bash scripts/e2e/qr-import-docker.sh",
     "test:e2e": "node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts",
-    "test:e2e:openshell": "OPENCLAW_E2E_OPENSHELL=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts test/openshell-sandbox.e2e.test.ts",
+    "test:e2e:openshell": "OPENCLAW_E2E_OPENSHELL=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts extensions/openshell/src/backend.e2e.test.ts",
     "test:extension": "node scripts/test-extension.mjs",
     "test:extensions": "node scripts/run-vitest.mjs run --config test/vitest/vitest.extensions.config.ts",
     "test:extensions:batch": "node scripts/test-extension-batch.mjs",

@@ -838,6 +838,36 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("writes raw payloads to the queue before normalization", async () => {
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w-raw", toJid: "jid" });
+    const rawPayloads: DeliverOutboundPayload[] = [
+      { text: "NO_REPLY" },
+      { text: '{"action":"NO_REPLY"}' },
+      { text: "caption\nMEDIA:https://x.test/a.png" },
+      { text: "NO_REPLY", mediaUrl: " https://x.test/b.png " },
+    ];
+
+    await deliverOutboundPayloads({
+      cfg: whatsappChunkConfig,
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: rawPayloads,
+      deps: { whatsapp: sendWhatsApp },
+    });
+
+    expect(queueMocks.enqueueDelivery).toHaveBeenCalledTimes(1);
+    expect(queueMocks.enqueueDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [
+          { text: "NO_REPLY" },
+          { text: '{"action":"NO_REPLY"}' },
+          { text: "caption\nMEDIA:https://x.test/a.png" },
+          { text: "NO_REPLY", mediaUrl: " https://x.test/b.png " },
+        ],
+      }),
+    );
+  });
+
   it("acks the queue entry when delivery is aborted", async () => {
     const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
     const abortController = new AbortController();

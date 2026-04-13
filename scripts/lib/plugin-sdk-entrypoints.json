@@ -1,6 +1,8 @@
 [
   "index",
   "core",
+  "lmstudio",
+  "lmstudio-runtime",
   "provider-setup",
   "sandbox",
   "self-hosted-provider-setup",

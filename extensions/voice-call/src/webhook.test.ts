@@ -49,6 +49,16 @@ const provider: VoiceCallProvider = {
   getCallStatus: async () => ({ status: "in-progress", isTerminal: false }),
 };
 
+type TwilioProviderTestDouble = VoiceCallProvider &
+  Pick<
+    TwilioProvider,
+    | "isValidStreamToken"
+    | "registerCallStream"
+    | "unregisterCallStream"
+    | "hasRegisteredStream"
+    | "clearTtsQueue"
+  >;
+
 const createConfig = (overrides: Partial<VoiceCallConfig> = {}): VoiceCallConfig => {
   const base = VoiceCallConfigSchema.parse({});
   base.serve.port = 0;
@@ -115,20 +125,8 @@ function expectWebhookUrl(url: string, expectedPath: string) {
   expect(parsed.port).not.toBe("0");
 }
 
-type TwilioTestProvider = VoiceCallProvider &
-  Partial<
-    Pick<
-      TwilioProvider,
-      | "clearTtsQueue"
-      | "hasRegisteredStream"
-      | "isValidStreamToken"
-      | "registerCallStream"
-      | "unregisterCallStream"
-    >
-  >;
-
 function createTwilioVerificationProvider(
-  overrides: Partial<TwilioTestProvider> = {},
+  overrides: Partial<TwilioProviderTestDouble> = {},
 ): VoiceCallProvider {
   return {
     ...provider,
@@ -139,8 +137,8 @@ function createTwilioVerificationProvider(
 }
 
 function createTwilioStreamingProvider(
-  overrides: Partial<TwilioTestProvider> = {},
-): TwilioTestProvider {
+  overrides: Partial<TwilioProviderTestDouble> = {},
+): TwilioProviderTestDouble {
   return {
     ...createTwilioVerificationProvider({
       parseWebhookEvent: () => ({ events: [] }),
@@ -773,11 +771,7 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
         },
       },
     });
-    const server = new VoiceCallWebhookServer(
-      config,
-      manager,
-      twilioProvider as unknown as VoiceCallProvider,
-    );
+    const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
     await server.start();
 
     const mediaHandler = server.getMediaStreamHandler() as unknown as {
@@ -805,9 +799,11 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
 });
 
 describe("VoiceCallWebhookServer barge-in suppression during initial message", () => {
-  const createTwilioProvider = (clearTtsQueue: ReturnType<typeof vi.fn>) =>
+  const createTwilioProvider = (
+    clearTtsQueue: ReturnType<typeof vi.fn<TwilioProviderTestDouble["clearTtsQueue"]>>,
+  ) =>
     createTwilioStreamingProvider({
-      clearTtsQueue: clearTtsQueue as TwilioTestProvider["clearTtsQueue"],
+      clearTtsQueue,
     });
 
   const getMediaCallbacks = (server: VoiceCallWebhookServer) =>
@@ -829,7 +825,7 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       initialMessage: "Hi, this is OpenClaw.",
     };
 
-    const clearTtsQueue = vi.fn();
+    const clearTtsQueue = vi.fn<TwilioProviderTestDouble["clearTtsQueue"]>();
     const processEvent = vi.fn((event: NormalizedEvent) => {
       if (event.type === "call.speech") {
         // Mirrors manager behavior: call.speech transitions to listening.
@@ -858,11 +854,7 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
         },
       },
     });
-    const server = new VoiceCallWebhookServer(
-      config,
-      manager,
-      createTwilioProvider(clearTtsQueue) as unknown as VoiceCallProvider,
-    );
+    const server = new VoiceCallWebhookServer(config, manager, createTwilioProvider(clearTtsQueue));
     await server.start();
     const handleInboundResponse = vi.fn(async () => {});
     (
@@ -913,7 +905,7 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       initialMessage: "Hello from inbound greeting.",
     };
 
-    const clearTtsQueue = vi.fn();
+    const clearTtsQueue = vi.fn<TwilioProviderTestDouble["clearTtsQueue"]>();
     const manager = {
       getActiveCalls: () => [call],
       getCallByProviderCallId: (providerCallId: string) =>
@@ -936,11 +928,7 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
         },
       },
     });
-    const server = new VoiceCallWebhookServer(
-      config,
-      manager,
-      createTwilioProvider(clearTtsQueue) as unknown as VoiceCallProvider,
-    );
+    const server = new VoiceCallWebhookServer(config, manager, createTwilioProvider(clearTtsQueue));
     await server.start();
 
     try {

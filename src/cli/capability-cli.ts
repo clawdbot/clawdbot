@@ -37,6 +37,7 @@ import {
   registerMemoryEmbeddingProvider,
 } from "../plugins/memory-embedding-providers.js";
 import { writeRuntimeJson, defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -1487,7 +1488,14 @@ export function registerCapabilityCli(program: Command) {
           .filter((provider) => provider.capabilities?.includes("audio"))
           .map((provider) => ({
             available: true,
-            configured: providerHasGenericConfig({ cfg, providerId: provider.id }),
+            configured: providerHasGenericConfig({
+              cfg,
+              providerId: provider.id,
+              envVars: getProviderEnvVars(provider.id, {
+                config: cfg,
+                includeUntrustedWorkspacePlugins: false,
+              }),
+            }),
             selected: false,
             id: provider.id,
             capabilities: provider.capabilities,

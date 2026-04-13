@@ -393,6 +393,17 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
   }
 }
 
+function handleSessionMessageGatewayEvent(
+  host: GatewayHost,
+  payload: { sessionKey?: string } | undefined,
+) {
+  const sessionKey = payload?.sessionKey?.trim();
+  if (!sessionKey || sessionKey !== host.sessionKey) {
+    return;
+  }
+  void loadChatHistory(host as unknown as ChatState);
+}
+
 function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   host.eventLogBuffer = [
     { ts: Date.now(), event: evt.event, payload: evt.payload },
@@ -426,6 +437,11 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     const sideResultHost = host as GatewayHostWithSideResults;
     sideResultHost.chatSideResult = sideResult;
     sideResultHost.chatSideResultTerminalRuns?.add(sideResult.runId);
+    return;
+  }
+
+  if (evt.event === "session.message") {
+    handleSessionMessageGatewayEvent(host, evt.payload as { sessionKey?: string } | undefined);
     return;
   }
 

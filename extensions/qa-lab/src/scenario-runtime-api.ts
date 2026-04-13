@@ -42,6 +42,16 @@ export type QaScenarioRuntimeDeps = {
   waitForGatewayHealthy: QaScenarioRuntimeFunction;
   waitForTransportReady: QaScenarioRuntimeFunction;
   waitForQaChannelReady: QaScenarioRuntimeFunction;
+  browserRequest: QaScenarioRuntimeFunction;
+  waitForBrowserReady: QaScenarioRuntimeFunction;
+  browserOpenTab: QaScenarioRuntimeFunction;
+  browserSnapshot: QaScenarioRuntimeFunction;
+  browserAct: QaScenarioRuntimeFunction;
+  webOpenPage: QaScenarioRuntimeFunction;
+  webWait: QaScenarioRuntimeFunction;
+  webType: QaScenarioRuntimeFunction;
+  webSnapshot: QaScenarioRuntimeFunction;
+  webEvaluate: QaScenarioRuntimeFunction;
   waitForConfigRestartSettle: QaScenarioRuntimeFunction;
   patchConfig: QaScenarioRuntimeFunction;
   applyConfig: QaScenarioRuntimeFunction;
@@ -116,6 +126,16 @@ export type QaScenarioRuntimeApi<
   waitForTransportReady: TDeps["waitForTransportReady"];
   waitForChannelReady: TDeps["waitForTransportReady"];
   waitForQaChannelReady: TDeps["waitForQaChannelReady"];
+  browserRequest: TDeps["browserRequest"];
+  waitForBrowserReady: TDeps["waitForBrowserReady"];
+  browserOpenTab: TDeps["browserOpenTab"];
+  browserSnapshot: TDeps["browserSnapshot"];
+  browserAct: TDeps["browserAct"];
+  webOpenPage: TDeps["webOpenPage"];
+  webWait: TDeps["webWait"];
+  webType: TDeps["webType"];
+  webSnapshot: TDeps["webSnapshot"];
+  webEvaluate: TDeps["webEvaluate"];
   waitForConfigRestartSettle: TDeps["waitForConfigRestartSettle"];
   patchConfig: TDeps["patchConfig"];
   applyConfig: TDeps["applyConfig"];
@@ -205,6 +225,16 @@ export function createQaScenarioRuntimeApi<
     waitForTransportReady: params.deps.waitForTransportReady,
     waitForChannelReady: params.deps.waitForTransportReady,
     waitForQaChannelReady: params.deps.waitForQaChannelReady,
+    browserRequest: params.deps.browserRequest,
+    waitForBrowserReady: params.deps.waitForBrowserReady,
+    browserOpenTab: params.deps.browserOpenTab,
+    browserSnapshot: params.deps.browserSnapshot,
+    browserAct: params.deps.browserAct,
+    webOpenPage: params.deps.webOpenPage,
+    webWait: params.deps.webWait,
+    webType: params.deps.webType,
+    webSnapshot: params.deps.webSnapshot,
+    webEvaluate: params.deps.webEvaluate,
     waitForConfigRestartSettle: params.deps.waitForConfigRestartSettle,
     patchConfig: params.deps.patchConfig,
     applyConfig: params.deps.applyConfig,

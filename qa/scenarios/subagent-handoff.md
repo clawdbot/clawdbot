@@ -46,5 +46,25 @@ steps:
           expr: "!['failed to delegate','could not delegate','subagent unavailable'].some((needle) => normalizeLowercaseStringOrEmpty(outbound.text).includes(needle))"
           message:
             expr: "`subagent handoff reported failure: ${outbound.text}`"
+      # Parity gate criterion 2 (no fake progress / fake tool completion):
+      # require an actual sessions_spawn tool call. Without this, a model
+      # could produce the three labeled sections ("Delegated task", "Result",
+      # "Evidence") as free-form prose without ever delegating to a real
+      # subagent. The assertion is pinned to THIS scenario by matching the
+      # scenario-unique prompt substring "Delegate one bounded QA task"
+      # (not a broad /delegate|subagent/ regex) so the earlier
+      # subagent-fanout-synthesis scenario — which also contains "delegate"
+      # and produces its own pre-tool sessions_spawn request — cannot
+      # satisfy the assertion here. The match is also constrained to
+      # pre-tool requests (no toolOutput) because the mock only plans
+      # sessions_spawn on requests with no toolOutput; the follow-up
+      # request after the tool runs has plannedToolName unset.
+      - set: subagentDebugRequests
+        value:
+          expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))] : []"
+      - assert:
+          expr: "!env.mock || subagentDebugRequests.some((request) => !request.toolOutput && /delegate one bounded qa task/i.test(String(request.allInputText ?? '')) && request.plannedToolName === 'sessions_spawn')"
+          message:
+            expr: "`expected sessions_spawn tool call during subagent handoff scenario, saw plannedToolNames=${JSON.stringify(subagentDebugRequests.map((request) => request.plannedToolName ?? null))}`"
     detailsExpr: outbound.text
 ```

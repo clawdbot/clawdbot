@@ -113,6 +113,28 @@ steps:
                                   expr: "sawAlpha && sawBeta"
                                   message:
                                     expr: "`fanout child sessions missing (alpha=${String(sawAlpha)} beta=${String(sawBeta)})`"
+                              # Tool-call assertion (criterion 2 of the
+                              # parity completion gate in #64227): the
+                              # scenario must have actually invoked
+                              # `sessions_spawn` at least twice with
+                              # distinct labels, not just ended up with
+                              # two rows in the session store through
+                              # prose trickery. The session store alone
+                              # can be populated by other flows or by a
+                              # model that fabricates "delegation"
+                              # narration. `plannedToolName` on the
+                              # mock's `/debug/requests` log is the
+                              # tool-call ground truth: two recorded
+                              # sessions_spawn requests with distinct
+                              # labels means the model really dispatched
+                              # both subagents.
+                              - set: fanoutSpawnRequests
+                                value:
+                                  expr: "[...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].filter((request) => request.plannedToolName === 'sessions_spawn' && /subagent fanout synthesis check/i.test(String(request.allInputText ?? '')))"
+                              - assert:
+                                  expr: "fanoutSpawnRequests.length >= 2"
+                                  message:
+                                    expr: "`expected at least two sessions_spawn tool calls during subagent fanout scenario, saw ${fanoutSpawnRequests.length}`"
                         - set: details
                           value:
                             expr: "outbound.text"

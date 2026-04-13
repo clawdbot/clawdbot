@@ -147,6 +147,16 @@ describe("evaluateSystemRunPolicy", () => {
     expect(denied.errorMessage).toContain("Windows shell wrappers like cmd.exe /c");
   });
 
+  it("does not block Windows cmd.exe invocations without inline shell-wrapper transport", () => {
+    const allowed = expectAllowedDecision(
+      evaluateSystemRunPolicy(
+        buildPolicyParams({ isWindows: true, cmdInvocation: true, shellWrapperInvocation: false }),
+      ),
+    );
+    expect(allowed.shellWrapperBlocked).toBe(false);
+    expect(allowed.windowsShellWrapperBlocked).toBe(false);
+  });
+
   it("allows execution when policy checks pass", () => {
     const allowed = expectAllowedDecision(
       evaluateSystemRunPolicy(buildPolicyParams({ ask: "on-miss" })),

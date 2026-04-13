@@ -281,17 +281,23 @@ export async function loadChannelConfigSurfaceModule(
     candidatePath: string,
   ): { schema: Record<string, unknown>; uiHints?: Record<string, unknown> } | null => {
     try {
-      const bunLoaded = loadViaBun(candidatePath);
-      if (bunLoaded && isBuiltChannelConfigSchema(bunLoaded)) {
-        return bunLoaded;
+      // Prefer the source-aware Jiti path so generated config metadata stays
+      // stable before and after build output exists in the repo.
+      const imported = loadViaJiti(candidatePath);
+      const resolved = resolveConfigSchemaExport(imported);
+      if (resolved) {
+        return resolved;
       }
     } catch {
-      // Bun is the fastest happy path, but some plugin config modules only load
-      // correctly through the source-aware Jiti alias setup.
+      // Fall back to Bun below when the source-aware loader cannot resolve the
+      // module graph in the current environment.
     }
 
-    const imported = loadViaJiti(candidatePath);
-    return resolveConfigSchemaExport(imported);
+    const bunLoaded = loadViaBun(candidatePath);
+    if (bunLoaded && isBuiltChannelConfigSchema(bunLoaded)) {
+      return bunLoaded;
+    }
+    return null;
   };
 
   try {

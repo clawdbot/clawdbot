@@ -293,6 +293,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/kilocode/**"
+"extensions: lmstudio":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/lmstudio/**"
 "extensions: openai":
   - changed-files:
       - any-glob-to-any-file:

@@ -703,6 +703,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/lmstudio: {}
+
   extensions/lobster:
     dependencies:
       '@clawdbot/lobster':
@@ -962,6 +964,10 @@ importers:
         version: link:../..
 
   extensions/qa-lab:
+    dependencies:
+      playwright-core:
+        specifier: 1.59.1
+        version: 1.59.1
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*

@@ -42,6 +42,8 @@ const DEFAULT_CHROME_MCP_ARGS = [
   "--experimentalStructuredContent",
   "--experimental-page-id-routing",
 ];
+const CHROME_MCP_NEW_PAGE_TIMEOUT_MS = 5_000;
+const CHROME_MCP_NAVIGATE_TIMEOUT_MS = 20_000;
 
 const sessions = new Map<string, ChromeMcpSession>();
 const pendingSessions = new Map<string, Promise<ChromeMcpSession>>();
@@ -401,16 +403,33 @@ export async function openChromeMcpTab(
   url: string,
   userDataDir?: string,
 ): Promise<BrowserTab> {
-  const result = await callTool(profileName, userDataDir, "new_page", { url });
+  const targetUrl = url.trim() || "about:blank";
+  const result = await callTool(profileName, userDataDir, "new_page", {
+    url: "about:blank",
+    timeout: CHROME_MCP_NEW_PAGE_TIMEOUT_MS,
+  });
   const pages = extractStructuredPages(result);
   const chosen = pages.find((page) => page.selected) ?? pages.at(-1);
   if (!chosen) {
     throw new Error("Chrome MCP did not return the created page.");
   }
+  const targetId = String(chosen.id);
+  const finalUrl =
+    targetUrl === "about:blank"
+      ? (chosen.url ?? targetUrl)
+      : (
+          await navigateChromeMcpPage({
+            profileName,
+            userDataDir,
+            targetId,
+            url: targetUrl,
+            timeoutMs: CHROME_MCP_NAVIGATE_TIMEOUT_MS,
+          })
+        ).url;
   return {
-    targetId: String(chosen.id),
+    targetId,
     title: "",
-    url: chosen.url ?? url,
+    url: finalUrl,
     type: "page",
   };
 }

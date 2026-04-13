@@ -83,6 +83,45 @@ async function runQaManualLane(opts: {
   await runtime.runQaManualLaneCommand(opts);
 }
 
+async function runQaCredentialsAdd(opts: {
+  actorId?: string;
+  endpointPrefix?: string;
+  json?: boolean;
+  kind: string;
+  note?: string;
+  payloadFile: string;
+  repoRoot?: string;
+  siteUrl?: string;
+}) {
+  const runtime = await loadQaLabCliRuntime();
+  await runtime.runQaCredentialsAddCommand(opts);
+}
+
+async function runQaCredentialsRemove(opts: {
+  actorId?: string;
+  credentialId: string;
+  endpointPrefix?: string;
+  json?: boolean;
+  siteUrl?: string;
+}) {
+  const runtime = await loadQaLabCliRuntime();
+  await runtime.runQaCredentialsRemoveCommand(opts);
+}
+
+async function runQaCredentialsList(opts: {
+  actorId?: string;
+  endpointPrefix?: string;
+  json?: boolean;
+  kind?: string;
+  limit?: number;
+  showSecrets?: boolean;
+  siteUrl?: string;
+  status?: string;
+}) {
+  const runtime = await loadQaLabCliRuntime();
+  await runtime.runQaCredentialsListCommand(opts);
+}
+
 async function runQaUi(opts: {
   repoRoot?: string;
   host?: string;
@@ -344,6 +383,82 @@ export function registerQaLabCli(program: Command) {
           message: opts.message,
           timeoutMs: opts.timeoutMs,
         });
+      },
+    );
+
+  const credentials = qa
+    .command("credentials")
+    .description("Manage pooled Convex live credentials used by QA lanes");
+
+  credentials
+    .command("add")
+    .description("Add one credential payload to the shared pool")
+    .requiredOption("--kind <kind>", "Credential kind (for Telegram v1, use telegram)")
+    .requiredOption("--payload-file <path>", "JSON object file containing the credential payload")
+    .option("--repo-root <path>", "Repository root for resolving relative payload-file paths")
+    .option("--note <text>", "Optional note stored with this credential row")
+    .option("--site-url <url>", "Override OPENCLAW_QA_CONVEX_SITE_URL")
+    .option("--endpoint-prefix <path>", "Override OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX")
+    .option("--actor-id <id>", "Optional admin actor id to include in broker audit events")
+    .option("--json", "Emit machine-readable JSON output", false)
+    .action(
+      async (opts: {
+        kind: string;
+        payloadFile: string;
+        repoRoot?: string;
+        note?: string;
+        siteUrl?: string;
+        endpointPrefix?: string;
+        actorId?: string;
+        json?: boolean;
+      }) => {
+        await runQaCredentialsAdd(opts);
+      },
+    );
+
+  credentials
+    .command("remove")
+    .description("Remove one credential from active use by disabling it")
+    .requiredOption("--credential-id <id>", "Credential row id from the Convex pool")
+    .option("--site-url <url>", "Override OPENCLAW_QA_CONVEX_SITE_URL")
+    .option("--endpoint-prefix <path>", "Override OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX")
+    .option("--actor-id <id>", "Optional admin actor id to include in broker audit events")
+    .option("--json", "Emit machine-readable JSON output", false)
+    .action(
+      async (opts: {
+        credentialId: string;
+        siteUrl?: string;
+        endpointPrefix?: string;
+        actorId?: string;
+        json?: boolean;
+      }) => {
+        await runQaCredentialsRemove(opts);
+      },
+    );
+
+  credentials
+    .command("list")
+    .description("List credential rows in the shared Convex pool")
+    .option("--kind <kind>", "Filter by credential kind")
+    .option("--status <status>", 'Filter by row status: "active", "disabled", or "all"', "all")
+    .option("--limit <count>", "Max rows to return", (value: string) => Number(value))
+    .option("--show-secrets", "Include credential payload JSON in output", false)
+    .option("--site-url <url>", "Override OPENCLAW_QA_CONVEX_SITE_URL")
+    .option("--endpoint-prefix <path>", "Override OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX")
+    .option("--actor-id <id>", "Optional admin actor id to include in broker audit events")
+    .option("--json", "Emit machine-readable JSON output", false)
+    .action(
+      async (opts: {
+        kind?: string;
+        status?: string;
+        limit?: number;
+        showSecrets?: boolean;
+        siteUrl?: string;
+        endpointPrefix?: string;
+        actorId?: string;
+        json?: boolean;
+      }) => {
+        await runQaCredentialsList(opts);
       },
     );
 

@@ -64,9 +64,26 @@ steps:
           expr: "!missingColorGroup"
           message:
             expr: "`missing expected colors in image description: ${outbound.text}`"
+      # Image-processing assertion: verify the mock actually received an
+      # image on the scenario-unique prompt. This is as strong as a
+      # tool-call assertion for this scenario — unlike the
+      # `source-docs-discovery-report` / `subagent-handoff` /
+      # `config-restart-capability-flip` scenarios that rely on a real
+      # tool call to satisfy the parity criterion, image understanding
+      # is handled inside the provider's vision capability and does NOT
+      # emit a tool call the mock can record as `plannedToolName`. The
+      # `imageInputCount` field IS the tool-call evidence for vision
+      # scenarios: it proves the attachment reached the provider, which
+      # is the only thing an external harness can verify in mock mode.
+      # Match on the scenario-unique prompt substring so the assertion
+      # can't be accidentally satisfied by some other scenario's image
+      # request that happens to share a debug log with this one.
+      - set: imageRequest
+        value:
+          expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].find((request) => String(request.prompt ?? '').includes('Image understanding check')) : null"
       - assert:
-          expr: "!env.mock || (((await fetchJson(`${env.mock.baseUrl}/debug/requests`)).find((request) => String(request.prompt ?? '').includes('Image understanding check'))?.imageInputCount ?? 0) >= 1)"
+          expr: "!env.mock || (imageRequest && (imageRequest.imageInputCount ?? 0) >= 1)"
           message:
-            expr: "`expected at least one input image, got ${String((await fetchJson(`${env.mock.baseUrl}/debug/requests`)).find((request) => String(request.prompt ?? '').includes('Image understanding check'))?.imageInputCount ?? 0)}`"
+            expr: "`expected at least one input image on the Image understanding check request, got imageInputCount=${String(imageRequest?.imageInputCount ?? 0)}`"
     detailsExpr: outbound.text
 ```

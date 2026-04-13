@@ -6,6 +6,7 @@ Files:
 
 - `scenarios.md` - canonical QA scenario pack, kickoff mission, and operator identity.
 - `frontier-harness-plan.md` - big-model bakeoff and tuning loop for harness work.
+- `convex-credential-broker/` - standalone Convex v1 lease broker for pooled live credentials.
 
 Key workflow:
 

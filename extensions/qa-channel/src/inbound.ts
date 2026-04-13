@@ -1,8 +1,47 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { dispatchInboundReplyWithBase } from "openclaw/plugin-sdk/inbound-reply-dispatch";
+import {
+  buildAgentMediaPayload,
+  saveMediaBuffer,
+  saveMediaSource,
+} from "openclaw/plugin-sdk/media-runtime";
 import { buildQaTarget, sendQaBusMessage, type QaBusMessage } from "./bus-client.js";
 import { getQaChannelRuntime } from "./runtime.js";
 import type { CoreConfig, ResolvedQaChannelAccount } from "./types.js";
+
+async function resolveQaInboundMediaPayload(attachments: QaBusMessage["attachments"]) {
+  if (!Array.isArray(attachments) || attachments.length === 0) {
+    return {};
+  }
+  const mediaList: Array<{ path: string; contentType?: string | null }> = [];
+  for (const attachment of attachments) {
+    if (!attachment?.mimeType) {
+      continue;
+    }
+    if (typeof attachment.contentBase64 === "string" && attachment.contentBase64.trim()) {
+      const saved = await saveMediaBuffer(
+        Buffer.from(attachment.contentBase64, "base64"),
+        attachment.mimeType,
+        "inbound",
+        undefined,
+        attachment.fileName,
+      );
+      mediaList.push({
+        path: saved.path,
+        contentType: saved.contentType,
+      });
+      continue;
+    }
+    if (typeof attachment.url === "string" && attachment.url.trim()) {
+      const saved = await saveMediaSource(attachment.url, undefined, "inbound");
+      mediaList.push({
+        path: saved.path,
+        contentType: saved.contentType,
+      });
+    }
+  }
+  return mediaList.length > 0 ? buildAgentMediaPayload(mediaList) : {};
+}
 
 export async function handleQaInbound(params: {
   channelId: string;
@@ -42,6 +81,7 @@ export async function handleQaInbound(params: {
     envelope: runtime.channel.reply.resolveEnvelopeFormatOptions(params.config as OpenClawConfig),
     body: inbound.text,
   });
+  const mediaPayload = await resolveQaInboundMediaPayload(inbound.attachments);
 
   const ctxPayload = runtime.channel.reply.finalizeInboundContext({
     Body: body,
@@ -81,6 +121,7 @@ export async function handleQaInbound(params: {
     OriginatingChannel: params.channelId,
     OriginatingTo: target,
     CommandAuthorized: true,
+    ...mediaPayload,
   });
 
   await dispatchInboundReplyWithBase({

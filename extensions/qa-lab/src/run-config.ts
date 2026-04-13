@@ -1,9 +1,9 @@
 import path from "node:path";
 import {
-  defaultQaModelForMode as resolveDefaultQaModelForMode,
   normalizeQaProviderMode as normalizeQaProviderModeInput,
   type QaProviderMode,
 } from "./model-selection.js";
+import { defaultQaRuntimeModelForMode } from "./model-selection.runtime.js";
 import type { QaSeedScenario } from "./scenario-catalog.js";
 
 export type { QaProviderMode } from "./model-selection.js";
@@ -34,7 +34,7 @@ export type QaLabRunnerSnapshot = {
 };
 
 export function defaultQaModelForMode(mode: QaProviderMode, alternate = false) {
-  return resolveDefaultQaModelForMode(mode, alternate ? { alternate: true } : undefined);
+  return defaultQaRuntimeModelForMode(mode, alternate ? { alternate: true } : undefined);
 }
 
 export function createDefaultQaRunSelection(scenarios: QaSeedScenario[]): QaLabRunSelection {

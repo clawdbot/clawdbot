@@ -30,6 +30,16 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     waitForGatewayHealthy: fn,
     waitForTransportReady: fn,
     waitForQaChannelReady: fn,
+    browserRequest: fn,
+    waitForBrowserReady: fn,
+    browserOpenTab: fn,
+    browserSnapshot: fn,
+    browserAct: fn,
+    webOpenPage: fn,
+    webWait: fn,
+    webType: fn,
+    webSnapshot: fn,
+    webEvaluate: fn,
     waitForConfigRestartSettle: fn,
     patchConfig: fn,
     applyConfig: fn,
@@ -130,6 +140,16 @@ describe("createQaScenarioRuntimeApi", () => {
     expect(api.config).toEqual({ expected: "value" });
     expect(api.waitForCondition).toBe(waitForCondition);
     expect(api.waitForChannelReady).toBe(api.waitForTransportReady);
+    expect(api.browserRequest).toBeDefined();
+    expect(api.waitForBrowserReady).toBeDefined();
+    expect(api.browserOpenTab).toBeDefined();
+    expect(api.browserSnapshot).toBeDefined();
+    expect(api.browserAct).toBeDefined();
+    expect(api.webOpenPage).toBeDefined();
+    expect(api.webWait).toBeDefined();
+    expect(api.webType).toBeDefined();
+    expect(api.webSnapshot).toBeDefined();
+    expect(api.webEvaluate).toBeDefined();
     expect(api.getTransportSnapshot()).toEqual(state.getSnapshot());
     expect(api.imageUnderstandingPngBase64).toBe("png-small");
 

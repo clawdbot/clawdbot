@@ -5,14 +5,20 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
 import { normalizeProviders } from "./models-config.providers.normalize.js";
-import { resolveApiKeyFromProfiles } from "./models-config.providers.secrets.js";
+import { resolveApiKeyFromProfiles } from "./models-config.providers.secret-helpers.js";
 import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
 
-vi.mock("./models-config.providers.policy.runtime.js", () => ({
-  applyProviderNativeStreamingUsagePolicy: () => undefined,
-  normalizeProviderConfigPolicy: () => undefined,
-  resolveProviderConfigApiKeyPolicy: () => undefined,
-}));
+vi.mock("./models-config.providers.policy.runtime.js", async () => {
+  const { normalizeLmstudioProviderConfig } = await vi.importActual<
+    typeof import("../plugin-sdk/lmstudio-runtime.js")
+  >("../plugin-sdk/lmstudio-runtime.js");
+  return {
+    applyProviderNativeStreamingUsagePolicy: () => undefined,
+    normalizeProviderConfigPolicy: (providerKey: string, provider: unknown) =>
+      providerKey === "lmstudio" ? normalizeLmstudioProviderConfig(provider as never) : undefined,
+    resolveProviderConfigApiKeyPolicy: () => undefined,
+  };
+});
 
 describe("normalizeProviders", () => {
   const createModel = (
@@ -268,5 +274,24 @@ describe("normalizeProviders", () => {
     });
     expect((enforced as Record<string, unknown>).openai).toBeNull();
     expect(enforced?.moonshot?.apiKey).toBe("MOONSHOT_API_KEY"); // pragma: allowlist secret
+  });
+
+  it("canonicalizes LM Studio baseUrl after merge-style explicit overwrite", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    try {
+      const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
+        lmstudio: {
+          baseUrl: "http://localhost:1234/api/v1/",
+          api: "openai-completions",
+          apiKey: "LM_API_TOKEN",
+          models: [],
+        },
+      };
+
+      const normalized = normalizeProviders({ providers, agentDir });
+      expect(normalized?.lmstudio?.baseUrl).toBe("http://localhost:1234/v1");
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
   });
 });

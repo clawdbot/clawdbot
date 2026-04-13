@@ -29,7 +29,12 @@ describe("openclaw-tools update_plan gating", () => {
     expect(createUpdatePlanTool().displaySummary).toBe("Track a short structured work plan.");
   });
 
-  it("does not auto-enable update_plan outside strict-agentic mode", () => {
+  it("auto-enables update_plan for unconfigured GPT-5 openai runs", () => {
+    // Criterion 1 of the GPT-5.4 parity gate ("no stalls after planning") is
+    // universal, not opt-in. Unspecified executionContract on a supported
+    // provider/model auto-activates strict-agentic so unconfigured installs
+    // get the same behavior as explicit opt-in. Explicit "default" still
+    // opts out (see "respects explicit default contract opt-out" below).
     const cfg = {
       agents: {
         list: [{ id: "main" }],
@@ -42,6 +47,63 @@ describe("openclaw-tools update_plan gating", () => {
         agentSessionKey: "agent:main:main",
         modelProvider: "openai",
         modelId: "gpt-5.4",
+      }),
+    ).toBe(true);
+    expect(
+      isUpdatePlanToolEnabledForOpenClawTools({
+        config: cfg,
+        agentSessionKey: "agent:main:main",
+        modelProvider: "openai-codex",
+        modelId: "gpt-5.4",
+      }),
+    ).toBe(true);
+  });
+
+  it("respects explicit default contract opt-out on GPT-5 runs", () => {
+    // Users who explicitly set executionContract: "default" are saying they
+    // want the old pre-parity-program behavior. Honor that opt-out.
+    const cfg = {
+      agents: {
+        defaults: {
+          embeddedPi: {
+            executionContract: "default",
+          },
+        },
+        list: [{ id: "main" }],
+      },
+    } as OpenClawConfig;
+
+    expect(
+      isUpdatePlanToolEnabledForOpenClawTools({
+        config: cfg,
+        agentSessionKey: "agent:main:main",
+        modelProvider: "openai",
+        modelId: "gpt-5.4",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not auto-enable update_plan for non-openai providers even when unconfigured", () => {
+    const cfg = {
+      agents: {
+        list: [{ id: "main" }],
+      },
+    } as OpenClawConfig;
+
+    expect(
+      isUpdatePlanToolEnabledForOpenClawTools({
+        config: cfg,
+        agentSessionKey: "agent:main:main",
+        modelProvider: "anthropic",
+        modelId: "claude-sonnet-4-6",
+      }),
+    ).toBe(false);
+    expect(
+      isUpdatePlanToolEnabledForOpenClawTools({
+        config: cfg,
+        agentSessionKey: "agent:main:main",
+        modelProvider: "openai",
+        modelId: "gpt-4.1",
       }),
     ).toBe(false);
   });
@@ -85,7 +147,7 @@ describe("openclaw-tools update_plan gating", () => {
         config: cfg,
         agentSessionKey: "agent:main:main",
         modelProvider: "anthropic",
-        modelId: "claude-opus-4-6",
+        modelId: "claude-sonnet-4-6",
       }),
     ).toBe(false);
     expect(

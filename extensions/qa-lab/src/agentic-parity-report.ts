@@ -1,4 +1,7 @@
-import { QA_AGENTIC_PARITY_SCENARIO_TITLES } from "./agentic-parity.js";
+import {
+  QA_AGENTIC_PARITY_SCENARIO_TITLES,
+  QA_AGENTIC_PARITY_TOOL_BACKED_SCENARIO_TITLES,
+} from "./agentic-parity.js";
 
 export type QaParityReportStep = {
   name: string;
@@ -13,6 +16,21 @@ export type QaParityReportScenario = {
   steps?: QaParityReportStep[];
 };
 
+/**
+ * Optional self-describing run metadata written by PR L (#64789). Before
+ * that PR merges, older summaries only have `scenarios` + `counts`; the
+ * parity report treats a missing `run` block as "unknown provenance" and
+ * skips the label-match verification for backwards compatibility
+ * with legacy summaries that predate the run metadata block.
+ */
+export type QaParityRunBlock = {
+  primaryProvider?: string;
+  primaryModel?: string;
+  primaryModelName?: string;
+  providerMode?: string;
+  scenarioIds?: readonly string[] | null;
+};
+
 export type QaParitySuiteSummary = {
   scenarios: QaParityReportScenario[];
   counts?: {
@@ -20,6 +38,8 @@ export type QaParitySuiteSummary = {
     passed?: number;
     failed?: number;
   };
+  /** Self-describing run metadata — see PR L #64789 for the writer side. */
+  run?: QaParityRunBlock;
 };
 
 export type QaAgenticParityMetrics = {
@@ -64,7 +84,11 @@ const UNINTENDED_STOP_PATTERNS = [
   /did not continue/i,
 ] as const;
 
-const SUSPICIOUS_PASS_PATTERNS = [
+// Failure-tone patterns: a passing scenario whose details text matches any
+// of these is treated as a "fake success" — the scenario is marked pass but
+// the supporting text reveals something went wrong. Adding new patterns here
+// widens the net for bad prose that correlates with runtime failure modes.
+const SUSPICIOUS_PASS_FAILURE_TONE_PATTERNS = [
   /incomplete turn/i,
   /\btimed out\b/i,
   /\btimeout\b/i,
@@ -75,6 +99,13 @@ const SUSPICIOUS_PASS_PATTERNS = [
   /error occurred/i,
   /an error was/i,
 ] as const;
+
+// Positive-tone patterns (e.g. "Successfully completed", "Done.") are NOT
+// checked in fakeSuccessCount. For passing runs, `details` is the model's
+// outbound prose, which never contains tool-call evidence strings, so a
+// tool-call-evidence exemption would false-positive on every legitimate
+// pass. Criterion 2 ("no fake progress") is enforced by per-scenario
+// `/debug/requests` tool-call assertions in the YAML flows (PR J) instead.
 
 function normalizeScenarioStatus(status: string | undefined): "pass" | "fail" | "skip" {
   return status === "pass" || status === "fail" || status === "skip" ? status : "fail";
@@ -103,6 +134,9 @@ export function computeQaAgenticParityMetrics(
     ...scenario,
     status: normalizeScenarioStatus(scenario.status),
   }));
+  const toolBackedTitleSet: ReadonlySet<string> = new Set(
+    QA_AGENTIC_PARITY_TOOL_BACKED_SCENARIO_TITLES,
+  );
   const totalScenarios = summary.counts?.total ?? scenarios.length;
   const passedScenarios =
     summary.counts?.passed ?? scenarios.filter((scenario) => scenario.status === "pass").length;
@@ -112,16 +146,40 @@ export function computeQaAgenticParityMetrics(
     (scenario) =>
       scenario.status !== "pass" && scenarioHasPattern(scenario, UNINTENDED_STOP_PATTERNS),
   ).length;
-  const fakeSuccessCount = scenarios.filter(
-    (scenario) =>
-      scenario.status === "pass" && scenarioHasPattern(scenario, SUSPICIOUS_PASS_PATTERNS),
+  const fakeSuccessCount = scenarios.filter((scenario) => {
+    if (scenario.status !== "pass") {
+      return false;
+    }
+    // Failure-tone patterns catch obviously-broken passes regardless of
+    // whether the scenario shows tool-call evidence — "timed out" under a
+    // pass is always fake.
+    if (scenarioHasPattern(scenario, SUSPICIOUS_PASS_FAILURE_TONE_PATTERNS)) {
+      return true;
+    }
+    // Positive-tone patterns (like "Successfully completed") are NOT checked
+    // here because for passing runs the `details` field is the model's
+    // outbound prose, which never contains tool-call evidence strings.
+    // The `scenarioLacksToolCallEvidence` check would return true for ALL
+    // passes and false-positive on legitimate completions. Criterion 2
+    // ("no fake tool completion") is instead enforced by the per-scenario
+    // `/debug/requests` tool-call assertions from the scenario YAML flows.
+    return false;
+  }).length;
+
+  // Count only the scenarios that are supposed to exercise a real tool,
+  // subagent, or capability invocation. Memory recall and image-only
+  // understanding lanes stay in the parity pack, but they should not inflate
+  // the tool-call metric just by passing.
+  const toolBackedScenarioCount = scenarios.filter((scenario) =>
+    toolBackedTitleSet.has(scenario.name),
+  ).length;
+  const validToolCallCount = scenarios.filter(
+    (scenario) => toolBackedTitleSet.has(scenario.name) && scenario.status === "pass",
   ).length;
 
-  // First-wave parity scenarios are all tool-mediated tasks, so a passing scenario is our
-  // verified unit of valid tool-backed execution in this harness.
-  const validToolCallCount = passedScenarios;
-
   const rate = (value: number) => (totalScenarios > 0 ? value / totalScenarios : 0);
+  const toolRate = (value: number) =>
+    toolBackedScenarioCount > 0 ? value / toolBackedScenarioCount : 0;
   return {
     totalScenarios,
     passedScenarios,
@@ -130,7 +188,7 @@ export function computeQaAgenticParityMetrics(
     unintendedStopCount,
     unintendedStopRate: rate(unintendedStopCount),
     validToolCallCount,
-    validToolCallRate: rate(validToolCallCount),
+    validToolCallRate: toolRate(validToolCallCount),
     fakeSuccessCount,
   };
 }
@@ -149,12 +207,114 @@ function scopeSummaryToParityPack(
   summary: QaParitySuiteSummary,
   parityTitleSet: ReadonlySet<string>,
 ): QaParitySuiteSummary {
-  // The parity verdict must only consider the declared first-wave parity scenarios.
-  // Drop `counts` so the metric helper recomputes totals from the filtered scenario
-  // list instead of inheriting the caller's full-suite counters.
+  // The parity verdict must only consider the declared parity scenarios
+  // (the full first-wave + second-wave pack from QA_AGENTIC_PARITY_SCENARIOS).
+  // Drop `counts` so the metric helper recomputes totals from the filtered
+  // scenario list instead of inheriting the caller's full-suite counters.
   return {
     scenarios: summary.scenarios.filter((scenario) => parityTitleSet.has(scenario.name)),
+    ...(summary.run ? { run: summary.run } : {}),
   };
+}
+
+type StructuredQaParityLabel = {
+  provider: string;
+  model: string;
+};
+
+/**
+ * Only treat caller labels as provenance-checked identifiers when they are
+ * exact lower-case provider/model refs. Human-facing display labels like
+ * "GPT-5.4 candidate" or "Candidate: GPT-5.4" should render in the report
+ * without being misread as structured provider ids.
+ */
+function parseStructuredLabelRef(label: string): StructuredQaParityLabel | null {
+  const trimmed = label.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+  if (trimmed !== trimmed.toLowerCase()) {
+    return null;
+  }
+  const separatorMatch = /^([a-z0-9][a-z0-9-]*)[/:]([a-z0-9][a-z0-9._-]*)$/.exec(trimmed);
+  if (!separatorMatch) {
+    return null;
+  }
+  return {
+    provider: separatorMatch[1] ?? "",
+    model: separatorMatch[2] ?? "",
+  };
+}
+
+/**
+ * Verify the `run.primaryProvider` + `run.primaryModel` fields on a summary
+ * match the caller-supplied label when that label is a structured
+ * `provider/model` or `provider:model` ref. PR L #64789 ships the `run`
+ * block; before it lands, older summaries don't have the field and this check
+ * is a no-op.
+ *
+ * Throws `QaParityLabelMismatchError` when the summary reports a different
+ * provider/model than the caller claimed — this catches the "swapped
+ * candidate and baseline summary paths" footgun the earlier adversarial
+ * review flagged. Returns silently when the fields are absent (legacy
+ * summaries) or when the fields match.
+ */
+function verifySummaryLabelMatch(params: {
+  summary: QaParitySuiteSummary;
+  label: string;
+  role: "candidate" | "baseline";
+}): void {
+  const runProvider = params.summary.run?.primaryProvider?.trim();
+  const runModel = params.summary.run?.primaryModel?.trim();
+  const runModelName = params.summary.run?.primaryModelName?.trim();
+  if (!runProvider || !runModel) {
+    return;
+  }
+  const labelRef = parseStructuredLabelRef(params.label);
+  if (!labelRef) {
+    return;
+  }
+  const normalizedRunModel = runModel.toLowerCase();
+  const normalizedRunModelName = runModelName?.toLowerCase();
+  const normalizedLabelModel = labelRef.model;
+  if (
+    runProvider.toLowerCase() === labelRef.provider &&
+    (normalizedRunModel === normalizedLabelModel ||
+      normalizedRunModelName === normalizedLabelModel ||
+      normalizedRunModel === `${labelRef.provider}/${normalizedLabelModel}`)
+  ) {
+    return;
+  }
+  throw new QaParityLabelMismatchError({
+    role: params.role,
+    label: params.label,
+    runProvider,
+    runModel,
+  });
+}
+
+export class QaParityLabelMismatchError extends Error {
+  readonly role: "candidate" | "baseline";
+  readonly label: string;
+  readonly runProvider: string;
+  readonly runModel: string;
+
+  constructor(params: {
+    role: "candidate" | "baseline";
+    label: string;
+    runProvider: string;
+    runModel: string;
+  }) {
+    super(
+      `${params.role} summary run.primaryProvider=${params.runProvider} and run.primaryModel=${params.runModel} do not match --${params.role}-label=${params.label}. ` +
+        `Check that the --candidate-summary / --baseline-summary paths weren't swapped.`,
+    );
+    this.name = "QaParityLabelMismatchError";
+    this.role = params.role;
+    this.label = params.label;
+    this.runProvider = params.runProvider;
+    this.runModel = params.runModel;
+  }
 }
 
 export function buildQaAgenticParityComparison(params: {
@@ -164,6 +324,22 @@ export function buildQaAgenticParityComparison(params: {
   baselineSummary: QaParitySuiteSummary;
   comparedAt?: string;
 }): QaAgenticParityComparison {
+  // Precondition: verify the `run.primaryProvider` field on each summary
+  // matches the caller-supplied label (when the `run` block is present).
+  // Throws `QaParityLabelMismatchError` on mismatch so the release gate
+  // fails loudly instead of silently producing a reversed verdict when an
+  // operator swaps the --candidate-summary and --baseline-summary paths.
+  // Legacy summaries without a `run` block are accepted as-is.
+  verifySummaryLabelMatch({
+    summary: params.candidateSummary,
+    label: params.candidateLabel,
+    role: "candidate",
+  });
+  verifySummaryLabelMatch({
+    summary: params.baselineSummary,
+    label: params.baselineLabel,
+    role: "baseline",
+  });
   const parityTitleSet: ReadonlySet<string> = new Set<string>(QA_AGENTIC_PARITY_SCENARIO_TITLES);
   // Rates and fake-success counts are computed from the parity-scoped summaries only,
   // so extra non-parity scenarios in the input (for example when a caller feeds a full
@@ -203,7 +379,7 @@ export function buildQaAgenticParityComparison(params: {
     });
 
   const failures: string[] = [];
-  const requiredScenarioCoverage = QA_AGENTIC_PARITY_SCENARIO_TITLES.map((name) => {
+  const requiredScenarioStatuses = QA_AGENTIC_PARITY_SCENARIO_TITLES.map((name) => {
     const candidate = candidateByName.get(name);
     const baseline = baselineByName.get(name);
     return {
@@ -211,7 +387,8 @@ export function buildQaAgenticParityComparison(params: {
       candidateStatus: requiredCoverageStatus(candidate),
       baselineStatus: requiredCoverageStatus(baseline),
     };
-  }).filter(
+  });
+  const requiredScenarioCoverage = requiredScenarioStatuses.filter(
     (scenario) =>
       scenario.candidateStatus === "missing" ||
       scenario.baselineStatus === "missing" ||
@@ -221,6 +398,26 @@ export function buildQaAgenticParityComparison(params: {
   for (const scenario of requiredScenarioCoverage) {
     failures.push(
       `Missing required parity scenario coverage for ${scenario.name}: ${params.candidateLabel}=${scenario.candidateStatus}, ${params.baselineLabel}=${scenario.baselineStatus}.`,
+    );
+  }
+  // Required parity scenarios that ran on both sides but FAILED also fail
+  // the gate. Without this check, a run where both models fail the same
+  // required scenarios still produced pass=true, because the downstream
+  // metric comparisons are purely relative (candidate vs baseline) and
+  // the suspicious-pass fake-success check only catches passes that carry
+  // failure-sounding details. Excluding missing/skip here keeps operator
+  // output from double-counting the same scenario with two lines.
+  const requiredScenarioFailures = requiredScenarioStatuses.filter(
+    (scenario) =>
+      scenario.candidateStatus !== "missing" &&
+      scenario.baselineStatus !== "missing" &&
+      scenario.candidateStatus !== "skip" &&
+      scenario.baselineStatus !== "skip" &&
+      (scenario.candidateStatus === "fail" || scenario.baselineStatus === "fail"),
+  );
+  for (const scenario of requiredScenarioFailures) {
+    failures.push(
+      `Required parity scenario ${scenario.name} failed: ${params.candidateLabel}=${scenario.candidateStatus}, ${params.baselineLabel}=${scenario.baselineStatus}.`,
     );
   }
   // Required parity scenarios are already reported via `requiredScenarioCoverage`
@@ -281,8 +478,13 @@ export function buildQaAgenticParityComparison(params: {
 }
 
 export function renderQaAgenticParityMarkdownReport(comparison: QaAgenticParityComparison): string {
+  // Title is parametrized from the candidate / baseline labels so reports
+  // for any candidate/baseline pair (not only gpt-5.4 vs opus 4.6) render
+  // with an accurate header. The default CLI labels are still
+  // openai/gpt-5.4 vs anthropic/claude-opus-4-6, but the helper works for
+  // any parity comparison a caller configures.
   const lines = [
-    "# OpenClaw GPT-5.4 / Opus 4.6 Agentic Parity Report",
+    `# OpenClaw Agentic Parity Report — ${comparison.candidateLabel} vs ${comparison.baselineLabel}`,
     "",
     `- Compared at: ${comparison.comparedAt}`,
     `- Candidate: ${comparison.candidateLabel}`,

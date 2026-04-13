@@ -188,6 +188,109 @@ describe("sendMessage", () => {
     );
   });
 
+  it("applies mirror matrix semantics for MEDIA and silent token variants", async () => {
+    const matrix: Array<{
+      name: string;
+      content: string;
+      mediaUrl?: string;
+      expectedPayloads: Array<{
+        text: string;
+        mediaUrl: string | null;
+        mediaUrls: string[];
+      }>;
+      expectedMirror: {
+        text: string;
+        mediaUrls?: string[];
+      };
+    }> = [
+      {
+        name: "MEDIA directives",
+        content: "Here\nMEDIA:https://example.com/a.png\nMEDIA:https://example.com/b.png",
+        expectedPayloads: [
+          {
+            text: "Here",
+            mediaUrl: null,
+            mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
+          },
+        ],
+        expectedMirror: {
+          text: "Here",
+          mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
+        },
+      },
+      {
+        name: "exact NO_REPLY",
+        content: "NO_REPLY",
+        expectedPayloads: [],
+        expectedMirror: {
+          text: "NO_REPLY",
+          mediaUrls: undefined,
+        },
+      },
+      {
+        name: "JSON NO_REPLY",
+        content: '{\n  "action": "NO_REPLY"\n}',
+        expectedPayloads: [],
+        expectedMirror: {
+          text: '{\n  "action": "NO_REPLY"\n}',
+          mediaUrls: undefined,
+        },
+      },
+      {
+        name: "exact NO_REPLY with explicit media",
+        content: "NO_REPLY",
+        mediaUrl: "https://example.com/c.png",
+        expectedPayloads: [
+          {
+            text: "",
+            mediaUrl: "https://example.com/c.png",
+            mediaUrls: ["https://example.com/c.png"],
+          },
+        ],
+        expectedMirror: {
+          text: "NO_REPLY",
+          mediaUrls: ["https://example.com/c.png"],
+        },
+      },
+    ];
+
+    for (const entry of matrix) {
+      mocks.deliverOutboundPayloads.mockClear();
+
+      await sendMessage({
+        cfg: {},
+        channel: "telegram",
+        to: "123456",
+        content: entry.content,
+        ...(entry.mediaUrl ? { mediaUrl: entry.mediaUrl } : {}),
+        mirror: {
+          sessionKey: "agent:main:telegram:dm:123456",
+        },
+      });
+
+      expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+      const deliveryCall = mocks.deliverOutboundPayloads.mock.calls[0]?.[0] as
+        | {
+            payloads?: Array<{ text?: string; mediaUrl?: string; mediaUrls?: string[] }>;
+            mirror?: unknown;
+          }
+        | undefined;
+      const payloadSummary = (deliveryCall?.payloads ?? []).map((payload) => ({
+        text: payload.text ?? "",
+        mediaUrl: payload.mediaUrl ?? null,
+        mediaUrls: payload.mediaUrls ?? [],
+      }));
+      expect(payloadSummary, entry.name).toEqual(entry.expectedPayloads);
+      expect(deliveryCall?.mirror, entry.name).toEqual(
+        expect.objectContaining({
+          sessionKey: "agent:main:telegram:dm:123456",
+          text: entry.expectedMirror.text,
+          mediaUrls: entry.expectedMirror.mediaUrls,
+        }),
+      );
+    }
+  });
+
   it("recovers telegram plugin resolution so message/send does not fail with Unknown channel: telegram", async () => {
     const telegramPlugin = {
       outbound: { deliveryMode: "direct" },

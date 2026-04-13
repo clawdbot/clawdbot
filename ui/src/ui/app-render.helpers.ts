@@ -9,6 +9,7 @@ import {
   resolveChatModelOverrideValue,
   resolveChatModelSelectState,
 } from "./chat-model-select-state.ts";
+import { refreshSlashCommands } from "./chat/slash-commands.ts";
 import { refreshVisibleToolsEffectiveForCurrentSession } from "./controllers/agents.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { loadSessions } from "./controllers/sessions.ts";
@@ -542,6 +543,10 @@ export function switchChatSession(state: AppViewState, nextSessionKey: string) {
   resetChatStateForSessionSwitch(state, nextSessionKey);
   void state.loadAssistantIdentity();
   void refreshChatAvatar(state);
+  void refreshSlashCommands({
+    client: state.client,
+    agentId: parseAgentSessionKey(nextSessionKey)?.agentId,
+  });
   syncUrlWithSessionKey(
     state as unknown as Parameters<typeof syncUrlWithSessionKey>[0],
     nextSessionKey,

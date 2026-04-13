@@ -419,6 +419,107 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
     };
   }
 
+  function resolveLmstudioDiscoveryUrl(baseUrl: string): string {
+    const normalized = baseUrl.trim().replace(/\/+$/u, "");
+    if (normalized.endsWith("/api/v1")) {
+      return `${normalized}/models`;
+    }
+    if (normalized.endsWith("/v1")) {
+      return `${normalized.slice(0, -"/v1".length)}/api/v1/models`;
+    }
+    return `${normalized}/api/v1/models`;
+  }
+
+  function extractLmstudioModelIds(payload: unknown): string[] {
+    if (!payload || typeof payload !== "object" || !("models" in payload)) {
+      return [];
+    }
+    const models = (payload as { models?: unknown }).models;
+    if (!Array.isArray(models)) {
+      return [];
+    }
+    return models
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") {
+          return null;
+        }
+        const typedEntry = entry as { type?: unknown; key?: unknown };
+        return {
+          type: normalizeText(typedEntry.type),
+          key: normalizeText(typedEntry.key),
+        };
+      })
+      .filter((entry): entry is { type: string; key: string } => Boolean(entry))
+      .filter((entry) => entry.type.trim().toLowerCase() === "llm")
+      .map((entry) => entry.key.trim())
+      .filter(Boolean);
+  }
+
+  function createLmstudioChoice(): ChoiceHandler {
+    return {
+      providerId: "lmstudio",
+      label: "LM Studio",
+      runNonInteractive: async (ctx) => {
+        const baseUrl = normalizeText(ctx.opts.customBaseUrl) || "http://localhost:1234/v1";
+        const lmstudioApiKey = normalizeText(ctx.opts.lmstudioApiKey);
+        const customApiKey = normalizeText(ctx.opts.customApiKey);
+        const resolved = await ctx.resolveApiKey({
+          provider: "lmstudio",
+          flagValue: lmstudioApiKey || customApiKey,
+          flagName: lmstudioApiKey ? "--lmstudio-api-key" : "--custom-api-key",
+          envVar: "LM_API_TOKEN",
+          required: false,
+        });
+        const resolvedOrSynthetic = resolved ?? {
+          key: "lmstudio-local",
+          source: "flag" as const,
+        };
+        const credential = ctx.toApiKeyCredential({
+          provider: "lmstudio",
+          resolved: resolvedOrSynthetic,
+        });
+        if (!credential) {
+          return null;
+        }
+        upsertAuthProfile({
+          profileId: "lmstudio:default",
+          credential: credential as never,
+          agentDir: ctx.agentDir,
+        });
+
+        const response = await fetch(resolveLmstudioDiscoveryUrl(baseUrl));
+        const discoveredModelIds = extractLmstudioModelIds(await response.json());
+        if (discoveredModelIds.length === 0) {
+          ctx.runtime.error(`No LM Studio LLM models were found at ${baseUrl}.`);
+          ctx.runtime.exit(1);
+          return null;
+        }
+
+        const requestedModelId = normalizeText(ctx.opts.customModelId);
+        const selectedModelId = requestedModelId || discoveredModelIds[0];
+        if (!discoveredModelIds.includes(selectedModelId)) {
+          ctx.runtime.error(`LM Studio model ${selectedModelId} was not found at ${baseUrl}.`);
+          ctx.runtime.exit(1);
+          return null;
+        }
+
+        let next = applyAuthProfileConfig(ctx.config as never, {
+          profileId: "lmstudio:default",
+          provider: "lmstudio",
+          mode: "api_key",
+        });
+        next = withProviderConfig(next, "lmstudio", {
+          baseUrl,
+          api: "openai-completions",
+          auth: "api-key",
+          apiKey: resolved ? "LM_API_TOKEN" : "lmstudio-local",
+          models: discoveredModelIds.map((id) => buildTestProviderModel(id)),
+        });
+        return applyPrimaryModel(next as never, `lmstudio/${selectedModelId}`);
+      },
+    };
+  }
+
   function createZaiChoice(
     choiceId: "zai-api-key" | "zai-coding-cn" | "zai-coding-global",
   ): ChoiceHandler {
@@ -436,7 +537,10 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
           return null;
         }
         if (resolved.source !== "profile") {
-          const credential = ctx.toApiKeyCredential({ provider: "zai", resolved });
+          const credential = ctx.toApiKeyCredential({
+            provider: "zai",
+            resolved,
+          });
           if (!credential) {
             return null;
           }
@@ -712,6 +816,7 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
         modelPlaceholder: "Qwen/Qwen3-32B",
       }),
     ],
+    ["lmstudio", createLmstudioChoice()],
     [
       "litellm-api-key",
       createApiKeyChoice({
@@ -912,7 +1017,9 @@ function expectZaiProbeCalls(
   expected: Array<{ url: string; modelId: string }>,
 ): void {
   const calls = (
-    fetchMock as unknown as { mock: { calls: Array<[RequestInfo | URL, RequestInit?]> } }
+    fetchMock as unknown as {
+      mock: { calls: Array<[RequestInfo | URL, RequestInit?]> };
+    }
   ).mock.calls;
 
   expect(calls).toHaveLength(expected.length);
@@ -1224,7 +1331,12 @@ describe("onboard (non-interactive): provider auth", () => {
 
       expect(cfg.auth?.profiles?.["xai:default"]?.provider).toBe("xai");
       expect(cfg.auth?.profiles?.["xai:default"]?.mode).toBe("api_key");
-      await expectApiKeyProfile({ profileId: "xai:default", provider: "xai", key: "xai-test-key" });
+      expect(cfg.agents?.defaults?.model?.primary).toBe("xai/grok-4");
+      await expectApiKeyProfile({
+        profileId: "xai:default",
+        provider: "xai",
+        key: "xai-test-key",
+      });
     });
   });
 

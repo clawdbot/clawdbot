@@ -1,12 +1,31 @@
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { describe, expect, it } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
 import {
+  createOutboundPayloadPlan,
   formatOutboundPayloadLog,
   normalizeOutboundPayloads,
   normalizeOutboundPayloadsForJson,
   normalizeReplyPayloadsForDelivery,
+  projectOutboundPayloadPlanForDelivery,
+  projectOutboundPayloadPlanForJson,
+  projectOutboundPayloadPlanForMirror,
+  projectOutboundPayloadPlanForOutbound,
 } from "./payloads.js";
+
+function resolveMirrorProjection(payloads: readonly ReplyPayload[]) {
+  const normalized = normalizeReplyPayloadsForDelivery(payloads);
+  return {
+    text: normalized
+      .map((payload) => payload.text)
+      .filter((text): text is string => Boolean(text))
+      .join("\n"),
+    mediaUrls: normalized.flatMap(
+      (payload) => resolveSendableOutboundReplyParts(payload).mediaUrls,
+    ),
+  };
+}
 
 describe("normalizeReplyPayloadsForDelivery", () => {
   it("parses directives, merges media, and preserves reply metadata", () => {
@@ -75,6 +94,167 @@ describe("normalizeReplyPayloadsForDelivery", () => {
         audioAsVoice: false,
       },
     ]);
+  });
+
+  it("keeps mixed NO_REPLY text literal and only suppresses exact sentinel payloads", () => {
+    expect(
+      normalizeReplyPayloadsForDelivery([
+        { text: "NO_REPLY thanks for the update" },
+        { text: "NO_REPLY" },
+        { text: "thanks NO_REPLY" },
+      ]),
+    ).toEqual([
+      {
+        text: "NO_REPLY thanks for the update",
+        mediaUrls: undefined,
+        mediaUrl: undefined,
+        replyToId: undefined,
+        replyToCurrent: false,
+        replyToTag: false,
+        audioAsVoice: false,
+      },
+      {
+        text: "thanks NO_REPLY",
+        mediaUrls: undefined,
+        mediaUrl: undefined,
+        replyToId: undefined,
+        replyToCurrent: false,
+        replyToTag: false,
+        audioAsVoice: false,
+      },
+    ]);
+  });
+
+  it("keeps silent token payloads when media exists", () => {
+    expect(
+      normalizeReplyPayloadsForDelivery([
+        { text: "NO_REPLY", mediaUrl: "https://x.test/one.png" },
+        { text: '{"action":"NO_REPLY"}', mediaUrls: ["https://x.test/two.png"] },
+      ]),
+    ).toEqual([
+      {
+        text: "",
+        mediaUrls: ["https://x.test/one.png"],
+        mediaUrl: "https://x.test/one.png",
+        replyToId: undefined,
+        replyToCurrent: false,
+        replyToTag: false,
+        audioAsVoice: false,
+      },
+      {
+        text: "",
+        mediaUrls: ["https://x.test/two.png"],
+        mediaUrl: undefined,
+        replyToId: undefined,
+        replyToCurrent: false,
+        replyToTag: false,
+        audioAsVoice: false,
+      },
+    ]);
+  });
+
+  it("is idempotent for already-normalized delivery payloads", () => {
+    const once = normalizeReplyPayloadsForDelivery([
+      {
+        text: "Hello",
+        mediaUrls: ["https://x.test/a.png"],
+        replyToId: "123",
+        replyToTag: true,
+        replyToCurrent: true,
+        audioAsVoice: true,
+      },
+      {
+        text: "",
+        channelData: { provider: "line" },
+      },
+    ]);
+    const twice = normalizeReplyPayloadsForDelivery(once);
+    expect(twice).toEqual(once);
+  });
+
+  it("captures a tricky payload matrix snapshot", () => {
+    const input: ReplyPayload[] = [
+      { text: "NO_REPLY" },
+      { text: "NO_REPLY with details" },
+      { text: '{"action":"NO_REPLY"}' },
+      { text: '{"action":"NO_REPLY","note":"keep"}' },
+      { text: "NO_REPLY", mediaUrl: "https://x.test/m1.png" },
+      { text: "MEDIA:https://x.test/m2.png\n[[audio_as_voice]] [[reply_to: 444]] hi" },
+      { text: "headline", btw: { question: "what changed?" } },
+      { text: " \n\t ", channelData: { mode: "custom" } },
+      { text: "Reasoning block", isReasoning: true },
+    ];
+    expect(normalizeReplyPayloadsForDelivery(input)).toMatchInlineSnapshot(`
+      [
+        {
+          "audioAsVoice": false,
+          "mediaUrl": undefined,
+          "mediaUrls": undefined,
+          "replyToCurrent": false,
+          "replyToId": undefined,
+          "replyToTag": false,
+          "text": "NO_REPLY with details",
+        },
+        {
+          "audioAsVoice": false,
+          "mediaUrl": undefined,
+          "mediaUrls": undefined,
+          "replyToCurrent": false,
+          "replyToId": undefined,
+          "replyToTag": false,
+          "text": "{"action":"NO_REPLY","note":"keep"}",
+        },
+        {
+          "audioAsVoice": false,
+          "mediaUrl": "https://x.test/m1.png",
+          "mediaUrls": [
+            "https://x.test/m1.png",
+          ],
+          "replyToCurrent": false,
+          "replyToId": undefined,
+          "replyToTag": false,
+          "text": "",
+        },
+        {
+          "audioAsVoice": true,
+          "mediaUrl": "https://x.test/m2.png",
+          "mediaUrls": [
+            "https://x.test/m2.png",
+          ],
+          "replyToCurrent": false,
+          "replyToId": "444",
+          "replyToTag": true,
+          "text": "hi",
+        },
+        {
+          "audioAsVoice": false,
+          "btw": {
+            "question": "what changed?",
+          },
+          "mediaUrl": undefined,
+          "mediaUrls": undefined,
+          "replyToCurrent": false,
+          "replyToId": undefined,
+          "replyToTag": false,
+          "text": "BTW
+      Question: what changed?
+
+      headline",
+        },
+        {
+          "audioAsVoice": false,
+          "channelData": {
+            "mode": "custom",
+          },
+          "mediaUrl": undefined,
+          "mediaUrls": undefined,
+          "replyToCurrent": false,
+          "replyToId": undefined,
+          "replyToTag": false,
+          "text": "",
+        },
+      ]
+    `);
   });
 
   it("keeps renderable channel-data payloads and reply-to-current markers", () => {
@@ -210,6 +390,64 @@ describe("normalizeOutboundPayloads", () => {
         },
       ]),
     ).toEqual([{ text: "BTW\nQuestion: what is 17 * 19?\n\n323", mediaUrls: [] }]);
+  });
+
+  it("keeps delivery and mirror projections aligned", () => {
+    const payloads: ReplyPayload[] = [
+      { text: "Hello" },
+      { text: "MEDIA:https://x.test/a.png\nMEDIA:https://x.test/b.png" },
+      { text: '{"action":"NO_REPLY"}' },
+      { text: "NO_REPLY", mediaUrl: "https://x.test/c.png" },
+    ];
+
+    const deliveryProjection = normalizeOutboundPayloads(payloads);
+    const mirrorProjection = resolveMirrorProjection(payloads);
+
+    expect(mirrorProjection.text).toBe(
+      deliveryProjection
+        .map((payload) => payload.text)
+        .filter((text) => Boolean(text))
+        .join("\n"),
+    );
+    expect(mirrorProjection.mediaUrls).toEqual(
+      deliveryProjection.flatMap((payload) => payload.mediaUrls),
+    );
+  });
+});
+
+describe("OutboundPayloadPlan projections", () => {
+  const matrix: ReplyPayload[] = [
+    { text: "hello" },
+    { text: "NO_REPLY" },
+    { text: "NO_REPLY", mediaUrl: "https://x.test/1.png" },
+    { text: "MEDIA:https://x.test/2.png\nworld" },
+    { text: '{"action":"NO_REPLY","note":"keep"}' },
+    { text: "reasoning", isReasoning: true },
+    { text: " \n", channelData: { mode: "flex" } },
+  ];
+
+  it("matches normalizeReplyPayloadsForDelivery", () => {
+    const plan = createOutboundPayloadPlan(matrix);
+    expect(projectOutboundPayloadPlanForDelivery(plan)).toEqual(
+      normalizeReplyPayloadsForDelivery(matrix),
+    );
+  });
+
+  it("matches normalizeOutboundPayloads", () => {
+    const plan = createOutboundPayloadPlan(matrix);
+    expect(projectOutboundPayloadPlanForOutbound(plan)).toEqual(normalizeOutboundPayloads(matrix));
+  });
+
+  it("matches normalizeOutboundPayloadsForJson", () => {
+    const plan = createOutboundPayloadPlan(matrix);
+    expect(projectOutboundPayloadPlanForJson(plan)).toEqual(
+      normalizeOutboundPayloadsForJson(matrix),
+    );
+  });
+
+  it("matches mirror projection behavior", () => {
+    const plan = createOutboundPayloadPlan(matrix);
+    expect(projectOutboundPayloadPlanForMirror(plan)).toEqual(resolveMirrorProjection(matrix));
   });
 });
 

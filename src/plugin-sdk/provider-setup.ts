@@ -4,7 +4,10 @@ export type {
   ProviderAuthContext,
   ProviderAuthMethodNonInteractiveContext,
   ProviderAuthResult,
+  ProviderCatalogContext,
   ProviderDiscoveryContext,
+  ProviderPrepareDynamicModelContext,
+  ProviderRuntimeModel,
 } from "../plugins/types.js";
 
 export {
