@@ -76,11 +76,11 @@ export type FeishuMessageInfo = {
   threadId?: string;
 };
 
-export type FeishuProbeResult = BaseProbeResult<string> & {
+export interface FeishuProbeResult extends BaseProbeResult {
   appId?: string;
   botName?: string;
   botOpenId?: string;
-};
+}
 
 export type FeishuMediaInfo = {
   path: string;

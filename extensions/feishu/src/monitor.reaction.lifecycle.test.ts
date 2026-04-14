@@ -24,7 +24,7 @@ describe("Feishu reaction lifecycle", () => {
     const result = await resolveReactionSyntheticEvent({
       cfg,
       accountId: "default",
-      event: makeReactionEvent(),
+      event: makeReactionEvent({ user_id: { open_id: "ou_user1", user_id: "on_user1" } }),
       botOpenId: "ou_bot",
       fetchMessage: async () => ({
         messageId: "om_msg1",
@@ -38,6 +38,7 @@ describe("Feishu reaction lifecycle", () => {
       uuid: () => "fixed-uuid",
     });
 
+    expect(result?.sender.sender_id).toEqual({ open_id: "ou_user1", user_id: "on_user1" });
     expect(result?.message.content).toBe('{"text":"[reacted with THUMBSUP to message om_msg1]"}');
   });
 

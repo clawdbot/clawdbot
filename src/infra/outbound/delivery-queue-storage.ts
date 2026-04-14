@@ -4,6 +4,7 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { generateSecureUuid } from "../secure-random.js";
 import type { OutboundMirror } from "./mirror.js";
+import type { OutboundSessionContext } from "./session-context.js";
 import type { OutboundChannel } from "./targets.js";
 
 const QUEUE_DIRNAME = "delivery-queue";
@@ -26,6 +27,8 @@ export type QueuedDeliveryPayload = {
   forceDocument?: boolean;
   silent?: boolean;
   mirror?: OutboundMirror;
+  /** Session context needed to preserve outbound media policy on recovery. */
+  session?: OutboundSessionContext;
   /** Gateway caller scopes at enqueue time, preserved for recovery replay. */
   gatewayClientScopes?: readonly string[];
 };
@@ -144,6 +147,7 @@ export async function enqueueDelivery(
     forceDocument: params.forceDocument,
     silent: params.silent,
     mirror: params.mirror,
+    session: params.session,
     gatewayClientScopes: params.gatewayClientScopes,
     retryCount: 0,
   });

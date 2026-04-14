@@ -244,14 +244,6 @@ function resolveSearchTool(raw?: MemoryQmdConfig["searchTool"]): string | undefi
   return value ? value : undefined;
 }
 
-function normalizeQmdCommand(command: string): string {
-  const normalized = path.normalize(command);
-  if (normalized === "/opt/homebrew/bin/qmd" || normalized === "/usr/local/bin/qmd") {
-    return "qmd";
-  }
-  return command;
-}
-
 function resolveSessionConfig(
   cfg: MemoryQmdConfig["sessions"],
   workspaceDir: string,
@@ -405,7 +397,7 @@ export function resolveMemoryBackendConfig(params: {
 
   const rawCommand = normalizeOptionalString(qmdCfg?.command) || "qmd";
   const parsedCommand = splitShellArgs(rawCommand);
-  const command = normalizeQmdCommand(parsedCommand?.[0] || rawCommand.split(/\s+/)[0] || "qmd");
+  const command = parsedCommand?.[0] || rawCommand.split(/\s+/)[0] || "qmd";
   const resolved: ResolvedQmdConfig = {
     command,
     mcporter: resolveMcporterConfig(qmdCfg?.mcporter),

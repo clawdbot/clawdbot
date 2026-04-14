@@ -46,6 +46,21 @@ export function requiresInspectableBrowserNavigationRedirects(ssrfPolicy?: SsrFP
   return !isPrivateNetworkAllowedByPolicy(ssrfPolicy);
 }
 
+export function requiresInspectableBrowserNavigationRedirectsForUrl(
+  url: string,
+  ssrfPolicy?: SsrFPolicy,
+): boolean {
+  if (!requiresInspectableBrowserNavigationRedirects(ssrfPolicy)) {
+    return false;
+  }
+  try {
+    const parsed = new URL(url);
+    return NETWORK_NAVIGATION_PROTOCOLS.has(parsed.protocol);
+  } catch {
+    return false;
+  }
+}
+
 function isIpLiteralHostname(hostname: string): boolean {
   return isIP(normalizeHostname(hostname)) !== 0;
 }

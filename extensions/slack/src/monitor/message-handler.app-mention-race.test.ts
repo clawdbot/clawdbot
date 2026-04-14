@@ -51,30 +51,41 @@ vi.mock("./message-handler/dispatch.js", () => ({
 }));
 
 let createSlackMessageHandler: typeof import("./message-handler.js").createSlackMessageHandler;
+let SlackRetryableInboundError: typeof import("./message-handler.js").SlackRetryableInboundError;
 
 function createMarkMessageSeen() {
   const seen = new Set<string>();
-  return (channel: string | undefined, ts: string | undefined) => {
-    if (!channel || !ts) {
+  return {
+    markMessageSeen(channel: string | undefined, ts: string | undefined) {
+      if (!channel || !ts) {
+        return false;
+      }
+      const key = `${channel}:${ts}`;
+      if (seen.has(key)) {
+        return true;
+      }
+      seen.add(key);
       return false;
-    }
-    const key = `${channel}:${ts}`;
-    if (seen.has(key)) {
-      return true;
-    }
-    seen.add(key);
-    return false;
+    },
+    releaseSeenMessage(channel: string | undefined, ts: string | undefined) {
+      if (!channel || !ts) {
+        return;
+      }
+      seen.delete(`${channel}:${ts}`);
+    },
   };
 }
 
 function createTestHandler() {
+  const seenMessages = createMarkMessageSeen();
   return createSlackMessageHandler({
     ctx: {
       cfg: {},
       accountId: "default",
       app: { client: {} },
       runtime: {},
-      markMessageSeen: createMarkMessageSeen(),
+      markMessageSeen: seenMessages.markMessageSeen,
+      releaseSeenMessage: seenMessages.releaseSeenMessage,
     } as Parameters<typeof createSlackMessageHandler>[0]["ctx"],
     account: { accountId: "default" } as Parameters<typeof createSlackMessageHandler>[0]["account"],
   });
@@ -118,7 +129,8 @@ async function createInFlightMessageScenario(ts: string) {
 
 describe("createSlackMessageHandler app_mention race handling", () => {
   beforeAll(async () => {
-    ({ createSlackMessageHandler } = await import("./message-handler.js"));
+    ({ createSlackMessageHandler, SlackRetryableInboundError } =
+      await import("./message-handler.js"));
   });
 
   beforeEach(() => {
@@ -179,6 +191,36 @@ describe("createSlackMessageHandler app_mention race handling", () => {
 
     await sendMessageEvent(handler, "1700000000.000200");
     await sendMentionEvent(handler, "1700000000.000200");
+
+    expect(prepareSlackMessageMock).toHaveBeenCalledTimes(1);
+    expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries message replay after an explicit retryable dispatch failure", async () => {
+    prepareSlackMessageMock.mockResolvedValue({ ctxPayload: {} });
+    dispatchPreparedSlackMessageMock
+      .mockRejectedValueOnce(new SlackRetryableInboundError("retry me"))
+      .mockResolvedValueOnce(undefined);
+
+    const handler = createTestHandler();
+
+    await expect(sendMessageEvent(handler, "1700000000.000250")).rejects.toThrow("retry me");
+    await expect(sendMessageEvent(handler, "1700000000.000250")).resolves.toBeUndefined();
+
+    expect(prepareSlackMessageMock).toHaveBeenCalledTimes(2);
+    expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps message replay deduped after a non-retryable dispatch failure", async () => {
+    prepareSlackMessageMock.mockResolvedValue({ ctxPayload: {} });
+    dispatchPreparedSlackMessageMock.mockRejectedValueOnce(new Error("post-send failure"));
+
+    const handler = createTestHandler();
+
+    await expect(sendMessageEvent(handler, "1700000000.000300")).rejects.toThrow(
+      "post-send failure",
+    );
+    await sendMessageEvent(handler, "1700000000.000300");
 
     expect(prepareSlackMessageMock).toHaveBeenCalledTimes(1);
     expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(1);

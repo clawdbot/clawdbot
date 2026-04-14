@@ -84,6 +84,13 @@ const MAX_TRACKED_PAIRING_REPLY_SENDERS = 512;
 const MAX_TRACKED_SHARED_DM_CONTEXT_NOTICES = 512;
 type MatrixAllowBotsMode = "off" | "mentions" | "all";
 
+export class MatrixRetryableInboundError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "MatrixRetryableInboundError";
+  }
+}
+
 async function redactMatrixDraftEvent(
   client: MatrixClient,
   roomId: string,
@@ -1273,6 +1280,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, _route.agentId);
       let finalReplyDeliveryFailed = false;
       let nonFinalReplyDeliveryFailed = false;
+      let retryableReplyDeliveryFailed = false;
       const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
         cfg,
         agentId: _route.agentId,
@@ -1568,6 +1576,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             }
           },
           onError: (err: unknown, info: { kind: "tool" | "block" | "final" }) => {
+            if (err instanceof MatrixRetryableInboundError) {
+              retryableReplyDeliveryFailed = true;
+            }
             if (info.kind === "final") {
               finalReplyDeliveryFailed = true;
             } else {
@@ -1632,17 +1643,31 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         },
       });
       if (finalReplyDeliveryFailed) {
+        if (retryableReplyDeliveryFailed) {
+          logVerboseMessage(
+            `matrix: final reply delivery failed room=${roomId} id=${_messageId}; leaving event uncommitted`,
+          );
+          // Explicit retryable failures reopen replay so the same history can be retried.
+          return;
+        }
         logVerboseMessage(
-          `matrix: final reply delivery failed room=${roomId} id=${_messageId}; leaving event uncommitted`,
+          `matrix: final reply delivery failed room=${roomId} id=${_messageId}; keeping replay committed`,
         );
-        // Do not advance watermark — the event will be retried and should see the same history.
+        await commitInboundEventIfClaimed();
         return;
       }
       if (!queuedFinal && nonFinalReplyDeliveryFailed) {
+        if (retryableReplyDeliveryFailed) {
+          logVerboseMessage(
+            `matrix: non-final reply delivery failed room=${roomId} id=${_messageId}; leaving event uncommitted`,
+          );
+          // Explicit retryable failures reopen replay.
+          return;
+        }
         logVerboseMessage(
-          `matrix: non-final reply delivery failed room=${roomId} id=${_messageId}; leaving event uncommitted`,
+          `matrix: non-final reply delivery failed room=${roomId} id=${_messageId}; keeping replay committed`,
         );
-        // Do not advance watermark — the event will be retried.
+        await commitInboundEventIfClaimed();
         return;
       }
       // Advance the per-agent watermark now that the reply succeeded (or no reply was needed).

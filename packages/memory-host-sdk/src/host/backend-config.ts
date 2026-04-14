@@ -318,6 +318,34 @@ function resolveMcporterConfig(raw?: MemoryQmdMcporterConfig): ResolvedQmdMcport
   return parsed;
 }
 
+function isRegularDefaultMemoryEntry(
+  entry: Pick<fs.Dirent, "name" | "isFile" | "isSymbolicLink">,
+  expectedName: string,
+): boolean {
+  return entry.name === expectedName && entry.isFile() && !entry.isSymbolicLink();
+}
+
+function findDefaultMemoryRootPattern(workspaceDir: string): string | null {
+  try {
+    let sawLegacyFallback = false;
+    for (const entry of fs.readdirSync(workspaceDir, { withFileTypes: true })) {
+      if (isRegularDefaultMemoryEntry(entry, "MEMORY.md")) {
+        return "MEMORY.md";
+      }
+      if (isRegularDefaultMemoryEntry(entry, "memory.md")) {
+        sawLegacyFallback = true;
+      }
+    }
+    return sawLegacyFallback ? "memory.md" : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveDefaultMemoryRootPattern(workspaceDir: string): string {
+  return findDefaultMemoryRootPattern(workspaceDir) ?? "MEMORY.md";
+}
+
 function resolveDefaultCollections(
   include: boolean,
   workspaceDir: string,
@@ -328,8 +356,13 @@ function resolveDefaultCollections(
     return [];
   }
   const entries: Array<{ path: string; pattern: string; base: string }> = [
-    { path: workspaceDir, pattern: "MEMORY.md", base: "memory-root" },
-    { path: workspaceDir, pattern: "memory.md", base: "memory-alt" },
+    // The root memory slot is singular: prefer MEMORY.md, but keep lowercase
+    // memory.md as a legacy fallback when the canonical file is absent.
+    {
+      path: workspaceDir,
+      pattern: resolveDefaultMemoryRootPattern(workspaceDir),
+      base: "memory-root",
+    },
     { path: path.join(workspaceDir, "memory"), pattern: "**/*.md", base: "memory-dir" },
   ];
   return entries.map((entry) => ({

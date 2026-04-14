@@ -42,6 +42,48 @@ afterEach(() => {
 });
 
 describe("resolveGatewayProgramArguments", () => {
+  it("prefers index.js over legacy entry.js when both exist in the same dist directory", async () => {
+    const entryPath = path.resolve("/opt/openclaw/dist/entry.js");
+    const indexPath = path.resolve("/opt/openclaw/dist/index.js");
+    process.argv = ["node", entryPath];
+    fsMocks.realpath.mockResolvedValue(entryPath);
+    fsMocks.access.mockResolvedValue(undefined);
+
+    const result = await resolveGatewayProgramArguments({ port: 18789 });
+
+    expect(result.programArguments).toEqual([
+      process.execPath,
+      indexPath,
+      "gateway",
+      "--port",
+      "18789",
+    ]);
+  });
+
+  it("keeps entry.js when index.js is missing", async () => {
+    const entryPath = path.resolve("/opt/openclaw/dist/entry.js");
+    const indexPath = path.resolve("/opt/openclaw/dist/index.js");
+    const indexMjsPath = path.resolve("/opt/openclaw/dist/index.mjs");
+    process.argv = ["node", entryPath];
+    fsMocks.realpath.mockResolvedValue(entryPath);
+    fsMocks.access.mockImplementation(async (target: string) => {
+      if (target === indexPath || target === indexMjsPath) {
+        throw new Error("missing");
+      }
+      return;
+    });
+
+    const result = await resolveGatewayProgramArguments({ port: 18789 });
+
+    expect(result.programArguments).toEqual([
+      process.execPath,
+      entryPath,
+      "gateway",
+      "--port",
+      "18789",
+    ]);
+  });
+
   it("uses realpath-resolved dist entry when running via npx shim", async () => {
     const argv1 = path.resolve("/tmp/.npm/_npx/63c3/node_modules/.bin/openclaw");
     const entryPath = path.resolve("/tmp/.npm/_npx/63c3/node_modules/openclaw/dist/entry.js");
@@ -80,8 +122,10 @@ describe("resolveGatewayProgramArguments", () => {
 
     const result = await resolveGatewayProgramArguments({ port: 18789 });
 
-    // Should use the symlinked path, not the realpath-resolved versioned path
-    expect(result.programArguments[1]).toBe(symlinkPath);
+    // Should use the symlinked canonical index.js path, not the realpath-resolved versioned path
+    expect(result.programArguments[1]).toBe(
+      path.resolve("/Users/test/Library/pnpm/global/5/node_modules/openclaw/dist/index.js"),
+    );
     expect(result.programArguments[1]).not.toContain("@2026.1.21-2");
   });
 

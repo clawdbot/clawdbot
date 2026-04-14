@@ -131,6 +131,10 @@ vi.mock("../agents/auth-profiles.js", () => ({
   ensureAuthProfileStore,
 }));
 
+vi.mock("../agents/auth-profiles.runtime.js", () => ({
+  ensureAuthProfileStore,
+}));
+
 vi.mock("../commands/auth-choice-prompt.js", () => ({
   promptAuthChoiceGrouped,
 }));
@@ -323,6 +327,7 @@ describe("runSetupWizard", () => {
     const multiselect: WizardPrompter["multiselect"] = vi.fn(async () => []);
     const prompter = buildWizardPrompter({ select, multiselect });
     const runtime = createRuntime({ throwsOnExit: true });
+    ensureAuthProfileStore.mockClear();
 
     await runSetupWizard(
       {
@@ -341,6 +346,7 @@ describe("runSetupWizard", () => {
     );
 
     expect(select).not.toHaveBeenCalled();
+    expect(ensureAuthProfileStore).not.toHaveBeenCalled();
     expect(setupChannels).not.toHaveBeenCalled();
     expect(setupSkills).not.toHaveBeenCalled();
     expect(healthCommand).not.toHaveBeenCalled();

@@ -50,8 +50,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   { pluginId: "voice-call", minHostVersionBaseline: "2026.3.22" },
   {
     pluginId: "whatsapp",
-    pluginLocalRuntimeDeps: ["@whiskeysockets/baileys"],
-    mirroredRootRuntimeDeps: ["jimp"],
+    mirroredRootRuntimeDeps: ["@whiskeysockets/baileys", "jimp"],
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "zalo", minHostVersionBaseline: "2026.3.22" },

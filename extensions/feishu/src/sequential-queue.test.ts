@@ -61,4 +61,32 @@ describe("createSequentialQueue", () => {
     expect(order).toContain("chat-1:end");
     expect(order).toContain("btw:end");
   });
+
+  it("does not leak unhandled rejections when a queued task fails", async () => {
+    const enqueue = createSequentialQueue();
+    const unhandled: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandledRejection);
+
+    try {
+      await expect(
+        enqueue("feishu:default:chat-1", async () => {
+          throw new Error("boom");
+        }),
+      ).rejects.toThrow("boom");
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).toEqual([]);
+
+      await expect(
+        enqueue("feishu:default:chat-1", async () => {
+          return;
+        }),
+      ).resolves.toBeUndefined();
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+    }
+  });
 });

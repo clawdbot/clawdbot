@@ -312,6 +312,33 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(onReplyStart).not.toHaveBeenCalled();
   });
 
+  it("does not fire onReplyStart when user delivery is suppressed", async () => {
+    const onReplyStart = vi.fn(async () => {});
+    const dispatcher = createDispatcher();
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher,
+      inboundAudio: false,
+      suppressUserDelivery: true,
+      shouldRouteToOriginating: false,
+      onReplyStart,
+    });
+
+    // Directly invoking the lifecycle (e.g. from dispatch-acp.ts before the
+    // first deliver call) must not fire the typing indicator when delivery is
+    // suppressed by sendPolicy: "deny".
+    await coordinator.startReplyLifecycle();
+    const delivered = await coordinator.deliver("final", { text: "hello" });
+
+    expect(delivered).toBe(false);
+    expect(onReplyStart).not.toHaveBeenCalled();
+  });
+
   it("keeps parent-owned background ACP child delivery silent while preserving accumulated output", async () => {
     const dispatcher = createDispatcher();
     const coordinator = createAcpDispatchDeliveryCoordinator({

@@ -49,7 +49,7 @@ export type HeartbeatSenderContext = {
 
 export type { OutboundTargetResolution } from "./targets-resolve-shared.js";
 export { resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targets-session.js";
-import { resolveSessionDeliveryTarget } from "./targets-session.js";
+import { resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targets-session.js";
 
 // Channel docking: prefer plugin.outbound.resolveTarget + allowFrom to normalize destinations.
 export function resolveOutboundTarget(params: {
@@ -220,12 +220,26 @@ export function resolveHeartbeatDeliveryTarget(params: {
     }
   }
 
+  const inheritedHeartbeatThreadId = shouldReuseHeartbeatTelegramTopicThread({
+    target,
+    heartbeat,
+    turnSource: params.turnSource,
+    entry,
+    resolvedTarget,
+  })
+    ? resolvedTarget.lastThreadId
+    : undefined;
+
   return {
     channel: resolvedTarget.channel,
     to: resolved.to,
     reason,
     accountId: effectiveAccountId,
-    threadId: resolvedTarget.threadId,
+    // Heartbeats normally avoid inheriting session reply-thread IDs, but
+    // Telegram forum-topic sessions encode the topic as part of the
+    // destination identity. Preserve that topic routing when the heartbeat is
+    // still targeting the same group session.
+    threadId: resolvedTarget.threadId ?? inheritedHeartbeatThreadId,
     lastChannel: resolvedTarget.lastChannel,
     lastAccountId: resolvedTarget.lastAccountId,
   };
@@ -283,6 +297,27 @@ function resolveHeartbeatDeliveryChatType(params: {
     channel: params.channel,
     to: params.to,
   });
+}
+
+function shouldReuseHeartbeatTelegramTopicThread(params: {
+  target: HeartbeatTarget;
+  heartbeat?: AgentDefaultsConfig["heartbeat"];
+  turnSource?: DeliveryContext;
+  entry?: SessionEntry;
+  resolvedTarget: SessionDeliveryTarget;
+}): boolean {
+  return (
+    params.resolvedTarget.threadId == null &&
+    params.target === "last" &&
+    !params.heartbeat?.to &&
+    params.turnSource?.threadId == null &&
+    params.resolvedTarget.channel === "telegram" &&
+    params.resolvedTarget.lastChannel === "telegram" &&
+    Boolean(params.resolvedTarget.to) &&
+    Boolean(params.resolvedTarget.lastTo) &&
+    params.resolvedTarget.to === params.resolvedTarget.lastTo &&
+    normalizeChatType(params.entry?.chatType) === "group"
+  );
 }
 
 function resolveHeartbeatSenderId(params: {

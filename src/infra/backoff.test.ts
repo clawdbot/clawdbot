@@ -43,4 +43,39 @@ describe("backoff helpers", () => {
       cause: expect.anything(),
     });
   });
+
+  it("advances with fake timers", async () => {
+    vi.useFakeTimers();
+    try {
+      const sleeper = sleepWithAbort(50);
+      await vi.advanceTimersByTimeAsync(49);
+      await expect(
+        Promise.race([sleeper.then(() => "done"), Promise.resolve("pending")]),
+      ).resolves.toBe("pending");
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(sleeper).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects if the signal aborts during listener registration", async () => {
+    let aborted = false;
+    const signal = {
+      get aborted() {
+        return aborted;
+      },
+      get reason() {
+        return new Error("listener-registration-race");
+      },
+      addEventListener(_event: string, _listener: EventListenerOrEventListenerObject) {
+        aborted = true;
+      },
+      removeEventListener() {},
+    } as unknown as AbortSignal;
+
+    await expect(sleepWithAbort(50, signal)).rejects.toMatchObject({
+      message: "aborted",
+    });
+  });
 });

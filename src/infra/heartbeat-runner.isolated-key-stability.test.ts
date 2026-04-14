@@ -292,6 +292,51 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
     });
   });
 
+  it("classifies hook:wake exec events when they are queued on the active isolated session", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      const cfg = makeIsolatedHeartbeatConfig(tmpDir, storePath);
+      const baseSessionKey = resolveMainSessionKey(cfg);
+      const isolatedSessionKey = `${baseSessionKey}:heartbeat`;
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [isolatedSessionKey]: {
+            sessionId: "sid",
+            updatedAt: 1,
+            lastChannel: "whatsapp",
+            lastProvider: "whatsapp",
+            lastTo: "+1555",
+            heartbeatIsolatedBaseSessionKey: baseSessionKey,
+          },
+        }),
+        "utf-8",
+      );
+      enqueueSystemEvent("exec finished: deploy succeeded", { sessionKey: isolatedSessionKey });
+      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+      replySpy.mockResolvedValue({ text: "Handled internally" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        sessionKey: isolatedSessionKey,
+        reason: "hook:wake",
+        deps: {
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+        },
+      });
+
+      expect(result.status).toBe("ran");
+      const calledCtx = replySpy.mock.calls[0]?.[0] as {
+        SessionKey?: string;
+        Provider?: string;
+        ForceSenderIsOwnerFalse?: boolean;
+      };
+      expect(calledCtx.SessionKey).toBe(isolatedSessionKey);
+      expect(calledCtx.Provider).toBe("exec-event");
+      expect(calledCtx.ForceSenderIsOwnerFalse).toBe(true);
+    });
+  });
+
   it("keeps a forced real :heartbeat session distinct from the heartbeat-isolated sibling", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
       const cfg = makeIsolatedHeartbeatConfig(tmpDir, storePath);

@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createSubsystemLogger,
@@ -68,10 +69,20 @@ export async function getMemorySearchManager(params: {
       }
     }
 
+    const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+    try {
+      await fs.mkdir(workspaceDir, { recursive: true });
+    } catch (err) {
+      log.warn(
+        `qmd workspace unavailable (${workspaceDir}); falling back to builtin: ${formatErrorMessage(err)}`,
+      );
+      return await getBuiltinMemorySearchManager(params);
+    }
+
     const qmdBinary = await checkQmdBinaryAvailability({
       command: resolved.qmd.command,
       env: process.env,
-      cwd: resolveAgentWorkspaceDir(params.cfg, params.agentId),
+      cwd: workspaceDir,
     });
     if (!qmdBinary.available) {
       log.warn(
@@ -112,6 +123,14 @@ export async function getMemorySearchManager(params: {
     }
   }
 
+  return await getBuiltinMemorySearchManager(params);
+}
+
+async function getBuiltinMemorySearchManager(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  purpose?: "default" | "status";
+}): Promise<MemorySearchManagerResult> {
   try {
     const { MemoryIndexManager } = await loadManagerRuntime();
     const manager = await MemoryIndexManager.get(params);

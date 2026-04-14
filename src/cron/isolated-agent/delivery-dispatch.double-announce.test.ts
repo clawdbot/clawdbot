@@ -15,13 +15,21 @@ import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 
 // --- Module mocks (must be hoisted before imports) ---
 
+const { countActiveDescendantRunsMock } = vi.hoisted(() => ({
+  countActiveDescendantRunsMock: vi.fn().mockReturnValue(0),
+}));
+
 vi.mock("../../config/sessions.js", () => ({
   resolveAgentMainSessionKey: vi.fn(({ agentId }: { agentId: string }) => `agent:${agentId}:main`),
   resolveMainSessionKey: vi.fn(() => "global"),
 }));
 
 vi.mock("../../agents/subagent-registry-read.js", () => ({
-  countActiveDescendantRuns: vi.fn().mockReturnValue(0),
+  countActiveDescendantRuns: countActiveDescendantRunsMock,
+}));
+
+vi.mock("./delivery-subagent-registry.runtime.js", () => ({
+  countActiveDescendantRuns: countActiveDescendantRunsMock,
 }));
 
 vi.mock("../../infra/outbound/deliver.js", () => ({

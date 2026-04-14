@@ -8,6 +8,7 @@ import {
   createResolvedFeishuLifecycleAccount,
   expectFeishuReplyDispatcherSentFinalReplyOnce,
   expectFeishuReplyPipelineDedupedAcrossReplay,
+  expectFeishuReplyPipelineDedupedAfterPostSendFailure,
   expectFeishuSingleEffectAcrossReplay,
   installFeishuLifecycleReplyRuntime,
   mockFeishuReplyOnceDispatch,
@@ -187,6 +188,31 @@ describe("Feishu bot-menu lifecycle", () => {
     );
     expect(touchBindingMock).toHaveBeenCalledWith("binding-menu");
 
+    expectFeishuReplyDispatcherSentFinalReplyOnce({ createFeishuReplyDispatcherMock });
+  });
+
+  it("does not duplicate delivery when launcher fallback hits a post-send failure", async () => {
+    const onBotMenu = await setupLifecycleMonitor();
+    const event = createBotMenuEvent({
+      eventKey: "quick-actions",
+      timestamp: "1700000000002",
+    });
+    sendCardFeishuMock.mockRejectedValueOnce(new Error("boom"));
+    dispatchReplyFromConfigMock.mockImplementationOnce(async ({ dispatcher }) => {
+      await dispatcher.sendFinalReply({ text: "menu reply once" });
+      throw new Error("post-send failure");
+    });
+
+    await expectFeishuReplyPipelineDedupedAfterPostSendFailure({
+      handler: onBotMenu,
+      event,
+      dispatchReplyFromConfigMock,
+      runtimeErrorMock: lastRuntime?.error as ReturnType<typeof vi.fn>,
+      waitTimeoutMs: 5_000,
+    });
+
+    expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
+    expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
     expectFeishuReplyDispatcherSentFinalReplyOnce({ createFeishuReplyDispatcherMock });
   });
 });

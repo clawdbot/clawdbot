@@ -96,6 +96,38 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
     });
   });
 
+  it("does not remap malformed file:// container workspace paths", async () => {
+    const { tool } = createToolHarness();
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      containerWorkdir: "/workspace",
+    });
+
+    await wrapped.execute("tc-malformed-file-url", { path: "file:///workspace/%E0%A4%A" });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: "file:///workspace/%E0%A4%A",
+      cwd: root,
+      root,
+    });
+  });
+
+  it("does not remap file:// container workspace paths with encoded separators", async () => {
+    const { tool } = createToolHarness();
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      containerWorkdir: "/workspace",
+    });
+
+    await wrapped.execute("tc-encoded-separator-file-url", {
+      path: "file:///workspace/%2FREADME.md",
+    });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: "file:///workspace/%2FREADME.md",
+      cwd: root,
+      root,
+    });
+  });
+
   it("maps @-prefixed container workspace paths to host workspace root", async () => {
     const { tool } = createToolHarness();
     const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {

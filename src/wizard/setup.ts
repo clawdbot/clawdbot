@@ -483,28 +483,30 @@ export async function runSetupWizard(
   const { applyLocalSetupWorkspaceConfig } = await import("../commands/onboard-config.js");
   let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(baseConfig, workspaceDir);
 
-  const { ensureAuthProfileStore } = await import("../agents/auth-profiles.runtime.js");
-  const { promptAuthChoiceGrouped } = await import("../commands/auth-choice-prompt.js");
-  const { promptCustomApiConfig } = await import("../commands/onboard-custom.js");
-  const { applyAuthChoice, resolvePreferredProviderForAuthChoice, warnIfModelConfigLooksOff } =
-    await import("../commands/auth-choice.js");
-  const { applyPrimaryModel, promptDefaultModel } = await import("../commands/model-picker.js");
-
-  const authStore = ensureAuthProfileStore(undefined, {
-    allowKeychainPrompt: false,
-  });
   const authChoiceFromPrompt = opts.authChoice === undefined;
-  const authChoice =
-    opts.authChoice ??
-    (await promptAuthChoiceGrouped({
-      prompter,
-      store: authStore,
-      includeSkip: true,
-      config: nextConfig,
-      workspaceDir,
-    }));
+  const promptedAuthChoice = authChoiceFromPrompt
+    ? await (async () => {
+        const { ensureAuthProfileStore } = await import("../agents/auth-profiles.runtime.js");
+        const { promptAuthChoiceGrouped } = await import("../commands/auth-choice-prompt.js");
+        const authStore = ensureAuthProfileStore(undefined, {
+          allowKeychainPrompt: false,
+        });
+        return await promptAuthChoiceGrouped({
+          prompter,
+          store: authStore,
+          includeSkip: true,
+          config: nextConfig,
+          workspaceDir,
+        });
+      })()
+    : undefined;
+  const authChoice = opts.authChoice ?? promptedAuthChoice;
+  if (!authChoice) {
+    throw new Error("Failed to resolve auth choice.");
+  }
 
   if (authChoice === "custom-api-key") {
+    const { promptCustomApiConfig } = await import("../commands/onboard-custom.js");
     const customResult = await promptCustomApiConfig({
       prompter,
       runtime,
@@ -512,7 +514,34 @@ export async function runSetupWizard(
       secretInputMode: opts.secretInputMode,
     });
     nextConfig = customResult.config;
+  } else if (authChoice === "skip") {
+    // Explicit skip should stay cold: do not bootstrap auth/profile machinery
+    // or run model/auth checks when the caller already chose to skip setup.
+    if (authChoiceFromPrompt) {
+      const { applyPrimaryModel, promptDefaultModel } = await import("../commands/model-picker.js");
+      const modelSelection = await promptDefaultModel({
+        config: nextConfig,
+        prompter,
+        allowKeep: true,
+        ignoreAllowlist: true,
+        includeProviderPluginSetups: true,
+        workspaceDir,
+        runtime,
+      });
+      if (modelSelection.config) {
+        nextConfig = modelSelection.config;
+      }
+      if (modelSelection.model) {
+        nextConfig = applyPrimaryModel(nextConfig, modelSelection.model);
+      }
+
+      const { warnIfModelConfigLooksOff } = await import("../commands/auth-choice.js");
+      await warnIfModelConfigLooksOff(nextConfig, prompter);
+    }
   } else {
+    const { applyAuthChoice, resolvePreferredProviderForAuthChoice, warnIfModelConfigLooksOff } =
+      await import("../commands/auth-choice.js");
+    const { applyPrimaryModel, promptDefaultModel } = await import("../commands/model-picker.js");
     const authResult = await applyAuthChoice({
       authChoice,
       config: nextConfig,
@@ -525,44 +554,39 @@ export async function runSetupWizard(
       },
     });
     nextConfig = authResult.config;
-
     if (authResult.agentModelOverride) {
       nextConfig = applyPrimaryModel(nextConfig, authResult.agentModelOverride);
     }
-  }
 
-  const authChoiceModelSelectionPolicy =
-    authChoice === "custom-api-key"
-      ? undefined
-      : await resolveAuthChoiceModelSelectionPolicy({
-          authChoice,
-          config: nextConfig,
-          workspaceDir,
-          resolvePreferredProviderForAuthChoice,
-        });
-  const shouldPromptModelSelection =
-    authChoice !== "custom-api-key" &&
-    (authChoiceFromPrompt || authChoiceModelSelectionPolicy?.promptWhenAuthChoiceProvided === true);
-  if (shouldPromptModelSelection) {
-    const modelSelection = await promptDefaultModel({
+    const authChoiceModelSelectionPolicy = await resolveAuthChoiceModelSelectionPolicy({
+      authChoice,
       config: nextConfig,
-      prompter,
-      allowKeep: authChoiceModelSelectionPolicy?.allowKeepCurrent ?? true,
-      ignoreAllowlist: true,
-      includeProviderPluginSetups: true,
-      preferredProvider: authChoiceModelSelectionPolicy?.preferredProvider,
       workspaceDir,
-      runtime,
+      resolvePreferredProviderForAuthChoice,
     });
-    if (modelSelection.config) {
-      nextConfig = modelSelection.config;
+    const shouldPromptModelSelection =
+      authChoiceFromPrompt || authChoiceModelSelectionPolicy?.promptWhenAuthChoiceProvided;
+    if (shouldPromptModelSelection) {
+      const modelSelection = await promptDefaultModel({
+        config: nextConfig,
+        prompter,
+        allowKeep: authChoiceModelSelectionPolicy?.allowKeepCurrent ?? true,
+        ignoreAllowlist: true,
+        includeProviderPluginSetups: true,
+        preferredProvider: authChoiceModelSelectionPolicy?.preferredProvider,
+        workspaceDir,
+        runtime,
+      });
+      if (modelSelection.config) {
+        nextConfig = modelSelection.config;
+      }
+      if (modelSelection.model) {
+        nextConfig = applyPrimaryModel(nextConfig, modelSelection.model);
+      }
     }
-    if (modelSelection.model) {
-      nextConfig = applyPrimaryModel(nextConfig, modelSelection.model);
-    }
-  }
 
-  await warnIfModelConfigLooksOff(nextConfig, prompter);
+    await warnIfModelConfigLooksOff(nextConfig, prompter);
+  }
 
   const { configureGatewayForSetup } = await import("./setup.gateway-config.js");
   const gateway = await configureGatewayForSetup({

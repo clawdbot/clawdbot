@@ -280,6 +280,20 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).toContain('"conversation_label": "ops-room"');
   });
 
+  it("includes topic_name for forum chats", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      IsForum: true,
+      MessageThreadId: 42,
+      TopicName: "Deployments",
+    } as TemplateContext);
+
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["topic_id"]).toBe("42");
+    expect(conversationInfo["topic_name"]).toBe("Deployments");
+    expect(conversationInfo["is_forum"]).toBe(true);
+  });
+
   it("includes sender identifier in conversation info", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "group",

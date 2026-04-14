@@ -75,6 +75,7 @@ export type { RuntimeEnv } from "../runtime.js";
 export { formatDocsLink } from "../terminal/links.js";
 export { evaluateSenderGroupAccessForPolicy } from "./group-access.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
+export { createClackPrompter } from "../wizard/clack-prompter.js";
 export { feishuSetupWizard, feishuSetupAdapter } from "./feishu-setup.js";
 export { buildAgentMediaPayload } from "./agent-media-payload.js";
 export { readJsonFileWithFallback } from "./json-store.js";

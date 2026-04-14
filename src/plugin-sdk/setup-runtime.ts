@@ -1,5 +1,6 @@
 export type { OpenClawConfig } from "../config/config.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
+export { createClackPrompter } from "../wizard/clack-prompter.js";
 export type { ChannelSetupAdapter } from "../channels/plugins/types.adapters.js";
 export type {
   ChannelSetupDmPolicy,

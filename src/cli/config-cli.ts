@@ -67,6 +67,7 @@ type ConfigSetOperation = {
   requestedPath: PathSegment[];
   setPath: PathSegment[];
   value: unknown;
+  schemaValidated?: boolean;
   touchedSecretTargetPath?: string;
   touchedProviderAlias?: string;
   assignedRef?: SecretRef;
@@ -615,6 +616,7 @@ function buildRefAssignmentOperation(params: {
       requestedPath: params.requestedPath,
       setPath: resolved.refPathSegments,
       value: params.ref,
+      schemaValidated: true,
       touchedSecretTargetPath: toDotPath(resolved.pathSegments),
       assignedRef: params.ref,
       ...(resolved.providerId ? { touchedProviderAlias: resolved.providerId } : {}),
@@ -625,6 +627,7 @@ function buildRefAssignmentOperation(params: {
     requestedPath: params.requestedPath,
     setPath: params.requestedPath,
     value: params.ref,
+    schemaValidated: true,
     touchedSecretTargetPath: resolved
       ? toDotPath(resolved.pathSegments)
       : toDotPath(params.requestedPath),
@@ -693,6 +696,7 @@ function parseBatchOperations(entries: ConfigSetBatchEntry[]): ConfigSetOperatio
         requestedPath: path,
         setPath: path,
         value: validated.data,
+        schemaValidated: true,
         touchedProviderAlias: alias,
       });
       continue;
@@ -772,6 +776,7 @@ function buildSingleSetOperations(params: {
         requestedPath: parsedPath,
         setPath: parsedPath,
         value: provider,
+        schemaValidated: true,
         touchedProviderAlias: alias,
       },
     ];
@@ -916,8 +921,13 @@ function selectDryRunRefsForResolution(params: { refs: SecretRef[]; allowExecInD
   return { refsToResolve, skippedExecRefs };
 }
 
-function collectDryRunSchemaErrors(config: OpenClawConfig): ConfigSetDryRunError[] {
-  const validated = validateConfigObjectRaw(config);
+function collectDryRunSchemaErrors(params: {
+  config: OpenClawConfig;
+  operations: ReadonlyArray<ConfigSetOperation>;
+}): ConfigSetDryRunError[] {
+  const validated = validateConfigObjectRaw(params.config, {
+    touchedPaths: params.operations.map((operation) => operation.setPath),
+  });
   if (validated.ok) {
     return [];
   }
@@ -1033,6 +1043,9 @@ export async function runConfigSet(opts: {
     if (opts.cliOptions.dryRun) {
       const hasJsonMode = operations.some((operation) => operation.inputMode === "json");
       const hasBuilderMode = operations.some((operation) => operation.inputMode === "builder");
+      const requiresFullSchemaValidation = operations.some(
+        (operation) => operation.inputMode === "json" && operation.schemaValidated !== true,
+      );
       const refs =
         hasJsonMode || hasBuilderMode
           ? collectDryRunRefs({
@@ -1045,7 +1058,7 @@ export async function runConfigSet(opts: {
         allowExecInDryRun: Boolean(opts.cliOptions.allowExec),
       });
       const errors: ConfigSetDryRunError[] = [];
-      if (!hasJsonMode && policyIssueLines.length > 0) {
+      if ((!hasJsonMode || !requiresFullSchemaValidation) && policyIssueLines.length > 0) {
         errors.push(
           ...policyIssueLines.map((message) => ({
             kind: "schema" as const,
@@ -1053,8 +1066,13 @@ export async function runConfigSet(opts: {
           })),
         );
       }
-      if (hasJsonMode) {
-        errors.push(...collectDryRunSchemaErrors(nextConfig));
+      if (requiresFullSchemaValidation) {
+        errors.push(
+          ...collectDryRunSchemaErrors({
+            config: nextConfig,
+            operations,
+          }),
+        );
       }
       if (hasJsonMode || hasBuilderMode) {
         errors.push(
@@ -1077,7 +1095,7 @@ export async function runConfigSet(opts: {
         configPath: shortenHomePath(snapshot.path),
         inputModes: [...new Set(operations.map((operation) => operation.inputMode))],
         checks: {
-          schema: hasJsonMode || policyIssueLines.length > 0,
+          schema: requiresFullSchemaValidation || policyIssueLines.length > 0,
           resolvability: hasJsonMode || hasBuilderMode,
           resolvabilityComplete:
             (hasJsonMode || hasBuilderMode) && selectedDryRunRefs.skippedExecRefs.length === 0,

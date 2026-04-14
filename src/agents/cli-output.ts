@@ -12,8 +12,10 @@ type CliUsage = {
 
 export type CliOutput = {
   text: string;
+  rawText?: string;
   sessionId?: string;
   usage?: CliUsage;
+  finalPromptText?: string;
 };
 
 export type CliStreamingDelta = {
@@ -149,18 +151,30 @@ function unwrapCliErrorText(raw: string): string {
 }
 
 function toCliUsage(raw: Record<string, unknown>): CliUsage | undefined {
+  const readNestedCached = (key: "input_tokens_details" | "prompt_tokens_details") => {
+    const nested = raw[key];
+    if (!isRecord(nested)) {
+      return undefined;
+    }
+    return typeof nested.cached_tokens === "number" && nested.cached_tokens > 0
+      ? nested.cached_tokens
+      : undefined;
+  };
   const pick = (key: string) =>
     typeof raw[key] === "number" && raw[key] > 0 ? raw[key] : undefined;
   const totalInput = pick("input_tokens") ?? pick("inputTokens");
   const output = pick("output_tokens") ?? pick("outputTokens");
+  const nestedCached =
+    readNestedCached("input_tokens_details") ?? readNestedCached("prompt_tokens_details");
   const cacheRead =
     pick("cache_read_input_tokens") ??
     pick("cached_input_tokens") ??
     pick("cacheRead") ??
-    pick("cached");
+    pick("cached") ??
+    nestedCached;
   const input =
     pick("input") ??
-    (Object.hasOwn(raw, "cached") && typeof totalInput === "number"
+    ((Object.hasOwn(raw, "cached") || nestedCached !== undefined) && typeof totalInput === "number"
       ? Math.max(0, totalInput - (cacheRead ?? 0))
       : totalInput);
   const cacheWrite =

@@ -60,13 +60,31 @@ export async function tryDispatchAcpReplyHook(
   event: PluginHookReplyDispatchEvent,
   ctx: PluginHookReplyDispatchContext,
 ): Promise<PluginHookReplyDispatchResult | void> {
-  if (event.sendPolicy === "deny" && !hasExplicitCommandCandidate(event.ctx)) {
+  // Under sendPolicy: "deny", ACP-bound sessions still need their turns to flow
+  // through acpManager.runTurn so session state, tool calls, and memory stay
+  // consistent — only outbound delivery should be suppressed. The ACP delivery
+  // path (dispatch-acp-delivery.ts) honors event.suppressUserDelivery to drop
+  // user-facing sends. If suppressUserDelivery is not set under deny, we cannot
+  // safely route through ACP (delivery would leak), so fall back to the
+  // embedded reply path unless an explicit command candidate or tail dispatch
+  // warrants going through ACP anyway.
+  if (
+    event.sendPolicy === "deny" &&
+    !event.suppressUserDelivery &&
+    !hasExplicitCommandCandidate(event.ctx) &&
+    !event.isTailDispatch
+  ) {
     return;
   }
   const runtime = await loadDispatchAcpRuntime();
   const bypassForCommand = await runtime.shouldBypassAcpDispatchForCommand(event.ctx, ctx.cfg);
 
-  if (event.sendPolicy === "deny" && !bypassForCommand) {
+  if (
+    event.sendPolicy === "deny" &&
+    !event.suppressUserDelivery &&
+    !bypassForCommand &&
+    !event.isTailDispatch
+  ) {
     return;
   }
 

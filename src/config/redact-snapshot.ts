@@ -423,12 +423,16 @@ export function redactConfigSnapshot(
     // properly redacted all sensitive data. Handing out a partially or, worse,
     // unredacted config string would be bad.
     // Therefore, the only safe route is to reject handling out broken configs.
+    const redactedConfig = {} as ConfigFileSnapshot["config"];
+    const redactedResolved = {} as ConfigFileSnapshot["resolved"];
     return {
       ...snapshot,
-      config: {},
+      sourceConfig: redactedResolved,
+      runtimeConfig: redactedConfig,
+      config: redactedConfig,
       raw: null,
       parsed: null,
-      resolved: {},
+      resolved: redactedResolved,
     };
   }
   // else: snapshot.config must be valid and populated, as that is what
@@ -455,6 +459,8 @@ export function redactConfigSnapshot(
 
   return {
     ...snapshot,
+    sourceConfig: redactedResolved,
+    runtimeConfig: redactedConfig,
     config: redactedConfig,
     raw: redactedRaw,
     parsed: redactedParsed,

@@ -177,6 +177,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.loopDetection.enabled": "Tool-loop Detection",
   "tools.loopDetection.historySize": "Tool-loop History Size",
   "tools.loopDetection.warningThreshold": "Tool-loop Warning Threshold",
+  "tools.loopDetection.unknownToolThreshold": "Unknown-tool Loop Threshold",
   "tools.loopDetection.criticalThreshold": "Tool-loop Critical Threshold",
   "tools.loopDetection.globalCircuitBreakerThreshold": "Tool-loop Global Circuit Breaker Threshold",
   "tools.loopDetection.detectors.genericRepeat": "Tool-loop Generic Repeat Detection",

@@ -1,5 +1,5 @@
 // Manual facade. Keep loader boundary explicit.
-type FacadeModule = typeof import("@openclaw/feishu/api.js");
+type FacadeModule = typeof import("@openclaw/feishu/contract-api.js");
 import {
   createLazyFacadeArrayValue,
   createLazyFacadeObjectValue,
@@ -9,7 +9,7 @@ import {
 function loadFacadeModule(): FacadeModule {
   return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({
     dirName: "feishu",
-    artifactBasename: "api.js",
+    artifactBasename: "contract-api.js",
   });
 }
 export const buildFeishuConversationId: FacadeModule["buildFeishuConversationId"] = ((...args) =>

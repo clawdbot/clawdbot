@@ -1220,6 +1220,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                     source: record.source,
                     message: `context engine already registered: ${id} (${result.existingOwner})`,
                   });
+                  return;
+                }
+                if (!record.contextEngineIds?.includes(id)) {
+                  record.contextEngineIds = [...(record.contextEngineIds ?? []), id];
                 }
               },
               registerCompactionProvider: (

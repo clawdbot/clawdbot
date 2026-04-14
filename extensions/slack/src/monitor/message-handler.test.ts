@@ -32,6 +32,7 @@ vi.mock("./thread-resolution.js", () => ({
 
 function createContext(overrides?: {
   markMessageSeen?: (channel: string | undefined, ts: string | undefined) => boolean;
+  releaseSeenMessage?: (channel: string | undefined, ts: string | undefined) => void;
 }) {
   return {
     cfg: {},
@@ -42,11 +43,14 @@ function createContext(overrides?: {
     runtime: {},
     markMessageSeen: (channel: string | undefined, ts: string | undefined) =>
       overrides?.markMessageSeen?.(channel, ts) ?? false,
+    releaseSeenMessage: (channel: string | undefined, ts: string | undefined) =>
+      overrides?.releaseSeenMessage?.(channel, ts),
   } as Parameters<typeof createSlackMessageHandler>[0]["ctx"];
 }
 
 function createHandlerWithTracker(overrides?: {
   markMessageSeen?: (channel: string | undefined, ts: string | undefined) => boolean;
+  releaseSeenMessage?: (channel: string | undefined, ts: string | undefined) => void;
 }) {
   const trackEvent = vi.fn();
   const handler = createSlackMessageHandler({

@@ -44,6 +44,7 @@ export async function persistInlineDirectives(params: {
   messageProvider?: string;
   surface?: string;
   gatewayClientScopes?: string[];
+  senderIsOwner?: boolean;
 }): Promise<{ provider: string; model: string; contextTokens: number }> {
   const {
     directives,
@@ -73,6 +74,7 @@ export async function persistInlineDirectives(params: {
     surface: params.surface,
     gatewayClientScopes: params.gatewayClientScopes,
   });
+  const delegatedTraceAllowed = (params.gatewayClientScopes ?? []).includes("operator.admin");
   const activeAgentId = sessionKey
     ? resolveSessionAgentId({ sessionKey, config: cfg })
     : resolveDefaultAgentId(cfg);
@@ -105,7 +107,11 @@ export async function persistInlineDirectives(params: {
       applyVerboseOverride(sessionEntry, directives.verboseLevel);
       updated = true;
     }
-    if (directives.hasTraceDirective && directives.traceLevel) {
+    if (
+      directives.hasTraceDirective &&
+      directives.traceLevel &&
+      (params.senderIsOwner || delegatedTraceAllowed)
+    ) {
       applyTraceOverride(sessionEntry, directives.traceLevel);
       updated = true;
     }

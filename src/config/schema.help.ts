@@ -543,6 +543,8 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.loopDetection.historySize": "Tool history window size for loop detection (default: 30).",
   "tools.loopDetection.warningThreshold":
     "Warning threshold for repetitive patterns when detector is enabled (default: 10).",
+  "tools.loopDetection.unknownToolThreshold":
+    "Block repeated calls to the same unavailable tool after this many misses (default: 10).",
   "tools.loopDetection.criticalThreshold":
     "Critical threshold for repetitive patterns when detector is enabled (default: 20).",
   "tools.loopDetection.globalCircuitBreakerThreshold":

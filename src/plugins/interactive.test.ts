@@ -780,4 +780,92 @@ describe("plugin interactive handlers", () => {
     });
     expect(handler).toHaveBeenCalledTimes(2);
   });
+
+  it("dedupes concurrent interactive dispatches while a handler is still running", async () => {
+    let releaseHandler!: () => void;
+    const handlerGate = new Promise<void>((resolve) => {
+      releaseHandler = resolve;
+    });
+    const handler = vi.fn(async () => {
+      await handlerGate;
+      return { handled: true };
+    });
+    expect(
+      registerPluginInteractiveHandler("codex-plugin", {
+        channel: "telegram",
+        namespace: "codex",
+        handler,
+      }),
+    ).toEqual({ ok: true });
+
+    const baseParams = createTelegramDispatchParams({
+      data: "codex:resume:thread-1",
+      callbackId: "cb-concurrent",
+    });
+
+    const firstDispatch = dispatchInteractive(baseParams);
+    await vi.waitFor(() => {
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+    const duplicateDispatch = await dispatchInteractive(baseParams);
+
+    expect(duplicateDispatch).toEqual({
+      matched: true,
+      handled: true,
+      duplicate: true,
+    });
+
+    releaseHandler();
+
+    await expect(firstDispatch).resolves.toEqual({
+      matched: true,
+      handled: true,
+      duplicate: false,
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases inflight interactive dedupe keys after a handler failure", async () => {
+    let rejectHandler!: (error: Error) => void;
+    const handlerGate = new Promise<never>((_, reject) => {
+      rejectHandler = reject;
+    });
+    const handler = vi
+      .fn(async () => ({ handled: true }))
+      .mockImplementationOnce(async () => await handlerGate)
+      .mockResolvedValueOnce({ handled: true });
+    expect(
+      registerPluginInteractiveHandler("codex-plugin", {
+        channel: "telegram",
+        namespace: "codex",
+        handler,
+      }),
+    ).toEqual({ ok: true });
+
+    const baseParams = createTelegramDispatchParams({
+      data: "codex:resume:thread-1",
+      callbackId: "cb-retry-after-failure",
+    });
+
+    const firstDispatch = dispatchInteractive(baseParams);
+    await vi.waitFor(() => {
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    await expect(dispatchInteractive(baseParams)).resolves.toEqual({
+      matched: true,
+      handled: true,
+      duplicate: true,
+    });
+
+    rejectHandler(new Error("boom"));
+    await expect(firstDispatch).rejects.toThrow("boom");
+
+    await expect(dispatchInteractive(baseParams)).resolves.toEqual({
+      matched: true,
+      handled: true,
+      duplicate: false,
+    });
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
 });

@@ -4,8 +4,15 @@ import {
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
-import { createDedupeCache } from "openclaw/plugin-sdk/infra-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
+import {
+  buildDiscordInboundReplayKey,
+  claimDiscordInboundReplay,
+  commitDiscordInboundReplay,
+  createDiscordInboundReplayGuard,
+  DiscordRetryableInboundError,
+  releaseDiscordInboundReplay,
+} from "./inbound-dedupe.js";
 import { buildDiscordInboundJob } from "./inbound-job.js";
 import {
   createDiscordInboundWorker,
@@ -40,25 +47,8 @@ export type DiscordMessageHandlerWithLifecycle = DiscordMessageHandler & {
   deactivate: () => void;
 };
 
-const RECENT_DISCORD_MESSAGE_TTL_MS = 5 * 60_000;
-const RECENT_DISCORD_MESSAGE_MAX = 5000;
-
-function buildDiscordInboundDedupeKey(params: {
-  accountId: string;
-  data: DiscordMessageEvent;
-}): string | null {
-  const messageId = params.data.message?.id?.trim();
-  if (!messageId) {
-    return null;
-  }
-  const channelId = resolveDiscordMessageChannelId({
-    message: params.data.message,
-    eventChannelId: params.data.channel_id,
-  });
-  if (!channelId) {
-    return null;
-  }
-  return `${params.accountId}:${channelId}:${messageId}`;
+function isNonEmptyString(value: string | undefined): value is string {
+  return typeof value === "string" && value.length > 0;
 }
 
 export function createDiscordMessageHandler(
@@ -75,22 +65,21 @@ export function createDiscordMessageHandler(
     "group-mentions";
   const preflightDiscordMessageImpl =
     params.__testing?.preflightDiscordMessage ?? preflightDiscordMessage;
+  const replayGuard = createDiscordInboundReplayGuard();
   const inboundWorker = createDiscordInboundWorker({
     runtime: params.runtime,
     setStatus: params.setStatus,
     abortSignal: params.abortSignal,
     runTimeoutMs: params.workerRunTimeoutMs,
+    replayGuard,
     __testing: params.__testing,
-  });
-  const recentInboundMessages = createDedupeCache({
-    ttlMs: RECENT_DISCORD_MESSAGE_TTL_MS,
-    maxSize: RECENT_DISCORD_MESSAGE_MAX,
   });
 
   const { debouncer } = createChannelInboundDebouncer<{
     data: DiscordMessageEvent;
     client: Client;
     abortSignal?: AbortSignal;
+    replayKey?: string;
   }>({
     cfg: params.cfg,
     channel: "discord",
@@ -129,70 +118,90 @@ export function createDiscordMessageHandler(
       if (!last) {
         return;
       }
+      const replayKeys = entries.map((entry) => entry.replayKey).filter(isNonEmptyString);
       const abortSignal = last.abortSignal;
       if (abortSignal?.aborted) {
+        releaseDiscordInboundReplay({
+          replayKeys,
+          error: abortSignal.reason,
+          replayGuard,
+        });
         return;
       }
-      if (entries.length === 1) {
+      try {
+        if (entries.length === 1) {
+          const ctx = await preflightDiscordMessageImpl({
+            ...params,
+            ackReactionScope,
+            groupPolicy,
+            abortSignal,
+            data: last.data,
+            client: last.client,
+          });
+          if (!ctx) {
+            await commitDiscordInboundReplay({ replayKeys, replayGuard });
+            return;
+          }
+          applyImplicitReplyBatchGate(ctx, params.replyToMode, false);
+          inboundWorker.enqueue(buildDiscordInboundJob(ctx, { replayKeys }));
+          return;
+        }
+        const combinedBaseText = entries
+          .map((entry) =>
+            resolveDiscordMessageText(entry.data.message, { includeForwarded: false }),
+          )
+          .filter(Boolean)
+          .join("\n");
+        const syntheticMessage = {
+          ...last.data.message,
+          content: combinedBaseText,
+          attachments: [],
+          message_snapshots: (last.data.message as { message_snapshots?: unknown })
+            .message_snapshots,
+          messageSnapshots: (last.data.message as { messageSnapshots?: unknown }).messageSnapshots,
+          rawData: {
+            ...(last.data.message as { rawData?: Record<string, unknown> }).rawData,
+          },
+        };
+        const syntheticData: DiscordMessageEvent = {
+          ...last.data,
+          message: syntheticMessage,
+        };
         const ctx = await preflightDiscordMessageImpl({
           ...params,
           ackReactionScope,
           groupPolicy,
           abortSignal,
-          data: last.data,
+          data: syntheticData,
           client: last.client,
         });
         if (!ctx) {
+          await commitDiscordInboundReplay({ replayKeys, replayGuard });
           return;
         }
-        applyImplicitReplyBatchGate(ctx, params.replyToMode, false);
-        inboundWorker.enqueue(buildDiscordInboundJob(ctx));
-        return;
-      }
-      const combinedBaseText = entries
-        .map((entry) => resolveDiscordMessageText(entry.data.message, { includeForwarded: false }))
-        .filter(Boolean)
-        .join("\n");
-      const syntheticMessage = {
-        ...last.data.message,
-        content: combinedBaseText,
-        attachments: [],
-        message_snapshots: (last.data.message as { message_snapshots?: unknown }).message_snapshots,
-        messageSnapshots: (last.data.message as { messageSnapshots?: unknown }).messageSnapshots,
-        rawData: {
-          ...(last.data.message as { rawData?: Record<string, unknown> }).rawData,
-        },
-      };
-      const syntheticData: DiscordMessageEvent = {
-        ...last.data,
-        message: syntheticMessage,
-      };
-      const ctx = await preflightDiscordMessageImpl({
-        ...params,
-        ackReactionScope,
-        groupPolicy,
-        abortSignal,
-        data: syntheticData,
-        client: last.client,
-      });
-      if (!ctx) {
-        return;
-      }
-      applyImplicitReplyBatchGate(ctx, params.replyToMode, true);
-      if (entries.length > 1) {
-        const ids = entries.map((entry) => entry.data.message?.id).filter(Boolean) as string[];
-        if (ids.length > 0) {
-          const ctxBatch = ctx as typeof ctx & {
-            MessageSids?: string[];
-            MessageSidFirst?: string;
-            MessageSidLast?: string;
-          };
-          ctxBatch.MessageSids = ids;
-          ctxBatch.MessageSidFirst = ids[0];
-          ctxBatch.MessageSidLast = ids[ids.length - 1];
+        applyImplicitReplyBatchGate(ctx, params.replyToMode, true);
+        if (entries.length > 1) {
+          const ids = entries.map((entry) => entry.data.message?.id).filter(isNonEmptyString);
+          if (ids.length > 0) {
+            const ctxBatch = ctx as typeof ctx & {
+              MessageSids?: string[];
+              MessageSidFirst?: string;
+              MessageSidLast?: string;
+            };
+            ctxBatch.MessageSids = ids;
+            ctxBatch.MessageSidFirst = ids[0];
+            ctxBatch.MessageSidLast = ids[ids.length - 1];
+          }
         }
+        inboundWorker.enqueue(buildDiscordInboundJob(ctx, { replayKeys }));
+      } catch (error) {
+        if (error instanceof DiscordRetryableInboundError) {
+          releaseDiscordInboundReplay({ replayKeys, error, replayGuard });
+        } else {
+          await commitDiscordInboundReplay({ replayKeys, replayGuard });
+        }
+        throw error;
       }
-      inboundWorker.enqueue(buildDiscordInboundJob(ctx));
     },
     onError: (err) => {
       params.runtime.error?.(danger(`discord debounce flush failed: ${String(err)}`));
@@ -213,15 +222,25 @@ export function createDiscordMessageHandler(
       if (params.botUserId && msgAuthorId === params.botUserId) {
         return;
       }
-      const dedupeKey = buildDiscordInboundDedupeKey({
+      const replayKey = buildDiscordInboundReplayKey({
         accountId: params.accountId,
         data,
       });
-      if (dedupeKey && recentInboundMessages.check(dedupeKey)) {
+      if (
+        !(await claimDiscordInboundReplay({
+          replayKey,
+          replayGuard,
+        }))
+      ) {
         return;
       }
 
-      await debouncer.enqueue({ data, client, abortSignal: options?.abortSignal });
+      await debouncer.enqueue({
+        data,
+        client,
+        abortSignal: options?.abortSignal,
+        replayKey: replayKey ?? undefined,
+      });
     } catch (err) {
       params.runtime.error?.(danger(`handler failed: ${String(err)}`));
     }

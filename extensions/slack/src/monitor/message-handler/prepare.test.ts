@@ -642,6 +642,7 @@ describe("prepareSlackMessage sender prefix", () => {
       removeAckAfterReply: false,
       logger: { info: vi.fn(), warn: vi.fn() },
       markMessageSeen: () => false,
+      releaseSeenMessage: () => {},
       shouldDropMismatchedSlackEvent: () => false,
       resolveSlackSystemEventSessionKey: () => "agent:main:slack:channel:c1",
       isChannelAllowed: () => true,

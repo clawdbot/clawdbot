@@ -78,9 +78,12 @@ describe("handleCommands send policy", () => {
     vi.clearAllMocks();
   });
 
-  it("prefers the target session entry from sessionStore for send policy checks", async () => {
+  it("allows processing to continue even when send policy is deny (#53328)", async () => {
+    // sendPolicy deny now only suppresses outbound delivery, not inbound processing.
+    // The deny gate moved to dispatch-from-config.ts where it suppresses delivery
+    // after the agent has processed the message.
     const result = await handleCommands(makeParams());
 
-    expect(result).toEqual({ shouldContinue: false });
+    expect(result).toEqual({ shouldContinue: true });
   });
 });

@@ -1,9 +1,11 @@
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+export {
+  AUTH_PROFILE_FILENAME,
+  AUTH_STATE_FILENAME,
+  LEGACY_AUTH_FILENAME,
+} from "./path-constants.js";
 
 export const AUTH_STORE_VERSION = 1;
-export const AUTH_PROFILE_FILENAME = "auth-profiles.json";
-export const AUTH_STATE_FILENAME = "auth-state.json";
-export const LEGACY_AUTH_FILENAME = "auth.json";
 
 export const CLAUDE_CLI_PROFILE_ID = "anthropic:claude-cli";
 export const CODEX_CLI_PROFILE_ID = "openai-codex:codex-cli";

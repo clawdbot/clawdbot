@@ -1,18 +1,17 @@
 import { formatRawAssistantErrorForUi } from "../agents/pi-embedded-helpers.js";
-import type { SessionEntry } from "../config/sessions.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import type { FallbackNoticeState } from "../status/fallback-notice-state.js";
 import { formatProviderModelRef } from "./model-runtime.js";
 import type { RuntimeFallbackAttempt } from "./reply/agent-runner-execution.js";
+export {
+  resolveActiveFallbackState,
+  type FallbackNoticeState,
+} from "../status/fallback-notice-state.js";
 
 const FALLBACK_REASON_PART_MAX = 80;
 const TRANSIENT_FALLBACK_REASONS = new Set(["rate_limit", "overloaded", "timeout"]);
 const TRANSIENT_ERROR_DETAIL_HINT_RE =
   /\b(?:429|5\d\d|too many requests|usage limit|quota|try again in|retry[- ]after|seconds?|minutes?|hours?|temporarily unavailable|overloaded|service unavailable|throttl)\b/i;
-
-export type FallbackNoticeState = Pick<
-  SessionEntry,
-  "fallbackNoticeSelectedModel" | "fallbackNoticeActiveModel" | "fallbackNoticeReason"
->;
 
 function truncateFallbackReasonPart(value: string, max = FALLBACK_REASON_PART_MAX): string {
   const text = value.replace(/\s+/g, " ").trim();
@@ -108,24 +107,6 @@ export function buildFallbackClearedNotice(params: {
     return `↪️ Model Fallback cleared: ${selected} (was ${previous})`;
   }
   return `↪️ Model Fallback cleared: ${selected}`;
-}
-
-export function resolveActiveFallbackState(params: {
-  selectedModelRef: string;
-  activeModelRef: string;
-  state?: FallbackNoticeState;
-}): { active: boolean; reason?: string } {
-  const selected = normalizeOptionalString(params.state?.fallbackNoticeSelectedModel);
-  const active = normalizeOptionalString(params.state?.fallbackNoticeActiveModel);
-  const reason = normalizeOptionalString(params.state?.fallbackNoticeReason);
-  const fallbackActive =
-    params.selectedModelRef !== params.activeModelRef &&
-    selected === params.selectedModelRef &&
-    active === params.activeModelRef;
-  return {
-    active: fallbackActive,
-    reason: fallbackActive ? reason : undefined,
-  };
 }
 
 export type ResolvedFallbackTransition = {

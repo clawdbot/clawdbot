@@ -533,6 +533,49 @@ describe("session-memory hook", () => {
     expect(files.length).toBe(1);
   });
 
+  it("uses agent-specific workspace when workspaceDir is provided for non-default agent (gateway path regression)", async () => {
+    const defaultWorkspace = await createCaseWorkspace("workspace-default");
+    const customAgentWorkspace = await createCaseWorkspace("workspace-custom-agent");
+    const sessionsDir = path.join(customAgentWorkspace, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const sessionFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "custom-agent-session.jsonl",
+      content: createMockSessionContent([
+        { role: "user", content: "Custom agent conversation" },
+        { role: "assistant", content: "Stored in agent workspace" },
+      ]),
+    });
+
+    // Simulate the gateway internal hook path: workspaceDir is resolved and
+    // passed explicitly in context (fix for #64528).  Without the fix, the
+    // gateway path omitted workspaceDir, causing the handler to fall back to
+    // the default workspace via resolveAgentWorkspaceDir — which for a
+    // default-agent sessionKey would resolve to the shared default workspace.
+    const { files, memoryContent } = await runNewWithPreviousSessionEntry({
+      tempDir: customAgentWorkspace,
+      cfg: {
+        agents: {
+          defaults: { workspace: defaultWorkspace },
+          list: [{ id: "custom-agent", workspace: customAgentWorkspace }],
+        },
+      } satisfies OpenClawConfig,
+      sessionKey: "agent:main:main",
+      workspaceDirOverride: customAgentWorkspace,
+      previousSessionEntry: {
+        sessionId: "custom-agent-session",
+        sessionFile,
+      },
+    });
+
+    expect(files.length).toBe(1);
+    expect(memoryContent).toContain("user: Custom agent conversation");
+    expect(memoryContent).toContain("assistant: Stored in agent workspace");
+    // Verify memory did NOT leak to the default workspace
+    await expect(fs.access(path.join(defaultWorkspace, "memory"))).rejects.toThrow();
+  });
+
   it("handles session files with fewer messages than requested", async () => {
     const sessionContent = createMockSessionContent([
       { role: "user", content: "Only message 1" },

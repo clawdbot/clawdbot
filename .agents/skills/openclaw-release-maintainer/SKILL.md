@@ -120,6 +120,10 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
   `.github/workflows/openclaw-npm-release.yml`, but it still needs a valid
   `NPM_TOKEN` because `npm dist-tag` management is separate from trusted
   publishing.
+- Direct stable publishes can also run the same workflow with
+  `sync_stable_dist_tags=true` to point both `latest` and `beta` at the
+  already-published stable version. This also needs the `npm-release`
+  environment approval and `NPM_TOKEN`.
 - The publish run must be started manually with `workflow_dispatch`.
 - The npm workflow and the private mac publish workflow accept
   `preflight_only=true` to run validation/build/package steps without uploading
@@ -178,7 +182,10 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
   plan does not yet support required reviewers there, do not assume the
   environment alone is the approval boundary; rely on private repo access and
   CODEOWNERS until those settings can be enabled.
-- Do not use `NPM_TOKEN` or the plugin OTP flow for OpenClaw releases.
+- Do not use `NPM_TOKEN` or the plugin OTP flow for the OpenClaw package
+  publish path; package publishing uses trusted publishing.
+- Use `NPM_TOKEN` only for explicit npm dist-tag management modes, because npm
+  does not support trusted publishing for `npm dist-tag add`.
 - `@openclaw/*` plugin publishes use a separate maintainer-only flow.
 - Only publish plugins that already exist on npm; bundled disk-tree-only plugins stay unpublished.
 
@@ -248,19 +255,25 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     passes with the same stable tag, `promote_beta_to_latest=true`,
     `preflight_only=false`, empty `preflight_run_id`, and `npm_dist_tag=beta`,
     then verify `latest` now points at that version.
-17. Start
+17. If the stable release was published directly to `latest` and `beta` should
+    follow it, start `.github/workflows/openclaw-npm-release.yml` again with
+    the same stable tag, `sync_stable_dist_tags=true`,
+    `promote_beta_to_latest=false`, `preflight_only=false`, empty
+    `preflight_run_id`, and `npm_dist_tag=latest`, then verify both `latest`
+    and `beta` point at that version.
+18. Start
     `openclaw/releases-private/.github/workflows/openclaw-macos-publish.yml`
     for the real publish with the successful private mac `preflight_run_id` and
     wait for success.
-18. Verify the successful real private mac run uploaded the `.zip`, `.dmg`,
+19. Verify the successful real private mac run uploaded the `.zip`, `.dmg`,
     and `.dSYM.zip` artifacts to the existing GitHub release in
     `openclaw/openclaw`.
-19. For stable releases, download `macos-appcast-<tag>` from the successful
+20. For stable releases, download `macos-appcast-<tag>` from the successful
     private mac run, update `appcast.xml` on `main`, and verify the feed.
-20. For beta releases, publish the mac assets but expect no shared production
+21. For beta releases, publish the mac assets but expect no shared production
     `appcast.xml` artifact and do not update the shared production feed unless a
     separate beta feed exists.
-21. After publish, verify npm and the attached release artifacts.
+22. After publish, verify npm and the attached release artifacts.
 
 ## GHSA advisory work
 

@@ -712,6 +712,52 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.run.extraSystemPrompt ?? "").not.toContain("Runtime System Events");
   });
 
+  it("downgrades sender ownership when drained system events include untrusted lines", async () => {
+    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(
+      "System (untrusted): [t] External webhook payload.",
+    );
+    const params = baseParams();
+    params.command = {
+      ...(params.command as Record<string, unknown>),
+      senderIsOwner: true,
+    } as never;
+
+    await runPreparedReply(params);
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.followupRun.run.senderIsOwner).toBe(false);
+  });
+
+  it("keeps sender ownership when drained system events are trusted", async () => {
+    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce("System: [t] Trusted event.");
+    const params = baseParams();
+    params.command = {
+      ...(params.command as Record<string, unknown>),
+      senderIsOwner: true,
+    } as never;
+
+    await runPreparedReply(params);
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.followupRun.run.senderIsOwner).toBe(true);
+  });
+
+  it("does not downgrade sender ownership when trusted event text contains the untrusted marker", async () => {
+    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(
+      "System: [t] Relay text mentions System (untrusted): but event is trusted.",
+    );
+    const params = baseParams();
+    params.command = {
+      ...(params.command as Record<string, unknown>),
+      senderIsOwner: true,
+    } as never;
+
+    await runPreparedReply(params);
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.followupRun.run.senderIsOwner).toBe(true);
+  });
+
   it("preserves first-token think hint when system events are prepended", async () => {
     // drainFormattedSystemEvents returns just the events block; the caller prepends it.
     // The hint must be extracted from the user body BEFORE prepending, so "System:"

@@ -59,11 +59,12 @@ export async function fetchBotIdentityForMonitor(
     return { botOpenId: result.botOpenId, botName: result.botName };
   }
 
-  if (options.abortSignal?.aborted || isAbortErrorMessage(result.error)) {
+  const probeError = result.error ?? undefined;
+  if (options.abortSignal?.aborted || isAbortErrorMessage(probeError)) {
     return {};
   }
 
-  if (isTimeoutErrorMessage(result.error)) {
+  if (isTimeoutErrorMessage(probeError)) {
     const error = options.runtime?.error ?? console.error;
     error(
       `feishu[${account.accountId}]: bot info probe timed out after ${timeoutMs}ms; continuing startup`,

@@ -1,8 +1,12 @@
+import { createClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
+  buildMattermostModelPickerSelectMessageSid,
   evaluateMattermostMentionGate,
+  MattermostRetryableInboundError,
+  processMattermostReplayGuardedPost,
   resolveMattermostReactionChannelId,
   resolveMattermostEffectiveReplyToId,
   resolveMattermostReplyRootId,
@@ -278,6 +282,135 @@ describe("resolveMattermostThreadSessionContext", () => {
       sessionKey: "agent:main:mattermost:default:user-1",
       parentSessionKey: undefined,
     });
+  });
+});
+
+describe("processMattermostReplayGuardedPost", () => {
+  it("skips duplicate message batches after a successful commit", async () => {
+    const replayGuard = createClaimableDedupe({
+      ttlMs: 10_000,
+      memoryMaxSize: 100,
+    });
+    const handlePost = vi.fn(async () => undefined);
+
+    await expect(
+      processMattermostReplayGuardedPost({
+        replayGuard,
+        accountId: "acct",
+        messageIds: ["post-1"],
+        handlePost,
+      }),
+    ).resolves.toBe("processed");
+    await expect(
+      processMattermostReplayGuardedPost({
+        replayGuard,
+        accountId: "acct",
+        messageIds: ["post-1"],
+        handlePost,
+      }),
+    ).resolves.toBe("duplicate");
+
+    expect(handlePost).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases claims for explicit retryable failures", async () => {
+    const replayGuard = createClaimableDedupe({
+      ttlMs: 10_000,
+      memoryMaxSize: 100,
+    });
+    let attempts = 0;
+    const handlePost = vi.fn(async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new MattermostRetryableInboundError("retry me");
+      }
+    });
+
+    await expect(
+      processMattermostReplayGuardedPost({
+        replayGuard,
+        accountId: "acct",
+        messageIds: ["post-2"],
+        handlePost,
+      }),
+    ).rejects.toThrow("retry me");
+    await expect(
+      processMattermostReplayGuardedPost({
+        replayGuard,
+        accountId: "acct",
+        messageIds: ["post-2"],
+        handlePost,
+      }),
+    ).resolves.toBe("processed");
+
+    expect(handlePost).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps replay committed after a non-retryable failure", async () => {
+    const replayGuard = createClaimableDedupe({
+      ttlMs: 10_000,
+      memoryMaxSize: 100,
+    });
+    const visibleSideEffect = vi.fn();
+    const handlePost = vi.fn(async () => {
+      visibleSideEffect();
+      throw new Error("post-send failure");
+    });
+
+    await expect(
+      processMattermostReplayGuardedPost({
+        replayGuard,
+        accountId: "acct",
+        messageIds: ["post-3"],
+        handlePost,
+      }),
+    ).rejects.toThrow("post-send failure");
+    await expect(
+      processMattermostReplayGuardedPost({
+        replayGuard,
+        accountId: "acct",
+        messageIds: ["post-3"],
+        handlePost,
+      }),
+    ).resolves.toBe("duplicate");
+
+    expect(handlePost).toHaveBeenCalledTimes(1);
+    expect(visibleSideEffect).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("buildMattermostModelPickerSelectMessageSid", () => {
+  it("stays stable for the same picker selection", () => {
+    expect(
+      buildMattermostModelPickerSelectMessageSid({
+        postId: "post-1",
+        provider: "OpenAI",
+        model: " GPT-5 ",
+      }),
+    ).toBe("interaction:post-1:select:openai/gpt-5");
+    expect(
+      buildMattermostModelPickerSelectMessageSid({
+        postId: "post-1",
+        provider: "openai",
+        model: "gpt-5",
+      }),
+    ).toBe("interaction:post-1:select:openai/gpt-5");
+  });
+
+  it("keeps different model selections distinct", () => {
+    expect(
+      buildMattermostModelPickerSelectMessageSid({
+        postId: "post-1",
+        provider: "openai",
+        model: "gpt-5",
+      }),
+    ).not.toBe(
+      buildMattermostModelPickerSelectMessageSid({
+        postId: "post-1",
+        provider: "openai",
+        model: "gpt-4.1",
+      }),
+    );
   });
 });
 

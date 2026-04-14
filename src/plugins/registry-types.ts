@@ -246,6 +246,7 @@ export type PluginRecord = {
   musicGenerationProviderIds: string[];
   webFetchProviderIds: string[];
   webSearchProviderIds: string[];
+  contextEngineIds?: string[];
   memoryEmbeddingProviderIds: string[];
   agentHarnessIds: string[];
   gatewayMethods: string[];

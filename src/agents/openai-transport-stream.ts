@@ -25,6 +25,11 @@ import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dyn
 import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import { flattenCompletionMessagesToStringContent } from "./openai-completions-string-content.js";
 import {
+  normalizeOpenAIReasoningEffort,
+  type OpenAIApiReasoningEffort,
+  type OpenAIReasoningEffort,
+} from "./openai-reasoning-effort.js";
+import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
 } from "./openai-responses-payload-policy.js";
@@ -39,8 +44,6 @@ import { transformTransportMessages } from "./transport-message-transform.js";
 import { mergeTransportMetadata, sanitizeTransportPayloadText } from "./transport-stream-shared.js";
 
 const DEFAULT_AZURE_OPENAI_API_VERSION = "2024-12-01-preview";
-
-type OpenAIReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
 
 type BaseStreamOptions = {
   temperature?: number;
@@ -739,8 +742,12 @@ function getPromptCacheRetention(
   return baseUrl?.includes("api.openai.com") ? "24h" : undefined;
 }
 
-function resolveOpenAIReasoningEffort(options: OpenAIResponsesOptions | undefined) {
-  return options?.reasoningEffort ?? options?.reasoning ?? "high";
+function resolveOpenAIReasoningEffort(
+  options: OpenAIResponsesOptions | undefined,
+): Exclude<OpenAIApiReasoningEffort, "none"> {
+  return normalizeOpenAIReasoningEffort(
+    options?.reasoningEffort ?? options?.reasoning ?? "high",
+  ) as Exclude<OpenAIApiReasoningEffort, "none">;
 }
 
 export function buildOpenAIResponsesParams(
@@ -1241,7 +1248,7 @@ type OpenAIResponsesRequestParams = {
   reasoning?:
     | { effort: "none" }
     | {
-        effort: NonNullable<OpenAIResponsesOptions["reasoningEffort"]>;
+        effort: Exclude<OpenAIApiReasoningEffort, "none">;
         summary: NonNullable<OpenAIResponsesOptions["reasoningSummary"]>;
       };
   include?: string[];
@@ -1253,6 +1260,13 @@ function mapReasoningEffort(effort: string, reasoningEffortMap: Record<string, s
 
 function resolveOpenAICompletionsReasoningEffort(options: OpenAICompletionsOptions | undefined) {
   return options?.reasoningEffort ?? options?.reasoning ?? "high";
+}
+
+function mapNativeOpenAIReasoningEffort(
+  effort: string,
+  reasoningEffortMap: Record<string, string>,
+): string {
+  return normalizeOpenAIReasoningEffort(mapReasoningEffort(effort, reasoningEffortMap));
 }
 
 function convertTools(
@@ -1328,7 +1342,7 @@ export function buildOpenAICompletionsParams(
       effort: mapReasoningEffort(completionsReasoningEffort, compat.reasoningEffortMap),
     };
   } else if (completionsReasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
-    params.reasoning_effort = mapReasoningEffort(
+    params.reasoning_effort = mapNativeOpenAIReasoningEffort(
       completionsReasoningEffort,
       compat.reasoningEffortMap,
     );

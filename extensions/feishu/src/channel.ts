@@ -1091,6 +1091,18 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             fallbackTo,
           }),
       },
+      auth: {
+        login: async ({ cfg }) => {
+          const { createClackPrompter } = await import("openclaw/plugin-sdk/setup-runtime");
+          const { writeConfigFile } = await import("openclaw/plugin-sdk/config-runtime");
+          const prompter = createClackPrompter();
+          const { runFeishuLogin } = await import("./setup-surface.js");
+          const nextCfg = await runFeishuLogin({ cfg, prompter });
+          if (nextCfg !== cfg) {
+            await writeConfigFile(nextCfg);
+          }
+        },
+      },
       setup: feishuSetupAdapter,
       setupWizard: feishuSetupWizard,
       messaging: {

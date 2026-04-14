@@ -99,4 +99,27 @@ describe("config mutate helpers", () => {
     ).rejects.toBeInstanceOf(ConfigMutationConflictError);
     expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
   });
+
+  it("reuses a provided snapshot and write options for replace", async () => {
+    const snapshot = createSnapshot({
+      hash: "hash-1",
+      sourceConfig: { gateway: { auth: { mode: "token" } } },
+    });
+
+    await replaceConfigFile({
+      baseHash: snapshot.hash,
+      nextConfig: { gateway: { auth: { mode: "token", token: "minted" } } },
+      snapshot,
+      writeOptions: { expectedConfigPath: snapshot.path },
+    });
+
+    expect(ioMocks.readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
+    expect(ioMocks.writeConfigFile).toHaveBeenCalledWith(
+      { gateway: { auth: { mode: "token", token: "minted" } } },
+      {
+        baseSnapshot: snapshot,
+        expectedConfigPath: snapshot.path,
+      },
+    );
+  });
 });

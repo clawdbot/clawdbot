@@ -135,6 +135,60 @@ describe("lmstudio-runtime", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("suppresses profile runtime auth when Authorization is configured", async () => {
+    resolveApiKeyForProviderMock.mockResolvedValueOnce({
+      apiKey: "stale-profile-key",
+      source: "profile:lmstudio:default",
+      mode: "api-key",
+    });
+
+    await expect(
+      resolveLmstudioRuntimeApiKey({
+        config: buildLmstudioConfig({
+          headers: {
+            Authorization: "Bearer proxy-token",
+          },
+        }),
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("suppresses env runtime auth when Authorization is configured", async () => {
+    resolveApiKeyForProviderMock.mockResolvedValueOnce({
+      apiKey: "stale-env-key",
+      source: "env:LM_API_TOKEN",
+      mode: "api-key",
+    });
+
+    await expect(
+      resolveLmstudioRuntimeApiKey({
+        config: buildLmstudioConfig({
+          headers: {
+            Authorization: "Bearer proxy-token",
+          },
+        }),
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("suppresses shell env runtime auth when Authorization is configured", async () => {
+    resolveApiKeyForProviderMock.mockResolvedValueOnce({
+      apiKey: "stale-shell-env-key",
+      source: "shell env: LM_API_TOKEN",
+      mode: "api-key",
+    });
+
+    await expect(
+      resolveLmstudioRuntimeApiKey({
+        config: buildLmstudioConfig({
+          headers: {
+            Authorization: "Bearer proxy-token",
+          },
+        }),
+      }),
+    ).resolves.toBeUndefined();
+  });
+
   it("throws when explicit api-key mode cannot resolve any key", async () => {
     resolveApiKeyForProviderMock.mockRejectedValue(
       new Error('No API key found for provider "lmstudio". Auth store: /tmp/auth-profiles.json.'),

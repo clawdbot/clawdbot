@@ -1,7 +1,7 @@
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeAccountId } from "./account-id.js";
 import type { DeliveryContext, DeliveryContextSessionSource } from "./delivery-context.types.js";
-import { normalizeMessageChannel } from "./message-channel.js";
+import { normalizeMessageChannel } from "./message-channel-core.js";
 export type { DeliveryContext, DeliveryContextSessionSource } from "./delivery-context.types.js";
 
 export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryContext | undefined {

@@ -78,6 +78,25 @@ describe("listMemoryFiles", () => {
     expect(files.some((file) => file.endsWith("standalone.md"))).toBe(true);
   });
 
+  it("uses lowercase memory.md as the root fallback when MEMORY.md is absent", async () => {
+    const tmpDir = getTmpDir();
+    await fs.writeFile(path.join(tmpDir, "memory.md"), "# Legacy memory");
+
+    const files = await listMemoryFiles(tmpDir);
+
+    expect(files).toEqual([path.join(tmpDir, "memory.md")]);
+  });
+
+  it("prefers MEMORY.md when both root files exist", async () => {
+    const tmpDir = getTmpDir();
+    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default memory");
+    await fs.writeFile(path.join(tmpDir, "memory.md"), "# Legacy memory");
+
+    const files = await listMemoryFiles(tmpDir);
+
+    expect(files).toEqual([path.join(tmpDir, "MEMORY.md")]);
+  });
+
   it("handles relative paths in additional paths", async () => {
     const tmpDir = getTmpDir();
     await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default memory");

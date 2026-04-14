@@ -79,6 +79,15 @@ export function getPluginCommandSpecs(provider?: string): Array<{
   ) {
     return [];
   }
+  return listProviderPluginCommandSpecs(provider);
+}
+
+/** Resolve plugin command specs for a provider's native naming surface without support gating. */
+export function listProviderPluginCommandSpecs(provider?: string): Array<{
+  name: string;
+  description: string;
+  acceptsArgs: boolean;
+}> {
   return Array.from(pluginCommands.values()).map((cmd) => ({
     name: resolvePluginNativeName(cmd, provider),
     description: cmd.description,

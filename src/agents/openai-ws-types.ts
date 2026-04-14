@@ -55,7 +55,10 @@ export interface ResponseCreateEvent {
   temperature?: number;
   top_p?: number;
   metadata?: Record<string, string>;
-  reasoning?: { effort?: "low" | "medium" | "high"; summary?: "auto" | "concise" | "detailed" };
+  reasoning?: {
+    effort?: "none" | "low" | "medium" | "high" | "xhigh";
+    summary?: "auto" | "concise" | "detailed";
+  };
   text?: { verbosity?: "low" | "medium" | "high"; [key: string]: unknown };
   truncation?: "auto" | "disabled";
   [key: string]: unknown;

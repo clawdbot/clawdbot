@@ -15,6 +15,7 @@ import { createEventDispatcher } from "./client.js";
 import { handleFeishuCommentEvent } from "./comment-handler.js";
 import { isRecord, readString } from "./comment-shared.js";
 import {
+  claimUnprocessedFeishuMessage,
   hasProcessedFeishuMessage,
   recordProcessedFeishuMessage,
   releaseFeishuMessageProcessing,
@@ -36,13 +37,32 @@ import type { FeishuChatType, ResolvedFeishuAccount } from "./types.js";
 
 const FEISHU_REACTION_VERIFY_TIMEOUT_MS = 1_500;
 
+export class FeishuRetryableSyntheticEventError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "FeishuRetryableSyntheticEventError";
+  }
+}
+
+function isFeishuRetryableSyntheticEventError(
+  error: unknown,
+): error is FeishuRetryableSyntheticEventError {
+  return (
+    error instanceof FeishuRetryableSyntheticEventError ||
+    (typeof error === "object" &&
+      error !== null &&
+      "name" in error &&
+      error.name === "FeishuRetryableSyntheticEventError")
+  );
+}
+
 export type FeishuReactionCreatedEvent = {
   message_id: string;
   chat_id?: string;
   chat_type?: string;
   reaction_type?: { emoji_type?: string };
   operator_type?: string;
-  user_id?: { open_id?: string };
+  user_id?: { open_id?: string; user_id?: string };
   action_time?: string;
 };
 
@@ -80,6 +100,7 @@ export async function resolveReactionSyntheticEvent(
   const emoji = event.reaction_type?.emoji_type;
   const messageId = event.message_id;
   const senderId = event.user_id?.open_id;
+  const senderUserId = event.user_id?.user_id;
   if (!emoji || !messageId || !senderId) {
     return null;
   }
@@ -134,7 +155,10 @@ export async function resolveReactionSyntheticEvent(
   const syntheticChatType: FeishuChatType = resolvedChatType;
   return {
     sender: {
-      sender_id: { open_id: senderId },
+      sender_id: {
+        open_id: senderId,
+        ...(senderUserId ? { user_id: senderUserId } : {}),
+      },
       sender_type: "user",
     },
     message: {
@@ -604,19 +628,20 @@ function registerEventHandlers(
           }
           const eventId = event.event_id?.trim();
           const syntheticMessageId = eventId ? `drive-comment:${eventId}` : undefined;
-          if (
-            syntheticMessageId &&
-            (await hasProcessedFeishuMessage(syntheticMessageId, accountId, log))
-          ) {
-            log(`feishu[${accountId}]: dropping duplicate comment event ${syntheticMessageId}`);
-            return;
-          }
-          if (
-            syntheticMessageId &&
-            !tryBeginFeishuMessageProcessing(syntheticMessageId, accountId)
-          ) {
-            log(`feishu[${accountId}]: dropping in-flight comment event ${syntheticMessageId}`);
-            return;
+          if (syntheticMessageId) {
+            const claim = await claimUnprocessedFeishuMessage({
+              messageId: syntheticMessageId,
+              namespace: accountId,
+              log,
+            });
+            if (claim === "duplicate") {
+              log(`feishu[${accountId}]: dropping duplicate comment event ${syntheticMessageId}`);
+              return;
+            }
+            if (claim === "inflight") {
+              log(`feishu[${accountId}]: dropping in-flight comment event ${syntheticMessageId}`);
+              return;
+            }
           }
           log(
             `feishu[${accountId}]: received drive comment notice ` +
@@ -641,6 +666,11 @@ function registerEventHandlers(
             if (syntheticMessageId) {
               await recordProcessedFeishuMessage(syntheticMessageId, accountId, log);
             }
+          } catch (err) {
+            if (syntheticMessageId && !isFeishuRetryableSyntheticEventError(err)) {
+              await recordProcessedFeishuMessage(syntheticMessageId, accountId, log);
+            }
+            throw err;
           } finally {
             if (syntheticMessageId) {
               releaseFeishuMessageProcessing(syntheticMessageId, accountId);
@@ -739,11 +769,16 @@ function registerEventHandlers(
           },
         };
         const syntheticMessageId = syntheticEvent.message.message_id;
-        if (await hasProcessedFeishuMessage(syntheticMessageId, accountId, log)) {
+        const claim = await claimUnprocessedFeishuMessage({
+          messageId: syntheticMessageId,
+          namespace: accountId,
+          log,
+        });
+        if (claim === "duplicate") {
           log(`feishu[${accountId}]: dropping duplicate bot-menu event for ${syntheticMessageId}`);
           return;
         }
-        if (!tryBeginFeishuMessageProcessing(syntheticMessageId, accountId)) {
+        if (claim === "inflight") {
           log(`feishu[${accountId}]: dropping in-flight bot-menu event for ${syntheticMessageId}`);
           return;
         }
@@ -774,8 +809,12 @@ function registerEventHandlers(
             }
             return await handleLegacyMenu();
           })
-          .catch((err) => {
-            releaseFeishuMessageProcessing(syntheticMessageId, accountId);
+          .catch(async (err) => {
+            if (isFeishuRetryableSyntheticEventError(err)) {
+              releaseFeishuMessageProcessing(syntheticMessageId, accountId);
+            } else {
+              await recordProcessedFeishuMessage(syntheticMessageId, accountId, log);
+            }
             throw err;
           });
         if (fireAndForget) {

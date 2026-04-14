@@ -3,6 +3,7 @@ import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pi
 import {
   resolveCommandAuthorizedFromAuthorizers,
   resolveNativeCommandSessionTargets,
+  listProviderPluginCommandSpecs,
 } from "openclaw/plugin-sdk/command-auth";
 import { type ChatCommandDefinition, type CommandArgs } from "openclaw/plugin-sdk/command-auth";
 import {
@@ -670,6 +671,17 @@ export async function registerSlackMonitorSlashCommands(params: {
       skillCommands,
       provider: "slack",
     });
+    const existingNativeNames = new Set(
+      nativeCommands.map((c) => normalizeLowercaseStringOrEmpty(c.name)).filter(Boolean),
+    );
+    for (const pluginCommand of listProviderPluginCommandSpecs("slack")) {
+      const normalizedName = normalizeLowercaseStringOrEmpty(pluginCommand.name);
+      if (!normalizedName || existingNativeNames.has(normalizedName)) {
+        continue;
+      }
+      existingNativeNames.add(normalizedName);
+      nativeCommands.push(pluginCommand);
+    }
   }
 
   if (nativeCommands.length > 0) {

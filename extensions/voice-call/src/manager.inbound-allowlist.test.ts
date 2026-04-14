@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createManagerHarness } from "./manager.test-harness.js";
+import { FakeProvider, createManagerHarness } from "./manager.test-harness.js";
 
 describe("CallManager inbound allowlist", () => {
   it("rejects inbound calls with missing caller ID when allowlist enabled", async () => {
@@ -100,6 +100,57 @@ describe("CallManager inbound allowlist", () => {
     expect(manager.getCallByProviderCallId("provider-dup")).toBeUndefined();
     expect(provider.hangupCalls).toEqual([
       expect.objectContaining({ providerCallId: "provider-dup" }),
+    ]);
+  });
+
+  it("retries rejected inbound hangup after a transient provider failure", async () => {
+    class FlakyHangupProvider extends FakeProvider {
+      hangupFailuresRemaining = 1;
+
+      override async hangupCall(input: Parameters<FakeProvider["hangupCall"]>[0]): Promise<void> {
+        this.hangupCalls.push(input);
+        if (this.hangupFailuresRemaining > 0) {
+          this.hangupFailuresRemaining -= 1;
+          throw new Error("provider down");
+        }
+      }
+    }
+
+    const provider = new FlakyHangupProvider();
+    const { manager } = await createManagerHarness(
+      {
+        inboundPolicy: "disabled",
+      },
+      provider,
+    );
+
+    manager.processEvent({
+      id: "evt-reject-fail-init",
+      type: "call.initiated",
+      callId: "provider-flaky",
+      providerCallId: "provider-flaky",
+      timestamp: Date.now(),
+      direction: "inbound",
+      from: "+15553333333",
+      to: "+15550000000",
+    });
+    await Promise.resolve();
+
+    manager.processEvent({
+      id: "evt-reject-fail-ring",
+      type: "call.ringing",
+      callId: "provider-flaky",
+      providerCallId: "provider-flaky",
+      timestamp: Date.now(),
+      direction: "inbound",
+      from: "+15553333333",
+      to: "+15550000000",
+    });
+
+    expect(manager.getCallByProviderCallId("provider-flaky")).toBeUndefined();
+    expect(provider.hangupCalls).toEqual([
+      expect.objectContaining({ providerCallId: "provider-flaky" }),
+      expect.objectContaining({ providerCallId: "provider-flaky" }),
     ]);
   });
 

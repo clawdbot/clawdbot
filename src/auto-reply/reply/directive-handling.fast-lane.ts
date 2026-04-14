@@ -90,6 +90,7 @@ export async function applyInlineDirectivesFastLane(
     currentElevatedLevel,
     surface: ctx.Surface,
     gatewayClientScopes: ctx.GatewayClientScopes,
+    senderIsOwner: params.senderIsOwner,
   });
 
   if (sessionEntry?.providerOverride) {

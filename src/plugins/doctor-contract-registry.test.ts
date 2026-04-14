@@ -11,6 +11,7 @@ const tempDirs: string[] = [];
 const mocks = getRegistryJitiMocks();
 
 let clearPluginDoctorContractRegistryCache: typeof import("./doctor-contract-registry.js").clearPluginDoctorContractRegistryCache;
+let collectRelevantDoctorPluginIdsForTouchedPaths: typeof import("./doctor-contract-registry.js").collectRelevantDoctorPluginIdsForTouchedPaths;
 let listPluginDoctorLegacyConfigRules: typeof import("./doctor-contract-registry.js").listPluginDoctorLegacyConfigRules;
 
 function makeTempDir(): string {
@@ -25,8 +26,11 @@ describe("doctor-contract-registry getJiti", () => {
   beforeEach(async () => {
     resetRegistryJitiMocks();
     vi.resetModules();
-    ({ clearPluginDoctorContractRegistryCache, listPluginDoctorLegacyConfigRules } =
-      await import("./doctor-contract-registry.js"));
+    ({
+      clearPluginDoctorContractRegistryCache,
+      collectRelevantDoctorPluginIdsForTouchedPaths,
+      listPluginDoctorLegacyConfigRules,
+    } = await import("./doctor-contract-registry.js"));
     clearPluginDoctorContractRegistryCache();
   });
 
@@ -55,5 +59,74 @@ describe("doctor-contract-registry getJiti", () => {
         tryNative: false,
       }),
     );
+  });
+
+  it("prefers doctor-contract-api over the broader contract-api surface", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(
+      path.join(pluginRoot, "doctor-contract-api.js"),
+      "export default {};\n",
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(pluginRoot, "contract-api.js"), "export default {};\n", "utf-8");
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [{ id: "test-plugin", rootDir: pluginRoot }],
+      diagnostics: [],
+    });
+
+    listPluginDoctorLegacyConfigRules({
+      workspaceDir: pluginRoot,
+      env: {},
+    });
+
+    expect(mocks.createJiti).toHaveBeenCalledTimes(1);
+    expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(
+      path.join(pluginRoot, "doctor-contract-api.js"),
+    );
+  });
+
+  it("narrows touched-path doctor ids for scoped dry-run validation", () => {
+    expect(
+      collectRelevantDoctorPluginIdsForTouchedPaths({
+        raw: {
+          channels: {
+            discord: {},
+            telegram: {},
+          },
+          plugins: {
+            entries: {
+              "memory-wiki": {},
+            },
+          },
+          talk: {
+            voiceId: "legacy-voice",
+          },
+        },
+        touchedPaths: [
+          ["channels", "discord", "token"],
+          ["plugins", "entries", "memory-wiki", "enabled"],
+          ["talk", "voiceId"],
+        ],
+      }),
+    ).toEqual(["discord", "elevenlabs", "memory-wiki"]);
+  });
+
+  it("falls back to the full doctor-id set when touched paths are too broad", () => {
+    expect(
+      collectRelevantDoctorPluginIdsForTouchedPaths({
+        raw: {
+          channels: {
+            discord: {},
+            telegram: {},
+          },
+          plugins: {
+            entries: {
+              "memory-wiki": {},
+            },
+          },
+        },
+        touchedPaths: [["channels"]],
+      }),
+    ).toEqual(["discord", "memory-wiki", "telegram"]);
   });
 });

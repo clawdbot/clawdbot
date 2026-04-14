@@ -165,6 +165,15 @@ describe("delivery-queue recovery", () => {
           text: "a",
           mediaUrls: ["https://example.com/a.png"],
         },
+        session: {
+          key: "agent:main:main",
+          agentId: "agent-main",
+          requesterAccountId: "acct-1",
+          requesterSenderId: "sender-1",
+          requesterSenderName: "Sender One",
+          requesterSenderUsername: "sender.one",
+          requesterSenderE164: "+15551234567",
+        },
       },
       tmpDir(),
     );
@@ -182,6 +191,15 @@ describe("delivery-queue recovery", () => {
           sessionKey: "agent:main:main",
           text: "a",
           mediaUrls: ["https://example.com/a.png"],
+        },
+        session: {
+          key: "agent:main:main",
+          agentId: "agent-main",
+          requesterAccountId: "acct-1",
+          requesterSenderId: "sender-1",
+          requesterSenderName: "Sender One",
+          requesterSenderUsername: "sender.one",
+          requesterSenderE164: "+15551234567",
         },
       }),
     );

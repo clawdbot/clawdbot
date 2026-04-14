@@ -45,6 +45,12 @@ describe("directive parsing", () => {
     expect(res.traceLevel).toBe("on");
   });
 
+  it("matches raw trace directive", () => {
+    const res = extractTraceDirective(" please /trace raw now");
+    expect(res.hasDirective).toBe(true);
+    expect(res.traceLevel).toBe("raw");
+  });
+
   it("matches reasoning directive", () => {
     const res = extractReasoningDirective("/reasoning on please");
     expect(res.hasDirective).toBe(true);

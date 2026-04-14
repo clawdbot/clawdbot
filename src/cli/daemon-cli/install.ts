@@ -5,7 +5,8 @@ import {
   isGatewayDaemonRuntime,
 } from "../../commands/daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../../commands/gateway-install-token.js";
-import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
+import { readConfigFileSnapshotForWrite } from "../../config/io.js";
+import { resolveGatewayPort } from "../../config/paths.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { isNonFatalSystemdInstallProbeError } from "../../daemon/systemd.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -37,7 +38,9 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     return;
   }
 
-  const cfg = await readBestEffortConfig();
+  const { snapshot: configSnapshot, writeOptions: configWriteOptions } =
+    await readConfigFileSnapshotForWrite();
+  const cfg = configSnapshot.valid ? configSnapshot.sourceConfig : configSnapshot.config;
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
     fail("Invalid port");
@@ -103,6 +106,8 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
 
   const tokenResolution = await resolveGatewayInstallToken({
     config: cfg,
+    configSnapshot,
+    configWriteOptions,
     env: installEnv,
     explicitToken: opts.token,
     autoGenerateWhenMissing: true,

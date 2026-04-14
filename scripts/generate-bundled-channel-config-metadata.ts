@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import path from "node:path";
+import { loadBundledPluginPublicArtifactModuleSync } from "../src/plugins/public-surface-loader.js";
 import { loadChannelConfigSurfaceModule } from "./load-channel-config-surface.ts";
 
 const GENERATED_BY = "scripts/generate-bundled-channel-config-metadata.ts";
@@ -63,6 +64,11 @@ type BundledChannelConfigMetadata = {
   description?: string;
   schema: Record<string, unknown>;
   uiHints?: Record<string, unknown>;
+  unsupportedSecretRefSurfacePatterns?: readonly string[];
+};
+
+type BundledChannelSecuritySurface = {
+  unsupportedSecretRefSurfacePatterns?: readonly string[];
 };
 
 function resolveChannelConfigSchemaModulePath(rootDir: string): string | null {
@@ -131,6 +137,34 @@ function formatTypeScriptModule(source: string, outputPath: string, repoRoot: st
   });
 }
 
+function resolveChannelUnsupportedSecretRefSurfacePatterns(
+  source: BundledPluginSource,
+  channelId: string,
+): string[] {
+  try {
+    const surface = loadBundledPluginPublicArtifactModuleSync<BundledChannelSecuritySurface>({
+      dirName: source.dirName,
+      artifactBasename: "security-contract-api.js",
+    });
+    const prefix = `channels.${channelId}.`;
+    return [
+      ...new Set(
+        (surface.unsupportedSecretRefSurfacePatterns ?? []).filter(
+          (pattern): pattern is string => typeof pattern === "string" && pattern.startsWith(prefix),
+        ),
+      ),
+    ].toSorted((left, right) => left.localeCompare(right));
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message.startsWith("Unable to resolve bundled plugin public surface ")
+    ) {
+      return [];
+    }
+    throw error;
+  }
+}
+
 export async function collectBundledChannelConfigMetadata(params?: { repoRoot?: string }) {
   const repoRoot = path.resolve(params?.repoRoot ?? process.cwd());
   const sources = collectBundledPluginSources({ repoRoot, requirePackageJson: true });
@@ -156,6 +190,10 @@ export async function collectBundledChannelConfigMetadata(params?: { repoRoot?: 
     for (const channelId of channelIds) {
       const label = resolveRootLabel(source, channelId);
       const description = resolveRootDescription(source, channelId);
+      const unsupportedSecretRefSurfacePatterns = resolveChannelUnsupportedSecretRefSurfacePatterns(
+        source,
+        channelId,
+      );
       entries.push({
         pluginId: source.manifest.id,
         channelId,
@@ -163,6 +201,9 @@ export async function collectBundledChannelConfigMetadata(params?: { repoRoot?: 
         ...(description ? { description } : {}),
         schema: surface.schema,
         ...(Object.keys(surface.uiHints ?? {}).length > 0 ? { uiHints: surface.uiHints } : {}),
+        ...(unsupportedSecretRefSurfacePatterns.length > 0
+          ? { unsupportedSecretRefSurfacePatterns }
+          : {}),
       });
     }
   }

@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
-import { mergeSessionEntry, type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import { resolveSessionTranscriptFile } from "../../config/sessions/transcript.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -14,13 +14,12 @@ import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
 import { runCliAgent } from "../cli-runner.js";
 import { clearCliSession, getCliSessionBinding, setCliSessionBinding } from "../cli-session.js";
 import { FailoverError } from "../failover-error.js";
-import { formatAgentInternalEventsForPrompt } from "../internal-events.js";
-import { hasInternalRuntimeContext } from "../internal-runtime-context.js";
 import { isCliProvider } from "../model-selection.js";
 import { prepareSessionManagerForRun } from "../pi-embedded-runner/session-manager-init.js";
 import { runEmbeddedPiAgent } from "../pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../skills.js";
 import { resolveFallbackRetryPrompt } from "./attempt-execution.helpers.js";
+import { persistSessionEntry } from "./attempt-execution.shared.js";
 import { resolveAgentRunContext } from "./run-context.js";
 import type { AgentCommandOpts } from "./types.js";
 
@@ -31,42 +30,6 @@ export {
 } from "./attempt-execution.helpers.js";
 
 const log = createSubsystemLogger("agents/agent-command");
-
-export type PersistSessionEntryParams = {
-  sessionStore: Record<string, SessionEntry>;
-  sessionKey: string;
-  storePath: string;
-  entry: SessionEntry;
-  clearedFields?: string[];
-};
-
-export async function persistSessionEntry(params: PersistSessionEntryParams): Promise<void> {
-  const persisted = await updateSessionStore(params.storePath, (store) => {
-    const merged = mergeSessionEntry(store[params.sessionKey], params.entry);
-    for (const field of params.clearedFields ?? []) {
-      if (!Object.hasOwn(params.entry, field)) {
-        Reflect.deleteProperty(merged, field);
-      }
-    }
-    store[params.sessionKey] = merged;
-    return merged;
-  });
-  params.sessionStore[params.sessionKey] = persisted;
-}
-
-export function prependInternalEventContext(
-  body: string,
-  events: AgentCommandOpts["internalEvents"],
-): string {
-  if (hasInternalRuntimeContext(body)) {
-    return body;
-  }
-  const renderedEvents = formatAgentInternalEventsForPrompt(events);
-  if (!renderedEvents) {
-    return body;
-  }
-  return [renderedEvents, body].filter(Boolean).join("\n\n");
-}
 
 const ACP_TRANSCRIPT_USAGE = {
   input: 0,

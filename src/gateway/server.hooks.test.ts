@@ -531,32 +531,43 @@ describe("gateway server hooks", () => {
 
   test("expires hook idempotency entries from first delivery time", async () => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
-    const nowSpy = vi.spyOn(Date, "now");
-    nowSpy.mockReturnValue(1_000_000);
 
     await withGatewayServer(async ({ port }) => {
       mockIsolatedRunOk();
-      const firstBody = await expectFirstHookDelivery(port, "fixed-window-idem");
 
-      nowSpy.mockReturnValue(1_000_000 + DEDUPE_TTL_MS - 1);
+      const firstNowSpy = vi.spyOn(Date, "now");
+      firstNowSpy.mockReturnValue(1_000_000);
+      const first = await postAgentHookWithIdempotency(port, "fixed-window-idem");
+      firstNowSpy.mockRestore();
+
+      const firstBody = (await first.json()) as { runId?: string };
+      expect(firstBody.runId).toBeTruthy();
+      await waitForSystemEvent();
+      drainSystemEvents(resolveMainKey());
+
+      const secondNowSpy = vi.spyOn(Date, "now");
+      secondNowSpy.mockReturnValue(1_000_000 + DEDUPE_TTL_MS - 1);
       const second = await postHook(
         port,
         "/hooks/agent",
         { message: "Do it", name: "Email" },
         { headers: { "Idempotency-Key": "fixed-window-idem" } },
       );
+      secondNowSpy.mockRestore();
       expect(second.status).toBe(200);
       const secondBody = (await second.json()) as { runId?: string };
       expect(secondBody.runId).toBe(firstBody.runId);
       expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
 
-      nowSpy.mockReturnValue(1_000_000 + DEDUPE_TTL_MS + 1);
+      const thirdNowSpy = vi.spyOn(Date, "now");
+      thirdNowSpy.mockReturnValue(1_000_000 + DEDUPE_TTL_MS + 1);
       const third = await postHook(
         port,
         "/hooks/agent",
         { message: "Do it", name: "Email" },
         { headers: { "Idempotency-Key": "fixed-window-idem" } },
       );
+      thirdNowSpy.mockRestore();
       expect(third.status).toBe(200);
       const thirdBody = (await third.json()) as { runId?: string };
       expect(thirdBody.runId).toBeTruthy();

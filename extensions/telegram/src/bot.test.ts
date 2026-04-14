@@ -41,7 +41,6 @@ const loadConfig = getLoadConfigMock();
 const loadWebMedia = getLoadWebMediaMock();
 const readChannelAllowFromStore = getReadChannelAllowFromStoreMock();
 const PUZZLE_EMOJI = "\u{1F9E9}";
-const CROSS_MARK_EMOJI = "\u{274C}";
 const INFO_EMOJI = "\u{2139}\u{FE0F}";
 const CHECK_MARK_EMOJI = "\u{2705}";
 const THUMBS_UP_EMOJI = "\u{1F44D}";
@@ -501,9 +500,10 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-approve-blocked");
   });
 
-  it("does not leak raw approval callback errors back into Telegram chat", async () => {
+  it("keeps approval callback resolution failures out of Telegram chat before retry", async () => {
     onSpy.mockClear();
     sendMessageSpy.mockClear();
+    editMessageReplyMarkupSpy.mockClear();
     resolveExecApprovalSpy.mockClear();
     resolveExecApprovalSpy.mockRejectedValueOnce(new Error("gateway secret detail"));
 
@@ -525,26 +525,27 @@ describe("createTelegramBot", () => {
       ctx: Record<string, unknown>,
     ) => Promise<void>;
 
-    await callbackHandler({
-      callbackQuery: {
-        id: "cbq-approve-error",
-        data: "/approve 138e9b8c allow-once",
-        from: { id: 9, first_name: "Ada", username: "ada_bot" },
-        message: {
-          chat: { id: 1234, type: "private" },
-          date: 1736380800,
-          message_id: 25,
-          text: "Approval required.",
+    await expect(
+      callbackHandler({
+        callbackQuery: {
+          id: "cbq-approve-error",
+          data: "/approve 138e9b8c allow-once",
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380800,
+            message_id: 25,
+            text: "Approval required.",
+          },
         },
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
-    });
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      }),
+    ).rejects.toThrow("gateway secret detail");
 
-    expect(sendMessageSpy).toHaveBeenCalledTimes(1);
-    expect(sendMessageSpy.mock.calls[0]?.[1]).toBe(
-      `${CROSS_MARK_EMOJI} Failed to submit approval. Please try again or contact an admin.`,
-    );
+    expect(sendMessageSpy).not.toHaveBeenCalled();
+    expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-approve-error");
   });
 
   it("allows exec approval callbacks from target-only Telegram recipients", async () => {
@@ -608,12 +609,13 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-approve-target");
   });
 
-  it("does not allow target-only recipients to use legacy plugin fallback ids", async () => {
+  it("keeps legacy plugin fallback approval failures retryable for target-only recipients", async () => {
     onSpy.mockClear();
     editMessageReplyMarkupSpy.mockClear();
     editMessageTextSpy.mockClear();
     resolveExecApprovalSpy.mockClear();
     replySpy.mockClear();
+    sendMessageSpy.mockClear();
     resolveExecApprovalSpy.mockRejectedValueOnce(new Error("unknown or expired approval id"));
 
     loadConfig.mockReturnValue({
@@ -637,21 +639,23 @@ describe("createTelegramBot", () => {
     ) => Promise<void>;
     expect(callbackHandler).toBeDefined();
 
-    await callbackHandler({
-      callbackQuery: {
-        id: "cbq-legacy-plugin-fallback-blocked",
-        data: "/approve 138e9b8c allow-once",
-        from: { id: 9, first_name: "Ada", username: "ada_bot" },
-        message: {
-          chat: { id: 1234, type: "private" },
-          date: 1736380800,
-          message_id: 25,
-          text: "Legacy plugin approval required.",
+    await expect(
+      callbackHandler({
+        callbackQuery: {
+          id: "cbq-legacy-plugin-fallback-blocked",
+          data: "/approve 138e9b8c allow-once",
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380800,
+            message_id: 25,
+            text: "Legacy plugin approval required.",
+          },
         },
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
-    });
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      }),
+    ).rejects.toThrow("unknown or expired approval id");
 
     expect(resolveExecApprovalSpy).toHaveBeenCalledWith({
       cfg: expect.objectContaining({
@@ -669,11 +673,7 @@ describe("createTelegramBot", () => {
     });
     expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
     expect(replySpy).not.toHaveBeenCalled();
-    expect(sendMessageSpy).toHaveBeenCalledWith(
-      1234,
-      `${CROSS_MARK_EMOJI} Failed to submit approval. Please try again or contact an admin.`,
-      undefined,
-    );
+    expect(sendMessageSpy).not.toHaveBeenCalled();
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-legacy-plugin-fallback-blocked");
   });
 

@@ -7,15 +7,16 @@ import "../cron/isolated-agent.mocks.js";
 import { __testing as acpManagerTesting } from "../acp/control-plane/manager.js";
 import { resolveAgentDir, resolveSessionAgentId } from "../agents/agent-scope.js";
 import * as authProfilesModule from "../agents/auth-profiles.js";
-import * as sessionStoreModule from "../agents/command/session-store.js";
+import * as sessionStoreModule from "../agents/command/session-store.runtime.js";
 import { resolveSession } from "../agents/command/session.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
-import type { OpenClawConfig } from "../config/config.js";
-import * as configModule from "../config/config.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions.js";
+import * as configIoModule from "../config/io.js";
+import * as runtimeSnapshotModule from "../config/runtime-snapshot.js";
 import * as sessionPathsModule from "../config/sessions/paths.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   emitAgentEvent,
   onAgentEvent,
@@ -50,7 +51,7 @@ vi.mock("../agents/auth-profiles/store.js", () => {
   };
 });
 
-vi.mock("../agents/command/session-store.js", () => {
+vi.mock("../agents/command/session-store.runtime.js", () => {
   return {
     updateSessionStoreAfterAgentRun: vi.fn(async () => undefined),
   };
@@ -64,8 +65,11 @@ const runtime: RuntimeEnv = {
   }),
 };
 
-const configSpy = vi.spyOn(configModule, "loadConfig");
-const readConfigFileSnapshotForWriteSpy = vi.spyOn(configModule, "readConfigFileSnapshotForWrite");
+const configSpy = vi.spyOn(configIoModule, "loadConfig");
+const readConfigFileSnapshotForWriteSpy = vi.spyOn(
+  configIoModule,
+  "readConfigFileSnapshotForWrite",
+);
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, { prefix: "openclaw-agent-" });
@@ -267,14 +271,14 @@ beforeEach(() => {
   resetAgentRunContextForTest();
   resetPluginRuntimeStateForTest();
   acpManagerTesting.resetAcpSessionManagerForTests();
-  configModule.clearRuntimeConfigSnapshot();
+  runtimeSnapshotModule.clearRuntimeConfigSnapshot();
   vi.mocked(runEmbeddedPiAgent).mockResolvedValue(createDefaultAgentResult());
   vi.mocked(loadModelCatalog).mockResolvedValue([]);
   vi.mocked(modelSelectionModule.isCliProvider).mockImplementation(() => false);
   readConfigFileSnapshotForWriteSpy.mockResolvedValue({
     snapshot: { valid: false, resolved: {} as OpenClawConfig },
     writeOptions: {},
-  } as Awaited<ReturnType<typeof configModule.readConfigFileSnapshotForWrite>>);
+  } as Awaited<ReturnType<typeof configIoModule.readConfigFileSnapshotForWrite>>);
 });
 
 describe("agentCommand", () => {

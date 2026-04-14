@@ -1,11 +1,30 @@
-import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMockIncomingRequest } from "../../../test/helpers/mock-incoming-request.js";
 import { WEBHOOK_RATE_LIMIT_DEFAULTS } from "../runtime-api.js";
-import { readNextcloudTalkWebhookBody } from "./monitor.js";
+import {
+  NextcloudTalkRetryableWebhookError,
+  processNextcloudTalkReplayGuardedMessage,
+  readNextcloudTalkWebhookBody,
+} from "./monitor.js";
 import { createSignedCreateMessageRequest } from "./monitor.test-fixtures.js";
 import { startWebhookServer } from "./monitor.test-harness.js";
+import { createNextcloudTalkReplayGuard } from "./replay-guard.js";
 import { generateNextcloudTalkSignature } from "./signature.js";
 import type { NextcloudTalkInboundMessage } from "./types.js";
+
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  while (tempDirs.length > 0) {
+    const dir = tempDirs.pop();
+    if (dir) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
 
 describe("readNextcloudTalkWebhookBody", () => {
   it("reads valid body within max bytes", async () => {
@@ -71,6 +90,24 @@ describe("createNextcloudTalkWebhookServer backend allowlist", () => {
 });
 
 describe("createNextcloudTalkWebhookServer replay handling", () => {
+  function createReplayAwareProcessMessage(params: {
+    stateDir: string;
+    accountId?: string;
+    handleMessage: (message: NextcloudTalkInboundMessage) => Promise<void>;
+  }) {
+    const replayGuard = createNextcloudTalkReplayGuard({
+      stateDir: params.stateDir,
+    });
+
+    return async (message: NextcloudTalkInboundMessage) =>
+      await processNextcloudTalkReplayGuardedMessage({
+        replayGuard,
+        accountId: params.accountId ?? "acct",
+        message,
+        handleMessage: () => params.handleMessage(message),
+      });
+  }
+
   it("acknowledges replayed requests and skips onMessage side effects", async () => {
     const seen = new Set<string>();
     const onMessage = vi.fn(async () => {});
@@ -104,6 +141,93 @@ describe("createNextcloudTalkWebhookServer replay handling", () => {
     expect(second.status).toBe(200);
     expect(shouldProcessMessage).toHaveBeenCalledTimes(2);
     expect(onMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows a retry after processMessage fails before replay commit", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nextcloud-talk-replay-"));
+    tempDirs.push(stateDir);
+    let attempts = 0;
+    const onError = vi.fn();
+    const handleMessage = vi.fn(async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new NextcloudTalkRetryableWebhookError("transient nextcloud failure");
+      }
+    });
+    const processMessage = vi.fn(
+      createReplayAwareProcessMessage({
+        stateDir,
+        handleMessage,
+      }),
+    );
+    const harness = await startWebhookServer({
+      path: "/nextcloud-replay-process",
+      processMessage,
+      onMessage: vi.fn(),
+      onError,
+    });
+
+    const { body, headers } = createSignedCreateMessageRequest();
+
+    const first = await fetch(harness.webhookUrl, {
+      method: "POST",
+      headers,
+      body,
+    });
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
+    const second = await fetch(harness.webhookUrl, {
+      method: "POST",
+      headers,
+      body,
+    });
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    await vi.waitFor(() => expect(handleMessage).toHaveBeenCalledTimes(2));
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps replay committed after a non-retryable processMessage failure", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nextcloud-talk-replay-"));
+    tempDirs.push(stateDir);
+    const onError = vi.fn();
+    const visibleSideEffect = vi.fn();
+    const handleMessage = vi.fn(async () => {
+      visibleSideEffect();
+      throw new Error("post-send failure");
+    });
+    const processMessage = vi.fn(
+      createReplayAwareProcessMessage({
+        stateDir,
+        handleMessage,
+      }),
+    );
+    const harness = await startWebhookServer({
+      path: "/nextcloud-replay-post-send",
+      processMessage,
+      onMessage: vi.fn(),
+      onError,
+    });
+
+    const { body, headers } = createSignedCreateMessageRequest();
+
+    const first = await fetch(harness.webhookUrl, {
+      method: "POST",
+      headers,
+      body,
+    });
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
+    const second = await fetch(harness.webhookUrl, {
+      method: "POST",
+      headers,
+      body,
+    });
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(handleMessage).toHaveBeenCalledTimes(1);
+    expect(visibleSideEffect).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledTimes(1);
   });
 });
 

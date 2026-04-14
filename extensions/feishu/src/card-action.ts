@@ -35,6 +35,13 @@ const processedCardActionTokens = new Map<
   { status: "inflight" | "completed"; expiresAt: number }
 >();
 
+export class FeishuRetryableCardActionError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "FeishuRetryableCardActionError";
+  }
+}
+
 export function resetProcessedFeishuCardActionTokensForTests(): void {
   processedCardActionTokens.clear();
 }
@@ -304,7 +311,11 @@ export async function handleFeishuCardAction(params: {
     });
     completeFeishuCardActionToken({ token: event.token, accountId: account.accountId });
   } catch (err) {
-    releaseFeishuCardActionToken({ token: event.token, accountId: account.accountId });
+    if (err instanceof FeishuRetryableCardActionError) {
+      releaseFeishuCardActionToken({ token: event.token, accountId: account.accountId });
+    } else {
+      completeFeishuCardActionToken({ token: event.token, accountId: account.accountId });
+    }
     throw err;
   }
 }

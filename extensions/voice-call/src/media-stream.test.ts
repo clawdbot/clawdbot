@@ -1,3 +1,5 @@
+import type { IncomingMessage } from "node:http";
+import net from "node:net";
 import type {
   RealtimeTranscriptionProviderPlugin,
   RealtimeTranscriptionSession,
@@ -257,6 +259,42 @@ describe("MediaStreamHandler security hardening", () => {
     }
   });
 
+  it("uses resolved client IPs for per-IP pending limits", async () => {
+    const handler = new MediaStreamHandler({
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
+      preStartTimeoutMs: 5_000,
+      maxPendingConnections: 10,
+      maxPendingConnectionsPerIp: 1,
+      resolveClientIp: (request) => String(request.headers["x-forwarded-for"] ?? ""),
+    });
+    const server = await startWsServer(handler);
+
+    try {
+      const first = new WebSocket(server.url, {
+        headers: { "x-forwarded-for": "198.51.100.10" },
+      });
+      await withTimeout(new Promise((resolve) => first.once("open", resolve)));
+
+      const second = new WebSocket(server.url, {
+        headers: { "x-forwarded-for": "203.0.113.20" },
+      });
+      await withTimeout(new Promise((resolve) => second.once("open", resolve)));
+
+      expect(first.readyState).toBe(WebSocket.OPEN);
+      expect(second.readyState).toBe(WebSocket.OPEN);
+
+      const firstClosed = waitForClose(first);
+      const secondClosed = waitForClose(second);
+      first.close();
+      second.close();
+      await firstClosed;
+      await secondClosed;
+    } finally {
+      await server.close();
+    }
+  });
+
   it("rejects upgrades when max connection cap is reached", async () => {
     const handler = new MediaStreamHandler({
       transcriptionProvider: createStubSttProvider(),
@@ -281,6 +319,128 @@ describe("MediaStreamHandler security hardening", () => {
 
       first.close();
       await waitForClose(first);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("counts in-flight upgrades against the max connection cap", () => {
+    const handler = new MediaStreamHandler({
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
+      maxConnections: 2,
+      maxPendingConnections: 10,
+      maxPendingConnectionsPerIp: 10,
+    });
+
+    const fakeWss = {
+      clients: new Set([{}]),
+      handleUpgrade: vi.fn(),
+      emit: vi.fn(),
+      on: vi.fn(),
+    };
+    let upgradeCallback: ((ws: WebSocket) => void) | null = null;
+    fakeWss.handleUpgrade.mockImplementation(
+      (
+        _request: IncomingMessage,
+        _socket: unknown,
+        _head: Buffer,
+        callback: (ws: WebSocket) => void,
+      ) => {
+        upgradeCallback = callback;
+      },
+    );
+
+    (
+      handler as unknown as {
+        wss: typeof fakeWss;
+      }
+    ).wss = fakeWss;
+
+    const firstSocket = {
+      once: vi.fn(),
+      removeListener: vi.fn(),
+      write: vi.fn(),
+      destroy: vi.fn(),
+    };
+    handler.handleUpgrade(
+      { socket: { remoteAddress: "127.0.0.1" } } as IncomingMessage,
+      firstSocket as never,
+      Buffer.alloc(0),
+    );
+
+    const secondSocket = {
+      once: vi.fn(),
+      removeListener: vi.fn(),
+      write: vi.fn(),
+      destroy: vi.fn(),
+    };
+    handler.handleUpgrade(
+      { socket: { remoteAddress: "127.0.0.1" } } as IncomingMessage,
+      secondSocket as never,
+      Buffer.alloc(0),
+    );
+
+    expect(fakeWss.handleUpgrade).toHaveBeenCalledTimes(1);
+    expect(secondSocket.write).toHaveBeenCalledOnce();
+    expect(secondSocket.destroy).toHaveBeenCalledOnce();
+
+    expect(upgradeCallback).not.toBeNull();
+    const completeUpgrade = upgradeCallback as ((ws: WebSocket) => void) | null;
+    if (!completeUpgrade) {
+      throw new Error("Expected upgrade callback to be registered");
+    }
+    completeUpgrade({} as WebSocket);
+    expect(fakeWss.emit).toHaveBeenCalledWith(
+      "connection",
+      expect.anything(),
+      expect.objectContaining({ socket: { remoteAddress: "127.0.0.1" } }),
+    );
+  });
+
+  it("releases in-flight reservations when ws rejects a malformed upgrade before the callback", async () => {
+    const handler = new MediaStreamHandler({
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
+      preStartTimeoutMs: 5_000,
+      maxConnections: 1,
+      maxPendingConnections: 10,
+      maxPendingConnectionsPerIp: 10,
+    });
+    const server = await startWsServer(handler);
+    const serverUrl = new URL(server.url);
+
+    try {
+      await withTimeout(
+        new Promise<void>((resolve, reject) => {
+          const socket = net.createConnection(
+            { host: serverUrl.hostname, port: Number(serverUrl.port) },
+            () => {
+              socket.write(
+                [
+                  "GET /voice/stream HTTP/1.1",
+                  `Host: ${serverUrl.host}`,
+                  "Upgrade: websocket",
+                  "Connection: Upgrade",
+                  "Sec-WebSocket-Version: 13",
+                  "",
+                  "",
+                ].join("\r\n"),
+              );
+            },
+          );
+          socket.once("error", reject);
+          socket.once("data", () => {
+            socket.end();
+          });
+          socket.once("close", () => resolve());
+        }),
+      );
+
+      const ws = await connectWs(server.url);
+      expect(ws.readyState).toBe(WebSocket.OPEN);
+      ws.close();
+      await waitForClose(ws);
     } finally {
       await server.close();
     }

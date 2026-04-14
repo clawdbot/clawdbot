@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -80,6 +81,15 @@ const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
   ".tox",
   "__pycache__",
 ]);
+
+function buildQmdProcessPath(rawPath: string | undefined): string {
+  const nodeBinDir = path.dirname(process.execPath);
+  const entries = rawPath?.split(path.delimiter).filter(Boolean) ?? [];
+  if (entries.includes(nodeBinDir)) {
+    return rawPath ?? nodeBinDir;
+  }
+  return [...entries, nodeBinDir].join(path.delimiter);
+}
 
 type McporterState = {
   coldStartWarned: boolean;
@@ -308,6 +318,7 @@ export class QmdMemoryManager implements MemorySearchManager {
 
     this.env = {
       ...process.env,
+      PATH: buildQmdProcessPath(process.env.PATH),
       XDG_CONFIG_HOME: this.xdgConfigHome,
       // QMD resolves index.yml relative to QMD_CONFIG_DIR rather than XDG_CONFIG_HOME.
       // Point it at the nested qmd config directory so per-agent collections are visible.
@@ -497,7 +508,13 @@ export class QmdMemoryManager implements MemorySearchManager {
       if (!this.pathsMatch(details.path, collection.path)) {
         continue;
       }
-      if (details.pattern !== collection.pattern) {
+      if (
+        !this.patternsMatchForManagedCollection(
+          collection.path,
+          details.pattern,
+          collection.pattern,
+        )
+      ) {
         continue;
       }
       return name;
@@ -611,7 +628,14 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (listedLegacy.path && !this.pathsMatch(listedLegacy.path, collection.path)) {
       return false;
     }
-    if (typeof listedLegacy.pattern === "string" && listedLegacy.pattern !== collection.pattern) {
+    if (
+      typeof listedLegacy.pattern === "string" &&
+      !this.patternsMatchForManagedCollection(
+        collection.path,
+        listedLegacy.pattern,
+        collection.pattern,
+      )
+    ) {
       return false;
     }
     return true;
@@ -777,10 +801,10 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private shouldRebindCollection(collection: ManagedCollection, listed: ListedCollection): boolean {
-    if (typeof listed.pattern === "string" && listed.pattern !== collection.pattern) {
-      return true;
-    }
     if (!listed.path) {
+      if (typeof listed.pattern === "string" && listed.pattern !== collection.pattern) {
+        return true;
+      }
       // Older qmd versions may only return names from `collection list --json`.
       // If the pattern is also missing, do not perform destructive rebinds when
       // metadata is incomplete: remove+add can permanently drop collections if
@@ -790,7 +814,61 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (!this.pathsMatch(listed.path, collection.path)) {
       return true;
     }
+    if (
+      typeof listed.pattern === "string" &&
+      !this.patternsMatchForManagedCollection(collection.path, listed.pattern, collection.pattern)
+    ) {
+      return true;
+    }
     return false;
+  }
+
+  private patternsMatchForManagedCollection(
+    collectionPath: string,
+    leftPattern: string,
+    rightPattern: string,
+  ): boolean {
+    if (leftPattern === rightPattern) {
+      return true;
+    }
+    return this.isEquivalentDefaultMemoryRootPattern(collectionPath, leftPattern, rightPattern);
+  }
+
+  private isEquivalentDefaultMemoryRootPattern(
+    collectionPath: string,
+    leftPattern: string,
+    rightPattern: string,
+  ): boolean {
+    if (
+      !this.isDefaultMemoryRootPattern(leftPattern) ||
+      !this.isDefaultMemoryRootPattern(rightPattern)
+    ) {
+      return false;
+    }
+    try {
+      let sawCanonical = false;
+      let sawLegacyFallback = false;
+      for (const entry of fsSync.readdirSync(collectionPath, { withFileTypes: true })) {
+        if (entry.isSymbolicLink() || !entry.isFile()) {
+          continue;
+        }
+        if (entry.name === "MEMORY.md") {
+          sawCanonical = true;
+        } else if (entry.name === "memory.md") {
+          sawLegacyFallback = true;
+        }
+      }
+      if (sawCanonical && sawLegacyFallback) {
+        return false;
+      }
+      return sawCanonical || sawLegacyFallback;
+    } catch {
+      return false;
+    }
+  }
+
+  private isDefaultMemoryRootPattern(pattern: string): boolean {
+    return pattern === "MEMORY.md" || pattern === "memory.md";
   }
 
   private pathsMatch(left: string, right: string): boolean {

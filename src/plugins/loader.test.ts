@@ -2608,6 +2608,12 @@ module.exports = { id: "throws-after-import", register() {} };`,
         selectCount: () => 1,
         duplicateMessage:
           "context engine already registered: shared-context-engine-loader-test (plugin:context-engine-owner-a)",
+        assertPrimaryOwner: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          expect(
+            registry.plugins.find((entry) => entry.id === "context-engine-owner-a")
+              ?.contextEngineIds,
+          ).toEqual(["shared-context-engine-loader-test"]);
+        },
         assert: expectDuplicateRegistrationResult,
       },
       {

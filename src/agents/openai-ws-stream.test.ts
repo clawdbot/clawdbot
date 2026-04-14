@@ -3134,6 +3134,18 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent.reasoning).toEqual({ effort: "medium" });
   });
 
+  it("maps minimal shared reasoning to low in response.create", () => {
+    const sent = buildOpenAIWebSocketResponseCreatePayload({
+      model: modelStub as never,
+      context: contextStub as never,
+      options: { reasoning: "minimal" } as never,
+      turnInput: { inputItems: [] },
+      tools: [],
+    });
+
+    expect(sent.reasoning).toEqual({ effort: "low" });
+  });
+
   it("omits response.create reasoning when reasoningEffort is none", async () => {
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-reason-none");
     const opts = { reasoningEffort: "none" };

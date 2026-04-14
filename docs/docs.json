@@ -976,6 +976,7 @@
                   "install/fly",
                   "install/gcp",
                   "install/hetzner",
+                  "install/hostinger",
                   "install/kubernetes",
                   "vps",
                   "install/macos-vm",

@@ -5,6 +5,7 @@ import {
   CRITICAL_THRESHOLD,
   GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
   TOOL_CALL_HISTORY_SIZE,
+  UNKNOWN_TOOL_THRESHOLD,
   WARNING_THRESHOLD,
   detectToolCallLoop,
   getToolCallStats,
@@ -42,6 +43,23 @@ function recordSuccessfulCall(
     toolParams: params,
     toolCallId,
     result,
+  });
+}
+
+function recordFailedCall(
+  state: SessionState,
+  toolName: string,
+  params: unknown,
+  error: unknown,
+  index: number,
+): void {
+  const toolCallId = `${toolName}-error-${index}`;
+  recordToolCall(state, toolName, params, toolCallId);
+  recordToolCallOutcome(state, {
+    toolName,
+    toolParams: params,
+    toolCallId,
+    error,
   });
 }
 
@@ -441,6 +459,71 @@ describe("tool-loop-detection", () => {
         expect(loopResult.level).toBe("critical");
         expect(loopResult.detector).toBe("global_circuit_breaker");
         expect(loopResult.message).toContain("global circuit breaker");
+      }
+    });
+
+    it("does not block repeated unknown-tool failures before the unknown-tool threshold", () => {
+      const state = createState();
+      const toolName = "exec";
+      const unknownToolError = new Error("Tool exec not found");
+
+      for (let index = 0; index < UNKNOWN_TOOL_THRESHOLD - 1; index += 1) {
+        recordFailedCall(state, toolName, { command: `echo ${index}` }, unknownToolError, index);
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        toolName,
+        { command: "echo still allowed" },
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(false);
+    });
+
+    it("blocks repeated unknown-tool failures even when the args keep changing", () => {
+      const state = createState();
+      const toolName = "exec";
+      const unknownToolError = new Error("Tool exec not found");
+
+      const attempts = [
+        { command: "ls" },
+        { command: "pwd" },
+        { input: "whoami" },
+        { cmd: "env" },
+        { shell: "bash -lc ls" },
+        { command: "printf ok" },
+        { cwd: "/tmp", command: "ls" },
+        { args: ["ls", "/tmp"] },
+        { command: "find . -maxdepth 1" },
+        { text: "run ls" },
+        { command: "uname -a" },
+        { command: "id" },
+        { command: "date" },
+        { command: "ps" },
+        { command: "df -h" },
+        { command: "free -m" },
+        { command: "ls /tmp" },
+        { command: "ls -la" },
+        { command: "cat /etc/hostname" },
+        { command: "echo done" },
+      ];
+
+      for (const [index, params] of attempts.entries()) {
+        recordFailedCall(state, toolName, params, unknownToolError, index);
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        toolName,
+        { command: "echo still looping" },
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.detector).toBe("unknown_tool_repeat");
+        expect(loopResult.level).toBe("critical");
       }
     });
 

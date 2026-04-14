@@ -161,6 +161,42 @@ export function collectRelevantDoctorPluginIds(raw: unknown): string[] {
   return [...ids].toSorted();
 }
 
+export function collectRelevantDoctorPluginIdsForTouchedPaths(params: {
+  raw: unknown;
+  touchedPaths: ReadonlyArray<ReadonlyArray<string>>;
+}): string[] {
+  const root = asNullableRecord(params.raw);
+  if (!root) {
+    return [];
+  }
+
+  const ids = new Set<string>();
+  for (const touchedPath of params.touchedPaths) {
+    const [first, second, third] = touchedPath;
+    if (first === "channels") {
+      if (!second) {
+        return collectRelevantDoctorPluginIds(params.raw);
+      }
+      if (second !== "defaults") {
+        ids.add(second);
+      }
+      continue;
+    }
+    if (first === "plugins") {
+      if (second !== "entries" || !third) {
+        return collectRelevantDoctorPluginIds(params.raw);
+      }
+      ids.add(third);
+      continue;
+    }
+    if (first === "talk" && hasLegacyElevenLabsTalkFields(root)) {
+      ids.add("elevenlabs");
+    }
+  }
+
+  return [...ids].toSorted();
+}
+
 function getDoctorContractRecordCache(
   baseCacheKey: string,
 ): Map<string, PluginDoctorContractEntry | null> {

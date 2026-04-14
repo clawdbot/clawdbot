@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { enqueueSystemEvent, resetSystemEventsForTest } from "openclaw/plugin-sdk/infra-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearInternalHooks,
   createInternalHookEvent,
@@ -20,6 +21,10 @@ import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
 const constants = __testing.constants;
 const { createTempWorkspace } = createMemoryCoreTestHarness();
+
+afterEach(() => {
+  resetSystemEventsForTest();
+});
 
 type CronParam = NonNullable<Parameters<typeof reconcileShortTermDreamingCronJob>[0]["cron"]>;
 type CronJobLike = Awaited<ReturnType<CronParam["list"]>>[number];
@@ -138,7 +143,7 @@ function getBeforeAgentReplyHandler(
   onMock: ReturnType<typeof vi.fn>,
 ): (
   event: { cleanedBody: string },
-  ctx: { trigger?: string; workspaceDir?: string },
+  ctx: { trigger?: string; workspaceDir?: string; sessionKey?: string },
 ) => Promise<unknown> {
   const call = onMock.mock.calls.find(([eventName]) => eventName === "before_agent_reply");
   if (!call) {
@@ -146,7 +151,7 @@ function getBeforeAgentReplyHandler(
   }
   return call[1] as (
     event: { cleanedBody: string },
-    ctx: { trigger?: string; workspaceDir?: string },
+    ctx: { trigger?: string; workspaceDir?: string; sessionKey?: string },
   ) => Promise<unknown>;
 }
 
@@ -1108,6 +1113,130 @@ describe("gateway startup reconciliation", () => {
       expect(harness.listCalls).toBe(2);
     } finally {
       nowSpy.mockRestore();
+      clearInternalHooks();
+    }
+  });
+
+  it("only triggers managed dreaming when the queued cron event is still pending", async () => {
+    clearInternalHooks();
+    const logger = createLogger();
+    const harness = createCronHarness();
+    const onMock = vi.fn();
+    const api: DreamingPluginApiTestDouble = {
+      config: {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: false,
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      pluginConfig: {},
+      logger,
+      runtime: {},
+      registerHook: (event: string, handler: Parameters<typeof registerInternalHook>[1]) => {
+        registerInternalHook(event, handler);
+      },
+      on: onMock,
+    };
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+      await triggerInternalHook(
+        createInternalHookEvent("gateway", "startup", "gateway:startup", {
+          cfg: api.config,
+          deps: { cron: harness.cron },
+        }),
+      );
+
+      const sessionKey = "agent:main:main";
+      enqueueSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
+        sessionKey,
+        contextKey: "cron:memory-dreaming",
+      });
+
+      const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
+      const first = await beforeAgentReply(
+        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+        { trigger: "heartbeat", workspaceDir: ".", sessionKey },
+      );
+
+      expect(first).toEqual({
+        handled: true,
+        reason: "memory-core: short-term dreaming disabled",
+      });
+
+      resetSystemEventsForTest();
+
+      const second = await beforeAgentReply(
+        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+        { trigger: "heartbeat", workspaceDir: ".", sessionKey },
+      );
+
+      expect(second).toBeUndefined();
+    } finally {
+      clearInternalHooks();
+    }
+  });
+
+  it("resolves queued managed dreaming cron events from the base session for isolated heartbeats", async () => {
+    clearInternalHooks();
+    const logger = createLogger();
+    const harness = createCronHarness();
+    const onMock = vi.fn();
+    const api: DreamingPluginApiTestDouble = {
+      config: {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: false,
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      pluginConfig: {},
+      logger,
+      runtime: {},
+      registerHook: (event: string, handler: Parameters<typeof registerInternalHook>[1]) => {
+        registerInternalHook(event, handler);
+      },
+      on: onMock,
+    };
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+      await triggerInternalHook(
+        createInternalHookEvent("gateway", "startup", "gateway:startup", {
+          cfg: api.config,
+          deps: { cron: harness.cron },
+        }),
+      );
+
+      enqueueSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
+        sessionKey: "agent:main:main",
+        contextKey: "cron:memory-dreaming",
+      });
+
+      const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
+      const result = await beforeAgentReply(
+        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+        { trigger: "heartbeat", workspaceDir: ".", sessionKey: "agent:main:main:heartbeat" },
+      );
+
+      expect(result).toEqual({
+        handled: true,
+        reason: "memory-core: short-term dreaming disabled",
+      });
+    } finally {
       clearInternalHooks();
     }
   });

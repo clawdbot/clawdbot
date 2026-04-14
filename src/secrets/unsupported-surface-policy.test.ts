@@ -1,88 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
-
-const { loadBundledChannelSecurityContractApiMock, loadPluginManifestRegistryMock } = vi.hoisted(
-  () => ({
-    loadBundledChannelSecurityContractApiMock: vi.fn((channelId: string) => {
-      if (channelId === "discord") {
-        return {
-          unsupportedSecretRefSurfacePatterns: [
-            "channels.discord.threadBindings.webhookToken",
-            "channels.discord.accounts.*.threadBindings.webhookToken",
-          ],
-          collectUnsupportedSecretRefConfigCandidates: (raw: Record<string, unknown>) => {
-            const discord = (raw.channels as Record<string, unknown> | undefined)?.discord as
-              | Record<string, unknown>
-              | undefined;
-            const candidates: Array<{ path: string; value: unknown }> = [];
-            const threadBindings = discord?.threadBindings as Record<string, unknown> | undefined;
-            candidates.push({
-              path: "channels.discord.threadBindings.webhookToken",
-              value: threadBindings?.webhookToken,
-            });
-            const accounts = discord?.accounts as Record<string, unknown> | undefined;
-            for (const [accountId, account] of Object.entries(accounts ?? {})) {
-              const accountThreadBindings = (account as Record<string, unknown>).threadBindings as
-                | Record<string, unknown>
-                | undefined;
-              candidates.push({
-                path: `channels.discord.accounts.${accountId}.threadBindings.webhookToken`,
-                value: accountThreadBindings?.webhookToken,
-              });
-            }
-            return candidates;
-          },
-        };
-      }
-      if (channelId === "whatsapp") {
-        return {
-          unsupportedSecretRefSurfacePatterns: [
-            "channels.whatsapp.creds.json",
-            "channels.whatsapp.accounts.*.creds.json",
-          ],
-          collectUnsupportedSecretRefConfigCandidates: (raw: Record<string, unknown>) => {
-            const whatsapp = (raw.channels as Record<string, unknown> | undefined)?.whatsapp as
-              | Record<string, unknown>
-              | undefined;
-            const candidates: Array<{ path: string; value: unknown }> = [];
-            const creds = whatsapp?.creds as Record<string, unknown> | undefined;
-            candidates.push({
-              path: "channels.whatsapp.creds.json",
-              value: creds?.json,
-            });
-            const accounts = whatsapp?.accounts as Record<string, unknown> | undefined;
-            for (const [accountId, account] of Object.entries(accounts ?? {})) {
-              const accountCreds = (account as Record<string, unknown>).creds as
-                | Record<string, unknown>
-                | undefined;
-              candidates.push({
-                path: `channels.whatsapp.accounts.${accountId}.creds.json`,
-                value: accountCreds?.json,
-              });
-            }
-            return candidates;
-          },
-        };
-      }
-      return undefined;
-    }),
-    loadPluginManifestRegistryMock: vi.fn(() => ({
-      plugins: [
-        { id: "discord", origin: "bundled", channels: ["discord"] },
-        { id: "whatsapp", origin: "bundled", channels: ["whatsapp"] },
-      ],
-      diagnostics: [],
-    })),
-  }),
-);
-
-vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: loadPluginManifestRegistryMock,
-}));
-
-vi.mock("./channel-contract-api.js", () => ({
-  loadBundledChannelSecurityContractApi: loadBundledChannelSecurityContractApiMock,
-}));
-
+import { describe, expect, it } from "vitest";
 import {
   collectUnsupportedSecretRefConfigCandidates,
   getUnsupportedSecretRefSurfacePatterns,
@@ -90,17 +6,19 @@ import {
 
 describe("unsupported SecretRef surface policy metadata", () => {
   it("exposes the canonical unsupported surface patterns", () => {
-    expect(getUnsupportedSecretRefSurfacePatterns()).toEqual([
-      "commands.ownerDisplaySecret",
-      "hooks.token",
-      "hooks.gmail.pushToken",
-      "hooks.mappings[].sessionKey",
-      "auth-profiles.oauth.*",
-      "channels.discord.threadBindings.webhookToken",
-      "channels.discord.accounts.*.threadBindings.webhookToken",
-      "channels.whatsapp.creds.json",
-      "channels.whatsapp.accounts.*.creds.json",
-    ]);
+    expect(getUnsupportedSecretRefSurfacePatterns().toSorted()).toEqual(
+      [
+        "commands.ownerDisplaySecret",
+        "hooks.token",
+        "hooks.gmail.pushToken",
+        "hooks.mappings[].sessionKey",
+        "auth-profiles.oauth.*",
+        "channels.discord.threadBindings.webhookToken",
+        "channels.discord.accounts.*.threadBindings.webhookToken",
+        "channels.whatsapp.creds.json",
+        "channels.whatsapp.accounts.*.creds.json",
+      ].toSorted(),
+    );
   });
 
   it("discovers concrete config candidates for unsupported mutable surfaces", () => {

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-mocks.js";
 import { downloadBlueBubblesAttachment, sendBlueBubblesAttachment } from "./attachments.js";
-import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
+import { fetchBlueBubblesServerInfo, getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import type { PluginRuntime } from "./runtime-api.js";
 import { setBlueBubblesRuntime } from "./runtime.js";
 import {
@@ -13,6 +13,7 @@ import {
 import type { BlueBubblesAttachment } from "./types.js";
 
 const mockFetch = vi.fn();
+const fetchServerInfoMock = vi.mocked(fetchBlueBubblesServerInfo);
 const fetchRemoteMediaMock = vi.fn(
   async (params: {
     url: string;
@@ -381,6 +382,8 @@ describe("sendBlueBubblesAttachment", () => {
     vi.stubGlobal("fetch", mockFetch);
     mockFetch.mockReset();
     fetchRemoteMediaMock.mockClear();
+    fetchServerInfoMock.mockReset();
+    fetchServerInfoMock.mockResolvedValue(null);
     setBlueBubblesRuntime(runtimeStub);
     vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReset();
     mockBlueBubblesPrivateApiStatus(
@@ -618,6 +621,136 @@ describe("sendBlueBubblesAttachment", () => {
     const attachBody = mockFetch.mock.calls[3][1]?.body as Uint8Array;
     const attachText = decodeBody(attachBody);
     expect(attachText).toContain("iMessage;-;+15557654321");
+  });
+
+  describe("lazy private API refresh (#43764)", () => {
+    const privateApiStatusMock = vi.mocked(getCachedBlueBubblesPrivateApiStatus);
+
+    it("refreshes cache when expired and reply threading is requested", async () => {
+      privateApiStatusMock.mockReturnValueOnce(null).mockReturnValueOnce(true);
+      fetchServerInfoMock.mockResolvedValueOnce({ private_api: true });
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({ data: { guid: "msg-refreshed" } })),
+      });
+
+      const result = await sendBlueBubblesAttachment({
+        to: "chat_guid:iMessage;-;+15551234567",
+        buffer: new Uint8Array([1, 2, 3]),
+        filename: "photo.jpg",
+        contentType: "image/jpeg",
+        replyToMessageGuid: "reply-guid-456",
+        opts: { serverUrl: "http://localhost:1234", password: "test" },
+      });
+
+      expect(result.messageId).toBe("msg-refreshed");
+      expect(fetchServerInfoMock).toHaveBeenCalledTimes(1);
+      const body = mockFetch.mock.calls[0][1]?.body as Uint8Array;
+      const bodyText = decodeBody(body);
+      expect(bodyText).toContain('name="method"');
+      expect(bodyText).toContain("private-api");
+      expect(bodyText).toContain('name="selectedMessageGuid"');
+    });
+
+    it("does not refresh when cache is populated (cache hit)", async () => {
+      mockBlueBubblesPrivateApiStatusOnce(
+        privateApiStatusMock,
+        BLUE_BUBBLES_PRIVATE_API_STATUS.enabled,
+      );
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({ data: { guid: "msg-cached" } })),
+      });
+
+      await sendBlueBubblesAttachment({
+        to: "chat_guid:iMessage;-;+15551234567",
+        buffer: new Uint8Array([1, 2, 3]),
+        filename: "photo.jpg",
+        contentType: "image/jpeg",
+        replyToMessageGuid: "reply-guid-123",
+        opts: { serverUrl: "http://localhost:1234", password: "test" },
+      });
+
+      expect(fetchServerInfoMock).not.toHaveBeenCalled();
+    });
+
+    it("degrades gracefully when refresh fails", async () => {
+      fetchServerInfoMock.mockRejectedValueOnce(new Error("network error"));
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({ data: { guid: "msg-degraded" } })),
+      });
+
+      const runtimeLog = vi.fn();
+      setBlueBubblesRuntime({
+        ...runtimeStub,
+        log: runtimeLog,
+      } as unknown as PluginRuntime);
+
+      const result = await sendBlueBubblesAttachment({
+        to: "chat_guid:iMessage;-;+15551234567",
+        buffer: new Uint8Array([1, 2, 3]),
+        filename: "photo.jpg",
+        contentType: "image/jpeg",
+        replyToMessageGuid: "reply-guid-789",
+        opts: { serverUrl: "http://localhost:1234", password: "test" },
+      });
+
+      expect(result.messageId).toBe("msg-degraded");
+      expect(fetchServerInfoMock).toHaveBeenCalledTimes(1);
+      expect(runtimeLog).toHaveBeenCalledTimes(1);
+      expect(runtimeLog.mock.calls[0]?.[0]).toContain("Private API status unknown");
+    });
+
+    it("degrades reply threading when refresh succeeds with private_api: false", async () => {
+      privateApiStatusMock.mockReturnValueOnce(null).mockReturnValueOnce(false);
+      fetchServerInfoMock.mockResolvedValueOnce({ private_api: false });
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({ data: { guid: "msg-disabled" } })),
+      });
+
+      const runtimeLog = vi.fn();
+      setBlueBubblesRuntime({
+        ...runtimeStub,
+        log: runtimeLog,
+      } as unknown as PluginRuntime);
+
+      const result = await sendBlueBubblesAttachment({
+        to: "chat_guid:iMessage;-;+15551234567",
+        buffer: new Uint8Array([1, 2, 3]),
+        filename: "photo.jpg",
+        contentType: "image/jpeg",
+        replyToMessageGuid: "reply-guid-disabled",
+        opts: { serverUrl: "http://localhost:1234", password: "test" },
+      });
+
+      expect(result.messageId).toBe("msg-disabled");
+      expect(fetchServerInfoMock).toHaveBeenCalledTimes(1);
+      // No warning — status is known (disabled), not unknown
+      expect(runtimeLog).not.toHaveBeenCalled();
+      const body = mockFetch.mock.calls[0][1]?.body as Uint8Array;
+      const bodyText = decodeBody(body);
+      expect(bodyText).not.toContain('name="selectedMessageGuid"');
+      expect(bodyText).not.toContain('name="method"');
+    });
+
+    it("does not refresh when no reply threading is requested", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({ data: { guid: "msg-plain" } })),
+      });
+
+      await sendBlueBubblesAttachment({
+        to: "chat_guid:iMessage;-;+15551234567",
+        buffer: new Uint8Array([1, 2, 3]),
+        filename: "photo.jpg",
+        contentType: "image/jpeg",
+        opts: { serverUrl: "http://localhost:1234", password: "test" },
+      });
+
+      expect(fetchServerInfoMock).not.toHaveBeenCalled();
+    });
   });
 
   it("still throws for non-handle targets when chatGuid is not found", async () => {

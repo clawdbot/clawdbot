@@ -157,6 +157,13 @@ describe("bundled plugin metadata", () => {
     );
   });
 
+  it("keeps Slack's doctor contract sidecar on the bundled public surface", () => {
+    const slack = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "slack");
+    expectArtifactPresence(slack?.publicSurfaceArtifacts, {
+      contains: ["doctor-contract-api.js"],
+    });
+  });
+
   it("loads tlon channel config metadata from the lightweight schema surface", () => {
     expect(collectRepoBundledChannelConfigsForTest("tlon")?.tlon).toEqual(
       expect.objectContaining({

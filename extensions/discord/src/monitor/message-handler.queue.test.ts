@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { DiscordRetryableInboundError } from "./inbound-dedupe.js";
 import {
   createDiscordMessageHandler,
   preflightDiscordMessageMock,
@@ -250,6 +251,69 @@ describe("createDiscordMessageHandler queue behavior", () => {
       expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
     });
     expect(preflightDiscordMessageMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries duplicate deliveries after an explicit retryable worker failure", async () => {
+    preflightDiscordMessageMock.mockReset();
+    processDiscordMessageMock.mockReset();
+
+    processDiscordMessageMock
+      .mockRejectedValueOnce(new DiscordRetryableInboundError("retry me"))
+      .mockResolvedValueOnce(undefined);
+    const params = createDiscordHandlerParams();
+    const handler = createDiscordMessageHandler(params);
+    installDefaultDiscordPreflight();
+    const duplicate = createMessageData("m-retry");
+
+    await expect(handler(duplicate as never, {} as never)).resolves.toBeUndefined();
+    await vi.waitFor(() => {
+      expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+    });
+    await vi.waitFor(() => {
+      expect(params.runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "discord inbound worker failed: DiscordRetryableInboundError: retry me",
+        ),
+      );
+    });
+
+    await expect(handler(duplicate as never, {} as never)).resolves.toBeUndefined();
+    await vi.waitFor(() => {
+      expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
+    });
+    expect(preflightDiscordMessageMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps replay committed after a non-retryable worker failure", async () => {
+    preflightDiscordMessageMock.mockReset();
+    processDiscordMessageMock.mockReset();
+
+    const visibleSideEffect = vi.fn();
+    processDiscordMessageMock.mockImplementationOnce(async () => {
+      visibleSideEffect();
+      throw new Error("post-send failure");
+    });
+    const params = createDiscordHandlerParams();
+    const handler = createDiscordMessageHandler(params);
+    installDefaultDiscordPreflight();
+    const duplicate = createMessageData("m-fail");
+
+    await expect(handler(duplicate as never, {} as never)).resolves.toBeUndefined();
+    await vi.waitFor(() => {
+      expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+    });
+    await vi.waitFor(() => {
+      expect(params.runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("discord inbound worker failed: Error: post-send failure"),
+      );
+    });
+
+    await expect(handler(duplicate as never, {} as never)).resolves.toBeUndefined();
+    await Promise.resolve();
+
+    expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+    expect(preflightDiscordMessageMock).toHaveBeenCalledTimes(1);
+    expect(visibleSideEffect).toHaveBeenCalledTimes(1);
   });
 
   it("applies explicit inbound worker timeout to queued runs so stalled runs do not block the queue", async () => {

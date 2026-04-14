@@ -1,5 +1,3 @@
-import { logVerbose } from "../../globals.js";
-import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { shouldHandleTextCommands } from "../commands-registry.js";
 import { emitResetCommandHooks } from "./commands-reset-hooks.js";
 import { maybeHandleResetCommand } from "./commands-reset.js";
@@ -41,18 +39,8 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
     }
   }
 
-  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
-  const sendPolicy = resolveSendPolicy({
-    cfg: params.cfg,
-    entry: targetSessionEntry,
-    sessionKey: params.sessionKey,
-    channel: targetSessionEntry?.channel ?? params.command.channel,
-    chatType: targetSessionEntry?.chatType,
-  });
-  if (sendPolicy === "deny") {
-    logVerbose(`Send blocked by policy for session ${params.sessionKey ?? "unknown"}`);
-    return { shouldContinue: false };
-  }
-
+  // sendPolicy "deny" is now handled downstream in dispatch-from-config.ts
+  // by suppressing outbound delivery while still allowing the agent to process
+  // the inbound message (context, memory, tool calls). See #53328.
   return { shouldContinue: true };
 }

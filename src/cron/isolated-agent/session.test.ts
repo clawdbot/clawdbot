@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
-vi.mock("../../config/sessions/store.js", () => ({
+vi.mock("../../config/sessions/store-load.js", () => ({
   loadSessionStore: vi.fn(),
 }));
 
@@ -9,7 +9,7 @@ vi.mock("../../config/sessions/paths.js", () => ({
   resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store.json"),
 }));
 
-vi.mock("../../config/sessions/reset.js", () => ({
+vi.mock("../../config/sessions/reset-policy.js", () => ({
   evaluateSessionFreshness: vi.fn().mockReturnValue({ fresh: true }),
   resolveSessionResetPolicy: vi.fn().mockReturnValue({ mode: "idle", idleMinutes: 60 }),
 }));
@@ -24,8 +24,8 @@ vi.mock("../../agents/bootstrap-cache.js", () => ({
 }));
 
 import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
-import { evaluateSessionFreshness } from "../../config/sessions/reset.js";
-import { loadSessionStore } from "../../config/sessions/store.js";
+import { evaluateSessionFreshness } from "../../config/sessions/reset-policy.js";
+import { loadSessionStore } from "../../config/sessions/store-load.js";
 import { resolveCronSession } from "./session.js";
 
 const NOW_MS = 1_737_600_000_000;

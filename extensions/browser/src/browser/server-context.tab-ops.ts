@@ -1,3 +1,4 @@
+import { resolveCdpControlPolicy } from "./cdp-reachability-policy.js";
 import { CDP_JSON_NEW_TIMEOUT_MS } from "./cdp-timeouts.js";
 import {
   assertCdpEndpointAllowed,
@@ -12,7 +13,7 @@ import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationResultAllowed,
   InvalidBrowserNavigationUrlError,
-  requiresInspectableBrowserNavigationRedirects,
+  requiresInspectableBrowserNavigationRedirectsForUrl,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
@@ -69,7 +70,7 @@ export function createProfileTabOps({
 }: TabOpsDeps): ProfileTabOps {
   const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(profile.cdpUrl);
   const capabilities = getBrowserProfileCapabilities(profile);
-  const getSsrFPolicy = () => state().resolved.ssrfPolicy;
+  const getCdpControlPolicy = () => resolveCdpControlPolicy(profile, state().resolved.ssrfPolicy);
 
   const listTabs = async (): Promise<BrowserTab[]> => {
     if (capabilities.usesChromeMcp) {
@@ -80,7 +81,7 @@ export function createProfileTabOps({
       const mod = await getPwAiModule({ mode: "strict" });
       const listPagesViaPlaywright = (mod as Partial<PwAiModule> | null)?.listPagesViaPlaywright;
       if (typeof listPagesViaPlaywright === "function") {
-        const ssrfPolicy = getSsrFPolicy();
+        const ssrfPolicy = getCdpControlPolicy();
         await assertCdpEndpointAllowed(profile.cdpUrl, ssrfPolicy);
         const pages = await listPagesViaPlaywright({ cdpUrl: profile.cdpUrl, ssrfPolicy });
         return pages.map((p) => ({
@@ -100,7 +101,7 @@ export function createProfileTabOps({
         webSocketDebuggerUrl?: string;
         type?: string;
       }>
-    >(appendCdpPath(cdpHttpBase, "/json/list"), undefined, undefined, getSsrFPolicy());
+    >(appendCdpPath(cdpHttpBase, "/json/list"), undefined, undefined, getCdpControlPolicy());
     return raw
       .map((t) => ({
         targetId: t.id ?? "",
@@ -136,7 +137,7 @@ export function createProfileTabOps({
         appendCdpPath(cdpHttpBase, `/json/close/${tab.targetId}`),
         undefined,
         undefined,
-        getSsrFPolicy(),
+        getCdpControlPolicy(),
       ).catch(() => {
         // best-effort cleanup only
       });
@@ -182,7 +183,7 @@ export function createProfileTabOps({
       }
     }
 
-    if (requiresInspectableBrowserNavigationRedirects(state().resolved.ssrfPolicy)) {
+    if (requiresInspectableBrowserNavigationRedirectsForUrl(url, state().resolved.ssrfPolicy)) {
       throw new InvalidBrowserNavigationUrlError(
         "Navigation blocked: strict browser SSRF policy requires Playwright-backed redirect-hop inspection",
       );
@@ -191,7 +192,7 @@ export function createProfileTabOps({
     const createdViaCdp = await createTargetViaCdp({
       cdpUrl: profile.cdpUrl,
       url,
-      ...ssrfPolicyOpts,
+      ssrfPolicy: getCdpControlPolicy(),
     })
       .then((r) => r.targetId)
       .catch(() => null);

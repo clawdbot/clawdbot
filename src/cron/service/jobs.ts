@@ -38,6 +38,13 @@ import type { CronServiceState } from "./state.js";
 const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
 const STAGGER_OFFSET_CACHE_MAX = 4096;
 const staggerOffsetCache = new Map<string, number>();
+export const DEFAULT_ERROR_BACKOFF_SCHEDULE_MS = [
+  30_000,
+  60_000,
+  5 * 60_000,
+  15 * 60_000,
+  60 * 60_000,
+];
 
 function isFiniteTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
@@ -45,6 +52,14 @@ function isFiniteTimestamp(value: unknown): value is number {
 
 export function hasScheduledNextRunAtMs(value: unknown): value is number {
   return isFiniteTimestamp(value) && value > 0;
+}
+
+export function errorBackoffMs(
+  consecutiveErrors: number,
+  scheduleMs = DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
+): number {
+  const idx = Math.min(consecutiveErrors - 1, scheduleMs.length - 1);
+  return scheduleMs[Math.max(0, idx)] ?? DEFAULT_ERROR_BACKOFF_SCHEDULE_MS[0];
 }
 
 function resolveStableCronOffsetMs(jobId: string, staggerMs: number) {
@@ -421,7 +436,27 @@ function walkSchedulableJobs(
 function recomputeJobNextRunAtMs(params: { state: CronServiceState; job: CronJob; nowMs: number }) {
   let changed = false;
   try {
-    const newNext = computeJobNextRunAtMs(params.job, params.nowMs);
+    let newNext = computeJobNextRunAtMs(params.job, params.nowMs);
+    if (
+      params.job.schedule.kind !== "at" &&
+      params.job.state.lastStatus === "error" &&
+      isFiniteTimestamp(params.job.state.lastRunAtMs)
+    ) {
+      const consecutiveErrorsRaw = params.job.state.consecutiveErrors;
+      const consecutiveErrors =
+        typeof consecutiveErrorsRaw === "number" && Number.isFinite(consecutiveErrorsRaw)
+          ? Math.max(1, Math.floor(consecutiveErrorsRaw))
+          : 1;
+      const backoffFloor =
+        params.job.state.lastRunAtMs +
+        errorBackoffMs(
+          consecutiveErrors,
+          params.state.deps.cronConfig?.retry?.backoffMs ?? DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
+        );
+      if (newNext !== undefined) {
+        newNext = Math.max(newNext, backoffFloor);
+      }
+    }
     if (params.job.state.nextRunAtMs !== newNext) {
       params.job.state.nextRunAtMs = newNext;
       changed = true;

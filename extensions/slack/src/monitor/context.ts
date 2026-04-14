@@ -68,6 +68,7 @@ export type SlackMonitorContext = {
 
   logger: ReturnType<typeof getChildLogger>;
   markMessageSeen: (channelId: string | undefined, ts?: string) => boolean;
+  releaseSeenMessage: (channelId: string | undefined, ts?: string) => void;
   shouldDropMismatchedSlackEvent: (body: unknown) => boolean;
   resolveSlackSystemEventSessionKey: (params: {
     channelId?: string | null;
@@ -158,6 +159,13 @@ export function createSlackMonitorContext(params: {
       return false;
     }
     return seenMessages.check(`${channelId}:${ts}`);
+  };
+
+  const releaseSeenMessage = (channelId: string | undefined, ts?: string) => {
+    if (!channelId || !ts) {
+      return;
+    }
+    seenMessages.delete(`${channelId}:${ts}`);
   };
 
   const resolveSlackSystemEventSessionKey = (p: {
@@ -433,6 +441,7 @@ export function createSlackMonitorContext(params: {
     removeAckAfterReply: params.removeAckAfterReply,
     logger,
     markMessageSeen,
+    releaseSeenMessage,
     shouldDropMismatchedSlackEvent,
     resolveSlackSystemEventSessionKey,
     isChannelAllowed,

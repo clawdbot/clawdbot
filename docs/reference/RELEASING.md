@@ -75,7 +75,9 @@ OpenClaw has three public release lanes:
   - stable npm releases default to `beta`
   - stable npm publish can target `latest` explicitly via workflow input
   - stable npm promotion from `beta` to `latest` is still available as an explicit manual mode on the trusted `OpenClaw NPM Release` workflow
-  - that promotion mode still needs a valid `NPM_TOKEN` in the `npm-release` environment because npm `dist-tag` management is separate from trusted publishing
+  - direct stable publishes can also run an explicit dist-tag sync mode that
+    points both `latest` and `beta` at the already-published stable version
+  - those dist-tag modes still need a valid `NPM_TOKEN` in the `npm-release` environment because npm `dist-tag` management is separate from trusted publishing
   - public `macOS Release` is validation-only
   - real private mac publish must pass successful private mac
     `preflight_run_id` and `validate_run_id`
@@ -113,6 +115,8 @@ OpenClaw has three public release lanes:
 - `npm_dist_tag`: npm target tag for the publish path; defaults to `beta`
 - `promote_beta_to_latest`: `true` to skip publish and move an already-published
   stable `beta` build onto `latest`
+- `sync_stable_dist_tags`: `true` to skip publish and point both `latest` and
+  `beta` at an already-published stable version
 
 `OpenClaw Release Checks` accepts these operator-controlled inputs:
 
@@ -129,8 +133,12 @@ Rules:
   the workflow verifies that metadata before publish continues
 - Promotion mode must use a stable or correction tag, `preflight_only=false`,
   an empty `preflight_run_id`, and `npm_dist_tag=beta`
-- Promotion mode also requires a valid `NPM_TOKEN` in the `npm-release`
-  environment because `npm dist-tag add` still needs regular npm auth
+- Dist-tag sync mode must use a stable or correction tag,
+  `preflight_only=false`, an empty `preflight_run_id`, `npm_dist_tag=latest`,
+  and `promote_beta_to_latest=false`
+- Promotion and dist-tag sync modes also require a valid `NPM_TOKEN` because
+  `npm dist-tag add` still needs regular npm auth; trusted publishing covers
+  the package publish path only
 
 ## Stable npm release sequence
 
@@ -152,9 +160,13 @@ When cutting a stable npm release:
    same stable `tag`, `promote_beta_to_latest=true`, `preflight_only=false`,
    `preflight_run_id` empty, and `npm_dist_tag=beta` when you want to move that
    published build to `latest`
+7. If the release intentionally published directly to `latest` and `beta`
+   should follow the same stable build, run `OpenClaw NPM Release` with the same
+   stable `tag`, `sync_stable_dist_tags=true`, `promote_beta_to_latest=false`,
+   `preflight_only=false`, `preflight_run_id` empty, and `npm_dist_tag=latest`
 
-The promotion mode still requires the `npm-release` environment approval and a
-valid `NPM_TOKEN` in that environment.
+The promotion and dist-tag sync modes still require the `npm-release`
+environment approval and a valid `NPM_TOKEN` accessible to that workflow run.
 
 That keeps the direct publish path and the beta-first promotion path both
 documented and operator-visible.

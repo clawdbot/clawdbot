@@ -10,6 +10,7 @@ import {
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
 import { assertMultipartActionOk, postMultipartFormData } from "./multipart.js";
 import {
+  fetchBlueBubblesServerInfo,
   getCachedBlueBubblesPrivateApiStatus,
   isBlueBubblesPrivateApiStatusEnabled,
 } from "./probe.js";
@@ -171,7 +172,27 @@ export async function sendBlueBubblesAttachment(params: {
   filename = sanitizeFilename(filename, fallbackName);
   contentType = normalizeOptionalString(contentType);
   const { baseUrl, password, accountId, allowPrivateNetwork } = resolveAccount(opts);
-  const privateApiStatus = getCachedBlueBubblesPrivateApiStatus(accountId);
+  let privateApiStatus = getCachedBlueBubblesPrivateApiStatus(accountId);
+
+  // Lazy refresh: when the cache has expired and Private API features are needed,
+  // fetch server info before making the decision. This prevents silent degradation
+  // of reply threading after the 10-minute cache TTL expires. (#43764)
+  const wantsReplyThread = Boolean(replyToMessageGuid?.trim());
+  if (privateApiStatus === null && wantsReplyThread) {
+    try {
+      await fetchBlueBubblesServerInfo({
+        baseUrl,
+        password,
+        accountId,
+        timeoutMs: opts.timeoutMs ?? 5000,
+        allowPrivateNetwork,
+      });
+      privateApiStatus = getCachedBlueBubblesPrivateApiStatus(accountId);
+    } catch {
+      // Refresh failed — proceed with null status (existing graceful degradation)
+    }
+  }
+
   const privateApiEnabled = isBlueBubblesPrivateApiStatusEnabled(privateApiStatus);
 
   // Validate voice memo format when requested (BlueBubbles converts MP3 -> CAF when isAudioMessage).

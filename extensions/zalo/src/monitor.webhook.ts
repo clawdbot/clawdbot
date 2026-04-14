@@ -1,10 +1,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
+import { createClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import type { ResolvedZaloAccount } from "./accounts.js";
 import type { ZaloFetch, ZaloUpdate } from "./api.js";
 import type { ZaloRuntimeEnv } from "./monitor.types.js";
 import {
-  createDedupeCache,
   createFixedWindowRateLimiter,
   createWebhookAnomalyTracker,
   readJsonWebhookBodyOrReject,
@@ -47,9 +47,9 @@ const webhookRateLimiter = createFixedWindowRateLimiter({
   maxRequests: WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests,
   maxTrackedKeys: WEBHOOK_RATE_LIMIT_DEFAULTS.maxTrackedKeys,
 });
-const recentWebhookEvents = createDedupeCache({
+const recentWebhookEvents = createClaimableDedupe({
   ttlMs: ZALO_WEBHOOK_REPLAY_WINDOW_MS,
-  maxSize: 5000,
+  memoryMaxSize: 5000,
 });
 const webhookAnomalyTracker = createWebhookAnomalyTracker({
   maxTrackedKeys: WEBHOOK_ANOMALY_COUNTER_DEFAULTS.maxTrackedKeys,
@@ -59,7 +59,7 @@ const webhookAnomalyTracker = createWebhookAnomalyTracker({
 
 export function clearZaloWebhookSecurityStateForTest(): void {
   webhookRateLimiter.clear();
-  recentWebhookEvents.clear();
+  recentWebhookEvents.clearMemory();
   webhookAnomalyTracker.clear();
 }
 
@@ -75,11 +75,11 @@ function timingSafeEquals(left: string, right: string): boolean {
   return safeEqualSecret(left, right);
 }
 
-function buildReplayEventCacheKey(
-  target: ZaloWebhookTarget,
-  update: ZaloUpdate,
-  messageId: string,
-): string {
+function buildReplayEventCacheKey(target: ZaloWebhookTarget, update: ZaloUpdate): string | null {
+  const messageId = update.message?.message_id;
+  if (!messageId) {
+    return null;
+  }
   const chatId = update.message?.chat?.id ?? "";
   const senderId = update.message?.from?.id ?? "";
   return JSON.stringify([
@@ -92,13 +92,44 @@ function buildReplayEventCacheKey(
   ]);
 }
 
-function isReplayEvent(target: ZaloWebhookTarget, update: ZaloUpdate, nowMs: number): boolean {
-  const messageId = update.message?.message_id;
-  if (!messageId) {
-    return false;
+export class ZaloRetryableWebhookError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "ZaloRetryableWebhookError";
   }
-  const key = buildReplayEventCacheKey(target, update, messageId);
-  return recentWebhookEvents.check(key, nowMs);
+}
+
+export async function processZaloReplayGuardedUpdate(params: {
+  target: ZaloWebhookTarget;
+  update: ZaloUpdate;
+  processUpdate: ZaloWebhookProcessUpdate;
+  nowMs?: number;
+}): Promise<"processed" | "duplicate"> {
+  const replayEventKey = buildReplayEventCacheKey(params.target, params.update);
+  if (replayEventKey) {
+    const replayClaim = await recentWebhookEvents.claim(replayEventKey, { now: params.nowMs });
+    if (replayClaim.kind !== "claimed") {
+      return "duplicate";
+    }
+  }
+
+  params.target.statusSink?.({ lastInboundAt: Date.now() });
+  try {
+    await params.processUpdate({ update: params.update, target: params.target });
+    if (replayEventKey) {
+      await recentWebhookEvents.commit(replayEventKey);
+    }
+    return "processed";
+  } catch (error) {
+    if (replayEventKey) {
+      if (error instanceof ZaloRetryableWebhookError) {
+        recentWebhookEvents.release(replayEventKey, { error });
+      } else {
+        await recentWebhookEvents.commit(replayEventKey);
+      }
+    }
+    throw error;
+  }
 }
 
 function recordWebhookStatus(
@@ -227,14 +258,12 @@ export async function handleZaloWebhookRequest(
         return true;
       }
 
-      if (isReplayEvent(target, update, nowMs)) {
-        res.statusCode = 200;
-        res.end("ok");
-        return true;
-      }
-
-      target.statusSink?.({ lastInboundAt: Date.now() });
-      processUpdate({ update, target }).catch((err) => {
+      void processZaloReplayGuardedUpdate({
+        target,
+        update,
+        processUpdate,
+        nowMs,
+      }).catch((err) => {
         target.runtime.error?.(`[${target.account.accountId}] Zalo webhook failed: ${String(err)}`);
       });
 

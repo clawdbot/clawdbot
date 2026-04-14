@@ -71,6 +71,40 @@ describe("normalizeReplyPayloadsForDelivery", () => {
     ]);
   });
 
+  it("suppresses relay status placeholder payloads", () => {
+    expect(
+      normalizeReplyPayloadsForDelivery([
+        { text: "No channel reply." },
+        { text: "Replied in-thread." },
+        { text: "Replied in #maintainers." },
+        {
+          text: "Updated [wiki/providers.md](/Users/steipete/.openclaw/workspace/wiki/providers.md:33). No channel reply.",
+        },
+        {
+          text: "Updated [wiki/tools.md] with the rollback failure-mode nuance. No channel reply.",
+        },
+      ]),
+    ).toEqual([]);
+  });
+
+  it("keeps normal payloads that mention wiki without matching relay placeholders", () => {
+    expect(
+      normalizeReplyPayloadsForDelivery([
+        { text: "Please update wiki/tools.md after this ships." },
+      ]),
+    ).toEqual([
+      {
+        text: "Please update wiki/tools.md after this ships.",
+        mediaUrls: undefined,
+        mediaUrl: undefined,
+        replyToId: undefined,
+        replyToCurrent: false,
+        replyToTag: false,
+        audioAsVoice: false,
+      },
+    ]);
+  });
+
   it("drops JSON NO_REPLY action payloads without media", () => {
     expect(
       normalizeReplyPayloadsForDelivery([

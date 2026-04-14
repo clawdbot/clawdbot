@@ -12,6 +12,7 @@ import {
 } from "./lib/bundled-extension-manifest.ts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import {
+  collectBuiltBundledPluginStagedRuntimeDependencyErrors,
   collectBundledPluginRootRuntimeMirrorErrors,
   collectBundledPluginRuntimeDependencySpecs,
   collectRootDistBundledRuntimeMirrors,
@@ -22,6 +23,7 @@ import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./s
 
 export { collectBundledExtensionManifestErrors } from "./lib/bundled-extension-manifest.ts";
 export {
+  collectBuiltBundledPluginStagedRuntimeDependencyErrors,
   collectBundledPluginRootRuntimeMirrorErrors,
   collectRootDistBundledRuntimeMirrors,
   packageNameFromSpecifier,
@@ -52,10 +54,11 @@ const forbiddenPrefixes = [
   "docs/.generated/",
 ];
 // 2026.3.12 ballooned to ~213.6 MiB unpacked and correlated with low-memory
-// startup/doctor OOM reports. Keep enough headroom for the current pack with
-// restored bundled upgrade surfaces and Control UI assets while still catching
-// regressions quickly.
-const npmPackUnpackedSizeBudgetBytes = 191 * 1024 * 1024;
+// startup/doctor OOM reports. 2026.4.12 intentionally stages Matrix runtime
+// dependencies, including crypto wasm, so packaged installs do not miss Docker
+// and gateway runtime dependencies. Keep the budget below the 2026.3.12 bloat
+// level while allowing that mirrored runtime surface.
+const npmPackUnpackedSizeBudgetBytes = 202 * 1024 * 1024;
 const appcastPath = resolve("appcast.xml");
 const laneBuildMin = 1_000_000_000;
 const laneFloorAdoptionDateKey = 20260227;
@@ -108,7 +111,10 @@ function checkBundledExtensionMetadata() {
     requiredRootMirrors,
     rootPackageJson: rootPackage,
   });
-  const errors = [...manifestErrors, ...rootMirrorErrors];
+  const builtArtifactErrors = collectBuiltBundledPluginStagedRuntimeDependencyErrors({
+    bundledPluginsDir: resolve("dist/extensions"),
+  });
+  const errors = [...manifestErrors, ...rootMirrorErrors, ...builtArtifactErrors];
   if (errors.length > 0) {
     console.error("release-check: bundled extension manifest validation failed:");
     for (const error of errors) {

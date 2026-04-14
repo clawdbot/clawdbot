@@ -42,6 +42,31 @@ export type OutboundPayloadMirror = {
   mediaUrls: string[];
 };
 
+function isSuppressedRelayStatusText(text: string): boolean {
+  const normalized = text.trim();
+  if (!normalized) {
+    return false;
+  }
+  if (/^no channel reply\.?$/i.test(normalized)) {
+    return true;
+  }
+  if (/^replied in-thread\.?$/i.test(normalized)) {
+    return true;
+  }
+  if (/^replied in #[-\w]+\.?$/i.test(normalized)) {
+    return true;
+  }
+  // Prevent relay housekeeping text from leaking into user-visible channels.
+  if (
+    /^updated\s+\[[^\]]*wiki\/[^\]]+\](?:\([^)]+\))?(?:\s+with\b[\s\S]*)?(?:\.\s*)?(?:no channel reply\.?)?$/i.test(
+      normalized,
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function mergeMediaUrls(...lists: Array<ReadonlyArray<string | undefined> | undefined>): string[] {
   const seen = new Set<string>();
   const merged: string[] = [];
@@ -75,6 +100,10 @@ function createOutboundPayloadPlanEntry(payload: ReplyPayload): OutboundPayloadP
     explicitMediaUrls,
     explicitMediaUrl ? [explicitMediaUrl] : undefined,
   );
+  const parsedText = parsed.text ?? "";
+  if (isSuppressedRelayStatusText(parsedText) && mergedMedia.length === 0) {
+    return null;
+  }
   if (parsed.isSilent && mergedMedia.length === 0) {
     return null;
   }
@@ -85,7 +114,7 @@ function createOutboundPayloadPlanEntry(payload: ReplyPayload): OutboundPayloadP
     text:
       formatBtwTextForExternalDelivery({
         ...payload,
-        text: parsed.text ?? "",
+        text: parsedText,
       }) ?? "",
     mediaUrls: mergedMedia.length ? mergedMedia : undefined,
     mediaUrl: resolvedMediaUrl,

@@ -51,6 +51,33 @@ describe("provider env vars dynamic manifest metadata", () => {
     expect(mod.listKnownSecretEnvVarNames()).toContain("FIREWORKS_ALT_API_KEY");
   });
 
+  it("keeps lazy manifest-backed exports cold until accessed and resolves them once", async () => {
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "external-fireworks",
+          origin: "global",
+          providerAuthEnvVars: {
+            fireworks: ["FIREWORKS_ALT_API_KEY"],
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    const mod = await import("./provider-env-vars.js");
+
+    expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
+    expect(mod.PROVIDER_ENV_VARS.fireworks).toEqual(["FIREWORKS_ALT_API_KEY"]);
+    expect(mod.PROVIDER_AUTH_ENV_VAR_CANDIDATES.fireworks).toEqual(["FIREWORKS_ALT_API_KEY"]);
+    const initialLoads = loadPluginManifestRegistry.mock.calls.length;
+    expect(initialLoads).toBeGreaterThan(0);
+
+    void mod.PROVIDER_ENV_VARS.fireworks;
+    void mod.PROVIDER_AUTH_ENV_VAR_CANDIDATES.fireworks;
+    expect(loadPluginManifestRegistry).toHaveBeenCalledTimes(initialLoads);
+  });
+
   it("keeps workspace plugin env vars in default lookups", async () => {
     loadPluginManifestRegistry.mockReturnValue({
       plugins: [

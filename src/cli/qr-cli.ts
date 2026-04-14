@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-import qrcode from "qrcode-terminal";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
@@ -24,7 +23,13 @@ type QrCliOptions = {
   password?: string;
 };
 
-function renderQrAscii(data: string): Promise<string> {
+async function loadQrTerminal() {
+  const mod = await import("qrcode-terminal");
+  return mod.default ?? mod;
+}
+
+async function renderQrAscii(data: string): Promise<string> {
+  const qrcode = await loadQrTerminal();
   return new Promise((resolve) => {
     qrcode.generate(data, { small: true }, (output: string) => {
       resolve(output);

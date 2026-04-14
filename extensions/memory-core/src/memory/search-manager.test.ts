@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { checkQmdBinaryAvailability as checkQmdBinaryAvailabilityFn } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -254,6 +257,30 @@ describe("getMemorySearchManager caching", () => {
       env: process.env,
       cwd: "/tmp/workspace",
     });
+  });
+
+  it("creates a missing agent workspace before probing qmd availability", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-qmd-workspace-"));
+    const workspace = path.join(tempRoot, "missing", "workspace");
+    const agentId = "missing-workspace";
+    const cfg = {
+      memory: { backend: "qmd", qmd: {} },
+      agents: { list: [{ id: agentId, default: true, workspace }] },
+    } as OpenClawConfig;
+
+    try {
+      await getMemorySearchManager({ cfg, agentId });
+
+      const stat = await fs.stat(workspace);
+      expect(stat.isDirectory()).toBe(true);
+      expect(checkQmdBinaryAvailability).toHaveBeenCalledWith({
+        command: "qmd",
+        env: process.env,
+        cwd: workspace,
+      });
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it("returns a cached qmd manager without probing the binary again", async () => {

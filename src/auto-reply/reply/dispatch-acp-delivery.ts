@@ -215,6 +215,13 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       return;
     }
     state.startedReplyLifecycle = true;
+    // When delivery is suppressed (e.g. sendPolicy: "deny"), do not fire the
+    // onReplyStart callback — channels wire it to typing indicators / lifecycle
+    // notifications that should not leak outbound events while the session is
+    // under a deny policy. See #53328.
+    if (params.suppressUserDelivery) {
+      return;
+    }
     void Promise.resolve(params.onReplyStart?.()).catch((error) => {
       logVerbose(
         `dispatch-acp: reply lifecycle start failed: ${error instanceof Error ? error.message : String(error)}`,

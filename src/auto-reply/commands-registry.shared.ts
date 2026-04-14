@@ -680,9 +680,9 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
       args: [
         {
           name: "mode",
-          description: "on or off",
+          description: "on, off, or raw",
           type: "string",
-          choices: ["on", "off"],
+          choices: ["on", "off", "raw"],
         },
       ],
       argsMenu: "auto",

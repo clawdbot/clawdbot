@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 
 const {
   loadModelCatalogMock,
@@ -49,8 +50,6 @@ vi.mock("../agents/model-selection.js", () => ({
 import { resolveCronModelSelection } from "./isolated-agent/model-selection.js";
 
 const DEFAULT_MESSAGE = "do it";
-const DEFAULT_PROVIDER = "anthropic";
-const DEFAULT_MODEL = "claude-opus-4-6";
 
 type AgentTurnPayload = {
   kind: "agentTurn";
@@ -88,7 +87,7 @@ function parseModelRef(raw: string): { provider: string; model: string } | { err
   }
 
   const provider = providerRaw === "bedrock" ? "amazon-bedrock" : providerRaw;
-  const model = provider === "anthropic" && modelRaw === "opus-4.5" ? "claude-opus-4-6" : modelRaw;
+  const model = provider === "anthropic" && modelRaw === "opus-4.5" ? "claude-opus-4-5" : modelRaw;
   return { provider, model };
 }
 
@@ -204,7 +203,7 @@ describe("cron model formatting and precedence edge cases", () => {
         selectModel({
           payload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "openai/" },
         }),
-      ).resolves.toEqual({ ok: false, error: "invalid model" });
+      ).resolves.toEqual({ ok: false, error: "invalid model: openai/" });
     });
 
     it("rejects model with leading slash (empty provider)", async () => {
@@ -212,7 +211,7 @@ describe("cron model formatting and precedence edge cases", () => {
         selectModel({
           payload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "/gpt-4.1-mini" },
         }),
-      ).resolves.toEqual({ ok: false, error: "invalid model" });
+      ).resolves.toEqual({ ok: false, error: "invalid model: /gpt-4.1-mini" });
     });
 
     it("normalizes provider casing", async () => {
@@ -237,7 +236,7 @@ describe("cron model formatting and precedence edge cases", () => {
             model: "anthropic/opus-4.5",
           },
         },
-        { provider: "anthropic", model: "claude-opus-4-6" },
+        { provider: "anthropic", model: "claude-opus-4-5" },
       );
     });
 

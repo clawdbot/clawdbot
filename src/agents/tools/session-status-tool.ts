@@ -21,7 +21,6 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
-import { importRuntimeModule } from "../../shared/runtime-import.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { buildTaskStatusSnapshotForRelatedSessionKeyForOwner } from "../../tasks/task-owner-access.js";
 import { formatTaskStatusDetail, formatTaskStatusTitle } from "../../tasks/task-status.js";
@@ -84,18 +83,11 @@ type CommandsStatusRuntimeModule = {
   }) => Promise<string>;
 };
 
-const COMMANDS_STATUS_RUNTIME_SPEC = [
-  "../../auto-reply/reply/commands-status.runtime",
-  ".js",
-] as const;
-
 let commandsStatusRuntimePromise: Promise<CommandsStatusRuntimeModule> | null = null;
 
 function loadCommandsStatusRuntime(): Promise<CommandsStatusRuntimeModule> {
-  commandsStatusRuntimePromise ??= importRuntimeModule<CommandsStatusRuntimeModule>(
-    import.meta.url,
-    COMMANDS_STATUS_RUNTIME_SPEC,
-  );
+  commandsStatusRuntimePromise ??=
+    import("./session-status.runtime.js") as Promise<CommandsStatusRuntimeModule>;
   return commandsStatusRuntimePromise;
 }
 

@@ -89,7 +89,7 @@ describe("resolveMemoryBackendConfig", () => {
     expect(resolved.qmd?.command).toBe("/Applications/QMD Tools/qmd");
   });
 
-  it("normalizes stale homebrew qmd paths to the portable command", () => {
+  it("preserves explicit homebrew qmd paths for service environments", () => {
     const cfg = {
       agents: { defaults: { workspace: "/tmp/memory-test" } },
       memory: {
@@ -100,7 +100,7 @@ describe("resolveMemoryBackendConfig", () => {
       },
     } as OpenClawConfig;
     const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
-    expect(resolved.qmd?.command).toBe("qmd");
+    expect(resolved.qmd?.command).toBe("/opt/homebrew/bin/qmd");
   });
 
   it("resolves custom paths relative to workspace", () => {

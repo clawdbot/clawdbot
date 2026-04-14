@@ -86,11 +86,12 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     const next = previous.catch(() => undefined).then(task);
     const settled = next.catch(() => undefined);
     keyChains.set(key, settled);
-    void settled.finally(() => {
+    const cleanup = () => {
       if (keyChains.get(key) === settled) {
         keyChains.delete(key);
       }
-    });
+    };
+    settled.then(cleanup, cleanup);
     return next;
   };
 

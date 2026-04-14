@@ -1,5 +1,3 @@
-import { setTimeout as delay } from "node:timers/promises";
-
 export type BackoffPolicy = {
   initialMs: number;
   maxMs: number;
@@ -17,12 +15,45 @@ export async function sleepWithAbort(ms: number, abortSignal?: AbortSignal) {
   if (ms <= 0) {
     return;
   }
-  try {
-    await delay(ms, undefined, { signal: abortSignal });
-  } catch (err) {
-    if (abortSignal?.aborted) {
-      throw new Error("aborted", { cause: err });
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const onAbort = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      if (abortSignal) {
+        abortSignal.removeEventListener("abort", onAbort);
+      }
+      reject(new Error("aborted", { cause: abortSignal?.reason ?? new Error("aborted") }));
+    };
+
+    if (abortSignal) {
+      abortSignal.addEventListener("abort", onAbort, { once: true });
+      if (abortSignal.aborted) {
+        onAbort();
+        return;
+      }
     }
-    throw err;
-  }
+
+    timer = setTimeout(() => {
+      settled = true;
+      if (abortSignal) {
+        abortSignal.removeEventListener("abort", onAbort);
+      }
+      timer = null;
+      resolve();
+    }, ms);
+
+    if (abortSignal) {
+      if (abortSignal.aborted) {
+        onAbort();
+      }
+    }
+  });
 }

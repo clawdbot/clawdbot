@@ -1008,6 +1008,9 @@ jobs:
       - name: Smoke test built bundled plugin singleton
         run: pnpm test:build:singleton
 
+      - name: Smoke test built bundled runtime deps
+        run: pnpm test:build:bundled-runtime-deps
+
       - name: Check CLI startup memory
         run: pnpm test:startup:memory
 

@@ -1617,6 +1617,6 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
   }
 
   if (registered.length > 0) {
-    api.logger.info?.(`feishu_doc: Registered ${registered.join(", ")}`);
+    api.logger.debug?.(`feishu_doc: Registered ${registered.join(", ")}`);
   }
 }

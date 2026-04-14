@@ -9,6 +9,7 @@ import {
 } from "../plugins/config-state.js";
 import {
   collectRelevantDoctorPluginIds,
+  collectRelevantDoctorPluginIdsForTouchedPaths,
   listPluginDoctorLegacyConfigRules,
 } from "../plugins/doctor-contract-registry.js";
 import { resolveManifestCommandAliasOwner } from "../plugins/manifest-command-aliases.runtime.js";
@@ -571,13 +572,21 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
  */
 export function validateConfigObjectRaw(
   raw: unknown,
+  opts?: {
+    touchedPaths?: ReadonlyArray<ReadonlyArray<string>>;
+  },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
   const policyIssues = collectUnsupportedSecretRefPolicyIssues(raw);
-  const legacyIssues = findLegacyConfigIssues(
-    raw,
-    raw,
-    listPluginDoctorLegacyConfigRules({ pluginIds: collectRelevantDoctorPluginIds(raw) }),
-  );
+  const doctorPluginIds = opts?.touchedPaths
+    ? collectRelevantDoctorPluginIdsForTouchedPaths({
+        raw,
+        touchedPaths: opts.touchedPaths,
+      })
+    : collectRelevantDoctorPluginIds(raw);
+  const extraLegacyRules = listPluginDoctorLegacyConfigRules({
+    pluginIds: doctorPluginIds,
+  });
+  const legacyIssues = findLegacyConfigIssues(raw, raw, extraLegacyRules, opts?.touchedPaths);
   if (legacyIssues.length > 0) {
     return {
       ok: false,

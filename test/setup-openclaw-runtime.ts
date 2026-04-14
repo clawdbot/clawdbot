@@ -16,7 +16,7 @@ import { drainSessionStoreLockQueuesForTest } from "../src/config/sessions/store
 import { drainFileLockStateForTest, resetFileLockStateForTest } from "../src/infra/file-lock.js";
 import type { OutboundSendDeps } from "../src/infra/outbound/deliver.js";
 import { clearPluginDiscoveryCache } from "../src/plugins/discovery.js";
-import { clearPluginManifestRegistryCache } from "../src/plugins/manifest-registry.js";
+import { clearPluginManifestRegistryCache } from "../src/plugins/manifest-registry-state.js";
 import type { PluginRegistry } from "../src/plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../src/plugins/runtime.js";
 import { installSharedTestSetup } from "./setup.shared.js";

@@ -46,11 +46,11 @@ export function parseTraceOverride(
     return { ok: true, value: undefined };
   }
   if (typeof raw !== "string") {
-    return { ok: false, error: 'invalid traceLevel (use "on"|"off")' };
+    return { ok: false, error: 'invalid traceLevel (use "on"|"off"|"raw")' };
   }
   const normalized = normalizeTraceLevel(raw);
   if (!normalized) {
-    return { ok: false, error: 'invalid traceLevel (use "on"|"off")' };
+    return { ok: false, error: 'invalid traceLevel (use "on"|"off"|"raw")' };
   }
   return { ok: true, value: normalized };
 }

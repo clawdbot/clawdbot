@@ -23,6 +23,7 @@ tuning that applies everywhere.
   <Card title="Oracle Cloud" href="/install/oracle">Always Free ARM tier</Card>
   <Card title="Fly.io" href="/install/fly">Fly Machines</Card>
   <Card title="Hetzner" href="/install/hetzner">Docker on Hetzner VPS</Card>
+  <Card title="Hostinger" href="/install/hostinger">VPS with one-click setup</Card>
   <Card title="GCP" href="/install/gcp">Compute Engine</Card>
   <Card title="Azure" href="/install/azure">Linux VM</Card>
   <Card title="exe.dev" href="/install/exe-dev">VM with HTTPS proxy</Card>

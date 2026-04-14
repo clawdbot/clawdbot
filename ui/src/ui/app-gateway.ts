@@ -177,6 +177,27 @@ function applySessionDefaults(host: GatewayHost, defaults?: SessionDefaultsSnaps
   if (!defaults?.mainSessionKey) {
     return;
   }
+
+  // Detect if user has already selected a specific session (not an alias like "main").
+  // If normalization doesn't change the value, it's a user-selected session.
+  const normalizedSessionKey = normalizeSessionKeyForDefaults(host.sessionKey, defaults);
+  const isUserSelectedSession = normalizedSessionKey === host.sessionKey;
+
+  if (isUserSelectedSession) {
+    // User has selected a specific session; preserve their choice
+    // Only normalize lastActiveSessionKey, don't override current sessionKey
+    const resolvedLastActiveSessionKey = normalizeSessionKeyForDefaults(
+      host.settings.lastActiveSessionKey,
+      defaults,
+    );
+    if (resolvedLastActiveSessionKey !== host.settings.lastActiveSessionKey) {
+      applySettings(host as unknown as Parameters<typeof applySettings>[0], {
+        ...host.settings,
+        lastActiveSessionKey: resolvedLastActiveSessionKey,
+      });
+    }
+    return; // Keep user's session selection
+  }
   const resolvedSessionKey = normalizeSessionKeyForDefaults(host.sessionKey, defaults);
   const resolvedSettingsSessionKey = normalizeSessionKeyForDefaults(
     host.settings.sessionKey,

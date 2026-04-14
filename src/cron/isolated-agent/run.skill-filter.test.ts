@@ -353,7 +353,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
 
       expect(result.status).toBe("ok");
       expect(session.sessionEntry.contextTokens).toBe(512_000);
-      expect(lookupContextTokensMock).toHaveBeenCalledWith("gpt-4", {
+      expect(lookupContextTokensMock).toHaveBeenCalledWith("gpt-5.4", {
         allowAsyncLoad: false,
       });
     });

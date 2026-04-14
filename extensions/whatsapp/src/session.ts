@@ -7,7 +7,6 @@ import { resolveAmbientNodeProxyAgent } from "openclaw/plugin-sdk/extension-shar
 import { danger, success } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger, toPinoLikeLogger } from "openclaw/plugin-sdk/runtime-env";
 import { ensureDir, resolveUserPath } from "openclaw/plugin-sdk/text-runtime";
-import qrcode from "qrcode-terminal";
 import {
   maybeRestoreCredsFromBackup,
   readCredsJsonRaw,
@@ -36,6 +35,11 @@ export {
 } from "./auth-store.js";
 
 const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
+
+async function loadQrTerminal() {
+  const mod = await import("qrcode-terminal");
+  return mod.default ?? mod;
+}
 
 // Per-authDir queues so multi-account creds saves don't block each other.
 const credsSaveQueues = new Map<string, Promise<void>>();
@@ -139,13 +143,14 @@ export async function createWaSocket(
   sock.ev.on("creds.update", () => enqueueSaveCreds(authDir, saveCreds, sessionLogger));
   sock.ev.on(
     "connection.update",
-    (update: Partial<import("@whiskeysockets/baileys").ConnectionState>) => {
+    async (update: Partial<import("@whiskeysockets/baileys").ConnectionState>) => {
       try {
         const { connection, lastDisconnect, qr } = update;
         if (qr) {
           opts.onQr?.(qr);
           if (printQr) {
             console.log("Scan this QR in WhatsApp (Linked Devices):");
+            const qrcode = await loadQrTerminal();
             qrcode.generate(qr, { small: true });
           }
         }

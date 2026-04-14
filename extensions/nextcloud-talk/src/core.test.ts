@@ -207,6 +207,39 @@ describe("nextcloud talk core", () => {
     expect(accountBFirst).toBe(true);
   });
 
+  it("releases in-flight replay claims when processing fails", async () => {
+    const stateDir = await makeTempDir();
+    const guard = createNextcloudTalkReplayGuard({ stateDir });
+
+    const firstClaim = await guard.claimMessage({
+      accountId: "account-a",
+      roomToken: "room-1",
+      messageId: "msg-claim",
+    });
+    const secondClaim = await guard.claimMessage({
+      accountId: "account-a",
+      roomToken: "room-1",
+      messageId: "msg-claim",
+    });
+
+    expect(firstClaim).toBe("claimed");
+    expect(secondClaim).toBe("inflight");
+
+    guard.releaseMessage({
+      accountId: "account-a",
+      roomToken: "room-1",
+      messageId: "msg-claim",
+      error: new Error("transient"),
+    });
+
+    const retryClaim = await guard.claimMessage({
+      accountId: "account-a",
+      roomToken: "room-1",
+      messageId: "msg-claim",
+    });
+    expect(retryClaim).toBe("claimed");
+  });
+
   it("resolves allowlist matches and group policy decisions", () => {
     expect(
       resolveNextcloudTalkAllowlistMatch({

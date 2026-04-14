@@ -21,6 +21,7 @@ import {
   resolvePluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
 import { loadPluginMetadataRegistrySnapshot } from "./runtime/metadata-registry-loader.js";
+import { hasKind } from "./slots.js";
 import type { PluginHookName } from "./types.js";
 
 export type PluginStatusReport = PluginRegistry & {
@@ -37,6 +38,7 @@ export type PluginCapabilityKind =
   | "image-generation"
   | "web-search"
   | "agent-harness"
+  | "context-engine"
   | "channel";
 
 export type PluginInspectShape =
@@ -249,6 +251,13 @@ function buildCapabilityEntries(plugin: PluginRegistry["plugins"][number]) {
     { kind: "image-generation" as const, ids: plugin.imageGenerationProviderIds },
     { kind: "web-search" as const, ids: plugin.webSearchProviderIds },
     { kind: "agent-harness" as const, ids: plugin.agentHarnessIds },
+    {
+      kind: "context-engine" as const,
+      ids:
+        plugin.status === "loaded" && hasKind(plugin.kind, "context-engine")
+          ? (plugin.contextEngineIds ?? [])
+          : [],
+    },
     { kind: "channel" as const, ids: plugin.channelIds },
   ].filter((entry) => entry.ids.length > 0);
 }

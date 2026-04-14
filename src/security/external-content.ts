@@ -1,5 +1,14 @@
 import { randomBytes } from "node:crypto";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+export {
+  isExternalHookSession,
+  mapHookExternalContentSource,
+  resolveHookExternalContentSource,
+  type HookExternalContentSource,
+} from "./external-content-source.js";
+import {
+  mapHookExternalContentSource,
+  resolveHookExternalContentSource,
+} from "./external-content-source.js";
 
 /**
  * Security utilities for handling untrusted external content.
@@ -92,10 +101,6 @@ export type ExternalContentSource =
   | "web_fetch"
   | "unknown";
 
-// Hook-origin async runs need immutable ingress provenance because routed
-// session keys can be normalized outside the hook:* namespace.
-export type HookExternalContentSource = "gmail" | "webhook";
-
 const EXTERNAL_SOURCE_LABELS: Record<ExternalContentSource, string> = {
   email: "Email",
   webhook: "Webhook",
@@ -106,25 +111,6 @@ const EXTERNAL_SOURCE_LABELS: Record<ExternalContentSource, string> = {
   web_fetch: "Web Fetch",
   unknown: "External",
 };
-
-export function resolveHookExternalContentSource(
-  sessionKey: string,
-): HookExternalContentSource | undefined {
-  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
-  if (normalized.startsWith("hook:gmail:")) {
-    return "gmail";
-  }
-  if (normalized.startsWith("hook:webhook:") || normalized.startsWith("hook:")) {
-    return "webhook";
-  }
-  return undefined;
-}
-
-export function mapHookExternalContentSource(
-  source: HookExternalContentSource,
-): Extract<ExternalContentSource, "email" | "webhook"> {
-  return source === "gmail" ? "email" : "webhook";
-}
 
 const FULLWIDTH_ASCII_OFFSET = 0xfee0;
 
@@ -361,13 +347,6 @@ export function buildSafeExternalPrompt(params: {
   const context = contextLines.length > 0 ? `${contextLines.join(" | ")}\n\n` : "";
 
   return `${context}${wrappedContent}`;
-}
-
-/**
- * Checks if a session key indicates an external hook source.
- */
-export function isExternalHookSession(sessionKey: string): boolean {
-  return resolveHookExternalContentSource(sessionKey) !== undefined;
 }
 
 /**

@@ -656,6 +656,32 @@ describe("plugin status reports", () => {
     expect(inspect.capabilities).toEqual([{ kind: "cli-backend", ids: ["claude-cli"] }]);
   });
 
+  it("treats a context-engine plugin as a plain capability", () => {
+    setPluginLoadResult({
+      plugins: [
+        createPluginRecord({
+          id: "moon",
+          name: "Moon",
+          kind: "context-engine",
+          contextEngineIds: ["moon-engine"],
+          hookCount: 1,
+        }),
+      ],
+      hooks: [createCustomHook({ pluginId: "moon", events: ["message"] })],
+    });
+
+    const inspect = expectInspectReport("moon");
+
+    expectInspectShape(inspect, {
+      shape: "plain-capability",
+      capabilityMode: "plain",
+      capabilityKinds: ["context-engine"],
+    });
+    expect(inspect.capabilities).toEqual([{ kind: "context-engine", ids: ["moon-engine"] }]);
+    expect(inspect.compatibility).toEqual([]);
+    expectNoCompatibilityWarnings();
+  });
+
   it("builds compatibility warnings for legacy compatibility paths", () => {
     setPluginLoadResult({
       plugins: [

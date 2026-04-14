@@ -7,19 +7,19 @@ const hoisted = vi.hoisted(() => ({
   listAgentIdsMock: vi.fn<() => string[]>(),
 }));
 
-vi.mock("../../config/sessions.js", async () => {
-  const actual = await vi.importActual<typeof import("../../config/sessions.js")>(
-    "../../config/sessions.js",
-  );
-  return {
-    ...actual,
-    loadSessionStore: (storePath: string) => hoisted.loadSessionStoreMock(storePath),
-    resolveStorePath: (store?: string, params?: { agentId?: string }) =>
-      `/stores/${params?.agentId ?? "main"}.json`,
-    resolveAgentIdFromSessionKey: () => "main",
-    resolveExplicitAgentSessionKey: () => undefined,
-  };
-});
+vi.mock("../../config/sessions/store-load.js", () => ({
+  loadSessionStore: (storePath: string) => hoisted.loadSessionStoreMock(storePath),
+}));
+
+vi.mock("../../config/sessions/paths.js", () => ({
+  resolveStorePath: (_store?: string, params?: { agentId?: string }) =>
+    `/stores/${params?.agentId ?? "main"}.json`,
+}));
+
+vi.mock("../../config/sessions/main-session.js", () => ({
+  resolveAgentIdFromSessionKey: () => "main",
+  resolveExplicitAgentSessionKey: () => undefined,
+}));
 
 vi.mock("../agent-scope.js", () => ({
   listAgentIds: () => hoisted.listAgentIdsMock(),

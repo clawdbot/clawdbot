@@ -2,9 +2,15 @@ import path from "node:path";
 import { fileURLToPath, URL } from "node:url";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
+const ENCODED_FILE_URL_SEPARATOR_RE = /%(?:2f|5c)/i;
+
 function isLocalFileUrlHost(hostname: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(hostname);
   return normalized === "" || normalized === "localhost";
+}
+
+export function hasEncodedFileUrlSeparator(pathname: string): boolean {
+  return ENCODED_FILE_URL_SEPARATOR_RE.test(pathname);
 }
 
 export function isWindowsNetworkPath(filePath: string): boolean {
@@ -33,6 +39,9 @@ export function safeFileURLToPath(fileUrl: string): string {
   }
   if (!isLocalFileUrlHost(parsed.hostname)) {
     throw new Error(`file:// URLs with remote hosts are not allowed: ${fileUrl}`);
+  }
+  if (hasEncodedFileUrlSeparator(parsed.pathname)) {
+    throw new Error(`file:// URLs cannot encode path separators: ${fileUrl}`);
   }
   const filePath = fileURLToPath(parsed);
   assertNoWindowsNetworkPath(filePath, "Local file URL");

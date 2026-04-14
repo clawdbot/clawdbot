@@ -286,9 +286,10 @@ function startScheduledSweep() {
     return;
   }
   sweepInProgress = true;
-  void sweepTaskRegistry().finally(() => {
+  const clearSweepInProgress = () => {
     sweepInProgress = false;
-  });
+  };
+  sweepTaskRegistry().then(clearSweepInProgress, clearSweepInProgress);
 }
 
 export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintenanceSummary> {

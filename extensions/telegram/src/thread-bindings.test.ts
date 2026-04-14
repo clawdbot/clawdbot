@@ -5,6 +5,20 @@ import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runti
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../../test/helpers/import-fresh.js";
+
+const writeJsonFileAtomicallyMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/json-store", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/json-store")>(
+    "openclaw/plugin-sdk/json-store",
+  );
+  writeJsonFileAtomicallyMock.mockImplementation(actual.writeJsonFileAtomically);
+  return {
+    ...actual,
+    writeJsonFileAtomically: writeJsonFileAtomicallyMock,
+  };
+});
+
 import {
   __testing,
   createTelegramThreadBindingManager,
@@ -12,10 +26,16 @@ import {
   setTelegramThreadBindingMaxAgeBySessionKey,
 } from "./thread-bindings.js";
 
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve();
+  await new Promise<void>((resolve) => queueMicrotask(resolve));
+}
+
 describe("telegram thread bindings", () => {
   let stateDirOverride: string | undefined;
 
   beforeEach(async () => {
+    writeJsonFileAtomicallyMock.mockClear();
     await __testing.resetTelegramThreadBindingsForTests();
   });
 
@@ -312,5 +332,44 @@ describe("telegram thread bindings", () => {
       bindings?: Array<{ idleTimeoutMs?: number }>;
     };
     expect(persisted.bindings?.[0]?.idleTimeoutMs).toBe(90_000);
+  });
+
+  it("does not leak unhandled rejections when a persist write fails", async () => {
+    stateDirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-bindings-"));
+    process.env.OPENCLAW_STATE_DIR = stateDirOverride;
+    const unhandled: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandledRejection);
+
+    try {
+      const manager = createTelegramThreadBindingManager({
+        accountId: "persist-failure",
+        persist: true,
+        enableSweeper: false,
+      });
+
+      await getSessionBindingService().bind({
+        targetSessionKey: "agent:main:subagent:child-persist-failure",
+        targetKind: "subagent",
+        conversation: {
+          channel: "telegram",
+          accountId: "persist-failure",
+          conversationId: "-100200300:topic:100",
+        },
+      });
+
+      writeJsonFileAtomicallyMock.mockImplementationOnce(async () => {
+        throw new Error("persist boom");
+      });
+      manager.touchConversation("-100200300:topic:100");
+
+      await __testing.resetTelegramThreadBindingsForTests();
+      await flushMicrotasks();
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+    }
   });
 });

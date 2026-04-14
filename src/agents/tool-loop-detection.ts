@@ -8,6 +8,7 @@ const log = createSubsystemLogger("agents/loop-detection");
 
 export type LoopDetectorKind =
   | "generic_repeat"
+  | "unknown_tool_repeat"
   | "known_poll_no_progress"
   | "global_circuit_breaker"
   | "ping_pong";
@@ -26,12 +27,14 @@ export type LoopDetectionResult =
 
 export const TOOL_CALL_HISTORY_SIZE = 30;
 export const WARNING_THRESHOLD = 10;
+export const UNKNOWN_TOOL_THRESHOLD = 10;
 export const CRITICAL_THRESHOLD = 20;
 export const GLOBAL_CIRCUIT_BREAKER_THRESHOLD = 30;
 const DEFAULT_LOOP_DETECTION_CONFIG = {
   enabled: false,
   historySize: TOOL_CALL_HISTORY_SIZE,
   warningThreshold: WARNING_THRESHOLD,
+  unknownToolThreshold: UNKNOWN_TOOL_THRESHOLD,
   criticalThreshold: CRITICAL_THRESHOLD,
   globalCircuitBreakerThreshold: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
   detectors: {
@@ -45,6 +48,7 @@ type ResolvedLoopDetectionConfig = {
   enabled: boolean;
   historySize: number;
   warningThreshold: number;
+  unknownToolThreshold: number;
   criticalThreshold: number;
   globalCircuitBreakerThreshold: number;
   detectors: {
@@ -86,6 +90,10 @@ function resolveLoopDetectionConfig(config?: ToolLoopDetectionConfig): ResolvedL
     enabled: config?.enabled ?? DEFAULT_LOOP_DETECTION_CONFIG.enabled,
     historySize: asPositiveInt(config?.historySize, DEFAULT_LOOP_DETECTION_CONFIG.historySize),
     warningThreshold,
+    unknownToolThreshold: asPositiveInt(
+      config?.unknownToolThreshold,
+      DEFAULT_LOOP_DETECTION_CONFIG.unknownToolThreshold,
+    ),
     criticalThreshold,
     globalCircuitBreakerThreshold,
     detectors: {
@@ -182,17 +190,33 @@ function formatErrorForHash(error: unknown): string {
   return stableStringify(error);
 }
 
+function extractUnknownToolName(error: unknown): string | undefined {
+  const raw = formatErrorForHash(error).trim();
+  if (!raw) {
+    return undefined;
+  }
+  const match =
+    raw.match(/unknown tool[:\s]+["']?([a-z0-9_.-]+)["']?/i) ??
+    raw.match(/tool\s+["']?([a-z0-9_.-]+)["']?\s+(?:not found|is not available)/i);
+  const toolName = match?.[1]?.trim();
+  return toolName ? toolName.toLowerCase() : undefined;
+}
+
 function hashToolOutcome(
   toolName: string,
   params: unknown,
   result: unknown,
   error: unknown,
-): string | undefined {
+): { resultHash?: string; unknownToolName?: string } {
   if (error !== undefined) {
-    return `error:${digestStable(formatErrorForHash(error))}`;
+    const unknownToolName = extractUnknownToolName(error);
+    return {
+      resultHash: `error:${digestStable(formatErrorForHash(error))}`,
+      unknownToolName,
+    };
   }
   if (!isPlainObject(result)) {
-    return result === undefined ? undefined : digestStable(result);
+    return { resultHash: result === undefined ? undefined : digestStable(result) };
   }
 
   const details = isPlainObject(result.details) ? result.details : {};
@@ -200,33 +224,65 @@ function hashToolOutcome(
   if (isKnownPollToolCall(toolName, params) && toolName === "process" && isPlainObject(params)) {
     const action = params.action;
     if (action === "poll") {
-      return digestStable({
-        action,
-        status: details.status,
-        exitCode: details.exitCode ?? null,
-        exitSignal: details.exitSignal ?? null,
-        aggregated: details.aggregated ?? null,
-        text,
-      });
+      return {
+        resultHash: digestStable({
+          action,
+          status: details.status,
+          exitCode: details.exitCode ?? null,
+          exitSignal: details.exitSignal ?? null,
+          aggregated: details.aggregated ?? null,
+          text,
+        }),
+      };
     }
     if (action === "log") {
-      return digestStable({
-        action,
-        status: details.status,
-        totalLines: details.totalLines ?? null,
-        totalChars: details.totalChars ?? null,
-        truncated: details.truncated ?? null,
-        exitCode: details.exitCode ?? null,
-        exitSignal: details.exitSignal ?? null,
-        text,
-      });
+      return {
+        resultHash: digestStable({
+          action,
+          status: details.status,
+          totalLines: details.totalLines ?? null,
+          totalChars: details.totalChars ?? null,
+          truncated: details.truncated ?? null,
+          exitCode: details.exitCode ?? null,
+          exitSignal: details.exitSignal ?? null,
+          text,
+        }),
+      };
     }
   }
 
-  return digestStable({
-    details,
-    text,
-  });
+  return {
+    resultHash: digestStable({
+      details,
+      text,
+    }),
+  };
+}
+
+function getUnknownToolRepeatStreak(
+  history: Array<{ toolName: string; unknownToolName?: string }>,
+  toolName: string,
+): { count: number; unknownToolName?: string } {
+  let streak = 0;
+  let repeatedUnknownToolName: string | undefined;
+
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const record = history[i];
+    if (!record || record.toolName !== toolName || !record.unknownToolName) {
+      break;
+    }
+    if (!repeatedUnknownToolName) {
+      repeatedUnknownToolName = record.unknownToolName;
+      streak = 1;
+      continue;
+    }
+    if (record.unknownToolName !== repeatedUnknownToolName) {
+      break;
+    }
+    streak += 1;
+  }
+
+  return { count: streak, unknownToolName: repeatedUnknownToolName };
 }
 
 function getNoProgressStreak(
@@ -381,10 +437,22 @@ export function detectToolCallLoop(
   }
   const history = state.toolCallHistory ?? [];
   const currentHash = hashToolCall(toolName, params);
+  const unknownToolStreak = getUnknownToolRepeatStreak(history, toolName);
   const noProgress = getNoProgressStreak(history, toolName, currentHash);
   const noProgressStreak = noProgress.count;
   const knownPollTool = isKnownPollToolCall(toolName, params);
   const pingPong = getPingPongStreak(history, currentHash);
+
+  if (unknownToolStreak.count >= resolvedConfig.unknownToolThreshold) {
+    return {
+      stuck: true,
+      level: "critical",
+      detector: "unknown_tool_repeat",
+      count: unknownToolStreak.count,
+      message: `CRITICAL: attempted unavailable tool ${unknownToolStreak.unknownToolName ?? toolName} ${unknownToolStreak.count} times. Stop retrying that missing tool and answer without it.`,
+      warningKey: `unknown-tool:${toolName}:${unknownToolStreak.unknownToolName ?? "unknown"}`,
+    };
+  }
 
   if (noProgressStreak >= resolvedConfig.globalCircuitBreakerThreshold) {
     log.error(
@@ -537,12 +605,8 @@ export function recordToolCallOutcome(
   },
 ): void {
   const resolvedConfig = resolveLoopDetectionConfig(params.config);
-  const resultHash = hashToolOutcome(
-    params.toolName,
-    params.toolParams,
-    params.result,
-    params.error,
-  );
+  const outcome = hashToolOutcome(params.toolName, params.toolParams, params.result, params.error);
+  const resultHash = outcome.resultHash;
   if (!resultHash) {
     return;
   }
@@ -568,6 +632,7 @@ export function recordToolCallOutcome(
       continue;
     }
     call.resultHash = resultHash;
+    call.unknownToolName = outcome.unknownToolName;
     matched = true;
     break;
   }
@@ -578,6 +643,7 @@ export function recordToolCallOutcome(
       argsHash,
       toolCallId: params.toolCallId,
       resultHash,
+      unknownToolName: outcome.unknownToolName,
       timestamp: Date.now(),
     });
   }

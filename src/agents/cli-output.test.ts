@@ -123,6 +123,39 @@ describe("parseCliJson", () => {
       },
     });
   });
+
+  it("parses nested OpenAI-style cached token details from CLI json payloads", () => {
+    const result = parseCliJson(
+      JSON.stringify({
+        session_id: "openai-session-123",
+        response: "OpenAI says hello",
+        usage: {
+          input_tokens: 15,
+          output_tokens: 4,
+          input_tokens_details: {
+            cached_tokens: 6,
+          },
+        },
+      }),
+      {
+        command: "codex",
+        output: "json",
+        sessionIdFields: ["session_id"],
+      },
+    );
+
+    expect(result).toEqual({
+      text: "OpenAI says hello",
+      sessionId: "openai-session-123",
+      usage: {
+        input: 9,
+        output: 4,
+        cacheRead: 6,
+        cacheWrite: undefined,
+        total: undefined,
+      },
+    });
+  });
 });
 
 describe("parseCliJsonl", () => {

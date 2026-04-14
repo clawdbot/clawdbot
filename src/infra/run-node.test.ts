@@ -15,6 +15,8 @@ const ROOT_SRC = "src/index.ts";
 const ROOT_TSCONFIG = "tsconfig.json";
 const ROOT_PACKAGE = "package.json";
 const ROOT_TSDOWN = "tsdown.config.ts";
+const GENERATED_A2UI_BUNDLE = "src/canvas-host/a2ui/a2ui.bundle.js";
+const GENERATED_A2UI_BUNDLE_HASH = "src/canvas-host/a2ui/.bundle.hash";
 const DIST_ENTRY = "dist/entry.js";
 const BUILD_STAMP = "dist/.buildstamp";
 const EXTENSION_SRC = bundledPluginFile("demo", "src/index.ts");
@@ -598,6 +600,30 @@ describe("run-node script", () => {
         createBuildRequirementDeps(tmp, {
           gitHead: "abc123\n",
           gitStatus: "",
+        }),
+      );
+
+      expect(requirement).toEqual({
+        shouldBuild: false,
+        reason: "clean",
+      });
+    });
+  });
+
+  it("ignores dirty generated A2UI bundle artifacts when dist is current", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+        },
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+      });
+
+      const requirement = resolveBuildRequirement(
+        createBuildRequirementDeps(tmp, {
+          gitHead: "abc123\n",
+          gitStatus: ` M ${GENERATED_A2UI_BUNDLE_HASH}\n M ${GENERATED_A2UI_BUNDLE}\n`,
         }),
       );
 

@@ -1,4 +1,5 @@
 import { resolveSessionThreadInfo } from "../../channels/plugins/session-conversation.js";
+import { resolveLoadedSessionThreadInfo } from "../../channels/plugins/session-thread-info-loaded.js";
 
 /**
  * Extract deliveryContext and threadId from a sessionKey.
@@ -15,5 +16,5 @@ export function parseSessionThreadInfoFast(sessionKey: string | undefined): {
   baseSessionKey: string | undefined;
   threadId: string | undefined;
 } {
-  return resolveSessionThreadInfo(sessionKey, { bundledFallback: false });
+  return resolveLoadedSessionThreadInfo(sessionKey);
 }

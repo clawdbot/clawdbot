@@ -42,6 +42,8 @@ describe("lmstudio-models", () => {
     expect(resolveLmstudioInferenceBase("http://localhost:1234/api/v1")).toBe(
       "http://localhost:1234/v1",
     );
+    expect(resolveLmstudioServerBase("localhost:1234/api/v1")).toBe("http://localhost:1234");
+    expect(resolveLmstudioInferenceBase("localhost:1234/api/v1")).toBe("http://localhost:1234/v1");
   });
 
   it("resolves reasoning capability for supported and unsupported options", () => {

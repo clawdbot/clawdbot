@@ -27,6 +27,8 @@ export const formatResponseUsageLine = (params: {
   }
   const inputLabel = typeof input === "number" ? formatTokenCount(input) : "?";
   const outputLabel = typeof output === "number" ? formatTokenCount(output) : "?";
+  const cacheRead = typeof usage.cacheRead === "number" ? usage.cacheRead : undefined;
+  const cacheWrite = typeof usage.cacheWrite === "number" ? usage.cacheWrite : undefined;
   const cost =
     params.showCost && typeof input === "number" && typeof output === "number"
       ? estimateUsageCost({
@@ -40,8 +42,13 @@ export const formatResponseUsageLine = (params: {
         })
       : undefined;
   const costLabel = params.showCost ? formatUsd(cost) : undefined;
+  const cacheSuffix =
+    (typeof cacheRead === "number" && cacheRead > 0) ||
+    (typeof cacheWrite === "number" && cacheWrite > 0)
+      ? ` · cache ${formatTokenCount(cacheRead ?? 0)} cached / ${formatTokenCount(cacheWrite ?? 0)} new`
+      : "";
   const suffix = costLabel ? ` · est ${costLabel}` : "";
-  return `Usage: ${inputLabel} in / ${outputLabel} out${suffix}`;
+  return `Usage: ${inputLabel} in / ${outputLabel} out${cacheSuffix}${suffix}`;
 };
 
 export const appendUsageLine = (payloads: ReplyPayload[], line: string): ReplyPayload[] => {

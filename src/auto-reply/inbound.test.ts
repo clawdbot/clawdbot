@@ -521,6 +521,29 @@ describe("createInboundDebouncer", () => {
     expect(calls).toEqual(["1", "2"]);
   });
 
+  it("does not leak unhandled rejections when a keyed flush failure is awaited", async () => {
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 0,
+      buildKey: (item) => item.key,
+      onFlush: async () => {
+        throw new Error("flush failed");
+      },
+    });
+    const unhandled: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandledRejection);
+
+    try {
+      await expect(debouncer.enqueue({ key: "a", id: "1" })).resolves.toBeUndefined();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+    }
+  });
+
   it("bypasses debouncing for new keys once the tracked-key cap is reached", async () => {
     vi.useFakeTimers();
     const calls: Array<string[]> = [];

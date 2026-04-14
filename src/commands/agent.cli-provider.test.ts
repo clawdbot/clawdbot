@@ -8,7 +8,7 @@ import { FailoverError } from "../agents/failover-error.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
-import * as configModule from "../config/config.js";
+import * as configIoModule from "../config/io.js";
 import { createDefaultAgentCommandResult } from "./agent-command.test-support.js";
 import {
   mockSharedAgentCommandConfig,
@@ -18,8 +18,11 @@ import {
 } from "./agent-runtime-config.test-support.js";
 import { agentCommand } from "./agent.js";
 
-const configSpy = vi.spyOn(configModule, "loadConfig");
-const readConfigFileSnapshotForWriteSpy = vi.spyOn(configModule, "readConfigFileSnapshotForWrite");
+const configSpy = vi.spyOn(configIoModule, "loadConfig");
+const readConfigFileSnapshotForWriteSpy = vi.spyOn(
+  configIoModule,
+  "readConfigFileSnapshotForWrite",
+);
 const runCliAgentSpy = vi.spyOn(cliRunnerModule, "runCliAgent");
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {

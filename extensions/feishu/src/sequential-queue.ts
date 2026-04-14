@@ -5,11 +5,12 @@ export function createSequentialQueue() {
     const previous = queues.get(key) ?? Promise.resolve();
     const next = previous.then(task, task);
     queues.set(key, next);
-    void next.finally(() => {
+    const cleanup = () => {
       if (queues.get(key) === next) {
         queues.delete(key);
       }
-    });
+    };
+    next.then(cleanup, cleanup);
     return next;
   };
 }

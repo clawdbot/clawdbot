@@ -228,5 +228,5 @@ export function registerFeishuWikiTools(api: OpenClawPluginApi) {
     { name: "feishu_wiki" },
   );
 
-  api.logger.info?.(`feishu_wiki: Registered feishu_wiki tool`);
+  api.logger.debug?.(`feishu_wiki: Registered feishu_wiki tool`);
 }

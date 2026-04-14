@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { inspect } from "node:util";
@@ -25,6 +24,7 @@ import { stylePromptTitle } from "../terminal/prompt-style.js";
 import { CONFIG_DIR, shortenHomeInString, shortenHomePath, sleep } from "../utils.js";
 import { VERSION } from "../version.js";
 import type { NodeManagerChoice, OnboardMode, ResetScope } from "./onboard-types.js";
+export { randomToken } from "./random-token.js";
 
 export { detectBinary };
 export { detectBrowserOpenSupport, openUrl, openUrlInBackground, resolveBrowserOpenCommand };
@@ -67,10 +67,6 @@ export function summarizeExistingConfig(config: OpenClawConfig): string {
     rows.push(shortenHomeInString(`skills.nodeManager: ${config.skills.install.nodeManager}`));
   }
   return rows.length ? rows.join("\n") : "No key settings detected.";
-}
-
-export function randomToken(): string {
-  return crypto.randomBytes(24).toString("hex");
 }
 
 export function normalizeGatewayTokenInput(value: unknown): string {

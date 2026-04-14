@@ -144,6 +144,59 @@ describe("startNostrBus inbound guards", () => {
     bus.close();
   });
 
+  it("dedupes replayed invalid-signature events before verify fans out again", async () => {
+    mockState.verifyEvent.mockReturnValue(false);
+    const onMessage = vi.fn(async () => {});
+    const authorizeSender = vi.fn(async () => "allow" as const);
+    const bus = await startNostrBus({
+      privateKey: TEST_HEX_PRIVATE_KEY,
+      onMessage,
+      authorizeSender,
+      onMetric: () => {},
+    });
+
+    const invalidEvent = createEvent({ id: "invalid-replay" });
+
+    await emitEvent(invalidEvent);
+    await emitEvent(invalidEvent);
+
+    expect(mockState.verifyEvent).toHaveBeenCalledTimes(1);
+    expect(authorizeSender).not.toHaveBeenCalled();
+    expect(mockState.decrypt).not.toHaveBeenCalled();
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(bus.getMetrics().eventsRejected.invalidSignature).toBe(1);
+    expect(bus.getMetrics().eventsDuplicate).toBe(1);
+
+    bus.close();
+  });
+
+  it("dedupes replayed self-message events before other guards rerun", async () => {
+    const onMessage = vi.fn(async () => {});
+    const authorizeSender = vi.fn(async () => "allow" as const);
+    const bus = await startNostrBus({
+      privateKey: TEST_HEX_PRIVATE_KEY,
+      onMessage,
+      authorizeSender,
+      onMetric: () => {},
+    });
+
+    const selfEvent = createEvent({
+      id: "self-replay",
+      pubkey: BOT_PUBKEY,
+    });
+
+    await emitEvent(selfEvent);
+    await emitEvent(selfEvent);
+
+    expect(mockState.verifyEvent).not.toHaveBeenCalled();
+    expect(authorizeSender).not.toHaveBeenCalled();
+    expect(mockState.decrypt).not.toHaveBeenCalled();
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(bus.getMetrics().eventsDuplicate).toBe(1);
+
+    bus.close();
+  });
+
   it("rate limits repeated events before decrypt", async () => {
     const onMessage = vi.fn(async () => {});
     const bus = await startNostrBus({
@@ -231,6 +284,32 @@ describe("startNostrBus inbound guards", () => {
     expect(authorizeSender).toHaveBeenCalledTimes(1);
     expect(mockState.decrypt).not.toHaveBeenCalled();
     expect(onMessage).not.toHaveBeenCalled();
+
+    bus.close();
+  });
+
+  it("retries a replayed event after the message handler fails", async () => {
+    const onMessage = vi
+      .fn<(sender: string, plaintext: string) => Promise<void>>()
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValueOnce(undefined);
+    const bus = await startNostrBus({
+      privateKey: TEST_HEX_PRIVATE_KEY,
+      onMessage,
+      onMetric: () => {},
+    });
+
+    const event = createEvent({
+      id: "retry-after-handler-failure",
+    });
+
+    await emitEvent(event);
+    await emitEvent(event);
+
+    expect(mockState.verifyEvent).toHaveBeenCalledTimes(2);
+    expect(mockState.decrypt).toHaveBeenCalledTimes(2);
+    expect(onMessage).toHaveBeenCalledTimes(2);
+    expect(bus.getMetrics().eventsProcessed).toBe(1);
 
     bus.close();
   });

@@ -189,5 +189,5 @@ export function registerFeishuChatTools(api: OpenClawPluginApi) {
     { name: "feishu_chat" },
   );
 
-  api.logger.info?.("feishu_chat: Registered feishu_chat tool");
+  api.logger.debug?.("feishu_chat: Registered feishu_chat tool");
 }

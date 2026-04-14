@@ -79,6 +79,7 @@ import {
   registerRuntimeConfigWriteListener,
   resetConfigRuntimeState as resetConfigRuntimeStateState,
   setRuntimeConfigSnapshot as setRuntimeConfigSnapshotState,
+  getRuntimeConfigSnapshotRefreshHandler as getRuntimeConfigSnapshotRefreshHandlerState,
   setRuntimeConfigSnapshotRefreshHandler as setRuntimeConfigSnapshotRefreshHandlerState,
   type RuntimeConfigWriteNotification,
 } from "./runtime-snapshot.js";
@@ -149,6 +150,16 @@ export type ConfigWriteOptions = {
    * even if schema/default normalization reintroduces them.
    */
   unsetPaths?: string[][];
+  /**
+   * Internal fast path for callers that already hold a fresh config snapshot.
+   * Avoids rereading the full config just to prepare an immediate write.
+   */
+  baseSnapshot?: ConfigFileSnapshot;
+  /**
+   * Internal one-shot CLI fast path. When no runtime snapshot is active, skip
+   * the post-write runtime snapshot refresh/reload tail entirely.
+   */
+  skipRuntimeSnapshotRefresh?: boolean;
 };
 
 export type ReadConfigFileSnapshotForWriteResult = {
@@ -1030,6 +1041,49 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     return snapshot;
   }
 
+  function finalizeLoadedRuntimeConfig(cfg: OpenClawConfig): OpenClawConfig {
+    const duplicates = findDuplicateAgentDirs(cfg, {
+      env: deps.env,
+      homedir: deps.homedir,
+    });
+    if (duplicates.length > 0) {
+      throw new DuplicateAgentDirError(duplicates);
+    }
+
+    applyConfigEnvVars(cfg, deps.env);
+
+    const enabled = shouldEnableShellEnvFallback(deps.env) || cfg.env?.shellEnv?.enabled === true;
+    if (enabled && !shouldDeferShellEnvFallback(deps.env)) {
+      loadShellEnvFallback({
+        enabled: true,
+        env: deps.env,
+        expectedKeys: resolveShellEnvExpectedKeys(deps.env),
+        logger: deps.logger,
+        timeoutMs: cfg.env?.shellEnv?.timeoutMs ?? resolveShellEnvFallbackTimeoutMs(deps.env),
+      });
+    }
+
+    const pendingSecret = AUTO_OWNER_DISPLAY_SECRET_BY_PATH.get(configPath);
+    const ownerDisplaySecretResolution = ensureOwnerDisplaySecret(
+      cfg,
+      () => pendingSecret ?? crypto.randomBytes(32).toString("hex"),
+    );
+    const cfgWithOwnerDisplaySecret = persistGeneratedOwnerDisplaySecret({
+      config: ownerDisplaySecretResolution.config,
+      configPath,
+      generatedSecret: ownerDisplaySecretResolution.generatedSecret,
+      logger: deps.logger,
+      state: {
+        pendingByPath: AUTO_OWNER_DISPLAY_SECRET_BY_PATH,
+        persistInFlight: AUTO_OWNER_DISPLAY_SECRET_PERSIST_IN_FLIGHT,
+        persistWarned: AUTO_OWNER_DISPLAY_SECRET_PERSIST_WARNED,
+      },
+      persistConfig: (nextConfig, options) => writeConfigFile(nextConfig, options),
+    });
+
+    return applyConfigOverrides(cfgWithOwnerDisplaySecret);
+  }
+
   function loadConfig(): OpenClawConfig {
     try {
       maybeLoadDotEnvForConfig(deps.env);
@@ -1144,47 +1198,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           legacyIssues: legacyResolution.sourceLegacyIssues,
         }),
       });
-
-      const duplicates = findDuplicateAgentDirs(cfg, {
-        env: deps.env,
-        homedir: deps.homedir,
-      });
-      if (duplicates.length > 0) {
-        throw new DuplicateAgentDirError(duplicates);
-      }
-
-      applyConfigEnvVars(cfg, deps.env);
-
-      const enabled = shouldEnableShellEnvFallback(deps.env) || cfg.env?.shellEnv?.enabled === true;
-      if (enabled && !shouldDeferShellEnvFallback(deps.env)) {
-        loadShellEnvFallback({
-          enabled: true,
-          env: deps.env,
-          expectedKeys: resolveShellEnvExpectedKeys(deps.env),
-          logger: deps.logger,
-          timeoutMs: cfg.env?.shellEnv?.timeoutMs ?? resolveShellEnvFallbackTimeoutMs(deps.env),
-        });
-      }
-
-      const pendingSecret = AUTO_OWNER_DISPLAY_SECRET_BY_PATH.get(configPath);
-      const ownerDisplaySecretResolution = ensureOwnerDisplaySecret(
-        cfg,
-        () => pendingSecret ?? crypto.randomBytes(32).toString("hex"),
-      );
-      const cfgWithOwnerDisplaySecret = persistGeneratedOwnerDisplaySecret({
-        config: ownerDisplaySecretResolution.config,
-        configPath,
-        generatedSecret: ownerDisplaySecretResolution.generatedSecret,
-        logger: deps.logger,
-        state: {
-          pendingByPath: AUTO_OWNER_DISPLAY_SECRET_BY_PATH,
-          persistInFlight: AUTO_OWNER_DISPLAY_SECRET_PERSIST_IN_FLIGHT,
-          persistWarned: AUTO_OWNER_DISPLAY_SECRET_PERSIST_WARNED,
-        },
-        persistConfig: (nextConfig, options) => writeConfigFile(nextConfig, options),
-      });
-
-      return applyConfigOverrides(cfgWithOwnerDisplaySecret);
+      return finalizeLoadedRuntimeConfig(cfg);
     } catch (err) {
       if (err instanceof DuplicateAgentDirError) {
         deps.logger.error(err.message);
@@ -1389,13 +1403,23 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     };
   }
 
+  async function readBestEffortConfig(): Promise<OpenClawConfig> {
+    const result = await readConfigFileSnapshotInternal();
+    if (!result.snapshot.valid) {
+      return result.snapshot.config;
+    }
+    return finalizeLoadedRuntimeConfig(
+      materializeRuntimeConfig(result.snapshot.sourceConfig, "load"),
+    );
+  }
+
   async function writeConfigFile(
     cfg: OpenClawConfig,
     options: ConfigWriteOptions = {},
   ): Promise<{ persistedHash: string }> {
     clearConfigCache();
     let persistCandidate: unknown = cfg;
-    const { snapshot } = await readConfigFileSnapshotInternal();
+    const snapshot = options.baseSnapshot ?? (await readConfigFileSnapshotInternal()).snapshot;
     let envRefMap: Map<string, string> | null = null;
     let changedPaths: Set<string> | null = null;
     if (snapshot.valid && snapshot.exists) {
@@ -1649,6 +1673,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
   return {
     configPath,
     loadConfig,
+    readBestEffortConfig,
     readConfigFileSnapshot,
     readConfigFileSnapshotForWrite,
     writeConfigFile,
@@ -1740,8 +1765,7 @@ export function getRuntimeConfig(): OpenClawConfig {
 }
 
 export async function readBestEffortConfig(): Promise<OpenClawConfig> {
-  const snapshot = await readConfigFileSnapshot();
-  return snapshot.valid ? loadConfig() : snapshot.config;
+  return await createConfigIO().readBestEffortConfig();
 }
 
 export async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
@@ -1781,7 +1805,15 @@ export async function writeConfigFile(
       envSnapshotForRestore: options.envSnapshotForRestore,
     }),
     unsetPaths: options.unsetPaths,
+    skipRuntimeSnapshotRefresh: options.skipRuntimeSnapshotRefresh,
   });
+  if (
+    options.skipRuntimeSnapshotRefresh &&
+    !hadRuntimeSnapshot &&
+    !getRuntimeConfigSnapshotRefreshHandlerState()
+  ) {
+    return;
+  }
   const notifyCommittedWrite = () => {
     const currentRuntimeConfig = getRuntimeConfigSnapshotState();
     if (!currentRuntimeConfig) {

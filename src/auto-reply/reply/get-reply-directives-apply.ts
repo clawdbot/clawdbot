@@ -179,6 +179,7 @@ export async function applyInlineDirectiveOverrides(params: {
     directives.hasThinkDirective ||
     directives.hasFastDirective ||
     directives.hasVerboseDirective ||
+    directives.hasTraceDirective ||
     directives.hasReasoningDirective ||
     directives.hasElevatedDirective ||
     directives.hasExecDirective ||
@@ -237,6 +238,7 @@ export async function applyInlineDirectiveOverrides(params: {
       messageProvider: ctx.Provider,
       surface: ctx.Surface,
       gatewayClientScopes: ctx.GatewayClientScopes,
+      senderIsOwner: command.senderIsOwner,
     });
     let statusReply: ReplyPayload | undefined;
     if (directives.hasStatusDirective && allowTextCommands && command.isAuthorizedSender) {
@@ -279,6 +281,7 @@ export async function applyInlineDirectiveOverrides(params: {
     ).applyInlineDirectivesFastLane({
       directives,
       commandAuthorized: command.isAuthorizedSender,
+      senderIsOwner: command.senderIsOwner,
       ctx,
       cfg,
       agentId,
@@ -335,6 +338,7 @@ export async function applyInlineDirectiveOverrides(params: {
     messageProvider: ctx.Provider,
     surface: ctx.Surface,
     gatewayClientScopes: ctx.GatewayClientScopes,
+    senderIsOwner: command.senderIsOwner,
   });
   provider = persisted.provider;
   model = persisted.model;

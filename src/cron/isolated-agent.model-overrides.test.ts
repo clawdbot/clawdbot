@@ -1,7 +1,6 @@
 import "./isolated-agent.mocks.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadModelCatalog } from "../agents/model-catalog.js";
-import * as modelSelection from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import {
   DEFAULT_AGENT_TURN_PAYLOAD,
@@ -13,10 +12,11 @@ import {
   runTurnWithStoredModelOverride,
   withTempHome,
 } from "./isolated-agent.turn-test-helpers.js";
+import * as isolatedAgentRunRuntime from "./isolated-agent/run.runtime.js";
 
 describe("runCronIsolatedAgentTurn model overrides", () => {
   beforeEach(() => {
-    vi.spyOn(modelSelection, "resolveThinkingDefault").mockReturnValue("off");
+    vi.spyOn(isolatedAgentRunRuntime, "resolveThinkingDefault").mockReturnValue("off");
     vi.mocked(runEmbeddedPiAgent).mockClear();
     vi.mocked(loadModelCatalog).mockResolvedValue([]);
   });
@@ -176,7 +176,7 @@ describe("runCronIsolatedAgentTurn model overrides", () => {
 
   it("passes through the resolved default thinking level", async () => {
     await withTempHome(async (home) => {
-      vi.mocked(modelSelection.resolveThinkingDefault).mockReturnValueOnce("low");
+      vi.mocked(isolatedAgentRunRuntime.resolveThinkingDefault).mockReturnValueOnce("low");
 
       await runCronTurn(home, {
         jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,

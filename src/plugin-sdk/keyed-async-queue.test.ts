@@ -78,6 +78,32 @@ describe("enqueueKeyedTask", () => {
     await expect(runs[1]()).resolves.toBe("ok");
   });
 
+  it("does not leak unhandled rejections when a task failure is already awaited", async () => {
+    const tails = new Map<string, Promise<void>>();
+    const unhandled: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandledRejection);
+
+    try {
+      await expect(
+        enqueueKeyedTask({
+          tails,
+          key: "a",
+          task: async () => {
+            throw new Error("boom");
+          },
+        }),
+      ).rejects.toThrow("boom");
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+    }
+  });
+
   it("runs enqueue/settle hooks once per task", async () => {
     const tails = new Map<string, Promise<void>>();
     const onEnqueue = vi.fn();

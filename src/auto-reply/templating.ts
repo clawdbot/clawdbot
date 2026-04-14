@@ -167,6 +167,8 @@ export type MsgContext = {
   NativeDirectUserId?: string;
   /** Telegram forum supergroup marker. */
   IsForum?: boolean;
+  /** Human-readable Telegram forum topic name (cached from service messages). */
+  TopicName?: string;
   /** Warning: DM has topics enabled but this message is not in a topic. */
   TopicRequiredButMissing?: boolean;
   /**

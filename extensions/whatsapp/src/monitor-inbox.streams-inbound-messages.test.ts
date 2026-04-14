@@ -2,6 +2,7 @@ import fsSync from "node:fs";
 import path from "node:path";
 import "./monitor-inbox.test-harness.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { WhatsAppRetryableInboundError } from "./inbound/dedupe.js";
 import {
   type InboxMonitorOptions,
   InboxOnMessage,
@@ -454,6 +455,33 @@ describe("web monitor inbox", () => {
     await waitForMessageCalls(onMessage, 1);
 
     expect(onMessage).toHaveBeenCalledTimes(1);
+
+    await listener.close();
+  });
+
+  it("retries redelivered messages after an explicit retryable inbound failure", async () => {
+    let attempts = 0;
+    const onMessage = vi.fn(async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new WhatsAppRetryableInboundError("retry me");
+      }
+    });
+
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    const upsert = buildNotifyMessageUpsert({
+      id: nextMessageId("retryable-dedupe"),
+      remoteJid: "999@s.whatsapp.net",
+      text: "ping",
+      timestamp: 1_700_000_000,
+      pushName: "Tester",
+    });
+
+    sock.ev.emit("messages.upsert", upsert);
+    await waitForMessageCalls(onMessage, 1);
+
+    sock.ev.emit("messages.upsert", upsert);
+    await waitForMessageCalls(onMessage, 2);
 
     await listener.close();
   });

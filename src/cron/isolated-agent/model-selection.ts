@@ -9,7 +9,7 @@ import {
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
-} from "./run.runtime.js";
+} from "./run-model-selection.runtime.js";
 
 type CronSessionModelOverrides = {
   modelOverride?: string;

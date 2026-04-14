@@ -11,9 +11,12 @@ import { createWaSocket, formatError, getStatusCode, waitForWaConnection } from 
 import { resolveJidToE164 } from "../text-runtime.js";
 import { checkInboundAccessControl } from "./access-control.js";
 import {
-  isRecentInboundMessage,
+  claimRecentInboundMessage,
+  commitRecentInboundMessage,
   isRecentOutboundMessage,
+  releaseRecentInboundMessage,
   rememberRecentOutboundMessage,
+  WhatsAppRetryableInboundError,
 } from "./dedupe.js";
 import {
   describeReplyContext,
@@ -120,7 +123,32 @@ export async function attachWebInboxToSocket(
     options.authDir,
     sock.user as { id?: string | null; lid?: string | null } | undefined,
   );
-  const debouncer = createInboundDebouncer<WebInboundMessage>({
+  type QueuedInboundMessage = WebInboundMessage & {
+    dedupeKey?: string;
+  };
+
+  const finalizeInboundDedupe = async (
+    entries: QueuedInboundMessage[],
+    error?: unknown,
+  ): Promise<void> => {
+    const dedupeKeys = [
+      ...new Set(
+        entries
+          .map((entry) => entry.dedupeKey)
+          .filter((dedupeKey): dedupeKey is string => Boolean(dedupeKey)),
+      ),
+    ];
+    if (dedupeKeys.length === 0) {
+      return;
+    }
+    if (error instanceof WhatsAppRetryableInboundError) {
+      dedupeKeys.forEach((dedupeKey) => releaseRecentInboundMessage(dedupeKey, error));
+      return;
+    }
+    await Promise.all(dedupeKeys.map((dedupeKey) => commitRecentInboundMessage(dedupeKey)));
+  };
+
+  const debouncer = createInboundDebouncer<QueuedInboundMessage>({
     debounceMs: options.debounceMs ?? 0,
     buildKey: (msg) => {
       const sender = msg.sender;
@@ -144,27 +172,34 @@ export async function attachWebInboxToSocket(
       if (!last) {
         return;
       }
-      if (entries.length === 1) {
-        await options.onMessage(last);
-        return;
-      }
-      const mentioned = new Set<string>();
-      for (const entry of entries) {
-        for (const jid of entry.mentions ?? entry.mentionedJids ?? []) {
-          mentioned.add(jid);
+      try {
+        if (entries.length === 1) {
+          await options.onMessage(last);
+          await finalizeInboundDedupe(entries);
+          return;
         }
+        const mentioned = new Set<string>();
+        for (const entry of entries) {
+          for (const jid of entry.mentions ?? entry.mentionedJids ?? []) {
+            mentioned.add(jid);
+          }
+        }
+        const combinedBody = entries
+          .map((entry) => entry.body)
+          .filter(Boolean)
+          .join("\n");
+        const combinedMessage: WebInboundMessage = {
+          ...last,
+          body: combinedBody,
+          mentions: mentioned.size > 0 ? Array.from(mentioned) : undefined,
+          mentionedJids: mentioned.size > 0 ? Array.from(mentioned) : undefined,
+        };
+        await options.onMessage(combinedMessage);
+        await finalizeInboundDedupe(entries);
+      } catch (error) {
+        await finalizeInboundDedupe(entries, error);
+        throw error;
       }
-      const combinedBody = entries
-        .map((entry) => entry.body)
-        .filter(Boolean)
-        .join("\n");
-      const combinedMessage: WebInboundMessage = {
-        ...last,
-        body: combinedBody,
-        mentions: mentioned.size > 0 ? Array.from(mentioned) : undefined,
-        mentionedJids: mentioned.size > 0 ? Array.from(mentioned) : undefined,
-      };
-      await options.onMessage(combinedMessage);
     },
     onError: (err) => {
       inboundLogger.error({ error: String(err) }, "failed handling inbound web message");
@@ -305,12 +340,6 @@ export async function attachWebInboxToSocket(
     ) {
       logVerbose(`Skipping recent outbound WhatsApp echo ${id} for ${remoteJid}`);
       return null;
-    }
-    if (id) {
-      const dedupeKey = `${options.accountId}:${remoteJid}:${id}`;
-      if (isRecentInboundMessage(dedupeKey)) {
-        return null;
-      }
     }
     const participantJid = msg.key?.participant ?? undefined;
     const from = group ? remoteJid : await resolveInboundJid(remoteJid);
@@ -482,7 +511,7 @@ export async function attachWebInboxToSocket(
       },
       "inbound message",
     );
-    const inboundMessage: WebInboundMessage = {
+    const inboundMessage: QueuedInboundMessage = {
       id: inbound.id,
       from: inbound.from,
       conversationId: inbound.from,
@@ -523,6 +552,7 @@ export async function attachWebInboxToSocket(
       mediaPath: enriched.mediaPath,
       mediaType: enriched.mediaType,
       mediaFileName: enriched.mediaFileName,
+      dedupeKey: inbound.id ? `${options.accountId}:${inbound.remoteJid}:${inbound.id}` : undefined,
     };
     try {
       const task = Promise.resolve(debouncer.enqueue(inboundMessage));
@@ -566,6 +596,11 @@ export async function attachWebInboxToSocket(
 
       const enriched = await enrichInboundMessage(msg);
       if (!enriched) {
+        continue;
+      }
+
+      const dedupeKey = inbound.id ? `${options.accountId}:${inbound.remoteJid}:${inbound.id}` : "";
+      if (dedupeKey && !(await claimRecentInboundMessage(dedupeKey))) {
         continue;
       }
 

@@ -118,13 +118,36 @@ function normalizeUrlPath(pathname: string): string {
   return trimmed.replace(/\/api\/v1$/i, "").replace(/\/v1$/i, "");
 }
 
+function hasExplicitHttpScheme(value: string): boolean {
+  return /^https?:\/\//i.test(value);
+}
+
+function isLikelyHostBaseUrl(value: string): boolean {
+  return (
+    /^(?:localhost|(?:\d{1,3}\.){3}\d{1,3}|[a-z0-9.-]+\.[a-z]{2,}|[^/\s?#]+:\d+)(?:[/?#].*)?$/i.test(
+      value,
+    ) && !value.startsWith("/")
+  );
+}
+
+function toFetchableLmstudioBaseUrl(value: string): string {
+  if (hasExplicitHttpScheme(value) || !isLikelyHostBaseUrl(value)) {
+    return value;
+  }
+  return `http://${value}`;
+}
+
 /** Resolves LM Studio server base URL (without /v1 or /api/v1). */
 export function resolveLmstudioServerBase(configuredBaseUrl?: string): string {
   // Use configured value when present; otherwise target local LM Studio default.
   const configured = configuredBaseUrl?.trim();
   const resolved = configured && configured.length > 0 ? configured : LMSTUDIO_DEFAULT_BASE_URL;
+  const fetchableBaseUrl = toFetchableLmstudioBaseUrl(resolved);
   try {
-    const parsed = new URL(resolved);
+    const parsed = new URL(fetchableBaseUrl);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new TypeError(`Unsupported LM Studio protocol: ${parsed.protocol}`);
+    }
     const pathname = normalizeUrlPath(parsed.pathname);
     parsed.pathname = pathname.length > 0 ? pathname : "/";
     parsed.search = "";

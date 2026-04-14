@@ -60,6 +60,16 @@ function sanitizeStringHeaders(headers: unknown): Record<string, string> | undef
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
+function shouldSuppressResolvedRuntimeApiKeyForHeaderAuth(
+  source: string | undefined,
+  hasAuthorizationHeader: boolean,
+): boolean {
+  if (!hasAuthorizationHeader || !source) {
+    return false;
+  }
+  return /^profile:|^(?:shell )?env(?::|$)/.test(source);
+}
+
 export async function resolveLmstudioConfiguredApiKey(params: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -228,6 +238,9 @@ export async function resolveLmstudioRuntimeApiKey(params: {
   // Normalize empty/whitespace keys to undefined for callers.
   const resolvedApiKey = resolved.apiKey?.trim();
   if (!resolvedApiKey || resolvedApiKey.length === 0) {
+    return await resolveConfiguredApiKeyOrThrow();
+  }
+  if (shouldSuppressResolvedRuntimeApiKeyForHeaderAuth(resolved.source, hasAuthorizationHeader)) {
     return await resolveConfiguredApiKeyOrThrow();
   }
   if (isNonSecretApiKeyMarker(resolvedApiKey) && resolvedApiKey !== CUSTOM_LOCAL_AUTH_MARKER) {

@@ -163,6 +163,46 @@ export function resolveProviderEnvVars(
   };
 }
 
+function createLazyReadonlyRecord(
+  resolve: () => Record<string, readonly string[]>,
+): Record<string, readonly string[]> {
+  let cached: Record<string, readonly string[]> | undefined;
+  const getResolved = (): Record<string, readonly string[]> => {
+    cached ??= resolve();
+    return cached;
+  };
+
+  return new Proxy({} as Record<string, readonly string[]>, {
+    get(_target, prop) {
+      if (typeof prop !== "string") {
+        return undefined;
+      }
+      return getResolved()[prop];
+    },
+    has(_target, prop) {
+      return typeof prop === "string" && Object.hasOwn(getResolved(), prop);
+    },
+    ownKeys() {
+      return Reflect.ownKeys(getResolved());
+    },
+    getOwnPropertyDescriptor(_target, prop) {
+      if (typeof prop !== "string") {
+        return undefined;
+      }
+      const value = getResolved()[prop];
+      if (value === undefined) {
+        return undefined;
+      }
+      return {
+        configurable: true,
+        enumerable: true,
+        value,
+        writable: false,
+      };
+    },
+  });
+}
+
 /**
  * Provider auth env candidates used by generic auth resolution.
  *
@@ -170,9 +210,9 @@ export function resolveProviderEnvVars(
  * `resolveEnvApiKey()`. Bundled providers source this from plugin manifest
  * metadata so auth probes do not need to load plugin runtime.
  */
-export const PROVIDER_AUTH_ENV_VAR_CANDIDATES: Record<string, readonly string[]> = {
-  ...resolveProviderAuthEnvVarCandidates(),
-};
+export const PROVIDER_AUTH_ENV_VAR_CANDIDATES = createLazyReadonlyRecord(() =>
+  resolveProviderAuthEnvVarCandidates(),
+);
 
 /**
  * Provider env vars used for setup/default secret refs and broad secret
@@ -183,9 +223,7 @@ export const PROVIDER_AUTH_ENV_VAR_CANDIDATES: Record<string, readonly string[]>
  * is only for true core/non-plugin providers and a few setup-specific ordering
  * overrides where generic onboarding wants a different preferred env var.
  */
-export const PROVIDER_ENV_VARS: Record<string, readonly string[]> = {
-  ...resolveProviderEnvVars(),
-};
+export const PROVIDER_ENV_VARS = createLazyReadonlyRecord(() => resolveProviderEnvVars());
 
 export function getProviderEnvVars(
   providerId: string,

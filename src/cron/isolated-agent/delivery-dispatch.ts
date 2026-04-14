@@ -1,4 +1,3 @@
-import { countActiveDescendantRuns } from "../../agents/subagent-registry-read.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
@@ -11,7 +10,6 @@ import { sleepWithAbort } from "../../infra/backoff.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { OutboundDeliveryResult } from "../../infra/outbound/deliver.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
-import { logWarn, logError } from "../../logger.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -131,6 +129,12 @@ let gatewayCallRuntimePromise: Promise<typeof import("../../gateway/call.runtime
 let deliveryOutboundRuntimePromise:
   | Promise<typeof import("./delivery-outbound.runtime.js")>
   | undefined;
+let deliverySubagentRegistryRuntimePromise:
+  | Promise<typeof import("./delivery-subagent-registry.runtime.js")>
+  | undefined;
+let deliveryLoggerRuntimePromise:
+  | Promise<typeof import("./delivery-logger.runtime.js")>
+  | undefined;
 let subagentFollowupRuntimePromise:
   | Promise<typeof import("./subagent-followup.runtime.js")>
   | undefined;
@@ -149,11 +153,39 @@ async function loadDeliveryOutboundRuntime(): Promise<
   return await deliveryOutboundRuntimePromise;
 }
 
+async function loadDeliverySubagentRegistryRuntime(): Promise<
+  typeof import("./delivery-subagent-registry.runtime.js")
+> {
+  deliverySubagentRegistryRuntimePromise ??= import("./delivery-subagent-registry.runtime.js");
+  return await deliverySubagentRegistryRuntimePromise;
+}
+
+async function loadDeliveryLoggerRuntime(): Promise<typeof import("./delivery-logger.runtime.js")> {
+  deliveryLoggerRuntimePromise ??= import("./delivery-logger.runtime.js");
+  return await deliveryLoggerRuntimePromise;
+}
+
 async function loadSubagentFollowupRuntime(): Promise<
   typeof import("./subagent-followup.runtime.js")
 > {
   subagentFollowupRuntimePromise ??= import("./subagent-followup.runtime.js");
   return await subagentFollowupRuntimePromise;
+}
+
+async function logCronDeliveryWarn(message: string): Promise<void> {
+  const { logWarn } = await loadDeliveryLoggerRuntime();
+  logWarn(message);
+}
+
+async function logCronDeliveryError(message: string): Promise<void> {
+  const { logError } = await loadDeliveryLoggerRuntime();
+  logError(message);
+}
+
+function logCronDeliveryErrorDeferred(message: string): void {
+  void loadDeliveryLoggerRuntime().then(({ logError }) => {
+    logError(message);
+  });
 }
 
 function cloneDeliveryResults(
@@ -278,7 +310,7 @@ async function queueCronAwarenessSystemEvent(params: {
       contextKey: params.deliveryIdempotencyKey,
     });
   } catch (err) {
-    logWarn(
+    await logCronDeliveryWarn(
       `[cron:${params.jobId}] failed to queue isolated cron awareness for the main session: ${formatErrorMessage(err)}`,
     );
   }
@@ -343,7 +375,7 @@ async function retryTransientDirectCronDelivery<T>(params: {
       }
       const nextAttempt = retryIndex + 2;
       const maxAttempts = retryDelaysMs.length + 1;
-      logWarn(
+      await logCronDeliveryWarn(
         `[cron:${params.jobId}] transient direct announce delivery failure, retrying ${nextAttempt}/${maxAttempts} in ${Math.round(delayMs / 1000)}s: ${summarizeDirectCronDeliveryError(err)}`,
       );
       retryIndex += 1;
@@ -462,7 +494,7 @@ export async function dispatchCronDelivery(
           job: params.job,
           runStartedAt: params.runStartedAt,
         });
-        logWarn(
+        await logCronDeliveryWarn(
           `[cron:${params.job.id}] skipping stale delivery scheduled at ${new Date(scheduledAtMs).toISOString()}, started ${Math.round(startDelayMs / 60_000)}m late, current age ${Math.round((nowMs - scheduledAtMs) / 60_000)}m`,
         );
         return params.withRunSession({
@@ -493,7 +525,7 @@ export async function dispatchCronDelivery(
       const onError = params.deliveryBestEffort
         ? (err: unknown, _payload: unknown) => {
             hadPartialFailure = true;
-            logError(
+            logCronDeliveryErrorDeferred(
               `[cron:${params.job.id}] delivery payload failed (bestEffort): ${formatErrorMessage(err)}`,
             );
           }
@@ -557,7 +589,9 @@ export async function dispatchCronDelivery(
           ...params.telemetry,
         });
       }
-      logError(`[cron:${params.job.id}] delivery failed (bestEffort): ${formatErrorMessage(err)}`);
+      await logCronDeliveryError(
+        `[cron:${params.job.id}] delivery failed (bestEffort): ${formatErrorMessage(err)}`,
+      );
       return null;
     }
   };
@@ -569,8 +603,11 @@ export async function dispatchCronDelivery(
       return null;
     }
     const initialSynthesizedText = synthesizedText.trim();
-    let activeSubagentRuns = countActiveDescendantRuns(params.agentSessionKey);
     const expectedSubagentFollowup = expectsSubagentFollowup(initialSynthesizedText);
+    const subagentRegistryRuntime = await loadDeliverySubagentRegistryRuntime();
+    let activeSubagentRuns = subagentRegistryRuntime.countActiveDescendantRuns(
+      params.agentSessionKey,
+    );
     const shouldCheckCompletedDescendants =
       activeSubagentRuns === 0 && isLikelyInterimCronMessage(initialSynthesizedText);
     const needsSubagentFollowupRuntime =
@@ -597,7 +634,9 @@ export async function dispatchCronDelivery(
         timeoutMs: params.timeoutMs,
         observedActiveDescendants: activeSubagentRuns > 0 || expectedSubagentFollowup,
       });
-      activeSubagentRuns = countActiveDescendantRuns(params.agentSessionKey);
+      activeSubagentRuns = subagentRegistryRuntime.countActiveDescendantRuns(
+        params.agentSessionKey,
+      );
       if (!finalReply && activeSubagentRuns === 0) {
         finalReply = await subagentFollowupRuntime?.readDescendantSubagentFallbackReply({
           sessionKey: params.agentSessionKey,
@@ -681,7 +720,7 @@ export async function dispatchCronDelivery(
           deliveryPayloads,
         };
       }
-      logWarn(`[cron:${params.job.id}] ${params.resolvedDelivery.error.message}`);
+      await logCronDeliveryWarn(`[cron:${params.job.id}] ${params.resolvedDelivery.error.message}`);
       return {
         result: params.withRunSession({
           status: "ok",

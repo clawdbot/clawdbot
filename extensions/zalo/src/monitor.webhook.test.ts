@@ -12,11 +12,15 @@ import {
   postWebhookReplay,
 } from "../test-support/lifecycle-test-support.js";
 import { handleZaloWebhookRequest } from "./monitor.js";
+import type { ZaloRuntimeEnv } from "./monitor.types.js";
 import {
   clearZaloWebhookSecurityStateForTest,
   getZaloWebhookRateLimitStateSizeForTest,
   getZaloWebhookStatusCounterSizeForTest,
+  handleZaloWebhookRequest as handleZaloWebhookRequestInternal,
   registerZaloWebhookTarget,
+  type ZaloWebhookProcessUpdate,
+  ZaloRetryableWebhookError,
 } from "./monitor.webhook.js";
 import type { ResolvedZaloAccount } from "./types.js";
 const DEFAULT_ACCOUNT: ResolvedZaloAccount = {
@@ -27,13 +31,19 @@ const DEFAULT_ACCOUNT: ResolvedZaloAccount = {
   config: {},
 };
 
-const webhookRequestHandler: RequestListener = async (req, res) => {
-  const handled = await handleZaloWebhookRequest(req, res);
-  if (!handled) {
-    res.statusCode = 404;
-    res.end("not found");
-  }
-};
+function createWebhookRequestHandler(processUpdate?: ZaloWebhookProcessUpdate): RequestListener {
+  return async (req, res) => {
+    const handled = processUpdate
+      ? await handleZaloWebhookRequestInternal(req, res, processUpdate)
+      : await handleZaloWebhookRequest(req, res);
+    if (!handled) {
+      res.statusCode = 404;
+      res.end("not found");
+    }
+  };
+}
+
+const webhookRequestHandler = createWebhookRequestHandler();
 
 function registerTarget(params: {
   path: string;
@@ -42,12 +52,13 @@ function registerTarget(params: {
   account?: ResolvedZaloAccount;
   config?: OpenClawConfig;
   core?: PluginRuntime;
+  runtime?: Partial<ZaloRuntimeEnv>;
 }): () => void {
   return registerZaloWebhookTarget({
     token: "tok",
     account: params.account ?? DEFAULT_ACCOUNT,
     config: params.config ?? ({} as OpenClawConfig),
-    runtime: {},
+    runtime: (params.runtime ?? {}) as ZaloRuntimeEnv,
     core: params.core ?? ({} as PluginRuntime),
     secret: params.secret ?? "secret",
     path: params.path,
@@ -253,6 +264,55 @@ describe("handleZaloWebhookRequest", () => {
       unregister();
     }
   });
+
+  it("allows a retry after processUpdate throws a retryable replay error", async () => {
+    const error = vi.fn();
+    const unregister = registerTarget({
+      path: "/hook-retry-after-failure",
+      runtime: { error },
+    });
+    const payload = createTextUpdate({
+      messageId: "msg-retry-after-failure-1",
+      userId: "123",
+      userName: "",
+      chatId: "123",
+      text: "hello",
+    });
+    let attempts = 0;
+    const processUpdate = vi.fn<ZaloWebhookProcessUpdate>(async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new ZaloRetryableWebhookError("boom");
+      }
+    });
+
+    try {
+      await withServer(createWebhookRequestHandler(processUpdate), async (baseUrl) => {
+        const first = await postWebhookJson({
+          baseUrl,
+          path: "/hook-retry-after-failure",
+          secret: "secret",
+          payload,
+        });
+
+        expect(first.status).toBe(200);
+        await vi.waitFor(() => expect(error).toHaveBeenCalledTimes(1));
+
+        const second = await postWebhookJson({
+          baseUrl,
+          path: "/hook-retry-after-failure",
+          secret: "secret",
+          payload,
+        });
+
+        expect(second.status).toBe(200);
+        await vi.waitFor(() => expect(processUpdate).toHaveBeenCalledTimes(2));
+      });
+    } finally {
+      unregister();
+    }
+  });
+
   it("keeps replay dedupe isolated per authenticated target", async () => {
     const sinkA = vi.fn();
     const sinkB = vi.fn();

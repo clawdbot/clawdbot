@@ -315,8 +315,15 @@ export function registerBrowserAgentSnapshotRoutes(
       targetId,
       run: async ({ profileCtx, tab, cdpUrl }) => {
         if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
+          const ssrfPolicyOpts = withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy);
           if (element) {
             return jsonError(res, 400, EXISTING_SESSION_LIMITS.snapshot.screenshotElement);
+          }
+          if (ssrfPolicyOpts.ssrfPolicy) {
+            await assertBrowserNavigationResultAllowed({
+              url: tab.url,
+              ...ssrfPolicyOpts,
+            });
           }
           const buffer = await takeChromeMcpScreenshot({
             profileName: profileCtx.profile.name,
@@ -396,8 +403,15 @@ export function registerBrowserAgentSnapshotRoutes(
         return jsonError(res, 400, "labels/mode=efficient require format=ai");
       }
       if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
+        const ssrfPolicyOpts = withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy);
         if (plan.selectorValue || plan.frameSelectorValue) {
           return jsonError(res, 400, EXISTING_SESSION_LIMITS.snapshot.snapshotSelector);
+        }
+        if (ssrfPolicyOpts.ssrfPolicy) {
+          await assertBrowserNavigationResultAllowed({
+            url: tab.url,
+            ...ssrfPolicyOpts,
+          });
         }
         const snapshot = await takeChromeMcpSnapshot({
           profileName: profileCtx.profile.name,

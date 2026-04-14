@@ -4,12 +4,64 @@ import { resolveProviderVariant, startQaMockOpenAiServer } from "./mock-openai-s
 const cleanups: Array<() => Promise<void>> = [];
 const QA_IMAGE_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAT0lEQVR42u3RQQkAMAzAwPg33Wnos+wgBo40dboAAAAAAAAAAAAAAAAAAAAAAAAAAAAAANYADwAAAAAAAAAAAAAAAAAAAAAAAAAAAAC+Azy47PDiI4pA2wAAAABJRU5ErkJggg==";
+const QA_REASONING_ONLY_RECOVERY_PROMPT =
+  "Reasoning-only continuation QA check: read QA_KICKOFF_TASK.md, then answer with exactly REASONING-RECOVERED-OK.";
+const QA_REASONING_ONLY_SIDE_EFFECT_PROMPT =
+  "Reasoning-only after write safety check: write reasoning-only-side-effect.txt, then answer with exactly SIDE-EFFECT-GUARD-OK.";
+const QA_EMPTY_RESPONSE_RECOVERY_PROMPT =
+  "Empty response continuation QA check: read QA_KICKOFF_TASK.md, then answer with exactly EMPTY-RECOVERED-OK.";
+const QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT =
+  "Empty response exhaustion QA check: read QA_KICKOFF_TASK.md, then answer with exactly EMPTY-EXHAUSTED-OK.";
+const QA_REASONING_ONLY_RETRY_INSTRUCTION =
+  "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
+const QA_EMPTY_RESPONSE_RETRY_INSTRUCTION =
+  "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
 
 afterEach(async () => {
   while (cleanups.length > 0) {
     await cleanups.pop()?.();
   }
 });
+
+async function startMockServer() {
+  const server = await startQaMockOpenAiServer({
+    host: "127.0.0.1",
+    port: 0,
+  });
+  cleanups.push(async () => {
+    await server.stop();
+  });
+  return server;
+}
+
+async function postResponses(server: { baseUrl: string }, body: unknown) {
+  return fetch(`${server.baseUrl}/v1/responses`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+async function expectResponsesText(server: { baseUrl: string }, body: unknown) {
+  const response = await postResponses(server, body);
+  expect(response.status).toBe(200);
+  return response.text();
+}
+
+async function expectResponsesJson<T>(server: { baseUrl: string }, body: unknown) {
+  const response = await postResponses(server, body);
+  expect(response.status).toBe(200);
+  return (await response.json()) as T;
+}
+
+function makeUserInput(text: string) {
+  return {
+    role: "user" as const,
+    content: [{ type: "input_text" as const, text }],
+  };
+}
 
 describe("qa mock openai server", () => {
   it("serves health and streamed responses", async () => {
@@ -1749,6 +1801,204 @@ describe("qa mock openai server", () => {
     expect(debugResponse.status).toBe(200);
     const debug = (await debugResponse.json()) as { model: string };
     expect(debug.model).toBe("claude-opus-4-6");
+  });
+
+  it("scripts a reasoning-only recovery sequence after a replay-safe read", async () => {
+    const server = await startMockServer();
+
+    const toolPlan = await expectResponsesText(server, {
+      stream: true,
+      model: "gpt-5.4",
+      input: [makeUserInput(QA_REASONING_ONLY_RECOVERY_PROMPT)],
+    });
+    expect(toolPlan).toContain('"name":"read"');
+    expect(toolPlan).toContain("QA_KICKOFF_TASK.md");
+
+    expect(
+      await expectResponsesJson<{
+        output?: Array<{ type?: string; id?: string; summary?: Array<{ text?: string }> }>;
+      }>(server, {
+        stream: false,
+        model: "gpt-5.4",
+        input: [
+          makeUserInput(QA_REASONING_ONLY_RECOVERY_PROMPT),
+          {
+            type: "function_call_output",
+            output: "QA mission: Understand this OpenClaw repo from source + docs before acting.",
+          },
+        ],
+      }),
+    ).toMatchObject({
+      output: [
+        {
+          type: "reasoning",
+          id: "rs_mock_reasoning_recovery",
+          summary: [{ text: expect.stringContaining("Need visible answer") }],
+        },
+      ],
+    });
+
+    expect(
+      await expectResponsesJson<{
+        output?: Array<{ content?: Array<{ text?: string }> }>;
+      }>(server, {
+        stream: false,
+        model: "gpt-5.4",
+        input: [
+          makeUserInput(QA_REASONING_ONLY_RECOVERY_PROMPT),
+          makeUserInput(QA_REASONING_ONLY_RETRY_INSTRUCTION),
+          {
+            type: "function_call_output",
+            output: "QA mission: Understand this OpenClaw repo from source + docs before acting.",
+          },
+        ],
+      }),
+    ).toMatchObject({
+      output: [
+        {
+          content: [{ text: "REASONING-RECOVERED-OK" }],
+        },
+      ],
+    });
+
+    const requests = await fetch(`${server.baseUrl}/debug/requests`);
+    expect(requests.status).toBe(200);
+    expect(await requests.json()).toMatchObject([
+      { plannedToolName: "read" },
+      { allInputText: expect.stringContaining(QA_REASONING_ONLY_RECOVERY_PROMPT) },
+      { allInputText: expect.stringContaining(QA_REASONING_ONLY_RETRY_INSTRUCTION) },
+    ]);
+  });
+
+  it("keeps the reasoning-only side-effect path ready for no-auto-retry QA coverage", async () => {
+    const server = await startMockServer();
+
+    const toolPlan = await expectResponsesText(server, {
+      stream: true,
+      model: "gpt-5.4",
+      input: [makeUserInput(QA_REASONING_ONLY_SIDE_EFFECT_PROMPT)],
+    });
+    expect(toolPlan).toContain('"name":"write"');
+    expect(toolPlan).toContain("reasoning-only-side-effect.txt");
+
+    expect(
+      await expectResponsesJson<{
+        output?: Array<{ type?: string; id?: string }>;
+      }>(server, {
+        stream: false,
+        model: "gpt-5.4",
+        input: [
+          makeUserInput(QA_REASONING_ONLY_SIDE_EFFECT_PROMPT),
+          {
+            type: "function_call_output",
+            output: "Successfully wrote 28 bytes to reasoning-only-side-effect.txt.",
+          },
+        ],
+      }),
+    ).toMatchObject({
+      output: [{ type: "reasoning", id: "rs_mock_reasoning_side_effect" }],
+    });
+
+    const requests = await fetch(`${server.baseUrl}/debug/requests`);
+    expect(requests.status).toBe(200);
+    expect((await requests.json()) as Array<{ allInputText?: string }>).toHaveLength(2);
+  });
+
+  it("scripts an empty-response recovery sequence after a replay-safe read", async () => {
+    const server = await startMockServer();
+
+    const toolPlan = await expectResponsesText(server, {
+      stream: true,
+      model: "gpt-5.4",
+      input: [makeUserInput(QA_EMPTY_RESPONSE_RECOVERY_PROMPT)],
+    });
+    expect(toolPlan).toContain('"name":"read"');
+
+    expect(
+      await expectResponsesJson<{
+        output?: Array<{ content?: Array<{ type?: string; text?: string }> }>;
+      }>(server, {
+        stream: false,
+        model: "gpt-5.4",
+        input: [
+          makeUserInput(QA_EMPTY_RESPONSE_RECOVERY_PROMPT),
+          {
+            type: "function_call_output",
+            output: "QA mission: Understand this OpenClaw repo from source + docs before acting.",
+          },
+        ],
+      }),
+    ).toMatchObject({
+      output: [
+        {
+          content: [{ type: "output_text", text: "" }],
+        },
+      ],
+    });
+
+    expect(
+      await expectResponsesJson<{
+        output?: Array<{ content?: Array<{ text?: string }> }>;
+      }>(server, {
+        stream: false,
+        model: "gpt-5.4",
+        input: [
+          makeUserInput(QA_EMPTY_RESPONSE_RECOVERY_PROMPT),
+          makeUserInput(QA_EMPTY_RESPONSE_RETRY_INSTRUCTION),
+          {
+            type: "function_call_output",
+            output: "QA mission: Understand this OpenClaw repo from source + docs before acting.",
+          },
+        ],
+      }),
+    ).toMatchObject({
+      output: [
+        {
+          content: [{ text: "EMPTY-RECOVERED-OK" }],
+        },
+      ],
+    });
+  });
+
+  it("can keep emitting empty GPT turns when the single retry budget should exhaust", async () => {
+    const server = await startMockServer();
+
+    await expectResponsesText(server, {
+      stream: true,
+      model: "gpt-5.4",
+      input: [makeUserInput(QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT)],
+    });
+
+    const firstEmpty = await expectResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      model: "gpt-5.4",
+      input: [
+        makeUserInput(QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT),
+        {
+          type: "function_call_output",
+          output: "QA mission: Understand this OpenClaw repo from source + docs before acting.",
+        },
+      ],
+    });
+    expect(firstEmpty.output?.[0]?.content?.[0]?.text).toBe("");
+
+    const secondEmpty = await expectResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      model: "gpt-5.4",
+      input: [
+        makeUserInput(QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT),
+        makeUserInput(QA_EMPTY_RESPONSE_RETRY_INSTRUCTION),
+        {
+          type: "function_call_output",
+          output: "QA mission: Understand this OpenClaw repo from source + docs before acting.",
+        },
+      ],
+    });
+    expect(secondEmpty.output?.[0]?.content?.[0]?.text).toBe("");
   });
 });
 

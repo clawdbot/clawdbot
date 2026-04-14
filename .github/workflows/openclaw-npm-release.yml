@@ -29,9 +29,14 @@ on:
         required: true
         default: false
         type: boolean
+      sync_stable_dist_tags:
+        description: Skip publish and point both latest and beta at an already-published stable version
+        required: true
+        default: false
+        type: boolean
 
 concurrency:
-  group: openclaw-npm-release-${{ github.event_name == 'workflow_dispatch' && format('{0}-{1}-{2}', inputs.tag, inputs.npm_dist_tag, inputs.promote_beta_to_latest) || github.ref }}
+  group: openclaw-npm-release-${{ github.event_name == 'workflow_dispatch' && format('{0}-{1}-{2}-{3}', inputs.tag, inputs.npm_dist_tag, inputs.promote_beta_to_latest, inputs.sync_stable_dist_tags) || github.ref }}
   cancel-in-progress: false
 
 env:
@@ -44,7 +49,7 @@ jobs:
   # KEEP THIS WORKFLOW SHORT AND DETERMINISTIC OR IT CAN GET STUCK AND JEOPARDIZE THE RELEASE.
   # RELEASE-TIME LIVE OR END-TO-END VALIDATION BELONGS IN openclaw-release-checks.yml.
   preflight_openclaw_npm:
-    if: ${{ inputs.preflight_only && !inputs.promote_beta_to_latest }}
+    if: ${{ inputs.preflight_only && !inputs.promote_beta_to_latest && !inputs.sync_stable_dist_tags }}
     runs-on: blacksmith-32vcpu-ubuntu-2404
     permissions:
       contents: read
@@ -241,7 +246,7 @@ jobs:
           if-no-files-found: error
 
   validate_publish_request:
-    if: ${{ !inputs.preflight_only && !inputs.promote_beta_to_latest }}
+    if: ${{ !inputs.preflight_only && !inputs.promote_beta_to_latest && !inputs.sync_stable_dist_tags }}
     runs-on: blacksmith-32vcpu-ubuntu-2404
     permissions:
       contents: read
@@ -270,7 +275,7 @@ jobs:
     # KEEP THE REAL RELEASE/PUBLISH PATH ON A GITHUB-HOSTED RUNNER.
     # npm trusted publishing + provenance requires this to stay on ubuntu-latest.
     needs: [validate_publish_request]
-    if: ${{ !inputs.preflight_only && !inputs.promote_beta_to_latest }}
+    if: ${{ !inputs.preflight_only && !inputs.promote_beta_to_latest && !inputs.sync_stable_dist_tags }}
     runs-on: ubuntu-latest
     environment: npm-release
     permissions:
@@ -411,7 +416,7 @@ jobs:
     # KEEP THE MUTATING RELEASE PATH ON A GITHUB-HOSTED RUNNER TOO.
     # This job changes the public npm dist-tags, so we keep it aligned with the
     # real release path instead of moving it onto the larger Blacksmith runners.
-    if: ${{ inputs.promote_beta_to_latest }}
+    if: ${{ inputs.promote_beta_to_latest && !inputs.sync_stable_dist_tags }}
     runs-on: ubuntu-latest
     environment: npm-release
     permissions:
@@ -506,3 +511,101 @@ jobs:
             exit 1
           fi
           echo "Promoted openclaw@${RELEASE_VERSION} from beta to latest."
+
+  sync_stable_dist_tags:
+    # This mode is for direct stable publishes where latest is correct but beta
+    # should also point at the same stable build after release.
+    if: ${{ inputs.sync_stable_dist_tags && !inputs.promote_beta_to_latest }}
+    runs-on: ubuntu-latest
+    environment: npm-release
+    permissions:
+      contents: read
+    steps:
+      - name: Require main workflow ref for dist-tag sync
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]]; then
+            echo "Dist-tag sync runs must be dispatched from main."
+            exit 1
+          fi
+
+      - name: Validate sync inputs
+        env:
+          PREFLIGHT_ONLY: ${{ inputs.preflight_only }}
+          PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+        run: |
+          set -euo pipefail
+          if [[ "${PREFLIGHT_ONLY}" == "true" ]]; then
+            echo "Dist-tag sync mode cannot run with preflight_only=true."
+            exit 1
+          fi
+          if [[ -n "${PREFLIGHT_RUN_ID}" ]]; then
+            echo "Dist-tag sync mode does not use preflight_run_id."
+            exit 1
+          fi
+          if [[ "${RELEASE_NPM_DIST_TAG}" != "latest" ]]; then
+            echo "Dist-tag sync mode expects npm_dist_tag=latest because it points latest and beta at the stable version."
+            exit 1
+          fi
+
+      - name: Validate stable tag input format
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*)?$ ]]; then
+            echo "Invalid stable release tag format: ${RELEASE_TAG}" >&2
+            exit 1
+          fi
+          echo "RELEASE_VERSION=${RELEASE_TAG#v}" >> "$GITHUB_ENV"
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "false"
+          use-sticky-disk: "false"
+          install-deps: "false"
+
+      - name: Validate published stable version
+        env:
+          RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
+        run: |
+          set -euo pipefail
+          if ! npm view "openclaw@${RELEASE_VERSION}" version >/dev/null 2>&1; then
+            echo "openclaw@${RELEASE_VERSION} is not published on npm." >&2
+            exit 1
+          fi
+
+          echo "Current latest dist-tag: $(npm view openclaw dist-tags.latest)"
+          echo "Current beta dist-tag: $(npm view openclaw dist-tags.beta)"
+
+      - name: Sync stable dist-tags
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
+        run: |
+          set -euo pipefail
+          printf '//registry.npmjs.org/:_authToken=%s\n' "${NODE_AUTH_TOKEN}" > "${HOME}/.npmrc"
+          npm whoami >/dev/null
+          npm dist-tag add "openclaw@${RELEASE_VERSION}" latest
+          npm dist-tag add "openclaw@${RELEASE_VERSION}" beta
+
+          synced_latest="$(npm view openclaw dist-tags.latest)"
+          synced_beta="$(npm view openclaw dist-tags.beta)"
+          if [[ "${synced_latest}" != "${RELEASE_VERSION}" ]]; then
+            echo "npm latest points at ${synced_latest}, expected ${RELEASE_VERSION} after sync." >&2
+            exit 1
+          fi
+          if [[ "${synced_beta}" != "${RELEASE_VERSION}" ]]; then
+            echo "npm beta points at ${synced_beta}, expected ${RELEASE_VERSION} after sync." >&2
+            exit 1
+          fi
+          echo "Synced openclaw@${RELEASE_VERSION} to npm latest and beta."

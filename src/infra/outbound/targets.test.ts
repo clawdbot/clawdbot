@@ -607,6 +607,74 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.threadId).toBe(1008013);
   });
 
+  it("preserves Telegram topic threadId for heartbeat target=last on topic-bound group sessions", () => {
+    const cfg: OpenClawConfig = {};
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg,
+      entry: {
+        sessionId: "sess-heartbeat-telegram-topic",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastTo: "-1001234567890",
+        lastThreadId: 1122,
+        chatType: "group",
+      },
+      heartbeat: {
+        target: "last",
+      },
+    });
+
+    expect(resolved.channel).toBe("telegram");
+    expect(resolved.to).toBe("-1001234567890");
+    expect(resolved.threadId).toBe(1122);
+  });
+
+  it("reuses Telegram topic routing when only deliveryContext carries the topic threadId", () => {
+    const cfg: OpenClawConfig = {};
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg,
+      entry: {
+        sessionId: "sess-heartbeat-telegram-topic-context-only",
+        updatedAt: 1,
+        deliveryContext: {
+          channel: "telegram",
+          to: "-1001234567890",
+          threadId: 1122,
+        },
+        chatType: "group",
+      },
+      heartbeat: {
+        target: "last",
+      },
+    });
+
+    expect(resolved.channel).toBe("telegram");
+    expect(resolved.to).toBe("-1001234567890");
+    expect(resolved.threadId).toBe(1122);
+  });
+
+  it("does not inherit stale Telegram threadId for direct-chat heartbeat routes", () => {
+    const cfg: OpenClawConfig = {};
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg,
+      entry: {
+        sessionId: "sess-heartbeat-telegram-direct-stale-thread",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastTo: "5232990709",
+        lastThreadId: 1122,
+        chatType: "direct",
+      },
+      heartbeat: {
+        target: "last",
+      },
+    });
+
+    expect(resolved.channel).toBe("telegram");
+    expect(resolved.to).toBe("5232990709");
+    expect(resolved.threadId).toBeUndefined();
+  });
+
   it("prefers turn-scoped routing over mutable session routing for target=last", () => {
     const resolved = resolveHeartbeatDeliveryTarget({
       cfg: {},

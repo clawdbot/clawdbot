@@ -15,6 +15,10 @@ import {
 } from "./config-policy.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
+import {
+  clearPluginManifestRegistryCache,
+  pluginManifestRegistryCache,
+} from "./manifest-registry-state.js";
 import type {
   PluginBundleFormat,
   PluginConfigUiHint,
@@ -117,14 +121,15 @@ export type PluginManifestRegistry = {
   diagnostics: PluginDiagnostic[];
 };
 
-const registryCache = new Map<string, { expiresAt: number; registry: PluginManifestRegistry }>();
+const registryCache = pluginManifestRegistryCache as Map<
+  string,
+  { expiresAt: number; registry: PluginManifestRegistry }
+>;
 
 // Keep a short cache window to collapse bursty reloads during startup flows.
 const DEFAULT_MANIFEST_CACHE_MS = 1000;
 
-export function clearPluginManifestRegistryCache(): void {
-  registryCache.clear();
-}
+export { clearPluginManifestRegistryCache } from "./manifest-registry-state.js";
 
 function listContractValues(
   plugin: PluginManifestRecord,

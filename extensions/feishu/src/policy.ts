@@ -5,11 +5,35 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { evaluateSenderGroupAccessForPolicy } from "openclaw/plugin-sdk/group-access";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
-import type { AllowlistMatch, ChannelGroupContext, GroupToolPolicyConfig } from "../runtime-api.js";
-import { normalizeFeishuTarget } from "./targets.js";
-import type { FeishuConfig, FeishuGroupConfig } from "./types.js";
+import type { AllowlistMatch, ChannelGroupContext } from "../runtime-api.js";
+import { detectIdType } from "./targets.js";
+import type { FeishuConfig } from "./types.js";
 
 export type FeishuAllowlistMatch = AllowlistMatch<"wildcard" | "id">;
+
+const FEISHU_PROVIDER_PREFIX_RE = /^(feishu|lark):/i;
+
+function stripRepeatedFeishuProviderPrefixes(raw: string): string {
+  let normalized = raw.trim();
+  while (FEISHU_PROVIDER_PREFIX_RE.test(normalized)) {
+    normalized = normalized.replace(FEISHU_PROVIDER_PREFIX_RE, "").trim();
+  }
+  return normalized;
+}
+
+function canonicalizeFeishuAllowlistKey(params: { kind: "chat" | "user"; value: string }): string {
+  const value = params.value.trim();
+  if (!value) {
+    return "";
+  }
+  // A typed wildcard (`chat:*`, `user:*`, `open_id:*`, `dm:*`, `group:*`,
+  // `channel:*`) collapses to the bare wildcard so it keeps matching across
+  // both kinds, preserving the prior `normalizeFeishuTarget`-based behavior.
+  if (value === "*") {
+    return "*";
+  }
+  return `${params.kind}:${value}`;
+}
 
 function normalizeFeishuAllowEntry(raw: string): string {
   const trimmed = raw.trim();
@@ -19,9 +43,56 @@ function normalizeFeishuAllowEntry(raw: string): string {
   if (trimmed === "*") {
     return "*";
   }
-  const withoutProviderPrefix = trimmed.replace(/^feishu:/i, "");
-  const normalized = normalizeFeishuTarget(withoutProviderPrefix) ?? withoutProviderPrefix;
-  return normalizeOptionalLowercaseString(normalized) ?? "";
+
+  const withoutProviderPrefix = stripRepeatedFeishuProviderPrefixes(trimmed);
+  if (withoutProviderPrefix === "*") {
+    return "*";
+  }
+  const lowered = normalizeOptionalLowercaseString(withoutProviderPrefix) ?? "";
+  if (!lowered) {
+    return "";
+  }
+  // Lowercase for prefix detection only; preserve the original ID casing in the
+  // canonicalized key. Sender candidates pass through this same path so allowlist
+  // entries and runtime IDs stay normalized symmetrically.
+  if (
+    lowered.startsWith("chat:") ||
+    lowered.startsWith("group:") ||
+    lowered.startsWith("channel:")
+  ) {
+    return canonicalizeFeishuAllowlistKey({
+      kind: "chat",
+      value: withoutProviderPrefix.slice(withoutProviderPrefix.indexOf(":") + 1),
+    });
+  }
+  if (lowered.startsWith("user:") || lowered.startsWith("dm:")) {
+    return canonicalizeFeishuAllowlistKey({
+      kind: "user",
+      value: withoutProviderPrefix.slice(withoutProviderPrefix.indexOf(":") + 1),
+    });
+  }
+  if (lowered.startsWith("open_id:")) {
+    return canonicalizeFeishuAllowlistKey({
+      kind: "user",
+      value: withoutProviderPrefix.slice(withoutProviderPrefix.indexOf(":") + 1),
+    });
+  }
+
+  const detectedType = detectIdType(withoutProviderPrefix);
+  if (detectedType === "chat_id") {
+    return canonicalizeFeishuAllowlistKey({
+      kind: "chat",
+      value: withoutProviderPrefix,
+    });
+  }
+  if (detectedType === "open_id" || detectedType === "user_id") {
+    return canonicalizeFeishuAllowlistKey({
+      kind: "user",
+      value: withoutProviderPrefix,
+    });
+  }
+
+  return "";
 }
 
 export function resolveFeishuAllowlistMatch(params: {
@@ -54,10 +125,7 @@ export function resolveFeishuAllowlistMatch(params: {
   return { allowed: false };
 }
 
-export function resolveFeishuGroupConfig(params: {
-  cfg?: FeishuConfig;
-  groupId?: string | null;
-}): FeishuGroupConfig | undefined {
+export function resolveFeishuGroupConfig(params: { cfg?: FeishuConfig; groupId?: string | null }) {
   const groups = params.cfg?.groups ?? {};
   const wildcard = groups["*"];
   const groupId = params.groupId?.trim();
@@ -80,10 +148,8 @@ export function resolveFeishuGroupConfig(params: {
   return wildcard;
 }
 
-export function resolveFeishuGroupToolPolicy(
-  params: ChannelGroupContext,
-): GroupToolPolicyConfig | undefined {
-  const cfg = params.cfg.channels?.feishu as FeishuConfig | undefined;
+export function resolveFeishuGroupToolPolicy(params: ChannelGroupContext) {
+  const cfg = params.cfg.channels?.feishu;
   if (!cfg) {
     return undefined;
   }
@@ -127,7 +193,7 @@ export function resolveFeishuReplyPolicy(params: {
     return { requireMention: false };
   }
 
-  const feishuCfg = params.cfg.channels?.feishu as FeishuConfig | undefined;
+  const feishuCfg = params.cfg.channels?.feishu;
   const resolvedCfg = resolveMergedAccountConfig<FeishuConfig>({
     channelConfig: feishuCfg,
     accounts: feishuCfg?.accounts as Record<string, Partial<FeishuConfig>> | undefined,

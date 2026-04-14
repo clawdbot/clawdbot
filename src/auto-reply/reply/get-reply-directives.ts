@@ -265,6 +265,7 @@ export async function resolveReplyDirectives(params: {
   const hasInlineDirective =
     parsedDirectives.hasThinkDirective ||
     parsedDirectives.hasVerboseDirective ||
+    parsedDirectives.hasTraceDirective ||
     parsedDirectives.hasFastDirective ||
     parsedDirectives.hasReasoningDirective ||
     parsedDirectives.hasElevatedDirective ||

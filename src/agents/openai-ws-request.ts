@@ -1,5 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { readStringValue } from "../shared/string-coerce.js";
+import { normalizeOpenAIReasoningEffort } from "./openai-reasoning-effort.js";
 import type {
   FunctionToolDefinition,
   InputItem,
@@ -77,7 +78,7 @@ export function buildOpenAIWebSocketResponseCreatePayload(params: {
   if (reasoningEffort !== "none" && (reasoningEffort || streamOpts?.reasoningSummary)) {
     const reasoning: { effort?: string; summary?: string } = {};
     if (reasoningEffort !== undefined) {
-      reasoning.effort = reasoningEffort;
+      reasoning.effort = normalizeOpenAIReasoningEffort(reasoningEffort);
     }
     if (streamOpts?.reasoningSummary !== undefined) {
       reasoning.summary = streamOpts.reasoningSummary;

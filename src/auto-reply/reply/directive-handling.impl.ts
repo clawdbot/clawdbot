@@ -56,6 +56,12 @@ export async function handleDirectiveOnly(
     currentReasoningLevel,
     currentElevatedLevel,
   } = params;
+  const delegatedTraceAllowed = (params.gatewayClientScopes ?? []).includes("operator.admin");
+  if (directives.hasTraceDirective && !params.senderIsOwner && !delegatedTraceAllowed) {
+    return {
+      text: "❌ /trace is restricted to owners and gateway clients with operator.admin scope.",
+    };
+  }
   const activeAgentId = resolveSessionAgentId({
     sessionKey: params.sessionKey,
     config: params.cfg,
@@ -154,13 +160,13 @@ export async function handleDirectiveOnly(
   }
   if (directives.hasTraceDirective && !directives.traceLevel) {
     if (!directives.rawTraceLevel) {
-      const level = (sessionEntry.traceLevel as "on" | "off" | undefined) ?? "off";
+      const level = (sessionEntry.traceLevel as "on" | "off" | "raw" | undefined) ?? "off";
       return {
-        text: withOptions(`Current trace level: ${level}.`, "on, off"),
+        text: withOptions(`Current trace level: ${level}.`, "on, off, raw"),
       };
     }
     return {
-      text: `Unrecognized trace level "${directives.rawTraceLevel}". Valid levels: off, on.`,
+      text: `Unrecognized trace level "${directives.rawTraceLevel}". Valid levels: off, on, raw.`,
     };
   }
   if (directives.hasFastDirective && directives.fastMode === undefined) {
@@ -473,8 +479,14 @@ export async function handleDirectiveOnly(
   if (directives.hasTraceDirective && directives.traceLevel) {
     parts.push(
       directives.traceLevel === "off"
-        ? formatDirectiveAck("Plugin trace disabled.")
-        : formatDirectiveAck("Plugin trace enabled."),
+        ? formatDirectiveAck("Trace disabled.")
+        : directives.traceLevel === "raw"
+          ? formatDirectiveAck(
+              "Trace set to raw. Warning: trace output may contain sensitive information.",
+            )
+          : formatDirectiveAck(
+              "Trace enabled. Warning: trace output may contain sensitive information.",
+            ),
     );
   }
   if (

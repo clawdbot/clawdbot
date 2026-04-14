@@ -1,7 +1,9 @@
+import syncFs from "node:fs";
+import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolveAgentWorkspaceDir } from "../../../../src/agents/agent-scope.js";
 import type { OpenClawConfig } from "../../../../src/config/config.js";
 import { resolveMemoryBackendConfig } from "./backend-config.js";
@@ -28,7 +30,7 @@ describe("resolveMemoryBackendConfig", () => {
     } as OpenClawConfig;
     const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
     expect(resolved.backend).toBe("qmd");
-    expect(resolved.qmd?.collections.length).toBeGreaterThanOrEqual(3);
+    expect(resolved.qmd?.collections.length).toBe(2);
     expect(resolved.qmd?.command).toBe("qmd");
     expect(resolved.qmd?.searchMode).toBe("search");
     expect(resolved.qmd?.update.intervalMs).toBeGreaterThan(0);
@@ -38,8 +40,91 @@ describe("resolveMemoryBackendConfig", () => {
     expect(resolved.qmd?.update.embedTimeoutMs).toBe(120_000);
     const names = new Set((resolved.qmd?.collections ?? []).map((collection) => collection.name));
     expect(names.has("memory-root-main")).toBe(true);
-    expect(names.has("memory-alt-main")).toBe(true);
     expect(names.has("memory-dir-main")).toBe(true);
+    expect(names.has("memory-alt-main")).toBe(false);
+    const rootCollection = resolved.qmd?.collections.find(
+      (collection) => collection.name === "memory-root-main",
+    );
+    expect(rootCollection?.pattern).toBe("MEMORY.md");
+  });
+
+  it("uses lowercase memory.md as the root fallback when MEMORY.md is absent", () => {
+    const workspaceDir = "/workspace/root";
+    const legacyEntry = {
+      name: "memory.md",
+      isFile: () => true,
+      isSymbolicLink: () => false,
+    } as Dirent;
+    const readdirSpy = vi
+      .spyOn(syncFs, "readdirSync")
+      .mockReturnValue([legacyEntry] as unknown as ReturnType<typeof syncFs.readdirSync>);
+    try {
+      const cfg = {
+        agents: {
+          defaults: { workspace: workspaceDir },
+          list: [{ id: "main", default: true, workspace: workspaceDir }],
+        },
+        memory: {
+          backend: "qmd",
+          qmd: {},
+        },
+      } as OpenClawConfig;
+      const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+      const rootCollection = resolved.qmd?.collections.find(
+        (collection) => collection.name === "memory-root-main",
+      );
+      expect(rootCollection?.pattern).toBe("memory.md");
+      expect(
+        (resolved.qmd?.collections ?? []).some(
+          (collection) => collection.name === "memory-alt-main",
+        ),
+      ).toBe(false);
+    } finally {
+      readdirSpy.mockRestore();
+    }
+  });
+
+  it("prefers MEMORY.md over legacy memory.md when both root files exist", () => {
+    const workspaceDir = "/workspace/root";
+    const entries = [
+      {
+        name: "MEMORY.md",
+        isFile: () => true,
+        isSymbolicLink: () => false,
+      },
+      {
+        name: "memory.md",
+        isFile: () => true,
+        isSymbolicLink: () => false,
+      },
+    ] as Dirent[];
+    const readdirSpy = vi
+      .spyOn(syncFs, "readdirSync")
+      .mockReturnValue(entries as unknown as ReturnType<typeof syncFs.readdirSync>);
+    try {
+      const cfg = {
+        agents: {
+          defaults: { workspace: workspaceDir },
+          list: [{ id: "main", default: true, workspace: workspaceDir }],
+        },
+        memory: {
+          backend: "qmd",
+          qmd: {},
+        },
+      } as OpenClawConfig;
+      const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+      const rootCollection = resolved.qmd?.collections.find(
+        (collection) => collection.name === "memory-root-main",
+      );
+      expect(rootCollection?.pattern).toBe("MEMORY.md");
+      expect(
+        (resolved.qmd?.collections ?? []).some(
+          (collection) => collection.name === "memory-alt-main",
+        ),
+      ).toBe(false);
+    } finally {
+      readdirSpy.mockRestore();
+    }
   });
 
   it("parses quoted qmd command paths", () => {

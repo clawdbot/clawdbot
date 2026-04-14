@@ -14,7 +14,7 @@ import { resolveTargetIdFromTabs } from "./target-id.js";
 type SelectionDeps = {
   profile: ResolvedBrowserProfile;
   getProfileState: () => ProfileRuntimeState;
-  getSsrFPolicy: () => SsrFPolicy | undefined;
+  getCdpControlPolicy: () => SsrFPolicy | undefined;
   ensureBrowserAvailable: () => Promise<void>;
   listTabs: () => Promise<BrowserTab[]>;
   openTab: (url: string) => Promise<BrowserTab>;
@@ -29,7 +29,7 @@ type SelectionOps = {
 export function createProfileSelectionOps({
   profile,
   getProfileState,
-  getSsrFPolicy,
+  getCdpControlPolicy,
   ensureBrowserAvailable,
   listTabs,
   openTab,
@@ -112,7 +112,7 @@ export function createProfileSelectionOps({
         await focusPageByTargetIdViaPlaywright({
           cdpUrl: profile.cdpUrl,
           targetId: resolvedTargetId,
-          ssrfPolicy: getSsrFPolicy(),
+          ssrfPolicy: getCdpControlPolicy(),
         });
         const profileState = getProfileState();
         profileState.lastTargetId = resolvedTargetId;
@@ -124,7 +124,7 @@ export function createProfileSelectionOps({
       appendCdpPath(cdpHttpBase, `/json/activate/${resolvedTargetId}`),
       undefined,
       undefined,
-      getSsrFPolicy(),
+      getCdpControlPolicy(),
     );
     const profileState = getProfileState();
     profileState.lastTargetId = resolvedTargetId;
@@ -147,7 +147,7 @@ export function createProfileSelectionOps({
         await closePageByTargetIdViaPlaywright({
           cdpUrl: profile.cdpUrl,
           targetId: resolvedTargetId,
-          ssrfPolicy: getSsrFPolicy(),
+          ssrfPolicy: getCdpControlPolicy(),
         });
         return;
       }
@@ -157,7 +157,7 @@ export function createProfileSelectionOps({
       appendCdpPath(cdpHttpBase, `/json/close/${resolvedTargetId}`),
       undefined,
       undefined,
-      getSsrFPolicy(),
+      getCdpControlPolicy(),
     );
   };
 

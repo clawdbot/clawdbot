@@ -82,12 +82,14 @@ export function createBlueBubblesAccountsMockModule() {
 }
 
 type BlueBubblesProbeMockModule = {
+  fetchBlueBubblesServerInfo: Mock<() => Promise<Record<string, unknown> | null>>;
   getCachedBlueBubblesPrivateApiStatus: Mock<() => boolean | null>;
   isBlueBubblesPrivateApiStatusEnabled: Mock<(status: boolean | null) => boolean>;
 };
 
 export function createBlueBubblesProbeMockModule(): BlueBubblesProbeMockModule {
   return {
+    fetchBlueBubblesServerInfo: vi.fn().mockResolvedValue(null),
     getCachedBlueBubblesPrivateApiStatus: vi
       .fn()
       .mockReturnValue(BLUE_BUBBLES_PRIVATE_API_STATUS.unknown),

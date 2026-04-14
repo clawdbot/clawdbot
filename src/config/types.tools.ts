@@ -169,6 +169,8 @@ export type ToolLoopDetectionConfig = {
   historySize?: number;
   /** Warning threshold before a warning-only loop classification (default: 10). */
   warningThreshold?: number;
+  /** Block repeated calls to the same unavailable tool after this many misses (default: 10). */
+  unknownToolThreshold?: number;
   /** Critical threshold for blocking repetitive loops (default: 20). */
   criticalThreshold?: number;
   /** Global no-progress breaker threshold (default: 30). */

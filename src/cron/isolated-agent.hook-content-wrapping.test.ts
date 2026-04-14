@@ -1,7 +1,6 @@
 import "./isolated-agent.mocks.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadModelCatalog } from "../agents/model-catalog.js";
-import * as modelSelection from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import {
   DEFAULT_MESSAGE,
@@ -10,10 +9,11 @@ import {
   runCronTurn,
   withTempHome,
 } from "./isolated-agent.turn-test-helpers.js";
+import * as isolatedAgentRunRuntime from "./isolated-agent/run.runtime.js";
 
 describe("runCronIsolatedAgentTurn hook content wrapping", () => {
   beforeEach(() => {
-    vi.spyOn(modelSelection, "resolveThinkingDefault").mockReturnValue("off");
+    vi.spyOn(isolatedAgentRunRuntime, "resolveThinkingDefault").mockReturnValue("off");
     vi.mocked(runEmbeddedPiAgent).mockClear();
     vi.mocked(loadModelCatalog).mockResolvedValue([]);
   });

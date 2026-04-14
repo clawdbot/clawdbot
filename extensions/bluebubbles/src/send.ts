@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/text-runtime";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
 import {
+  fetchBlueBubblesServerInfo,
   getCachedBlueBubblesPrivateApiStatus,
   isBlueBubblesPrivateApiStatusEnabled,
 } from "./probe.js";
@@ -456,7 +457,7 @@ export async function sendMessageBlueBubbles(
     serverUrl: opts.serverUrl,
     password: opts.password,
   });
-  const privateApiStatus = getCachedBlueBubblesPrivateApiStatus(accountId);
+  let privateApiStatus = getCachedBlueBubblesPrivateApiStatus(accountId);
 
   const target = resolveBlueBubblesSendTarget(to);
   const chatGuid = await resolveChatGuidForTarget({
@@ -486,6 +487,25 @@ export async function sendMessageBlueBubbles(
   const effectId = resolveEffectId(opts.effectId);
   const wantsReplyThread = normalizeOptionalString(opts.replyToMessageGuid) !== undefined;
   const wantsEffect = Boolean(effectId);
+
+  // Lazy refresh: when the cache has expired and Private API features are needed,
+  // fetch server info before making the decision. This prevents silent degradation
+  // of reply threading and effects after the 10-minute cache TTL expires. (#43764)
+  if (privateApiStatus === null && (wantsReplyThread || wantsEffect)) {
+    try {
+      await fetchBlueBubblesServerInfo({
+        baseUrl,
+        password,
+        accountId,
+        timeoutMs: opts.timeoutMs ?? 5000,
+        allowPrivateNetwork,
+      });
+      privateApiStatus = getCachedBlueBubblesPrivateApiStatus(accountId);
+    } catch {
+      // Refresh failed — proceed with null status (existing graceful degradation)
+    }
+  }
+
   const privateApiDecision = resolvePrivateApiDecision({
     privateApiStatus,
     wantsReplyThread,

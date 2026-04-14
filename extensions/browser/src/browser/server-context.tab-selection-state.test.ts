@@ -125,7 +125,51 @@ describe("browser server-context tab selection state", () => {
     expect(createTargetViaCdp).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:18800",
       url: "http://127.0.0.1:8080",
-      ssrfPolicy: { allowPrivateNetwork: true },
+      ssrfPolicy: undefined,
+    });
+  });
+
+  it("can bootstrap a managed loopback tab under strict SSRF because CDP control stays local", async () => {
+    const createTargetViaCdp = vi
+      .spyOn(cdpModule, "createTargetViaCdp")
+      .mockResolvedValue({ targetId: "CREATED" });
+
+    let listCount = 0;
+    const fetchMock = vi.fn(async (url: unknown) => {
+      const u = String(url);
+      if (!u.includes("/json/list")) {
+        throw new Error(`unexpected fetch: ${u}`);
+      }
+      listCount += 1;
+      return {
+        ok: true,
+        json: async () =>
+          listCount === 1
+            ? []
+            : [
+                {
+                  id: "CREATED",
+                  title: "New Tab",
+                  url: "about:blank",
+                  webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/CREATED",
+                  type: "page",
+                },
+              ],
+      } as unknown as Response;
+    });
+
+    global.fetch = withFetchPreconnect(fetchMock);
+    const state = makeState("openclaw");
+    state.resolved.ssrfPolicy = {};
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const openclaw = ctx.forProfile("openclaw");
+
+    const selected = await openclaw.ensureTabAvailable();
+    expect(selected.targetId).toBe("CREATED");
+    expect(createTargetViaCdp).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:18800",
+      url: "about:blank",
+      ssrfPolicy: undefined,
     });
   });
 

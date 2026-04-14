@@ -196,6 +196,7 @@ export function buildInboundUserContextPrefix(
       ctx.MessageThreadId != null
         ? (normalizePromptMetadataString(String(ctx.MessageThreadId)) ?? undefined)
         : undefined,
+    topic_name: normalizePromptMetadataString(ctx.TopicName) ?? undefined,
     is_forum: ctx.IsForum === true ? true : undefined,
     is_group_chat: !isDirect ? true : undefined,
     was_mentioned: ctx.WasMentioned === true ? true : undefined,

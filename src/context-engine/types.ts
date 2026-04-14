@@ -50,6 +50,13 @@ export type ContextEngineInfo = {
   version?: string;
   /** True when the engine manages its own compaction lifecycle. */
   ownsCompaction?: boolean;
+  /**
+   * Controls how turn-triggered maintenance should be executed.
+   *
+   * Engines remain compatible by default unless the host explicitly opts into
+   * background turn maintenance.
+   */
+  turnMaintenanceMode?: "foreground" | "background";
 };
 
 export type SubagentSpawnPreparation = {
@@ -128,6 +135,11 @@ export type ContextEnginePromptCacheInfo = {
 };
 
 export type ContextEngineRuntimeContext = Record<string, unknown> & {
+  /**
+   * True when the host has explicitly opted this maintenance run into
+   * consuming deferred compaction debt.
+   */
+  allowDeferredCompactionExecution?: boolean;
   /** Optional prompt-cache telemetry for cache-aware engines. */
   promptCache?: ContextEnginePromptCacheInfo;
   /**

@@ -507,6 +507,7 @@ export async function deliverOutboundPayloads(
         forceDocument: params.forceDocument,
         silent: params.silent,
         mirror: params.mirror,
+        session: params.session,
         gatewayClientScopes: params.gatewayClientScopes,
       }).catch(() => null); // Best-effort — don't block delivery if queue write fails.
 

@@ -92,7 +92,7 @@ describe("buildDiscordInboundJob", () => {
 
   it("re-materializes the process context with an overridden abort signal", async () => {
     const ctx = await createBaseDiscordMessageContext();
-    const job = buildDiscordInboundJob(ctx);
+    const job = buildDiscordInboundJob(ctx, { replayKeys: ["default:ch-1:m-1"] });
     const overrideAbortController = new AbortController();
 
     const rematerialized = materializeDiscordInboundJob(job, overrideAbortController.signal);
@@ -103,6 +103,7 @@ describe("buildDiscordInboundJob", () => {
     expect(rematerialized.abortSignal).toBe(overrideAbortController.signal);
     expect(rematerialized.message).toEqual(job.payload.message);
     expect(rematerialized.data).toEqual(job.payload.data);
+    expect(job.replayKeys).toEqual(["default:ch-1:m-1"]);
   });
 
   it("preserves Carbon message getters across queued jobs", async () => {

@@ -73,6 +73,7 @@ export type EmbeddedRunAttemptResult = {
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
   systemPromptReport?: SessionSystemPromptReport;
+  finalPromptText?: string;
   messagesSnapshot: AgentMessage[];
   assistantTexts: string[];
   toolMetas: Array<{ toolName: string; meta?: string }>;

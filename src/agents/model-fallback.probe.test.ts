@@ -21,6 +21,10 @@ vi.mock("./auth-profiles/order.js", () => ({
   resolveAuthProfileOrder: vi.fn(),
 }));
 
+vi.mock("./auth-profiles/source-check.js", () => ({
+  hasAnyAuthProfileStoreSource: vi.fn(() => true),
+}));
+
 type AuthProfilesStoreModule = typeof import("./auth-profiles/store.js");
 type AuthProfilesUsageModule = typeof import("./auth-profiles/usage.js");
 type AuthProfilesOrderModule = typeof import("./auth-profiles/order.js");

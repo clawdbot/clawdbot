@@ -111,6 +111,7 @@ import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
+import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import {
   resolveTranscriptPolicy,
   shouldAllowProviderOwnedThinkingReplay,
@@ -278,6 +279,16 @@ export {
 };
 
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
+
+export function resolveUnknownToolGuardThreshold(loopDetection?: {
+  enabled?: boolean;
+  unknownToolThreshold?: number;
+}): number | undefined {
+  if (loopDetection?.enabled !== true) {
+    return undefined;
+  }
+  return loopDetection.unknownToolThreshold ?? UNKNOWN_TOOL_THRESHOLD;
+}
 
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
   const content = (msg as { content?: unknown }).content;
@@ -1236,6 +1247,9 @@ export async function runEmbeddedAttempt(
       activeSession.agent.streamFn = wrapStreamFnTrimToolCallNames(
         activeSession.agent.streamFn,
         allowedToolNames,
+        {
+          unknownToolThreshold: resolveUnknownToolGuardThreshold(clientToolLoopDetection),
+        },
       );
 
       if (
@@ -1534,6 +1548,7 @@ export async function runEmbeddedAttempt(
       let attemptUsage: NormalizedUsage | undefined;
       let cacheBreak: ReturnType<typeof completePromptCacheObservation> = null;
       let promptCache: EmbeddedRunAttemptResult["promptCache"];
+      let finalPromptText: string | undefined;
       if (params.replyOperation) {
         params.replyOperation.attachBackend(queueHandle);
       }
@@ -1954,6 +1969,7 @@ export async function runEmbeddedAttempt(
           }
 
           if (!skipPromptSubmission) {
+            finalPromptText = effectivePrompt;
             const btwSnapshotMessages = activeSession.messages.slice(-MAX_BTW_SNAPSHOT_MESSAGES);
             updateActiveEmbeddedRunSnapshot(params.sessionId, {
               transcriptLeafId,
@@ -2374,6 +2390,7 @@ export async function runEmbeddedAttempt(
         bootstrapPromptWarningSignaturesSeen: bootstrapPromptWarning.warningSignaturesSeen,
         bootstrapPromptWarningSignature: bootstrapPromptWarning.signature,
         systemPromptReport,
+        finalPromptText,
         messagesSnapshot,
         assistantTexts,
         toolMetas: toolMetasNormalized,

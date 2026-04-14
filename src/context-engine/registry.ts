@@ -395,6 +395,49 @@ export function listContextEngineIds(): string[] {
   return [...getContextEngineRegistryState().engines.keys()];
 }
 
+function describeResolvedContextEngineContractError(
+  engineId: string,
+  engine: unknown,
+): string | null {
+  if (!engine || typeof engine !== "object") {
+    return `Context engine "${engineId}" factory returned ${JSON.stringify(engine)} instead of a ContextEngine object.`;
+  }
+
+  const candidate = engine as Record<string, unknown>;
+  const issues: string[] = [];
+  const info = candidate.info;
+  if (!info || typeof info !== "object") {
+    issues.push("missing info");
+  } else {
+    const infoRecord = info as Record<string, unknown>;
+    const infoId = typeof infoRecord.id === "string" ? infoRecord.id.trim() : "";
+    if (!infoId) {
+      issues.push("missing info.id");
+    } else if (infoId !== engineId) {
+      issues.push(`info.id must match registered id "${engineId}"`);
+    }
+    if (typeof infoRecord.name !== "string" || !infoRecord.name.trim()) {
+      issues.push("missing info.name");
+    }
+  }
+
+  if (typeof candidate.ingest !== "function") {
+    issues.push("missing ingest()");
+  }
+  if (typeof candidate.assemble !== "function") {
+    issues.push("missing assemble()");
+  }
+  if (typeof candidate.compact !== "function") {
+    issues.push("missing compact()");
+  }
+
+  if (issues.length === 0) {
+    return null;
+  }
+
+  return `Context engine "${engineId}" factory returned an invalid ContextEngine: ${issues.join(", ")}.`;
+}
+
 // ---------------------------------------------------------------------------
 // Resolution
 // ---------------------------------------------------------------------------
@@ -423,5 +466,11 @@ export async function resolveContextEngine(config?: OpenClawConfig): Promise<Con
     );
   }
 
-  return wrapContextEngineWithSessionKeyCompat(await entry.factory());
+  const engine = await entry.factory();
+  const contractError = describeResolvedContextEngineContractError(engineId, engine);
+  if (contractError) {
+    throw new Error(contractError);
+  }
+
+  return wrapContextEngineWithSessionKeyCompat(engine);
 }

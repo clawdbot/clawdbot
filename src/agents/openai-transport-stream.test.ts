@@ -588,6 +588,33 @@ describe("openai transport stream", () => {
     expect(params.reasoning).toEqual({ effort: "high", summary: "auto" });
   });
 
+  it("maps minimal shared reasoning to low for OpenAI Responses", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoning: "minimal",
+      } as never,
+    ) as { reasoning?: unknown };
+
+    expect(params.reasoning).toEqual({ effort: "low", summary: "auto" });
+  });
+
   it.each([
     {
       label: "openai",
@@ -1059,6 +1086,33 @@ describe("openai transport stream", () => {
     ) as { reasoning_effort?: unknown };
 
     expect(params.reasoning_effort).toBe("medium");
+  });
+
+  it("maps minimal shared reasoning to low for OpenAI completions", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoning: "minimal",
+      } as never,
+    ) as { reasoning_effort?: unknown };
+
+    expect(params.reasoning_effort).toBe("low");
   });
 
   it("defaults OpenAI completions reasoning effort to high when unset", () => {

@@ -143,6 +143,24 @@ describe("buildTelegramMessageContext group sessions without forum", () => {
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:telegram:group:-1001234567890:topic:99");
     expect(ctx?.ctxPayload?.MessageThreadId).toBe(99);
   });
+
+  it("surfaces topic name from reply_to_message forum metadata", async () => {
+    const ctx = await buildContext({
+      message_id: 3,
+      chat: { id: -1001234567890, type: "supergroup", title: "Test Forum", is_forum: true },
+      date: 1700000002,
+      text: "@bot hello",
+      message_thread_id: 99,
+      from: { id: 42, first_name: "Alice" },
+      reply_to_message: {
+        message_id: 2,
+        forum_topic_created: { name: "Deployments", icon_color: 0x6fb9f0 },
+      },
+    });
+
+    expect(ctx).not.toBeNull();
+    expect(ctx?.ctxPayload?.TopicName).toBe("Deployments");
+  });
 });
 
 describe("buildTelegramMessageContext direct peer routing", () => {

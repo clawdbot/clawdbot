@@ -374,18 +374,28 @@ export async function expectFeishuReplyPipelineDedupedAfterPostSendFailure(param
   event: unknown;
   dispatchReplyFromConfigMock: ReturnType<typeof vi.fn>;
   runtimeErrorMock: ReturnType<typeof vi.fn>;
+  waitTimeoutMs?: number;
 }) {
+  const waitTimeoutMs = params.waitTimeoutMs ?? FEISHU_LIFECYCLE_WAIT_TIMEOUT_MS;
   await replayFeishuLifecycleEvent({
     handler: params.handler,
     event: params.event,
-    waitForFirst: () => {
-      expect(params.dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
-      expect(params.runtimeErrorMock).toHaveBeenCalledTimes(1);
-    },
-    waitForSecond: () => {
-      expect(params.dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
-      expect(params.runtimeErrorMock).toHaveBeenCalledTimes(1);
-    },
+    waitForFirst: () =>
+      vi.waitFor(
+        () => {
+          expect(params.dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
+          expect(params.runtimeErrorMock).toHaveBeenCalledTimes(1);
+        },
+        { timeout: waitTimeoutMs },
+      ),
+    waitForSecond: () =>
+      vi.waitFor(
+        () => {
+          expect(params.dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
+          expect(params.runtimeErrorMock).toHaveBeenCalledTimes(1);
+        },
+        { timeout: waitTimeoutMs },
+      ),
   });
 }
 

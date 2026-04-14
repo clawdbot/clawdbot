@@ -7,6 +7,12 @@ export const existingSessionRouteState = {
       driver: "existing-session" as const,
       name: "chrome-live",
     },
+    listTabs: vi.fn(async () => [
+      {
+        targetId: "7",
+        url: "https://example.com",
+      },
+    ]),
     ensureTabAvailable: vi.fn(async () => ({
       targetId: "7",
       url: "https://example.com",

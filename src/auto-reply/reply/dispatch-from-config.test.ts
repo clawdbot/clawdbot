@@ -2692,6 +2692,54 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("releases inbound dedupe when dispatch fails before completion", async () => {
+    setNoAbort();
+    const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      OriginatingChannel: "whatsapp",
+      OriginatingTo: "whatsapp:+15555550124",
+      To: "whatsapp:+15555550124",
+      AccountId: "default",
+      MessageSid: "msg-dup-error",
+      SessionKey: "agent:main:whatsapp:direct:+15555550124",
+      CommandBody: "hello",
+      RawBody: "hello",
+      Body: "hello",
+    });
+    const replyResolver = vi
+      .fn<
+        (_ctx: MsgContext, _opts?: GetReplyOptions, _cfg?: OpenClawConfig) => Promise<ReplyPayload>
+      >()
+      .mockRejectedValueOnce(new Error("dispatch failed"))
+      .mockResolvedValueOnce({ text: "retry succeeds" });
+
+    await expect(
+      dispatchReplyFromConfig({
+        ctx,
+        cfg,
+        dispatcher: createDispatcher(),
+        replyResolver,
+      }),
+    ).rejects.toThrow("dispatch failed");
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher: createDispatcher(),
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(2);
+    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "whatsapp",
+        outcome: "error",
+        error: "Error: dispatch failed",
+      }),
+    );
+  });
+
   it("passes configOverride to replyResolver when provided", async () => {
     setNoAbort();
     const cfg = emptyConfig;
@@ -2956,6 +3004,28 @@ describe("before_dispatch hook", () => {
     expect(result.queuedFinal).toBe(true);
   });
 
+  it("suppresses before_dispatch handled reply when sendPolicy is deny", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "deny",
+    };
+    hookMocks.runner.runBeforeDispatch.mockResolvedValue({ handled: true, text: "Blocked" });
+    const dispatcher = createDispatcher();
+    const result = await dispatchReplyFromConfig({
+      ctx: createHookCtx({ SessionKey: "test:session" }),
+      cfg: emptyConfig,
+      dispatcher,
+    });
+    // Hook handled the message (no model dispatch)
+    expect(hookMocks.runner.runBeforeDispatch).toHaveBeenCalled();
+    // But delivery must be suppressed
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(mocks.routeReply).not.toHaveBeenCalled();
+    expect(result.queuedFinal).toBe(false);
+  });
+
   it("continues default dispatch when hook returns not handled", async () => {
     hookMocks.runner.runBeforeDispatch.mockResolvedValue({ handled: false });
     const dispatcher = createDispatcher();
@@ -2967,5 +3037,335 @@ describe("before_dispatch hook", () => {
     });
     expect(hookMocks.runner.runBeforeDispatch).toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "model reply" });
+  });
+});
+
+describe("sendPolicy deny — suppress delivery, not processing (#53328)", () => {
+  beforeEach(() => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "reply_dispatch",
+    );
+    hookMocks.runner.runReplyDispatch.mockResolvedValue(undefined);
+    hookMocks.runner.runBeforeDispatch.mockResolvedValue(undefined);
+  });
+
+  it("still calls the replyResolver when sendPolicy is deny", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "deny",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "agent reply" }) satisfies ReplyPayload);
+    const ctx = buildTestCtx({ SessionKey: "test:session" });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    // The agent MUST process the message (replyResolver called)
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes suppressUserDelivery to tail reply_dispatch when sendPolicy is deny", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "deny",
+    };
+    hookMocks.runner.runReplyDispatch.mockImplementation(async (event: unknown) => {
+      const candidate = event as { isTailDispatch?: boolean };
+      if (candidate.isTailDispatch) {
+        return {
+          handled: true,
+          queuedFinal: false,
+          counts: { tool: 0, block: 0, final: 0 },
+        };
+      }
+      return undefined;
+    });
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      SessionKey: "test:session",
+      AcpDispatchTailAfterReset: true,
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "agent reply" }),
+    });
+
+    expect(hookMocks.runner.runReplyDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        isTailDispatch: true,
+        sendPolicy: "deny",
+        suppressUserDelivery: true,
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("suppresses final reply delivery when sendPolicy is deny", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "deny",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "agent reply" }) satisfies ReplyPayload);
+    const ctx = buildTestCtx({ SessionKey: "test:session" });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    // Delivery MUST be suppressed
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(result.queuedFinal).toBe(false);
+  });
+
+  it("suppresses tool result delivery when sendPolicy is deny", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "deny",
+    };
+    const dispatcher = createDispatcher();
+    let capturedOnToolResult: ((payload: ReplyPayload) => Promise<void>) | undefined;
+    const replyResolver = vi.fn(
+      async (_ctx: MsgContext, opts?: GetReplyOptions, _cfg?: OpenClawConfig) => {
+        capturedOnToolResult = opts?.onToolResult as
+          | ((payload: ReplyPayload) => Promise<void>)
+          | undefined;
+        return { text: "reply" } satisfies ReplyPayload;
+      },
+    );
+    const ctx = buildTestCtx({ SessionKey: "test:session" });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    // Trigger a tool result — delivery should be suppressed
+    expect(capturedOnToolResult).toBeDefined();
+    await capturedOnToolResult!({ text: "tool output" });
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+  });
+
+  it("suppresses block reply delivery when sendPolicy is deny", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "deny",
+    };
+    const dispatcher = createDispatcher();
+    let capturedOnBlockReply:
+      | ((payload: ReplyPayload, context?: unknown) => Promise<void>)
+      | undefined;
+    const replyResolver = vi.fn(
+      async (_ctx: MsgContext, opts?: GetReplyOptions, _cfg?: OpenClawConfig) => {
+        capturedOnBlockReply = opts?.onBlockReply as
+          | ((payload: ReplyPayload, context?: unknown) => Promise<void>)
+          | undefined;
+        return [] as ReplyPayload[];
+      },
+    );
+    const ctx = buildTestCtx({ SessionKey: "test:session" });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    // Trigger a block reply — delivery should be suppressed
+    expect(capturedOnBlockReply).toBeDefined();
+    await capturedOnBlockReply!({ text: "streaming chunk" });
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("delivers replies normally when sendPolicy is allow", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "agent reply" }) satisfies ReplyPayload);
+    const ctx = buildTestCtx({ SessionKey: "test:session" });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers replies normally when sendPolicy is unset (defaults to allow)", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "agent reply" }) satisfies ReplyPayload);
+    const ctx = buildTestCtx({ SessionKey: "test:session" });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses the fast-abort reply under sendPolicy deny", async () => {
+    // Fast-abort runs before sendPolicy in the old code, so the abort reply
+    // leaked. Under the guard, the abort is still recorded but no reply is
+    // dispatched. See #53328.
+    mocks.tryFastAbortFromMessage.mockResolvedValue({
+      handled: true,
+      aborted: true,
+    });
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "deny",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Body: "/stop",
+      SessionKey: "test:session",
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(result.queuedFinal).toBe(false);
+  });
+
+  it("delivers the fast-abort reply normally when sendPolicy is allow (regression guard)", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValue({
+      handled: true,
+      aborted: true,
+    });
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "hi" }) satisfies ReplyPayload);
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Body: "/stop",
+      SessionKey: "test:session",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+      text: "⚙️ Agent was aborted.",
+    });
+  });
+
+  it("skips plugin-bound claim hook under deny and falls through to suppressed agent dispatch", async () => {
+    // Plugin-bound inbound handlers can emit outbound replies we cannot
+    // rewind. Under deny, skip the plugin claim entirely and let the agent
+    // process the message with delivery suppressed. See #53328.
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) =>
+        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
+    );
+    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+      status: "handled",
+      result: { handled: true },
+    });
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-deny",
+      targetSessionKey: "plugin-binding:codex:abc123",
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:deny-test",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "openclaw-codex-app-server",
+        pluginRoot: "/tmp/plugin",
+      },
+    } satisfies SessionBindingRecord);
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "deny",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "agent reply" }) satisfies ReplyPayload);
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "discord:channel:deny-test",
+      To: "discord:channel:deny-test",
+      AccountId: "default",
+      SessionKey: "agent:main:discord:channel:deny-test",
+      Body: "observed message",
+    });
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    // Binding is still tracked (touch runs before the gate)...
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-deny");
+    // ...but the plugin claim hook MUST NOT be invoked under deny — the
+    // plugin can't be trusted to honor suppressDelivery on its outbound path.
+    expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
+    // Agent still processes the message (the whole point of the PR)...
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    // ...but no final reply is delivered.
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 });

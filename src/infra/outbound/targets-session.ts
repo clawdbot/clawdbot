@@ -2,18 +2,18 @@ import {
   comparableChannelTargetsShareRoute,
   parseExplicitTargetForLoadedChannel,
   resolveComparableTargetForLoadedChannel,
-} from "../../channels/plugins/target-parsing.js";
+} from "../../channels/plugins/target-parsing-loaded.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
-import type {
-  DeliverableMessageChannel,
-  GatewayMessageChannel,
-} from "../../utils/message-channel.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
-} from "../../utils/message-channel.js";
+} from "../../utils/message-channel-core.js";
+import type {
+  DeliverableMessageChannel,
+  GatewayMessageChannel,
+} from "../../utils/message-channel-normalize.js";
 
 export type SessionDeliveryTarget = {
   channel?: DeliverableMessageChannel;

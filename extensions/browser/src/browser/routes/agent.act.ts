@@ -71,11 +71,28 @@ async function assertExistingSessionPostInteractionNavigationAllowed(params: {
   userDataDir?: string;
   targetId: string;
   ssrfPolicy?: BrowserNavigationPolicyOptions["ssrfPolicy"];
+  listTabs: () => Promise<Array<{ targetId: string; url: string }>>;
+  initialTabTargetIds: ReadonlySet<string>;
 }): Promise<void> {
   const ssrfPolicyOpts = withBrowserNavigationPolicy(params.ssrfPolicy);
   if (!ssrfPolicyOpts.ssrfPolicy) {
     return;
   }
+  const listTabs = params.listTabs;
+  const initialTabTargetIds = params.initialTabTargetIds;
+
+  const assertNewTabsAllowed = async () => {
+    const tabs = await listTabs();
+    for (const tab of tabs) {
+      if (initialTabTargetIds.has(tab.targetId)) {
+        continue;
+      }
+      await assertBrowserNavigationResultAllowed({
+        url: tab.url,
+        ...ssrfPolicyOpts,
+      });
+    }
+  };
 
   let lastObservedUrl: string | undefined;
   let sawStableAllowedUrl = false;
@@ -103,6 +120,7 @@ async function assertExistingSessionPostInteractionNavigationAllowed(params: {
   }
 
   if (sawStableAllowedUrl) {
+    await assertNewTabsAllowed();
     return;
   }
 
@@ -122,6 +140,7 @@ async function assertExistingSessionPostInteractionNavigationAllowed(params: {
         ...ssrfPolicyOpts,
       });
       if (followUpUrl === lastObservedUrl) {
+        await assertNewTabsAllowed();
         return;
       }
     } catch {
@@ -368,11 +387,16 @@ export function registerBrowserAgentActRoutes(
         const isExistingSession = getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp;
         const profileName = profileCtx.profile.name;
         if (isExistingSession) {
+          const initialTabTargetIds = withBrowserNavigationPolicy(ssrfPolicy).ssrfPolicy
+            ? new Set((await profileCtx.listTabs()).map((currentTab) => currentTab.targetId))
+            : new Set<string>();
           const existingSessionNavigationGuard = {
             profileName,
             userDataDir: profileCtx.profile.userDataDir,
             targetId: tab.targetId,
             ssrfPolicy,
+            listTabs: () => profileCtx.listTabs(),
+            initialTabTargetIds,
           };
           const unsupportedMessage = getExistingSessionUnsupportedMessage(action);
           if (unsupportedMessage) {

@@ -163,6 +163,37 @@ describe("createEmbeddedLobsterRunner", () => {
     ).rejects.toThrow("boom");
   });
 
+  it("fails closed when the embedded runtime requests unsupported input", async () => {
+    const runtime = {
+      runToolRequest: vi.fn().mockResolvedValue({
+        ok: true,
+        protocolVersion: 1,
+        status: "needs_input",
+        output: [],
+        requiresApproval: null,
+        requiresInput: {
+          prompt: "Need more data",
+          schema: { type: "string" },
+        },
+      }),
+      resumeToolRequest: vi.fn(),
+    };
+
+    const runner = createEmbeddedLobsterRunner({
+      loadRuntime: vi.fn().mockResolvedValue(runtime),
+    });
+
+    await expect(
+      runner.run({
+        action: "run",
+        pipeline: "exec --json=true echo hi",
+        cwd: process.cwd(),
+        timeoutMs: 2000,
+        maxStdoutBytes: 4096,
+      }),
+    ).rejects.toThrow("Lobster input requests are not supported by the OpenClaw Lobster tool yet");
+  });
+
   it("routes resume through the embedded runtime", async () => {
     const runtime = {
       runToolRequest: vi.fn(),
