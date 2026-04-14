@@ -171,14 +171,16 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
       });
       await Promise.resolve();
 
-      rewriteTranscriptEntriesInSessionFileMock.mockImplementationOnce(async (_params?: unknown) => {
-        events.push("rewrite");
-        return {
-          changed: true,
-          bytesFreed: 123,
-          rewrittenEntries: 2,
-        };
-      });
+      rewriteTranscriptEntriesInSessionFileMock.mockImplementationOnce(
+        async (_params?: unknown) => {
+          events.push("rewrite");
+          return {
+            changed: true,
+            bytesFreed: 123,
+            rewrittenEntries: 2,
+          };
+        },
+      );
 
       const runtimeContext = buildContextEngineMaintenanceRuntimeContext({
         sessionId: "session-rewrite-handoff",
@@ -836,19 +838,20 @@ describe("runContextEngineMaintenance", () => {
             allowRewrite = resolve;
           });
           events.push("maintenance-before-rewrite");
-          await (params as { runtimeContext?: ContextEngineRuntimeContext }).runtimeContext
-            ?.rewriteTranscriptEntries?.({
-              replacements: [
-                {
-                  entryId: "entry-1",
-                  message: castAgentMessage({
-                    role: "assistant",
-                    content: [{ type: "text", text: "done" }],
-                    timestamp: 2,
-                  }),
-                },
-              ],
-            });
+          await (
+            params as { runtimeContext?: ContextEngineRuntimeContext }
+          ).runtimeContext?.rewriteTranscriptEntries?.({
+            replacements: [
+              {
+                entryId: "entry-1",
+                message: castAgentMessage({
+                  role: "assistant",
+                  content: [{ type: "text", text: "done" }],
+                  timestamp: 2,
+                }),
+              },
+            ],
+          });
           events.push("maintenance-after-rewrite");
           return {
             changed: false,
@@ -857,14 +860,16 @@ describe("runContextEngineMaintenance", () => {
           };
         });
 
-        rewriteTranscriptEntriesInSessionFileMock.mockImplementationOnce(async (_params?: unknown) => {
-          events.push("rewrite");
-          return {
-            changed: true,
-            bytesFreed: 123,
-            rewrittenEntries: 2,
-          };
-        });
+        rewriteTranscriptEntriesInSessionFileMock.mockImplementationOnce(
+          async (_params?: unknown) => {
+            events.push("rewrite");
+            return {
+              changed: true,
+              bytesFreed: 123,
+              rewrittenEntries: 2,
+            };
+          },
+        );
 
         const backgroundEngine = {
           info: {

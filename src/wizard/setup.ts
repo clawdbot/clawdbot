@@ -1,5 +1,6 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import type {
+  AuthChoice,
   GatewayAuthChoice,
   OnboardMode,
   OnboardOptions,
@@ -484,25 +485,23 @@ export async function runSetupWizard(
   let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(baseConfig, workspaceDir);
 
   const authChoiceFromPrompt = opts.authChoice === undefined;
-  const promptedAuthChoice = authChoiceFromPrompt
-    ? await (async () => {
-        const { ensureAuthProfileStore } = await import("../agents/auth-profiles.runtime.js");
-        const { promptAuthChoiceGrouped } = await import("../commands/auth-choice-prompt.js");
-        const authStore = ensureAuthProfileStore(undefined, {
-          allowKeychainPrompt: false,
-        });
-        return await promptAuthChoiceGrouped({
-          prompter,
-          store: authStore,
-          includeSkip: true,
-          config: nextConfig,
-          workspaceDir,
-        });
-      })()
-    : undefined;
-  const authChoice = opts.authChoice ?? promptedAuthChoice;
-  if (!authChoice) {
-    throw new Error("Failed to resolve auth choice.");
+  let authChoice: AuthChoice | undefined = opts.authChoice;
+  if (authChoiceFromPrompt) {
+    const { ensureAuthProfileStore } = await import("../agents/auth-profiles.runtime.js");
+    const { promptAuthChoiceGrouped } = await import("../commands/auth-choice-prompt.js");
+    const authStore = ensureAuthProfileStore(undefined, {
+      allowKeychainPrompt: false,
+    });
+    authChoice = await promptAuthChoiceGrouped({
+      prompter,
+      store: authStore,
+      includeSkip: true,
+      config: nextConfig,
+      workspaceDir,
+    });
+  }
+  if (authChoice === undefined) {
+    throw new WizardCancelledError("auth choice is required");
   }
 
   if (authChoice === "custom-api-key") {

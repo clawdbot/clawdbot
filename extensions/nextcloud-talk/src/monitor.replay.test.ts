@@ -99,13 +99,14 @@ describe("createNextcloudTalkWebhookServer replay handling", () => {
       stateDir: params.stateDir,
     });
 
-    return async (message: NextcloudTalkInboundMessage) =>
+    return async (message: NextcloudTalkInboundMessage): Promise<void> => {
       await processNextcloudTalkReplayGuardedMessage({
         replayGuard,
         accountId: params.accountId ?? "acct",
         message,
         handleMessage: () => params.handleMessage(message),
       });
+    };
   }
 
   it("acknowledges replayed requests and skips onMessage side effects", async () => {

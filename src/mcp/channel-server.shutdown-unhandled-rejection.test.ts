@@ -4,7 +4,7 @@ const transportState = vi.hoisted(() => ({
   lastTransport: null as { onclose?: (() => void) | undefined } | null,
 }));
 const serverState = vi.hoisted(() => ({
-  connect: vi.fn(async (_transport?: unknown) => {}),
+  connect: vi.fn(async (_transport: unknown) => {}),
   close: vi.fn(async () => {}),
 }));
 const bridgeState = vi.hoisted(() => ({
@@ -13,7 +13,7 @@ const bridgeState = vi.hoisted(() => ({
     throw new Error("close boom");
   }),
   setServer: vi.fn(),
-  handleClaudePermissionRequest: vi.fn(async (_payload?: unknown) => {}),
+  handleClaudePermissionRequest: vi.fn(async (_payload: unknown) => {}),
 }));
 
 vi.mock("@modelcontextprotocol/sdk/server/stdio.js", () => ({

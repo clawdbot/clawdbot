@@ -5,6 +5,8 @@ import {
   CONTEXT_WINDOW_HARD_MIN_TOKENS,
   CONTEXT_WINDOW_WARN_BELOW_TOKENS,
   evaluateContextWindowGuard,
+  formatContextWindowBlockMessage,
+  formatContextWindowWarningMessage,
   resolveContextWindowInfo,
   type ContextWindowInfo,
 } from "../../context-window-guard.js";
@@ -126,19 +128,33 @@ export function resolveEffectiveRuntimeModel(params: {
     warnBelowTokens: CONTEXT_WINDOW_WARN_BELOW_TOKENS,
     hardMinTokens: CONTEXT_WINDOW_HARD_MIN_TOKENS,
   });
+  const runtimeBaseUrl =
+    typeof (params.runtimeModel as { baseUrl?: unknown }).baseUrl === "string"
+      ? (params.runtimeModel as { baseUrl: string }).baseUrl
+      : undefined;
   if (ctxGuard.shouldWarn) {
     log.warn(
-      `low context window: ${params.provider}/${params.modelId} ctx=${ctxGuard.tokens} (warn<${CONTEXT_WINDOW_WARN_BELOW_TOKENS}) source=${ctxGuard.source}`,
+      formatContextWindowWarningMessage({
+        provider: params.provider,
+        modelId: params.modelId,
+        guard: ctxGuard,
+        runtimeBaseUrl,
+      }),
     );
   }
   if (ctxGuard.shouldBlock) {
+    const message = formatContextWindowBlockMessage({
+      guard: ctxGuard,
+      runtimeBaseUrl,
+    });
     log.error(
-      `blocked model (context window too small): ${params.provider}/${params.modelId} ctx=${ctxGuard.tokens} (min=${CONTEXT_WINDOW_HARD_MIN_TOKENS}) source=${ctxGuard.source}`,
+      `blocked model (context window too small): ${params.provider}/${params.modelId} ctx=${ctxGuard.tokens} (min=${CONTEXT_WINDOW_HARD_MIN_TOKENS}) source=${ctxGuard.source}; ${message}`,
     );
-    throw new FailoverError(
-      `Model context window too small (${ctxGuard.tokens} tokens). Minimum is ${CONTEXT_WINDOW_HARD_MIN_TOKENS}.`,
-      { reason: "unknown", provider: params.provider, model: params.modelId },
-    );
+    throw new FailoverError(message, {
+      reason: "unknown",
+      provider: params.provider,
+      model: params.modelId,
+    });
   }
 
   return {

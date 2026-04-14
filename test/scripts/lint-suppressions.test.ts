@@ -80,7 +80,6 @@ describe("production lint suppressions", () => {
     expect(summarizeSuppressions(collectProductionLintSuppressions())).toEqual([
       "extensions/browser/src/browser/pw-tools-core.interactions.ts|@typescript-eslint/no-implied-eval|2",
       "scripts/e2e/mcp-channels-harness.ts|unicorn/prefer-add-event-listener|1",
-      "src/agents/agent-scope-config.ts|no-control-regex|1",
       "src/agents/agent-scope.ts|no-control-regex|1",
       "src/agents/pi-embedded-runner/run/images.ts|no-control-regex|1",
       "src/agents/skills-clawhub.ts|no-control-regex|1",

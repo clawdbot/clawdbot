@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { LegacyConfigRule } from "../../config/legacy.shared.js";
 
 const {
   loadBundledChannelDoctorContractApiMock,
@@ -7,9 +8,7 @@ const {
 } = vi.hoisted(() => ({
   loadBundledChannelDoctorContractApiMock: vi.fn(),
   getBootstrapChannelPluginMock: vi.fn(),
-  listPluginDoctorLegacyConfigRulesMock: vi.fn<() => Array<{ path: string[]; message: string }>>(
-    () => [],
-  ),
+  listPluginDoctorLegacyConfigRulesMock: vi.fn((): LegacyConfigRule[] => []),
 }));
 
 vi.mock("./doctor-contract-api.js", () => ({

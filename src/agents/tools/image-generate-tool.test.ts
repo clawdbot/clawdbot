@@ -348,6 +348,7 @@ describe("createImageGenerateTool", () => {
       config: {
         agents: {
           defaults: {
+            mediaMaxMb: 8,
             imageGenerationModel: {
               primary: "openai/gpt-image-1",
             },
@@ -375,6 +376,7 @@ describe("createImageGenerateTool", () => {
         cfg: {
           agents: {
             defaults: {
+              mediaMaxMb: 8,
               imageGenerationModel: {
                 primary: "openai/gpt-image-1",
               },
@@ -394,7 +396,7 @@ describe("createImageGenerateTool", () => {
       Buffer.from("png-1"),
       "image/png",
       "tool-image-generation",
-      undefined,
+      8 * 1024 * 1024,
       "cats/output.png",
     );
     expect(saveMediaBuffer).toHaveBeenNthCalledWith(
@@ -402,7 +404,7 @@ describe("createImageGenerateTool", () => {
       Buffer.from("png-2"),
       "image/png",
       "tool-image-generation",
-      undefined,
+      8 * 1024 * 1024,
       "cats/output.png",
     );
     expect(result).toMatchObject({

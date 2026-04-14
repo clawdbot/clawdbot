@@ -118,6 +118,30 @@ describe("qa scenario catalog", () => {
     );
   });
 
+  it("includes the seeded mock-only broken-turn scenarios in the markdown pack", () => {
+    const scenarioIds = [
+      "reasoning-only-recovery-replay-safe-read",
+      "reasoning-only-no-auto-retry-after-write",
+      "empty-response-recovery-replay-safe-read",
+      "empty-response-retry-budget-exhausted",
+    ];
+
+    for (const scenarioId of scenarioIds) {
+      const scenario = readQaScenarioById(scenarioId);
+      const config = readQaScenarioExecutionConfig(scenarioId) as
+        | {
+            requiredProvider?: string;
+            prompt?: string;
+          }
+        | undefined;
+
+      expect(scenario.sourcePath).toBe(`qa/scenarios/${scenarioId}.md`);
+      expect(config?.requiredProvider).toBe("mock-openai");
+      expect(config?.prompt).toContain("check");
+      expect(scenario.execution.flow?.steps.length).toBeGreaterThan(0);
+    }
+  });
+
   it("keeps mock-only image debug assertions guarded in live-frontier runs", () => {
     const scenario = readQaScenarioPack().scenarios.find(
       (candidate) => candidate.id === "image-understanding-attachment",

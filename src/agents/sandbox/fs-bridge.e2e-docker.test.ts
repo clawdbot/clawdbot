@@ -11,13 +11,32 @@ type DockerExecResult = {
   code: number;
 };
 
-async function execDockerRawForTest(args: string[]): Promise<DockerExecResult> {
+async function execDockerRawForTest(
+  args: string[],
+  opts?: { timeoutMs?: number },
+): Promise<DockerExecResult> {
   return await new Promise<DockerExecResult>((resolve) => {
     const child = spawn("docker", args, {
       stdio: ["ignore", "pipe", "pipe"],
     });
+    const timeoutMs = opts?.timeoutMs ?? 30_000;
     let stdout = "";
     let stderr = "";
+    let settled = false;
+    const finish = (result: DockerExecResult) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      resolve(result);
+    };
+    const timeout = setTimeout(() => {
+      child.kill("SIGKILL");
+      const command = `docker ${args.join(" ")}`;
+      finish({ stdout, stderr: stderr || `${command} timed out`, code: 124 });
+    }, timeoutMs);
+    timeout.unref();
     child.stdout?.on("data", (chunk) => {
       stdout += chunk.toString();
     });
@@ -25,10 +44,10 @@ async function execDockerRawForTest(args: string[]): Promise<DockerExecResult> {
       stderr += chunk.toString();
     });
     child.on("error", () => {
-      resolve({ stdout: "", stderr: "", code: 1 });
+      finish({ stdout: "", stderr: "", code: 1 });
     });
     child.on("close", (code) => {
-      resolve({ stdout, stderr, code: code ?? 0 });
+      finish({ stdout, stderr, code: code ?? 0 });
     });
   });
 }
@@ -43,18 +62,20 @@ async function execDockerForTest(args: string[]): Promise<void> {
 
 async function sandboxImageReady(): Promise<boolean> {
   try {
-    const dockerVersion = await execDockerRawForTest(["version"]);
+    const dockerVersion = await execDockerRawForTest(["version"], { timeoutMs: 5_000 });
     if (dockerVersion.code !== 0) {
       return false;
     }
-    const pythonCheck = await execDockerRawForTest([
-      "run",
-      "--rm",
-      "--entrypoint",
-      "python3",
-      DEFAULT_SANDBOX_IMAGE,
-      "--version",
-    ]);
+    const imageCheck = await execDockerRawForTest(["image", "inspect", DEFAULT_SANDBOX_IMAGE], {
+      timeoutMs: 5_000,
+    });
+    if (imageCheck.code !== 0) {
+      return false;
+    }
+    const pythonCheck = await execDockerRawForTest(
+      ["run", "--rm", "--entrypoint", "python3", DEFAULT_SANDBOX_IMAGE, "--version"],
+      { timeoutMs: 15_000 },
+    );
     return pythonCheck.code === 0;
   } catch {
     return false;

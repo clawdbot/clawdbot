@@ -134,7 +134,7 @@ describe("createVideoGenerateTool", () => {
       ],
       metadata: { taskId: "task-1" },
     });
-    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
+    const saveSpy = vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
       path: "/tmp/generated-lobster.mp4",
       id: "generated-lobster.mp4",
       size: 11,
@@ -145,6 +145,7 @@ describe("createVideoGenerateTool", () => {
       config: asConfig({
         agents: {
           defaults: {
+            mediaMaxMb: 8,
             videoGenerationModel: { primary: "qwen/wan2.6-t2v" },
           },
         },
@@ -158,6 +159,13 @@ describe("createVideoGenerateTool", () => {
     const result = await tool.execute("call-1", { prompt: "friendly lobster surfing" });
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
 
+    expect(saveSpy).toHaveBeenCalledWith(
+      Buffer.from("video-bytes"),
+      "video/mp4",
+      "tool-video-generation",
+      8 * 1024 * 1024,
+      "lobster.mp4",
+    );
     expect(text).toContain("Generated 1 video with qwen/wan2.6-t2v.");
     expect(text).toContain("MEDIA:/tmp/generated-lobster.mp4");
     expect(result.details).toMatchObject({

@@ -58,6 +58,39 @@ console.log(
 ' "$label" "$pack_json_file"
 }
 
+assert_pack_unpacked_size_budget() {
+  local label="$1"
+  local pack_json_file="$2"
+  node --input-type=module - "$label" "$pack_json_file" <<'NODE'
+import { readFileSync } from "node:fs";
+import { collectPackUnpackedSizeErrors } from "./scripts/lib/npm-pack-budget.mjs";
+
+const label = process.argv[2];
+const packJsonFile = process.argv[3];
+const raw = readFileSync(packJsonFile, "utf8") || "[]";
+const parsed = JSON.parse(raw);
+const budgetOverride = process.env.OPENCLAW_INSTALL_SMOKE_PACK_UNPACKED_BUDGET_BYTES;
+const budgetBytes = budgetOverride ? Number(budgetOverride) : undefined;
+if (budgetOverride && !Number.isFinite(budgetBytes)) {
+  throw new Error(
+    `OPENCLAW_INSTALL_SMOKE_PACK_UNPACKED_BUDGET_BYTES must be numeric, got ${JSON.stringify(
+      budgetOverride,
+    )}`,
+  );
+}
+const errors = collectPackUnpackedSizeErrors(parsed, {
+  budgetBytes,
+  missingDataMessage: `${label} npm pack output did not include unpackedSize; install smoke cannot verify pack budget.`,
+});
+for (const error of errors) {
+  console.error(`ERROR: ${error}`);
+}
+if (errors.length > 0) {
+  process.exit(1);
+}
+NODE
+}
+
 print_pack_delta_audit() {
   local baseline_pack_json_file="$1"
   local update_pack_json_file="$2"
@@ -191,6 +224,7 @@ process.stdout.write(last.filename);
 ' "$pack_json_file"
   )"
   print_pack_audit "update" "$pack_json_file"
+  assert_pack_unpacked_size_budget "update" "$pack_json_file"
   packed_update_version="$(
     node -e '
 const raw = require("node:fs").readFileSync(process.argv[1], "utf8") || "[]";

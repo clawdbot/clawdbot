@@ -6,6 +6,7 @@ vi.hoisted(() => {
 });
 
 import "./server-context.chrome-test-harness.js";
+import * as cdpHelpersModule from "./cdp.helpers.js";
 import * as cdpModule from "./cdp.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 import { createBrowserRouteContext } from "./server-context.js";
@@ -295,5 +296,39 @@ describe("browser server-context tab selection state", () => {
       InvalidBrowserNavigationUrlError,
     );
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the loopback CDP control policy for /json/new fallback requests", async () => {
+    vi.spyOn(cdpModule, "createTargetViaCdp").mockRejectedValue(new Error("cdp unavailable"));
+    const fetchJson = vi.spyOn(cdpHelpersModule, "fetchJson");
+    fetchJson.mockRejectedValueOnce(new Error("HTTP 405")).mockResolvedValueOnce({
+      id: "NEW",
+      title: "New Tab",
+      url: "https://example.com",
+      webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/NEW",
+      type: "page",
+    });
+
+    const state = makeState("openclaw");
+    state.resolved.ssrfPolicy = {};
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const openclaw = ctx.forProfile("openclaw");
+
+    const opened = await openclaw.openTab("https://example.com");
+    expect(opened.targetId).toBe("NEW");
+    expect(fetchJson).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining("/json/new"),
+      expect.any(Number),
+      { method: "PUT" },
+      undefined,
+    );
+    expect(fetchJson).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining("/json/new"),
+      expect.any(Number),
+      undefined,
+      undefined,
+    );
   });
 });

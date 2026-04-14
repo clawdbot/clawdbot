@@ -46,6 +46,10 @@ function shouldClearSocketRefAfterSendFailure(err: unknown): boolean {
   return /closed|reset|disconnect|no active socket/i.test(formatError(err));
 }
 
+function isNonEmptyString(value: string | undefined): value is string {
+  return Boolean(value);
+}
+
 export type MonitorWebInboxOptions = {
   verbose: boolean;
   accountId: string;
@@ -132,11 +136,7 @@ export async function attachWebInboxToSocket(
     error?: unknown,
   ): Promise<void> => {
     const dedupeKeys = [
-      ...new Set(
-        entries
-          .map((entry) => entry.dedupeKey)
-          .filter((dedupeKey): dedupeKey is string => Boolean(dedupeKey)),
-      ),
+      ...new Set(entries.map((entry) => entry.dedupeKey).filter(isNonEmptyString)),
     ];
     if (dedupeKeys.length === 0) {
       return;

@@ -86,6 +86,10 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 - For stable correction releases like `YYYY.M.D-N`, it also verifies the
   upgrade path from `YYYY.M.D` to `YYYY.M.D-N` so a correction publish cannot
   silently leave existing global installs on the old base stable payload.
+- Treat install smoke as a pack-budget gate too. `pnpm test:install:smoke`
+  now fails the candidate update tarball when npm reports an oversized
+  `unpackedSize`, so release-time e2e cannot miss pack bloat that would risk
+  low-memory install/startup failures.
 
 ## Check all relevant release builds
 

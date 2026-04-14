@@ -238,43 +238,62 @@ export async function startGatewaySidecars(params: {
   return { pluginServices };
 }
 
-export async function startGatewayPostAttachRuntime(params: {
-  minimalTestGateway: boolean;
-  cfgAtStart: OpenClawConfig;
-  bindHost: string;
-  bindHosts: string[];
-  port: number;
-  tlsEnabled: boolean;
-  log: {
-    info: (msg: string) => void;
-    warn: (msg: string) => void;
-  };
-  isNixMode: boolean;
-  startupStartedAt?: number;
-  broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
-  tailscaleMode: GatewayTailscaleMode;
-  resetOnExit: boolean;
-  controlUiBasePath: string;
-  logTailscale: {
-    info: (msg: string) => void;
-    warn: (msg: string) => void;
-    error: (msg: string) => void;
-    debug?: (msg: string) => void;
-  };
-  gatewayPluginConfigAtStart: OpenClawConfig;
-  pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
-  defaultWorkspaceDir: string;
-  deps: CliDeps;
-  startChannels: () => Promise<void>;
-  logHooks: {
-    info: (msg: string) => void;
-    warn: (msg: string) => void;
-    error: (msg: string) => void;
-  };
-  logChannels: { info: (msg: string) => void; error: (msg: string) => void };
-  unavailableGatewayMethods: Set<string>;
-}) {
-  logGatewayStartup({
+type GatewayPostAttachRuntimeDeps = {
+  getGlobalHookRunner: typeof getGlobalHookRunner;
+  logGatewayStartup: typeof logGatewayStartup;
+  scheduleGatewayUpdateCheck: typeof scheduleGatewayUpdateCheck;
+  startGatewaySidecars: typeof startGatewaySidecars;
+  startGatewayTailscaleExposure: typeof startGatewayTailscaleExposure;
+};
+
+const defaultGatewayPostAttachRuntimeDeps: GatewayPostAttachRuntimeDeps = {
+  getGlobalHookRunner,
+  logGatewayStartup,
+  scheduleGatewayUpdateCheck,
+  startGatewaySidecars,
+  startGatewayTailscaleExposure,
+};
+
+export async function startGatewayPostAttachRuntime(
+  params: {
+    minimalTestGateway: boolean;
+    cfgAtStart: OpenClawConfig;
+    bindHost: string;
+    bindHosts: string[];
+    port: number;
+    tlsEnabled: boolean;
+    log: {
+      info: (msg: string) => void;
+      warn: (msg: string) => void;
+    };
+    isNixMode: boolean;
+    startupStartedAt?: number;
+    broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
+    tailscaleMode: GatewayTailscaleMode;
+    resetOnExit: boolean;
+    controlUiBasePath: string;
+    logTailscale: {
+      info: (msg: string) => void;
+      warn: (msg: string) => void;
+      error: (msg: string) => void;
+      debug?: (msg: string) => void;
+    };
+    gatewayPluginConfigAtStart: OpenClawConfig;
+    pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
+    defaultWorkspaceDir: string;
+    deps: CliDeps;
+    startChannels: () => Promise<void>;
+    logHooks: {
+      info: (msg: string) => void;
+      warn: (msg: string) => void;
+      error: (msg: string) => void;
+    };
+    logChannels: { info: (msg: string) => void; error: (msg: string) => void };
+    unavailableGatewayMethods: Set<string>;
+  },
+  runtimeDeps: GatewayPostAttachRuntimeDeps = defaultGatewayPostAttachRuntimeDeps,
+) {
+  runtimeDeps.logGatewayStartup({
     cfg: params.cfgAtStart,
     bindHost: params.bindHost,
     bindHosts: params.bindHosts,
@@ -290,7 +309,7 @@ export async function startGatewayPostAttachRuntime(params: {
 
   const stopGatewayUpdateCheck = params.minimalTestGateway
     ? () => {}
-    : scheduleGatewayUpdateCheck({
+    : runtimeDeps.scheduleGatewayUpdateCheck({
         cfg: params.cfgAtStart,
         log: params.log,
         isNixMode: params.isNixMode,
@@ -302,7 +321,7 @@ export async function startGatewayPostAttachRuntime(params: {
 
   const tailscaleCleanup = params.minimalTestGateway
     ? null
-    : await startGatewayTailscaleExposure({
+    : await runtimeDeps.startGatewayTailscaleExposure({
         tailscaleMode: params.tailscaleMode,
         resetOnExit: params.resetOnExit,
         port: params.port,
@@ -313,7 +332,7 @@ export async function startGatewayPostAttachRuntime(params: {
   let pluginServices: PluginServicesHandle | null = null;
   if (!params.minimalTestGateway) {
     params.log.info("starting channels and sidecars...");
-    ({ pluginServices } = await startGatewaySidecars({
+    ({ pluginServices } = await runtimeDeps.startGatewaySidecars({
       cfg: params.gatewayPluginConfigAtStart,
       pluginRegistry: params.pluginRegistry,
       defaultWorkspaceDir: params.defaultWorkspaceDir,
@@ -329,7 +348,7 @@ export async function startGatewayPostAttachRuntime(params: {
   }
 
   if (!params.minimalTestGateway) {
-    const hookRunner = getGlobalHookRunner();
+    const hookRunner = runtimeDeps.getGlobalHookRunner();
     if (hookRunner?.hasHooks("gateway_start")) {
       void hookRunner.runGatewayStart({ port: params.port }, { port: params.port }).catch((err) => {
         params.log.warn(`gateway_start hook failed: ${String(err)}`);

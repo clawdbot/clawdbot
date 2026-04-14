@@ -69,8 +69,16 @@ export async function assertCdpEndpointAllowed(
     throw new Error(`Invalid CDP URL protocol: ${parsed.protocol.replace(":", "")}`);
   }
   try {
+    const policy = isLoopbackHost(parsed.hostname)
+      ? {
+          ...ssrfPolicy,
+          allowedHostnames: Array.from(
+            new Set([...(ssrfPolicy?.allowedHostnames ?? []), parsed.hostname]),
+          ),
+        }
+      : ssrfPolicy;
     await resolvePinnedHostnameWithPolicy(parsed.hostname, {
-      policy: ssrfPolicy,
+      policy,
     });
   } catch (error) {
     throw new BrowserCdpEndpointBlockedError({ cause: error });
@@ -263,11 +271,20 @@ export async function fetchCdpChecked(
   try {
     const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
     const res = await withNoProxyForCdpUrl(url, async () => {
+      const parsedUrl = new URL(url);
+      const policy = isLoopbackHost(parsedUrl.hostname)
+        ? {
+            ...ssrfPolicy,
+            allowedHostnames: Array.from(
+              new Set([...(ssrfPolicy?.allowedHostnames ?? []), parsedUrl.hostname]),
+            ),
+          }
+        : (ssrfPolicy ?? { allowPrivateNetwork: true });
       const guarded = await fetchWithSsrFGuard({
         url,
         init: { ...init, headers },
         signal: ctrl.signal,
-        policy: ssrfPolicy ?? { allowPrivateNetwork: true },
+        policy,
         auditContext: "browser-cdp",
       });
       guardedRelease = guarded.release;

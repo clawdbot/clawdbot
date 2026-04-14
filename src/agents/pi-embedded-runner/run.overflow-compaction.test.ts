@@ -98,7 +98,9 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
         ...overflowBaseRunParams,
         runId: "run-small-context",
       }),
-    ).rejects.toThrow("Model context window too small (800 tokens). Minimum is 1000.");
+    ).rejects.toThrow(
+      "Model context window too small (800 tokens; source=model). Minimum is 1000.",
+    );
 
     expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
   });

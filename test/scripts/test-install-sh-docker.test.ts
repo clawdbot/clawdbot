@@ -35,6 +35,15 @@ describe("test-install-sh-docker", () => {
     expect(script).toContain("==> Pack audit");
     expect(script).toContain("==> Pack audit delta");
   });
+
+  it("fails the update smoke when the candidate npm pack exceeds the release budget", () => {
+    const script = readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("assert_pack_unpacked_size_budget");
+    expect(script).toContain('assert_pack_unpacked_size_budget "update" "$pack_json_file"');
+    expect(script).toContain('from "./scripts/lib/npm-pack-budget.mjs"');
+    expect(script).toContain("install smoke cannot verify pack budget");
+  });
 });
 
 describe("install-sh smoke runner", () => {

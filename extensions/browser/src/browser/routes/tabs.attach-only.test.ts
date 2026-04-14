@@ -42,7 +42,7 @@ describe("browser tab routes attachOnly loopback profiles", () => {
           {
             id: "PAGE-1",
             title: "WordPress",
-            url: "https://example.test/wp-login.php",
+            url: "https://example.com/wp-login.php",
             webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/page/PAGE-1",
             type: "page",
           },
@@ -73,7 +73,7 @@ describe("browser tab routes attachOnly loopback profiles", () => {
         {
           targetId: "PAGE-1",
           title: "WordPress",
-          url: "https://example.test/wp-login.php",
+          url: "https://example.com/wp-login.php",
           wsUrl: "ws://127.0.0.1:9222/devtools/page/PAGE-1",
           type: "page",
         },

@@ -4,7 +4,6 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 const {
   loadModelCatalogMock,
   getModelRefStatusMock,
-  normalizeProviderIdMock,
   normalizeModelSelectionMock,
   resolveAllowedModelRefMock,
   resolveConfiguredModelRefMock,
@@ -12,9 +11,6 @@ const {
 } = vi.hoisted(() => ({
   loadModelCatalogMock: vi.fn(),
   getModelRefStatusMock: vi.fn(),
-  normalizeProviderIdMock: vi.fn((value: unknown) =>
-    typeof value === "string" && value.trim() ? value.trim().toLowerCase() : "",
-  ),
   normalizeModelSelectionMock: vi.fn((value: unknown) => {
     if (typeof value === "string" && value.trim()) {
       return value.trim();
@@ -34,13 +30,11 @@ const {
   resolveHooksGmailModelMock: vi.fn(),
 }));
 
-vi.mock("../agents/model-catalog.js", () => ({
-  loadModelCatalog: loadModelCatalogMock,
-}));
-
-vi.mock("../agents/model-selection.js", () => ({
+vi.mock("./isolated-agent/run-model-selection.runtime.js", () => ({
+  DEFAULT_MODEL: "claude-opus-4-6",
+  DEFAULT_PROVIDER: "anthropic",
   getModelRefStatus: getModelRefStatusMock,
-  normalizeProviderId: normalizeProviderIdMock,
+  loadModelCatalog: loadModelCatalogMock,
   normalizeModelSelection: normalizeModelSelectionMock,
   resolveAllowedModelRef: resolveAllowedModelRefMock,
   resolveConfiguredModelRef: resolveConfiguredModelRefMock,
@@ -203,7 +197,7 @@ describe("cron model formatting and precedence edge cases", () => {
         selectModel({
           payload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "openai/" },
         }),
-      ).resolves.toEqual({ ok: false, error: "invalid model: openai/" });
+      ).resolves.toEqual({ ok: false, error: "invalid model" });
     });
 
     it("rejects model with leading slash (empty provider)", async () => {
@@ -211,7 +205,7 @@ describe("cron model formatting and precedence edge cases", () => {
         selectModel({
           payload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "/gpt-4.1-mini" },
         }),
-      ).resolves.toEqual({ ok: false, error: "invalid model: /gpt-4.1-mini" });
+      ).resolves.toEqual({ ok: false, error: "invalid model" });
     });
 
     it("normalizes provider casing", async () => {

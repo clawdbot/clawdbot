@@ -18,12 +18,12 @@ vi.mock("../../config/sessions/main-session.js", async () => {
   };
 });
 
-vi.mock("../../config/sessions/paths.js", () => ({
-  resolveStorePath: mocks.resolveStorePath,
-}));
-
 vi.mock("../../config/sessions/store-load.js", () => ({
   loadSessionStore: mocks.loadSessionStore,
+}));
+
+vi.mock("../../config/sessions/paths.js", () => ({
+  resolveStorePath: mocks.resolveStorePath,
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({

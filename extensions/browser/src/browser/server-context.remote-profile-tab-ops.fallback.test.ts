@@ -80,7 +80,7 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
   it("fails closed for remote tab opens in strict mode without Playwright", async () => {
     vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
     const { state, remote, fetchMock } = deps.createRemoteRouteHarness();
-    state.resolved.ssrfPolicy = {};
+    state.resolved.ssrfPolicy = { dangerouslyAllowPrivateNetwork: false };
 
     await expect(remote.openTab("https://example.com")).rejects.toBeInstanceOf(
       deps.InvalidBrowserNavigationUrlError,

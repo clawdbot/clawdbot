@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { ContextEngine } from "../../context-engine/types.js";
 import {
   CHARS_PER_TOKEN_ESTIMATE,
   TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
@@ -181,6 +182,106 @@ function enforceToolResultLimitInPlace(params: {
     const truncated = truncateToolResultToChars(message, maxSingleToolResultChars, estimateCache);
     applyMessageMutationInPlace(message, truncated, estimateCache);
   }
+}
+
+/**
+ * Per-iteration `afterTurn` + `assemble` wrapper for sessions where
+ * the context engine owns compaction. Lets the engine compact inside
+ * a long tool loop instead of only at end of attempt.
+ */
+export function installContextEngineLoopHook(params: {
+  agent: GuardableAgent;
+  contextEngine: ContextEngine;
+  sessionId: string;
+  sessionKey?: string;
+  sessionFile: string;
+  tokenBudget?: number;
+  modelId: string;
+  getPrePromptMessageCount?: () => number;
+}): () => void {
+  const { contextEngine, sessionId, sessionKey, sessionFile, tokenBudget, modelId } = params;
+  const mutableAgent = params.agent as GuardableAgentRecord;
+  const originalTransformContext = mutableAgent.transformContext;
+  let lastSeenLength: number | null = null;
+  let lastAssembledView: AgentMessage[] | null = null;
+
+  mutableAgent.transformContext = (async (messages: AgentMessage[], signal: AbortSignal) => {
+    const transformed = originalTransformContext
+      ? await originalTransformContext.call(mutableAgent, messages, signal)
+      : messages;
+    const sourceMessages = Array.isArray(transformed) ? transformed : messages;
+
+    // Seed the loop fence from the attempt's pre-prompt message count when available.
+    // This keeps the first real post-tool-call iteration eligible for compaction even
+    // if the hook's first observed call happens after tool results were appended.
+    const prePromptMessageCount = Math.max(
+      0,
+      Math.min(
+        sourceMessages.length,
+        lastSeenLength ?? params.getPrePromptMessageCount?.() ?? sourceMessages.length,
+      ),
+    );
+    lastSeenLength = prePromptMessageCount;
+
+    const hasNewMessages = sourceMessages.length > prePromptMessageCount;
+    if (!hasNewMessages) {
+      return lastAssembledView ?? sourceMessages;
+    }
+
+    try {
+      if (typeof contextEngine.afterTurn === "function") {
+        await contextEngine.afterTurn({
+          sessionId,
+          sessionKey,
+          sessionFile,
+          messages: sourceMessages,
+          prePromptMessageCount,
+          tokenBudget,
+        });
+      } else {
+        const newMessages = sourceMessages.slice(prePromptMessageCount);
+        if (newMessages.length > 0) {
+          if (typeof contextEngine.ingestBatch === "function") {
+            await contextEngine.ingestBatch({
+              sessionId,
+              sessionKey,
+              messages: newMessages,
+            });
+          } else {
+            for (const message of newMessages) {
+              await contextEngine.ingest({
+                sessionId,
+                sessionKey,
+                message,
+              });
+            }
+          }
+        }
+      }
+      lastSeenLength = sourceMessages.length;
+      const assembled = await contextEngine.assemble({
+        sessionId,
+        sessionKey,
+        messages: sourceMessages,
+        tokenBudget,
+        model: modelId,
+      });
+      if (assembled && Array.isArray(assembled.messages) && assembled.messages !== sourceMessages) {
+        lastAssembledView = assembled.messages;
+        return assembled.messages;
+      }
+      lastAssembledView = null;
+    } catch {
+      // Best-effort: any engine failure falls through to the raw source
+      // messages so the tool loop still makes forward progress.
+    }
+
+    return sourceMessages;
+  }) as GuardableTransformContext;
+
+  return () => {
+    mutableAgent.transformContext = originalTransformContext;
+  };
 }
 
 export function installToolResultContextGuard(params: {

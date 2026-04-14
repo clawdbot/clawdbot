@@ -219,6 +219,7 @@ export async function emitSlackModalLifecycleEvent(params: {
     channelId: sessionRouting.channelId,
     channelType: sessionRouting.channelType,
     expectedSenderId: expectedUserId,
+    interactiveEvent: true,
   });
   if (!auth.allowed) {
     params.ctx.runtime.log?.(

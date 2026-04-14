@@ -230,14 +230,14 @@ export function createProfileTabOps({
       {
         method: "PUT",
       },
-      ssrfPolicyOpts.ssrfPolicy,
+      getCdpControlPolicy(),
     ).catch(async (err) => {
       if (String(err).includes("HTTP 405")) {
         return await fetchJson<CdpTarget>(
           endpoint,
           CDP_JSON_NEW_TIMEOUT_MS,
           undefined,
-          ssrfPolicyOpts.ssrfPolicy,
+          getCdpControlPolicy(),
         );
       }
       throw err;

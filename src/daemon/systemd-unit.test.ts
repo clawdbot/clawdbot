@@ -38,4 +38,20 @@ describe("buildSystemdUnit", () => {
       }),
     ).toThrow(/CR or LF/);
   });
+
+  it("renders EnvironmentFile entries before inline Environment values", () => {
+    const unit = buildSystemdUnit({
+      description: "OpenClaw Gateway",
+      programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+      environmentFiles: ["/home/test/.openclaw/.env"],
+      environment: {
+        OPENCLAW_GATEWAY_PORT: "18789",
+      },
+    });
+    expect(unit).toContain("EnvironmentFile=-/home/test/.openclaw/.env");
+    expect(unit).toContain("Environment=OPENCLAW_GATEWAY_PORT=18789");
+    expect(unit.indexOf("EnvironmentFile=-/home/test/.openclaw/.env")).toBeLessThan(
+      unit.indexOf("Environment=OPENCLAW_GATEWAY_PORT=18789"),
+    );
+  });
 });

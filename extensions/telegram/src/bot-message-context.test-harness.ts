@@ -36,7 +36,7 @@ type BuildTelegramMessageContextForTestParams = {
   cfg?: Record<string, unknown>;
   accountId?: string;
   runtime?: BuildTelegramMessageContextParams["runtime"];
-  sessionRuntime?: BuildTelegramMessageContextParams["sessionRuntime"];
+  sessionRuntime?: BuildTelegramMessageContextParams["sessionRuntime"] | null;
   resolveGroupActivation?: BuildTelegramMessageContextParams["resolveGroupActivation"];
   resolveGroupRequireMention?: BuildTelegramMessageContextParams["resolveGroupRequireMention"];
   resolveTelegramGroupConfig?: BuildTelegramMessageContextParams["resolveTelegramGroupConfig"];
@@ -59,6 +59,13 @@ export async function buildTelegramMessageContextForTest(
 > {
   const { vi } = await loadVitestModule();
   const buildTelegramMessageContext = await loadBuildTelegramMessageContext();
+  const sessionRuntime =
+    params.sessionRuntime === null
+      ? undefined
+      : {
+          ...telegramMessageContextSessionRuntimeForTest,
+          ...params.sessionRuntime,
+        };
   return await buildTelegramMessageContext({
     primaryCtx: {
       message: {
@@ -85,10 +92,7 @@ export async function buildTelegramMessageContextForTest(
       recordChannelActivity: () => undefined,
       ...params.runtime,
     },
-    sessionRuntime: {
-      ...telegramMessageContextSessionRuntimeForTest,
-      ...params.sessionRuntime,
-    },
+    sessionRuntime,
     account: { accountId: params.accountId ?? "default" } as never,
     historyLimit: 0,
     groupHistories: new Map(),

@@ -47,6 +47,8 @@ type AttemptSpawnWorkspaceHoisted = {
   createAgentSessionMock: UnknownMock;
   sessionManagerOpenMock: UnknownMock;
   resolveSandboxContextMock: UnknownMock;
+  ensureGlobalUndiciEnvProxyDispatcherMock: UnknownMock;
+  ensureGlobalUndiciStreamTimeoutsMock: UnknownMock;
   buildEmbeddedMessageActionDiscoveryInputMock: UnknownMock;
   subscribeEmbeddedPiSessionMock: Mock<SubscribeEmbeddedPiSessionFn>;
   acquireSessionWriteLockMock: Mock<AcquireSessionWriteLockFn>;
@@ -71,6 +73,8 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const createAgentSessionMock = vi.fn();
   const sessionManagerOpenMock = vi.fn();
   const resolveSandboxContextMock = vi.fn();
+  const ensureGlobalUndiciEnvProxyDispatcherMock = vi.fn();
+  const ensureGlobalUndiciStreamTimeoutsMock = vi.fn();
   const buildEmbeddedMessageActionDiscoveryInputMock = vi.fn((params: unknown) => params);
   const installToolResultContextGuardMock = vi.fn(() => () => {});
   const flushPendingToolResultsAfterIdleMock = vi.fn(async () => {});
@@ -135,6 +139,8 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     createAgentSessionMock,
     sessionManagerOpenMock,
     resolveSandboxContextMock,
+    ensureGlobalUndiciEnvProxyDispatcherMock,
+    ensureGlobalUndiciStreamTimeoutsMock,
     buildEmbeddedMessageActionDiscoveryInputMock,
     subscribeEmbeddedPiSessionMock,
     acquireSessionWriteLockMock,
@@ -209,8 +215,10 @@ vi.mock("../../../infra/machine-name.js", () => ({
 }));
 
 vi.mock("../../../infra/net/undici-global-dispatcher.js", () => ({
-  ensureGlobalUndiciEnvProxyDispatcher: () => {},
-  ensureGlobalUndiciStreamTimeouts: () => {},
+  ensureGlobalUndiciEnvProxyDispatcher: (...args: unknown[]) =>
+    hoisted.ensureGlobalUndiciEnvProxyDispatcherMock(...args),
+  ensureGlobalUndiciStreamTimeouts: (...args: unknown[]) =>
+    hoisted.ensureGlobalUndiciStreamTimeoutsMock(...args),
 }));
 
 vi.mock("../../bootstrap-files.js", async () => {
@@ -683,6 +691,8 @@ export function resetEmbeddedAttemptHarness(
   hoisted.createAgentSessionMock.mockReset();
   hoisted.sessionManagerOpenMock.mockReset().mockReturnValue(hoisted.sessionManager);
   hoisted.resolveSandboxContextMock.mockReset();
+  hoisted.ensureGlobalUndiciEnvProxyDispatcherMock.mockReset();
+  hoisted.ensureGlobalUndiciStreamTimeoutsMock.mockReset();
   hoisted.buildEmbeddedMessageActionDiscoveryInputMock
     .mockReset()
     .mockImplementation((params) => params);

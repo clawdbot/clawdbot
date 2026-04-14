@@ -3,6 +3,7 @@ import { loadConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveConfiguredMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { resolveMusicGenerationModeCapabilities } from "../../music-generation/capabilities.js";
@@ -359,13 +360,14 @@ async function executeMusicGenerationJob(params: {
       progressSummary: "Saving generated music",
     });
   }
+  const configuredMediaMaxBytes = resolveConfiguredMediaMaxBytes(params.effectiveCfg);
   const savedTracks = await Promise.all(
     result.tracks.map((track) =>
       saveMediaBuffer(
         track.buffer,
         track.mimeType,
         "tool-music-generation",
-        undefined,
+        configuredMediaMaxBytes,
         params.filename || track.fileName,
       ),
     ),

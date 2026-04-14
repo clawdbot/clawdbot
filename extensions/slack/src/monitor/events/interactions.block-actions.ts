@@ -472,6 +472,11 @@ async function authorizeSlackBlockAction(params: {
     ctx: params.ctx,
     senderId: params.parsed.userId,
     channelId: params.parsed.channelId,
+    // Block action sender identity is verified by Slack's request signing.
+    // Pass the Slack-verified userId as expectedSenderId to satisfy the
+    // mandatory actor-binding requirement for interactive events.
+    expectedSenderId: params.parsed.userId,
+    interactiveEvent: true,
   });
   if (auth.allowed) {
     return auth;

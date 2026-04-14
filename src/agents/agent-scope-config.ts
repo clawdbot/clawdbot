@@ -42,8 +42,7 @@ function getLog(): ReturnType<typeof createSubsystemLogger> {
 
 /** Strip null bytes from paths to prevent ENOTDIR errors. */
 function stripNullBytes(s: string): string {
-  // eslint-disable-next-line no-control-regex
-  return s.replace(/\0/g, "");
+  return s.replaceAll("\0", "");
 }
 
 export function listAgentEntries(cfg: OpenClawConfig): AgentEntry[] {

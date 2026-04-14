@@ -56,4 +56,5 @@ export type GatewayServiceRenderArgs = {
   programArguments: string[];
   workingDirectory?: string;
   environment?: GatewayServiceEnv;
+  environmentFiles?: string[];
 };

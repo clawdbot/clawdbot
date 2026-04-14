@@ -21,6 +21,16 @@ describe("resolveEffectiveExecutionContract", () => {
       ).toBe("strict-agentic");
     });
 
+    it("auto-activates on the mock-openai qa lane", () => {
+      expect(
+        resolveEffectiveExecutionContract({
+          config: emptyConfig,
+          provider: "mock-openai",
+          modelId: "mock-openai/gpt-5.4",
+        }),
+      ).toBe("strict-agentic");
+    });
+
     it("auto-activates on gpt-5o and variants without a separator", () => {
       for (const modelId of ["gpt-5", "gpt-5o", "gpt-5o-mini"]) {
         expect(

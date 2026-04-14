@@ -397,6 +397,149 @@ describe("gateway tool", () => {
     );
   });
 
+  it("rejects config.patch that enables dangerouslyDisableDeviceAuth", async () => {
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-dangerous-device-auth", {
+        action: "config.patch",
+        raw: "{ gateway: { controlUi: { dangerouslyDisableDeviceAuth: true } } }",
+      }),
+    ).rejects.toThrow("cannot enable dangerous config flags");
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
+  it("rejects config.patch that enables allowUnsafeExternalContent on gmail hooks", async () => {
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-dangerous-gmail", {
+        action: "config.patch",
+        raw: "{ hooks: { gmail: { allowUnsafeExternalContent: true } } }",
+      }),
+    ).rejects.toThrow("cannot enable dangerous config flags");
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
+  it("rejects config.patch that weakens applyPatch.workspaceOnly", async () => {
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-dangerous-workspace", {
+        action: "config.patch",
+        raw: "{ tools: { exec: { applyPatch: { workspaceOnly: false } } } }",
+      }),
+    ).rejects.toThrow("cannot enable dangerous config flags");
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
+  it("rejects config.patch that enables allowInsecureAuth on control UI", async () => {
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-dangerous-insecure-auth", {
+        action: "config.patch",
+        raw: "{ gateway: { controlUi: { allowInsecureAuth: true } } }",
+      }),
+    ).rejects.toThrow("cannot enable dangerous config flags");
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
+  it("rejects config.patch that enables dangerouslyAllowHostHeaderOriginFallback", async () => {
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-dangerous-origin-fallback", {
+        action: "config.patch",
+        raw: "{ gateway: { controlUi: { dangerouslyAllowHostHeaderOriginFallback: true } } }",
+      }),
+    ).rejects.toThrow("cannot enable dangerous config flags");
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
+  it("allows config.patch that does not enable any dangerous flag", async () => {
+    const sessionKey = "agent:main:whatsapp:dm:+15555550123";
+    const tool = requireGatewayTool(sessionKey);
+
+    const raw = '{ channels: { telegram: { groups: { "*": { requireMention: false } } } } }';
+    await tool.execute("call-safe-patch", {
+      action: "config.patch",
+      raw,
+    });
+
+    expect(callGatewayTool).toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.objectContaining({ raw: raw.trim() }),
+    );
+  });
+
+  it("allows config.patch when a dangerous flag is already enabled and stays enabled", async () => {
+    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          hash: "hash-1",
+          config: {
+            tools: { exec: { ask: "on-miss", security: "allowlist" } },
+            hooks: { gmail: { allowUnsafeExternalContent: true } },
+          },
+        };
+      }
+      return { ok: true };
+    });
+    const sessionKey = "agent:main:whatsapp:dm:+15555550123";
+    const tool = requireGatewayTool(sessionKey);
+
+    const raw =
+      '{ hooks: { gmail: { allowUnsafeExternalContent: true } }, agents: { defaults: { workspace: "~/test" } } }';
+    await tool.execute("call-keep-dangerous", {
+      action: "config.patch",
+      raw,
+    });
+
+    expect(callGatewayTool).toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.objectContaining({ raw: raw.trim() }),
+    );
+  });
+
+  it("rejects config.apply that introduces a dangerous flag", async () => {
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-dangerous-apply", {
+        action: "config.apply",
+        raw: '{ tools: { exec: { ask: "on-miss", security: "allowlist", applyPatch: { workspaceOnly: false } } } }',
+      }),
+    ).rejects.toThrow("cannot enable dangerous config flags");
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.apply",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
   it("passes update.run through gateway call", async () => {
     const sessionKey = "agent:main:whatsapp:dm:+15555550123";
     const tool = requireGatewayTool(sessionKey);

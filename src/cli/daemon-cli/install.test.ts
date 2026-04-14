@@ -17,7 +17,7 @@ const hasConfiguredSecretInputMock = vi.hoisted(() =>
     if (typeof value === "string" && value.trim()) {
       return true;
     }
-    return resolveSecretInputRefMock(value as never)?.ref != null;
+    return resolveSecretInputRefMock(value)?.ref != null;
   }),
 );
 const resolveGatewayAuthMock = vi.hoisted(() =>

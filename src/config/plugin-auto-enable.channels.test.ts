@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyPluginAutoEnable,
   materializePluginAutoEnableCandidates,
@@ -102,6 +102,83 @@ describe("applyPluginAutoEnable channels", () => {
 
     expect(result.config.plugins?.entries?.["env-secondary"]?.enabled).toBe(true);
     expect(result.config.plugins?.entries?.["env-primary"]).toBeUndefined();
+  });
+
+  it("memoizes external catalog preferOver lookups within one auto-enable pass", () => {
+    const stateDir = makeTempDir();
+    const catalogPath = path.join(stateDir, "plugins", "catalog.json");
+    fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
+    fs.writeFileSync(
+      catalogPath,
+      JSON.stringify({
+        entries: [
+          {
+            name: "@openclaw/env-primary",
+            openclaw: {
+              channel: {
+                id: "env-primary",
+                label: "Env Primary",
+                selectionLabel: "Env Primary",
+                docsPath: "/channels/env-primary",
+                blurb: "Env primary entry",
+              },
+              install: {
+                npmSpec: "@openclaw/env-primary",
+              },
+            },
+          },
+          {
+            name: "@openclaw/env-secondary",
+            openclaw: {
+              channel: {
+                id: "env-secondary",
+                label: "Env Secondary",
+                selectionLabel: "Env Secondary",
+                docsPath: "/channels/env-secondary",
+                blurb: "Env secondary entry",
+                preferOver: ["env-primary"],
+              },
+              install: {
+                npmSpec: "@openclaw/env-secondary",
+              },
+            },
+          },
+        ],
+      }),
+      "utf-8",
+    );
+
+    const readFileSpy = vi.spyOn(fs, "readFileSync");
+
+    try {
+      materializePluginAutoEnableCandidates({
+        config: {
+          channels: {
+            "env-primary": { token: "primary" },
+            "env-secondary": { token: "secondary" },
+          },
+        },
+        candidates: Array.from({ length: 20 }, (_, index) => ({
+          pluginId: index % 2 === 0 ? "env-primary" : "env-secondary",
+          kind: "channel-configured" as const,
+          channelId: index % 2 === 0 ? "env-primary" : "env-secondary",
+        })),
+        env: {
+          ...makeIsolatedEnv(),
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+        },
+        manifestRegistry: makeRegistry([]),
+      });
+
+      expect(
+        readFileSpy.mock.calls.filter(([filePath]) =>
+          String(filePath).endsWith("plugins/catalog.json"),
+        ),
+      ).toHaveLength(2);
+    } finally {
+      readFileSpy.mockRestore();
+    }
   });
 
   describe("third-party channel plugins (pluginId ≠ channelId)", () => {

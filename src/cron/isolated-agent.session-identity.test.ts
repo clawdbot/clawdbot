@@ -1,7 +1,8 @@
 import "./isolated-agent.mocks.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as modelThinkingDefault from "../agents/model-thinking-default.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import { makeCfg, makeJob, writeSessionStore } from "./isolated-agent.test-harness.js";
 import {
@@ -23,8 +24,9 @@ setupRunCronIsolatedAgentTurnSuite();
 
 describe("runCronIsolatedAgentTurn session identity", () => {
   beforeEach(() => {
-    mockRunCronFallbackPassthrough();
+    vi.spyOn(modelThinkingDefault, "resolveThinkingDefault").mockReturnValue("off");
     runEmbeddedPiAgentMock.mockClear();
+    mockRunCronFallbackPassthrough();
   });
 
   it("passes resolved agentDir to runEmbeddedPiAgent", async () => {

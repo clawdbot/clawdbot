@@ -97,7 +97,7 @@ async function expectFirstHookDelivery(
   const first = await postAgentHookWithIdempotency(port, idempotencyKey, headers);
   const firstBody = (await first.json()) as { runId?: string };
   expect(firstBody.runId).toBeTruthy();
-  await waitForSystemEvent();
+  await waitForSystemEvent(5_000);
   drainSystemEvents(resolveMainKey());
   return firstBody;
 }

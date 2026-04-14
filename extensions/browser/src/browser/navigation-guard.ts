@@ -43,7 +43,7 @@ export function withBrowserNavigationPolicy(
 }
 
 export function requiresInspectableBrowserNavigationRedirects(ssrfPolicy?: SsrFPolicy): boolean {
-  return !isPrivateNetworkAllowedByPolicy(ssrfPolicy);
+  return ssrfPolicy?.dangerouslyAllowPrivateNetwork === false;
 }
 
 export function requiresInspectableBrowserNavigationRedirectsForUrl(
@@ -122,6 +122,7 @@ export async function assertBrowserNavigationAllowed(
   // the same address that passed policy checks.
   if (
     opts.ssrfPolicy &&
+    opts.ssrfPolicy.dangerouslyAllowPrivateNetwork === false &&
     !isPrivateNetworkAllowedByPolicy(opts.ssrfPolicy) &&
     !isIpLiteralHostname(parsed.hostname) &&
     !isExplicitlyAllowedBrowserHostname(parsed.hostname, opts.ssrfPolicy)

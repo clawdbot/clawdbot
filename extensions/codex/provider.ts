@@ -114,6 +114,7 @@ export async function buildCodexProviderCatalog(
   return {
     provider: {
       baseUrl: CODEX_BASE_URL,
+      apiKey: "codex-app-server",
       auth: "token",
       api: "openai-codex-responses",
       models,

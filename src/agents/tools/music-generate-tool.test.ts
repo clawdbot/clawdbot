@@ -167,7 +167,7 @@ describe("createMusicGenerateTool", () => {
       lyrics: ["wake the city up"],
       metadata: { taskId: "music-task-1" },
     });
-    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
+    const saveSpy = vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
       path: "/tmp/generated-night-drive.mp3",
       id: "generated-night-drive.mp3",
       size: 11,
@@ -178,6 +178,7 @@ describe("createMusicGenerateTool", () => {
       config: asConfig({
         agents: {
           defaults: {
+            mediaMaxMb: 8,
             musicGenerationModel: { primary: "google/lyria-3-clip-preview" },
           },
         },
@@ -194,6 +195,13 @@ describe("createMusicGenerateTool", () => {
     });
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
 
+    expect(saveSpy).toHaveBeenCalledWith(
+      Buffer.from("music-bytes"),
+      "audio/mpeg",
+      "tool-music-generation",
+      8 * 1024 * 1024,
+      "night-drive.mp3",
+    );
     expect(text).toContain("Generated 1 track with google/lyria-3-clip-preview.");
     expect(text).toContain("Lyrics returned.");
     expect(text).toContain("MEDIA:/tmp/generated-night-drive.mp3");

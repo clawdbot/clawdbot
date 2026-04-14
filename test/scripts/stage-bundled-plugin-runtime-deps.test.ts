@@ -189,7 +189,7 @@ describe("stageBundledPluginRuntimeDeps", () => {
     ).toBe("module.exports = 'transitive';\n");
   });
 
-  it("removes source maps from staged runtime dependencies", () => {
+  it("removes global non-runtime suffixes from staged runtime dependencies", () => {
     const { pluginDir, repoRoot } = createBundledPluginFixture({
       packageJson: {
         name: "@openclaw/fixture-plugin",
@@ -206,11 +206,13 @@ describe("stageBundledPluginRuntimeDeps", () => {
       "utf8",
     );
     fs.writeFileSync(path.join(directDir, "index.js"), "module.exports = 1;\n", "utf8");
+    fs.writeFileSync(path.join(directDir, "index.d.ts"), "export {};\n", "utf8");
     fs.writeFileSync(path.join(directDir, "index.js.map"), '{ "version": 3 }\n', "utf8");
 
     stageBundledPluginRuntimeDeps({ cwd: repoRoot });
 
     expect(fs.existsSync(path.join(pluginDir, "node_modules", "direct", "index.js"))).toBe(true);
+    expect(fs.existsSync(path.join(pluginDir, "node_modules", "direct", "index.d.ts"))).toBe(false);
     expect(fs.existsSync(path.join(pluginDir, "node_modules", "direct", "index.js.map"))).toBe(
       false,
     );

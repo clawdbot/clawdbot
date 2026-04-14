@@ -386,7 +386,7 @@ export async function expectFeishuReplyPipelineDedupedAfterPostSendFailure(param
           expect(params.dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
           expect(params.runtimeErrorMock).toHaveBeenCalledTimes(1);
         },
-        { timeout: waitTimeoutMs },
+        waitTimeoutMs == null ? undefined : { timeout: waitTimeoutMs },
       ),
     waitForSecond: () =>
       vi.waitFor(
@@ -394,7 +394,7 @@ export async function expectFeishuReplyPipelineDedupedAfterPostSendFailure(param
           expect(params.dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
           expect(params.runtimeErrorMock).toHaveBeenCalledTimes(1);
         },
-        { timeout: waitTimeoutMs },
+        waitTimeoutMs == null ? undefined : { timeout: waitTimeoutMs },
       ),
   });
 }

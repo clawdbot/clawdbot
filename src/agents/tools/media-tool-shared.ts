@@ -7,6 +7,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { normalizeModelRef } from "../model-selection.js";
 import { normalizeProviderId } from "../provider-id.js";
 import { ToolInputError, readStringArrayParam, readStringParam } from "./common.js";
 import type { ImageModelConfig } from "./image-tool.helpers.js";
@@ -400,9 +401,13 @@ export function resolveModelFromRegistry(params: {
   provider: string;
   modelId: string;
 }): Model<Api> {
-  const model = params.modelRegistry.find(params.provider, params.modelId) as Model<Api> | null;
+  const resolvedRef = normalizeModelRef(params.provider, params.modelId);
+  const model = params.modelRegistry.find(
+    resolvedRef.provider,
+    resolvedRef.model,
+  ) as Model<Api> | null;
   if (!model) {
-    throw new Error(`Unknown model: ${params.provider}/${params.modelId}`);
+    throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
   }
   return model;
 }

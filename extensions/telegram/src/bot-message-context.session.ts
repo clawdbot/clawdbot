@@ -76,6 +76,17 @@ async function loadTelegramMessageContextSessionRuntime(
   };
 }
 
+export async function resolveTelegramMessageContextStorePath(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionRuntime?: TelegramMessageContextSessionRuntimeOverrides;
+}): Promise<string> {
+  const sessionRuntime = await loadTelegramMessageContextSessionRuntime(params.sessionRuntime);
+  return sessionRuntime.resolveStorePath(params.cfg.session?.store, {
+    agentId: params.agentId,
+  });
+}
+
 export async function buildTelegramInboundContextPayload(params: {
   cfg: OpenClawConfig;
   primaryCtx: TelegramContext;
@@ -232,8 +243,10 @@ export async function buildTelegramInboundContextPayload(params: {
     ? (groupLabel ?? `group:${chatId}`)
     : buildSenderLabel(msg, senderId || chatId);
   const sessionRuntime = await loadTelegramMessageContextSessionRuntime(sessionRuntimeOverride);
-  const storePath = sessionRuntime.resolveStorePath(cfg.session?.store, {
+  const storePath = await resolveTelegramMessageContextStorePath({
+    cfg,
     agentId: route.agentId,
+    sessionRuntime: sessionRuntimeOverride,
   });
   const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
   const previousTimestamp = sessionRuntime.readSessionUpdatedAt({

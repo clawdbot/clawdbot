@@ -90,6 +90,9 @@ OpenClaw has three public release lanes:
 - npm release preflight fails closed unless the tarball includes both
   `dist/control-ui/index.html` and a non-empty `dist/control-ui/assets/` payload
   so we do not ship an empty browser dashboard again
+- `pnpm test:install:smoke` also enforces the npm pack `unpackedSize` budget on
+  the candidate update tarball, so installer e2e catches accidental pack bloat
+  before the release publish path
 - If the release work touched CI planning, extension timing manifests, or
   extension test matrices, regenerate and review the planner-owned
   `checks-node-extensions` workflow matrix outputs from `.github/workflows/ci.yml`

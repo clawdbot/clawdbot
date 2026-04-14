@@ -62,7 +62,7 @@ function dependencyVersionSatisfied(spec, installedVersion) {
   return semverSatisfies(installedVersion, spec, { includePrerelease: false });
 }
 
-const defaultStagedRuntimeDepGlobalPruneSuffixes = [".map"];
+const defaultStagedRuntimeDepGlobalPruneSuffixes = [".d.ts", ".map"];
 const defaultStagedRuntimeDepPruneRules = new Map([
   // Type declarations only; runtime resolves through lib/es entrypoints.
   ["@larksuiteoapi/node-sdk", { paths: ["types"] }],

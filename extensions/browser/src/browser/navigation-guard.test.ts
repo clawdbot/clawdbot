@@ -128,6 +128,18 @@ describe("browser navigation guard", () => {
     expect(lookupFn).not.toHaveBeenCalled();
   });
 
+  it("allows hostname navigation when the default strict policy object is present", async () => {
+    const lookupFn = createLookupFn("93.184.216.34");
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "https://example.com",
+        lookupFn,
+        ssrfPolicy: {},
+      }),
+    ).resolves.toBeUndefined();
+    expect(lookupFn).toHaveBeenCalledWith("example.com", { all: true });
+  });
+
   it("allows explicitly allowed hostnames in strict mode", async () => {
     const lookupFn = createLookupFn("93.184.216.34");
     await expect(
@@ -300,8 +312,11 @@ describe("browser navigation guard", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("treats default browser SSRF mode as requiring redirect-hop inspection", () => {
-    expect(requiresInspectableBrowserNavigationRedirects()).toBe(true);
+  it("requires redirect-hop inspection only in explicit strict mode", () => {
+    expect(requiresInspectableBrowserNavigationRedirects()).toBe(false);
+    expect(
+      requiresInspectableBrowserNavigationRedirects({ dangerouslyAllowPrivateNetwork: false }),
+    ).toBe(true);
     expect(requiresInspectableBrowserNavigationRedirects({ allowPrivateNetwork: true })).toBe(
       false,
     );

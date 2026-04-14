@@ -8,6 +8,7 @@ import { resolveEffectiveToolFsWorkspaceOnly } from "../../agents/tool-fs-policy
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
+import { resolveConfiguredMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { saveMediaSource } from "../../media/store.js";
 import { resolveConfigDir } from "../../utils.js";
 import type { ReplyPayload } from "../types.js";
@@ -103,6 +104,7 @@ export function createReplyMediaPathNormalizer(params: {
     cfg: params.cfg,
     agentId,
   });
+  const configuredMediaMaxBytes = resolveConfiguredMediaMaxBytes(params.cfg);
   let sandboxRootPromise: Promise<string | undefined> | undefined;
   const persistedMediaBySource = new Map<string, Promise<string>>();
 
@@ -133,7 +135,7 @@ export function createReplyMediaPathNormalizer(params: {
     if (cached) {
       return await cached;
     }
-    const persistPromise = saveMediaSource(media, undefined, "outbound")
+    const persistPromise = saveMediaSource(media, undefined, "outbound", configuredMediaMaxBytes)
       .then((saved) => saved.path)
       .catch((err) => {
         persistedMediaBySource.delete(media);

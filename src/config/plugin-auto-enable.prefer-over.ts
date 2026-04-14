@@ -122,6 +122,10 @@ function resolvePreferredOverIds(
   return resolveExternalCatalogPreferOver(channelId, env);
 }
 
+function getPluginAutoEnableCandidateCacheKey(candidate: PluginAutoEnableCandidate): string {
+  return `${candidate.pluginId}:${candidate.kind === "channel-configured" ? candidate.channelId : candidate.pluginId}`;
+}
+
 export function shouldSkipPreferredPluginAutoEnable(params: {
   config: OpenClawConfig;
   entry: PluginAutoEnableCandidate;
@@ -130,7 +134,19 @@ export function shouldSkipPreferredPluginAutoEnable(params: {
   registry: PluginManifestRegistry;
   isPluginDenied: (config: OpenClawConfig, pluginId: string) => boolean;
   isPluginExplicitlyDisabled: (config: OpenClawConfig, pluginId: string) => boolean;
+  preferOverCache: Map<string, string[]>;
 }): boolean {
+  const getPreferredOverIds = (candidate: PluginAutoEnableCandidate): string[] => {
+    const cacheKey = getPluginAutoEnableCandidateCacheKey(candidate);
+    const cached = params.preferOverCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+    const resolved = resolvePreferredOverIds(candidate, params.env, params.registry);
+    params.preferOverCache.set(cacheKey, resolved);
+    return resolved;
+  };
+
   for (const other of params.configured) {
     if (other.pluginId === params.entry.pluginId) {
       continue;
@@ -141,9 +157,7 @@ export function shouldSkipPreferredPluginAutoEnable(params: {
     ) {
       continue;
     }
-    if (
-      resolvePreferredOverIds(other, params.env, params.registry).includes(params.entry.pluginId)
-    ) {
+    if (getPreferredOverIds(other).includes(params.entry.pluginId)) {
       return true;
     }
   }

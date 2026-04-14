@@ -3,6 +3,7 @@ import { loadConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveConfiguredMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
@@ -611,13 +612,14 @@ async function executeVideoGenerationJob(params: {
     );
   }
 
+  const configuredMediaMaxBytes = resolveConfiguredMediaMaxBytes(params.effectiveCfg);
   const savedVideos = await Promise.all(
     bufferVideos.map((video) =>
       saveMediaBuffer(
         video.buffer,
         video.mimeType,
         "tool-video-generation",
-        undefined,
+        configuredMediaMaxBytes,
         params.filename || video.fileName,
       ),
     ),

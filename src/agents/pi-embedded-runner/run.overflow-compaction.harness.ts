@@ -169,6 +169,14 @@ export const mockedResolveContextWindowInfo = vi.fn(() => ({
   tokens: 200000,
   source: "model",
 }));
+export const mockedFormatContextWindowWarningMessage = vi.fn(
+  (params: { provider: string; modelId: string; guard: { tokens: number; source: string } }) =>
+    `low context window: ${params.provider}/${params.modelId} ctx=${params.guard.tokens} source=${params.guard.source}`,
+);
+export const mockedFormatContextWindowBlockMessage = vi.fn(
+  (params: { guard: { tokens: number; source: string } }) =>
+    `Model context window too small (${params.guard.tokens} tokens; source=${params.guard.source}). Minimum is 1000.`,
+);
 export const mockedGetApiKeyForModel = vi.fn(
   async ({ profileId }: { profileId?: string } = {}) => ({
     apiKey: "test-key",
@@ -300,6 +308,16 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
     tokens: 200000,
     source: "model",
   });
+  mockedFormatContextWindowWarningMessage.mockReset();
+  mockedFormatContextWindowWarningMessage.mockImplementation(
+    (params: { provider: string; modelId: string; guard: { tokens: number; source: string } }) =>
+      `low context window: ${params.provider}/${params.modelId} ctx=${params.guard.tokens} source=${params.guard.source}`,
+  );
+  mockedFormatContextWindowBlockMessage.mockReset();
+  mockedFormatContextWindowBlockMessage.mockImplementation(
+    (params: { guard: { tokens: number; source: string } }) =>
+      `Model context window too small (${params.guard.tokens} tokens; source=${params.guard.source}). Minimum is 1000.`,
+  );
   mockedGetApiKeyForModel.mockReset();
   mockedGetApiKeyForModel.mockImplementation(
     async ({ profileId }: { profileId?: string } = {}) => ({
@@ -443,6 +461,8 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     CONTEXT_WINDOW_HARD_MIN_TOKENS: 1000,
     CONTEXT_WINDOW_WARN_BELOW_TOKENS: 5000,
     evaluateContextWindowGuard: mockedEvaluateContextWindowGuard,
+    formatContextWindowBlockMessage: mockedFormatContextWindowBlockMessage,
+    formatContextWindowWarningMessage: mockedFormatContextWindowWarningMessage,
     resolveContextWindowInfo: mockedResolveContextWindowInfo,
   }));
 

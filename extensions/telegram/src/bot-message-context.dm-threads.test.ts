@@ -1,6 +1,16 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-const { recordInboundSessionMock } = vi.hoisted(() => ({
-  recordInboundSessionMock: vi.fn().mockResolvedValue(undefined),
+import { resetTopicNameCacheForTest } from "./topic-name-cache.js";
+
+type SessionRuntimeModule = typeof import("./bot-message-context.session.runtime.js");
+type RecordInboundSessionFn = SessionRuntimeModule["recordInboundSession"];
+type ResolveStorePathFn = SessionRuntimeModule["resolveStorePath"];
+
+const { recordInboundSessionMock, resolveStorePathMock } = vi.hoisted(() => ({
+  recordInboundSessionMock: vi.fn<RecordInboundSessionFn>(async () => undefined),
+  resolveStorePathMock: vi.fn<ResolveStorePathFn>(() => "/tmp/openclaw-session-store.json"),
 }));
 
 vi.mock("./bot-message-context.session.runtime.js", async () => {
@@ -9,7 +19,10 @@ vi.mock("./bot-message-context.session.runtime.js", async () => {
   );
   return {
     ...actual,
-    recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
+    recordInboundSession: (...args: Parameters<typeof actual.recordInboundSession>) =>
+      recordInboundSessionMock(...args),
+    resolveStorePath: (...args: Parameters<typeof actual.resolveStorePath>) =>
+      resolveStorePathMock(...args),
   };
 });
 
@@ -34,11 +47,15 @@ const { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
 
 beforeEach(() => {
   clearRuntimeConfigSnapshot();
+  resetTopicNameCacheForTest();
 });
 
 afterEach(() => {
   clearRuntimeConfigSnapshot();
+  resetTopicNameCacheForTest();
   recordInboundSessionMock.mockClear();
+  resolveStorePathMock.mockReset();
+  resolveStorePathMock.mockReturnValue("/tmp/openclaw-session-store.json");
 });
 
 describe("buildTelegramMessageContext dm thread sessions", () => {
@@ -160,6 +177,123 @@ describe("buildTelegramMessageContext group sessions without forum", () => {
 
     expect(ctx).not.toBeNull();
     expect(ctx?.ctxPayload?.TopicName).toBe("Deployments");
+  });
+
+  it("handles forum messages without session runtime overrides", async () => {
+    const ctx = await buildTelegramMessageContextForTest({
+      message: {
+        message_id: 3,
+        chat: { id: -1001234567890, type: "supergroup", title: "Test Forum", is_forum: true },
+        date: 1700000002,
+        text: "@bot hello",
+        message_thread_id: 99,
+        from: { id: 42, first_name: "Alice" },
+        reply_to_message: {
+          message_id: 2,
+          forum_topic_created: { name: "Deployments", icon_color: 0x6fb9f0 },
+        },
+      },
+      options: { forceWasMentioned: true },
+      resolveGroupActivation: () => true,
+      sessionRuntime: null,
+    });
+
+    expect(ctx).not.toBeNull();
+    expect(ctx?.ctxPayload?.TopicName).toBe("Deployments");
+  });
+
+  it("reloads topic name from disk after cache reset", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-topic-name-"));
+    const sessionStorePath = path.join(tempDir, "sessions.json");
+    const buildPersistedContext = async (message: Record<string, unknown>) =>
+      await buildTelegramMessageContextForTest({
+        message,
+        options: { forceWasMentioned: true },
+        resolveGroupActivation: () => true,
+        sessionRuntime: {
+          resolveStorePath: () => sessionStorePath,
+        },
+      });
+
+    try {
+      await buildPersistedContext({
+        message_id: 4,
+        chat: { id: -1001234567890, type: "supergroup", title: "Test Forum", is_forum: true },
+        date: 1700000003,
+        text: "@bot hello",
+        message_thread_id: 99,
+        from: { id: 42, first_name: "Alice" },
+        reply_to_message: {
+          message_id: 3,
+          forum_topic_created: { name: "Deployments", icon_color: 0x6fb9f0 },
+        },
+      });
+
+      resetTopicNameCacheForTest();
+
+      const ctx = await buildPersistedContext({
+        message_id: 5,
+        chat: { id: -1001234567890, type: "supergroup", title: "Test Forum", is_forum: true },
+        date: 1700000004,
+        text: "@bot again",
+        message_thread_id: 99,
+        from: { id: 42, first_name: "Alice" },
+      });
+
+      expect(ctx).not.toBeNull();
+      expect(ctx?.ctxPayload?.TopicName).toBe("Deployments");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+      resetTopicNameCacheForTest();
+    }
+  });
+
+  it("persists topic names through the default session runtime path", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-topic-name-"));
+    const sessionStorePath = path.join(tempDir, "sessions.json");
+    resolveStorePathMock.mockReturnValue(sessionStorePath);
+
+    try {
+      await buildTelegramMessageContextForTest({
+        message: {
+          message_id: 6,
+          chat: { id: -1001234567890, type: "supergroup", title: "Test Forum", is_forum: true },
+          date: 1700000005,
+          text: "@bot hello",
+          message_thread_id: 99,
+          from: { id: 42, first_name: "Alice" },
+          reply_to_message: {
+            message_id: 5,
+            forum_topic_created: { name: "Deployments", icon_color: 0x6fb9f0 },
+          },
+        },
+        options: { forceWasMentioned: true },
+        resolveGroupActivation: () => true,
+        sessionRuntime: null,
+      });
+
+      resetTopicNameCacheForTest();
+
+      const ctx = await buildTelegramMessageContextForTest({
+        message: {
+          message_id: 7,
+          chat: { id: -1001234567890, type: "supergroup", title: "Test Forum", is_forum: true },
+          date: 1700000006,
+          text: "@bot again",
+          message_thread_id: 99,
+          from: { id: 42, first_name: "Alice" },
+        },
+        options: { forceWasMentioned: true },
+        resolveGroupActivation: () => true,
+        sessionRuntime: null,
+      });
+
+      expect(ctx).not.toBeNull();
+      expect(ctx?.ctxPayload?.TopicName).toBe("Deployments");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+      resetTopicNameCacheForTest();
+    }
   });
 });
 

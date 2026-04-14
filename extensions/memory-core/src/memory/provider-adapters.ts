@@ -4,6 +4,7 @@ import {
   DEFAULT_LMSTUDIO_EMBEDDING_MODEL,
   DEFAULT_LOCAL_MODEL,
   DEFAULT_MISTRAL_EMBEDDING_MODEL,
+  DEFAULT_OLLAMA_EMBEDDING_MODEL,
   DEFAULT_OPENAI_EMBEDDING_MODEL,
   DEFAULT_VOYAGE_EMBEDDING_MODEL,
   OPENAI_BATCH_ENDPOINT,
@@ -12,6 +13,7 @@ import {
   createLmstudioEmbeddingProvider,
   createLocalEmbeddingProvider,
   createMistralEmbeddingProvider,
+  createOllamaEmbeddingProvider,
   createOpenAiEmbeddingProvider,
   createVoyageEmbeddingProvider,
   hasNonTextEmbeddingParts,
@@ -290,6 +292,31 @@ const mistralAdapter: MemoryEmbeddingProviderAdapter = {
   },
 };
 
+const ollamaAdapter: MemoryEmbeddingProviderAdapter = {
+  id: "ollama",
+  defaultModel: DEFAULT_OLLAMA_EMBEDDING_MODEL,
+  transport: "remote",
+  create: async (options) => {
+    const { provider, client } = await createOllamaEmbeddingProvider({
+      ...options,
+      provider: "ollama",
+      fallback: "none",
+    });
+    return {
+      provider,
+      runtime: {
+        id: "ollama",
+        cacheKeyData: {
+          provider: "ollama",
+          baseUrl: client.baseUrl,
+          model: client.model,
+          headers: sanitizeHeaders(client.headers, ["authorization"]),
+        },
+      },
+    };
+  },
+};
+
 const lmstudioAdapter: MemoryEmbeddingProviderAdapter = {
   id: "lmstudio",
   defaultModel: DEFAULT_LMSTUDIO_EMBEDDING_MODEL,
@@ -347,6 +374,7 @@ export const builtinMemoryEmbeddingProviderAdapters = [
   geminiAdapter,
   voyageAdapter,
   mistralAdapter,
+  ollamaAdapter,
   lmstudioAdapter,
 ] as const;
 
@@ -409,6 +437,7 @@ export {
   DEFAULT_LMSTUDIO_EMBEDDING_MODEL,
   DEFAULT_LOCAL_MODEL,
   DEFAULT_MISTRAL_EMBEDDING_MODEL,
+  DEFAULT_OLLAMA_EMBEDDING_MODEL,
   DEFAULT_OPENAI_EMBEDDING_MODEL,
   DEFAULT_VOYAGE_EMBEDDING_MODEL,
   canAutoSelectLocal,

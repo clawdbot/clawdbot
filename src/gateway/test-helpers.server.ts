@@ -472,7 +472,7 @@ export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) 
       if (activeSuiteHookScopeCount === 0) {
         await cleanupGatewayTestHome({ restoreEnv: true });
       }
-    });
+    }, 300_000);
     return;
   }
 

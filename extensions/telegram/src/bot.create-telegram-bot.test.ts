@@ -62,6 +62,63 @@ const TELEGRAM_TEST_TIMINGS = {
   textFragmentGapMs: 30,
 } as const;
 
+type TelegramMiddlewareTestContext = Record<string, unknown>;
+type TelegramMiddleware = (
+  ctx: TelegramMiddlewareTestContext,
+  next: () => Promise<void>,
+) => Promise<void> | void;
+
+function getRegisteredTelegramMiddlewares(): TelegramMiddleware[] {
+  return middlewareUseSpy.mock.calls
+    .map((call) => call[0])
+    .filter((fn): fn is TelegramMiddleware => typeof fn === "function");
+}
+
+async function runTelegramMiddlewareChain(params: {
+  ctx: TelegramMiddlewareTestContext;
+  finalHandler: (ctx: TelegramMiddlewareTestContext) => Promise<void>;
+}): Promise<void> {
+  const middlewares = getRegisteredTelegramMiddlewares();
+  let idx = -1;
+  const dispatch = async (i: number): Promise<void> => {
+    if (i <= idx) {
+      throw new Error("middleware dispatch called multiple times");
+    }
+    idx = i;
+    const fn = middlewares[i];
+    if (!fn) {
+      await params.finalHandler(params.ctx);
+      return;
+    }
+    await fn(params.ctx, async () => dispatch(i + 1));
+  };
+  await dispatch(0);
+}
+
+function installPerKeySequentializer(): void {
+  sequentializeSpy.mockImplementationOnce(() => {
+    const lanes = new Map<string, Promise<void>>();
+    return async (ctx: TelegramMiddlewareTestContext, next: () => Promise<void>) => {
+      const key = harness.sequentializeKey?.(ctx) ?? "default";
+      const previous = lanes.get(key) ?? Promise.resolve();
+      const current = previous.then(async () => {
+        await next();
+      });
+      lanes.set(
+        key,
+        current.catch(() => undefined),
+      );
+      try {
+        await current;
+      } finally {
+        if (lanes.get(key) === current) {
+          lanes.delete(key);
+        }
+      }
+    };
+  });
+}
+
 describe("createTelegramBot", () => {
   beforeAll(() => {
     process.env.TZ = "UTC";
@@ -144,6 +201,182 @@ describe("createTelegramBot", () => {
     expect(sequentializeSpy).toHaveBeenCalledTimes(1);
     expect(middlewareUseSpy).toHaveBeenCalledWith(sequentializeSpy.mock.results[0]?.value);
     expect(harness.sequentializeKey).toBe(getTelegramSequentialKey);
+  });
+
+  it("lets /status bypass a busy Telegram topic lane", async () => {
+    installPerKeySequentializer();
+    loadConfig.mockReturnValue({
+      commands: { native: true },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    });
+
+    const startedBodies: string[] = [];
+    let releaseConversationTurn!: () => void;
+    const conversationGate = new Promise<void>((resolve) => {
+      releaseConversationTurn = resolve;
+    });
+
+    replySpy.mockImplementation(async (ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onReplyStart?.();
+      const body = String(ctx.CommandBody ?? ctx.Body ?? "");
+      startedBodies.push(body);
+      if (body.includes("hello there")) {
+        await conversationGate;
+      }
+      return { text: `reply:${body}` };
+    });
+
+    createTelegramBot({ token: "tok" });
+    const messageHandler = getOnHandler("message") as (
+      ctx: TelegramMiddlewareTestContext,
+    ) => Promise<void>;
+    const statusHandler = commandSpy.mock.calls.find((call) => call[0] === "status")?.[1] as
+      | ((ctx: TelegramMiddlewareTestContext) => Promise<void>)
+      | undefined;
+    expect(statusHandler).toBeDefined();
+    if (!statusHandler) {
+      return;
+    }
+
+    const busyCtx = {
+      ...makeForumGroupMessageCtx({ threadId: 99, text: "hello there" }),
+      message: {
+        ...makeForumGroupMessageCtx({ threadId: 99, text: "hello there" }).message,
+        message_id: 101,
+      },
+      update: { update_id: 101 },
+    };
+    const statusCtx = {
+      ...makeForumGroupMessageCtx({ threadId: 99, text: "/status" }),
+      message: {
+        ...makeForumGroupMessageCtx({ threadId: 99, text: "/status" }).message,
+        message_id: 102,
+      },
+      update: { update_id: 102 },
+      match: "",
+    };
+
+    const busyPromise = runTelegramMiddlewareChain({
+      ctx: busyCtx,
+      finalHandler: messageHandler,
+    });
+
+    await vi.waitFor(() => {
+      expect(startedBodies).toHaveLength(1);
+      expect(startedBodies[0]).toContain("hello there");
+    });
+
+    const statusPromise = runTelegramMiddlewareChain({
+      ctx: statusCtx,
+      finalHandler: statusHandler,
+    });
+
+    await vi.waitFor(() => {
+      expect(startedBodies).toHaveLength(2);
+      expect(startedBodies[0]).toContain("hello there");
+      expect(startedBodies[1]).toBe("/status");
+      expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+      expect(sendMessageSpy.mock.calls[0]?.[1]).toContain("reply:/status");
+    });
+
+    await statusPromise;
+
+    releaseConversationTurn();
+    await busyPromise;
+
+    await vi.waitFor(() => {
+      expect(sendMessageSpy).toHaveBeenCalledTimes(2);
+    });
+    const sentBodies = sendMessageSpy.mock.calls.map((call) => String(call[1]));
+    expect(sentBodies[0]).toContain("reply:/status");
+    expect(sentBodies[1]).toContain("hello there");
+  });
+
+  it("keeps ordinary Telegram messages serialized within the same topic", async () => {
+    installPerKeySequentializer();
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    });
+
+    const startedBodies: string[] = [];
+    let releaseFirstTurn!: () => void;
+    const firstTurnGate = new Promise<void>((resolve) => {
+      releaseFirstTurn = resolve;
+    });
+
+    replySpy.mockImplementation(async (ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onReplyStart?.();
+      const body = String(ctx.Body ?? "");
+      startedBodies.push(body);
+      if (body.includes("first message")) {
+        await firstTurnGate;
+      }
+      return { text: `reply:${body}` };
+    });
+
+    createTelegramBot({ token: "tok" });
+    const messageHandler = getOnHandler("message") as (
+      ctx: TelegramMiddlewareTestContext,
+    ) => Promise<void>;
+
+    const firstCtx = {
+      ...makeForumGroupMessageCtx({ threadId: 99, text: "first message" }),
+      message: {
+        ...makeForumGroupMessageCtx({ threadId: 99, text: "first message" }).message,
+        message_id: 201,
+      },
+      update: { update_id: 201 },
+    };
+    const secondCtx = {
+      ...makeForumGroupMessageCtx({ threadId: 99, text: "second message" }),
+      message: {
+        ...makeForumGroupMessageCtx({ threadId: 99, text: "second message" }).message,
+        message_id: 202,
+      },
+      update: { update_id: 202 },
+    };
+
+    const firstPromise = runTelegramMiddlewareChain({
+      ctx: firstCtx,
+      finalHandler: messageHandler,
+    });
+
+    await vi.waitFor(() => {
+      expect(startedBodies).toHaveLength(1);
+      expect(startedBodies[0]).toContain("first message");
+    });
+
+    const secondPromise = runTelegramMiddlewareChain({
+      ctx: secondCtx,
+      finalHandler: messageHandler,
+    });
+
+    await Promise.resolve();
+    expect(startedBodies).toHaveLength(1);
+    expect(startedBodies[0]).toContain("first message");
+    expect(sendMessageSpy).not.toHaveBeenCalled();
+
+    releaseFirstTurn();
+    await Promise.all([firstPromise, secondPromise]);
+
+    expect(startedBodies).toHaveLength(2);
+    expect(startedBodies[0]).toContain("first message");
+    expect(startedBodies[1]).toContain("second message");
+    const sentBodies = sendMessageSpy.mock.calls.map((call) => String(call[1]));
+    expect(sentBodies[0]).toContain("first message");
+    expect(sentBodies[1]).toContain("second message");
   });
 
   it("preserves same-chat reply order when a debounced run is still active", async () => {

@@ -318,7 +318,16 @@ describe("browser config", () => {
         dangerouslyAllowPrivateNetwork: false,
       },
     });
-    expect(resolved.ssrfPolicy).toEqual({});
+    expect(resolved.ssrfPolicy).toEqual({ dangerouslyAllowPrivateNetwork: false });
+  });
+
+  it("preserves legacy explicit strict mode from allowPrivateNetwork=false", () => {
+    const resolved = resolveBrowserConfig({
+      ssrfPolicy: {
+        allowPrivateNetwork: false,
+      },
+    } as unknown as BrowserConfig);
+    expect(resolved.ssrfPolicy).toEqual({ dangerouslyAllowPrivateNetwork: false });
   });
 
   it("keeps allowlist-only browser SSRF policy strict by default", () => {

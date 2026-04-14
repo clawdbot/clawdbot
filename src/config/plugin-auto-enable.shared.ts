@@ -660,6 +660,8 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
     return { config: next, changes, autoEnabledReasons: {} };
   }
 
+  const preferOverCache = new Map<string, string[]>();
+
   for (const entry of params.candidates) {
     const builtInChannelId = normalizeChatChannelId(entry.pluginId);
     if (isPluginDenied(next, entry.pluginId) || isPluginExplicitlyDisabled(next, entry.pluginId)) {
@@ -674,6 +676,7 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
         registry: params.manifestRegistry,
         isPluginDenied,
         isPluginExplicitlyDisabled,
+        preferOverCache,
       })
     ) {
       continue;

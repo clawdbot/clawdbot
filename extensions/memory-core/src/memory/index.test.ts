@@ -6,12 +6,16 @@ import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearMemoryEmbeddingProviders as clearRegistry,
+  listMemoryEmbeddingProviders as listRegisteredAdapters,
   registerMemoryEmbeddingProvider as registerAdapter,
 } from "../../../../src/plugins/memory-embedding-providers.js";
 import "./test-runtime-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
 import { getMemorySearchManager, closeAllMemorySearchManagers } from "./index.js";
-import { registerBuiltInMemoryEmbeddingProviders } from "./provider-adapters.js";
+import {
+  DEFAULT_OLLAMA_EMBEDDING_MODEL,
+  registerBuiltInMemoryEmbeddingProviders,
+} from "./provider-adapters.js";
 
 let embedBatchCalls = 0;
 let embedBatchInputCalls = 0;
@@ -108,6 +112,18 @@ vi.mock("./embeddings.js", () => {
 });
 
 describe("memory index", () => {
+  it("registers the builtin ollama embedding provider", () => {
+    const adapter = listRegisteredAdapters().find((entry) => entry.id === "ollama");
+
+    expect(adapter).toBeDefined();
+    expect(adapter).toEqual(
+      expect.objectContaining({
+        id: "ollama",
+        defaultModel: DEFAULT_OLLAMA_EMBEDDING_MODEL,
+      }),
+    );
+  });
+
   let fixtureRoot = "";
   let workspaceDir = "";
   let memoryDir = "";
