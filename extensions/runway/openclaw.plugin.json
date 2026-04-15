@@ -1,0 +1,30 @@
+{
+  "id": "runway",
+  "enabledByDefault": true,
+  "providerAuthEnvVars": {
+    "runway": ["RUNWAYML_API_SECRET", "RUNWAY_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "runway",
+      "method": "api-key",
+      "choiceId": "runway-api-key",
+      "choiceLabel": "Runway API key",
+      "groupId": "runway",
+      "groupLabel": "Runway",
+      "groupHint": "API key",
+      "optionKey": "runwayApiKey",
+      "cliFlag": "--runway-api-key",
+      "cliOption": "--runway-api-key <key>",
+      "cliDescription": "Runway API key"
+    }
+  ],
+  "contracts": {
+    "videoGenerationProviders": ["runway"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

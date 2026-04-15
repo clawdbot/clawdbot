@@ -1,0 +1,55 @@
+{
+  "name": "@openclaw/matrix",
+  "version": "2026.4.12",
+  "description": "OpenClaw Matrix channel plugin",
+  "type": "module",
+  "dependencies": {
+    "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
+    "@matrix-org/matrix-sdk-crypto-wasm": "18.0.0",
+    "fake-indexeddb": "^6.2.5",
+    "markdown-it": "14.1.1",
+    "matrix-js-sdk": "41.3.0",
+    "music-metadata": "^11.12.3"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.4.12"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "matrix",
+      "label": "Matrix",
+      "selectionLabel": "Matrix (plugin)",
+      "docsPath": "/channels/matrix",
+      "docsLabel": "matrix",
+      "blurb": "open protocol; install the plugin to enable.",
+      "order": 70,
+      "quickstartAllowFrom": true,
+      "persistedAuthState": {
+        "specifier": "./auth-presence",
+        "exportName": "hasAnyMatrixAuth"
+      }
+    },
+    "install": {
+      "npmSpec": "@openclaw/matrix",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.4.10",
+      "allowInvalidConfigRecovery": true
+    },
+    "bundle": {
+      "stageRuntimeDependencies": true
+    }
+  }
+}

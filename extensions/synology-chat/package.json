@@ -1,0 +1,29 @@
+{
+  "name": "@openclaw/synology-chat",
+  "version": "2026.4.12",
+  "description": "Synology Chat channel plugin for OpenClaw",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "synology-chat",
+      "label": "Synology Chat",
+      "selectionLabel": "Synology Chat (Webhook)",
+      "docsPath": "/channels/synology-chat",
+      "docsLabel": "synology-chat",
+      "blurb": "Connect your Synology NAS Chat to OpenClaw with full agent capabilities.",
+      "order": 90
+    },
+    "install": {
+      "npmSpec": "@openclaw/synology-chat",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.4.10"
+    }
+  }
+}

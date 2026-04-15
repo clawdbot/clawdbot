@@ -1,0 +1,31 @@
+{
+  "id": "mistral",
+  "enabledByDefault": true,
+  "providers": ["mistral"],
+  "providerAuthEnvVars": {
+    "mistral": ["MISTRAL_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "mistral",
+      "method": "api-key",
+      "choiceId": "mistral-api-key",
+      "choiceLabel": "Mistral API key",
+      "groupId": "mistral",
+      "groupLabel": "Mistral AI",
+      "groupHint": "API key",
+      "optionKey": "mistralApiKey",
+      "cliFlag": "--mistral-api-key",
+      "cliOption": "--mistral-api-key <key>",
+      "cliDescription": "Mistral API key"
+    }
+  ],
+  "contracts": {
+    "mediaUnderstandingProviders": ["mistral"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

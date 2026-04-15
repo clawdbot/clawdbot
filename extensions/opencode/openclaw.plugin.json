@@ -1,0 +1,28 @@
+{
+  "id": "opencode",
+  "enabledByDefault": true,
+  "providers": ["opencode"],
+  "providerAuthEnvVars": {
+    "opencode": ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "opencode",
+      "method": "api-key",
+      "choiceId": "opencode-zen",
+      "choiceLabel": "OpenCode Zen catalog",
+      "groupId": "opencode",
+      "groupLabel": "OpenCode",
+      "groupHint": "Shared API key for Zen + Go catalogs",
+      "optionKey": "opencodeZenApiKey",
+      "cliFlag": "--opencode-zen-api-key",
+      "cliOption": "--opencode-zen-api-key <key>",
+      "cliDescription": "OpenCode API key (Zen catalog)"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

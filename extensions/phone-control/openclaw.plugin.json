@@ -1,0 +1,17 @@
+{
+  "id": "phone-control",
+  "enabledByDefault": true,
+  "name": "Phone Control",
+  "description": "Arm/disarm high-risk phone node commands (camera/screen/writes) with an optional auto-expiry.",
+  "commandAliases": [
+    {
+      "name": "phone",
+      "kind": "runtime-slash"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

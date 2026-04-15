@@ -1,0 +1,12 @@
+{
+  "id": "zalo",
+  "channels": ["zalo"],
+  "channelEnvVars": {
+    "zalo": ["ZALO_BOT_TOKEN", "ZALO_WEBHOOK_SECRET"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

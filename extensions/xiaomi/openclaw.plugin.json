@@ -1,0 +1,28 @@
+{
+  "id": "xiaomi",
+  "enabledByDefault": true,
+  "providers": ["xiaomi"],
+  "providerAuthEnvVars": {
+    "xiaomi": ["XIAOMI_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "xiaomi",
+      "method": "api-key",
+      "choiceId": "xiaomi-api-key",
+      "choiceLabel": "Xiaomi API key",
+      "groupId": "xiaomi",
+      "groupLabel": "Xiaomi",
+      "groupHint": "API key",
+      "optionKey": "xiaomiApiKey",
+      "cliFlag": "--xiaomi-api-key",
+      "cliOption": "--xiaomi-api-key <key>",
+      "cliDescription": "Xiaomi API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

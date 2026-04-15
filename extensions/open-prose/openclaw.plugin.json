@@ -1,0 +1,11 @@
+{
+  "id": "open-prose",
+  "name": "OpenProse",
+  "description": "OpenProse VM skill pack with a /prose slash command.",
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

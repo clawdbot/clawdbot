@@ -1,0 +1,204 @@
+# Content Creation Pipeline
+#
+# From idea to published content in one run. Researches a topic in parallel,
+# writes a blog post, refines it through editorial review, and generates
+# social media posts. Watch an entire content operation happen automatically.
+#
+# Usage: Provide a topic and watch the content materialize.
+
+input topic: "The topic to create content about"
+input audience: "Target audience (e.g., 'developers', 'executives', 'general')"
+
+agent researcher:
+  model: opus          # Deep research requires reasoning
+  skills: ["web-search"]
+  prompt: """
+You are a research specialist. For any topic:
+1. Find authoritative sources
+2. Identify key facts and statistics
+3. Note interesting angles and hooks
+4. Cite your sources
+
+Return structured research with citations.
+"""
+
+agent writer:
+  model: opus          # Writing is hard work
+  prompt: """
+You are a skilled technical writer. You write:
+- Clear, engaging prose
+- Well-structured articles with headers
+- Content appropriate for the target audience
+- With a distinctive but professional voice
+
+Avoid jargon unless writing for experts.
+"""
+
+agent editor:
+  model: sonnet
+  persist: true
+  prompt: """
+You are a senior editor. You review content for:
+- Clarity and flow
+- Factual accuracy
+- Engagement and hook strength
+- Appropriate length and structure
+
+Be constructive. Suggest specific improvements.
+"""
+
+agent social-strategist:
+  model: sonnet
+  prompt: """
+You create social media content. For each platform:
+- Twitter/X: Punchy, hooks, threads if needed
+- LinkedIn: Professional, insight-focused
+- Hacker News: Technical, understated, genuine
+
+Match the culture of each platform. Never be cringe.
+"""
+
+# Phase 1: Parallel research from multiple angles
+session "Research phase starting for: {topic}"
+
+parallel:
+  core_research = session: researcher
+    prompt: """
+Deep research on: {topic}
+
+Find:
+- Current state of the art
+- Recent developments (last 6 months)
+- Key players and their positions
+- Statistics and data points
+"""
+
+  competitive_landscape = session: researcher
+    prompt: """
+Competitive/comparative research on: {topic}
+
+Find:
+- Alternative approaches or solutions
+- Pros and cons of different options
+- What experts recommend
+"""
+
+  human_interest = session: researcher
+    prompt: """
+Human interest research on: {topic}
+
+Find:
+- Real-world case studies
+- Success and failure stories
+- Quotes from practitioners
+- Surprising or counterintuitive findings
+"""
+
+# Phase 2: Synthesize research
+let research_synthesis = session "Synthesize all research"
+  prompt: """
+Combine all research into a unified brief:
+1. Key thesis/angle for the article
+2. Supporting evidence ranked by strength
+3. Narrative arc suggestion
+4. Potential hooks and headlines
+
+Target audience: {audience}
+"""
+  context: { core_research, competitive_landscape, human_interest }
+
+# Phase 3: Write first draft
+let draft = session: writer
+  prompt: """
+Write a blog post on: {topic}
+
+Target: {audience}
+Length: 1500-2000 words
+Structure: Hook, context, main points, examples, conclusion
+
+Use the research provided. Cite sources where appropriate.
+"""
+  context: research_synthesis
+
+# Phase 4: Editorial loop
+session: editor
+  prompt: "Beginning editorial review. I'll track revisions."
+
+loop until **the article meets publication standards** (max: 4):
+  let critique = resume: editor
+    prompt: """
+Review this draft critically:
+1. What works well?
+2. What needs improvement?
+3. Specific suggestions (be actionable)
+4. Overall verdict: READY / NEEDS_REVISION
+
+Be demanding but fair.
+"""
+    context: draft
+
+  if **the article needs revision**:
+    draft = session: writer
+      prompt: """
+Revise the article based on editorial feedback.
+Address each point specifically.
+Maintain what's working well.
+"""
+      context: { draft, critique }
+
+# Phase 5: Generate social media variants
+parallel:
+  twitter_content = session: social-strategist
+    prompt: """
+Create Twitter/X content to promote this article:
+1. Main announcement tweet (punchy, with hook)
+2. 5-tweet thread extracting key insights
+3. 3 standalone insight tweets for later
+
+Include placeholder for article link.
+"""
+    context: draft
+
+  linkedin_post = session: social-strategist
+    prompt: """
+Create a LinkedIn post for this article:
+- Professional but not boring
+- Lead with insight, not announcement
+- 150-300 words
+- End with genuine question for engagement
+"""
+    context: draft
+
+  hn_submission = session: social-strategist
+    prompt: """
+Create Hacker News submission:
+- Title: factual, not clickbait, <80 chars
+- Suggested comment: genuine, adds context, not promotional
+
+HN culture: technical, skeptical, hates marketing speak.
+"""
+    context: draft
+
+# Phase 6: Package everything
+output article = draft
+output social = { twitter_content, linkedin_post, hn_submission }
+
+resume: editor
+  prompt: """
+Content Pipeline Complete!
+
+Final package:
+1. Article: {draft length} words, {revision count} revisions
+2. Twitter: thread + standalone tweets
+3. LinkedIn: professional post
+4. HN: submission ready
+
+Recommended publication order:
+1. Publish article
+2. HN submission (wait for feedback)
+3. Twitter thread
+4. LinkedIn (next business day AM)
+
+All files saved to ./content-output/
+"""
+  context: { draft, twitter_content, linkedin_post, hn_submission }

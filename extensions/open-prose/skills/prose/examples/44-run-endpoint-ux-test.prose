@@ -1,0 +1,261 @@
+# /run Endpoint UX Test
+#
+# A multi-agent observation protocol for qualitative UX testing of the
+# OpenProse /run endpoint. Two concurrent observers watch the execution
+# from different perspectives and synthesize feedback.
+#
+# Unlike correctness testing, this focuses on user experience quality:
+# - How does the execution FEEL to a user?
+# - What's confusing, surprising, or delightful?
+# - Where are the rough edges?
+#
+# Key patterns demonstrated:
+# - Parallel observers with different responsibilities
+# - Persistent agents with memory for continuous synthesis
+# - Loop-based polling with timing control
+# - Final synthesis across multiple observation streams
+
+input test_program: "The OpenProse program to execute for testing"
+input api_url: "API base URL (e.g., https://api.openprose.com or http://localhost:3001)"
+input auth_token: "Bearer token for authentication"
+
+# ============================================================================
+# Agent Definitions: The Observation Team
+# ============================================================================
+
+# WebSocket Observer: Watches the real-time execution stream
+agent ws_observer:
+  model: opus
+  persist: true
+  prompt: """You are a UX researcher observing an OpenProse program execution.
+
+Your job is to watch the WebSocket execution stream and evaluate the experience
+from a USER's perspective - not as an engineer checking correctness.
+
+Focus on:
+- Latency and responsiveness (does it FEEL fast?)
+- Clarity of status transitions (does the user know what's happening?)
+- Quality of streamed events (are they informative? overwhelming? sparse?)
+- Error messages (helpful or cryptic?)
+- Overall flow (smooth or jarring?)
+
+Log your raw observations, then periodically synthesize into user feedback.
+Think: "If I were a first-time user, what would I think right now?"
+"""
+
+# File Explorer Monitor: Watches the filesystem during execution
+agent file_observer:
+  model: opus
+  persist: true
+  prompt: """You are a UX researcher monitoring the file system during execution.
+
+Your job is to observe how the filesystem changes as a program runs, evaluating
+whether the state management would make sense to a user browsing files.
+
+Focus on:
+- Directory structure clarity (can a user understand what's where?)
+- File naming conventions (self-documenting or cryptic?)
+- State file contents (readable? useful for debugging?)
+- Timing of file creation/modification (predictable?)
+- What a file browser UI should show
+
+You will poll periodically and note changes between snapshots.
+"""
+
+# Synthesis Agent: Combines observations into action items
+agent synthesizer:
+  model: opus
+  prompt: """You are a senior UX researcher synthesizing observations from
+multiple sources into prioritized, actionable feedback.
+
+Your output should be:
+1. Correlated findings (where did both observers notice the same thing?)
+2. Prioritized action items (high/medium/low)
+3. Specific quotes/evidence supporting each finding
+4. Recommendations that are concrete and implementable
+
+Be direct. "The loading state is confusing" not "Consider potentially improving..."
+"""
+
+# ============================================================================
+# Block Definitions: Observation Operations
+# ============================================================================
+
+# Initialize the execution and get connection details
+block setup_execution(program, api_url, token):
+  let execution_info = session "Execute POST /run"
+    prompt: """Make a POST request to {api_url}/run with:
+- Header: Authorization: Bearer {token}
+- Header: Content-Type: application/json
+- Body: {"program": <the program below>}
+
+Program to execute:
+```
+{program}
+```
+
+Return the response JSON containing executionId, environmentId, and wsUrl.
+Also note the response time and any issues with the request."""
+    permissions:
+      network: ["{api_url}/*"]
+
+  output execution_info = execution_info
+
+# WebSocket observation loop - runs until execution completes
+block observe_websocket(ws_url, token, program):
+  let connection = session: ws_observer
+    prompt: """Connect to the WebSocket at:
+{ws_url}&token={token}
+
+Once connected, send the execute message:
+{"type":"execute","program":<the program>}
+
+Program:
+```
+{program}
+```
+
+Log your initial connection experience:
+- How long did connection take?
+- Any handshake issues?
+- First message received?"""
+
+  loop until **execution completed (received status: completed/failed/aborted)**:
+    resume: ws_observer
+      prompt: """Continue observing the WebSocket stream.
+
+Log each message you receive with:
+- Timestamp
+- Message type
+- Key content
+- Your interpretation as a user
+
+After every 3-5 messages, add a synthesis entry:
+- What would a user be thinking right now?
+- Positive observations
+- Concerning observations"""
+
+  # Final synthesis from this observer
+  output ws_feedback = resume: ws_observer
+    prompt: """The execution has completed. Write your final assessment:
+
+1. Total duration and event count
+2. Status transitions observed
+3. What worked well from a UX perspective
+4. Pain points and confusion
+5. Top 3 recommendations"""
+
+# File explorer polling loop - checks every ~10 seconds
+block observe_filesystem(env_id, api_url, token):
+  let initial_tree = session: file_observer
+    prompt: """Fetch the initial file tree:
+GET {api_url}/environments/{env_id}/files/tree?depth=3
+Authorization: Bearer {token}
+
+Log what you see:
+- Directory structure
+- Any existing .prose/ state
+- Baseline for comparison"""
+    permissions:
+      network: ["{api_url}/*"]
+
+  let snapshot_count = 0
+
+  loop until **websocket observer signals completion** (max: 30):
+    let snapshot_count = snapshot_count + 1
+
+    resume: file_observer
+      prompt: """Snapshot #{snapshot_count}: Fetch the current file tree and compare to previous.
+
+GET {api_url}/environments/{env_id}/files/tree?depth=3
+
+Log:
+- What's NEW since last snapshot
+- What's MODIFIED since last snapshot
+- Any interesting files to read
+- Your interpretation of what the execution is doing
+
+If you see interesting state files (.prose/runs/*/state.md, bindings/, etc.),
+read them and comment on their clarity.
+
+Note: This is snapshot #{snapshot_count}. Aim for ~10 second intervals."""
+      permissions:
+        network: ["{api_url}/*"]
+
+  # Final synthesis from this observer
+  output file_feedback = resume: file_observer
+    prompt: """The execution has completed. Write your final filesystem assessment:
+
+1. Total snapshots taken
+2. Directories and files created during execution
+3. State file clarity (could a user understand them?)
+4. What the file browser UI should highlight
+5. Top 3 recommendations"""
+
+# ============================================================================
+# Main Workflow: The UX Test
+# ============================================================================
+
+# Phase 1: Setup
+# --------------
+# Execute the test program via POST /run
+
+let exec = do setup_execution(test_program, api_url, auth_token)
+
+session "Log test configuration"
+  prompt: """Create a test log entry with:
+- Test started: (current timestamp)
+- API URL: {api_url}
+- Execution ID: (from exec)
+- Environment ID: (from exec)
+- WebSocket URL: (from exec)
+- Program being tested: (first 100 chars of test_program)"""
+  context: exec
+
+# Phase 2: Parallel Observation
+# -----------------------------
+# Launch both observers concurrently
+
+parallel:
+  ws_results = do observe_websocket(exec.wsUrl, auth_token, test_program)
+  file_results = do observe_filesystem(exec.environmentId, api_url, auth_token)
+
+# Phase 3: Synthesis
+# ------------------
+# Combine observations into prioritized action items
+
+output action_items = session: synthesizer
+  prompt: """Synthesize the observations from both agents into a unified UX assessment.
+
+WebSocket Observer Findings:
+{ws_results}
+
+File Explorer Observer Findings:
+{file_results}
+
+Create a final report with:
+
+## Test Summary
+- Duration, event count, snapshot count
+- Overall UX grade (A-F)
+
+## Correlated Findings
+(Where did BOTH observers notice the same thing?)
+
+## Action Items
+
+### High Priority
+(Issues that significantly harm user experience)
+
+### Medium Priority
+(Noticeable issues that should be addressed)
+
+### Low Priority / Nice-to-Have
+(Polish items)
+
+## Evidence
+(Specific quotes and observations supporting each finding)
+
+## Recommendations
+(Concrete, implementable suggestions)"""
+  context: { ws_results, file_results, exec }

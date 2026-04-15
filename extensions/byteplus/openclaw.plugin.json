@@ -1,0 +1,34 @@
+{
+  "id": "byteplus",
+  "enabledByDefault": true,
+  "providers": ["byteplus", "byteplus-plan"],
+  "providerAuthEnvVars": {
+    "byteplus": ["BYTEPLUS_API_KEY"]
+  },
+  "providerAuthAliases": {
+    "byteplus-plan": "byteplus"
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "byteplus",
+      "method": "api-key",
+      "choiceId": "byteplus-api-key",
+      "choiceLabel": "BytePlus API key",
+      "groupId": "byteplus",
+      "groupLabel": "BytePlus",
+      "groupHint": "API key",
+      "optionKey": "byteplusApiKey",
+      "cliFlag": "--byteplus-api-key",
+      "cliOption": "--byteplus-api-key <key>",
+      "cliDescription": "BytePlus API key"
+    }
+  ],
+  "contracts": {
+    "videoGenerationProviders": ["byteplus"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -1,0 +1,55 @@
+import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
+import { z } from "openclaw/plugin-sdk/zod";
+
+const DmPolicySchema = z.enum(["open", "allowlist", "pairing", "disabled"]);
+const GroupPolicySchema = z.enum(["open", "allowlist", "disabled"]);
+const ThreadBindingsSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    idleHours: z.number().optional(),
+    maxAgeHours: z.number().optional(),
+    spawnSubagentSessions: z.boolean().optional(),
+    spawnAcpSessions: z.boolean().optional(),
+  })
+  .strict();
+
+const LineCommonConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  channelAccessToken: z.string().optional(),
+  channelSecret: z.string().optional(),
+  tokenFile: z.string().optional(),
+  secretFile: z.string().optional(),
+  name: z.string().optional(),
+  allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+  groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+  dmPolicy: DmPolicySchema.optional().default("pairing"),
+  groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+  responsePrefix: z.string().optional(),
+  mediaMaxMb: z.number().optional(),
+  webhookPath: z.string().optional(),
+  threadBindings: ThreadBindingsSchema.optional(),
+});
+
+const LineGroupConfigSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    requireMention: z.boolean().optional(),
+    systemPrompt: z.string().optional(),
+    skills: z.array(z.string()).optional(),
+  })
+  .strict();
+
+const LineAccountConfigSchema = LineCommonConfigSchema.extend({
+  groups: z.record(z.string(), LineGroupConfigSchema.optional()).optional(),
+}).strict();
+
+export const LineConfigSchema = LineCommonConfigSchema.extend({
+  accounts: z.record(z.string(), LineAccountConfigSchema.optional()).optional(),
+  defaultAccount: z.string().optional(),
+  groups: z.record(z.string(), LineGroupConfigSchema.optional()).optional(),
+}).strict();
+
+export const LineChannelConfigSchema = buildChannelConfigSchema(LineConfigSchema);
+
+export type LineConfigSchemaType = z.infer<typeof LineConfigSchema>;

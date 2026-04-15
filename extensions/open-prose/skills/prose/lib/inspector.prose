@@ -1,0 +1,196 @@
+# Post-Run Inspector
+# Analyzes completed .prose runs for runtime fidelity and task effectiveness
+#
+# Usage:
+#   prose run @openprose/lib/inspector
+#
+# Inputs:
+#   run_path: Path to the run to inspect (e.g., .prose/runs/20260119-100000-abc123)
+#   depth: light | deep
+#   target: vm | task | all
+#
+# Compounding: Each inspection builds on prior inspections via persistent index agent.
+# The index agent uses `persist: user` so inspection history spans all projects.
+
+input run_path: "Path to the run to inspect (e.g., .prose/runs/20260119-100000-abc123)"
+input depth: "Inspection depth: light or deep"
+input target: "Evaluation target: vm, task, or all"
+
+# ============================================================
+# Agents
+# ============================================================
+
+agent index:
+  model: haiku
+  persist: user
+  prompt: """
+    You maintain the inspection registry across all projects.
+    Track: target_run_id, depth, target, timestamp, verdict.
+    Return JSON when queried. Store compactly.
+  """
+
+agent extractor:
+  model: sonnet
+  prompt: """
+    You extract structured data from .prose run artifacts.
+    Read state.md, bindings/, and logs carefully.
+    Return clean JSON.
+  """
+
+agent evaluator:
+  model: opus
+  prompt: """
+    You evaluate .prose runs with intelligent judgment.
+    Rate 1-10 with specific rationale. Be concrete.
+  """
+
+agent synthesizer:
+  model: sonnet
+  prompt: """
+    You produce clear reports in requested formats.
+  """
+
+# ============================================================
+# Phase 0: Check Prior Work
+# ============================================================
+
+let prior = resume: index
+  prompt: """
+    Any prior inspections for: {run_path}?
+    Return JSON: { "inspections": [...], "has_light": bool, "has_deep": bool }
+  """
+
+# ============================================================
+# Phase 1: Extraction
+# ============================================================
+
+let extraction = session: extractor
+  prompt: """
+    Extract from run at: {run_path}
+    Depth: {depth}
+    Prior work: {prior}
+
+    ALWAYS get:
+    - run_id (from path)
+    - completed (did state.md show completion?)
+    - error_count (failures in state.md)
+    - binding_names (list all bindings/)
+    - output_names (bindings with kind: output)
+
+    IF depth=deep AND no prior deep inspection:
+    - program_source (contents of program.prose)
+    - execution_summary (key statements from state.md)
+    - binding_previews (first 300 chars of each binding)
+
+    IF prior deep exists, skip deep extraction and note "using cached".
+
+    Return JSON.
+  """
+  context: prior
+
+# ============================================================
+# Phase 2: Evaluation
+# ============================================================
+
+let evaluation = session: evaluator
+  prompt: """
+    Evaluate this run.
+
+    Target: {target}
+    Depth: {depth}
+    Data: {extraction}
+    Prior findings: {prior}
+
+    FOR vm (if target=vm or all):
+    - completion (1-10): Clean finish?
+    - binding_integrity (1-10): Expected outputs exist with content?
+    - vm_verdict: pass/partial/fail
+    - vm_notes: 1-2 sentences
+
+    FOR task (if target=task or all):
+    - output_substance (1-10): Outputs look real, not empty/error?
+    - goal_alignment (1-10): Based on program name, does output fit?
+    - task_verdict: pass/partial/fail
+    - task_notes: 1-2 sentences
+
+    IF depth=deep, add:
+    - fidelity (1-10): Execution trace matches program structure?
+    - efficiency (1-10): Reasonable number of steps for the job?
+
+    Return JSON with all applicable fields.
+  """
+  context: extraction
+
+# ============================================================
+# Phase 3: Synthesis
+# ============================================================
+
+parallel:
+  verdict = session: synthesizer
+    prompt: """
+      Machine-readable verdict as JSON:
+      {
+        "run_id": "...",
+        "depth": "{depth}",
+        "target": "{target}",
+        "vm": { "verdict": "...", "scores": {...} },
+        "task": { "verdict": "...", "scores": {...} },
+        "flags": []
+      }
+
+      Data: {evaluation}
+    """
+    context: evaluation
+
+  diagram = session: synthesizer
+    prompt: """
+      Simple mermaid flowchart of the run.
+      Show: inputs -> key steps -> outputs.
+      Use execution_summary if available, else infer from bindings.
+      Output only the mermaid code.
+
+      Data: {extraction}
+    """
+    context: extraction
+
+  report = session: synthesizer
+    prompt: """
+      2-paragraph markdown summary:
+      1. What was inspected, key metrics
+      2. Findings and any recommendations
+
+      Data: {extraction}, {evaluation}
+    """
+    context: { extraction, evaluation }
+
+# ============================================================
+# Phase 4: Register
+# ============================================================
+
+resume: index
+  prompt: """
+    Register this inspection:
+    run_path: {run_path}
+    depth: {depth}
+    target: {target}
+    verdict: {verdict}
+
+    Update your memory with this entry.
+  """
+  context: verdict
+
+# ============================================================
+# Output
+# ============================================================
+
+output inspection = session: synthesizer
+  prompt: """
+    Combine into final output structure:
+
+    verdict_json: {verdict}
+    mermaid: {diagram}
+    summary: {report}
+
+    Return as JSON with these three fields.
+  """
+  context: { verdict, diagram, report }

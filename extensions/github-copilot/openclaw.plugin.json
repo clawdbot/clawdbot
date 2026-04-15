@@ -1,0 +1,43 @@
+{
+  "id": "github-copilot",
+  "enabledByDefault": true,
+  "providers": ["github-copilot"],
+  "providerAuthEnvVars": {
+    "github-copilot": ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "github-copilot",
+      "method": "device",
+      "choiceId": "github-copilot",
+      "choiceLabel": "GitHub Copilot",
+      "choiceHint": "Device login with your GitHub account",
+      "groupId": "copilot",
+      "groupLabel": "Copilot",
+      "groupHint": "GitHub + local proxy"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "discovery": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "discovery": {
+      "label": "Model Discovery",
+      "help": "Plugin-owned controls for GitHub Copilot model auto-discovery."
+    },
+    "discovery.enabled": {
+      "label": "Enable Discovery",
+      "help": "When false, OpenClaw keeps the GitHub Copilot plugin available but skips implicit startup discovery from ambient Copilot credentials."
+    }
+  }
+}

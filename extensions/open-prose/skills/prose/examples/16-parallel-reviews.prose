@@ -1,0 +1,19 @@
+# Parallel Code Reviews
+# Run multiple specialized reviews concurrently
+
+agent reviewer:
+  model: sonnet
+  prompt: "You are an expert code reviewer"
+
+# Run all reviews in parallel
+parallel:
+  security = session: reviewer
+    prompt: "Review for security vulnerabilities"
+  perf = session: reviewer
+    prompt: "Review for performance issues"
+  style = session: reviewer
+    prompt: "Review for code style and readability"
+
+# Synthesize all review results
+session "Create unified code review report"
+  context: { security, perf, style }

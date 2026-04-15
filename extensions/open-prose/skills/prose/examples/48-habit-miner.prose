@@ -1,0 +1,445 @@
+# Habit Miner
+# Excavates your AI session history to find recurring workflows worth automating
+# Scans .claude, .opencode, .cursor, etc. — discovers patterns, writes .prose programs
+#
+# BACKEND: Run with sqlite+ or postgres for incremental processing across runs
+#   prose run 48-habit-miner.prose --backend sqlite+
+#
+# KEY VM FEATURES USED:
+# - persist: true on miner — remembers patterns across runs, watches them mature
+# - resume: — incremental processing, only analyzes new logs since last run
+# - recursive blocks — handles arbitrarily large log corpora
+# - reference-based context — agents read from storage, not everything in memory
+
+input mode: "Mode: 'full' (analyze everything), 'incremental' (new logs only), 'check' (see what's new)"
+input min_frequency: "Minimum times a pattern must appear to qualify (default: 3)"
+input focus: "Optional: filter to specific area (e.g., 'git', 'testing', 'refactoring')"
+
+# ============================================================
+# Agents
+# ============================================================
+
+agent scout:
+  model: sonnet
+  prompt: """
+    You discover AI assistant log files on the user's system.
+
+    Check common locations:
+    - ~/.claude/ (Claude Code)
+    - ~/.opencode/ (OpenCode)
+    - ~/.cursor/ (Cursor)
+    - ~/.continue/ (Continue)
+    - ~/.aider/ (Aider)
+    - ~/.copilot/ (GitHub Copilot)
+    - ~/.codeium/ (Codeium)
+    - ~/.tabnine/ (Tabnine)
+    - ~/.config/claude-code/
+    - ~/.config/github-copilot/
+    - ~/.local/share/*/
+
+    For each location found, report:
+    - Path
+    - Log format (jsonl, sqlite, json, etc.)
+    - Approximate size
+    - Number of sessions/files
+    - Date range (oldest to newest)
+    - NEW since last scan (if incremental)
+
+    Be thorough but respect permissions. Don't read content yet, just inventory.
+  """
+  permissions:
+    bash: allow
+    read: ["~/.claude/**", "~/.opencode/**", "~/.cursor/**", "~/.continue/**",
+           "~/.aider/**", "~/.copilot/**", "~/.codeium/**", "~/.tabnine/**",
+           "~/.config/**", "~/.local/share/**"]
+
+agent parser:
+  model: sonnet
+  prompt: """
+    You parse AI assistant log files into normalized conversation format.
+
+    Handle formats:
+    - JSONL: one JSON object per line (Claude Code, many others)
+    - SQLite: query conversation tables
+    - JSON: array of messages or nested structure
+    - Markdown: conversation exports
+
+    Extract for each session:
+    - Session ID / timestamp
+    - User messages (the requests)
+    - Assistant actions (tools used, files modified)
+    - Outcome (success/failure indicators)
+
+    Normalize to common schema regardless of source format.
+    Track file modification times for incremental processing.
+  """
+  permissions:
+    bash: allow
+    read: ["~/.claude/**", "~/.opencode/**", "~/.cursor/**", "~/.continue/**",
+           "~/.aider/**", "~/.copilot/**", "~/.codeium/**", "~/.tabnine/**"]
+
+agent miner:
+  model: opus
+  persist: true  # <-- KEY: Remembers patterns across runs
+  prompt: """
+    You find and track patterns in conversation histories over time.
+
+    Your memory contains patterns from previous runs. Each pattern has:
+    - name: descriptive identifier
+    - maturity: emerging (3-5 hits) → established (6-15) → proven (16+)
+    - examples: representative instances
+    - last_seen: when pattern last appeared
+    - trend: growing / stable / declining
+
+    On each run:
+    1. Load your memory of known patterns
+    2. Process new sessions
+    3. Update pattern frequencies and maturity
+    4. Identify NEW emerging patterns
+    5. Note patterns that are declining (not seen recently)
+
+    Patterns MATURE over time. Don't rush to automate emerging patterns.
+    Wait until they're established before recommending automation.
+  """
+
+agent qualifier:
+  model: opus
+  prompt: """
+    You determine which patterns are ready for automation.
+
+    Consider MATURITY (from miner's memory):
+    - emerging: Too early. Note it, but don't automate yet.
+    - established: Good candidate. Enough data to generalize.
+    - proven: Strong candidate. Battle-tested pattern.
+
+    Also consider:
+    - COMPLEXITY: Multi-step, not trivial
+    - CONSISTENCY: Similar enough across instances
+    - AUTOMATABLE: Not too context-dependent
+    - VALUE: Would save meaningful time/effort
+
+    Reject patterns that are:
+    - Still emerging (wait for more data)
+    - Too simple (just run a single command)
+    - Too variable (every instance is different)
+  """
+
+agent author:
+  model: opus
+  prompt: """
+    You write .prose programs from mature workflow patterns.
+
+    For each qualified pattern:
+    - Identify the inputs (what varies between instances)
+    - Identify the constants (what's always the same)
+    - Design appropriate agents for the workflow
+    - Structure phases logically
+    - Add error handling where needed
+    - Include user checkpoints at decision points
+
+    Write idiomatic OpenProse. Follow existing example patterns.
+    Reference the pattern's maturity level in a header comment.
+  """
+  permissions:
+    write: ["**/*.prose"]
+
+agent organizer:
+  model: sonnet
+  prompt: """
+    You organize generated .prose programs into a coherent collection.
+
+    Tasks:
+    - Group related programs by domain (git, testing, docs, etc.)
+    - Suggest directory structure
+    - Create an index/README
+    - Identify programs that could share blocks or agents
+    - Note potential compositions (program A often followed by B)
+  """
+  permissions:
+    write: ["**/*.md", "**/*.prose"]
+
+# ============================================================
+# Recursive block for processing large log corpora
+# ============================================================
+
+block process_logs(sources, depth):
+  # Base case: small enough to process directly
+  if **fewer than 50 sessions** or depth <= 0:
+    output sources | pmap:
+      session: parser
+        prompt: "Parse these logs into normalized format"
+        context: item
+
+  # Recursive case: chunk and fan out
+  let chunks = session "Split sources into ~25 session batches"
+    context: sources
+
+  let results = []
+  parallel for chunk in chunks:
+    let chunk_result = do process_logs(chunk, depth - 1)
+    results = results + chunk_result
+
+  output results
+
+# ============================================================
+# Phase 0: Discovery
+# ============================================================
+
+let inventory = session: scout
+  prompt: """
+    Scan the system for AI assistant log files.
+    Mode: {mode}
+
+    Check all common locations. For each found, report:
+    - Full path
+    - Format detected
+    - Size (human readable)
+    - Session/file count
+    - Date range
+    - If incremental: how many NEW since last scan
+
+    Return a structured inventory.
+  """
+
+# For "check" mode, just show what's available and exit
+if **mode is check**:
+  output result = {
+    status: "check-complete",
+    inventory: inventory,
+    hint: "Run with mode:'incremental' to process new logs, or mode:'full' for everything"
+  }
+
+input source_selection: """
+  ## AI Assistant Logs Found
+
+  {inventory}
+
+  ---
+
+  Mode: {mode}
+
+  Select which sources to analyze:
+  - List the paths you want included
+  - Or say "all" to analyze everything found
+  - Or say "none" to cancel
+"""
+
+if **user selected none or wants to cancel**:
+  output result = {
+    status: "cancelled",
+    inventory: inventory
+  }
+  throw "User cancelled - no sources selected"
+
+let selected_sources = session: scout
+  prompt: "Parse user's selection into a list of paths to analyze"
+  context: { inventory, source_selection, mode }
+
+# ============================================================
+# Phase 1: Parsing (with recursive chunking for scale)
+# ============================================================
+
+let parsed_sessions = do process_logs(selected_sources, 3)
+
+let session_count = session "Count total sessions parsed"
+  context: parsed_sessions
+
+# ============================================================
+# Phase 2: Mining (with persistent memory)
+# ============================================================
+
+# Resume the miner with its accumulated pattern knowledge
+let pattern_update = resume: miner
+  prompt: """
+    Process these new sessions against your pattern memory.
+
+    1. Load your known patterns (with maturity levels)
+    2. Match new sessions to existing patterns OR identify new ones
+    3. Update frequencies, maturity levels, last_seen dates
+    4. Report:
+       - Patterns that MATURED (crossed a threshold)
+       - NEW patterns emerging
+       - Patterns DECLINING (not seen in a while)
+       - Current state of all tracked patterns
+
+    Focus area (if specified): {focus}
+  """
+  context: { parsed_sessions, focus }
+
+# ============================================================
+# Phase 3: Qualification
+# ============================================================
+
+let qualified = session: qualifier
+  prompt: """
+    Review the miner's pattern update. Identify patterns ready for automation.
+
+    Minimum frequency threshold: {min_frequency}
+
+    PRIORITIZE:
+    1. Patterns that just reached "established" or "proven" maturity
+    2. Proven patterns not yet automated
+    3. High-value patterns even if just established
+
+    SKIP:
+    - Emerging patterns (let them mature)
+    - Already-automated patterns (unless significantly evolved)
+    - Declining patterns (might be obsolete)
+
+    Return ranked list with reasoning.
+  """
+  context: { pattern_update, min_frequency }
+
+if **no patterns ready for automation**:
+  output result = {
+    status: "no-new-automations",
+    sessions_analyzed: session_count,
+    pattern_update: pattern_update,
+    message: "Patterns are still maturing. Run again later."
+  }
+
+# ============================================================
+# Phase 4: User Checkpoint
+# ============================================================
+
+input pattern_selection: """
+  ## Patterns Ready for Automation
+
+  Analyzed {session_count} sessions.
+
+  Pattern Update:
+  {pattern_update}
+
+  Ready for automation:
+  {qualified}
+
+  ---
+
+  Which patterns should I write .prose programs for?
+  - List by name or number
+  - Or say "all" for everything qualified
+  - Or say "none" to let patterns mature further
+
+  You can also refine any pattern description before I write code.
+"""
+
+if **user wants to wait for more maturity**:
+  output result = {
+    status: "deferred",
+    sessions_analyzed: session_count,
+    pattern_update: pattern_update,
+    qualified: qualified
+  }
+
+let patterns_to_automate = session: qualifier
+  prompt: "Parse user selection into final list of patterns to automate"
+  context: { qualified, pattern_selection }
+
+# ============================================================
+# Phase 5: Program Generation
+# ============================================================
+
+let programs = patterns_to_automate | map:
+  session: author
+    prompt: """
+      Write a .prose program for this pattern.
+
+      Pattern maturity: {pattern.maturity}
+      Times observed: {pattern.frequency}
+      Representative examples: {pattern.examples}
+
+      The program should:
+      - Parameterize what varies between instances
+      - Hardcode what's always the same
+      - Use appropriate agents for distinct roles
+      - Include error handling
+      - Add user checkpoints at decision points
+
+      Include a header comment noting:
+      - Pattern maturity level
+      - Number of observations it's based on
+      - Date generated
+    """
+    context: item
+
+# ============================================================
+# Phase 6: Organization
+# ============================================================
+
+let organized = session: organizer
+  prompt: """
+    Organize the generated programs.
+
+    Tasks:
+    1. Group by domain (git, testing, docs, refactoring, etc.)
+    2. Suggest directory structure
+    3. Create an index README with:
+       - Program name and one-line description
+       - Pattern maturity (established/proven)
+       - When to use it
+       - Example invocation
+    4. Identify shared patterns that could be extracted
+    5. Note programs that often chain together
+  """
+  context: programs
+
+# ============================================================
+# Phase 7: Output Location
+# ============================================================
+
+input output_location: """
+  ## Generated Programs
+
+  {organized}
+
+  ---
+
+  Where should I write these programs?
+
+  Options:
+  - A directory path (e.g., ~/my-workflows/)
+  - "preview" to just show them without writing
+"""
+
+if **user wants preview only**:
+  output result = {
+    status: "preview",
+    sessions_analyzed: session_count,
+    pattern_update: pattern_update,
+    qualified: qualified,
+    programs: programs,
+    organization: organized
+  }
+
+let written = session: organizer
+  prompt: "Write all programs to the specified location with proper structure"
+  context: { programs, organized, output_location }
+  permissions:
+    write: ["**/*.prose", "**/*.md"]
+
+# ============================================================
+# Output
+# ============================================================
+
+output result = {
+  status: "complete",
+
+  # Discovery
+  sources_scanned: inventory,
+  sources_analyzed: selected_sources,
+
+  # Analysis
+  sessions_analyzed: session_count,
+  pattern_update: pattern_update,
+
+  # Qualification
+  patterns_qualified: qualified,
+  patterns_automated: patterns_to_automate,
+
+  # Generation
+  programs_written: written,
+  organization: organized,
+
+  # For next run
+  next_step: "Run again with mode:'incremental' to process new logs and mature patterns"
+}

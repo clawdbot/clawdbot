@@ -1,0 +1,8 @@
+{
+  "id": "qa-lab",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

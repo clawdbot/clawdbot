@@ -1,0 +1,215 @@
+# Calibrator
+# Validates that lightweight evaluations are reliable proxies for deep evaluations
+#
+# Usage:
+#   prose run @openprose/lib/calibrator
+#
+# Purpose:
+#   Run both light and deep inspections on the same runs, compare results,
+#   and build confidence (or identify gaps) in light evaluations.
+#
+# Inputs:
+#   run_paths: Paths to runs to calibrate on (comma-separated or glob)
+#   sample_size: How many runs to sample (if more available)
+#
+# Outputs:
+#   - Agreement rate between light and deep
+#   - Cases where they disagree
+#   - Recommendations for improving light evaluation
+
+input run_paths: "Paths to runs (comma-separated, or 'recent' for latest)"
+input sample_size: "Max runs to analyze (default: 10)"
+
+# ============================================================
+# Agents
+# ============================================================
+
+agent sampler:
+  model: sonnet
+  prompt: """
+    You select runs for calibration analysis.
+    Prefer diverse runs: different programs, outcomes, sizes.
+  """
+
+agent comparator:
+  model: opus
+  prompt: """
+    You compare light vs deep evaluation results with nuance.
+    Identify agreement, disagreement, and edge cases.
+  """
+
+agent statistician:
+  model: sonnet
+  prompt: """
+    You compute statistics and confidence intervals.
+  """
+
+agent advisor:
+  model: opus
+  prompt: """
+    You recommend improvements to evaluation criteria.
+  """
+
+# ============================================================
+# Phase 1: Select Runs
+# ============================================================
+
+let selected_runs = session: sampler
+  prompt: """
+    Select runs for calibration.
+
+    Input: {run_paths}
+    Sample size: {sample_size}
+
+    If run_paths is "recent", find recent runs in .prose/runs/
+    If specific paths, use those.
+
+    Select a diverse sample:
+    - Different programs if possible
+    - Mix of successful and partial/failed if available
+    - Different sizes (small vs large runs)
+
+    Return list of run paths.
+  """
+
+# ============================================================
+# Phase 2: Run Both Inspection Depths
+# ============================================================
+
+let calibration_data = selected_runs | map:
+  # Run light and deep sequentially on each (can't parallel same run)
+  let light = session "Light inspection"
+    prompt: """
+      Run a LIGHT inspection on: {item}
+
+      Evaluate quickly:
+      - completion: did it finish cleanly?
+      - binding_integrity: do expected outputs exist?
+      - output_substance: do outputs have real content?
+      - goal_alignment: does output match program purpose?
+
+      Score each 1-10, give verdicts (pass/partial/fail).
+      Return JSON.
+    """
+
+  let deep = session "Deep inspection"
+    prompt: """
+      Run a DEEP inspection on: {item}
+
+      Evaluate thoroughly:
+      - Read the full program source
+      - Trace execution step by step
+      - Check each binding's content
+      - Evaluate output quality in detail
+      - Assess fidelity (did VM follow program correctly?)
+      - Assess efficiency (reasonable steps for the job?)
+
+      Score each dimension 1-10, give verdicts.
+      Return JSON.
+    """
+    context: light  # Deep can see light's assessment
+
+  session "Package results"
+    prompt: """
+      Package the light and deep inspection results.
+
+      Run: {item}
+      Light: {light}
+      Deep: {deep}
+
+      Return:
+      {
+        "run_path": "...",
+        "light": { verdicts, scores },
+        "deep": { verdicts, scores },
+        "agreement": {
+          "vm_verdict": true/false,
+          "task_verdict": true/false,
+          "score_delta": { ... }
+        }
+      }
+    """
+    context: { light, deep }
+
+# ============================================================
+# Phase 3: Statistical Analysis
+# ============================================================
+
+let statistics = session: statistician
+  prompt: """
+    Compute calibration statistics.
+
+    Data: {calibration_data}
+
+    Calculate:
+    - Overall agreement rate (how often do light and deep agree?)
+    - Agreement by verdict type (vm vs task)
+    - Score correlation (do light scores predict deep scores?)
+    - Disagreement patterns (when do they diverge?)
+
+    Return:
+    {
+      "sample_size": N,
+      "agreement_rate": { overall, vm, task },
+      "score_correlation": { ... },
+      "disagreements": [ { run, light_said, deep_said, reason } ],
+      "confidence": "high" | "medium" | "low"
+    }
+  """
+  context: calibration_data
+
+# ============================================================
+# Phase 4: Recommendations
+# ============================================================
+
+let recommendations = session: advisor
+  prompt: """
+    Based on calibration results, recommend improvements.
+
+    Statistics: {statistics}
+    Raw data: {calibration_data}
+
+    If agreement is high (>90%):
+    - Light evaluation is reliable
+    - Note any edge cases to watch
+
+    If agreement is medium (70-90%):
+    - Identify patterns in disagreements
+    - Suggest criteria adjustments
+
+    If agreement is low (<70%):
+    - Light evaluation needs work
+    - Specific recommendations for improvement
+
+    Return:
+    {
+      "reliability_verdict": "reliable" | "mostly_reliable" | "needs_work",
+      "key_findings": [...],
+      "recommendations": [
+        { "priority": 1, "action": "...", "rationale": "..." }
+      ]
+    }
+  """
+  context: { statistics, calibration_data }
+
+# ============================================================
+# Output
+# ============================================================
+
+output report = session "Format report"
+  prompt: """
+    Format calibration results as a report.
+
+    Statistics: {statistics}
+    Recommendations: {recommendations}
+
+    Include:
+    1. Summary: Is light evaluation reliable?
+    2. Agreement rates (table)
+    3. Disagreement cases (if any)
+    4. Recommendations
+    5. Confidence level in these results
+
+    Format as markdown.
+  """
+  context: { statistics, recommendations, calibration_data }
