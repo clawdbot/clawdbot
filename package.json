@@ -90,6 +90,10 @@
       "types": "./dist/plugin-sdk/config-runtime.d.ts",
       "default": "./dist/plugin-sdk/config-runtime.js"
     },
+    "./plugin-sdk/runtime-doctor": {
+      "types": "./dist/plugin-sdk/runtime-doctor.d.ts",
+      "default": "./dist/plugin-sdk/runtime-doctor.js"
+    },
     "./plugin-sdk/reply-runtime": {
       "types": "./dist/plugin-sdk/reply-runtime.d.ts",
       "default": "./dist/plugin-sdk/reply-runtime.js"
@@ -678,6 +682,10 @@
       "types": "./dist/plugin-sdk/provider-usage.d.ts",
       "default": "./dist/plugin-sdk/provider-usage.js"
     },
+    "./plugin-sdk/provider-zai-endpoint": {
+      "types": "./dist/plugin-sdk/provider-zai-endpoint.d.ts",
+      "default": "./dist/plugin-sdk/provider-zai-endpoint.js"
+    },
     "./plugin-sdk/provider-web-fetch": {
       "types": "./dist/plugin-sdk/provider-web-fetch.d.ts",
       "default": "./dist/plugin-sdk/provider-web-fetch.js"
@@ -817,6 +825,10 @@
     "./plugin-sdk/runtime-config-snapshot": {
       "types": "./dist/plugin-sdk/runtime-config-snapshot.d.ts",
       "default": "./dist/plugin-sdk/runtime-config-snapshot.js"
+    },
+    "./plugin-sdk/runtime-secret-resolution": {
+      "types": "./dist/plugin-sdk/runtime-secret-resolution.d.ts",
+      "default": "./dist/plugin-sdk/runtime-secret-resolution.js"
     },
     "./plugin-sdk/runtime-store": {
       "types": "./dist/plugin-sdk/runtime-store.d.ts",
