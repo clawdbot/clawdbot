@@ -126,6 +126,10 @@
       "types": "./dist/plugin-sdk/text-runtime.d.ts",
       "default": "./dist/plugin-sdk/text-runtime.js"
     },
+    "./plugin-sdk/agent-harness": {
+      "types": "./dist/plugin-sdk/agent-harness.d.ts",
+      "default": "./dist/plugin-sdk/agent-harness.js"
+    },
     "./plugin-sdk/agent-runtime": {
       "types": "./dist/plugin-sdk/agent-runtime.d.ts",
       "default": "./dist/plugin-sdk/agent-runtime.js"
@@ -565,6 +569,10 @@
     "./plugin-sdk/group-access": {
       "types": "./dist/plugin-sdk/group-access.d.ts",
       "default": "./dist/plugin-sdk/group-access.js"
+    },
+    "./plugin-sdk/global-singleton": {
+      "types": "./dist/plugin-sdk/global-singleton.d.ts",
+      "default": "./dist/plugin-sdk/global-singleton.js"
     },
     "./plugin-sdk/host-runtime": {
       "types": "./dist/plugin-sdk/host-runtime.d.ts",
