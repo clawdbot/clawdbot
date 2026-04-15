@@ -18,7 +18,9 @@ import {
   extractTelegramLocation,
   getTelegramTextParts,
   hasBotMention,
+  isBinaryContent,
   normalizeForwardedContext,
+  resolveTelegramTextContent,
   resolveTelegramMediaPlaceholder,
   type TelegramForwardedContext,
 } from "./body-helpers.js";
@@ -32,11 +34,16 @@ export {
   extractTelegramLocation,
   getTelegramTextParts,
   hasBotMention,
+  isBinaryContent,
   normalizeForwardedContext,
   resolveTelegramMediaPlaceholder,
 };
 
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
+
+function hadUnsafeTelegramText(raw: unknown, sanitized: string): boolean {
+  return typeof raw === "string" && raw.trim().length > 0 && sanitized.trim().length === 0;
+}
 
 export type TelegramThreadSpec = {
   id?: number;
@@ -328,7 +335,7 @@ export type TelegramReplyTarget = {
   sender: string;
   senderId?: string;
   senderUsername?: string;
-  body: string;
+  body?: string;
   kind: "reply" | "quote";
   /** Forward context if the reply target was itself a forwarded message (issue #9619). */
   forwardedFrom?: TelegramForwardedContext;
@@ -337,28 +344,30 @@ export type TelegramReplyTarget = {
 export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   const reply = msg.reply_to_message;
   const externalReply = (msg as Message & { external_reply?: Message }).external_reply;
-  const quoteText =
+  const rawQuoteText =
     msg.quote?.text ??
     (externalReply as (Message & { quote?: { text?: string } }) | undefined)?.quote?.text;
+  const quoteText = resolveTelegramTextContent(rawQuoteText);
   let body = "";
   let kind: TelegramReplyTarget["kind"] = "reply";
+  const filteredQuoteText = hadUnsafeTelegramText(rawQuoteText, quoteText);
 
-  if (typeof quoteText === "string") {
-    body = quoteText.trim();
-    if (body) {
-      kind = "quote";
-    }
+  body = quoteText.trim();
+  if (body) {
+    kind = "quote";
   }
 
   const replyLike = reply ?? externalReply;
+  let filteredReplyText = false;
   if (!body && replyLike) {
-    const replyBody = (
+    const rawReplyText =
       typeof replyLike.text === "string"
         ? replyLike.text
         : typeof replyLike.caption === "string"
           ? replyLike.caption
-          : ""
-    ).trim();
+          : undefined;
+    const replyBody = resolveTelegramTextContent(rawReplyText).trim();
+    filteredReplyText = hadUnsafeTelegramText(rawReplyText, replyBody);
     body = replyBody;
     if (!body) {
       body = resolveTelegramMediaPlaceholder(replyLike) ?? "";
@@ -370,7 +379,10 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
       }
     }
   }
-  if (!body) {
+  if (!body && !replyLike) {
+    return null;
+  }
+  if (!body && !filteredQuoteText && !filteredReplyText) {
     return null;
   }
   const sender = replyLike ? buildSenderName(replyLike) : undefined;
@@ -384,7 +396,7 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
     sender: senderLabel,
     senderId: replyLike?.from?.id != null ? String(replyLike.from.id) : undefined,
     senderUsername: replyLike?.from?.username ?? undefined,
-    body,
+    body: body || undefined,
     kind,
     forwardedFrom,
   };

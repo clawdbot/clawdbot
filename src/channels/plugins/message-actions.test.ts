@@ -14,6 +14,7 @@ import {
   listChannelMessageActions,
   listChannelMessageCapabilities,
   listChannelMessageCapabilitiesForChannel,
+  resolveChannelMessageToolMediaSourceParamKeys,
   resolveChannelMessageToolSchemaProperties,
 } from "./message-action-discovery.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
@@ -197,6 +198,82 @@ describe("message action capability checks", () => {
         channel: "demo-unified",
       }),
     ).toHaveProperty("components");
+  });
+
+  it("derives plugin-owned media-source params for the current action", () => {
+    const mediaPlugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "demo-media",
+        label: "Demo Media",
+        capabilities: { chatTypes: ["direct", "group"] },
+        config: {
+          listAccountIds: () => ["default"],
+        },
+      }),
+      actions: {
+        describeMessageTool: () => ({
+          actions: ["send", "set-profile"],
+          mediaSourceParams: {
+            "set-profile": ["avatarUrl", "avatarPath"],
+          },
+          schema: {
+            properties: {
+              avatarUrl: Type.Optional(Type.String({ description: "Remote avatar URL" })),
+              avatarPath: Type.Optional(Type.String({ description: "Local avatar path" })),
+              displayName: Type.Optional(Type.String()),
+            },
+          },
+        }),
+      },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "demo-media", source: "test", plugin: mediaPlugin }]),
+    );
+
+    expect(
+      resolveChannelMessageToolMediaSourceParamKeys({
+        cfg: {} as OpenClawConfig,
+        action: "set-profile",
+        channel: "demo-media",
+      }),
+    ).toEqual(["avatarUrl", "avatarPath"]);
+    expect(
+      resolveChannelMessageToolMediaSourceParamKeys({
+        cfg: {} as OpenClawConfig,
+        action: "send",
+        channel: "demo-media",
+      }),
+    ).toEqual([]);
+  });
+
+  it("keeps flat media-source param discovery for backward compatibility", () => {
+    const mediaPlugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "demo-media-flat",
+        label: "Demo Media Flat",
+        capabilities: { chatTypes: ["direct", "group"] },
+        config: {
+          listAccountIds: () => ["default"],
+        },
+      }),
+      actions: {
+        describeMessageTool: () => ({
+          actions: ["set-profile"],
+          mediaSourceParams: ["avatarUrl", "avatarPath"],
+        }),
+      },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "demo-media-flat", source: "test", plugin: mediaPlugin }]),
+    );
+
+    expect(
+      resolveChannelMessageToolMediaSourceParamKeys({
+        cfg: {} as OpenClawConfig,
+        action: "set-profile",
+        channel: "demo-media-flat",
+      }),
+    ).toEqual(["avatarUrl", "avatarPath"]);
   });
 
   it("skips crashing action/capability discovery paths and logs once", () => {

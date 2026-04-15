@@ -43,7 +43,6 @@ describe("test-live-media", () => {
       "minimax",
     ]);
     expect(plan.find((entry) => entry.suite.id === "video")?.providers).toEqual([
-      "fal",
       "google",
       "minimax",
       "openai",
@@ -54,12 +53,12 @@ describe("test-live-media", () => {
   it("supports suite-specific provider filters without auth narrowing", async () => {
     const { buildRunPlan, parseArgs } = await import("../../scripts/test-live-media.ts");
     const plan = buildRunPlan(
-      parseArgs(["video", "--video-providers", "openai,runway", "--all-providers"]),
+      parseArgs(["video", "--video-providers", "fal,openai,runway", "--all-providers"]),
     );
 
     expect(plan).toHaveLength(1);
     expect(plan[0]?.suite.id).toBe("video");
-    expect(plan[0]?.providers).toEqual(["openai", "runway"]);
+    expect(plan[0]?.providers).toEqual(["fal", "openai", "runway"]);
   });
 
   it("forwards quiet flags separately from passthrough args", async () => {

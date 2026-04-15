@@ -1,0 +1,117 @@
+import { describe, expect, it } from "vitest";
+import { getChatChannelMeta } from "../channels/chat-meta.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import { normalizeRegisteredChannelPlugin } from "./channel-validation.js";
+import type { PluginDiagnostic } from "./types.js";
+
+function collectDiagnostics() {
+  const diagnostics: PluginDiagnostic[] = [];
+  return {
+    diagnostics,
+    pushDiagnostic: (diag: PluginDiagnostic) => {
+      diagnostics.push(diag);
+    },
+  };
+}
+
+function createChannelPlugin(overrides?: Partial<ChannelPlugin>): ChannelPlugin {
+  return {
+    id: "demo",
+    meta: {
+      id: "demo",
+      label: "Demo",
+      selectionLabel: "Demo",
+      docsPath: "/channels/demo",
+      blurb: "demo channel",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => [],
+      resolveAccount: () => ({ accountId: "default" }),
+    },
+    ...overrides,
+  };
+}
+
+describe("normalizeRegisteredChannelPlugin", () => {
+  it("fills bundled channel metadata from the canonical core baseline", () => {
+    const { diagnostics, pushDiagnostic } = collectDiagnostics();
+
+    const normalized = normalizeRegisteredChannelPlugin({
+      pluginId: "demo-plugin",
+      source: "/tmp/demo/index.ts",
+      plugin: createChannelPlugin({
+        id: "telegram",
+        meta: {
+          id: "telegram",
+        } as never,
+      }),
+      pushDiagnostic,
+    });
+
+    const telegram = getChatChannelMeta("telegram");
+    expect(normalized?.meta).toMatchObject({
+      label: telegram.label,
+      selectionLabel: telegram.selectionLabel,
+      docsPath: telegram.docsPath,
+      blurb: telegram.blurb,
+    });
+    expect(diagnostics.map((diag) => diag.message)).toEqual([
+      'channel "telegram" registered incomplete metadata; filled missing label, selectionLabel, docsPath, blurb',
+    ]);
+  });
+
+  it("falls back to the channel id for external channels with incomplete metadata", () => {
+    const { diagnostics, pushDiagnostic } = collectDiagnostics();
+
+    const normalized = normalizeRegisteredChannelPlugin({
+      pluginId: "demo-plugin",
+      source: "/tmp/demo/index.ts",
+      plugin: createChannelPlugin({
+        id: "external-chat",
+        meta: {
+          id: "external-chat",
+        } as never,
+      }),
+      pushDiagnostic,
+    });
+
+    expect(normalized?.id).toBe("external-chat");
+    expect(normalized?.meta).toMatchObject({
+      id: "external-chat",
+      label: "external-chat",
+      selectionLabel: "external-chat",
+      docsPath: "/channels/external-chat",
+      blurb: "",
+    });
+    expect(diagnostics.map((diag) => diag.message)).toEqual([
+      'channel "external-chat" registered incomplete metadata; filled missing label, selectionLabel, docsPath, blurb',
+    ]);
+  });
+
+  it("warns and repairs mismatched meta ids", () => {
+    const { diagnostics, pushDiagnostic } = collectDiagnostics();
+
+    const normalized = normalizeRegisteredChannelPlugin({
+      pluginId: "demo-plugin",
+      source: "/tmp/demo/index.ts",
+      plugin: createChannelPlugin({
+        id: "demo",
+        meta: {
+          id: "other-demo",
+          label: "Demo",
+          selectionLabel: "Demo",
+          docsPath: "/channels/demo",
+          blurb: "demo channel",
+        },
+      }),
+      pushDiagnostic,
+    });
+
+    expect(normalized?.id).toBe("demo");
+    expect(normalized?.meta.id).toBe("demo");
+    expect(diagnostics.map((diag) => diag.message)).toEqual([
+      'channel "demo" meta.id mismatch ("other-demo"); using registered channel id',
+    ]);
+  });
+});

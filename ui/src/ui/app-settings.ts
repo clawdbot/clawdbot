@@ -1,4 +1,5 @@
 import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
+import { t } from "../i18n/index.ts";
 import { refreshChat } from "./app-chat.ts";
 import {
   startLogsPolling,
@@ -34,11 +35,16 @@ import {
 } from "./controllers/dreaming.ts";
 import { loadExecApprovals, type ExecApprovalsState } from "./controllers/exec-approvals.ts";
 import { loadLogs, type LogsState } from "./controllers/logs.ts";
+import {
+  loadModelAuthStatusState,
+  type ModelAuthStatusState,
+} from "./controllers/model-auth-status.ts";
 import { loadNodes, type NodesState } from "./controllers/nodes.ts";
 import { loadPresence, type PresenceState } from "./controllers/presence.ts";
 import { loadSessions, type SessionsState } from "./controllers/sessions.ts";
 import { loadSkills, type SkillsState } from "./controllers/skills.ts";
 import { loadUsage, type UsageState } from "./controllers/usage.ts";
+import { isMonitoredAuthProvider } from "./model-auth-helpers.ts";
 import {
   inferBasePathFromPathname,
   normalizeBasePath,
@@ -104,6 +110,7 @@ type SettingsAppHost = SettingsHost &
   PresenceState &
   SessionsState &
   SkillsState &
+  ModelAuthStatusState &
   UsageState & {
     overviewLogCursor: number | null;
     overviewLogLines: string[];
@@ -550,7 +557,7 @@ export function syncUrlWithSessionKey(host: SettingsHost, sessionKey: string, re
   updateBrowserHistory(url, replace);
 }
 
-export async function loadOverview(host: SettingsHost) {
+export async function loadOverview(host: SettingsHost, opts?: { refresh?: boolean }) {
   const app = host as SettingsAppHost;
   await Promise.allSettled([
     loadChannels(app, false),
@@ -562,6 +569,9 @@ export async function loadOverview(host: SettingsHost) {
     loadSkills(app),
     loadUsage(app),
     loadOverviewLogs(app),
+    // `refresh: true` bypasses the gateway's 60s auth-status cache so a
+    // user-initiated refresh surfaces post-re-auth state immediately.
+    loadModelAuthStatusState(app, { refresh: opts?.refresh }),
   ]);
   buildAttentionItems(app);
 }
@@ -685,6 +695,43 @@ function buildAttentionItems(host: SettingsAppHost) {
       title: `${overdue.length} overdue job${overdue.length > 1 ? "s" : ""}`,
       description: overdue.map((j) => j.name).join(", "),
     });
+  }
+
+  const modelAuth = host.modelAuthStatusResult;
+  if (modelAuth) {
+    // Use the same predicate as the Overview card so the two stay in sync.
+    // Without this, a `missing` provider shows up on the card but never
+    // produces the re-auth attention callout.
+    const monitored = modelAuth.providers.filter(isMonitoredAuthProvider);
+    const expiredProviders = monitored.filter(
+      (p) => p.status === "expired" || p.status === "missing",
+    );
+    if (expiredProviders.length > 0) {
+      items.push({
+        severity: "error",
+        icon: "key",
+        title: t("overview.cards.modelAuthAttentionExpiredTitle"),
+        description: t("overview.cards.modelAuthAttentionExpiredDesc", {
+          providers: expiredProviders.map((p) => p.displayName).join(", "),
+        }),
+      });
+    }
+    const expiringProviders = monitored.filter((p) => p.status === "expiring");
+    if (expiringProviders.length > 0) {
+      items.push({
+        severity: "warning",
+        icon: "key",
+        title: t("overview.cards.modelAuthAttentionExpiringTitle"),
+        description: expiringProviders
+          .map((p) =>
+            t("overview.cards.modelAuthAttentionExpiringEntry", {
+              provider: p.displayName,
+              when: p.expiry?.label ?? "soon",
+            }),
+          )
+          .join(", "),
+      });
+    }
   }
 
   host.attentionItems = items;

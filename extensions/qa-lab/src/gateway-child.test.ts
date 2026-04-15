@@ -652,13 +652,14 @@ describe("qa bundled plugin dir", () => {
     );
   });
 
-  it("creates a scoped bundled plugin tree for the allowed plugins only", async () => {
+  it("creates a scoped bundled plugin tree for allowed plugins plus always-allowed runtime facades", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-scope-"));
     cleanups.push(async () => {
       await rm(repoRoot, { recursive: true, force: true });
     });
     await mkdir(path.join(repoRoot, "dist", "extensions", "qa-channel"), { recursive: true });
     await mkdir(path.join(repoRoot, "dist", "extensions", "memory-core"), { recursive: true });
+    await mkdir(path.join(repoRoot, "dist", "extensions", "speech-core"), { recursive: true });
     await mkdir(path.join(repoRoot, "dist", "extensions", "unused-plugin"), { recursive: true });
     await writeFile(path.join(repoRoot, "dist", "shared-chunk-abc123.js"), "export {};\n", "utf8");
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-target-"));
@@ -672,7 +673,11 @@ describe("qa bundled plugin dir", () => {
       allowedPluginIds: ["qa-channel", "memory-core"],
     });
 
-    expect((await readdir(bundledPluginsDir)).toSorted()).toEqual(["memory-core", "qa-channel"]);
+    expect((await readdir(bundledPluginsDir)).toSorted()).toEqual([
+      "memory-core",
+      "qa-channel",
+      "speech-core",
+    ]);
     expect(bundledPluginsDir).toBe(
       path.join(
         repoRoot,
@@ -688,6 +693,7 @@ describe("qa bundled plugin dir", () => {
     );
     expect((await lstat(path.join(bundledPluginsDir, "qa-channel"))).isDirectory()).toBe(true);
     expect((await lstat(path.join(bundledPluginsDir, "memory-core"))).isDirectory()).toBe(true);
+    expect((await lstat(path.join(bundledPluginsDir, "speech-core"))).isDirectory()).toBe(true);
     await expect(
       lstat(
         path.join(
@@ -853,5 +859,38 @@ describe("qa bundled plugin dir", () => {
         allowedPluginIds: ["memory-core", "qa-channel"],
       }),
     ).resolves.toBe("2026.4.8");
+  });
+
+  it("includes always-allowed runtime facade plugins when raising the QA runtime host version", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-runtime-version-runtime-facade-"));
+    cleanups.push(async () => {
+      await rm(repoRoot, { recursive: true, force: true });
+    });
+    await writeFile(
+      path.join(repoRoot, "package.json"),
+      JSON.stringify({ version: "2026.4.7-1" }),
+      "utf8",
+    );
+    const bundledRoot = path.join(repoRoot, "extensions");
+    await mkdir(path.join(bundledRoot, "qa-channel"), { recursive: true });
+    await writeFile(
+      path.join(bundledRoot, "qa-channel", "package.json"),
+      JSON.stringify({ openclaw: { install: { minHostVersion: ">=2026.4.8" } } }),
+      "utf8",
+    );
+    await mkdir(path.join(bundledRoot, "speech-core"), { recursive: true });
+    await writeFile(
+      path.join(bundledRoot, "speech-core", "package.json"),
+      JSON.stringify({ openclaw: { install: { minHostVersion: ">=2026.4.9" } } }),
+      "utf8",
+    );
+
+    await expect(
+      __testing.resolveQaRuntimeHostVersion({
+        repoRoot,
+        bundledPluginsSourceRoot: bundledRoot,
+        allowedPluginIds: ["qa-channel"],
+      }),
+    ).resolves.toBe("2026.4.9");
   });
 });

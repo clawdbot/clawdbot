@@ -450,6 +450,7 @@ export async function startGatewayServer(
     resolvedAuth,
     rateLimiter: authRateLimiter,
     gatewayTls,
+    getResolvedAuth,
     hooksConfig: () => runtimeState?.hooksConfig ?? initialHooksConfig,
     getHookClientIpConfig: () => runtimeState?.hookClientIpConfig ?? initialHookClientIpConfig,
     pluginRegistry,

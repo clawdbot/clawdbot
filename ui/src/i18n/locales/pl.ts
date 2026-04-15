@@ -257,6 +257,18 @@ export const pl: TranslationMap = {
       cost: "Koszt",
       skills: "Skills",
       recentSessions: "Ostatnie sesje",
+      modelAuth: "Uwierzytelnianie modeli",
+      modelAuthOk: "{count} ok",
+      modelAuthExpired: "{count} wygasło",
+      modelAuthExpiring: "{count} wkrótce wygaśnie",
+      modelAuthProviders: "{count} dostawców",
+      modelAuthUsageLeft: "Pozostało {pct}%",
+      modelAuthExpiresIn: "wygasa {when}",
+      modelAuthAttentionExpiredTitle: "Uwierzytelnianie modeli wygasło",
+      modelAuthAttentionExpiringTitle: "Uwierzytelnianie modeli wkrótce wygaśnie",
+      modelAuthAttentionExpiredDesc:
+        "{providers} — uwierzytelnij ponownie za pomocą openclaw models auth",
+      modelAuthAttentionExpiringEntry: "{provider} ({when})",
     },
     attention: {
       title: "Uwaga",

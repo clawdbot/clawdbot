@@ -39,6 +39,8 @@ export async function scanStatusJsonWithPolicy(
     await ensureCliPluginRegistryLoaded({
       scope: "configured-channels",
       routeLogsToStderr: true,
+      config: overview.cfg,
+      activationSourceConfig: overview.sourceConfig,
     });
   }
 

@@ -13,6 +13,7 @@ import {
   shouldDeferProviderSyntheticProfileAuthWithPlugin,
 } from "../plugins/provider-runtime.js";
 import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
+import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -73,7 +74,19 @@ export function getCustomProviderApiKey(
   provider: string,
 ): string | undefined {
   const entry = resolveProviderConfig(cfg, provider);
-  return normalizeOptionalSecretInput(entry?.apiKey);
+  const literal = normalizeOptionalSecretInput(entry?.apiKey);
+  if (literal) {
+    return literal;
+  }
+  const ref = coerceSecretRef(entry?.apiKey);
+  if (!ref) {
+    return undefined;
+  }
+  if (ref.source === "env") {
+    const envId = ref.id.trim();
+    return envId || NON_ENV_SECRETREF_MARKER;
+  }
+  return NON_ENV_SECRETREF_MARKER;
 }
 
 type ResolvedCustomProviderApiKey = {
@@ -81,11 +94,61 @@ type ResolvedCustomProviderApiKey = {
   source: string;
 };
 
+function canResolveEnvSecretRefInReadOnlyPath(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+  id: string;
+}): boolean {
+  const providerConfig = params.cfg?.secrets?.providers?.[params.provider];
+  if (!providerConfig) {
+    return params.provider === resolveDefaultSecretProviderAlias(params.cfg ?? {}, "env");
+  }
+  if (providerConfig.source !== "env") {
+    return false;
+  }
+  const allowlist = providerConfig.allowlist;
+  return !allowlist || allowlist.includes(params.id);
+}
+
 export function resolveUsableCustomProviderApiKey(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
   env?: NodeJS.ProcessEnv;
 }): ResolvedCustomProviderApiKey | null {
+  const customProviderConfig = resolveProviderConfig(params.cfg, params.provider);
+  const apiKeyRef = coerceSecretRef(customProviderConfig?.apiKey);
+  if (apiKeyRef) {
+    if (apiKeyRef.source !== "env") {
+      return null;
+    }
+    const envVarName = apiKeyRef.id.trim();
+    if (!envVarName) {
+      return null;
+    }
+    if (
+      !canResolveEnvSecretRefInReadOnlyPath({
+        cfg: params.cfg,
+        provider: apiKeyRef.provider,
+        id: envVarName,
+      })
+    ) {
+      return null;
+    }
+    const envValue = normalizeOptionalSecretInput((params.env ?? process.env)[envVarName]);
+    if (!envValue) {
+      return null;
+    }
+    const applied = new Set(getShellEnvAppliedKeys());
+    return {
+      apiKey: envValue,
+      source: resolveEnvSourceLabel({
+        applied,
+        envVars: [envVarName],
+        label: `${envVarName} (models.json secretref)`,
+      }),
+    };
+  }
+
   const customKey = getCustomProviderApiKey(params.cfg, params.provider);
   if (!customKey) {
     return null;

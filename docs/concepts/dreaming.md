@@ -80,6 +80,9 @@ After each phase has enough material, `memory-core` runs a best-effort backgroun
 subagent turn (using the default runtime model) and appends a short diary entry.
 
 This diary is for human reading in the Dreams UI, not a promotion source.
+Dreaming-generated diary/report artifacts are excluded from short-term
+promotion. Only grounded memory snippets are eligible to promote into
+`MEMORY.md`.
 
 There is also a grounded historical backfill lane for review and recovery work:
 

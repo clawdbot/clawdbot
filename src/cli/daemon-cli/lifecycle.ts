@@ -157,14 +157,17 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
 
 export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
   const service = resolveGatewayService();
-  const gatewayPort = await resolveGatewayLifecyclePort(service).catch(() =>
-    resolveGatewayPortFallback(),
-  );
+  let gatewayPortPromise: Promise<number> | undefined;
   return await runServiceStop({
     serviceNoun: "Gateway",
     service,
     opts,
-    onNotLoaded: async () => stopGatewayWithoutServiceManager(gatewayPort),
+    onNotLoaded: async () => {
+      gatewayPortPromise ??= resolveGatewayLifecyclePort(service).catch(() =>
+        resolveGatewayPortFallback(),
+      );
+      return await stopGatewayWithoutServiceManager(await gatewayPortPromise);
+    },
   });
 }
 

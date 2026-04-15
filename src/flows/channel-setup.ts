@@ -1,5 +1,4 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { listChatChannels } from "../channels/chat-meta.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import {
   getChannelSetupPlugin,
@@ -138,6 +137,12 @@ export async function setupChannels(
     }
     return Array.from(merged.values());
   };
+  const resolveVisibleChannelEntries = () =>
+    resolveChannelSetupEntries({
+      cfg: next,
+      installedPlugins: listVisibleInstalledPlugins(),
+      workspaceDir: resolveWorkspaceDir(),
+    });
   const loadScopedChannelPlugin = async (
     channel: ChannelChoice,
     pluginId?: string,
@@ -191,13 +196,7 @@ export async function setupChannels(
   };
   await preloadConfiguredExternalPlugins();
 
-  const {
-    installedPlugins,
-    catalogEntries,
-    installedCatalogEntries,
-    statusByChannel,
-    statusLines,
-  } = await collectChannelStatus({
+  const { statusByChannel, statusLines } = await collectChannelStatus({
     cfg: next,
     options,
     accountOverrides,
@@ -218,38 +217,11 @@ export async function setupChannels(
     return cfg;
   }
 
-  const corePrimer = listChatChannels()
-    .filter((meta) => shouldShowChannelInSetup(meta))
-    .map((meta) => ({
-      id: meta.id,
-      label: meta.label,
-      blurb: meta.blurb,
-    }));
-  const coreIds = new Set(corePrimer.map((entry) => entry.id));
-  const primerChannels = [
-    ...corePrimer,
-    ...installedPlugins
-      .filter((plugin) => !coreIds.has(plugin.id))
-      .map((plugin) => ({
-        id: plugin.id,
-        label: plugin.meta.label,
-        blurb: plugin.meta.blurb,
-      })),
-    ...installedCatalogEntries
-      .filter((entry) => !coreIds.has(entry.id as ChannelChoice))
-      .map((entry) => ({
-        id: entry.id as ChannelChoice,
-        label: entry.meta.label,
-        blurb: entry.meta.blurb,
-      })),
-    ...catalogEntries
-      .filter((entry) => !coreIds.has(entry.id as ChannelChoice))
-      .map((entry) => ({
-        id: entry.id as ChannelChoice,
-        label: entry.meta.label,
-        blurb: entry.meta.blurb,
-      })),
-  ];
+  const primerChannels = resolveVisibleChannelEntries().entries.map((entry) => ({
+    id: entry.id,
+    label: entry.meta.label,
+    blurb: entry.meta.blurb,
+  }));
   await noteChannelPrimer(prompter, primerChannels);
 
   const quickstartDefault =
@@ -302,11 +274,7 @@ export async function setupChannels(
   };
 
   const getChannelEntries = () => {
-    const resolved = resolveChannelSetupEntries({
-      cfg: next,
-      installedPlugins: listVisibleInstalledPlugins(),
-      workspaceDir: resolveWorkspaceDir(),
-    });
+    const resolved = resolveVisibleChannelEntries();
     return {
       entries: resolved.entries,
       catalogById: resolved.installableCatalogById,

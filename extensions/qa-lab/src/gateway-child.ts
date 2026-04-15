@@ -78,6 +78,14 @@ const QA_MOCK_BLOCKED_ENV_KEY_PATTERNS = Object.freeze([
 
 const QA_LIVE_PROVIDER_CONFIG_PATH_ENV = "OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH";
 const QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV = "OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN";
+// Keep this in sync with the facade runtime's always-allowed bundled surfaces.
+// QA child staging must include these runtime helpers even when they are not in
+// cfg.plugins.allow, otherwise lazy facade loads can fail inside the child.
+const QA_ALWAYS_STAGE_RUNTIME_PLUGIN_IDS = Object.freeze([
+  "image-generation-core",
+  "media-understanding-core",
+  "speech-core",
+]);
 const QA_LIVE_SETUP_TOKEN_VALUE_ENV = "OPENCLAW_LIVE_SETUP_TOKEN_VALUE";
 const QA_LIVE_ANTHROPIC_SETUP_TOKEN_PROFILE_ENV = "OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN_PROFILE";
 const QA_LIVE_ANTHROPIC_SETUP_TOKEN_PROFILE_ID = "anthropic:qa-setup-token";
@@ -765,8 +773,12 @@ async function resolveQaRuntimeHostVersion(params: {
   const rootPackageRaw = await fs.readFile(path.join(params.repoRoot, "package.json"), "utf8");
   const rootPackage = JSON.parse(rootPackageRaw) as { version?: string };
   let selected = parseStableSemverFloor(rootPackage.version);
+  const stagedPluginIds = collectQaBundledPluginIds({
+    sourceRoot: params.bundledPluginsSourceRoot,
+    allowedPluginIds: params.allowedPluginIds,
+  });
 
-  for (const pluginId of params.allowedPluginIds) {
+  for (const pluginId of stagedPluginIds) {
     const packagePath = path.join(params.bundledPluginsSourceRoot, pluginId, "package.json");
     if (!existsSync(packagePath)) {
       continue;
@@ -788,12 +800,29 @@ async function resolveQaRuntimeHostVersion(params: {
   return selected?.label;
 }
 
+function collectQaBundledPluginIds(params: {
+  sourceRoot: string;
+  allowedPluginIds: readonly string[];
+}) {
+  const pluginIds = new Set(params.allowedPluginIds);
+  for (const pluginId of QA_ALWAYS_STAGE_RUNTIME_PLUGIN_IDS) {
+    if (existsSync(path.join(params.sourceRoot, pluginId))) {
+      pluginIds.add(pluginId);
+    }
+  }
+  return [...pluginIds];
+}
+
 async function createQaBundledPluginsDir(params: {
   repoRoot: string;
   tempRoot: string;
   allowedPluginIds: readonly string[];
 }) {
   const sourceRoot = resolveQaBundledPluginsSourceRoot(params.repoRoot);
+  const stagedPluginIds = collectQaBundledPluginIds({
+    sourceRoot,
+    allowedPluginIds: params.allowedPluginIds,
+  });
   const sourceTreeRoot = path.dirname(sourceRoot);
   if (
     sourceTreeRoot === path.join(params.repoRoot, "dist") ||
@@ -814,7 +843,7 @@ async function createQaBundledPluginsDir(params: {
       const targetPath = path.join(stagedTreeRoot, entry.name);
       if (entry.name === "extensions") {
         await fs.mkdir(targetPath, { recursive: true });
-        for (const pluginId of params.allowedPluginIds) {
+        for (const pluginId of stagedPluginIds) {
           const sourceDir = path.join(sourceRoot, pluginId);
           if (!existsSync(sourceDir)) {
             throw new Error(`qa bundled plugin not found: ${pluginId} (${sourceDir})`);
@@ -834,7 +863,7 @@ async function createQaBundledPluginsDir(params: {
 
   const bundledPluginsDir = path.join(params.tempRoot, "bundled-plugins");
   await fs.mkdir(bundledPluginsDir, { recursive: true });
-  for (const pluginId of params.allowedPluginIds) {
+  for (const pluginId of stagedPluginIds) {
     const sourceDir = path.join(sourceRoot, pluginId);
     if (!existsSync(sourceDir)) {
       throw new Error(`qa bundled plugin not found: ${pluginId} (${sourceDir})`);

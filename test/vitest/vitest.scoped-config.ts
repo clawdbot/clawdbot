@@ -141,6 +141,7 @@ export function createScopedVitestConfig(
     includeOpenClawRuntimeSetup?: boolean;
     isolate?: boolean;
     name?: string;
+    fileParallelism?: boolean;
     pool?: "forks" | "threads";
     passWithNoTests?: boolean;
     setupFiles?: string[];
@@ -184,6 +185,9 @@ export function createScopedVitestConfig(
       include: relativizeScopedPatterns(includeFromEnv ?? cliInclude ?? include, scopedDir),
       exclude,
       ...(options?.pool ? { pool: options.pool } : {}),
+      ...(options?.fileParallelism === undefined
+        ? {}
+        : { fileParallelism: options.fileParallelism }),
       ...(scopedGroupOrder === undefined
         ? {}
         : {

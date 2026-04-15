@@ -72,7 +72,11 @@ export function createSubagentRunManager(params: {
     triggerCleanup: boolean;
   }): Promise<void>;
 }) {
-  const waitForSubagentCompletion = async (runId: string, waitTimeoutMs: number) => {
+  const waitForSubagentCompletion = async (
+    runId: string,
+    waitTimeoutMs: number,
+    expectedEntry?: SubagentRunRecord,
+  ) => {
     try {
       const wait = await waitForAgentRun({
         runId,
@@ -80,7 +84,7 @@ export function createSubagentRunManager(params: {
         callGateway: params.callGateway,
       });
       const entry = params.runs.get(runId);
-      if (!entry) {
+      if (!entry || (expectedEntry && entry !== expectedEntry)) {
         return;
       }
       if (wait.status === "pending") {
@@ -253,7 +257,7 @@ export function createSubagentRunManager(params: {
     params.persist();
     // Always start sweeper — session-mode runs (no archiveAtMs) also need TTL cleanup.
     params.startSweeper();
-    void waitForSubagentCompletion(nextRunId, waitTimeoutMs);
+    void waitForSubagentCompletion(nextRunId, waitTimeoutMs, next);
     return true;
   };
 
@@ -296,7 +300,7 @@ export function createSubagentRunManager(params: {
     const runTimeoutSeconds = registerParams.runTimeoutSeconds ?? 0;
     const waitTimeoutMs = params.resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
     const requesterOrigin = normalizeDeliveryContext(registerParams.requesterOrigin);
-    params.runs.set(runId, {
+    const entry: SubagentRunRecord = {
       runId,
       childSessionKey,
       controllerSessionKey,
@@ -322,7 +326,8 @@ export function createSubagentRunManager(params: {
       attachmentsDir: registerParams.attachmentsDir,
       attachmentsRootDir: registerParams.attachmentsRootDir,
       retainAttachmentsOnKeep: registerParams.retainAttachmentsOnKeep,
-    });
+    };
+    params.runs.set(runId, entry);
     try {
       createRunningTaskRun({
         runtime: "subagent",
@@ -351,7 +356,7 @@ export function createSubagentRunManager(params: {
     params.startSweeper();
     // Wait for subagent completion via gateway RPC (cross-process).
     // The in-process lifecycle listener is a fallback for embedded runs.
-    void waitForSubagentCompletion(runId, waitTimeoutMs);
+    void waitForSubagentCompletion(runId, waitTimeoutMs, entry);
   };
 
   const releaseSubagentRun = (runId: string) => {

@@ -243,6 +243,7 @@ jobs:
                     task: "test-shard",
                     shard_name: shard.shardName,
                     configs: shard.configs,
+                    requires_dist: shard.requiresDist,
                   }))
                 : [],
             ),
@@ -420,16 +421,23 @@ jobs:
           use-sticky-disk: "false"
 
       - name: Build dist
-        run: pnpm build
+        run: pnpm build:ci-artifacts
 
       - name: Build Control UI
         run: pnpm ui:build
+
+      - name: Cache dist build
+        uses: actions/cache@v5
+        with:
+          path: dist/
+          key: ${{ runner.os }}-dist-build-${{ github.sha }}
 
       - name: Upload dist artifact
         uses: actions/upload-artifact@v7
         with:
           name: dist-build
           path: dist/
+          compression-level: 0
           retention-days: 1
 
       - name: Upload A2UI bundle artifact
@@ -640,7 +648,16 @@ jobs:
       - name: Configure Node test resources
         run: echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
 
+      - name: Restore dist cache
+        id: dist-cache
+        if: matrix.requires_dist == true
+        uses: actions/cache@v5
+        with:
+          path: dist/
+          key: ${{ runner.os }}-dist-build-${{ github.sha }}
+
       - name: Download dist artifact
+        if: matrix.requires_dist == true && steps.dist-cache.outputs.cache-hit != 'true'
         uses: actions/download-artifact@v8
         with:
           name: dist-build
@@ -988,8 +1005,16 @@ jobs:
           install-bun: "false"
           use-sticky-disk: "false"
 
-      - name: Download dist artifact
+      - name: Restore dist cache
+        id: build-smoke-dist-cache
         if: github.event_name == 'push'
+        uses: actions/cache@v5
+        with:
+          path: dist/
+          key: ${{ runner.os }}-dist-build-${{ github.sha }}
+
+      - name: Download dist artifact
+        if: github.event_name == 'push' && steps.build-smoke-dist-cache.outputs.cache-hit != 'true'
         uses: actions/download-artifact@v8
         with:
           name: dist-build

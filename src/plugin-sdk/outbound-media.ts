@@ -4,7 +4,7 @@ import { loadWebMedia } from "./web-media.js";
 export type OutboundMediaLoadOptions = {
   maxBytes?: number;
   mediaAccess?: OutboundMediaAccess;
-  mediaLocalRoots?: readonly string[];
+  mediaLocalRoots?: readonly string[] | "any";
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
 };
 

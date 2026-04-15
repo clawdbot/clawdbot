@@ -28,4 +28,20 @@ describe("google provider policy public artifact", () => {
       models: [{ id: "gemini-3-pro-preview" }],
     });
   });
+
+  it("preserves explicit OpenAI-compatible Google endpoints during normalization", () => {
+    expect(
+      normalizeConfig({
+        provider: "google",
+        providerConfig: {
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+          api: "openai-completions",
+          models: [],
+        },
+      }),
+    ).toMatchObject({
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+      api: "openai-completions",
+    });
+  });
 });

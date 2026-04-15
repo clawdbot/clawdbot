@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import { sendMessage } from "../infra/outbound/message.js";
 import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
+import { createExecTool } from "./bash-tools.exec.js";
+import { callGatewayTool } from "./tools/gateway.js";
 
 vi.mock("./tools/gateway.js", () => ({
   callGatewayTool: vi.fn(),
@@ -21,10 +24,6 @@ vi.mock("./tools/nodes-utils.js", () => ({
 vi.mock("../infra/outbound/message.js", () => ({
   sendMessage: vi.fn(async () => ({ ok: true })),
 }));
-
-let callGatewayTool: typeof import("./tools/gateway.js").callGatewayTool;
-let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
-let sendMessage: typeof import("../infra/outbound/message.js").sendMessage;
 
 function buildPreparedSystemRunPayload(rawInvokeParams: unknown) {
   const invoke = (rawInvokeParams ?? {}) as {
@@ -224,7 +223,6 @@ describe("exec approvals", () => {
   let previousDisableBundledPlugins: string | undefined;
 
   beforeEach(async () => {
-    vi.resetModules();
     previousHome = process.env.HOME;
     previousUserProfile = process.env.USERPROFILE;
     previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -235,9 +233,6 @@ describe("exec approvals", () => {
     process.env.USERPROFILE = tempDir;
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
     process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
-    ({ callGatewayTool } = await import("./tools/gateway.js"));
-    ({ createExecTool } = await import("./bash-tools.exec.js"));
-    ({ sendMessage } = await import("../infra/outbound/message.js"));
     vi.mocked(callGatewayTool).mockReset();
     vi.mocked(sendMessage).mockClear();
   });

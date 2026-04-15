@@ -316,10 +316,23 @@ pnpm test:live:media video
 ```
 
 This live file loads missing provider env vars from `~/.profile`, prefers
-live/env API keys ahead of stored auth profiles by default, and runs the
-declared modes it can exercise safely with local media:
+live/env API keys ahead of stored auth profiles by default, and runs a
+release-safe smoke by default:
 
-- `generate` for every provider in the sweep
+- `generate` for every non-FAL provider in the sweep
+- one-second lobster prompt
+- per-provider operation cap from `OPENCLAW_LIVE_VIDEO_GENERATION_TIMEOUT_MS`
+  (`180000` by default)
+
+FAL is opt-in because provider-side queue latency can dominate release time:
+
+```bash
+pnpm test:live:media video --video-providers fal
+```
+
+Set `OPENCLAW_LIVE_VIDEO_GENERATION_FULL_MODES=1` to also run declared transform
+modes the shared sweep can exercise safely with local media:
+
 - `imageToVideo` when `capabilities.imageToVideo.enabled`
 - `videoToVideo` when `capabilities.videoToVideo.enabled` and the provider/model
   accepts buffer-backed local video input in the shared sweep

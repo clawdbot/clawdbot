@@ -24,6 +24,7 @@ type SessionsSpawnGatewayMockOptions = {
 
 const hoisted = vi.hoisted(() => {
   const callGatewayMock = vi.fn();
+  const sessionStore: Record<string, { sessionId: string; updatedAt: number }> = {};
   let nextRunId = 0;
   const defaultConfigOverride = {
     session: {
@@ -94,6 +95,7 @@ const hoisted = vi.hoisted(() => {
       nextRunId += 1;
       return `run-${nextRunId}`;
     },
+    sessionStore,
     state,
   };
 });
@@ -197,6 +199,12 @@ export function setupSessionsSpawnGatewayMock(setupOpts: SessionsSpawnGatewayMoc
       if (params?.lane === "subagent") {
         childRunId = runId;
         childSessionKey = params.sessionKey ?? "";
+        if (childSessionKey) {
+          hoisted.sessionStore[childSessionKey] = {
+            sessionId: `sess-${childSessionKey}`,
+            updatedAt: Date.now(),
+          };
+        }
         setupOpts.onAgentSubagentSpawn?.(params);
       }
       return {
@@ -265,6 +273,22 @@ vi.mock("../config/config.js", async () => {
     ...actual,
     loadConfig: () => hoisted.state.configOverride,
     resolveGatewayPort: () => 18789,
+  };
+});
+
+vi.mock("../config/sessions.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../config/sessions.js")>("../config/sessions.js");
+  return {
+    ...actual,
+    loadSessionStore: () => hoisted.sessionStore,
+    resolveStorePath: () => "/tmp/openclaw-sessions-spawn-test-store.json",
+    updateSessionStore: async (
+      _storePath: string,
+      mutator: (store: typeof hoisted.sessionStore) => void | Promise<void>,
+    ) => {
+      await mutator(hoisted.sessionStore);
+    },
   };
 });
 

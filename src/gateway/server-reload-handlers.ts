@@ -106,7 +106,9 @@ export function createGatewayReloadHandlers(params: {
     }
 
     if (plan.restartGmailWatcher) {
-      await stopGmailWatcher().catch(() => {});
+      await stopGmailWatcher().catch((err) => {
+        params.logHooks.warn(`gmail watcher stop failed during reload: ${String(err)}`);
+      });
       await startGmailWatcherWithLogs({
         cfg: nextConfig,
         log: params.logHooks,

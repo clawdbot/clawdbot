@@ -96,6 +96,24 @@ function resolveRuntimeHooks(params?: {
   return params?.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
 }
 
+function canonicalizeLegacyResolvedModel(params: {
+  provider: string;
+  model: Model<Api>;
+}): Model<Api> {
+  if (
+    normalizeProviderId(params.provider) !== "openai-codex" ||
+    params.model.id.trim().toLowerCase() !== "gpt-5.4-codex"
+  ) {
+    return params.model;
+  }
+  return {
+    ...params.model,
+    id: "gpt-5.4",
+    name:
+      params.model.name.trim().toLowerCase() === "gpt-5.4-codex" ? "gpt-5.4" : params.model.name,
+  };
+}
+
 function applyResolvedTransportFallback(params: {
   provider: string;
   cfg?: OpenClawConfig;
@@ -184,10 +202,13 @@ function normalizeResolvedModel(params: {
       runtimeHooks,
       model: compatNormalized ?? pluginNormalized ?? normalizedInputModel,
     });
-  return normalizeResolvedProviderModel({
+  return canonicalizeLegacyResolvedModel({
     provider: params.provider,
-    model:
-      fallbackTransportNormalized ?? compatNormalized ?? pluginNormalized ?? normalizedInputModel,
+    model: normalizeResolvedProviderModel({
+      provider: params.provider,
+      model:
+        fallbackTransportNormalized ?? compatNormalized ?? pluginNormalized ?? normalizedInputModel,
+    }),
   });
 }
 
@@ -270,7 +291,11 @@ function applyConfiguredProviderOverrides(params: {
       headers: sanitizeModelHeaders(discoveredModel.headers, { stripSecretRefMarkers: true }),
     };
   }
-  const configuredModel = providerConfig.models?.find((candidate) => candidate.id === modelId);
+  const configuredModel =
+    providerConfig.models?.find((candidate) => candidate.id === modelId) ??
+    (discoveredModel.id !== modelId
+      ? providerConfig.models?.find((candidate) => candidate.id === discoveredModel.id)
+      : undefined);
   const discoveredHeaders = sanitizeModelHeaders(discoveredModel.headers, {
     stripSecretRefMarkers: true,
   });

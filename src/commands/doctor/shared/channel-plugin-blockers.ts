@@ -13,10 +13,32 @@ export type ChannelPluginBlockerHit = {
   reason: "disabled in config" | "plugins disabled";
 };
 
+function hasExplicitChannelPluginBlockerConfig(cfg: OpenClawConfig): boolean {
+  if (cfg.plugins?.enabled === false) {
+    return true;
+  }
+  const entries = cfg.plugins?.entries;
+  if (!entries || typeof entries !== "object") {
+    return false;
+  }
+  return Object.values(entries).some((entry) => {
+    return (
+      entry &&
+      typeof entry === "object" &&
+      !Array.isArray(entry) &&
+      "enabled" in entry &&
+      (entry as { enabled?: unknown }).enabled === false
+    );
+  });
+}
+
 export function scanConfiguredChannelPluginBlockers(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): ChannelPluginBlockerHit[] {
+  if (!hasExplicitChannelPluginBlockerConfig(cfg)) {
+    return [];
+  }
   const configuredChannelIds = new Set(
     listPotentialConfiguredChannelIds(cfg, env).map((id) => id.trim()),
   );

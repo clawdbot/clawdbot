@@ -46,15 +46,17 @@ describe("channel plugin module loader helpers", () => {
 
   it("resolves plugin module candidates and picks the first existing extension", () => {
     const rootDir = createTempDir();
-    const expectedPath = path.join(rootDir, "src", "checker.mjs");
+    const expectedPath = path.join(rootDir, "src", "checker.mts");
     fs.mkdirSync(path.dirname(expectedPath), { recursive: true });
     fs.writeFileSync(expectedPath, "export const ok = true;\n", "utf8");
 
     expect(resolvePluginModuleCandidates(rootDir, "./src/checker")).toEqual([
       path.join(rootDir, "src", "checker"),
       path.join(rootDir, "src", "checker.ts"),
+      path.join(rootDir, "src", "checker.mts"),
       path.join(rootDir, "src", "checker.js"),
       path.join(rootDir, "src", "checker.mjs"),
+      path.join(rootDir, "src", "checker.cts"),
       path.join(rootDir, "src", "checker.cjs"),
     ]);
     expect(resolveExistingPluginModulePath(rootDir, "./src/checker")).toBe(expectedPath);

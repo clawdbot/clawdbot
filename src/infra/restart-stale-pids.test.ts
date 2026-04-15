@@ -776,13 +776,20 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       const stalePid = process.pid + 911;
       Object.defineProperty(process, "platform", { value: "win32", configurable: true });
       try {
+        let fakeNow = 0;
+        __testing.setDateNowOverride(() => fakeNow);
         mockReadWindowsListeningPids.mockReturnValue([stalePid]);
         mockReadWindowsProcessArgs.mockReturnValue(["openclaw", "gateway"]);
         mockReadWindowsProcessArgsResult.mockReturnValue({
           ok: true,
           args: ["openclaw", "gateway"],
         });
-        mockReadWindowsListeningPidsResult.mockReturnValue({ ok: true, pids: [stalePid] });
+        mockReadWindowsListeningPidsResult.mockImplementation((_port, timeoutMs) => {
+          if (timeoutMs === 400) {
+            fakeNow += 2001;
+          }
+          return { ok: true, pids: [stalePid] };
+        });
         mockSpawnSync.mockReturnValue({
           error: null,
           status: 1,
@@ -803,6 +810,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
           expect.objectContaining({ timeout: 5000 }),
         );
       } finally {
+        __testing.setDateNowOverride(null);
         if (origDescriptor) {
           Object.defineProperty(process, "platform", origDescriptor);
         }
@@ -814,6 +822,8 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       const stalePid = process.pid + 912;
       Object.defineProperty(process, "platform", { value: "win32", configurable: true });
       try {
+        let fakeNow = 0;
+        __testing.setDateNowOverride(() => fakeNow);
         mockReadWindowsListeningPidsResult.mockReturnValue({ ok: true, pids: [stalePid] });
         mockReadWindowsProcessArgs.mockReturnValue(["openclaw", "gateway"]);
         mockReadWindowsProcessArgsResult.mockReturnValue({
@@ -839,6 +849,9 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
           }
           return true;
         });
+        __testing.setSleepSyncOverride((ms) => {
+          fakeNow += ms;
+        });
 
         expect(cleanStaleGatewayProcessesSync()).toEqual([]);
         expect(mockSpawnSync).toHaveBeenNthCalledWith(
@@ -854,6 +867,8 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
           expect.objectContaining({ timeout: 5000 }),
         );
       } finally {
+        __testing.setSleepSyncOverride(null);
+        __testing.setDateNowOverride(null);
         if (origDescriptor) {
           Object.defineProperty(process, "platform", origDescriptor);
         }

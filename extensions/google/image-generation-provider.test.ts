@@ -305,6 +305,33 @@ describe("Google image-generation provider", () => {
     );
   });
 
+  it("strips a configured /openai suffix before calling the native Gemini image API", async () => {
+    mockGoogleApiKeyAuth();
+    const fetchMock = installGoogleFetchMock();
+
+    const provider = buildGoogleImageGenerationProvider();
+    await provider.generateImage({
+      provider: "google",
+      model: "gemini-3-pro-image-preview",
+      prompt: "draw a fox",
+      cfg: {
+        models: {
+          providers: {
+            google: {
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent",
+      expect.any(Object),
+    );
+  });
+
   it("prefers scoped configured Gemini API keys over environment fallbacks", () => {
     expect(
       geminiWebSearchTesting.resolveGeminiApiKey({

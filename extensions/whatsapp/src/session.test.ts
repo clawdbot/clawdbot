@@ -127,7 +127,11 @@ describe("web session", () => {
       fetchAgent?: unknown;
     };
     expect(passed.agent).toBeDefined();
-    expect(passed.fetchAgent).toBe(passed.agent);
+    expect(passed.fetchAgent).toBeDefined();
+    expect(passed.fetchAgent).not.toBe(passed.agent);
+    expect(typeof (passed.fetchAgent as { dispatch?: unknown } | undefined)?.dispatch).toBe(
+      "function",
+    );
   });
 
   it("does not create a proxy agent when no env proxy is configured", async () => {

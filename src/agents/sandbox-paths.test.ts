@@ -130,6 +130,16 @@ describe("resolveSandboxedMediaSource", () => {
     });
   });
 
+  it("preserves remote mxc:// media sources", async () => {
+    await withSandboxRoot(async (sandboxDir) => {
+      const result = await resolveSandboxedMediaSource({
+        media: "mxc://matrix.org/abc123def456",
+        sandboxRoot: sandboxDir,
+      });
+      expect(result).toBe("mxc://matrix.org/abc123def456");
+    });
+  });
+
   // Group 3: Rejections (security)
   it.each([
     {

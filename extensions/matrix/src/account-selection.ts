@@ -213,6 +213,9 @@ export function requiresExplicitMatrixDefaultAccount(
   if (configuredAccountIds.length <= 1) {
     return false;
   }
+  if (configuredAccountIds.includes(DEFAULT_ACCOUNT_ID)) {
+    return false;
+  }
   const configuredDefault = normalizeOptionalAccountId(
     typeof channel.defaultAccount === "string" ? channel.defaultAccount : undefined,
   );

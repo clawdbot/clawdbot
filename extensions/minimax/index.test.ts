@@ -53,6 +53,72 @@ describe("minimax provider hooks", () => {
     ).toBe("native");
   });
 
+  it("keeps MiniMax auth setup metadata aligned across regions", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: minimaxProviderPlugin,
+      id: "minimax",
+      name: "MiniMax Provider",
+    });
+    const apiProvider = requireRegisteredProvider(providers, "minimax");
+    const portalProvider = requireRegisteredProvider(providers, "minimax-portal");
+
+    expect(
+      apiProvider.auth.map((method) => ({
+        id: method.id,
+        label: method.label,
+        hint: method.hint,
+        choiceId: method.wizard?.choiceId,
+        groupId: method.wizard?.groupId,
+        groupHint: method.wizard?.groupHint,
+      })),
+    ).toEqual([
+      {
+        id: "api-global",
+        label: "MiniMax API key (Global)",
+        hint: "Global endpoint - api.minimax.io",
+        choiceId: "minimax-global-api",
+        groupId: "minimax",
+        groupHint: "M2.7 (recommended)",
+      },
+      {
+        id: "api-cn",
+        label: "MiniMax API key (CN)",
+        hint: "CN endpoint - api.minimaxi.com",
+        choiceId: "minimax-cn-api",
+        groupId: "minimax",
+        groupHint: "M2.7 (recommended)",
+      },
+    ]);
+
+    expect(
+      portalProvider.auth.map((method) => ({
+        id: method.id,
+        label: method.label,
+        hint: method.hint,
+        choiceId: method.wizard?.choiceId,
+        groupId: method.wizard?.groupId,
+        groupHint: method.wizard?.groupHint,
+      })),
+    ).toEqual([
+      {
+        id: "oauth",
+        label: "MiniMax OAuth (Global)",
+        hint: "Global endpoint - api.minimax.io",
+        choiceId: "minimax-global-oauth",
+        groupId: "minimax",
+        groupHint: "M2.7 (recommended)",
+      },
+      {
+        id: "oauth-cn",
+        label: "MiniMax OAuth (CN)",
+        hint: "CN endpoint - api.minimaxi.com",
+        choiceId: "minimax-cn-oauth",
+        groupId: "minimax",
+        groupHint: "M2.7 (recommended)",
+      },
+    ]);
+  });
+
   it("owns replay policy for Anthropic and OpenAI-compatible MiniMax transports", async () => {
     const { providers } = await registerProviderPlugin({
       plugin: minimaxProviderPlugin,
@@ -145,6 +211,20 @@ describe("minimax provider hooks", () => {
 
     expect(resolvedApiModelId).toBe("MiniMax-M2.7-highspeed");
     expect(resolvedPortalModelId).toBe("MiniMax-M2.7-highspeed");
+  });
+
+  it("shares the provider hook bundle across MiniMax variants", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: minimaxProviderPlugin,
+      id: "minimax",
+      name: "MiniMax Provider",
+    });
+    const apiProvider = requireRegisteredProvider(providers, "minimax");
+    const portalProvider = requireRegisteredProvider(providers, "minimax-portal");
+
+    expect(apiProvider.buildReplayPolicy).toBe(portalProvider.buildReplayPolicy);
+    expect(apiProvider.wrapStreamFn).toBe(portalProvider.wrapStreamFn);
+    expect(apiProvider.resolveReasoningOutputMode).toBe(portalProvider.resolveReasoningOutputMode);
   });
 
   it("registers the bundled MiniMax web search provider", () => {

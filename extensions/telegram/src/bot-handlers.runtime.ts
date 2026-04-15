@@ -14,11 +14,7 @@ import {
   updateSessionStore,
 } from "openclaw/plugin-sdk/config-runtime";
 import type { DmPolicy } from "openclaw/plugin-sdk/config-runtime";
-import type {
-  TelegramDirectConfig,
-  TelegramGroupConfig,
-  TelegramTopicConfig,
-} from "openclaw/plugin-sdk/config-runtime";
+import type { TelegramGroupConfig, TelegramTopicConfig } from "openclaw/plugin-sdk/config-runtime";
 import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/config-runtime";
 import {
   buildPluginBindingResolvedText,
@@ -212,7 +208,7 @@ export const registerTelegramHandlers = ({
       entry.debounceLane === "forward" ? FORWARD_BURST_DEBOUNCE_MS : debounceMs,
     buildKey: (entry) => entry.debounceKey,
     shouldDebounce: (entry) => {
-      const text = entry.msg.text ?? entry.msg.caption ?? "";
+      const text = getTelegramTextParts(entry.msg).text;
       const hasDebounceableText = shouldDebounceTextInbound({
         text,
         cfg,
@@ -248,7 +244,7 @@ export const registerTelegramHandlers = ({
         return;
       }
       const combinedText = entries
-        .map((entry) => entry.msg.text ?? entry.msg.caption ?? "")
+        .map((entry) => getTelegramTextParts(entry.msg).text)
         .filter(Boolean)
         .join("\n");
       const combinedMedia = entries.flatMap((entry) => entry.allMedia);
@@ -304,7 +300,7 @@ export const registerTelegramHandlers = ({
     senderId?: string | number;
   }): {
     agentId: string;
-    sessionEntry: ReturnType<typeof loadSessionStore>[string] | undefined;
+    sessionEntry: ReturnType<typeof resolveSessionStoreEntry>["existing"];
     sessionKey: string;
     model?: string;
   } => {
@@ -836,8 +832,9 @@ export const registerTelegramHandlers = ({
       // for reactions, we cannot determine if the reaction came from a topic, so block all
       // reactions if requireTopic is enabled for this DM.
       if (!isGroup) {
-        const requireTopic = (eventAuthContext.groupConfig as TelegramDirectConfig | undefined)
-          ?.requireTopic;
+        const requireTopic = (
+          eventAuthContext.groupConfig as { requireTopic?: boolean } | undefined
+        )?.requireTopic;
         if (requireTopic === true) {
           logVerbose(
             `Blocked telegram reaction in DM ${chatId}: requireTopic=true but topic unknown for reactions`,
@@ -1535,7 +1532,7 @@ export const registerTelegramHandlers = ({
             }
             return;
           }
-          const models = [...modelSet].toSorted();
+          const models = [...modelSet].toSorted((left, right) => left.localeCompare(right));
           const pageSize = getModelsPageSize();
           const totalPages = calculateTotalPages(models.length, pageSize);
           const safePage = Math.max(1, Math.min(page, totalPages));

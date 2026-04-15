@@ -3,6 +3,7 @@ import { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { resolveBlueBubblesEffectiveAllowPrivateNetwork } from "./accounts.js";
+import { runBlueBubblesCatchup } from "./catchup.js";
 import { createBlueBubblesDebounceRegistry } from "./monitor-debounce.js";
 import {
   asRecord,
@@ -343,14 +344,15 @@ export async function monitorBlueBubblesProvider(
     );
   }
 
-  const unregister = registerBlueBubblesWebhookTarget({
+  const target: WebhookTarget = {
     account,
     config,
     runtime,
     core,
     path,
     statusSink,
-  });
+  };
+  const unregister = registerBlueBubblesWebhookTarget(target);
 
   return await new Promise((resolve) => {
     const stop = () => {
@@ -367,6 +369,17 @@ export async function monitorBlueBubblesProvider(
     runtime.log?.(
       `[${account.accountId}] BlueBubbles webhook listening on ${normalizeWebhookPath(path)}`,
     );
+
+    // Kick off a catchup pass for messages delivered while the webhook
+    // target wasn't reachable. Fire-and-forget; the catchup runs through the
+    // same processMessage path webhooks use, and #66230's inbound dedupe
+    // drops any GUID that was already handled, so this is safe even if a
+    // live webhook raced the startup replay. See #66721.
+    runBlueBubblesCatchup(target).catch((err) => {
+      runtime.error?.(
+        `[${account.accountId}] BlueBubbles catchup: unexpected failure: ${String(err)}`,
+      );
+    });
   });
 }
 

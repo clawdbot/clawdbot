@@ -1,14 +1,10 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../plugins/provider-runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
-    "../plugins/provider-runtime.js",
-  );
+vi.mock("../plugins/provider-hook-runtime.js", async () => {
   const replayHelpers = await vi.importActual<
     typeof import("../plugins/provider-replay-helpers.js")
   >("../plugins/provider-replay-helpers.js");
   return {
-    ...actual,
     resolveProviderRuntimePlugin: vi.fn(({ provider }: { provider?: string }) => {
       if (
         !provider ||
@@ -189,7 +185,6 @@ vi.mock("../plugins/provider-runtime.js", async () => {
         },
       };
     }),
-    resetProviderRuntimeHookCacheForTest: vi.fn(),
   };
 });
 

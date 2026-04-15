@@ -1,5 +1,6 @@
 import fsPromises from "node:fs/promises";
 import nodePath from "node:path";
+import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { readConfigFileSnapshot, replaceConfigFile, resolveGatewayPort } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
@@ -165,8 +166,7 @@ async function promptWebToolsConfig(
   const existingSearch = nextConfig.tools?.web?.search;
   const existingFetch = nextConfig.tools?.web?.fetch;
   const { resolveSearchProviderOptions, setupSearch } = await import("./onboard-search.js");
-  const { describeCodexNativeWebSearch, isCodexNativeWebSearchRelevant } =
-    await import("../agents/codex-native-web-search.js");
+  const { isCodexNativeWebSearchRelevant } = await import("../agents/codex-native-web-search.js");
   const searchProviderOptions = resolveSearchProviderOptions(nextConfig);
 
   note(

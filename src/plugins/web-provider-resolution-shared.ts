@@ -1,5 +1,4 @@
-import { resolveBundledPluginCompatibleActivationInputs } from "./activation-context.js";
-import type { NormalizedPluginsConfig } from "./config-state.js";
+import { resolveBundledPluginCompatibleLoadValues } from "./activation-context.js";
 import type { PluginLoadOptions } from "./loader.js";
 import {
   loadPluginManifestRegistry,
@@ -72,16 +71,6 @@ export function resolveManifestDeclaredWebProviderCandidatePluginIds(params: {
   onlyPluginIds?: readonly string[];
   origin?: PluginManifestRecord["origin"];
 }): string[] | undefined {
-  const contractIds = new Set(
-    resolveManifestContractPluginIds({
-      contract: params.contract,
-      origin: params.origin,
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-      onlyPluginIds: params.onlyPluginIds,
-    }),
-  );
   const scopedPluginIds = normalizePluginIdScope(params.onlyPluginIds);
   const onlyPluginIdSet = createPluginIdScopeSet(scopedPluginIds);
   const ids = loadPluginManifestRegistry({
@@ -93,8 +82,7 @@ export function resolveManifestDeclaredWebProviderCandidatePluginIds(params: {
       (plugin) =>
         (!params.origin || plugin.origin === params.origin) &&
         (!onlyPluginIdSet || onlyPluginIdSet.has(plugin.id)) &&
-        (contractIds.has(plugin.id) ||
-          pluginManifestDeclaresProviderConfig(plugin, params.configKey, params.contract)),
+        pluginManifestDeclaresProviderConfig(plugin, params.configKey, params.contract),
     )
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
@@ -127,11 +115,10 @@ export function resolveBundledWebProviderResolutionConfig(params: {
   bundledAllowlistCompat?: boolean;
 }): {
   config: PluginLoadOptions["config"];
-  normalized: NormalizedPluginsConfig;
   activationSourceConfig?: PluginLoadOptions["config"];
   autoEnabledReasons: Record<string, string[]>;
 } {
-  const activation = resolveBundledPluginCompatibleActivationInputs({
+  const activation = resolveBundledPluginCompatibleLoadValues({
     rawConfig: params.config,
     env: params.env,
     workspaceDir: params.workspaceDir,
@@ -150,7 +137,6 @@ export function resolveBundledWebProviderResolutionConfig(params: {
 
   return {
     config: activation.config,
-    normalized: activation.normalized,
     activationSourceConfig: activation.activationSourceConfig,
     autoEnabledReasons: activation.autoEnabledReasons,
   };

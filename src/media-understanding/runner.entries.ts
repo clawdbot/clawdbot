@@ -6,7 +6,8 @@ import {
 } from "../agents/api-key-rotation.js";
 import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 import {
-  mergeProviderRequestOverrides,
+  mergeModelProviderRequestOverrides,
+  sanitizeConfiguredModelProviderRequest,
   sanitizeConfiguredProviderRequest,
 } from "../agents/provider-request-config.js";
 import type { MsgContext } from "../auto-reply/templating.js";
@@ -429,7 +430,8 @@ async function resolveProviderExecutionContext(params: {
     ...sanitizeProviderHeaders(params.entry.headers as Record<string, unknown> | undefined),
   };
   const headers = Object.keys(mergedHeaders).length > 0 ? mergedHeaders : undefined;
-  const request = mergeProviderRequestOverrides(
+  const request = mergeModelProviderRequestOverrides(
+    sanitizeConfiguredModelProviderRequest(providerConfig?.request),
     sanitizeConfiguredProviderRequest(params.config?.request),
     sanitizeConfiguredProviderRequest(params.entry.request),
   );

@@ -7,7 +7,7 @@ import {
   type ProviderDiscoveryContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  buildProviderReplayFamilyHooks,
+  OPENAI_COMPATIBLE_REPLAY_HOOKS,
   type ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeOptionalString, readStringValue } from "openclaw/plugin-sdk/text-runtime";
@@ -33,9 +33,6 @@ import { createOllamaWebSearchProvider } from "./src/web-search-provider.js";
 
 const PROVIDER_ID = "ollama";
 const DEFAULT_API_KEY = "ollama-local";
-const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
-  family: "openai-compatible",
-});
 
 type OllamaPluginConfig = {
   discovery?: {

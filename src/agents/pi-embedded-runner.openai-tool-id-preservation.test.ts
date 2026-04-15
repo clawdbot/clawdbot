@@ -2,6 +2,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSanitizeSessionHistoryHelpersMock,
+  createSanitizeSessionHistoryProviderHookRuntimeMock,
   createSanitizeSessionHistoryProviderRuntimeMock,
   loadSanitizeSessionHistoryWithCleanMocks,
   makeInMemorySessionManager,
@@ -15,6 +16,24 @@ vi.mock("./pi-embedded-helpers.js", async () => await createSanitizeSessionHisto
 vi.mock(
   "../plugins/provider-runtime.js",
   async () => await createSanitizeSessionHistoryProviderRuntimeMock(),
+);
+vi.mock("../plugins/provider-hook-runtime.js", () =>
+  createSanitizeSessionHistoryProviderHookRuntimeMock({
+    resolveProviderRuntimePlugin: vi.fn(({ provider }: { provider?: string }) =>
+      provider === "openai"
+        ? {
+            buildReplayPolicy: (context?: { modelApi?: string }) => ({
+              sanitizeMode: "images-only",
+              sanitizeToolCallIds: context?.modelApi === "openai-completions",
+              ...(context?.modelApi === "openai-completions" ? { toolCallIdMode: "strict" } : {}),
+              applyAssistantFirstOrderingFix: false,
+              validateGeminiTurns: false,
+              validateAnthropicTurns: false,
+            }),
+          }
+        : undefined,
+    ),
+  }),
 );
 
 describe("sanitizeSessionHistory openai tool id preservation", () => {
@@ -63,12 +82,12 @@ describe("sanitizeSessionHistory openai tool id preservation", () => {
     {
       name: "strips fc ids when replayable reasoning metadata is missing",
       withReasoning: false,
-      expectedToolId: "call123",
+      expectedToolId: "call_123",
     },
     {
       name: "keeps canonical call_id|fc_id pairings when replayable reasoning is present",
       withReasoning: true,
-      expectedToolId: "call123fc123",
+      expectedToolId: "call_123|fc_123",
     },
   ])("$name", async ({ withReasoning, expectedToolId }) => {
     const result = await sanitizeSessionHistory({
@@ -121,7 +140,7 @@ describe("sanitizeSessionHistory openai tool id preservation", () => {
       isError?: boolean;
     };
     expect(toolResult.role).toBe("toolResult");
-    expect(toolResult.toolCallId).toBe("call123");
+    expect(toolResult.toolCallId).toBe("call_123");
     expect(toolResult.content?.[0]?.text).toBe("ok");
     expect(toolResult.isError).toBe(false);
 

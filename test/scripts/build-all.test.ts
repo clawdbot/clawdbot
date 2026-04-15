@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { BUILD_ALL_STEPS, resolveBuildAllStep } from "../../scripts/build-all.mjs";
+import {
+  BUILD_ALL_PROFILES,
+  BUILD_ALL_STEPS,
+  resolveBuildAllStep,
+  resolveBuildAllSteps,
+} from "../../scripts/build-all.mjs";
 
 describe("resolveBuildAllStep", () => {
   it("routes pnpm steps through the npm_execpath pnpm runner on Windows", () => {
@@ -68,5 +73,32 @@ describe("resolveBuildAllStep", () => {
         windowsVerbatimArguments: undefined,
       },
     });
+  });
+});
+
+describe("resolveBuildAllSteps", () => {
+  it("keeps the full profile aligned with the declared steps", () => {
+    expect(resolveBuildAllSteps("full")).toEqual(BUILD_ALL_STEPS);
+    expect(BUILD_ALL_PROFILES.full).toEqual(BUILD_ALL_STEPS.map((step) => step.label));
+  });
+
+  it("uses a runtime-only profile for ci artifacts", () => {
+    expect(resolveBuildAllSteps("ciArtifacts").map((step) => step.label)).toEqual([
+      "canvas:a2ui:bundle",
+      "tsdown",
+      "runtime-postbuild",
+      "write-npm-update-compat-sidecars",
+      "build-stamp",
+      "canvas-a2ui-copy",
+      "copy-hook-metadata",
+      "copy-export-html-templates",
+      "write-build-info",
+      "write-cli-startup-metadata",
+      "write-cli-compat",
+    ]);
+  });
+
+  it("rejects unknown build profiles", () => {
+    expect(() => resolveBuildAllSteps("wat")).toThrow("Unknown build profile: wat");
   });
 });

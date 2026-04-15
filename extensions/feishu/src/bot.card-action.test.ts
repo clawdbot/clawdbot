@@ -367,6 +367,29 @@ describe("Feishu Card Action Handler", () => {
     expect(handleFeishuMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects empty callback tokens before dispatch", async () => {
+    const log = vi.fn();
+    const event = createStructuredQuickActionEvent({
+      token: "   ",
+      action: "feishu.quick_actions.help",
+      command: "/help",
+    });
+
+    await handleFeishuCardAction({
+      cfg,
+      event,
+      runtime: {
+        ...runtime,
+        log,
+      },
+    });
+
+    expect(handleFeishuMessage).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(
+      "feishu[mock-account]: rejected card action from u123: missing token",
+    );
+  });
+
   it("keeps a claimed token completed after a non-retryable dispatch failure", async () => {
     const event = createStructuredQuickActionEvent({
       token: "tok11",

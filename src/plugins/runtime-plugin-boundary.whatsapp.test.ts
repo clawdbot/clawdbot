@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { stageBundledPluginRuntime } from "../../scripts/stage-bundled-plugin-runtime.mjs";
 import { bundledDistPluginFile } from "../../test/helpers/bundled-plugin-paths.js";
+import type { PluginJitiLoaderCache } from "./jiti-loader-cache.js";
 import { loadPluginBoundaryModuleWithJiti } from "./runtime/runtime-plugin-boundary.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -89,7 +90,7 @@ function createBundledWhatsAppRuntimeFixture() {
 }
 
 function loadWhatsAppBoundaryModules(runtimePluginDir: string) {
-  const loaders = new Map<boolean, ReturnType<typeof import("jiti").createJiti>>();
+  const loaders: PluginJitiLoaderCache = new Map();
   return {
     light: loadPluginBoundaryModuleWithJiti<LightModule>(
       path.join(runtimePluginDir, "light-runtime-api.js"),

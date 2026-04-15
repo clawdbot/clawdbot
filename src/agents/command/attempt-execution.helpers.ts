@@ -73,7 +73,13 @@ export function resolveFallbackRetryPrompt(params: {
   if (!params.sessionHasHistory) {
     return params.body;
   }
-  return "Continue where you left off. The previous model attempt failed or timed out.";
+  // Even with persisted session history, fully replacing the body with a
+  // generic "continue where you left off" message strips the original task
+  // from the fallback model's view. Agents then have to reconstruct the
+  // instruction from history alone, which is fragile and sometimes
+  // impossible. Prepend the retry context to the original body instead so
+  // the fallback model has both the recovery signal AND the task. (#65760)
+  return `[Retry after the previous model attempt failed or timed out]\n\n${params.body}`;
 }
 
 export function createAcpVisibleTextAccumulator() {

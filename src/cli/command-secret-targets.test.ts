@@ -14,6 +14,7 @@ const REGISTRY_IDS = [
   "models.providers.openai.apiKey",
   "messages.tts.providers.openai.apiKey",
   "plugins.entries.firecrawl.config.webFetch.apiKey",
+  "plugins.entries.exa.config.webSearch.apiKey",
   "skills.entries.demo.apiKey",
   "tools.web.search.apiKey",
 ] as const;
@@ -77,6 +78,7 @@ describe("command secret target ids", () => {
     expect(ids.has("agents.defaults.memorySearch.remote.apiKey")).toBe(true);
     expect(ids.has("agents.list[].memorySearch.remote.apiKey")).toBe(true);
     expect(ids.has("plugins.entries.firecrawl.config.webFetch.apiKey")).toBe(true);
+    expect(ids.has("plugins.entries.exa.config.webSearch.apiKey")).toBe(true);
     expect(ids.has("channels.discord.token")).toBe(false);
   });
 

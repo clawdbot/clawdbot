@@ -125,6 +125,7 @@ export async function createWaSocket(
   const { state, saveCreds } = await useMultiFileAuthState(authDir);
   const { version } = await fetchLatestBaileysVersion();
   const agent = await resolveEnvProxyAgent(sessionLogger);
+  const fetchAgent = await resolveEnvFetchDispatcher(sessionLogger, agent);
   const sock = makeWASocket({
     auth: {
       creds: state.creds,
@@ -137,7 +138,9 @@ export async function createWaSocket(
     syncFullHistory: false,
     markOnlineOnConnect: false,
     agent,
-    fetchAgent: agent,
+    // Baileys types still model `fetchAgent` as a Node agent even though the
+    // runtime path accepts an undici dispatcher for upload fetches.
+    fetchAgent: fetchAgent as Agent | undefined,
   });
 
   sock.ev.on("creds.update", () => enqueueSaveCreds(authDir, saveCreds, sessionLogger));
@@ -197,6 +200,58 @@ async function resolveEnvProxyAgent(
       logger.info("Using ambient env proxy for WhatsApp WebSocket connection");
     },
   });
+}
+
+async function resolveEnvFetchDispatcher(
+  logger: ReturnType<typeof getChildLogger>,
+  agent?: unknown,
+): Promise<unknown> {
+  const proxyUrl = resolveProxyUrlFromAgent(agent);
+  const envProxyUrl = resolveEnvHttpsProxyUrl();
+  if (!proxyUrl && !envProxyUrl) {
+    return undefined;
+  }
+  try {
+    const { EnvHttpProxyAgent, ProxyAgent } = await import("undici");
+    return proxyUrl
+      ? new ProxyAgent({ allowH2: false, uri: proxyUrl })
+      : new EnvHttpProxyAgent({ allowH2: false });
+  } catch (error) {
+    logger.warn(
+      { error: String(error) },
+      "Failed to initialize env proxy dispatcher for WhatsApp media uploads",
+    );
+    return undefined;
+  }
+}
+
+function resolveProxyUrlFromAgent(agent: unknown): string | undefined {
+  if (typeof agent !== "object" || agent === null || !("proxy" in agent)) {
+    return undefined;
+  }
+  const proxy = (agent as { proxy?: unknown }).proxy;
+  if (proxy instanceof URL) {
+    return proxy.toString();
+  }
+  return typeof proxy === "string" && proxy.length > 0 ? proxy : undefined;
+}
+
+function resolveEnvHttpsProxyUrl(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const lowerHttpsProxy = normalizeEnvProxyValue(env.https_proxy);
+  const lowerHttpProxy = normalizeEnvProxyValue(env.http_proxy);
+  const httpsProxy =
+    lowerHttpsProxy !== undefined ? lowerHttpsProxy : normalizeEnvProxyValue(env.HTTPS_PROXY);
+  const httpProxy =
+    lowerHttpProxy !== undefined ? lowerHttpProxy : normalizeEnvProxyValue(env.HTTP_PROXY);
+  return httpsProxy ?? httpProxy ?? undefined;
+}
+
+function normalizeEnvProxyValue(value: string | undefined): string | null | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>) {

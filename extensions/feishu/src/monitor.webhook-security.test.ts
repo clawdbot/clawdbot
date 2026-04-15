@@ -28,6 +28,7 @@ vi.mock("@larksuiteoapi/node-sdk", () => ({
   ),
 }));
 
+import type { RuntimeEnv } from "../runtime-api.js";
 import {
   clearFeishuWebhookRateLimitStateForTest,
   getFeishuWebhookRateLimitStateSizeForTest,
@@ -35,6 +36,8 @@ import {
   monitorFeishuProvider,
   stopFeishuMonitor,
 } from "./monitor.js";
+import { monitorWebhook } from "./monitor.transport.js";
+import type { ResolvedFeishuAccount } from "./types.js";
 
 async function waitForSlowBodyTimeoutResponse(
   url: string,
@@ -108,6 +111,33 @@ describe("Feishu webhook security hardening", () => {
     });
 
     await expect(monitorFeishuProvider({ config: cfg })).rejects.toThrow(/requires encryptKey/i);
+  });
+
+  it("refuses to start the webhook transport without encryptKey", async () => {
+    const account = {
+      accountId: "transport-missing-encrypt-key",
+      config: {
+        enabled: true,
+        connectionMode: "webhook",
+        webhookHost: "127.0.0.1",
+        webhookPort: await getFreePort(),
+        webhookPath: "/hook-transport-missing-encrypt",
+      },
+    } as ResolvedFeishuAccount;
+
+    await expect(
+      monitorWebhook({
+        account,
+        accountId: account.accountId,
+        runtime: {
+          log: vi.fn(),
+          error: vi.fn(),
+          exit: vi.fn(),
+        } as RuntimeEnv,
+        abortSignal: new AbortController().signal,
+        eventDispatcher: {} as never,
+      }),
+    ).rejects.toThrow(/requires encryptKey/i);
   });
 
   it("returns 415 for POST requests without json content type", async () => {

@@ -202,7 +202,7 @@ describe("promptCustomApiConfig", () => {
 
     const firstCall = fetchMock.mock.calls[0]?.[1] as { body?: string } | undefined;
     expect(firstCall?.body).toBeDefined();
-    expect(JSON.parse(firstCall?.body ?? "{}")).toMatchObject({ max_tokens: 1 });
+    expect(JSON.parse(firstCall?.body ?? "{}")).toMatchObject({ max_tokens: 16 });
   });
 
   it("uses azure responses-specific headers and body for openai verification probes", async () => {
@@ -259,7 +259,7 @@ describe("promptCustomApiConfig", () => {
     expect(body).toEqual({
       model: "deepseek-v3-0324",
       messages: [{ role: "user", content: "Hi" }],
-      max_tokens: 1,
+      max_tokens: 16,
       stream: false,
     });
   });

@@ -6,7 +6,11 @@ import type {
 } from "../../channels/plugins/types.public.js";
 import { normalizeAnyChannelId, normalizeChannelId } from "../../channels/registry.js";
 import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
-import { getAgentRuntimeCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
+import {
+  getAgentRuntimeCommandSecretTargetIds,
+  getScopedChannelsCommandSecretTargets,
+} from "../../cli/command-secret-targets.js";
+import { resolveMessageSecretScope } from "../../cli/message-secret-scope.js";
 import { getRuntimeConfigSnapshot, type OpenClawConfig } from "../../config/config.js";
 import {
   normalizeOptionalLowercaseString,
@@ -32,6 +36,12 @@ export function resolveQueuedReplyRuntimeConfig(config: OpenClawConfig): OpenCla
 
 export async function resolveQueuedReplyExecutionConfig(
   config: OpenClawConfig,
+  params?: {
+    originatingChannel?: string;
+    messageProvider?: string;
+    originatingAccountId?: string;
+    agentAccountId?: string;
+  },
 ): Promise<OpenClawConfig> {
   const runtimeConfig = resolveQueuedReplyRuntimeConfig(config);
   const { resolvedConfig } = await resolveCommandSecretRefsViaGateway({
@@ -39,7 +49,34 @@ export async function resolveQueuedReplyExecutionConfig(
     commandName: "reply",
     targetIds: getAgentRuntimeCommandSecretTargetIds(),
   });
-  return resolvedConfig ?? runtimeConfig;
+  const baseResolvedConfig = resolvedConfig ?? runtimeConfig;
+
+  const scope = resolveMessageSecretScope({
+    channel: params?.originatingChannel,
+    fallbackChannel: params?.messageProvider,
+    accountId: params?.originatingAccountId,
+    fallbackAccountId: params?.agentAccountId,
+  });
+  if (!scope.channel) {
+    return baseResolvedConfig;
+  }
+
+  const scopedTargets = getScopedChannelsCommandSecretTargets({
+    config: baseResolvedConfig,
+    channel: scope.channel,
+    accountId: scope.accountId,
+  });
+  if (scopedTargets.targetIds.size === 0) {
+    return baseResolvedConfig;
+  }
+
+  const scopedResolved = await resolveCommandSecretRefsViaGateway({
+    config: baseResolvedConfig,
+    commandName: "reply",
+    targetIds: scopedTargets.targetIds,
+    ...(scopedTargets.allowedPaths ? { allowedPaths: scopedTargets.allowedPaths } : {}),
+  });
+  return scopedResolved.resolvedConfig ?? baseResolvedConfig;
 }
 
 /**

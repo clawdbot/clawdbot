@@ -52,6 +52,7 @@ export const AgentDefaultsSchema = z
     contextInjection: z.union([z.literal("always"), z.literal("continuation-skip")]).optional(),
     bootstrapMaxChars: z.number().int().positive().optional(),
     bootstrapTotalMaxChars: z.number().int().positive().optional(),
+    localModelMode: z.union([z.literal("default"), z.literal("lean")]).optional(),
     bootstrapPromptTruncationWarning: z
       .union([z.literal("off"), z.literal("once"), z.literal("always")])
       .optional(),

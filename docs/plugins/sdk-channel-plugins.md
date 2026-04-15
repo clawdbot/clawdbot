@@ -35,6 +35,16 @@ shared `message` tool in core. Your plugin owns:
 Core owns the shared message tool, prompt wiring, the outer session-key shape,
 generic `:thread:` bookkeeping, and dispatch.
 
+If your channel adds message-tool params that carry media sources, expose those
+param names through `describeMessageTool(...).mediaSourceParams`. Core uses
+that explicit list for sandbox path normalization and outbound media-access
+policy, so plugins do not need shared-core special cases for provider-specific
+avatar, attachment, or cover-image params.
+Prefer returning an action-keyed map such as
+`{ "set-profile": ["avatarUrl", "avatarPath"] }` so unrelated actions do not
+inherit another action's media args. A flat array still works for params that
+are intentionally shared across every exposed action.
+
 If your platform stores extra scope inside conversation ids, keep that parsing
 in the plugin with `messaging.resolveSessionConversation(...)`. That is the
 canonical hook for mapping `rawId` to the base conversation id, optional thread

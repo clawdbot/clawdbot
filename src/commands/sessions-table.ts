@@ -1,10 +1,5 @@
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import type { SessionEntry } from "../config/sessions.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSessionModelRef } from "../gateway/session-utils.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
-import { parseAgentSessionKey } from "../routing/session-key.js";
 import { theme } from "../terminal/theme.js";
 
 export type SessionDisplayRow = {
@@ -70,29 +65,6 @@ export function toSessionDisplayRows(store: Record<string, SessionEntry>): Sessi
       } satisfies SessionDisplayRow;
     })
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-}
-
-export function resolveSessionDisplayDefaults(cfg: OpenClawConfig): SessionDisplayDefaults {
-  const resolved = resolveConfiguredModelRef({
-    cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
-  return {
-    model: resolved.model ?? DEFAULT_MODEL,
-  };
-}
-
-export function resolveSessionDisplayModel(
-  cfg: OpenClawConfig,
-  row: Pick<
-    SessionDisplayRow,
-    "key" | "model" | "modelProvider" | "modelOverride" | "providerOverride"
-  >,
-  defaults: SessionDisplayDefaults,
-): string {
-  const resolved = resolveSessionModelRef(cfg, row, parseAgentSessionKey(row.key)?.agentId);
-  return resolved.model ?? defaults.model;
 }
 
 function truncateSessionKey(key: string): string {

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   auditGatewayServiceConfig,
   buildGatewayInstallPlan,
@@ -11,17 +11,10 @@ import {
   serviceRestart,
   writeConfigFile,
 } from "./doctor.e2e-harness.js";
-
-let doctorCommand: typeof import("./doctor.js").doctorCommand;
-let healthCommand: typeof import("./health.js").healthCommand;
+import { doctorCommand } from "./doctor.js";
+import { healthCommand } from "./health.js";
 
 describe("doctor command update-mode repairs", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ doctorCommand } = await import("./doctor.js"));
-    ({ healthCommand } = await import("./health.js"));
-  });
-
   it("skips gateway installs during non-interactive update repairs", async () => {
     mockDoctorConfigSnapshot();
 

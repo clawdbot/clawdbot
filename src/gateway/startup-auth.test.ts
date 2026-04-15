@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { expectGeneratedTokenPersistedToGatewayAuth } from "../test-utils/auth-token-assertions.js";
+import {
+  assertGatewayAuthNotKnownWeak,
+  assertHooksTokenSeparateFromGatewayAuth,
+  ensureGatewayStartupAuth,
+} from "./startup-auth.js";
 
 const mocks = vi.hoisted(() => ({
   replaceConfigFile: vi.fn(async (_params: { nextConfig: OpenClawConfig }) => {}),
@@ -13,19 +18,6 @@ vi.mock("../config/config.js", async () => {
     replaceConfigFile: mocks.replaceConfigFile,
   };
 });
-
-let assertGatewayAuthNotKnownWeak: typeof import("./startup-auth.js").assertGatewayAuthNotKnownWeak;
-let assertHooksTokenSeparateFromGatewayAuth: typeof import("./startup-auth.js").assertHooksTokenSeparateFromGatewayAuth;
-let ensureGatewayStartupAuth: typeof import("./startup-auth.js").ensureGatewayStartupAuth;
-
-async function loadFreshStartupAuthModuleForTest() {
-  vi.resetModules();
-  ({
-    assertGatewayAuthNotKnownWeak,
-    assertHooksTokenSeparateFromGatewayAuth,
-    ensureGatewayStartupAuth,
-  } = await import("./startup-auth.js"));
-}
 
 describe("ensureGatewayStartupAuth", () => {
   async function expectEphemeralGeneratedTokenWhenOverridden(cfg: OpenClawConfig) {
@@ -43,10 +35,9 @@ describe("ensureGatewayStartupAuth", () => {
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   }
 
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.restoreAllMocks();
     mocks.replaceConfigFile.mockClear();
-    await loadFreshStartupAuthModuleForTest();
   });
 
   async function expectNoTokenGeneration(cfg: OpenClawConfig, mode: string) {
@@ -476,8 +467,9 @@ describe("ensureGatewayStartupAuth", () => {
 });
 
 describe("assertGatewayAuthNotKnownWeak", () => {
-  beforeEach(async () => {
-    await loadFreshStartupAuthModuleForTest();
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    mocks.replaceConfigFile.mockClear();
   });
 
   it("throws on the known-weak token sentinel", () => {

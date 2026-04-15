@@ -1013,7 +1013,12 @@ export async function runReplyAgent(params: {
     return undefined;
   }
 
-  followupRun.run.config = await resolveQueuedReplyExecutionConfig(followupRun.run.config);
+  followupRun.run.config = await resolveQueuedReplyExecutionConfig(followupRun.run.config, {
+    originatingChannel: sessionCtx.OriginatingChannel,
+    messageProvider: followupRun.run.messageProvider,
+    originatingAccountId: followupRun.originatingAccountId,
+    agentAccountId: followupRun.run.agentAccountId,
+  });
 
   const replyToChannel = resolveOriginMessageProvider({
     originatingChannel: sessionCtx.OriginatingChannel,
@@ -1031,6 +1036,15 @@ export async function runReplyAgent(params: {
     cfg,
     sessionKey,
     workspaceDir: followupRun.run.workspaceDir,
+    messageProvider: followupRun.run.messageProvider,
+    accountId: followupRun.originatingAccountId ?? followupRun.run.agentAccountId,
+    groupId: followupRun.run.groupId,
+    groupChannel: followupRun.run.groupChannel,
+    groupSpace: followupRun.run.groupSpace,
+    requesterSenderId: followupRun.run.senderId,
+    requesterSenderName: followupRun.run.senderName,
+    requesterSenderUsername: followupRun.run.senderUsername,
+    requesterSenderE164: followupRun.run.senderE164,
   });
   const blockReplyCoalescing =
     blockStreamingEnabled && opts?.onBlockReply

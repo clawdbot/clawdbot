@@ -4,11 +4,10 @@ import type {
   ProviderFetchUsageSnapshotContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth-result";
-import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
-import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import { fetchGeminiUsage } from "openclaw/plugin-sdk/provider-usage";
 import { formatGoogleOauthApiKey, parseGoogleUsageToken } from "./oauth-token-shared.js";
+import { GOOGLE_GEMINI_PROVIDER_HOOKS } from "./provider-hooks.js";
 import { isModernGoogleModel, resolveGoogleGeminiForwardCompatModel } from "./provider-models.js";
 
 const PROVIDER_ID = "google-gemini-cli";
@@ -22,8 +21,7 @@ const ENV_VARS = [
 ] as const;
 
 const GOOGLE_GEMINI_CLI_PROVIDER_HOOKS = {
-  ...buildProviderReplayFamilyHooks({ family: "google-gemini" }),
-  ...buildProviderStreamFamilyHooks("google-thinking"),
+  ...GOOGLE_GEMINI_PROVIDER_HOOKS,
   ...buildProviderToolCompatFamilyHooks("gemini"),
 };
 

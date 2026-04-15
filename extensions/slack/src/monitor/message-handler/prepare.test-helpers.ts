@@ -86,7 +86,12 @@ export function createSlackSessionStoreFixture(prefix: string) {
       if (!fixtureRoot) {
         return;
       }
-      fs.rmSync(fixtureRoot, { recursive: true, force: true });
+      fs.rmSync(fixtureRoot, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 50,
+      });
       fixtureRoot = "";
     },
     makeTmpStorePath() {

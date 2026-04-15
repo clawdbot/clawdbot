@@ -219,4 +219,41 @@ describe("Feishu card-action lifecycle", () => {
     expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
     expectFeishuReplyDispatcherSentFinalReplyOnce({ createFeishuReplyDispatcherMock });
   });
+
+  it("drops malformed card-action events with empty tokens before handler dispatch", async () => {
+    const onCardAction = await setupLifecycleMonitor();
+
+    await onCardAction({
+      operator: {
+        open_id: "ou_user1",
+        user_id: "user_1",
+        union_id: "union_1",
+      },
+      token: "",
+      action: {
+        tag: "button",
+        value: createFeishuCardInteractionEnvelope({
+          k: "quick",
+          a: "feishu.quick_actions.help",
+          q: "/help",
+          c: {
+            u: "ou_user1",
+            h: "p2p:ou_user1",
+            t: "p2p",
+            e: Date.now() + 60_000,
+          },
+        }),
+      },
+      context: {
+        open_id: "ou_user1",
+        user_id: "user_1",
+        chat_id: "p2p:ou_user1",
+      },
+    });
+
+    expect(lastRuntime?.error).toHaveBeenCalledWith(
+      "feishu[acct-card]: ignoring malformed card action payload",
+    );
+    expect(dispatchReplyFromConfigMock).not.toHaveBeenCalled();
+  });
 });

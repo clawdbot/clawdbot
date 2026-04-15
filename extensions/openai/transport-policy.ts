@@ -6,7 +6,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
-import { isOpenAIApiBaseUrl, isOpenAICodexBaseUrl } from "./shared.js";
+import { isOpenAIApiBaseUrl, isOpenAICodexBaseUrl } from "./base-url.js";
 
 const DEFAULT_OPENAI_WS_DEGRADE_COOLDOWN_MS = 60_000;
 const AZURE_PROVIDER_IDS = new Set(["azure-openai", "azure-openai-responses"]);

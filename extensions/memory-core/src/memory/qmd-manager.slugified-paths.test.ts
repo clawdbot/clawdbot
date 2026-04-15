@@ -11,17 +11,17 @@ const { logWarnMock, logDebugMock, logInfoMock } = vi.hoisted(() => ({
   logInfoMock: vi.fn(),
 }));
 
-type MockChild = EventEmitter & {
+interface MockChild extends EventEmitter {
   stdout: EventEmitter;
   stderr: EventEmitter;
   kill: (signal?: NodeJS.Signals) => void;
   closeWith: (code?: number | null) => void;
-};
+}
 
 function createMockChild(params?: { autoClose?: boolean }): MockChild {
   const stdout = new EventEmitter();
   const stderr = new EventEmitter();
-  const child = new EventEmitter() as MockChild;
+  const child = new EventEmitter() as unknown as MockChild;
   child.stdout = stdout;
   child.stderr = stderr;
   child.closeWith = (code = 0) => {
@@ -123,14 +123,32 @@ describe("QmdMemoryManager slugified path resolution", () => {
   }) {
     const inner = params.manager as unknown as {
       db: {
-        prepare: (query: string) => { all: (...args: unknown[]) => unknown };
+        prepare: (query: string) => {
+          get: (...args: unknown[]) => unknown;
+          all: (...args: unknown[]) => unknown;
+        };
         close: () => void;
       };
     };
     inner.db = {
       prepare: (query: string) => ({
+        get: (...args: unknown[]) => {
+          if (query.includes("collection = ? AND active = 1 AND path = ?")) {
+            expect(args[0]).toBe(params.collection);
+            const requestedPath = args[1];
+            expect(typeof requestedPath).toBe("string");
+            const exactCandidates = new Set([
+              ...(params.exactPaths ?? []),
+              ...(params.actualPath ? [params.actualPath] : []),
+            ]);
+            return typeof requestedPath === "string" && exactCandidates.has(requestedPath)
+              ? { path: requestedPath }
+              : undefined;
+          }
+          throw new Error(`unexpected sqlite query: ${query}`);
+        },
         all: (...args: unknown[]) => {
-          if (query.includes("collection = ? AND path = ?")) {
+          if (query.includes("collection = ? AND path = ? AND active = 1")) {
             expect(args).toEqual([params.collection, params.normalizedPath]);
             return (params.exactPaths ?? []).map((pathValue) => ({ path: pathValue }));
           }

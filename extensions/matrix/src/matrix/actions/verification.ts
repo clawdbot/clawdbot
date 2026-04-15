@@ -2,7 +2,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { CoreConfig } from "../../types.js";
 import { formatMatrixEncryptionUnavailableError } from "../encryption-guidance.js";
-import { withStartedActionClient } from "./client.js";
+import { withResolvedActionClient, withStartedActionClient } from "./client.js";
 import type { MatrixActionClientOpts } from "./types.js";
 
 function requireCrypto(
@@ -152,7 +152,7 @@ export async function confirmMatrixVerificationReciprocateQr(
 export async function getMatrixEncryptionStatus(
   opts: MatrixActionClientOpts & { includeRecoveryKey?: boolean } = {},
 ) {
-  return await withStartedActionClient(opts, async (client) => {
+  return await withResolvedActionClient(opts, async (client) => {
     const crypto = requireCrypto(client, opts);
     const recoveryKey = await crypto.getRecoveryKey();
     return {
@@ -168,7 +168,7 @@ export async function getMatrixEncryptionStatus(
 export async function getMatrixVerificationStatus(
   opts: MatrixActionClientOpts & { includeRecoveryKey?: boolean } = {},
 ) {
-  return await withStartedActionClient(opts, async (client) => {
+  return await withResolvedActionClient(opts, async (client) => {
     const status = await client.getOwnDeviceVerificationStatus();
     const payload = {
       ...status,
@@ -186,7 +186,7 @@ export async function getMatrixVerificationStatus(
 }
 
 export async function getMatrixRoomKeyBackupStatus(opts: MatrixActionClientOpts = {}) {
-  return await withStartedActionClient(
+  return await withResolvedActionClient(
     opts,
     async (client) => await client.getRoomKeyBackupStatus(),
   );

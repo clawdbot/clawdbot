@@ -18,12 +18,10 @@ import {
 } from "../infra/node-commands.js";
 import { normalizePluginGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import {
-  normalizeOptionalString,
-  normalizeStringifiedOptionalString,
-} from "../shared/string-coerce.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import { buildPluginApi } from "./api-builder.js";
+import { normalizeRegisteredChannelPlugin } from "./channel-validation.js";
 import { registerPluginCommand, validatePluginCommandDefinition } from "./command-registration.js";
 import {
   getRegisteredCompactionProvider,
@@ -449,18 +447,16 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       typeof (registration as OpenClawPluginChannelRegistration).plugin === "object"
         ? (registration as OpenClawPluginChannelRegistration)
         : { plugin: registration as ChannelPlugin };
-    const plugin = normalized.plugin;
-    const id =
-      normalizeOptionalString(plugin?.id) ?? normalizeStringifiedOptionalString(plugin?.id) ?? "";
-    if (!id) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: "channel registration missing id",
-      });
+    const plugin = normalizeRegisteredChannelPlugin({
+      pluginId: record.id,
+      source: record.source,
+      plugin: normalized.plugin,
+      pushDiagnostic,
+    });
+    if (!plugin) {
       return;
     }
+    const id = plugin.id;
     const existingRuntime = registry.channels.find((entry) => entry.plugin.id === id);
     if (mode !== "setup-only" && existingRuntime) {
       pushDiagnostic({

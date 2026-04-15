@@ -178,4 +178,56 @@ describe("runCapability proxy fetch passthrough", () => {
     });
     expect(seenFetchFn).toBeUndefined();
   });
+
+  it("passes allowPrivateNetwork to audio provider when set in providerConfig.request", async () => {
+    let seenRequest: AudioTranscriptionRequest["request"];
+
+    await withAudioFixture("openclaw-audio-allowprivatenetwork", async ({ ctx, media, cache }) => {
+      const providerRegistry = buildProviderRegistry({
+        openai: {
+          id: "openai",
+          capabilities: ["audio"],
+          transcribeAudio: async (req: AudioTranscriptionRequest) => {
+            seenRequest = req.request;
+            return { text: "ok", model: req.model };
+          },
+        },
+      });
+
+      const cfg = {
+        models: {
+          providers: {
+            openai: {
+              apiKey: "test-key", // pragma: allowlist secret
+              request: {
+                allowPrivateNetwork: true,
+              },
+              models: [],
+            },
+          },
+        },
+        tools: {
+          media: {
+            audio: {
+              enabled: true,
+              models: [{ provider: "openai", model: "whisper-1" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = await runCapability({
+        capability: "audio",
+        cfg,
+        ctx,
+        attachments: cache,
+        media,
+        providerRegistry,
+      });
+
+      expect(result.outputs[0]?.text).toBe("ok");
+    });
+
+    expect(seenRequest?.allowPrivateNetwork).toBe(true);
+  });
 });

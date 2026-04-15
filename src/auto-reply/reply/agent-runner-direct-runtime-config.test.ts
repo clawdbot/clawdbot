@@ -136,12 +136,27 @@ describe("runReplyAgent runtime config", () => {
     ).rejects.toBe(sentinelError);
 
     expect(followupRun.run.config).toBe(freshCfg);
-    expect(resolveQueuedReplyExecutionConfigMock).toHaveBeenCalledWith(staleCfg);
+    expect(resolveQueuedReplyExecutionConfigMock).toHaveBeenCalledWith(
+      staleCfg,
+      expect.objectContaining({
+        originatingChannel: "telegram",
+        messageProvider: "telegram",
+      }),
+    );
     expect(resolveReplyToModeMock).toHaveBeenCalledWith(freshCfg, "telegram", "default", "dm");
     expect(createReplyMediaPathNormalizerMock).toHaveBeenCalledWith({
       cfg: freshCfg,
       sessionKey: undefined,
       workspaceDir: "/tmp",
+      messageProvider: "telegram",
+      accountId: undefined,
+      groupId: undefined,
+      groupChannel: undefined,
+      groupSpace: undefined,
+      requesterSenderId: undefined,
+      requesterSenderName: undefined,
+      requesterSenderUsername: undefined,
+      requesterSenderE164: undefined,
     });
     expect(runPreflightCompactionIfNeededMock).toHaveBeenCalledWith(
       expect.objectContaining({

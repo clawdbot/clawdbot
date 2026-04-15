@@ -10,13 +10,13 @@ import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
+import { isPassThroughRemoteMediaSource } from "./media-source-url.js";
 
 type BuildMediaLocalRootsOptions = {
   preferredTmpDir?: string;
 };
 
 let cachedPreferredTmpDir: string | undefined;
-const HTTP_URL_RE = /^https?:\/\//i;
 const DATA_URL_RE = /^data:/i;
 const WINDOWS_DRIVE_RE = /^[A-Za-z]:[\\/]/;
 
@@ -73,7 +73,7 @@ export function getAgentScopedMediaLocalRoots(
 
 function resolveLocalMediaPath(source: string): string | undefined {
   const trimmed = source.trim();
-  if (!trimmed || HTTP_URL_RE.test(trimmed) || DATA_URL_RE.test(trimmed)) {
+  if (!trimmed || isPassThroughRemoteMediaSource(trimmed) || DATA_URL_RE.test(trimmed)) {
     return undefined;
   }
   if (trimmed.startsWith("file://")) {

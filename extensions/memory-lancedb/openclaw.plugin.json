@@ -47,6 +47,11 @@
       "help": "Maximum message length eligible for auto-capture",
       "advanced": true,
       "placeholder": "500"
+    },
+    "storageOptions": {
+      "label": "Storage Options",
+      "advanced": true,
+      "help": "Storage configuration options (access_key, secret_key, endpoint, etc.); supports ${ENV_VAR} values"
     }
   },
   "configSchema": {
@@ -88,6 +93,12 @@
         "type": "number",
         "minimum": 100,
         "maximum": 10000
+      },
+      "storageOptions": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        }
       }
     },
     "required": ["embedding"]

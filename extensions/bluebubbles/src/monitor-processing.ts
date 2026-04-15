@@ -13,6 +13,10 @@ import { downloadBlueBubblesAttachment } from "./attachments.js";
 import { markBlueBubblesChatRead, sendBlueBubblesTyping } from "./chat.js";
 import { resolveBlueBubblesConversationRoute } from "./conversation-route.js";
 import { fetchBlueBubblesHistory } from "./history.js";
+import {
+  claimBlueBubblesInboundMessage,
+  resolveBlueBubblesInboundDedupeKey,
+} from "./inbound-dedupe.js";
 import { sendBlueBubblesMedia } from "./media-send.js";
 import {
   buildMessagePlaceholder,
@@ -581,11 +585,102 @@ function buildInboundHistorySnapshot(params: {
   return selected;
 }
 
+function sanitizeForLog(value: unknown, maxLen = 200): string {
+  const cleaned = String(value).replace(/[\r\n\t\p{C}]/gu, " ");
+  return cleaned.length > maxLen ? cleaned.slice(0, maxLen) + "..." : cleaned;
+}
+
+/**
+ * Signal object threaded through `processMessageAfterDedupe` so the outer
+ * wrapper can distinguish "reply delivery failed silently" from "returned
+ * normally after an intentional drop" (fromMe cache, pairing flow, allowlist
+ * block, empty text, etc.).
+ *
+ * Reply delivery errors in the BlueBubbles path surface through the
+ * dispatcher's `onError` callback rather than as thrown exceptions, so a
+ * plain try/catch cannot detect them — see review thread `rwF8` on #66230.
+ */
+type InboundDedupeDeliverySignal = { deliveryFailed: boolean };
+
+/**
+ * Claim → process → finalize/release wrapper around the real inbound flow.
+ *
+ * Claim before doing any work so restart replays and in-flight concurrent
+ * redeliveries both drop cleanly. Finalize (persist the GUID) only when
+ * processing completed cleanly AND any reply dispatch reported success;
+ * release (let a later replay try again) when processing threw OR the reply
+ * pipeline reported a delivery failure via its onError callback.
+ *
+ * The dedupe key follows the same canonicalization rules as the debouncer
+ * (`monitor-debounce.ts`): balloon events (URL previews, stickers) share
+ * a logical identity with their originating text message via
+ * `associatedMessageGuid`, so balloon-first vs text-first event ordering
+ * cannot produce two distinct dedupe keys for the same logical message.
+ */
 export async function processMessage(
   message: NormalizedWebhookMessage,
   target: WebhookTarget,
 ): Promise<void> {
+  const { account, core, runtime } = target;
+
+  const dedupeKey = resolveBlueBubblesInboundDedupeKey(message);
+
+  // Drop BlueBubbles MessagePoller replays after server restart (#19176, #12053).
+  const claim = await claimBlueBubblesInboundMessage({
+    guid: dedupeKey,
+    accountId: account.accountId,
+    onDiskError: (error) =>
+      logVerbose(core, runtime, `inbound-dedupe disk error: ${sanitizeForLog(error)}`),
+  });
+  if (claim.kind === "duplicate" || claim.kind === "inflight") {
+    logVerbose(
+      core,
+      runtime,
+      `drop: ${claim.kind} inbound key=${sanitizeForLog(dedupeKey ?? "")} sender=${sanitizeForLog(message.senderId)}`,
+    );
+    return;
+  }
+
+  const signal: InboundDedupeDeliverySignal = { deliveryFailed: false };
+  try {
+    await processMessageAfterDedupe(message, target, signal);
+  } catch (error) {
+    if (claim.kind === "claimed") {
+      claim.release();
+    }
+    throw error;
+  }
+  if (claim.kind === "claimed") {
+    if (signal.deliveryFailed) {
+      logVerbose(
+        core,
+        runtime,
+        `inbound-dedupe: releasing claim for key=${sanitizeForLog(dedupeKey ?? "")} after reply delivery failure (will retry on replay)`,
+      );
+      claim.release();
+    } else {
+      try {
+        await claim.finalize();
+      } catch (finalizeError) {
+        // commit() already clears inflight state in its finally block, so
+        // no explicit release() needed here — just log the persistence error.
+        logVerbose(
+          core,
+          runtime,
+          `inbound-dedupe: finalize failed for key=${sanitizeForLog(dedupeKey ?? "")}: ${sanitizeForLog(finalizeError)}`,
+        );
+      }
+    }
+  }
+}
+
+async function processMessageAfterDedupe(
+  message: NormalizedWebhookMessage,
+  target: WebhookTarget,
+  dedupeSignal: InboundDedupeDeliverySignal,
+): Promise<void> {
   const { account, config, runtime, core, statusSink } = target;
+
   const pairing = createChannelPairingController({
     core,
     channel: "bluebubbles",
@@ -1597,6 +1692,19 @@ export async function processMessage(
         onReplyStart: typingCallbacks?.onReplyStart,
         onIdle: typingCallbacks?.onIdle,
         onError: (err, info) => {
+          // Flag the outer dedupe wrapper so it releases the claim instead
+          // of committing. Without this, a transient BlueBubbles send failure
+          // would permanently block replay-retry for 7 days and the user
+          // would never receive a reply to that message.
+          //
+          // Only the terminal `final` delivery represents the user-visible
+          // answer. The dispatcher continues past `tool` / `block` failures
+          // and may still deliver `final` successfully — releasing the
+          // dedupe claim for those would invite a replay that re-runs tool
+          // side effects and resends partially-delivered content.
+          if (info.kind === "final") {
+            dedupeSignal.deliveryFailed = true;
+          }
           runtime.error?.(`BlueBubbles ${info.kind} reply failed: ${String(err)}`);
         },
       },

@@ -144,11 +144,23 @@ export async function qaWebEvaluate<T = unknown>(params: QaWebEvaluateParams): P
   ])) as T;
 }
 
-export async function closeAllQaWebSessions(): Promise<void> {
-  const active = [...sessions.values()];
-  sessions.clear();
+export async function closeQaWebSessions(pageIds?: Iterable<string>): Promise<void> {
+  const active = pageIds
+    ? [...pageIds].flatMap((pageId) => {
+        const session = sessions.get(pageId);
+        sessions.delete(pageId);
+        return session ? [session] : [];
+      })
+    : [...sessions.values()];
+  if (!pageIds) {
+    sessions.clear();
+  }
   for (const session of active) {
     await session.context.close().catch(() => {});
     await session.browser.close().catch(() => {});
   }
+}
+
+export async function closeAllQaWebSessions(): Promise<void> {
+  await closeQaWebSessions();
 }

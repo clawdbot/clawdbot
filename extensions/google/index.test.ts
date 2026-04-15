@@ -188,4 +188,17 @@ describe("google provider plugin hooks", () => {
     runCase(googleProvider, "google");
     runCase(cliProvider, "google-gemini-cli");
   });
+
+  it("shares Gemini replay and stream hooks across Google provider variants", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const googleProvider = requireRegisteredProvider(providers, "google");
+    const cliProvider = requireRegisteredProvider(providers, "google-gemini-cli");
+
+    expect(googleProvider.buildReplayPolicy).toBe(cliProvider.buildReplayPolicy);
+    expect(googleProvider.wrapStreamFn).toBe(cliProvider.wrapStreamFn);
+  });
 });

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { AuthProfileStore, OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { resolveRequiredHomeDir } from "openclaw/plugin-sdk/provider-auth";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   resolveCodexAccessTokenExpiry,
   resolveCodexAuthIdentity,
@@ -9,6 +10,7 @@ import {
 import { trimNonEmptyString } from "./openai-codex-shared.js";
 
 const PROVIDER_ID = "openai-codex";
+const log = createSubsystemLogger("openai/codex-cli-auth");
 
 export const CODEX_CLI_PROFILE_ID = `${PROVIDER_ID}:codex-cli`;
 export const OPENAI_CODEX_DEFAULT_PROFILE_ID = `${PROVIDER_ID}:default`;
@@ -42,7 +44,19 @@ function readCodexCliAuthFile(env: NodeJS.ProcessEnv): CodexCliAuthFile | null {
     const raw = fs.readFileSync(authPath, "utf8");
     const parsed = JSON.parse(raw);
     return parsed && typeof parsed === "object" ? (parsed as CodexCliAuthFile) : null;
-  } catch {
+  } catch (error) {
+    const code =
+      error instanceof SyntaxError
+        ? "INVALID_JSON"
+        : error instanceof Error && "code" in error
+          ? (error as NodeJS.ErrnoException).code
+          : undefined;
+    if (code === "ENOENT") {
+      return null;
+    }
+    log.debug(
+      `Failed to read Codex CLI auth file (code=${typeof code === "string" ? code : "UNKNOWN"})`,
+    );
     return null;
   }
 }

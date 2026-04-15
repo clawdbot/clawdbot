@@ -6,6 +6,20 @@ type ResponsesInputItem = Record<string, unknown>;
 
 type StreamEvent =
   | { type: "response.output_item.added"; item: Record<string, unknown> }
+  | {
+      type: "response.output_text.delta";
+      item_id: string;
+      output_index: number;
+      content_index: number;
+      delta: string;
+    }
+  | {
+      type: "response.output_text.done";
+      item_id: string;
+      output_index: number;
+      content_index: number;
+      text: string;
+    }
   | { type: "response.function_call_arguments.delta"; delta: string }
   | { type: "response.output_item.done"; item: Record<string, unknown> }
   | {
@@ -128,6 +142,8 @@ const QA_REASONING_ONLY_RECOVERY_PROMPT_RE = /reasoning-only continuation qa che
 const QA_REASONING_ONLY_SIDE_EFFECT_PROMPT_RE = /reasoning-only after write safety check/i;
 const QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE = /empty response continuation qa check/i;
 const QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE = /empty response exhaustion qa check/i;
+const QA_QUIET_STREAMING_PROMPT_RE = /(?:matrix\s+)?quiet streaming qa check/i;
+const QA_BLOCK_STREAMING_PROMPT_RE = /(?:matrix\s+)?block streaming qa check/i;
 const QA_REASONING_ONLY_RETRY_NEEDLE =
   "recorded reasoning but did not produce a user-visible answer";
 const QA_EMPTY_RESPONSE_RETRY_NEEDLE =
@@ -507,6 +523,21 @@ function extractExactMarkerDirective(text: string) {
   return extractLastCapture(text, /exact marker:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i);
 }
 
+function extractLabeledMarkerDirective(text: string, label: string) {
+  const escapedLabel = label.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const backtickedMatch = extractLastCapture(
+    text,
+    new RegExp(`${escapedLabel}:\\s*\`([^\\\`]+)\``, "i"),
+  );
+  if (backtickedMatch) {
+    return backtickedMatch;
+  }
+  return extractLastCapture(
+    text,
+    new RegExp(`${escapedLabel}:\\s*([^\\s\\\`.,;:!?]+(?:-[^\\s\\\`.,;:!?]+)*)`, "i"),
+  );
+}
+
 function isHeartbeatPrompt(text: string) {
   const trimmed = text.trim();
   if (!trimmed || /remember this fact/i.test(trimmed)) {
@@ -691,39 +722,95 @@ function extractPlannedToolName(events: StreamEvent[]) {
   return undefined;
 }
 
-function buildAssistantEvents(text: string): StreamEvent[] {
-  const outputItem = {
+type MockAssistantMessageSpec = {
+  id: string;
+  phase?: "commentary" | "final_answer";
+  streamDeltas?: string[];
+  text: string;
+};
+
+function splitMockStreamingText(text: string, parts = 3) {
+  if (text.length <= 1) {
+    return [text];
+  }
+  const chunkSize = Math.max(1, Math.ceil(text.length / parts));
+  const chunks: string[] = [];
+  for (let index = 0; index < text.length; index += chunkSize) {
+    chunks.push(text.slice(index, index + chunkSize));
+  }
+  return chunks.length > 1 ? chunks : [text.slice(0, 1), text.slice(1)];
+}
+
+function buildAssistantOutputItem(spec: MockAssistantMessageSpec) {
+  return {
     type: "message",
-    id: "msg_mock_1",
+    id: spec.id,
     role: "assistant",
     status: "completed",
-    content: [{ type: "output_text", text, annotations: [] }],
+    ...(spec.phase ? { phase: spec.phase } : {}),
+    content: [{ type: "output_text", text: spec.text, annotations: [] }],
   } as const;
-  return [
-    {
+}
+
+function buildAssistantEvents(specsOrText: MockAssistantMessageSpec[] | string): StreamEvent[] {
+  const specs =
+    typeof specsOrText === "string"
+      ? [
+          {
+            id: "msg_mock_1",
+            text: specsOrText,
+          },
+        ]
+      : specsOrText;
+  const output = specs.map((spec) => buildAssistantOutputItem(spec));
+  const events: StreamEvent[] = [];
+
+  for (const [outputIndex, spec] of specs.entries()) {
+    events.push({
       type: "response.output_item.added",
       item: {
         type: "message",
-        id: "msg_mock_1",
+        id: spec.id,
         role: "assistant",
+        ...(spec.phase ? { phase: spec.phase } : {}),
         content: [],
         status: "in_progress",
       },
-    },
-    {
+    });
+    for (const delta of spec.streamDeltas ?? []) {
+      events.push({
+        type: "response.output_text.delta",
+        item_id: spec.id,
+        output_index: outputIndex,
+        content_index: 0,
+        delta,
+      });
+    }
+    if ((spec.streamDeltas ?? []).length > 0) {
+      events.push({
+        type: "response.output_text.done",
+        item_id: spec.id,
+        output_index: outputIndex,
+        content_index: 0,
+        text: spec.text,
+      });
+    }
+    events.push({
       type: "response.output_item.done",
-      item: outputItem,
+      item: output[outputIndex],
+    });
+  }
+
+  events.push({
+    type: "response.completed",
+    response: {
+      id: "resp_mock_msg_1",
+      status: "completed",
+      output,
+      usage: { input_tokens: 64, output_tokens: 24, total_tokens: 88 },
     },
-    {
-      type: "response.completed",
-      response: {
-        id: "resp_mock_msg_1",
-        status: "completed",
-        output: [outputItem],
-        usage: { input_tokens: 64, output_tokens: 24, total_tokens: 88 },
-      },
-    },
-  ];
+  });
+  return events;
 }
 
 function buildReasoningOnlyEvents(summaryText: string, id: string): StreamEvent[] {
@@ -766,6 +853,16 @@ async function buildResponsesPayload(
   const toolOutput = extractToolOutput(input);
   const toolJson = parseToolOutputJson(toolOutput);
   const allInputText = extractAllRequestTexts(input, body);
+  const exactReplyDirective =
+    extractExactReplyDirective(prompt) ?? extractExactReplyDirective(allInputText);
+  const firstExactMarkerDirective = extractLabeledMarkerDirective(
+    allInputText,
+    "first exact marker",
+  );
+  const secondExactMarkerDirective = extractLabeledMarkerDirective(
+    allInputText,
+    "second exact marker",
+  );
   const isGroupChat = allInputText.includes('"is_group_chat": true');
   const isBaselineUnmentionedChannelChatter = /\bno bot ping here\b/i.test(prompt);
   const hasReasoningOnlyRetryInstruction = allInputText.includes(QA_REASONING_ONLY_RETRY_NEEDLE);
@@ -817,6 +914,36 @@ async function buildResponsesPayload(
       return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
     }
     return buildAssistantEvents("");
+  }
+  if (QA_QUIET_STREAMING_PROMPT_RE.test(allInputText) && exactReplyDirective) {
+    return buildAssistantEvents([
+      {
+        id: "msg_mock_quiet_stream",
+        phase: "final_answer",
+        streamDeltas: splitMockStreamingText(exactReplyDirective),
+        text: exactReplyDirective,
+      },
+    ]);
+  }
+  if (
+    QA_BLOCK_STREAMING_PROMPT_RE.test(allInputText) &&
+    firstExactMarkerDirective &&
+    secondExactMarkerDirective
+  ) {
+    return buildAssistantEvents([
+      {
+        id: "msg_mock_block_1",
+        phase: "final_answer",
+        streamDeltas: splitMockStreamingText(firstExactMarkerDirective),
+        text: firstExactMarkerDirective,
+      },
+      {
+        id: "msg_mock_block_2",
+        phase: "final_answer",
+        streamDeltas: splitMockStreamingText(secondExactMarkerDirective),
+        text: secondExactMarkerDirective,
+      },
+    ]);
   }
   if (/lobster invaders/i.test(prompt)) {
     if (!toolOutput) {

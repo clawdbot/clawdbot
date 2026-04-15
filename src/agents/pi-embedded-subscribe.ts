@@ -97,6 +97,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     lastBlockReplyText: undefined,
     reasoningStreamOpen: false,
     assistantMessageIndex: 0,
+    lastAssistantStreamItemId: undefined,
     lastAssistantTextMessageIndex: -1,
     lastAssistantTextNormalized: undefined,
     lastAssistantTextTrimmed: undefined,
@@ -206,6 +207,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.reasoningStreamOpen = false;
     state.suppressBlockChunks = false;
     state.assistantMessageIndex += 1;
+    state.lastAssistantStreamItemId = undefined;
     state.lastAssistantTextMessageIndex = -1;
     state.lastAssistantTextNormalized = undefined;
     state.lastAssistantTextTrimmed = undefined;
@@ -322,26 +324,26 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     ensureCompactionPromise();
   };
 
+  const resolveCompactionPromiseIfIdle = () => {
+    if (state.pendingCompactionRetry !== 0 || state.compactionInFlight) {
+      return;
+    }
+    state.compactionRetryResolve?.();
+    state.compactionRetryResolve = undefined;
+    state.compactionRetryReject = undefined;
+    state.compactionRetryPromise = null;
+  };
+
   const resolveCompactionRetry = () => {
     if (state.pendingCompactionRetry <= 0) {
       return;
     }
     state.pendingCompactionRetry -= 1;
-    if (state.pendingCompactionRetry === 0 && !state.compactionInFlight) {
-      state.compactionRetryResolve?.();
-      state.compactionRetryResolve = undefined;
-      state.compactionRetryReject = undefined;
-      state.compactionRetryPromise = null;
-    }
+    resolveCompactionPromiseIfIdle();
   };
 
   const maybeResolveCompactionWait = () => {
-    if (state.pendingCompactionRetry === 0 && !state.compactionInFlight) {
-      state.compactionRetryResolve?.();
-      state.compactionRetryResolve = undefined;
-      state.compactionRetryReject = undefined;
-      state.compactionRetryPromise = null;
-    }
+    resolveCompactionPromiseIfIdle();
   };
   const recordAssistantUsage = (usageLike: unknown) => {
     const usage = normalizeUsage((usageLike ?? undefined) as UsageLike | undefined);

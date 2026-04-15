@@ -111,6 +111,141 @@ describe("anthropic transport stream", () => {
     );
   });
 
+  it("ignores non-positive runtime maxTokens overrides and falls back to the model limit", async () => {
+    const model = attachModelProviderRequestTransport(
+      {
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+        api: "anthropic-messages",
+        provider: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"anthropic-messages">,
+      {
+        proxy: {
+          mode: "env-proxy",
+        },
+      },
+    );
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        {
+          messages: [{ role: "user", content: "hello" }],
+        } as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "sk-ant-api",
+          maxTokens: 0,
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    await stream.result();
+
+    expect(anthropicMessagesStreamMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "claude-sonnet-4-6",
+        max_tokens: 8192,
+        stream: true,
+      }),
+      undefined,
+    );
+  });
+
+  it("ignores fractional runtime maxTokens overrides that floor to zero", async () => {
+    const model = attachModelProviderRequestTransport(
+      {
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+        api: "anthropic-messages",
+        provider: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"anthropic-messages">,
+      {
+        proxy: {
+          mode: "env-proxy",
+        },
+      },
+    );
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        {
+          messages: [{ role: "user", content: "hello" }],
+        } as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "sk-ant-api",
+          maxTokens: 0.5,
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    await stream.result();
+
+    expect(anthropicMessagesStreamMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "claude-sonnet-4-6",
+        max_tokens: 8192,
+        stream: true,
+      }),
+      undefined,
+    );
+  });
+
+  it("fails locally when Anthropic maxTokens is non-positive after resolution", async () => {
+    const model = attachModelProviderRequestTransport(
+      {
+        id: "claude-haiku-4-5",
+        name: "Claude Haiku 4.5",
+        api: "anthropic-messages",
+        provider: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 32000,
+        maxTokens: 0,
+      } satisfies Model<"anthropic-messages">,
+      {
+        proxy: {
+          mode: "env-proxy",
+        },
+      },
+    );
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        {
+          messages: [{ role: "user", content: "hello" }],
+        } as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "sk-ant-api",
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain(
+      "Anthropic Messages transport requires a positive maxTokens value",
+    );
+    expect(anthropicMessagesStreamMock).not.toHaveBeenCalled();
+  });
+
   it("preserves Anthropic OAuth identity and tool-name remapping with transport overrides", async () => {
     anthropicMessagesStreamMock.mockReturnValueOnce(
       (async function* () {

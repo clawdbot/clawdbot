@@ -1,10 +1,10 @@
 import type { ProviderResolveDynamicModelContext } from "openclaw/plugin-sdk/plugin-entry";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import {
-  buildProviderReplayFamilyHooks,
   cloneFirstTemplateModel,
   DEFAULT_CONTEXT_TOKENS,
   normalizeModelCompat,
+  OPENAI_COMPATIBLE_REPLAY_HOOKS,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { isFireworksKimiModelId } from "./model-id.js";
 import { applyFireworksConfig, FIREWORKS_DEFAULT_MODEL_REF } from "./onboard.js";
@@ -18,10 +18,6 @@ import {
 import { wrapFireworksProviderStream } from "./stream.js";
 
 const PROVIDER_ID = "fireworks";
-const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
-  family: "openai-compatible",
-});
-
 function resolveFireworksDynamicModel(ctx: ProviderResolveDynamicModelContext) {
   const modelId = ctx.modelId.trim();
   if (!modelId) {

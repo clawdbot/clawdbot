@@ -474,6 +474,137 @@ describe("firecrawl tools", () => {
     expect(resolveFirecrawlBaseUrl({} as OpenClawConfig)).not.toBe(DEFAULT_FIRECRAWL_BASE_URL);
   });
 
+  it("resolves env SecretRefs for Firecrawl API key without requiring a runtime snapshot", () => {
+    vi.stubEnv("FIRECRAWL_API_KEY", "firecrawl-env-ref-key");
+    const cfg = {
+      plugins: {
+        entries: {
+          firecrawl: {
+            config: {
+              webSearch: {
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "FIRECRAWL_API_KEY",
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveFirecrawlApiKey(cfg)).toBe("firecrawl-env-ref-key");
+  });
+
+  it("does not use env fallback when a non-env SecretRef is configured but unavailable", () => {
+    vi.stubEnv("FIRECRAWL_API_KEY", "firecrawl-env-fallback");
+    const cfg = {
+      plugins: {
+        entries: {
+          firecrawl: {
+            config: {
+              webSearch: {
+                apiKey: {
+                  source: "file",
+                  provider: "vault",
+                  id: "/firecrawl/api-key",
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveFirecrawlApiKey(cfg)).toBeUndefined();
+  });
+
+  it("does not read arbitrary env SecretRef ids for Firecrawl API key resolution", () => {
+    vi.stubEnv("UNRELATED_SECRET", "should-not-be-read");
+    const cfg = {
+      plugins: {
+        entries: {
+          firecrawl: {
+            config: {
+              webSearch: {
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "UNRELATED_SECRET",
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveFirecrawlApiKey(cfg)).toBeUndefined();
+  });
+
+  it("does not resolve env SecretRefs when provider allowlist excludes FIRECRAWL_API_KEY", () => {
+    vi.stubEnv("FIRECRAWL_API_KEY", "firecrawl-env-ref-key");
+    const cfg = {
+      secrets: {
+        providers: {
+          "firecrawl-env": {
+            source: "env",
+            allowlist: ["OTHER_FIRECRAWL_API_KEY"],
+          },
+        },
+      },
+      plugins: {
+        entries: {
+          firecrawl: {
+            config: {
+              webSearch: {
+                apiKey: {
+                  source: "env",
+                  provider: "firecrawl-env",
+                  id: "FIRECRAWL_API_KEY",
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveFirecrawlApiKey(cfg)).toBeUndefined();
+  });
+
+  it("does not resolve env SecretRefs when provider source is not env", () => {
+    vi.stubEnv("FIRECRAWL_API_KEY", "firecrawl-env-ref-key");
+    const cfg = {
+      secrets: {
+        providers: {
+          "firecrawl-env": {
+            source: "file",
+            path: "/tmp/secrets.json",
+          },
+        },
+      },
+      plugins: {
+        entries: {
+          firecrawl: {
+            config: {
+              webSearch: {
+                apiKey: {
+                  source: "env",
+                  provider: "firecrawl-env",
+                  id: "FIRECRAWL_API_KEY",
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveFirecrawlApiKey(cfg)).toBeUndefined();
+  });
+
   it("only allows the official Firecrawl API host for fetch endpoints", () => {
     expect(firecrawlClientTesting.resolveEndpoint("https://api.firecrawl.dev", "/v2/scrape")).toBe(
       "https://api.firecrawl.dev/v2/scrape",

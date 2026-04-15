@@ -14,11 +14,21 @@ import {
 import { DEFAULT_PROVIDER, DEFAULT_MODEL } from "../agents/defaults.js";
 import { parseModelRef } from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 const log = createSubsystemLogger("llm-slug-generator");
+const DEFAULT_SLUG_GENERATOR_TIMEOUT_MS = 15_000;
+
+function resolveSlugGeneratorTimeoutMs(cfg: OpenClawConfig): number {
+  const configuredTimeoutSeconds = cfg.agents?.defaults?.timeoutSeconds;
+  if (typeof configuredTimeoutSeconds !== "number" || !Number.isFinite(configuredTimeoutSeconds)) {
+    return DEFAULT_SLUG_GENERATOR_TIMEOUT_MS;
+  }
+  return resolveAgentTimeoutMs({ cfg });
+}
 
 /**
  * Generate a short 1-2 word filename slug from session content using LLM
@@ -50,6 +60,7 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
     const parsed = modelRef ? parseModelRef(modelRef, DEFAULT_PROVIDER) : null;
     const provider = parsed?.provider ?? DEFAULT_PROVIDER;
     const model = parsed?.model ?? DEFAULT_MODEL;
+    const timeoutMs = resolveSlugGeneratorTimeoutMs(params.cfg);
 
     const result = await runEmbeddedPiAgent({
       sessionId: `slug-generator-${Date.now()}`,
@@ -62,7 +73,7 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
       prompt,
       provider,
       model,
-      timeoutMs: 15_000, // 15 second timeout
+      timeoutMs,
       runId: `slug-gen-${Date.now()}`,
     });
 

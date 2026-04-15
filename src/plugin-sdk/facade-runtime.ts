@@ -3,9 +3,15 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
+import {
+  getCachedPluginJitiLoader,
+  type PluginJitiLoaderCache,
+} from "../plugins/jiti-loader-cache.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import {
+  PUBLIC_SURFACE_SOURCE_EXTENSIONS,
   normalizeBundledPluginArtifactSubpath,
+  resolveBundledPluginSourcePublicSurfacePath,
   resolveBundledPluginPublicSurfacePath,
 } from "../plugins/public-surface-runtime.js";
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
@@ -27,7 +33,6 @@ const OPENCLAW_PACKAGE_ROOT =
     moduleUrl: import.meta.url,
   }) ?? fileURLToPath(new URL("../..", import.meta.url));
 const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
-const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"] as const;
 const OPENCLAW_SOURCE_EXTENSIONS_ROOT = path.resolve(OPENCLAW_PACKAGE_ROOT, "extensions");
 const cachedFacadeModuleLocationsByKey = new Map<
   string,
@@ -40,23 +45,6 @@ const cachedFacadeModuleLocationsByKey = new Map<
 function createFacadeResolutionKey(params: { dirName: string; artifactBasename: string }): string {
   const bundledPluginsDir = resolveBundledPluginsDir();
   return `${params.dirName}::${params.artifactBasename}::${bundledPluginsDir ? path.resolve(bundledPluginsDir) : "<default>"}`;
-}
-
-function resolveSourceFirstPublicSurfacePath(params: {
-  bundledPluginsDir?: string;
-  dirName: string;
-  artifactBasename: string;
-}): string | null {
-  const artifactBasename = normalizeBundledPluginArtifactSubpath(params.artifactBasename);
-  const sourceBaseName = artifactBasename.replace(/\.js$/u, "");
-  const sourceRoot = params.bundledPluginsDir ?? path.resolve(OPENCLAW_PACKAGE_ROOT, "extensions");
-  for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
-    const candidate = path.resolve(sourceRoot, params.dirName, `${sourceBaseName}${ext}`);
-    if (fs.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-  return null;
 }
 
 function resolveRegistryPluginModuleLocationFromRegistry(params: {
@@ -108,11 +96,10 @@ function resolveFacadeModuleLocationUncached(params: {
   const preferSource = !CURRENT_MODULE_PATH.includes(`${path.sep}dist${path.sep}`);
   if (preferSource) {
     const modulePath =
-      resolveSourceFirstPublicSurfacePath({
+      resolveBundledPluginSourcePublicSurfacePath({
         ...params,
-        ...(bundledPluginsDir ? { bundledPluginsDir } : {}),
+        sourceRoot: bundledPluginsDir ?? path.resolve(OPENCLAW_PACKAGE_ROOT, "extensions"),
       }) ??
-      resolveSourceFirstPublicSurfacePath(params) ??
       resolveBundledPluginPublicSurfacePath({
         rootDir: OPENCLAW_PACKAGE_ROOT,
         ...(bundledPluginsDir ? { bundledPluginsDir } : {}),
@@ -167,7 +154,6 @@ type BundledPluginPublicSurfaceParams = {
 };
 
 type FacadeActivationCheckRuntimeModule = typeof import("./facade-activation-check.runtime.js");
-type JitiLoader = ReturnType<(typeof import("jiti"))["createJiti"]>;
 
 const nodeRequire = createRequire(import.meta.url);
 const FACADE_ACTIVATION_CHECK_RUNTIME_CANDIDATES = [
@@ -176,39 +162,49 @@ const FACADE_ACTIVATION_CHECK_RUNTIME_CANDIDATES = [
 ] as const;
 
 let facadeActivationCheckRuntimeModule: FacadeActivationCheckRuntimeModule | undefined;
-let facadeActivationCheckRuntimeJiti: JitiLoader | undefined;
+const facadeActivationCheckRuntimeJitiLoaders: PluginJitiLoaderCache = new Map();
 
-function getFacadeActivationCheckRuntimeJiti(): JitiLoader {
-  if (facadeActivationCheckRuntimeJiti) {
-    return facadeActivationCheckRuntimeJiti;
+function getFacadeActivationCheckRuntimeJiti(modulePath: string) {
+  return getCachedPluginJitiLoader({
+    cache: facadeActivationCheckRuntimeJitiLoaders,
+    modulePath,
+    importerUrl: import.meta.url,
+    jitiFilename: import.meta.url,
+    aliasMap: {},
+    tryNative: false,
+  });
+}
+
+function loadFacadeActivationCheckRuntimeFromCandidates(
+  loadCandidate: (
+    candidate: (typeof FACADE_ACTIVATION_CHECK_RUNTIME_CANDIDATES)[number],
+  ) => unknown,
+): FacadeActivationCheckRuntimeModule | undefined {
+  for (const candidate of FACADE_ACTIVATION_CHECK_RUNTIME_CANDIDATES) {
+    try {
+      return loadCandidate(candidate) as FacadeActivationCheckRuntimeModule;
+    } catch {
+      // Try source/runtime candidates in order.
+    }
   }
-  const { createJiti } = nodeRequire("jiti") as typeof import("jiti");
-  facadeActivationCheckRuntimeJiti = createJiti(import.meta.url, { tryNative: false });
-  return facadeActivationCheckRuntimeJiti;
+  return undefined;
 }
 
 function loadFacadeActivationCheckRuntime(): FacadeActivationCheckRuntimeModule {
   if (facadeActivationCheckRuntimeModule) {
     return facadeActivationCheckRuntimeModule;
   }
-  for (const candidate of FACADE_ACTIVATION_CHECK_RUNTIME_CANDIDATES) {
-    try {
-      facadeActivationCheckRuntimeModule = nodeRequire(
-        candidate,
-      ) as FacadeActivationCheckRuntimeModule;
-      return facadeActivationCheckRuntimeModule;
-    } catch {
-      // Try source/runtime candidates in order.
-    }
+  facadeActivationCheckRuntimeModule = loadFacadeActivationCheckRuntimeFromCandidates((candidate) =>
+    nodeRequire(candidate),
+  );
+  if (facadeActivationCheckRuntimeModule) {
+    return facadeActivationCheckRuntimeModule;
   }
-  const jiti = getFacadeActivationCheckRuntimeJiti();
-  for (const candidate of FACADE_ACTIVATION_CHECK_RUNTIME_CANDIDATES) {
-    try {
-      facadeActivationCheckRuntimeModule = jiti(candidate) as FacadeActivationCheckRuntimeModule;
-      return facadeActivationCheckRuntimeModule;
-    } catch {
-      // Try source/runtime candidates in order.
-    }
+  facadeActivationCheckRuntimeModule = loadFacadeActivationCheckRuntimeFromCandidates((candidate) =>
+    getFacadeActivationCheckRuntimeJiti(candidate)(candidate),
+  );
+  if (facadeActivationCheckRuntimeModule) {
+    return facadeActivationCheckRuntimeModule;
   }
   throw new Error("Unable to load facade activation check runtime");
 }
@@ -289,7 +285,7 @@ export function resetFacadeRuntimeStateForTest(): void {
   resetFacadeLoaderStateForTest();
   facadeActivationCheckRuntimeModule?.resetFacadeActivationCheckRuntimeStateForTest();
   facadeActivationCheckRuntimeModule = undefined;
-  facadeActivationCheckRuntimeJiti = undefined;
+  facadeActivationCheckRuntimeJitiLoaders.clear();
   cachedFacadeModuleLocationsByKey.clear();
 }
 

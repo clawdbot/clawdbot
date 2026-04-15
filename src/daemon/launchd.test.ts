@@ -51,6 +51,23 @@ const cleanStaleGatewayProcessesSync = vi.hoisted(() =>
 );
 const defaultProgramArguments = ["node", "-e", "process.exit(0)"];
 
+async function runStopLaunchAgentWithFakeTimers(args: Parameters<typeof stopLaunchAgent>[0]) {
+  vi.useFakeTimers();
+  try {
+    const stopPromise = stopLaunchAgent(args)
+      .then(() => ({ ok: true as const }))
+      .catch((error: unknown) => ({ ok: false as const, error }));
+    await vi.runAllTimersAsync();
+    const result = await stopPromise;
+    if (!result.ok) {
+      throw result.error;
+    }
+    return;
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 function expectLaunchctlEnableBootstrapOrder(env: Record<string, string | undefined>) {
   const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
   const label = "ai.openclaw.gateway";
@@ -546,7 +563,7 @@ describe("launchd install", () => {
       output += chunk.toString();
     });
 
-    await stopLaunchAgent({ env, stdout });
+    await runStopLaunchAgentWithFakeTimers({ env, stdout });
 
     expect(state.launchctlCalls.some((call) => call[0] === "stop")).toBe(true);
     expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(true);
@@ -564,7 +581,7 @@ describe("launchd install", () => {
       output += chunk.toString();
     });
 
-    await stopLaunchAgent({ env, stdout });
+    await runStopLaunchAgentWithFakeTimers({ env, stdout });
 
     expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(true);
     expect(output).toContain("Stopped LaunchAgent (degraded)");
@@ -597,7 +614,7 @@ describe("launchd install", () => {
       output += chunk.toString();
     });
 
-    await stopLaunchAgent({ env, stdout });
+    await runStopLaunchAgentWithFakeTimers({ env, stdout });
 
     expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(true);
     expect(output).toContain("Stopped LaunchAgent (degraded)");
@@ -610,7 +627,9 @@ describe("launchd install", () => {
     state.printFailuresRemaining = 10;
     state.bootoutError = "launchctl bootout permission denied";
 
-    await expect(stopLaunchAgent({ env, stdout: new PassThrough() })).rejects.toThrow(
+    await expect(
+      runStopLaunchAgentWithFakeTimers({ env, stdout: new PassThrough() }),
+    ).rejects.toThrow(
       "launchctl print could not confirm stop; used bootout fallback and left service unloaded: launchctl print permission denied; launchctl bootout failed: launchctl bootout permission denied",
     );
   });

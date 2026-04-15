@@ -261,6 +261,18 @@ export const de: TranslationMap = {
       cost: "Kosten",
       skills: "Skills",
       recentSessions: "Letzte Sitzungen",
+      modelAuth: "Modell-Authentifizierung",
+      modelAuthOk: "{count} ok",
+      modelAuthExpired: "{count} abgelaufen",
+      modelAuthExpiring: "{count} laufen bald ab",
+      modelAuthProviders: "{count} Anbieter",
+      modelAuthUsageLeft: "{pct}% übrig",
+      modelAuthExpiresIn: "läuft {when} ab",
+      modelAuthAttentionExpiredTitle: "Modell-Authentifizierung abgelaufen",
+      modelAuthAttentionExpiringTitle: "Modell-Authentifizierung läuft bald ab",
+      modelAuthAttentionExpiredDesc:
+        "{providers} — mit openclaw models auth erneut authentifizieren",
+      modelAuthAttentionExpiringEntry: "{provider} ({when})",
     },
     attention: {
       title: "Aufmerksamkeit",

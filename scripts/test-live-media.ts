@@ -25,6 +25,7 @@ export type MediaSuiteConfig = {
   testFile: string;
   providerEnvVar: string;
   providers: string[];
+  defaultProviders?: string[];
 };
 
 export const MEDIA_SUITES: Record<MediaSuiteId, MediaSuiteConfig> = {
@@ -48,6 +49,18 @@ export const MEDIA_SUITES: Record<MediaSuiteId, MediaSuiteConfig> = {
       "alibaba",
       "byteplus",
       "fal",
+      "google",
+      "minimax",
+      "openai",
+      "qwen",
+      "runway",
+      "together",
+      "vydra",
+      "xai",
+    ],
+    defaultProviders: [
+      "alibaba",
+      "byteplus",
       "google",
       "minimax",
       "openai",
@@ -213,9 +226,10 @@ function selectProviders(params: {
   requireAuth: boolean;
 }): string[] {
   const explicit = params.suiteProviders ?? params.globalProviders;
-  let providers = params.suite.providers.filter((provider) =>
-    explicit ? explicit.has(provider) : true,
-  );
+  const candidates = explicit
+    ? params.suite.providers
+    : (params.suite.defaultProviders ?? params.suite.providers);
+  let providers = candidates.filter((provider) => (explicit ? explicit.has(provider) : true));
   if (!params.requireAuth) {
     return providers;
   }
@@ -275,6 +289,7 @@ Defaults:
   - runs image + music + video
   - auto-loads missing provider env vars from ~/.profile
   - narrows each suite to providers that currently have usable auth
+  - skips the slow fal video smoke by default; pass --video-providers fal to run it
   - forwards extra args to scripts/test-live.mjs
 
 Flags:

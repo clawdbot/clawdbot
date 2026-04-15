@@ -27,12 +27,13 @@ describe("mapFailoverReasonToProbeStatus", () => {
     expect(mapFailoverReasonToProbeStatus("overloaded")).toBe("rate_limit");
     expect(mapFailoverReasonToProbeStatus("billing")).toBe("billing");
     expect(mapFailoverReasonToProbeStatus("timeout")).toBe("timeout");
+    expect(mapFailoverReasonToProbeStatus("model_not_found")).toBe("format");
     expect(mapFailoverReasonToProbeStatus("format")).toBe("format");
   });
 
   it("falls back to unknown for unrecognized values", () => {
     expect(mapFailoverReasonToProbeStatus(undefined)).toBe("unknown");
     expect(mapFailoverReasonToProbeStatus(null)).toBe("unknown");
-    expect(mapFailoverReasonToProbeStatus("model_not_found")).toBe("unknown");
+    expect(mapFailoverReasonToProbeStatus("something_else")).toBe("unknown");
   });
 });

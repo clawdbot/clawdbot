@@ -114,6 +114,8 @@ const ERROR_PATTERNS = {
     /\bstop reason:\s*(?:abort|error|malformed_response|network_error)\b/i,
     /\breason:\s*(?:abort|error|malformed_response|network_error)\b/i,
     /\bunhandled stop reason:\s*(?:abort|error|malformed_response|network_error)\b/i,
+    // `\breason:` does not match provider payloads like `finish_reason: network_error` (#61281).
+    /\bfinish_reason:\s*(?:abort|error|malformed_response|network_error)\b/i,
     // AbortError messages from fetch/stream aborts (Ollama NDJSON stream
     // timeouts, signal aborts, etc.) — without these the flattened message
     // falls through to reason=unknown (#58315).

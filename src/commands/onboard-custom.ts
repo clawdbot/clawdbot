@@ -400,7 +400,8 @@ async function requestOpenAiVerification(params: {
       body: {
         model: params.modelId,
         messages: [{ role: "user", content: "Hi" }],
-        max_tokens: 1,
+        // Recent OpenAI-family endpoints reject probes below 16 tokens.
+        max_tokens: 16,
         stream: false,
       },
     });

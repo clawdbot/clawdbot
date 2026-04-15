@@ -116,4 +116,42 @@ describe("listManifestInstalledChannelIds", () => {
 
     expect(resolved.entries.map((entry) => entry.id)).toEqual(["telegram"]);
   });
+
+  it("preserves bundled channel display metadata when installed setup plugins omit it", () => {
+    listChatChannels.mockReturnValue([
+      {
+        id: "telegram",
+        label: "Telegram",
+        selectionLabel: "Telegram",
+        docsPath: "/channels/telegram",
+        blurb: "bot token",
+      },
+    ]);
+
+    const resolved = resolveChannelSetupEntries({
+      cfg: {} as never,
+      installedPlugins: [
+        {
+          id: "telegram",
+          meta: {
+            id: "telegram",
+          },
+        } as never,
+      ],
+      workspaceDir: "/tmp/workspace",
+      env: { OPENCLAW_HOME: "/tmp/home" } as NodeJS.ProcessEnv,
+    });
+
+    expect(resolved.entries).toEqual([
+      expect.objectContaining({
+        id: "telegram",
+        meta: expect.objectContaining({
+          label: "Telegram",
+          selectionLabel: "Telegram",
+          blurb: "bot token",
+          docsPath: "/channels/telegram",
+        }),
+      }),
+    ]);
+  });
 });

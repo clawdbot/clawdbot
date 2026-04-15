@@ -92,6 +92,7 @@ import type {
   HealthSummary,
   LogEntry,
   LogLevel,
+  ModelAuthStatusResult,
   ModelCatalogEntry,
   PresenceEntry,
   ChannelsStatusSnapshot,
@@ -466,6 +467,10 @@ export class OpenClawApp extends LitElement {
   @state() healthResult: HealthSummary | null = null;
   @state() healthError: string | null = null;
 
+  @state() modelAuthStatusLoading = false;
+  @state() modelAuthStatusResult: ModelAuthStatusResult | null = null;
+  @state() modelAuthStatusError: string | null = null;
+
   @state() debugLoading = false;
   @state() debugStatus: StatusSummary | null = null;
   @state() debugHealth: HealthSummary | null = null;
@@ -657,8 +662,8 @@ export class OpenClawApp extends LitElement {
     return [active, ...rest];
   }
 
-  async loadOverview() {
-    await loadOverviewInternal(this as unknown as Parameters<typeof loadOverviewInternal>[0]);
+  async loadOverview(opts?: { refresh?: boolean }) {
+    await loadOverviewInternal(this as unknown as Parameters<typeof loadOverviewInternal>[0], opts);
   }
 
   async loadCron() {

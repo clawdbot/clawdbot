@@ -17,6 +17,18 @@ export function composeProviderStreamWrappers(
   );
 }
 
+export function defaultToolStreamExtraParams(
+  extraParams?: Record<string, unknown>,
+): Record<string, unknown> {
+  if (extraParams?.tool_stream !== undefined) {
+    return extraParams;
+  }
+  return {
+    ...extraParams,
+    tool_stream: true,
+  };
+}
+
 const HTML_ENTITY_RE = /&(?:amp|lt|gt|quot|apos|#39|#x[0-9a-f]+|#\d+);/i;
 
 function decodeHtmlEntities(value: string): string {

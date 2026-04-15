@@ -82,6 +82,9 @@ describe("bundled plugin build entries", () => {
     expect(artifacts.some((artifact) => artifact.startsWith("dist/extensions/qa-lab/"))).toBe(
       false,
     );
+    expect(artifacts.some((artifact) => artifact.startsWith("dist/extensions/qa-matrix/"))).toBe(
+      false,
+    );
   });
 
   it("keeps bundled channel secret contracts on packed top-level sidecars", () => {

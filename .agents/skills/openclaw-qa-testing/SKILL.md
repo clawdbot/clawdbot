@@ -12,8 +12,8 @@ Use this skill for `qa-lab` / `qa-channel` work. Repo-local QA only.
 - `docs/concepts/qa-e2e-automation.md`
 - `docs/help/testing.md`
 - `docs/channels/qa-channel.md`
-- `qa/QA_KICKOFF_TASK.md`
-- `qa/seed-scenarios.json`
+- `qa/README.md`
+- `qa/scenarios/index.md`
 - `extensions/qa-lab/src/suite.ts`
 - `extensions/qa-lab/src/character-eval.ts`
 
@@ -28,24 +28,24 @@ Use this skill for `qa-lab` / `qa-channel` work. Repo-local QA only.
 
 ## Default workflow
 
-1. Read the seed plan and current suite implementation.
+1. Read the scenario pack and current suite implementation.
 2. Decide lane:
    - mock/dev: `mock-openai`
-   - real validation: `live-openai`
+   - real validation: `live-frontier`
 3. For live OpenAI, use:
 
 ```bash
 OPENCLAW_LIVE_OPENAI_KEY="${OPENAI_API_KEY}" \
 pnpm openclaw qa suite \
-  --provider-mode live-openai \
+  --provider-mode live-frontier \
   --model openai/gpt-5.4 \
   --alt-model openai/gpt-5.4 \
-  --output-dir .artifacts/qa-e2e/run-all-live-openai-<tag>
+  --output-dir .artifacts/qa-e2e/run-all-live-frontier-<tag>
 ```
 
 4. Watch outputs:
-   - summary: `.artifacts/qa-e2e/run-all-live-openai-<tag>/qa-suite-summary.json`
-   - report: `.artifacts/qa-e2e/run-all-live-openai-<tag>/qa-suite-report.md`
+   - summary: `.artifacts/qa-e2e/run-all-live-frontier-<tag>/qa-suite-summary.json`
+   - report: `.artifacts/qa-e2e/run-all-live-frontier-<tag>/qa-suite-report.md`
 5. If the user wants to watch the live UI, find the current `openclaw-qa` listen port and report `http://127.0.0.1:<port>`.
 6. If a scenario fails, fix the product or harness root cause, then rerun the full lane.
 
@@ -141,8 +141,8 @@ pnpm openclaw qa manual \
 
 ## When adding scenarios
 
-- Add scenario metadata to `qa/seed-scenarios.json`
-- Keep kickoff expectations in `qa/QA_KICKOFF_TASK.md` aligned
+- Add or update scenario markdown under `qa/scenarios/`
+- Keep kickoff expectations in `qa/scenarios/index.md` aligned
 - Add executable coverage in `extensions/qa-lab/src/suite.ts`
 - Prefer end-to-end assertions over mock-only checks
 - Save outputs under `.artifacts/qa-e2e/`

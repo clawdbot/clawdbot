@@ -522,6 +522,8 @@ function createSetupEntryChannelPluginFixture(params: {
   setupBlurb: string;
   configured: boolean;
   startupDeferConfiguredChannelFullLoadUntilAfterListen?: boolean;
+  useBundledSetupEntryContract?: boolean;
+  splitBundledSetupSecrets?: boolean;
 }) {
   useNoBundledPlugins();
   const pluginDir = makeTempDir();
@@ -597,7 +599,40 @@ module.exports = {
   );
   fs.writeFileSync(
     path.join(pluginDir, "setup-entry.cjs"),
-    `require("node:fs").writeFileSync(${JSON.stringify(setupMarker)}, "loaded", "utf-8");
+    params.useBundledSetupEntryContract
+      ? `require("node:fs").writeFileSync(${JSON.stringify(setupMarker)}, "loaded", "utf-8");
+module.exports = {
+  kind: "bundled-channel-setup-entry",
+  loadSetupPlugin: () => ({
+    id: ${JSON.stringify(params.id)},
+    meta: {
+      id: ${JSON.stringify(params.id)},
+      label: ${JSON.stringify(params.label)},
+      selectionLabel: ${JSON.stringify(params.label)},
+      docsPath: ${JSON.stringify(`/channels/${params.id}`)},
+      blurb: ${JSON.stringify(params.setupBlurb)},
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => ${listAccountIds},
+      resolveAccount: () => ${resolveAccount},
+    },
+    outbound: { deliveryMode: "direct" },
+  }),
+  ${
+    params.splitBundledSetupSecrets
+      ? `loadSetupSecrets: () => ({
+    secretTargetRegistryEntries: [
+      {
+        id: ${JSON.stringify(`channels.${params.id}.setup-token`)},
+        targetType: "channel",
+      },
+    ],
+  }),`
+      : ""
+  }
+};`
+      : `require("node:fs").writeFileSync(${JSON.stringify(setupMarker)}, "loaded", "utf-8");
 module.exports = {
   plugin: {
     id: ${JSON.stringify(params.id)},
@@ -1644,8 +1679,6 @@ module.exports = { id: "throws-after-import", register() {} };`,
   });
 
   it("can scope bundled provider loads to deepseek without hanging", () => {
-    resetPluginLoaderTestStateForTest();
-
     const scoped = loadOpenClawPlugins({
       cache: false,
       activate: false,
@@ -2359,6 +2392,52 @@ module.exports = { id: "throws-after-import", register() {} };`,
     const configurable = registry.plugins.find((entry) => entry.id === "configurable");
     expect(configurable?.status).toBe("error");
     expect(registry.diagnostics.some((d) => d.level === "error")).toBe(true);
+  });
+
+  it("repairs incomplete registered channel metadata before storing registry entries", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "channel-meta-repair",
+      filename: "channel-meta-repair.cjs",
+      body: `module.exports = { id: "channel-meta-repair", register(api) {
+  api.registerChannel({
+    plugin: {
+      id: "telegram",
+      meta: {
+        id: "telegram"
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({ accountId: "default" })
+      },
+      outbound: { deliveryMode: "direct" }
+    }
+  });
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["channel-meta-repair"],
+      },
+    });
+
+    const telegram = registry.channels.find((entry) => entry.plugin.id === "telegram")?.plugin;
+    expect(telegram?.meta).toMatchObject({
+      id: "telegram",
+      label: "Telegram",
+      docsPath: "/channels/telegram",
+    });
+    expect(
+      registry.diagnostics.some(
+        (diag) =>
+          diag.level === "warn" &&
+          diag.message ===
+            'channel "telegram" registered incomplete metadata; filled missing label, selectionLabel, docsPath, blurb',
+      ),
+    ).toBe(true);
   });
 
   it("throws when strict plugin loading sees plugin errors", () => {
@@ -3169,6 +3248,58 @@ module.exports = {
       expectedChannels: 1,
     },
     {
+      name: "uses package setupEntry bundled contract for setup-runtime channel loads",
+      fixture: {
+        id: "setup-runtime-bundled-contract-test",
+        label: "Setup Runtime Bundled Contract Test",
+        packageName: "@openclaw/setup-runtime-bundled-contract-test",
+        fullBlurb: "full entry should not run while unconfigured",
+        setupBlurb: "setup runtime bundled contract",
+        configured: false,
+        useBundledSetupEntryContract: true,
+      },
+      load: ({ pluginDir }: { pluginDir: string }) =>
+        loadOpenClawPlugins({
+          cache: false,
+          config: {
+            plugins: {
+              load: { paths: [pluginDir] },
+              allow: ["setup-runtime-bundled-contract-test"],
+            },
+          },
+        }),
+      expectFullLoaded: false,
+      expectSetupLoaded: true,
+      expectedChannels: 1,
+    },
+    {
+      name: "preserves bundled setupEntry split secrets for setup-runtime channel loads",
+      fixture: {
+        id: "setup-runtime-bundled-contract-secrets-test",
+        label: "Setup Runtime Bundled Contract Secrets Test",
+        packageName: "@openclaw/setup-runtime-bundled-contract-secrets-test",
+        fullBlurb: "full entry should not run while unconfigured",
+        setupBlurb: "setup runtime bundled contract secrets",
+        configured: false,
+        useBundledSetupEntryContract: true,
+        splitBundledSetupSecrets: true,
+      },
+      load: ({ pluginDir }: { pluginDir: string }) =>
+        loadOpenClawPlugins({
+          cache: false,
+          config: {
+            plugins: {
+              load: { paths: [pluginDir] },
+              allow: ["setup-runtime-bundled-contract-secrets-test"],
+            },
+          },
+        }),
+      expectFullLoaded: false,
+      expectSetupLoaded: true,
+      expectedChannels: 1,
+      expectedSetupSecretId: "channels.setup-runtime-bundled-contract-secrets-test.setup-token",
+    },
+    {
       name: "does not prefer setupEntry for configured channel loads without startup opt-in",
       fixture: {
         id: "setup-runtime-not-preferred-test",
@@ -3199,14 +3330,208 @@ module.exports = {
       expectSetupLoaded: false,
       expectedChannels: 1,
     },
-  ])("$name", ({ fixture, load, expectFullLoaded, expectSetupLoaded, expectedChannels }) => {
-    const built = createSetupEntryChannelPluginFixture(fixture);
-    const registry = load({ pluginDir: built.pluginDir });
+  ])(
+    "$name",
+    ({
+      fixture,
+      load,
+      expectFullLoaded,
+      expectSetupLoaded,
+      expectedChannels,
+      expectedSetupSecretId,
+    }) => {
+      const built = createSetupEntryChannelPluginFixture(fixture);
+      const registry = load({ pluginDir: built.pluginDir });
 
-    expect(fs.existsSync(built.fullMarker)).toBe(expectFullLoaded);
-    expect(fs.existsSync(built.setupMarker)).toBe(expectSetupLoaded);
-    expect(registry.channelSetups).toHaveLength(1);
-    expect(registry.channels).toHaveLength(expectedChannels);
+      expect(fs.existsSync(built.fullMarker)).toBe(expectFullLoaded);
+      expect(fs.existsSync(built.setupMarker)).toBe(expectSetupLoaded);
+      expect(registry.channelSetups).toHaveLength(1);
+      expect(registry.channels).toHaveLength(expectedChannels);
+      if (expectedSetupSecretId) {
+        expect(registry.channelSetups[0]?.plugin.secrets?.secretTargetRegistryEntries).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              id: expectedSetupSecretId,
+            }),
+          ]),
+        );
+        expect(registry.channels[0]?.plugin.secrets?.secretTargetRegistryEntries).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              id: expectedSetupSecretId,
+            }),
+          ]),
+        );
+      }
+    },
+  );
+
+  it("isolates loadSetupPlugin errors as per-plugin diagnostics instead of crashing registry load", () => {
+    useNoBundledPlugins();
+    const pluginDir = makeTempDir();
+
+    // Plugin whose setup-entry uses the bundled contract but loadSetupPlugin() throws
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/setup-entry-throws-test",
+          openclaw: {
+            extensions: ["./index.cjs"],
+            setupEntry: "./setup-entry.cjs",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "setup-entry-throws-test",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          channels: ["setup-entry-throws-test"],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    // index.cjs: full entry (should NOT be reached if setup-entry is used)
+    fs.writeFileSync(
+      path.join(pluginDir, "index.cjs"),
+      `module.exports = { id: "setup-entry-throws-test", register() {} };`,
+      "utf-8",
+    );
+    // setup-entry.cjs: bundled contract whose loadSetupPlugin throws
+    fs.writeFileSync(
+      path.join(pluginDir, "setup-entry.cjs"),
+      `module.exports = {
+  kind: "bundled-channel-setup-entry",
+  loadSetupPlugin: () => { throw new Error("boom: setup plugin missing"); },
+};`,
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [pluginDir] },
+          allow: ["setup-entry-throws-test"],
+        },
+      },
+    });
+
+    // The registry load should NOT crash; the error should be recorded as a
+    // per-plugin diagnostic rather than aborting the whole load.
+    expect(registry.diagnostics.length).toBeGreaterThanOrEqual(1);
+    const diagnostic = registry.diagnostics.find(
+      (d) => d.pluginId === "setup-entry-throws-test" && d.level === "error",
+    );
+    expect(diagnostic).toBeDefined();
+    expect(diagnostic!.message).toContain("failed to load setup entry");
+  });
+
+  it("keeps healthy sibling channel plugins loadable when a setup entry throws", () => {
+    useNoBundledPlugins();
+    const brokenDir = makeTempDir();
+
+    fs.writeFileSync(
+      path.join(brokenDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/setup-entry-throws-sibling-test",
+          openclaw: {
+            extensions: ["./index.cjs"],
+            setupEntry: "./setup-entry.cjs",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(brokenDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "setup-entry-throws-sibling-test",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          channels: ["broken-chat"],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(brokenDir, "index.cjs"),
+      `module.exports = { id: "setup-entry-throws-sibling-test", register() {} };`,
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(brokenDir, "setup-entry.cjs"),
+      `module.exports = {
+  kind: "bundled-channel-setup-entry",
+  loadSetupPlugin: () => { throw new Error("boom: setup plugin missing"); },
+};`,
+      "utf-8",
+    );
+
+    const healthy = writePlugin({
+      id: "healthy-channel",
+      filename: "healthy-channel.cjs",
+      body: `module.exports = { id: "healthy-channel", register(api) {
+  api.registerChannel({
+    plugin: {
+      id: "healthy-chat",
+      meta: {
+        id: "healthy-chat",
+        label: "Healthy Chat",
+        selectionLabel: "Healthy Chat",
+        docsPath: "/channels/healthy-chat",
+        blurb: "healthy sibling channel",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({ accountId: "default" }),
+      },
+      outbound: { deliveryMode: "direct" },
+    }
+  });
+} };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          enabled: true,
+          load: { paths: [brokenDir, healthy.file] },
+          allow: ["setup-entry-throws-sibling-test", "healthy-channel"],
+        },
+      },
+    });
+
+    expect(
+      registry.channels.find((entry) => entry.plugin.id === "healthy-chat")?.plugin.meta,
+    ).toMatchObject({
+      label: "Healthy Chat",
+      docsPath: "/channels/healthy-chat",
+    });
+    expect(registry.plugins.find((entry) => entry.id === "healthy-channel")?.status).toBe("loaded");
+    expect(
+      registry.diagnostics.some(
+        (diag) =>
+          diag.pluginId === "setup-entry-throws-sibling-test" &&
+          diag.level === "error" &&
+          diag.message.includes("failed to load setup entry"),
+      ),
+    ).toBe(true);
   });
 
   it("prefers setupEntry for configured channel loads during startup when opted in", () => {

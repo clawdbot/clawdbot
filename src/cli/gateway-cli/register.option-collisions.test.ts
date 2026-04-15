@@ -62,7 +62,7 @@ vi.mock("./run.js", () => ({
       .option("--password <password>", "Gateway password"),
 }));
 
-vi.mock("../daemon-cli.js", () => ({
+vi.mock("../daemon-cli/register-service-commands.js", () => ({
   addGatewayServiceCommands: () => undefined,
 }));
 
@@ -70,9 +70,9 @@ vi.mock("../../commands/health.js", () => ({
   formatHealthChannelLines: () => [],
 }));
 
-vi.mock("../../config/config.js", () => ({
-  loadConfig: () => ({}),
+vi.mock("../../config/read-best-effort-config.runtime.js", () => ({
   readBestEffortConfig: async () => ({}),
+  readSourceConfigBestEffort: async () => ({}),
 }));
 
 vi.mock("../../infra/bonjour-discovery.js", () => ({

@@ -62,10 +62,21 @@ export type ChannelMessageToolSchemaContribution = {
   visibility?: "current-channel" | "all-configured";
 };
 
+type ChannelMessageToolMediaSourceParams =
+  | readonly string[]
+  | Partial<Record<ChannelMessageActionName, readonly string[]>>;
+
 export type ChannelMessageToolDiscovery = {
   actions?: readonly ChannelMessageActionName[] | null;
   capabilities?: readonly ChannelMessageCapability[] | null;
   schema?: ChannelMessageToolSchemaContribution | ChannelMessageToolSchemaContribution[] | null;
+  /**
+   * Plugin-owned message-tool params that carry media sources.
+   * Core uses this to derive sandbox path normalization and host media-access
+   * hints without hardcoding plugin-specific param names. Prefer scoping keys
+   * by action so unrelated actions do not inherit another action's media args.
+   */
+  mediaSourceParams?: ChannelMessageToolMediaSourceParams | null;
 };
 
 /** Shared setup input bag used by CLI, onboarding, and setup adapters. */
@@ -630,7 +641,8 @@ export type ChannelMessageActionAdapter = {
   /**
    * Unified discovery surface for the shared `message` tool.
    * This returns the scoped actions,
-   * capabilities, and schema fragments together so they cannot drift.
+   * capabilities, schema fragments, and any plugin-owned media-source params
+   * together so they cannot drift.
    */
   describeMessageTool: (
     params: ChannelMessageActionDiscoveryContext,

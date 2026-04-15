@@ -1,3 +1,4 @@
+import type { FileHandle } from "node:fs/promises";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,10 +9,12 @@ import {
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import * as pinnedPathHelperModule from "./fs-pinned-path-helper.js";
 import {
+  __setFsSafeTestHooksForTest,
   appendFileWithinRoot,
   copyFileWithinRoot,
   createRootScopedReadFile,
   mkdirPathWithinRoot,
+  resolveOpenedFileRealPathForHandle,
   SafeOpenError,
   openFileWithinRoot,
   readFileWithinRoot,
@@ -25,6 +28,8 @@ import {
 const tempDirs = createTrackedTempDirs();
 
 afterEach(async () => {
+  __setFsSafeTestHooksForTest(undefined);
+  vi.unstubAllEnvs();
   await tempDirs.cleanup();
 });
 
@@ -149,6 +154,32 @@ describe("fs-safe", () => {
     });
   });
 
+  it.runIf(process.platform !== "win32")(
+    "resolves opened file real paths from the fd before the current path target",
+    async () => {
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+      const outside = await tempDirs.make("openclaw-fs-safe-outside-");
+      const originalPath = path.join(root, "inside.txt");
+      const movedPath = path.join(root, "inside-moved.txt");
+      const outsidePath = path.join(outside, "outside.txt");
+      await fs.writeFile(originalPath, "inside");
+      await fs.writeFile(outsidePath, "outside");
+
+      const handle = await fs.open(originalPath, "r");
+      try {
+        await fs.rename(originalPath, movedPath);
+        await fs.symlink(outsidePath, originalPath);
+
+        const resolved = await resolveOpenedFileRealPathForHandle(handle, originalPath);
+
+        await expect(fs.realpath(movedPath)).resolves.toBe(resolved);
+        await expect(handle.readFile({ encoding: "utf8" })).resolves.toBe("inside");
+      } finally {
+        await handle.close().catch(() => {});
+      }
+    },
+  );
+
   it("blocks traversal outside root", async () => {
     const root = await tempDirs.make("openclaw-fs-safe-root-");
     const outside = await tempDirs.make("openclaw-fs-safe-outside-");
@@ -219,6 +250,70 @@ describe("fs-safe", () => {
         relativePath: "link.txt",
       }),
     ).rejects.toMatchObject({ code: "invalid-path" });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects symlink-target reads when the path target changes after open",
+    async () => {
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+      const insideA = path.join(root, "inside-a.txt");
+      const insideB = path.join(root, "inside-b.txt");
+      const link = path.join(root, "link.txt");
+      await fs.writeFile(insideA, "inside-a");
+      await fs.writeFile(insideB, "inside-b");
+      await fs.symlink(insideA, link);
+
+      __setFsSafeTestHooksForTest({
+        afterOpen: async () => {
+          await fs.rm(link);
+          await fs.symlink(insideB, link);
+        },
+      });
+
+      await expect(
+        readFileWithinRoot({
+          rootDir: root,
+          relativePath: "link.txt",
+          allowSymlinkTargetWithinRoot: true,
+        }),
+      ).rejects.toMatchObject({ code: "invalid-path" });
+    },
+  );
+
+  it("closes the opened handle when afterOpen hook throws", async () => {
+    const root = await tempDirs.make("openclaw-fs-safe-root-");
+    const filePath = path.join(root, "inside.txt");
+    await fs.writeFile(filePath, "inside");
+
+    let openedHandle: FileHandle | undefined;
+    __setFsSafeTestHooksForTest({
+      afterOpen: (_target, handle) => {
+        openedHandle = handle;
+        throw new Error("after-open boom");
+      },
+    });
+
+    await expect(
+      openFileWithinRoot({
+        rootDir: root,
+        relativePath: "inside.txt",
+      }),
+    ).rejects.toThrow("after-open boom");
+    expect(openedHandle).toBeDefined();
+    await expect(openedHandle?.readFile({ encoding: "utf8" })).rejects.toMatchObject({
+      code: "EBADF",
+    });
+  });
+
+  it("rejects setting fs-safe test hooks outside test mode", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("VITEST", undefined);
+
+    expect(() =>
+      __setFsSafeTestHooksForTest({
+        afterPreOpenLstat: () => {},
+      }),
+    ).toThrow("__setFsSafeTestHooksForTest is only available in tests");
   });
 
   it.runIf(process.platform !== "win32")("blocks hardlink aliases under root", async () => {

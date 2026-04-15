@@ -57,6 +57,51 @@ describe("scanStatusJsonFast", () => {
     expect(loggingStateRef.forceConsoleToStderr).toBe(false);
   });
 
+  it("preloads configured channel plugins from the resolved snapshot while preserving source activation config", async () => {
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+    applyStatusScanDefaults(mocks, {
+      hasConfiguredChannels: true,
+      sourceConfig: {
+        channels: {
+          telegram: {
+            botToken: {
+              source: "file",
+              provider: "vault",
+              id: "/telegram/bot-token",
+            },
+          },
+        },
+      } as never,
+      resolvedConfig: {
+        marker: "resolved-snapshot",
+        channels: {
+          telegram: {
+            botToken: "resolved-token",
+          },
+        },
+      } as never,
+    });
+
+    await scanStatusJsonFast({}, {} as never);
+
+    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "configured-channels",
+        config: expect.objectContaining({ marker: "resolved-snapshot" }),
+        activationSourceConfig: expect.objectContaining({
+          channels: expect.objectContaining({
+            telegram: expect.objectContaining({
+              botToken: expect.objectContaining({
+                source: "file",
+                id: "/telegram/bot-token",
+              }),
+            }),
+          }),
+        }),
+      }),
+    );
+  });
+
   it("skips plugin compatibility loading even when configured channels are present", async () => {
     mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
 

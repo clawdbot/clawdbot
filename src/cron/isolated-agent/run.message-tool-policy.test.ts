@@ -165,3 +165,71 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     );
   });
 });
+
+describe("runCronIsolatedAgentTurn delivery instruction", () => {
+  let previousFastTestEnv: string | undefined;
+
+  beforeEach(() => {
+    previousFastTestEnv = clearFastTestEnv();
+    resetRunCronIsolatedAgentTurnHarness();
+    resolveDeliveryTargetMock.mockResolvedValue({
+      ok: true,
+      channel: "telegram",
+      to: "123",
+      accountId: undefined,
+      error: undefined,
+    });
+  });
+
+  afterEach(() => {
+    restoreFastTestEnv(previousFastTestEnv);
+  });
+
+  it("appends a plain-text delivery instruction to the prompt when delivery is requested", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "telegram",
+      to: "123",
+    });
+
+    await runCronIsolatedAgentTurn(makeParams());
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const prompt: string = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.prompt ?? "";
+    expect(prompt).toContain("Return your response as plain text");
+    expect(prompt).toContain("it will be delivered automatically");
+  });
+
+  it("does not append a delivery instruction when delivery is not requested", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({ requested: false, mode: "none" });
+
+    await runCronIsolatedAgentTurn(makeParams());
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const prompt: string = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.prompt ?? "";
+    expect(prompt).not.toContain("Return your response as plain text");
+    expect(prompt).not.toContain("it will be delivered automatically");
+  });
+
+  it("does not instruct the agent to summarize when delivery is requested", async () => {
+    // Regression for https://github.com/openclaw/openclaw/issues/58535:
+    // "summary" caused LLMs to condense structured output and drop fields
+    // non-deterministically on every run.
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "telegram",
+      to: "123",
+    });
+
+    await runCronIsolatedAgentTurn(makeParams());
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const prompt: string = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.prompt ?? "";
+    expect(prompt).not.toMatch(/\bsummary\b/i);
+  });
+});

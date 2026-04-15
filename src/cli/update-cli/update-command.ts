@@ -814,6 +814,13 @@ async function continuePostCoreUpdateInFreshProcess(params: {
   return true;
 }
 
+function shouldResumePostCoreUpdateInFreshProcess(params: {
+  result: UpdateRunResult;
+  downgradeRisk: boolean;
+}): boolean {
+  return isPackageManagerUpdateMode(params.result.mode) && !params.downgradeRisk;
+}
+
 export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   suppressDeprecations();
   const invocationCwd = tryResolveInvocationCwd();
@@ -1149,7 +1156,12 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   const postUpdateRoot = result.root ?? root;
 
   let pluginsUpdatedInFreshProcess = false;
-  if (isPackageManagerUpdateMode(result.mode)) {
+  if (
+    shouldResumePostCoreUpdateInFreshProcess({
+      result,
+      downgradeRisk,
+    })
+  ) {
     pluginsUpdatedInFreshProcess = await continuePostCoreUpdateInFreshProcess({
       root: postUpdateRoot,
       channel,

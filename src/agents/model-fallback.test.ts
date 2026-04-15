@@ -591,6 +591,33 @@ describe("runWithModelFallback", () => {
     expect(run.mock.calls[1]?.[1]).toBe("gpt-4.1-mini");
   });
 
+  it("records invalid-model HTTP 400 responses as model_not_found during fallback", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(
+          new Error("HTTP 400: openrouter/__invalid_test_model__ is not a valid model ID"),
+          { status: 400 },
+        ),
+      )
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openrouter",
+      model: "__invalid_test_model__",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(result.attempts).toHaveLength(1);
+    expect(result.attempts[0]?.reason).toBe("model_not_found");
+    expect(run.mock.calls[1]?.[0]).toBe("openai");
+    expect(run.mock.calls[1]?.[1]).toBe("gpt-4.1-mini");
+  });
+
   it("warns when falling back due to model_not_found", async () => {
     setLoggerOverride({ level: "silent", consoleLevel: "warn" });
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});

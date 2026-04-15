@@ -1,7 +1,5 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
-import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
-import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import {
   GOOGLE_GEMINI_DEFAULT_MODEL,
   applyGoogleGeminiModelDefault,
@@ -9,14 +7,8 @@ import {
   normalizeGoogleModelId,
   resolveGoogleGenerativeAiTransport,
 } from "./api.js";
+import { GOOGLE_GEMINI_PROVIDER_HOOKS } from "./provider-hooks.js";
 import { isModernGoogleModel, resolveGoogleGeminiForwardCompatModel } from "./provider-models.js";
-
-const GOOGLE_GEMINI_PROVIDER_HOOKS = {
-  ...buildProviderReplayFamilyHooks({
-    family: "google-gemini",
-  }),
-  ...buildProviderStreamFamilyHooks("google-thinking"),
-};
 
 export function registerGoogleProvider(api: OpenClawPluginApi) {
   api.registerProvider({

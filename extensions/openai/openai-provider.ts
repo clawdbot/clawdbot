@@ -9,21 +9,16 @@ import {
   normalizeProviderId,
   type ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { isOpenAIApiBaseUrl } from "./base-url.js";
 import { applyOpenAIConfig, OPENAI_DEFAULT_MODEL } from "./default-models.js";
-import { buildOpenAIReplayPolicy } from "./replay-policy.js";
 import {
+  buildOpenAIResponsesProviderHooks,
   buildOpenAISyntheticCatalogEntry,
   cloneFirstTemplateModel,
   findCatalogTemplate,
-  isOpenAIApiBaseUrl,
   matchesExactOrPrefix,
 } from "./shared.js";
-import {
-  resolveOpenAITransportTurnState,
-  resolveOpenAIWebSocketSessionPolicy,
-} from "./transport-policy.js";
 
 const PROVIDER_ID = "openai";
 const OPENAI_GPT_54_MODEL_ID = "gpt-5.4";
@@ -69,8 +64,6 @@ const OPENAI_MODERN_MODEL_IDS = [
 ] as const;
 const OPENAI_DIRECT_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const SUPPRESSED_SPARK_PROVIDERS = new Set(["openai", "azure-openai-responses"]);
-const OPENAI_RESPONSES_STREAM_HOOKS = buildProviderStreamFamilyHooks("openai-responses-defaults");
-
 function shouldUseOpenAIResponsesTransport(params: {
   provider: string;
   api?: string | null;
@@ -221,26 +214,9 @@ export function buildOpenAIProvider(): ProviderPlugin {
       shouldUseOpenAIResponsesTransport({ provider, api, baseUrl })
         ? { api: "openai-responses", baseUrl }
         : undefined,
-    buildReplayPolicy: buildOpenAIReplayPolicy,
-    prepareExtraParams: (ctx) => {
-      const transport = ctx.extraParams?.transport;
-      const hasSupportedTransport =
-        transport === "auto" || transport === "sse" || transport === "websocket";
-      const hasExplicitWarmup = typeof ctx.extraParams?.openaiWsWarmup === "boolean";
-      if (hasSupportedTransport && hasExplicitWarmup) {
-        return ctx.extraParams;
-      }
-      return {
-        ...ctx.extraParams,
-        ...(hasSupportedTransport ? {} : { transport: "auto" }),
-        ...(hasExplicitWarmup ? {} : { openaiWsWarmup: true }),
-      };
-    },
-    ...OPENAI_RESPONSES_STREAM_HOOKS,
+    ...buildOpenAIResponsesProviderHooks({ openaiWsWarmup: true }),
     matchesContextOverflowError: ({ errorMessage }) =>
       /content_filter.*(?:prompt|input).*(?:too long|exceed)/i.test(errorMessage),
-    resolveTransportTurnState: (ctx) => resolveOpenAITransportTurnState(ctx),
-    resolveWebSocketSessionPolicy: (ctx) => resolveOpenAIWebSocketSessionPolicy(ctx),
     resolveReasoningOutputMode: () => "native",
     supportsXHighThinking: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_XHIGH_MODEL_IDS),
     isModernModelRef: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_MODERN_MODEL_IDS),

@@ -36,11 +36,6 @@
         "setup": false,
         "docs": false
       }
-    },
-    "install": {
-      "npmSpec": "@openclaw/qa-channel",
-      "defaultChoice": "npm",
-      "minHostVersion": ">=2026.4.10"
     }
   }
 }

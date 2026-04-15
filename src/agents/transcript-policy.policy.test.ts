@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
-vi.mock("../plugins/provider-runtime.js", () => ({
+vi.mock("../plugins/provider-hook-runtime.js", () => ({
   resolveProviderRuntimePlugin: vi.fn(({ provider }: { provider?: string }) =>
     provider === "mistral"
       ? {

@@ -2,7 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 
-const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"] as const;
+export const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [
+  ".ts",
+  ".mts",
+  ".js",
+  ".mjs",
+  ".cts",
+  ".cjs",
+] as const;
 
 export function normalizeBundledPluginArtifactSubpath(artifactBasename: string): string {
   if (
@@ -31,6 +38,48 @@ export function normalizeBundledPluginArtifactSubpath(artifactBasename: string):
   return normalized;
 }
 
+export function resolveBundledPluginSourcePublicSurfacePath(params: {
+  sourceRoot: string;
+  dirName: string;
+  artifactBasename: string;
+}): string | null {
+  const artifactBasename = normalizeBundledPluginArtifactSubpath(params.artifactBasename);
+  const sourceBaseName = artifactBasename.replace(/\.js$/u, "");
+  for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
+    const sourceCandidate = path.resolve(
+      params.sourceRoot,
+      params.dirName,
+      `${sourceBaseName}${ext}`,
+    );
+    if (fs.existsSync(sourceCandidate)) {
+      return sourceCandidate;
+    }
+  }
+  return null;
+}
+
+function resolvePackageSourceFallbackForBundledDir(params: {
+  rootDir: string;
+  bundledPluginsDir: string;
+  dirName: string;
+  artifactBasename: string;
+}): string | null {
+  const normalizedBundledDir = path.resolve(params.bundledPluginsDir);
+  const normalizedRootDir = path.resolve(params.rootDir);
+  const packageBundledDirs = [
+    path.join(normalizedRootDir, "dist", "extensions"),
+    path.join(normalizedRootDir, "dist-runtime", "extensions"),
+  ];
+  if (!packageBundledDirs.includes(normalizedBundledDir)) {
+    return null;
+  }
+  return resolveBundledPluginSourcePublicSurfacePath({
+    sourceRoot: path.join(normalizedRootDir, "extensions"),
+    dirName: params.dirName,
+    artifactBasename: params.artifactBasename,
+  });
+}
+
 export function resolveBundledPluginPublicSurfacePath(params: {
   rootDir: string;
   dirName: string;
@@ -48,14 +97,19 @@ export function resolveBundledPluginPublicSurfacePath(params: {
     if (fs.existsSync(explicitBuiltCandidate)) {
       return explicitBuiltCandidate;
     }
-
-    const sourceBaseName = artifactBasename.replace(/\.js$/u, "");
-    for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
-      const sourceCandidate = path.join(explicitPluginDir, `${sourceBaseName}${ext}`);
-      if (fs.existsSync(sourceCandidate)) {
-        return sourceCandidate;
-      }
-    }
+    return (
+      resolveBundledPluginSourcePublicSurfacePath({
+        sourceRoot: explicitBundledPluginsDir,
+        dirName: params.dirName,
+        artifactBasename,
+      }) ??
+      resolvePackageSourceFallbackForBundledDir({
+        rootDir: params.rootDir,
+        bundledPluginsDir: explicitBundledPluginsDir,
+        dirName: params.dirName,
+        artifactBasename,
+      })
+    );
   }
 
   for (const candidate of [
@@ -67,18 +121,9 @@ export function resolveBundledPluginPublicSurfacePath(params: {
     }
   }
 
-  const sourceBaseName = artifactBasename.replace(/\.js$/u, "");
-  for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
-    const sourceCandidate = path.resolve(
-      params.rootDir,
-      "extensions",
-      params.dirName,
-      `${sourceBaseName}${ext}`,
-    );
-    if (fs.existsSync(sourceCandidate)) {
-      return sourceCandidate;
-    }
-  }
-
-  return null;
+  return resolveBundledPluginSourcePublicSurfacePath({
+    sourceRoot: path.resolve(params.rootDir, "extensions"),
+    dirName: params.dirName,
+    artifactBasename,
+  });
 }

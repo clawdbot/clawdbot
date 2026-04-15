@@ -10,6 +10,14 @@ import { resolveEmbeddedRunSkillEntries } from "./skills-runtime.js";
 const tempDirs: string[] = [];
 const originalBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 
+function restoreBundledPluginsDir() {
+  if (originalBundledDir === undefined) {
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    return;
+  }
+  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledDir;
+}
+
 async function createTempDir(prefix: string) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   tempDirs.push(dir);
@@ -40,7 +48,7 @@ async function resolveBundledDiffsSkillEntries(config?: OpenClawConfig) {
 }
 
 afterEach(async () => {
-  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledDir;
+  restoreBundledPluginsDir();
   clearPluginManifestRegistryCache();
   await Promise.all(
     tempDirs.splice(0, tempDirs.length).map((dir) => fs.rm(dir, { recursive: true, force: true })),

@@ -16,6 +16,7 @@ const extraArgs = process.argv.slice(2);
 const INEFFECTIVE_DYNAMIC_IMPORT_RE = /\[INEFFECTIVE_DYNAMIC_IMPORT\]/;
 const UNRESOLVED_IMPORT_RE = /\[UNRESOLVED_IMPORT\]/;
 const ANSI_ESCAPE_RE = new RegExp(String.raw`\u001B\[[0-9;]*m`, "g");
+const HASHED_ROOT_JS_RE = /^(?<base>.+)-[A-Za-z0-9_-]+\.js$/u;
 
 function removeDistPluginNodeModulesSymlinks(rootDir) {
   const extensionsDir = path.join(rootDir, "extensions");
@@ -45,6 +46,34 @@ function pruneStaleRuntimeSymlinks() {
   // so tsdown's clean step cannot traverse stale runtime overlays on rebuilds.
   removeDistPluginNodeModulesSymlinks(path.join(cwd, "dist"));
   removeDistPluginNodeModulesSymlinks(path.join(cwd, "dist-runtime"));
+}
+
+export function pruneStaleRootChunkFiles(params = {}) {
+  const cwd = params.cwd ?? process.cwd();
+  const fsImpl = params.fs ?? fs;
+  const roots = [path.join(cwd, "dist"), path.join(cwd, "dist-runtime")];
+  for (const root of roots) {
+    let entries = [];
+    try {
+      entries = fsImpl.readdirSync(root, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isFile()) {
+        continue;
+      }
+      if (!HASHED_ROOT_JS_RE.test(entry.name)) {
+        continue;
+      }
+      try {
+        fsImpl.rmSync(path.join(root, entry.name), { force: true });
+      } catch {
+        // Best-effort cleanup. The subsequent build will overwrite any stragglers.
+      }
+    }
+  }
 }
 
 export function pruneSourceCheckoutBundledPluginNodeModules(params = {}) {
@@ -116,6 +145,7 @@ function isMainModule() {
 if (isMainModule()) {
   pruneSourceCheckoutBundledPluginNodeModules();
   pruneStaleRuntimeSymlinks();
+  pruneStaleRootChunkFiles();
   const invocation = resolveTsdownBuildInvocation();
   const result = spawnSync(invocation.command, invocation.args, invocation.options);
 

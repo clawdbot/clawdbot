@@ -215,4 +215,28 @@ describe("zai provider plugin", () => {
 
     expect(capturedPayload).not.toHaveProperty("tool_stream");
   });
+
+  it("defaults tool_stream extra params but preserves explicit values", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(
+      provider.prepareExtraParams?.({
+        provider: "zai",
+        modelId: "glm-4.7",
+        extraParams: { endpoint: "global" },
+      } as never),
+    ).toEqual({
+      endpoint: "global",
+      tool_stream: true,
+    });
+
+    const explicit = { endpoint: "global", tool_stream: false };
+    expect(
+      provider.prepareExtraParams?.({
+        provider: "zai",
+        modelId: "glm-4.7",
+        extraParams: explicit,
+      } as never),
+    ).toBe(explicit);
+  });
 });

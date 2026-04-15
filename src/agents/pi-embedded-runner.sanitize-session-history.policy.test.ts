@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSanitizeSessionHistoryHelpersMock,
+  createSanitizeSessionHistoryProviderHookRuntimeMock,
   createSanitizeSessionHistoryProviderRuntimeMock,
   loadSanitizeSessionHistoryWithCleanMocks,
   makeMockSessionManager,
@@ -18,6 +19,9 @@ vi.mock(
 vi.mock(
   "../plugins/provider-runtime.js",
   async () => await createSanitizeSessionHistoryProviderRuntimeMock(),
+);
+vi.mock("../plugins/provider-hook-runtime.js", () =>
+  createSanitizeSessionHistoryProviderHookRuntimeMock(),
 );
 
 let sanitizeSessionHistory: SanitizeSessionHistoryHarness["sanitizeSessionHistory"];

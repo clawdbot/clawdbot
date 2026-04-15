@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { CONFIG_PATH, type HookMappingConfig, type HooksConfig } from "../config/config.js";
+import { CONFIG_PATH } from "../config/paths.js";
+import type { HookMappingConfig, HooksConfig } from "../config/types.hooks.js";
 import { importFileModule, resolveFunctionModuleExport } from "../hooks/module-loader.js";
 import { normalizeOptionalString, readStringValue } from "../shared/string-coerce.js";
 import type { HookMessageChannel } from "./hooks.types.js";

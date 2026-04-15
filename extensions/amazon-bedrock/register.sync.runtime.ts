@@ -1,7 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  buildProviderReplayFamilyHooks,
+  ANTHROPIC_BY_MODEL_REPLAY_HOOKS,
   normalizeProviderId,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
@@ -74,9 +74,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     /ValidationException.*(?:exceeds? the (?:maximum|max) (?:number of )?(?:input )?tokens)/i,
     /ModelStreamErrorException.*(?:Input is too long|too many input tokens)/i,
   ] as const;
-  const anthropicByModelReplayHooks = buildProviderReplayFamilyHooks({
-    family: "anthropic-by-model",
-  });
+  const anthropicByModelReplayHooks = ANTHROPIC_BY_MODEL_REPLAY_HOOKS;
   const pluginConfig = (api.pluginConfig ?? {}) as AmazonBedrockPluginConfig;
   const guardrail = pluginConfig.guardrail;
 

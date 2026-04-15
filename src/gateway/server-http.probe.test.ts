@@ -113,6 +113,65 @@ describe("gateway probe endpoints", () => {
     });
   });
 
+  it("re-resolves auth for remote /ready requests after shared auth rotation", async () => {
+    const getReadiness: ReadinessChecker = () => ({
+      ready: false,
+      failing: ["discord", "telegram"],
+      uptimeMs: 8_000,
+    });
+    let currentAuth = AUTH_TOKEN;
+
+    await withGatewayServer({
+      prefix: "probe-remote-rotated-auth",
+      // `resolvedAuth` remains the static fallback; `getResolvedAuth` drives the rotated value.
+      resolvedAuth: AUTH_TOKEN,
+      overrides: {
+        getReadiness,
+        getResolvedAuth: () => currentAuth,
+      },
+      run: async (server) => {
+        const sendReady = async (authorization: string) => {
+          const req = createRequest({
+            path: "/ready",
+            remoteAddress: "10.0.0.8",
+            host: "gateway.test",
+            authorization,
+          });
+          const { res, getBody } = createResponse();
+          await dispatchRequest(server, req, res);
+          return { statusCode: res.statusCode, body: JSON.parse(getBody()) };
+        };
+
+        await expect(sendReady("Bearer test-token")).resolves.toEqual({
+          statusCode: 503,
+          body: {
+            ready: false,
+            failing: ["discord", "telegram"],
+            uptimeMs: 8_000,
+          },
+        });
+
+        currentAuth = {
+          ...AUTH_TOKEN,
+          token: "rotated-token",
+        };
+
+        await expect(sendReady("Bearer test-token")).resolves.toEqual({
+          statusCode: 503,
+          body: { ready: false },
+        });
+        await expect(sendReady("Bearer rotated-token")).resolves.toEqual({
+          statusCode: 503,
+          body: {
+            ready: false,
+            failing: ["discord", "telegram"],
+            uptimeMs: 8_000,
+          },
+        });
+      },
+    });
+  });
+
   it("hides readiness details when trusted-proxy auth violates browser origin policy", async () => {
     const getReadiness: ReadinessChecker = () => ({
       ready: false,

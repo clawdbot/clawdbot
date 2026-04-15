@@ -11,6 +11,7 @@ import type {
   AttentionItem,
   CronJob,
   CronStatus,
+  ModelAuthStatusResult,
   SessionsListResult,
   SessionsUsageResult,
   SkillStatusReport,
@@ -40,6 +41,7 @@ export type OverviewProps = {
   lastChannelsRefresh: number | null;
   warnQueryToken: boolean;
   // New dashboard data
+  modelAuthStatus: ModelAuthStatusResult | null;
   usageResult: SessionsUsageResult | null;
   sessionsResult: SessionsListResult | null;
   skillsReport: SkillStatusReport | null;
@@ -416,6 +418,7 @@ export function renderOverview(props: OverviewProps) {
       skillsReport: props.skillsReport,
       cronJobs: props.cronJobs,
       cronStatus: props.cronStatus,
+      modelAuthStatus: props.modelAuthStatus,
       presenceCount: props.presenceCount,
       onNavigate: props.onNavigate,
     })}

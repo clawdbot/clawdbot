@@ -34,6 +34,7 @@ import {
   type PluginManifestChannelConfig,
   type PluginManifestContracts,
   type PluginManifestModelSupport,
+  type PluginManifestQaRunner,
   type PluginManifestSetup,
 } from "./manifest.js";
 import { checkMinHostVersion } from "./min-host-version.js";
@@ -92,6 +93,7 @@ export type PluginManifestRecord = {
   providerAuthChoices?: PluginManifest["providerAuthChoices"];
   activation?: PluginManifestActivation;
   setup?: PluginManifestSetup;
+  qaRunners?: PluginManifestQaRunner[];
   skills: string[];
   settingsFiles?: string[];
   hooks: string[];
@@ -333,6 +335,7 @@ function buildRecord(params: {
     providerAuthChoices: params.manifest.providerAuthChoices,
     activation: params.manifest.activation,
     setup: params.manifest.setup,
+    qaRunners: params.manifest.qaRunners,
     skills: params.manifest.skills ?? [],
     settingsFiles: [],
     hooks: [],

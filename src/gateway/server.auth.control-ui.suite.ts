@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import {
@@ -28,7 +30,7 @@ import {
   writeTrustedProxyControlUiConfig,
 } from "./server.auth.shared.js";
 
-let controlUiIdentityPathSeq = 0;
+const operatorIdentityPathByPrefix = new Map<string, string>();
 
 export function registerControlUiAndPairingSuite(): void {
   const trustedProxyControlUiCases: Array<{
@@ -117,12 +119,13 @@ export function registerControlUiAndPairingSuite(): void {
   };
 
   const createOperatorIdentityFixture = async (identityPrefix: string) => {
-    const { mkdtemp } = await import("node:fs/promises");
-    const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
     const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
-    const identityDir = await mkdtemp(join(tmpdir(), identityPrefix));
-    const identityPath = join(identityDir, "device.json");
+    let identityPath = operatorIdentityPathByPrefix.get(identityPrefix);
+    if (!identityPath) {
+      const poolId = process.env.VITEST_POOL_ID ?? "0";
+      identityPath = path.join(os.tmpdir(), `${identityPrefix}${process.pid}-${poolId}.json`);
+      operatorIdentityPathByPrefix.set(identityPrefix, identityPath);
+    }
     const identity = loadOrCreateDeviceIdentity(identityPath);
     return {
       identityPath,
@@ -355,8 +358,7 @@ export function registerControlUiAndPairingSuite(): void {
         const challenge = await challengePromise;
         const nonce = (challenge.payload as { nonce?: unknown } | undefined)?.nonce;
         expect(typeof nonce).toBe("string");
-        const os = await import("node:os");
-        const path = await import("node:path");
+        const { identityPath } = await createOperatorIdentityFixture("openclaw-controlui-device-");
         const scopes = [
           "operator.admin",
           "operator.read",
@@ -369,10 +371,7 @@ export function registerControlUiAndPairingSuite(): void {
           scopes,
           clientId: GATEWAY_CLIENT_NAMES.CONTROL_UI,
           clientMode: GATEWAY_CLIENT_MODES.WEBCHAT,
-          identityPath: path.join(
-            os.tmpdir(),
-            `openclaw-controlui-device-${process.pid}-${process.env.VITEST_POOL_ID ?? "0"}-${controlUiIdentityPathSeq++}.json`,
-          ),
+          identityPath,
           nonce: String(nonce),
         });
         const res = await connectReq(ws, {

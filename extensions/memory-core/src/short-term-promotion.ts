@@ -37,6 +37,9 @@ const SHORT_TERM_LOCK_RETRY_DELAY_MS = 40;
 const PHASE_SIGNAL_LIGHT_BOOST_MAX = 0.06;
 const PHASE_SIGNAL_REM_BOOST_MAX = 0.09;
 const PHASE_SIGNAL_HALF_LIFE_DAYS = 14;
+const DREAMING_TRANSCRIPT_PROMPT_LINE_RE =
+  /\[[^\]]*dreaming-narrative[^\]]*]\s*(?:User|Assistant):\s*Write a dream diary entry from these memory fragments:?/i;
+const DREAMING_DIFF_PREFIX_RE = /@@\s*-\d+(?:,\d+)?\s+[-*+]\s+/iy;
 const inProcessShortTermLocks = new Map<string, Promise<void>>();
 const ensuredShortTermDirs = new Map<string, Promise<void>>();
 
@@ -235,6 +238,62 @@ function normalizeSnippet(raw: string): string {
   return trimmed.replace(/\s+/g, " ");
 }
 
+function consumeDreamingLeadPrefix(snippet: string): string {
+  let index = 0;
+  while (index < snippet.length) {
+    DREAMING_DIFF_PREFIX_RE.lastIndex = index;
+    const diffMatch = DREAMING_DIFF_PREFIX_RE.exec(snippet);
+    if (diffMatch) {
+      index = DREAMING_DIFF_PREFIX_RE.lastIndex;
+      continue;
+    }
+    const char = snippet[index];
+    if (char === "[" || char === "(") {
+      index += 1;
+      while (snippet[index] === " ") {
+        index += 1;
+      }
+      continue;
+    }
+    if (
+      (char === "-" || char === "*" || char === "+" || char === ">") &&
+      snippet[index + 1] === " "
+    ) {
+      index += 2;
+      continue;
+    }
+    break;
+  }
+  return snippet.slice(index);
+}
+
+function hasDreamingNarrativeLead(snippet: string): boolean {
+  const withoutPrefix = consumeDreamingLeadPrefix(snippet);
+  return /^Candidate:/i.test(withoutPrefix) || /^Reflections?:/i.test(withoutPrefix);
+}
+
+function isContaminatedDreamingSnippet(raw: string): boolean {
+  const snippet = normalizeSnippet(raw);
+  if (!snippet) {
+    return false;
+  }
+  if (
+    /<!--\s*openclaw-memory-promotion:/i.test(snippet) ||
+    DREAMING_TRANSCRIPT_PROMPT_LINE_RE.test(snippet)
+  ) {
+    return true;
+  }
+
+  const hasNarrativeLead = hasDreamingNarrativeLead(snippet);
+  const hasConfidence = /\bconfidence:\s*\d/i.test(snippet);
+  const hasEvidence = /\bevidence:\s*(?:memory\/\.dreams\/session-corpus\/|memory\/)/i.test(
+    snippet,
+  );
+  const hasStatus = /\bstatus:\s*staged\b/i.test(snippet);
+  const hasRecalls = /\brecalls:\s*\d+\b/i.test(snippet);
+  return hasNarrativeLead && hasConfidence && hasEvidence && hasStatus && hasRecalls;
+}
+
 function normalizeMemoryPath(rawPath: string): string {
   return rawPath.replaceAll("\\", "/").replace(/^\.\//, "");
 }
@@ -409,6 +468,9 @@ function normalizeStore(raw: unknown, nowIso: string): ShortTermRecallStore {
           ? entry.claimHash.trim()
           : undefined;
       const snippet = typeof entry.snippet === "string" ? normalizeSnippet(entry.snippet) : "";
+      if (snippet && isContaminatedDreamingSnippet(snippet)) {
+        continue;
+      }
       const queryHashes = Array.isArray(entry.queryHashes)
         ? normalizeDistinctStrings(entry.queryHashes, MAX_QUERY_HASHES)
         : [];
@@ -849,6 +911,9 @@ export async function recordShortTermRecalls(params: {
     for (const result of relevant) {
       const normalizedPath = normalizeMemoryPath(result.path);
       const snippet = normalizeSnippet(result.snippet);
+      if (!snippet || isContaminatedDreamingSnippet(snippet)) {
+        continue;
+      }
       const claimHash = snippet ? buildClaimHash(snippet) : undefined;
       const groundedKey = claimHash
         ? buildEntryKey({
@@ -954,6 +1019,7 @@ export async function recordGroundedShortTermCandidates(params: {
       const normalizedPath = normalizeMemoryPath(item.path);
       if (
         !snippet ||
+        isContaminatedDreamingSnippet(snippet) ||
         !normalizedPath ||
         !isShortTermMemoryPath(normalizedPath) ||
         !Number.isFinite(item.startLine) ||
@@ -1134,6 +1200,9 @@ export async function rankShortTermPromotionCandidates(
 
   for (const entry of Object.values(store.entries)) {
     if (!entry || entry.source !== "memory" || !isShortTermMemoryPath(entry.path)) {
+      continue;
+    }
+    if (isContaminatedDreamingSnippet(entry.snippet)) {
       continue;
     }
     if (!includePromoted && entry.promotedAt) {
@@ -1471,6 +1540,9 @@ export async function applyShortTermPromotions(
     const store = await readStore(workspaceDir, nowIso);
     const selected = options.candidates
       .filter((candidate) => {
+        if (isContaminatedDreamingSnippet(candidate.snippet)) {
+          return false;
+        }
         if (candidate.promotedAt) {
           return false;
         }
@@ -1506,7 +1578,7 @@ export async function applyShortTermPromotions(
     const rehydratedSelected: PromotionCandidate[] = [];
     for (const candidate of selected) {
       const rehydrated = await rehydratePromotionCandidate(workspaceDir, candidate);
-      if (rehydrated) {
+      if (rehydrated && !isContaminatedDreamingSnippet(rehydrated.snippet)) {
         rehydratedSelected.push(rehydrated);
       }
     }
@@ -1881,4 +1953,5 @@ export const __testing = {
   calculatePhaseSignalBoost,
   buildClaimHash,
   totalSignalCountForEntry,
+  isContaminatedDreamingSnippet,
 };

@@ -34,6 +34,7 @@ import { resolveSlackRoomContextHints } from "./room-context.js";
 type SlackBlock = { type: string; [key: string]: unknown };
 
 const SLACK_COMMAND_ARG_ACTION_ID = "openclaw_cmdarg";
+const SLACK_COMMAND_ARG_ACTION_LISTENER = /^openclaw_cmdarg/;
 const SLACK_COMMAND_ARG_VALUE_PREFIX = "cmdarg";
 const SLACK_COMMAND_ARG_BUTTON_ROW_SIZE = 5;
 const SLACK_COMMAND_ARG_OVERFLOW_MIN = 3;
@@ -221,16 +222,18 @@ function buildSlackCommandArgMenuBlocks(params: {
           },
         ]
       : encodedChoices.length <= SLACK_COMMAND_ARG_BUTTON_ROW_SIZE || !canUseStaticSelect
-        ? chunkItems(encodedChoices, SLACK_COMMAND_ARG_BUTTON_ROW_SIZE).map((choices) => ({
-            type: "actions",
-            elements: choices.map((choice) => ({
-              type: "button",
-              action_id: SLACK_COMMAND_ARG_ACTION_ID,
-              text: { type: "plain_text", text: choice.label },
-              value: choice.value,
-              confirm: buildSlackArgMenuConfirm({ command: params.command, arg: params.arg }),
-            })),
-          }))
+        ? chunkItems(encodedChoices, SLACK_COMMAND_ARG_BUTTON_ROW_SIZE).map(
+            (choices, rowIndex) => ({
+              type: "actions",
+              elements: choices.map((choice, colIndex) => ({
+                type: "button",
+                action_id: `${SLACK_COMMAND_ARG_ACTION_ID}_${rowIndex}_${colIndex}`,
+                text: { type: "plain_text", text: choice.label },
+                value: choice.value,
+                confirm: buildSlackArgMenuConfirm({ command: params.command, arg: params.arg }),
+              })),
+            }),
+          )
         : chunkItems(encodedChoices, SLACK_COMMAND_ARG_SELECT_OPTIONS_MAX).map(
             (choices, index) => ({
               type: "actions",
@@ -804,7 +807,7 @@ export async function registerSlackMonitorSlashCommands(params: {
     );
   }
 
-  const registerArgAction = (actionId: string) => {
+  const registerArgAction = (actionId: string | RegExp) => {
     (
       ctx.app as unknown as {
         action: NonNullable<(typeof ctx.app & { action?: unknown })["action"]>;
@@ -882,5 +885,5 @@ export async function registerSlackMonitorSlashCommands(params: {
       });
     });
   };
-  registerArgAction(SLACK_COMMAND_ARG_ACTION_ID);
+  registerArgAction(SLACK_COMMAND_ARG_ACTION_LISTENER);
 }

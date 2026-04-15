@@ -52,8 +52,8 @@ function createConfig(): OpenClawConfig {
 
 function createCommand(cfg: OpenClawConfig, discordConfig?: DiscordAccountConfig) {
   const commandSpec: NativeCommandSpec = {
-    name: "status",
-    description: "Status",
+    name: "ping",
+    description: "Ping",
     acceptsArgs: false,
   };
   return createDiscordNativeCommand({

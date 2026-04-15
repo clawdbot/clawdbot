@@ -19,6 +19,12 @@ const OPENAI_CODEX_MINI_MODEL = {
   contextWindow: 272_000,
 };
 
+const OPENAI_CODEX_PRO_MODEL = {
+  ...OPENAI_CODEX_MODEL,
+  id: "gpt-5.4-pro",
+  name: "GPT-5.4 Pro",
+};
+
 const OPENAI_CODEX_53_MODEL = {
   ...OPENAI_CODEX_MODEL,
   id: "gpt-5.4",
@@ -232,6 +238,35 @@ describe("modelsListCommand forward-compat", () => {
       expect(codexMini).toBeTruthy();
       expect(codexMini?.missing).toBe(false);
       expect(codexMini?.tags).not.toContain("missing");
+    });
+
+    it("does not mark configured codex gpt-5.4-pro as missing when forward-compat can build a fallback", async () => {
+      mocks.resolveConfiguredEntries.mockReturnValueOnce({
+        entries: [
+          {
+            key: "openai-codex/gpt-5.4-pro",
+            ref: { provider: "openai-codex", model: "gpt-5.4-pro" },
+            tags: new Set(["configured"]),
+            aliases: [],
+          },
+        ],
+      });
+      mocks.resolveModelWithRegistry.mockReturnValueOnce({ ...OPENAI_CODEX_PRO_MODEL });
+      const runtime = createRuntime();
+
+      await modelsListCommand({ json: true }, runtime as never);
+
+      expect(mocks.printModelTable).toHaveBeenCalled();
+      const rows = lastPrintedRows<{
+        key: string;
+        tags: string[];
+        missing: boolean;
+      }>();
+
+      const codexPro = rows.find((row) => row.key === "openai-codex/gpt-5.4-pro");
+      expect(codexPro).toBeTruthy();
+      expect(codexPro?.missing).toBe(false);
+      expect(codexPro?.tags).not.toContain("missing");
     });
 
     it("passes source config to model registry loading for persistence safety", async () => {

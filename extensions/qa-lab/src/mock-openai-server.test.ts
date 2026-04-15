@@ -99,6 +99,47 @@ describe("qa mock openai server", () => {
     expect(body).toContain('"name":"read"');
   });
 
+  it("emits deterministic text deltas for generic streaming QA prompts", async () => {
+    const server = await startMockServer();
+
+    const quietResponse = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        input: [makeUserInput("Quiet streaming QA check: reply exactly `MATRIX_QA_STREAMING_OK`.")],
+      }),
+    });
+    expect(quietResponse.status).toBe(200);
+    const quietBody = await quietResponse.text();
+    expect(quietBody).toContain('"type":"response.output_text.delta"');
+    expect(quietBody).toContain('"phase":"final_answer"');
+    expect(quietBody).toContain("MATRIX_QA_STREAMING_OK");
+
+    const blockResponse = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        input: [
+          makeUserInput(
+            "Block streaming QA check: emit exactly two assistant message blocks in order. First exact marker: `BLOCK_ONE_OK`. Second exact marker: `BLOCK_TWO_OK`.",
+          ),
+        ],
+      }),
+    });
+    expect(blockResponse.status).toBe(200);
+    const blockBody = await blockResponse.text();
+    expect(blockBody).toContain('"item_id":"msg_mock_block_1"');
+    expect(blockBody).toContain('"item_id":"msg_mock_block_2"');
+    expect(blockBody).toContain("BLOCK_ONE_OK");
+    expect(blockBody).toContain("BLOCK_TWO_OK");
+  });
+
   it("prefers path-like refs over generic quoted keys in prompts", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",

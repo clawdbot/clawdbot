@@ -19,6 +19,10 @@ import {
 } from "./lib/bundled-plugin-root-runtime-mirrors.mjs";
 import { collectPackUnpackedSizeErrors as collectNpmPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mjs";
 import { listPluginSdkDistArtifacts } from "./lib/plugin-sdk-entries.mjs";
+import {
+  runInstalledWorkspaceBootstrapSmoke,
+  WORKSPACE_TEMPLATE_PACK_PATHS,
+} from "./lib/workspace-bootstrap-smoke.mjs";
 import { listStaticExtensionAssetOutputs } from "./runtime-postbuild.mjs";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
 
@@ -39,6 +43,7 @@ const requiredPathGroups = [
   ...listPluginSdkDistArtifacts(),
   ...listBundledPluginPackArtifacts(),
   ...listStaticExtensionAssetOutputs(),
+  ...WORKSPACE_TEMPLATE_PACK_PATHS,
   ...listRequiredQaScenarioPackPaths(),
   "scripts/npm-runner.mjs",
   "scripts/postinstall-bundled-plugins.mjs",
@@ -235,6 +240,8 @@ function runPackedBundledChannelEntrySmoke(): void {
     if (completionFiles.length === 0) {
       throw new Error("release-check: packed completion smoke produced no completion files.");
     }
+
+    runInstalledWorkspaceBootstrapSmoke({ packageRoot });
   } finally {
     rmSync(tmpRoot, { recursive: true, force: true });
   }

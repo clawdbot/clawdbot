@@ -47,11 +47,11 @@
     "compat": {
       "pluginApi": ">=2026.4.12"
     },
-    "build": {
-      "openclawVersion": "2026.4.12"
-    },
     "bundle": {
       "stageRuntimeDependencies": true
+    },
+    "build": {
+      "openclawVersion": "2026.4.12"
     },
     "release": {
       "publishToClawHub": true,

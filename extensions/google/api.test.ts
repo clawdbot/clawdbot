@@ -1,7 +1,10 @@
+import type { ProviderRequestTransportOverrides } from "openclaw/plugin-sdk/provider-http";
 import { describe, expect, it } from "vitest";
 import {
   isGoogleGenerativeAiApi,
+  normalizeGoogleApiBaseUrl,
   normalizeGoogleGenerativeAiBaseUrl,
+  normalizeGoogleProviderConfig,
   parseGeminiAuth,
   resolveGoogleGenerativeAiHttpRequestConfig,
   resolveGoogleGenerativeAiApiOrigin,
@@ -38,6 +41,20 @@ describe("google generative ai helpers", () => {
     expect(normalizeGoogleGenerativeAiBaseUrl()).toBeUndefined();
   });
 
+  it("keeps /openai on generic Google base URL normalization and strips it only for native Gemini callers", () => {
+    expect(
+      normalizeGoogleApiBaseUrl("https://generativelanguage.googleapis.com/v1beta/openai"),
+    ).toBe("https://generativelanguage.googleapis.com/v1beta/openai");
+    expect(
+      normalizeGoogleGenerativeAiBaseUrl("https://generativelanguage.googleapis.com/v1beta/openai"),
+    ).toBe("https://generativelanguage.googleapis.com/v1beta");
+    expect(
+      normalizeGoogleGenerativeAiBaseUrl(
+        "https://generativelanguage.googleapis.com/v1alpha/openai/",
+      ),
+    ).toBe("https://generativelanguage.googleapis.com/v1alpha");
+  });
+
   it("normalizes Google provider configs by provider key, provider api, or model api", () => {
     expect(
       shouldNormalizeGoogleGenerativeAiProviderConfig("google", {
@@ -57,6 +74,12 @@ describe("google generative ai helpers", () => {
     ).toBe(true);
     expect(
       shouldNormalizeGoogleGenerativeAiProviderConfig("custom", {
+        api: "openai-completions",
+        models: [{ api: "openai-completions" }],
+      }),
+    ).toBe(false);
+    expect(
+      shouldNormalizeGoogleGenerativeAiProviderConfig("google", {
         api: "openai-completions",
         models: [{ api: "openai-completions" }],
       }),
@@ -81,6 +104,36 @@ describe("google generative ai helpers", () => {
     ).toEqual({
       api: "openai-completions",
       baseUrl: "https://generativelanguage.googleapis.com",
+    });
+  });
+
+  it("normalizes google-vertex model ids without rewriting the OpenAI-compatible baseUrl", () => {
+    expect(
+      normalizeGoogleProviderConfig("google-vertex", {
+        api: "openai-completions",
+        baseUrl:
+          "https://aiplatform.googleapis.com/v1/projects/test/locations/us-central1/endpoints/openapi",
+        models: [
+          {
+            id: "gemini-3.1-flash-lite",
+            name: "Gemini Flash Lite",
+            input: ["text"],
+            reasoning: false,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 1,
+            maxTokens: 1,
+          },
+        ],
+      }),
+    ).toMatchObject({
+      api: "openai-completions",
+      baseUrl:
+        "https://aiplatform.googleapis.com/v1/projects/test/locations/us-central1/endpoints/openapi",
+      models: [
+        expect.objectContaining({
+          id: "gemini-3.1-flash-lite-preview",
+        }),
+      ],
     });
   });
 
@@ -123,7 +176,7 @@ describe("google generative ai helpers", () => {
     });
     expect(oauthConfig).toMatchObject({
       baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-      allowPrivateNetwork: true,
+      allowPrivateNetwork: false,
     });
     expect(Object.fromEntries(new Headers(oauthConfig.headers).entries())).toEqual({
       authorization: "Bearer oauth-token",
@@ -143,5 +196,53 @@ describe("google generative ai helpers", () => {
       "content-type": "application/json",
       "x-goog-api-key": "api-key-123",
     });
+  });
+
+  it("preserves explicit OpenAI-compatible Google endpoints during provider normalization", () => {
+    expect(
+      resolveGoogleGenerativeAiTransport({
+        api: "openai-completions",
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+      }),
+    ).toEqual({
+      api: "openai-completions",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    });
+  });
+
+  it("strips URL credentials during Google base URL normalization", () => {
+    const normalized = normalizeGoogleApiBaseUrl(
+      "https://user:secret@generativelanguage.googleapis.com/v1beta/openai?x=1#frag",
+    );
+    expect(normalized).toBe("https://generativelanguage.googleapis.com/v1beta/openai");
+  });
+
+  it("rejects non-Google Gemini base URLs and ignores smuggled private-network flags", () => {
+    expect(() =>
+      resolveGoogleGenerativeAiHttpRequestConfig({
+        apiKey: "api-key-123",
+        baseUrl: "https://proxy.example.com/v1beta",
+        capability: "image",
+        transport: "http",
+      }),
+    ).toThrow("Google Generative AI baseUrl must use https://generativelanguage.googleapis.com");
+
+    expect(() =>
+      resolveGoogleGenerativeAiHttpRequestConfig({
+        apiKey: "api-key-123",
+        baseUrl: "http://generativelanguage.googleapis.com/v1beta",
+        capability: "image",
+        transport: "http",
+      }),
+    ).toThrow("Google Generative AI baseUrl must use https://generativelanguage.googleapis.com");
+
+    const config = resolveGoogleGenerativeAiHttpRequestConfig({
+      apiKey: "api-key-123",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      capability: "image",
+      transport: "http",
+      request: { allowPrivateNetwork: true } as unknown as ProviderRequestTransportOverrides,
+    });
+    expect(config.allowPrivateNetwork).toBe(false);
   });
 });

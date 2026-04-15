@@ -2,6 +2,7 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import {
   createHtmlEntityToolCallArgumentDecodingWrapper,
+  defaultToolStreamExtraParams,
   decodeHtmlEntitiesInObject,
 } from "./provider-stream-shared.js";
 
@@ -39,6 +40,24 @@ describe("decodeHtmlEntitiesInObject", () => {
       command: 'cd ~/dev && echo "ok"',
       args: ["<input>", "'quoted'"],
     });
+  });
+});
+
+describe("defaultToolStreamExtraParams", () => {
+  it("defaults tool_stream on when absent", () => {
+    expect(defaultToolStreamExtraParams()).toEqual({ tool_stream: true });
+    expect(defaultToolStreamExtraParams({ fastMode: true })).toEqual({
+      fastMode: true,
+      tool_stream: true,
+    });
+  });
+
+  it("preserves explicit tool_stream values", () => {
+    const enabled = { tool_stream: true, fastMode: true };
+    const disabled = { tool_stream: false, fastMode: true };
+
+    expect(defaultToolStreamExtraParams(enabled)).toBe(enabled);
+    expect(defaultToolStreamExtraParams(disabled)).toBe(disabled);
   });
 });
 

@@ -31,6 +31,7 @@ const STATIC_AGENT_RUNTIME_BASE_TARGET_IDS = [
   "tools.web.search.apiKey",
   "plugins.entries.brave.config.webSearch.apiKey",
   "plugins.entries.google.config.webSearch.apiKey",
+  "plugins.entries.exa.config.webSearch.apiKey",
   "plugins.entries.xai.config.webSearch.apiKey",
   "plugins.entries.moonshot.config.webSearch.apiKey",
   "plugins.entries.perplexity.config.webSearch.apiKey",

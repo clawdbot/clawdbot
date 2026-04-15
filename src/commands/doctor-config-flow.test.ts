@@ -3,7 +3,10 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../../test/helpers/temp-home.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
-import { runDoctorConfigWithInput } from "./doctor-config-flow.test-utils.js";
+import {
+  getDoctorConfigInputForTest,
+  runDoctorConfigWithInput,
+} from "./doctor-config-flow.test-utils.js";
 
 type TerminalNote = (message: string, title?: string) => void;
 
@@ -57,7 +60,55 @@ vi.mock("../config/validation.js", () => ({
 }));
 
 vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
-  getBootstrapChannelPlugin: vi.fn(() => undefined),
+  getBootstrapChannelPlugin: vi.fn((channelId: string) => {
+    if (channelId !== "discord") {
+      return undefined;
+    }
+    return {
+      doctor: {
+        normalizeCompatibilityConfig: ({
+          cfg,
+        }: {
+          cfg: { channels?: { discord?: Record<string, unknown> } };
+        }) => {
+          const discord = cfg.channels?.discord;
+          if (!discord) {
+            return { config: cfg, changes: [] };
+          }
+          if (
+            !("streamMode" in discord) &&
+            typeof discord.streaming !== "boolean" &&
+            typeof discord.streaming !== "string"
+          ) {
+            return { config: cfg, changes: [] };
+          }
+          const next = structuredClone(cfg);
+          const nextDiscord = next.channels?.discord;
+          if (!nextDiscord) {
+            return { config: cfg, changes: [] };
+          }
+          const nextStreaming =
+            nextDiscord.streaming && typeof nextDiscord.streaming === "object"
+              ? { ...(nextDiscord.streaming as Record<string, unknown>) }
+              : {};
+          if (!("mode" in nextStreaming)) {
+            nextStreaming.mode =
+              nextDiscord.streamMode === "block"
+                ? "partial"
+                : nextDiscord.streaming === false
+                  ? "off"
+                  : "partial";
+          }
+          delete nextDiscord.streamMode;
+          nextDiscord.streaming = nextStreaming;
+          return {
+            config: next,
+            changes: ["Discord allowlist ids normalized to strings."],
+          };
+        },
+      },
+    };
+  }),
 }));
 
 vi.mock("../plugins/doctor-contract-registry.js", () => {
@@ -532,16 +583,95 @@ vi.mock("./doctor-config-preflight.js", async () => {
     return process.env.OPENCLAW_CONFIG_PATH || path.join(stateDir, "openclaw.json");
   }
 
+  function normalizeDiscordStreamingCompat(cfg: Record<string, unknown>): Record<string, unknown> {
+    const channels =
+      cfg.channels && typeof cfg.channels === "object" && !Array.isArray(cfg.channels)
+        ? (cfg.channels as Record<string, unknown>)
+        : null;
+    const discord =
+      channels?.discord && typeof channels.discord === "object" && !Array.isArray(channels.discord)
+        ? (channels.discord as Record<string, unknown>)
+        : null;
+    if (
+      !discord ||
+      (!("streamMode" in discord) &&
+        typeof discord.streaming !== "boolean" &&
+        typeof discord.streaming !== "string")
+    ) {
+      return cfg;
+    }
+    const next = structuredClone(cfg);
+    const nextDiscord = ((next.channels as Record<string, unknown> | undefined)?.discord ??
+      {}) as Record<string, unknown>;
+    const nextStreaming =
+      nextDiscord.streaming && typeof nextDiscord.streaming === "object"
+        ? { ...(nextDiscord.streaming as Record<string, unknown>) }
+        : {};
+    if (!("mode" in nextStreaming)) {
+      nextStreaming.mode =
+        nextDiscord.streamMode === "block"
+          ? "partial"
+          : nextDiscord.streaming === false
+            ? "off"
+            : "partial";
+    }
+    delete nextDiscord.streamMode;
+    nextDiscord.streaming = nextStreaming;
+    return next;
+  }
+
   return {
     runDoctorConfigPreflight: vi.fn(async () => {
-      const configPath = resolveConfigPath();
-      let parsed: Record<string, unknown> = {};
-      let exists = false;
-      try {
-        parsed = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<string, unknown>;
-        exists = true;
-      } catch {
-        parsed = {};
+      const injected = getDoctorConfigInputForTest();
+      const configPath = injected?.path ?? resolveConfigPath();
+      let parsed: Record<string, unknown> = injected?.config
+        ? structuredClone(injected.config)
+        : {};
+      let exists = injected?.exists ?? false;
+      if (!injected) {
+        try {
+          parsed = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<string, unknown>;
+          exists = true;
+        } catch {
+          parsed = {};
+        }
+      }
+      if (injected?.preflightMode === "fast") {
+        return {
+          snapshot: {
+            exists,
+            path: configPath,
+            parsed,
+            config: parsed,
+            sourceConfig: parsed,
+            valid: true,
+            warnings: [],
+            legacyIssues: [],
+          },
+          baseConfig: parsed,
+        };
+      }
+      if (injected?.preflightMode === "issues") {
+        const legacyIssues = findLegacyConfigIssues(
+          parsed,
+          parsed,
+          listPluginDoctorLegacyConfigRules({
+            pluginIds: collectRelevantDoctorPluginIds(parsed),
+          }),
+        );
+        return {
+          snapshot: {
+            exists,
+            path: configPath,
+            parsed,
+            config: parsed,
+            sourceConfig: parsed,
+            valid: legacyIssues.length === 0,
+            warnings: [],
+            legacyIssues,
+          },
+          baseConfig: parsed,
+        };
       }
       const legacyIssues = findLegacyConfigIssues(
         parsed,
@@ -551,7 +681,7 @@ vi.mock("./doctor-config-preflight.js", async () => {
         }),
       );
       const compat = applyRuntimeLegacyConfigMigrations(parsed);
-      const effectiveConfig = compat.next ?? parsed;
+      const effectiveConfig = normalizeDiscordStreamingCompat(compat.next ?? parsed);
       return {
         snapshot: {
           exists,
@@ -1578,14 +1708,16 @@ describe("doctor config flow", () => {
     const cfg = result.cfg as unknown as {
       channels: { discord: { dm: { allowFrom: string[] }; allowFrom?: string[] } };
     };
-    // When dmPolicy is set at top level but allowFrom only exists nested in dm,
-    // the repair adds "*" to dm.allowFrom
-    if (cfg.channels.discord.dm) {
+    // Top-level allowFrom is canonical for Discord; nested dm.allowFrom is
+    // preserved when it already carried sender ids.
+    if (cfg.channels.discord.allowFrom) {
+      expect(cfg.channels.discord.allowFrom).toContain("*");
+      expect(cfg.channels.discord.dm?.allowFrom).toContain("123");
+    } else if (cfg.channels.discord.dm) {
       expect(cfg.channels.discord.dm.allowFrom).toContain("*");
       expect(cfg.channels.discord.dm.allowFrom).toContain("123");
     } else {
-      // If doctor flattened the config, allowFrom should be at top level
-      expect(cfg.channels.discord.allowFrom).toContain("*");
+      expect.unreachable("expected Discord repair to preserve a DM allowFrom location");
     }
   });
 

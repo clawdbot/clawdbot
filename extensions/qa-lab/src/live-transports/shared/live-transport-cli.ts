@@ -33,6 +33,11 @@ export type LiveTransportQaCliRegistration = {
   register(qa: Command): void;
 };
 
+export type LiveTransportQaCredentialCliOptions = {
+  sourceDescription?: string;
+  roleDescription?: string;
+};
+
 export function createLazyCliRuntimeLoader<T>(load: () => Promise<T>) {
   let promise: Promise<T> | null = null;
   return async () => {
@@ -61,13 +66,14 @@ export function mapLiveTransportQaCommanderOptions(
 export function registerLiveTransportQaCli(params: {
   qa: Command;
   commandName: string;
+  credentialOptions?: LiveTransportQaCredentialCliOptions;
   description: string;
   outputDirHelp: string;
   scenarioHelp: string;
   sutAccountHelp: string;
   run: (opts: LiveTransportQaCommandOptions) => Promise<void>;
 }) {
-  params.qa
+  const command = params.qa
     .command(params.commandName)
     .description(params.description)
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
@@ -81,22 +87,27 @@ export function registerLiveTransportQaCli(params: {
     .option("--alt-model <ref>", "Alternate provider/model ref")
     .option("--scenario <id>", params.scenarioHelp, collectString, [])
     .option("--fast", "Enable provider fast mode where supported", false)
-    .option("--sut-account <id>", params.sutAccountHelp, "sut")
-    .option(
+    .option("--sut-account <id>", params.sutAccountHelp, "sut");
+
+  if (params.credentialOptions) {
+    command.option(
       "--credential-source <source>",
-      "Credential source for live lanes: env or convex (default: env)",
-    )
-    .option(
-      "--credential-role <role>",
-      "Credential role for convex auth: maintainer or ci (default: maintainer)",
-    )
-    .action(async (opts: LiveTransportQaCommanderOptions) => {
-      await params.run(mapLiveTransportQaCommanderOptions(opts));
-    });
+      params.credentialOptions.sourceDescription ??
+        "Credential source for live lanes: env or convex (default: env)",
+    );
+    if (params.credentialOptions.roleDescription) {
+      command.option("--credential-role <role>", params.credentialOptions.roleDescription);
+    }
+  }
+
+  command.action(async (opts: LiveTransportQaCommanderOptions) => {
+    await params.run(mapLiveTransportQaCommanderOptions(opts));
+  });
 }
 
 export function createLiveTransportQaCliRegistration(params: {
   commandName: string;
+  credentialOptions?: LiveTransportQaCredentialCliOptions;
   description: string;
   outputDirHelp: string;
   scenarioHelp: string;
@@ -109,6 +120,7 @@ export function createLiveTransportQaCliRegistration(params: {
       registerLiveTransportQaCli({
         qa,
         commandName: params.commandName,
+        credentialOptions: params.credentialOptions,
         description: params.description,
         outputDirHelp: params.outputDirHelp,
         scenarioHelp: params.scenarioHelp,

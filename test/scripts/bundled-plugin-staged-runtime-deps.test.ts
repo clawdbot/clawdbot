@@ -62,4 +62,20 @@ describe("collectBuiltBundledPluginStagedRuntimeDependencyErrors", () => {
       }),
     ).toEqual([]);
   });
+
+  it("keeps the WhatsApp bundled plugin opted into staged runtime dependencies", () => {
+    const packageJson = JSON.parse(
+      fs.readFileSync(path.join(process.cwd(), "extensions/whatsapp/package.json"), "utf8"),
+    ) as {
+      dependencies?: Record<string, string>;
+      openclaw?: {
+        bundle?: {
+          stageRuntimeDependencies?: boolean;
+        };
+      };
+    };
+
+    expect(packageJson.dependencies?.["@whiskeysockets/baileys"]).toBe("7.0.0-rc.9");
+    expect(packageJson.openclaw?.bundle?.stageRuntimeDependencies).toBe(true);
+  });
 });

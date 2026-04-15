@@ -615,6 +615,33 @@ describe("openai transport stream", () => {
     expect(params.reasoning).toEqual({ effort: "low", summary: "auto" });
   });
 
+  it("maps low reasoning to medium for Codex mini responses models", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.1-codex-mini",
+        name: "gpt-5.1-codex-mini",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-codex-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoning: "low",
+      } as never,
+    ) as { reasoning?: unknown };
+
+    expect(params.reasoning).toEqual({ effort: "medium", summary: "auto" });
+  });
+
   it.each([
     {
       label: "openai",
@@ -1196,6 +1223,33 @@ describe("openai transport stream", () => {
     expect(params.stream_options).toMatchObject({ include_usage: true });
   });
 
+  it("enables streaming usage compat for Ollama OpenAI-compat endpoints", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "qwen2.5:7b",
+        name: "Qwen 2.5 7B",
+        api: "openai-completions",
+        provider: "ollama",
+        baseUrl: "http://127.0.0.1:11434/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 32768,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    ) as {
+      stream_options?: { include_usage?: boolean };
+    };
+
+    expect(params.stream_options).toMatchObject({ include_usage: true });
+  });
+
   it("disables developer-role-only compat defaults for configured custom proxy completions providers", () => {
     const params = buildOpenAICompletionsParams(
       {
@@ -1672,5 +1726,295 @@ describe("openai transport stream", () => {
     expect(output.content.some((block) => (block as { type?: string }).type === "toolCall")).toBe(
       false,
     );
+  });
+
+  it("handles reasoning_details from OpenRouter/Qwen3 in completions stream", async () => {
+    const model = {
+      id: "openrouter/qwen/qwen3-235b-a22b",
+      name: "Qwen3 235B A22B",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = {
+      role: "assistant" as const,
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    const stream: { push(event: unknown): void } = { push() {} };
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-reasoning",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              reasoning_details: [
+                { type: "reasoning.text", text: "I need to think about this." },
+                { type: "reasoning.text", text: " Let me analyze." },
+              ],
+            } as Record<string, unknown>,
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-reasoning",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              content: " Hello! How can I help you?",
+            },
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-reasoning",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {},
+            logprobs: null,
+            finish_reason: "stop",
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    const thinkingBlock = output.content[0] as { type: string; thinking: string };
+    const textBlock = output.content[1] as { type: string; text: string };
+
+    expect(output.content.length).toBe(2);
+    expect(thinkingBlock.type).toBe("thinking");
+    expect(thinkingBlock.thinking).toBe("I need to think about this. Let me analyze.");
+    expect(textBlock.type).toBe("text");
+    expect(textBlock.text).toBe(" Hello! How can I help you?");
+  });
+
+  it("keeps tool calls when reasoning_details and tool_calls share a chunk", async () => {
+    const model = {
+      id: "openrouter/qwen/qwen3-235b-a22b",
+      name: "Qwen3 235B A22B",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = {
+      role: "assistant" as const,
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    const stream: { push(event: unknown): void } = { push() {} };
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-toolcall",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              reasoning_details: [{ type: "reasoning.text", text: "Need a tool." }],
+              tool_calls: [
+                {
+                  id: "call_1",
+                  type: "function" as const,
+                  function: { name: "lookup", arguments: '{"query":"qwen3"}' },
+                },
+              ],
+            } as Record<string, unknown>,
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-toolcall",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {},
+            logprobs: null,
+            finish_reason: "tool_calls",
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    expect(output.stopReason).toBe("toolUse");
+    expect(output.content).toMatchObject([
+      { type: "thinking", thinking: "Need a tool.", thinkingSignature: "reasoning_details" },
+      { type: "toolCall", id: "call_1", name: "lookup", arguments: { query: "qwen3" } },
+    ]);
+  });
+
+  it("keeps streamed tool call arguments intact when reasoning_details repeats", async () => {
+    const model = {
+      id: "openrouter/qwen/qwen3-235b-a22b",
+      name: "Qwen3 235B A22B",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = {
+      role: "assistant" as const,
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    const stream: { push(event: unknown): void } = { push() {} };
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-toolcall-stream",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              reasoning_details: [{ type: "reasoning.text", text: "Need a tool." }],
+              tool_calls: [
+                {
+                  id: "call_1",
+                  type: "function" as const,
+                  function: { name: "lookup", arguments: '{"query":' },
+                },
+              ],
+            } as Record<string, unknown>,
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-toolcall-stream",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              reasoning_details: [{ type: "reasoning.text", text: " Still thinking." }],
+              tool_calls: [
+                {
+                  id: "call_1",
+                  type: "function" as const,
+                  function: { arguments: '"qwen3"}' },
+                },
+              ],
+            } as Record<string, unknown>,
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-toolcall-stream",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {},
+            logprobs: null,
+            finish_reason: "tool_calls",
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    expect(output.stopReason).toBe("toolUse");
+    expect(output.content).toMatchObject([
+      { type: "thinking", thinking: "Need a tool." },
+      { type: "toolCall", id: "call_1", name: "lookup", arguments: { query: "qwen3" } },
+      { type: "thinking", thinking: " Still thinking.", thinkingSignature: "reasoning_details" },
+    ]);
   });
 });

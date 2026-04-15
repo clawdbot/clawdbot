@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { sanitizeForLog } from "../terminal/ansi.js";
 import type { ContextEngine } from "./types.js";
 
 /**
@@ -449,7 +450,9 @@ function describeResolvedContextEngineContractError(
  *   1. `config.plugins.slots.contextEngine` (explicit slot override)
  *   2. Default slot value ("legacy")
  *
- * Throws if the resolved engine id has no registered factory.
+ * Non-default engines that fail (unregistered, factory throw, or contract
+ * violation) are logged and silently replaced by the default engine.
+ * Throws only when the default engine itself cannot be resolved.
  */
 export async function resolveContextEngine(config?: OpenClawConfig): Promise<ContextEngine> {
   const slotValue = config?.plugins?.slots?.contextEngine;
@@ -458,19 +461,85 @@ export async function resolveContextEngine(config?: OpenClawConfig): Promise<Con
       ? slotValue.trim()
       : defaultSlotIdForKey("contextEngine");
 
+  const defaultEngineId = defaultSlotIdForKey("contextEngine");
+  const isDefaultEngine = engineId === defaultEngineId;
+
   const entry = getContextEngineRegistryState().engines.get(engineId);
   if (!entry) {
+    if (isDefaultEngine) {
+      throw new Error(
+        `Context engine "${engineId}" is not registered. ` +
+          `Available engines: ${listContextEngineIds().join(", ") || "(none)"}`,
+      );
+    }
+    console.error(
+      `[context-engine] Context engine "${sanitizeForLog(engineId)}" is not registered; ` +
+        `falling back to default engine "${defaultEngineId}".`,
+    );
+    return resolveDefaultContextEngine(defaultEngineId);
+  }
+
+  let engine: ContextEngine;
+  try {
+    engine = await entry.factory();
+  } catch (factoryError) {
+    if (isDefaultEngine) {
+      throw factoryError;
+    }
+    console.error(
+      `[context-engine] Context engine "${sanitizeForLog(engineId)}" factory threw during resolution: ` +
+        `${sanitizeForLog(factoryError instanceof Error ? factoryError.message : String(factoryError))}; ` +
+        `falling back to default engine "${defaultEngineId}".`,
+    );
+    return resolveDefaultContextEngine(defaultEngineId);
+  }
+
+  let contractError: string | null;
+  try {
+    contractError = describeResolvedContextEngineContractError(engineId, engine);
+  } catch (validationError) {
+    if (isDefaultEngine) {
+      throw validationError;
+    }
+    console.error(
+      `[context-engine] Context engine "${sanitizeForLog(engineId)}" contract validation threw: ` +
+        `${sanitizeForLog(validationError instanceof Error ? validationError.message : String(validationError))}; ` +
+        `falling back to default engine "${defaultEngineId}".`,
+    );
+    return resolveDefaultContextEngine(defaultEngineId);
+  }
+  if (contractError) {
+    if (isDefaultEngine) {
+      throw new Error(contractError);
+    }
+    // contractError includes engineId from plugin config; sanitizeForLog covers it
+    console.error(
+      `[context-engine] ${sanitizeForLog(contractError)}; falling back to default engine "${defaultEngineId}".`,
+    );
+    return resolveDefaultContextEngine(defaultEngineId);
+  }
+
+  return wrapContextEngineWithSessionKeyCompat(engine);
+}
+
+/**
+ * Resolve the default context engine as a last-resort fallback.
+ *
+ * This helper is intentionally strict: if the default engine itself fails,
+ * there is no further fallback and the error must propagate.
+ */
+async function resolveDefaultContextEngine(defaultEngineId: string): Promise<ContextEngine> {
+  const defaultEntry = getContextEngineRegistryState().engines.get(defaultEngineId);
+  if (!defaultEntry) {
     throw new Error(
-      `Context engine "${engineId}" is not registered. ` +
+      `[context-engine] fallback failed: default engine "${defaultEngineId}" is not registered. ` +
         `Available engines: ${listContextEngineIds().join(", ") || "(none)"}`,
     );
   }
-
-  const engine = await entry.factory();
-  const contractError = describeResolvedContextEngineContractError(engineId, engine);
+  const engine = await defaultEntry.factory();
+  const contractError = describeResolvedContextEngineContractError(defaultEngineId, engine);
   if (contractError) {
-    throw new Error(contractError);
+    throw new Error(`[context-engine] ${contractError}`);
   }
-
   return wrapContextEngineWithSessionKeyCompat(engine);
 }

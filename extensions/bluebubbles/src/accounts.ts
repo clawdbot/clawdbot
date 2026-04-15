@@ -48,7 +48,7 @@ function mergeBlueBubblesAccountConfig(
     accountId,
     omitKeys: ["defaultAccount"],
     normalizeAccountId,
-    nestedObjectKeys: ["network"],
+    nestedObjectKeys: ["network", "catchup"],
   });
   return {
     ...merged,

@@ -1,7 +1,10 @@
 import {
   assertOkOrThrowHttpError,
+  createProviderOperationDeadline,
   fetchWithTimeout,
   postJsonRequest,
+  resolveProviderOperationTimeoutMs,
+  waitProviderOperationPollInterval,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type {
@@ -165,6 +168,11 @@ export async function pollDashscopeVideoTaskUntilComplete(params: {
   baseUrl: string;
   defaultTimeoutMs?: number;
 }): Promise<DashscopeVideoGenerationResponse> {
+  const defaultTimeoutMs = params.defaultTimeoutMs ?? DEFAULT_VIDEO_GENERATION_TIMEOUT_MS;
+  const deadline = createProviderOperationDeadline({
+    timeoutMs: params.timeoutMs,
+    label: `${params.providerLabel} video generation task ${params.taskId}`,
+  });
   for (let attempt = 0; attempt < DEFAULT_VIDEO_GENERATION_MAX_POLL_ATTEMPTS; attempt += 1) {
     const response = await fetchWithTimeout(
       `${params.baseUrl}/api/v1/tasks/${params.taskId}`,
@@ -172,7 +180,7 @@ export async function pollDashscopeVideoTaskUntilComplete(params: {
         method: "GET",
         headers: params.headers,
       },
-      params.timeoutMs ?? params.defaultTimeoutMs ?? DEFAULT_VIDEO_GENERATION_TIMEOUT_MS,
+      resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs }),
       params.fetchFn,
     );
     await assertOkOrThrowHttpError(
@@ -191,7 +199,10 @@ export async function pollDashscopeVideoTaskUntilComplete(params: {
           `${params.providerLabel} video generation task ${params.taskId} ${normalizeLowercaseStringOrEmpty(status)}`,
       );
     }
-    await new Promise((resolve) => setTimeout(resolve, DEFAULT_VIDEO_GENERATION_POLL_INTERVAL_MS));
+    await waitProviderOperationPollInterval({
+      deadline,
+      pollIntervalMs: DEFAULT_VIDEO_GENERATION_POLL_INTERVAL_MS,
+    });
   }
   throw new Error(
     `${params.providerLabel} video generation task ${params.taskId} did not finish in time`,
@@ -211,6 +222,11 @@ export async function runDashscopeVideoGenerationTask(params: {
   dispatcherPolicy?: Parameters<typeof postJsonRequest>[0]["dispatcherPolicy"];
   defaultTimeoutMs?: number;
 }): Promise<VideoGenerationResult> {
+  const defaultTimeoutMs = params.defaultTimeoutMs ?? DEFAULT_VIDEO_GENERATION_TIMEOUT_MS;
+  const deadline = createProviderOperationDeadline({
+    timeoutMs: params.timeoutMs,
+    label: `${params.providerLabel} video generation`,
+  });
   const { response, release } = await postJsonRequest({
     url: params.url,
     headers: params.headers,
@@ -228,7 +244,7 @@ export async function runDashscopeVideoGenerationTask(params: {
         DEFAULT_VIDEO_RESOLUTION_TO_SIZE,
       ),
     },
-    timeoutMs: params.timeoutMs,
+    timeoutMs: resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs }),
     fetchFn: params.fetchFn,
     allowPrivateNetwork: params.allowPrivateNetwork,
     dispatcherPolicy: params.dispatcherPolicy,
@@ -245,10 +261,10 @@ export async function runDashscopeVideoGenerationTask(params: {
       providerLabel: params.providerLabel,
       taskId,
       headers: params.headers,
-      timeoutMs: params.timeoutMs,
+      timeoutMs: resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs }),
       fetchFn: params.fetchFn,
       baseUrl: params.baseUrl,
-      defaultTimeoutMs: params.defaultTimeoutMs ?? DEFAULT_VIDEO_GENERATION_TIMEOUT_MS,
+      defaultTimeoutMs,
     });
     const urls = extractDashscopeVideoUrls(completed);
     if (urls.length === 0) {
@@ -259,9 +275,9 @@ export async function runDashscopeVideoGenerationTask(params: {
     const videos = await downloadDashscopeGeneratedVideos({
       providerLabel: params.providerLabel,
       urls,
-      timeoutMs: params.timeoutMs,
+      timeoutMs: resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs }),
       fetchFn: params.fetchFn,
-      defaultTimeoutMs: params.defaultTimeoutMs ?? DEFAULT_VIDEO_GENERATION_TIMEOUT_MS,
+      defaultTimeoutMs,
     });
     return {
       videos,

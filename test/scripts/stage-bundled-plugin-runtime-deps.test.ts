@@ -123,6 +123,77 @@ describe("stageBundledPluginRuntimeDeps", () => {
     expect(fs.readFileSync(path.join(pluginDir, "node_modules", "marker.txt"), "utf8")).toBe("2\n");
   });
 
+  it("restages when the root pnpm lockfile changes", () => {
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { "left-pad": "1.3.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+    fs.writeFileSync(path.join(repoRoot, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
+
+    let installCount = 0;
+    const stageOnce = () =>
+      stageBundledPluginRuntimeDeps({
+        cwd: repoRoot,
+        installPluginRuntimeDepsImpl: ({ fingerprint }: { fingerprint: string }) => {
+          installCount += 1;
+          const nodeModulesDir = path.join(pluginDir, "node_modules");
+          fs.mkdirSync(nodeModulesDir, { recursive: true });
+          fs.writeFileSync(path.join(nodeModulesDir, "marker.txt"), `${installCount}\n`, "utf8");
+          fs.writeFileSync(
+            path.join(pluginDir, ".openclaw-runtime-deps-stamp.json"),
+            `${JSON.stringify({ fingerprint }, null, 2)}\n`,
+            "utf8",
+          );
+        },
+      });
+
+    stageOnce();
+    fs.writeFileSync(
+      path.join(repoRoot, "pnpm-lock.yaml"),
+      "lockfileVersion: '9.0'\npatchedDependencies:\n  left-pad@1.3.0: patches/left-pad.patch\n",
+      "utf8",
+    );
+    stageOnce();
+
+    expect(installCount).toBe(2);
+    expect(fs.readFileSync(path.join(pluginDir, "node_modules", "marker.txt"), "utf8")).toBe("2\n");
+  });
+
+  it("restages when installed root runtime dependency contents change", () => {
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { direct: "1.0.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+    const directDir = path.join(repoRoot, "node_modules", "direct");
+    fs.mkdirSync(directDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(directDir, "package.json"),
+      '{ "name": "direct", "version": "1.0.0" }\n',
+      "utf8",
+    );
+    fs.writeFileSync(path.join(directDir, "index.js"), "module.exports = 'first';\n", "utf8");
+
+    stageBundledPluginRuntimeDeps({ cwd: repoRoot });
+    expect(
+      fs.readFileSync(path.join(pluginDir, "node_modules", "direct", "index.js"), "utf8"),
+    ).toBe("module.exports = 'first';\n");
+
+    fs.writeFileSync(path.join(directDir, "index.js"), "module.exports = 'second';\n", "utf8");
+    stageBundledPluginRuntimeDeps({ cwd: repoRoot });
+
+    expect(
+      fs.readFileSync(path.join(pluginDir, "node_modules", "direct", "index.js"), "utf8"),
+    ).toBe("module.exports = 'second';\n");
+  });
+
   it("stages runtime deps from the root node_modules when already installed", () => {
     const { pluginDir, repoRoot } = createBundledPluginFixture({
       packageJson: {
@@ -187,6 +258,269 @@ describe("stageBundledPluginRuntimeDeps", () => {
     expect(
       fs.readFileSync(path.join(pluginDir, "node_modules", "transitive", "index.js"), "utf8"),
     ).toBe("module.exports = 'transitive';\n");
+  });
+
+  it("stages nested dependency trees from installed direct package roots", () => {
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { direct: "1.0.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+    const directDir = path.join(repoRoot, "node_modules", "direct");
+    const nestedDir = path.join(directDir, "node_modules", "nested");
+    fs.mkdirSync(nestedDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(directDir, "package.json"),
+      '{ "name": "direct", "version": "1.0.0", "dependencies": { "nested": "^1.0.0" } }\n',
+      "utf8",
+    );
+    fs.writeFileSync(path.join(directDir, "index.js"), "module.exports = 'direct';\n", "utf8");
+    fs.writeFileSync(
+      path.join(nestedDir, "package.json"),
+      '{ "name": "nested", "version": "1.0.0" }\n',
+      "utf8",
+    );
+    fs.writeFileSync(path.join(nestedDir, "index.js"), "module.exports = 'nested';\n", "utf8");
+
+    stageBundledPluginRuntimeDeps({ cwd: repoRoot });
+
+    expect(
+      fs.readFileSync(path.join(pluginDir, "node_modules", "direct", "index.js"), "utf8"),
+    ).toBe("module.exports = 'direct';\n");
+    expect(
+      fs.readFileSync(
+        path.join(pluginDir, "node_modules", "direct", "node_modules", "nested", "index.js"),
+        "utf8",
+      ),
+    ).toBe("module.exports = 'nested';\n");
+  });
+
+  it("falls back to install when a dependency tree contains an unowned symlinked directory", () => {
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { direct: "1.0.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+    const directDir = path.join(repoRoot, "node_modules", "direct");
+    const linkedTargetDir = path.join(repoRoot, "linked-target");
+    const linkedPath = path.join(directDir, "node_modules", "linked");
+    fs.mkdirSync(path.join(directDir, "node_modules"), { recursive: true });
+    fs.mkdirSync(linkedTargetDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(directDir, "package.json"),
+      '{ "name": "direct", "version": "1.0.0" }\n',
+      "utf8",
+    );
+    fs.writeFileSync(path.join(directDir, "index.js"), "module.exports = 'direct';\n", "utf8");
+    fs.writeFileSync(path.join(linkedTargetDir, "marker.txt"), "first\n", "utf8");
+    fs.symlinkSync(linkedTargetDir, linkedPath);
+
+    let installCount = 0;
+    stageBundledPluginRuntimeDeps({
+      cwd: repoRoot,
+      installPluginRuntimeDepsImpl: ({ fingerprint }: { fingerprint: string }) => {
+        installCount += 1;
+        const nodeModulesDir = path.join(pluginDir, "node_modules");
+        fs.mkdirSync(nodeModulesDir, { recursive: true });
+        fs.writeFileSync(path.join(nodeModulesDir, "marker.txt"), "installed\n", "utf8");
+        fs.writeFileSync(
+          path.join(pluginDir, ".openclaw-runtime-deps-stamp.json"),
+          `${JSON.stringify({ fingerprint }, null, 2)}\n`,
+          "utf8",
+        );
+      },
+    });
+
+    expect(installCount).toBe(1);
+    expect(
+      fs.existsSync(path.join(pluginDir, "node_modules", "direct", "node_modules", "linked")),
+    ).toBe(false);
+    expect(fs.readFileSync(path.join(pluginDir, "node_modules", "marker.txt"), "utf8")).toBe(
+      "installed\n",
+    );
+  });
+
+  it("dedupes cyclic dependency aliases by canonical root", () => {
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { a: "1.0.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+    const rootNodeModulesDir = path.join(repoRoot, "node_modules");
+    const storeDir = path.join(repoRoot, ".store");
+    const aStoreDir = path.join(storeDir, "a");
+    const bStoreDir = path.join(storeDir, "b");
+    fs.mkdirSync(path.join(aStoreDir, "node_modules"), { recursive: true });
+    fs.mkdirSync(path.join(bStoreDir, "node_modules"), { recursive: true });
+    fs.writeFileSync(
+      path.join(aStoreDir, "package.json"),
+      '{ "name": "a", "version": "1.0.0", "dependencies": { "b": "1.0.0" } }\n',
+      "utf8",
+    );
+    fs.writeFileSync(path.join(aStoreDir, "index.js"), "module.exports = 'a';\n", "utf8");
+    fs.writeFileSync(
+      path.join(bStoreDir, "package.json"),
+      '{ "name": "b", "version": "1.0.0", "dependencies": { "a": "1.0.0" } }\n',
+      "utf8",
+    );
+    fs.writeFileSync(path.join(bStoreDir, "index.js"), "module.exports = 'b';\n", "utf8");
+    fs.mkdirSync(rootNodeModulesDir, { recursive: true });
+    fs.symlinkSync(aStoreDir, path.join(rootNodeModulesDir, "a"));
+    fs.symlinkSync(bStoreDir, path.join(rootNodeModulesDir, "b"));
+    fs.symlinkSync(bStoreDir, path.join(aStoreDir, "node_modules", "b"));
+    fs.symlinkSync(aStoreDir, path.join(bStoreDir, "node_modules", "a"));
+
+    stageBundledPluginRuntimeDeps({ cwd: repoRoot });
+
+    expect(fs.readFileSync(path.join(pluginDir, "node_modules", "a", "index.js"), "utf8")).toBe(
+      "module.exports = 'a';\n",
+    );
+    expect(
+      fs.readFileSync(
+        path.join(pluginDir, "node_modules", "a", "node_modules", "b", "index.js"),
+        "utf8",
+      ),
+    ).toBe("module.exports = 'b';\n");
+  });
+
+  it("falls back to install when a dependency name escapes node_modules", () => {
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { "../escape": "1.0.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+
+    let installCount = 0;
+    stageBundledPluginRuntimeDeps({
+      cwd: repoRoot,
+      installPluginRuntimeDepsImpl: ({ fingerprint }: { fingerprint: string }) => {
+        installCount += 1;
+        const nodeModulesDir = path.join(pluginDir, "node_modules");
+        fs.mkdirSync(nodeModulesDir, { recursive: true });
+        fs.writeFileSync(path.join(nodeModulesDir, "marker.txt"), "installed\n", "utf8");
+        fs.writeFileSync(
+          path.join(pluginDir, ".openclaw-runtime-deps-stamp.json"),
+          `${JSON.stringify({ fingerprint }, null, 2)}\n`,
+          "utf8",
+        );
+      },
+    });
+
+    expect(installCount).toBe(1);
+    expect(fs.existsSync(path.join(pluginDir, "escape"))).toBe(false);
+    expect(fs.readFileSync(path.join(pluginDir, "node_modules", "marker.txt"), "utf8")).toBe(
+      "installed\n",
+    );
+  });
+
+  it("falls back to install when a staged dependency tree contains a symlink outside copied roots", () => {
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { direct: "1.0.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+    const directDir = path.join(repoRoot, "node_modules", "direct");
+    const escapedDir = path.join(repoRoot, "outside-root");
+    fs.mkdirSync(path.join(directDir, "node_modules"), { recursive: true });
+    fs.mkdirSync(escapedDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(directDir, "package.json"),
+      '{ "name": "direct", "version": "1.0.0" }\n',
+      "utf8",
+    );
+    fs.writeFileSync(path.join(directDir, "index.js"), "module.exports = 'direct';\n", "utf8");
+    fs.writeFileSync(path.join(escapedDir, "secret.txt"), "host secret\n", "utf8");
+    fs.symlinkSync(escapedDir, path.join(directDir, "node_modules", "escaped"));
+
+    let installCount = 0;
+    stageBundledPluginRuntimeDeps({
+      cwd: repoRoot,
+      installPluginRuntimeDepsImpl: ({ fingerprint }: { fingerprint: string }) => {
+        installCount += 1;
+        const nodeModulesDir = path.join(pluginDir, "node_modules");
+        fs.mkdirSync(nodeModulesDir, { recursive: true });
+        fs.writeFileSync(path.join(nodeModulesDir, "marker.txt"), "installed\n", "utf8");
+        fs.writeFileSync(
+          path.join(pluginDir, ".openclaw-runtime-deps-stamp.json"),
+          `${JSON.stringify({ fingerprint }, null, 2)}\n`,
+          "utf8",
+        );
+      },
+    });
+
+    expect(installCount).toBe(1);
+    expect(
+      fs.existsSync(
+        path.join(pluginDir, "node_modules", "direct", "node_modules", "escaped", "secret.txt"),
+      ),
+    ).toBe(false);
+    expect(fs.readFileSync(path.join(pluginDir, "node_modules", "marker.txt"), "utf8")).toBe(
+      "installed\n",
+    );
+  });
+
+  it("falls back to install when the root transitive closure is incomplete", () => {
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { direct: "1.0.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+    const directDir = path.join(repoRoot, "node_modules", "direct");
+    fs.mkdirSync(directDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(directDir, "package.json"),
+      '{ "name": "direct", "version": "1.0.0", "dependencies": { "missing-transitive": "^1.0.0" } }\n',
+      "utf8",
+    );
+    fs.writeFileSync(path.join(directDir, "index.js"), "module.exports = 'direct';\n", "utf8");
+
+    let installCount = 0;
+    stageBundledPluginRuntimeDeps({
+      cwd: repoRoot,
+      installPluginRuntimeDepsImpl: ({ fingerprint }: { fingerprint: string }) => {
+        installCount += 1;
+        const nodeModulesDir = path.join(pluginDir, "node_modules", "direct");
+        fs.mkdirSync(nodeModulesDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(nodeModulesDir, "package.json"),
+          '{ "name": "direct", "version": "1.0.0" }\n',
+          "utf8",
+        );
+        fs.writeFileSync(
+          path.join(nodeModulesDir, "index.js"),
+          "module.exports = 'installed';\n",
+          "utf8",
+        );
+        fs.writeFileSync(
+          path.join(pluginDir, ".openclaw-runtime-deps-stamp.json"),
+          `${JSON.stringify({ fingerprint }, null, 2)}\n`,
+          "utf8",
+        );
+      },
+    });
+
+    expect(installCount).toBe(1);
+    expect(
+      fs.readFileSync(path.join(pluginDir, "node_modules", "direct", "index.js"), "utf8"),
+    ).toBe("module.exports = 'installed';\n");
   });
 
   it("removes global non-runtime suffixes from staged runtime dependencies", () => {

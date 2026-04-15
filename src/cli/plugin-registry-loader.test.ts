@@ -60,6 +60,23 @@ describe("plugin-registry-loader", () => {
     expect(loggingState.forceConsoleToStderr).toBe(false);
   });
 
+  it("forwards explicit config snapshots to plugin loading", async () => {
+    const config = { channels: { telegram: { enabled: true } } } as never;
+    const activationSourceConfig = { channels: { telegram: { enabled: true } } } as never;
+
+    await ensureCliPluginRegistryLoaded({
+      scope: "configured-channels",
+      config,
+      activationSourceConfig,
+    });
+
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
+      scope: "configured-channels",
+      config,
+      activationSourceConfig,
+    });
+  });
+
   it("maps command paths to plugin registry scopes", () => {
     expect(resolvePluginRegistryScopeForCommandPath(["status"])).toBe("channels");
     expect(resolvePluginRegistryScopeForCommandPath(["health"])).toBe("channels");

@@ -648,6 +648,12 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("410 conversation expired")).toBe("session_expired");
   });
 
+  it("classifies 'No conversation found' from Claude CLI as session_expired", () => {
+    expect(classifyFailoverReason("No conversation found with session ID: abc123")).toBe(
+      "session_expired",
+    );
+  });
+
   it("keeps explicit billing and auth signals on 410 text", () => {
     expect(classifyFailoverReason("HTTP 410: invalid_api_key")).toBe("auth");
     expect(classifyFailoverReason("HTTP 410: authentication failed")).toBe("auth");
@@ -682,6 +688,12 @@ describe("classifyFailoverReason", () => {
         "HTTP 400: INVALID_ARGUMENT: input exceeds the maximum number of tokens",
       ),
     ).toBeNull();
+  });
+
+  it("classifies OpenAI Responses unknown-no-details message as unknown", () => {
+    const message = "Unknown error (no error details in response)";
+    expect(classifyFailoverReason(message)).toBe("unknown");
+    expect(isFailoverErrorMessage(message)).toBe(true);
   });
 
   it("classifies provider-scoped generic upstream messages", () => {
@@ -770,6 +782,14 @@ describe("isFailoverErrorMessage", () => {
       "Unhandled stop reason: network_error",
       "stop reason: network_error",
       "reason: network_error",
+    ]);
+  });
+
+  it("matches Provider finish_reason: network_error as timeout (#61281)", () => {
+    expectTimeoutFailoverSamples([
+      "Provider finish_reason: network_error",
+      "Provider finish_reason: abort",
+      "Provider finish_reason: malformed_response",
     ]);
   });
 

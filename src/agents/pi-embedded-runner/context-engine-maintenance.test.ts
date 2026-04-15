@@ -424,7 +424,11 @@ describe("runContextEngineMaintenance", () => {
           sessionKey,
           sessionFile: "/tmp/session.jsonl",
           reason: "turn",
-          runtimeContext: { workspaceDir: "/tmp/workspace" },
+          runtimeContext: {
+            workspaceDir: "/tmp/workspace",
+            tokenBudget: 2048,
+            currentTokenCount: 1536,
+          },
         });
 
         expect(result).toBeUndefined();
@@ -453,6 +457,8 @@ describe("runContextEngineMaintenance", () => {
           runtimeContext: expect.objectContaining({
             workspaceDir: "/tmp/workspace",
             allowDeferredCompactionExecution: true,
+            tokenBudget: 2048,
+            currentTokenCount: 1536,
           }),
         });
 

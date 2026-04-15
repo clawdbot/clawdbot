@@ -19,6 +19,7 @@ const runtimeModuleMocks = vi.hoisted(() => ({
   matchPluginCommand: vi.fn(),
   executePluginCommand: vi.fn(),
   dispatchReplyWithDispatcher: vi.fn(),
+  resolveDirectStatusReplyForSession: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/plugin-runtime", async () => {
@@ -42,6 +43,11 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
       runtimeModuleMocks.dispatchReplyWithDispatcher(...args),
   };
 });
+
+vi.mock("openclaw/plugin-sdk/command-status-runtime", () => ({
+  resolveDirectStatusReplyForSession: (...args: unknown[]) =>
+    runtimeModuleMocks.resolveDirectStatusReplyForSession(...args),
+}));
 
 function createInteraction(params?: {
   channelType?: ChannelType;
@@ -306,35 +312,24 @@ function createDispatchSpy() {
   } as never);
 }
 
-function expectBoundSessionDispatch(
-  dispatchSpy: ReturnType<typeof createDispatchSpy>,
-  expectedPattern: RegExp,
-) {
-  expect(dispatchSpy).toHaveBeenCalledTimes(1);
-  const dispatchCall = dispatchSpy.mock.calls[0]?.[0] as {
-    ctx?: { SessionKey?: string; CommandTargetSessionKey?: string };
-  };
-  if (!dispatchCall.ctx?.SessionKey || !dispatchCall.ctx.CommandTargetSessionKey) {
-    throw new Error("native command dispatch did not include bound session context");
-  }
-  expect(dispatchCall.ctx.SessionKey).toMatch(expectedPattern);
-  expect(dispatchCall.ctx.CommandTargetSessionKey).toMatch(expectedPattern);
-}
-
-async function expectBoundStatusCommandDispatch(params: {
+async function expectBoundStatusCommandDirectReply(params: {
   cfg: OpenClawConfig;
   interaction: MockCommandInteraction;
   expectedPattern: RegExp;
 }) {
   runtimeModuleMocks.matchPluginCommand.mockReturnValue(null);
-  const dispatchSpy = createDispatchSpy();
+  const dispatchSpy = runtimeModuleMocks.dispatchReplyWithDispatcher;
+  const statusSpy = runtimeModuleMocks.resolveDirectStatusReplyForSession;
   const command = await createStatusCommand(params.cfg);
 
   await (command as { run: (interaction: unknown) => Promise<void> }).run(
     params.interaction as unknown,
   );
 
-  expectBoundSessionDispatch(dispatchSpy, params.expectedPattern);
+  expect(dispatchSpy).not.toHaveBeenCalled();
+  expect(statusSpy).toHaveBeenCalledTimes(1);
+  const statusCall = statusSpy.mock.calls[0]?.[0] as { sessionKey?: string };
+  expect(statusCall.sessionKey).toMatch(params.expectedPattern);
 }
 
 describe("Discord native plugin command dispatch", () => {
@@ -366,6 +361,10 @@ describe("Discord native plugin command dispatch", () => {
         tool: 0,
       },
     } as never);
+    runtimeModuleMocks.resolveDirectStatusReplyForSession.mockReset();
+    runtimeModuleMocks.resolveDirectStatusReplyForSession.mockResolvedValue({
+      text: "status reply",
+    });
     discordNativeCommandTesting.setMatchPluginCommand(
       runtimeModuleMocks.matchPluginCommand as typeof import("openclaw/plugin-sdk/plugin-runtime").matchPluginCommand,
     );
@@ -632,7 +631,7 @@ describe("Discord native plugin command dispatch", () => {
       }),
     );
 
-    await expectBoundStatusCommandDispatch({
+    await expectBoundStatusCommandDirectReply({
       cfg,
       interaction,
       expectedPattern: /^agent:codex:acp:binding:discord:default:/,
@@ -683,7 +682,8 @@ describe("Discord native plugin command dispatch", () => {
       }),
     );
     runtimeModuleMocks.matchPluginCommand.mockReturnValue(null);
-    const dispatchSpy = createDispatchSpy();
+    const dispatchSpy = runtimeModuleMocks.dispatchReplyWithDispatcher;
+    const statusSpy = runtimeModuleMocks.resolveDirectStatusReplyForSession;
     const command = await createStatusCommand(cfg);
     discordNativeCommandTesting.setResolveDiscordNativeInteractionRouteState(async () => ({
       route: {
@@ -712,14 +712,10 @@ describe("Discord native plugin command dispatch", () => {
 
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
-    expect(dispatchSpy).toHaveBeenCalledTimes(1);
-    const dispatchCall = dispatchSpy.mock.calls[0]?.[0] as {
-      ctx?: { SessionKey?: string; CommandTargetSessionKey?: string };
-    };
-    expect(dispatchCall.ctx?.SessionKey).toBe("agent:qwen:discord:slash:owner");
-    expect(dispatchCall.ctx?.CommandTargetSessionKey).toBe(
-      "agent:qwen:discord:channel:1478836151241412759",
-    );
+    expect(dispatchSpy).not.toHaveBeenCalled();
+    expect(statusSpy).toHaveBeenCalledTimes(1);
+    const statusCall = statusSpy.mock.calls[0]?.[0] as { sessionKey?: string };
+    expect(statusCall.sessionKey).toBe("agent:qwen:discord:channel:1478836151241412759");
   });
 
   it("routes Discord DM native slash commands through configured ACP bindings", async () => {
@@ -735,7 +731,7 @@ describe("Discord native plugin command dispatch", () => {
       }),
     );
 
-    await expectBoundStatusCommandDispatch({
+    await expectBoundStatusCommandDirectReply({
       cfg,
       interaction,
       expectedPattern: /^agent:codex:acp:binding:discord:default:/,

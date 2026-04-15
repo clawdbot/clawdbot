@@ -1,36 +1,27 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { createJiti } from "jiti";
 import { openBoundaryFileSync } from "../../infra/boundary-file-read.js";
 import {
-  buildPluginLoaderJitiOptions,
-  resolvePluginLoaderJitiConfig,
-} from "../../plugins/sdk-alias.js";
+  getCachedPluginJitiLoader,
+  type PluginJitiLoaderCache,
+} from "../../plugins/jiti-loader-cache.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 
 const nodeRequire = createRequire(import.meta.url);
 
 function createModuleLoader() {
-  const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
+  const jitiLoaders: PluginJitiLoaderCache = new Map();
 
   return (modulePath: string) => {
-    const { tryNative, aliasMap, cacheKey } = resolvePluginLoaderJitiConfig({
+    return getCachedPluginJitiLoader({
+      cache: jitiLoaders,
       modulePath,
-      argv1: process.argv[1],
-      moduleUrl: import.meta.url,
+      importerUrl: import.meta.url,
+      argvEntry: process.argv[1],
       preferBuiltDist: true,
+      jitiFilename: import.meta.url,
     });
-    const cached = jitiLoaders.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
-    const loader = createJiti(import.meta.url, {
-      ...buildPluginLoaderJitiOptions(aliasMap),
-      tryNative,
-    });
-    jitiLoaders.set(cacheKey, loader);
-    return loader;
   };
 }
 
@@ -62,8 +53,10 @@ export function resolvePluginModuleCandidates(rootDir: string, specifier: string
   return [
     resolvedPath,
     `${resolvedPath}.ts`,
+    `${resolvedPath}.mts`,
     `${resolvedPath}.js`,
     `${resolvedPath}.mjs`,
+    `${resolvedPath}.cts`,
     `${resolvedPath}.cjs`,
   ];
 }

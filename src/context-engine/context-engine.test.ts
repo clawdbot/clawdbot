@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearMemoryPluginState, registerMemoryPromptSection } from "../plugins/memory-state.js";
@@ -705,26 +705,88 @@ describe("Default engine selection", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("Invalid engine fallback", () => {
-  it("includes the requested id and available ids in unknown-engine errors", async () => {
-    // Ensure at least legacy is registered so we see it in the available list
+  beforeEach(() => {
     registerLegacyContextEngine();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("falls back to default engine when requested engine is not registered", async () => {
+    const engine = await resolveContextEngine(configWithSlot("does-not-exist"));
+    expect(engine.info.id).toBe("legacy");
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("does-not-exist"));
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining("falling back to default engine"),
+    );
+  });
+
+  it("throws when the default engine itself is not registered", async () => {
+    // Access the process-global registry via the well-known symbol and clear it
+    // so even the default engine is missing. The symbol key must match the
+    // private CONTEXT_ENGINE_REGISTRY_STATE constant in registry.ts — guard
+    // against a silent key mismatch so a rename surfaces loudly.
+    const registryState = (globalThis as Record<symbol, unknown>)[
+      Symbol.for("openclaw.contextEngineRegistryState")
+    ] as { engines: Map<string, unknown> } | undefined;
+    expect(registryState).toBeDefined();
+    const snapshot = new Map(registryState!.engines);
+    registryState!.engines.clear();
 
     try {
-      await resolveContextEngine(configWithSlot("does-not-exist"));
-      // Should not reach here
-      expect.unreachable("Expected resolveContextEngine to throw");
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      expect(message).toContain("does-not-exist");
-      expect(message).toContain("not registered");
-      // Should mention available engines
-      expect(message).toMatch(/Available engines:/);
-      // At least "legacy" should be listed as available
-      expect(message).toContain("legacy");
+      await expect(resolveContextEngine()).rejects.toThrow("not registered");
+    } finally {
+      for (const [key, value] of snapshot) {
+        registryState!.engines.set(key, value);
+      }
     }
   });
 
-  it("rejects resolved engines that omit info metadata", async () => {
+  it("propagates error when default engine factory throws", async () => {
+    // Override the default "legacy" engine with a throwing factory via the
+    // core-owner path so the registration is accepted.
+    registerContextEngineForOwner(
+      "legacy",
+      () => {
+        throw new Error("default engine init failed");
+      },
+      "core",
+      { allowSameOwnerRefresh: true },
+    );
+
+    await expect(resolveContextEngine()).rejects.toThrow("default engine init failed");
+  });
+
+  it("propagates error when default engine fails contract validation", async () => {
+    registerContextEngineForOwner(
+      "legacy",
+      () => ({ broken: true }) as unknown as ContextEngine,
+      "core",
+      { allowSameOwnerRefresh: true },
+    );
+
+    await expect(resolveContextEngine()).rejects.toThrow(
+      'Context engine "legacy" factory returned an invalid ContextEngine',
+    );
+  });
+
+  it("falls back to default engine when factory throws", async () => {
+    const engineId = `factory-throw-${Date.now().toString(36)}`;
+    registerContextEngine(engineId, () => {
+      throw new Error("plugin version mismatch");
+    });
+
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+    expect(engine.info.id).toBe("legacy");
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("plugin version mismatch"));
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining("falling back to default engine"),
+    );
+  });
+
+  it("falls back to default engine when resolved engine omits info metadata", async () => {
     const engineId = `invalid-info-${Date.now().toString(36)}`;
     registerContextEngine(
       engineId,
@@ -742,36 +804,12 @@ describe("Invalid engine fallback", () => {
         }) as unknown as ContextEngine,
     );
 
-    await expect(resolveContextEngine(configWithSlot(engineId))).rejects.toThrow(
-      `Context engine "${engineId}" factory returned an invalid ContextEngine: missing info.`,
-    );
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+    expect(engine.info.id).toBe("legacy");
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("missing info"));
   });
 
-  it("rejects resolved engines that omit required info fields", async () => {
-    const engineId = `invalid-info-fields-${Date.now().toString(36)}`;
-    registerContextEngine(
-      engineId,
-      () =>
-        ({
-          info: { id: engineId },
-          async ingest() {
-            return { ingested: false };
-          },
-          async assemble({ messages }: { messages: AgentMessage[] }) {
-            return { messages, estimatedTokens: 0 };
-          },
-          async compact() {
-            return { ok: true, compacted: false };
-          },
-        }) as unknown as ContextEngine,
-    );
-
-    await expect(resolveContextEngine(configWithSlot(engineId))).rejects.toThrow(
-      `Context engine "${engineId}" factory returned an invalid ContextEngine: missing info.name.`,
-    );
-  });
-
-  it("rejects resolved engines whose info.id mismatches the registered id", async () => {
+  it("falls back to default engine when info.id mismatches the registered id", async () => {
     const engineId = `mismatched-info-id-${Date.now().toString(36)}`;
     registerContextEngine(
       engineId,
@@ -790,12 +828,14 @@ describe("Invalid engine fallback", () => {
         }) as unknown as ContextEngine,
     );
 
-    await expect(resolveContextEngine(configWithSlot(engineId))).rejects.toThrow(
-      `Context engine "${engineId}" factory returned an invalid ContextEngine: info.id must match registered id "${engineId}".`,
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+    expect(engine.info.id).toBe("legacy");
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining(`info.id must match registered id "${engineId}"`),
     );
   });
 
-  it("rejects resolved engines that omit required lifecycle methods", async () => {
+  it("falls back to default engine when resolved engine omits lifecycle methods", async () => {
     const engineId = `invalid-methods-${Date.now().toString(36)}`;
     registerContextEngine(
       engineId,
@@ -808,8 +848,24 @@ describe("Invalid engine fallback", () => {
         }) as unknown as ContextEngine,
     );
 
-    await expect(resolveContextEngine(configWithSlot(engineId))).rejects.toThrow(
-      `Context engine "${engineId}" factory returned an invalid ContextEngine: missing assemble(), missing compact().`,
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+    expect(engine.info.id).toBe("legacy");
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining("missing assemble(), missing compact()"),
+    );
+  });
+
+  it("falls back to default engine when contract validation itself throws", async () => {
+    const engineId = `validation-throw-${Date.now().toString(36)}`;
+    // BigInt cannot be JSON.stringify'd — triggers a throw inside
+    // describeResolvedContextEngineContractError when the factory returns
+    // a non-object value that passes the typeof !== "object" branch.
+    registerContextEngine(engineId, () => 42n as unknown as ContextEngine);
+
+    const engine = await resolveContextEngine(configWithSlot(engineId));
+    expect(engine.info.id).toBe("legacy");
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining("contract validation threw"),
     );
   });
 });

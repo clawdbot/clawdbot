@@ -207,7 +207,7 @@ steps:
         args:
           - lambda:
               async: true
-              expr: "await (async () => { const store = await readRawQaSessionStore(env); const entry = store[activeSessionKey]; if (!entry || !Array.isArray(entry.pluginDebugEntries)) return undefined; return entry.pluginDebugEntries.some((pluginEntry) => pluginEntry?.pluginId === 'active-memory' && Array.isArray(pluginEntry.lines) && pluginEntry.lines.some((line) => line.includes('Active Memory: ok'))) ? entry : undefined; })()"
+              expr: "await (async () => { const store = await readRawQaSessionStore(env); const entry = store[activeSessionKey]; if (!entry || !Array.isArray(entry.pluginDebugEntries)) return undefined; return entry.pluginDebugEntries.some((pluginEntry) => pluginEntry?.pluginId === 'active-memory' && Array.isArray(pluginEntry.lines) && pluginEntry.lines.some((line) => line.includes('Active Memory: status=ok'))) ? entry : undefined; })()"
           - 10000
       - if:
           expr: "Boolean(env.mock)"

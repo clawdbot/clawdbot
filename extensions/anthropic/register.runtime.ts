@@ -52,13 +52,6 @@ const ANTHROPIC_MODERN_MODEL_PREFIXES = [
   "claude-sonnet-4-5",
   "claude-haiku-4-5",
 ] as const;
-const _ANTHROPIC_OAUTH_ALLOWLIST = [
-  "anthropic/claude-sonnet-4-6",
-  "anthropic/claude-opus-4-6",
-  "anthropic/claude-opus-4-5",
-  "anthropic/claude-sonnet-4-5",
-  "anthropic/claude-haiku-4-5",
-] as const;
 const ANTHROPIC_SETUP_TOKEN_NOTE_LINES = [
   "Anthropic setup-token auth is supported in OpenClaw.",
   "OpenClaw prefers Claude CLI reuse when it is available on the host.",
@@ -380,13 +373,6 @@ async function runAnthropicCliMigrationNonInteractive(ctx: {
 export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
   const providerId = "anthropic";
   const defaultAnthropicModel = "anthropic/claude-sonnet-4-6";
-  const _anthropicOauthAllowlist = [
-    "anthropic/claude-sonnet-4-6",
-    "anthropic/claude-opus-4-6",
-    "anthropic/claude-opus-4-5",
-    "anthropic/claude-sonnet-4-5",
-    "anthropic/claude-haiku-4-5",
-  ] as const;
   api.registerCliBackend(buildAnthropicCliBackend());
   api.registerProvider({
     id: providerId,

@@ -61,18 +61,20 @@ The `fetch-content` output includes:
 - `issue_number` / `pr_number`: where it is
 - `edit_history_count`: number of existing edits
 - `type`: location type for routing
+- For `discussion_comment`, it also includes `comment_node_id`, `discussion_node_id`, and `reply_to_node_id` when the original comment was a reply.
 
 ### Location type routing
 
-| type                          | Flow                     |
-| ----------------------------- | ------------------------ |
-| `issue_comment`               | Comment: delete+recreate |
-| `pull_request_comment`        | Comment: delete+recreate |
-| `pull_request_review_comment` | Comment: delete+recreate |
-| `issue_body`                  | Body: redact in place    |
-| `pull_request_body`           | Body: redact in place    |
-| `commit`                      | Notify only              |
-| _other_                       | Skip and report          |
+| type                          | Flow                                          |
+| ----------------------------- | --------------------------------------------- |
+| `issue_comment`               | Comment: delete+recreate                      |
+| `pull_request_comment`        | Comment: delete+recreate                      |
+| `pull_request_review_comment` | Comment: delete+recreate                      |
+| `discussion_comment`          | Discussion comment: delete+recreate (GraphQL) |
+| `issue_body`                  | Body: redact in place                         |
+| `pull_request_body`           | Body: redact in place                         |
+| `commit`                      | Notify only                                   |
+| _other_                       | Skip and report                               |
 
 ## Step 2: Decide (Agent)
 
@@ -100,14 +102,27 @@ node secret-scanning.mjs redact-body <issue|pr> <NUMBER> <redacted-body-file>
 
 ### Comments — Delete and Recreate
 
+For issue/PR comments:
+
 ```bash
 # Delete original (all edit history gone)
 node secret-scanning.mjs delete-comment <COMMENT_ID>
 
 # Recreate with redacted content
-# Agent prepares the body file with maintainer header + redacted content
 node secret-scanning.mjs recreate-comment <ISSUE_NUMBER> <body-file>
 ```
+
+For discussion comments (uses GraphQL):
+
+```bash
+# Delete original
+node secret-scanning.mjs delete-discussion-comment <COMMENT_NODE_ID>
+
+# Recreate with redacted content
+node secret-scanning.mjs recreate-discussion-comment <DISCUSSION_NODE_ID> <body-file> [REPLY_TO_NODE_ID]
+```
+
+The `fetch-content` output for `discussion_comment` includes `comment_node_id` and `discussion_node_id` for these commands. When the original discussion comment was a reply, it also includes `reply_to_node_id`; pass that optional third argument so the redacted replacement stays in the original thread.
 
 The recreated comment should follow this format:
 
@@ -140,8 +155,12 @@ Cannot clean. Notify author to delete branch or force-push (for unmerged PRs).
 ## Step 5: Notify
 
 ```bash
-node secret-scanning.mjs notify <ISSUE_NUMBER> <AUTHOR> <LOCATION_TYPE> <SECRET_TYPES>
+node secret-scanning.mjs notify <TARGET> <AUTHOR> <LOCATION_TYPE> <SECRET_TYPES> [REPLY_TO_NODE_ID]
 ```
+
+- For non-discussion types, `<TARGET>` is the issue/PR number.
+- For `discussion_comment`, `<TARGET>` is the `discussion_node_id` returned by `fetch-content`.
+- For reply-style `discussion_comment` locations, pass the optional `reply_to_node_id` from `fetch-content` so the notification stays in the same thread.
 
 Secret types are comma-separated: `"Discord Bot Token,Feishu App Secret"`
 

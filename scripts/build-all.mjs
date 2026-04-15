@@ -13,7 +13,7 @@ export const BUILD_ALL_STEPS = [
   {
     label: "write-npm-update-compat-sidecars",
     kind: "node",
-    args: ["scripts/write-npm-update-compat-sidecars.mjs"],
+    args: ["--import", "tsx", "scripts/write-npm-update-compat-sidecars.ts"],
   },
   { label: "build-stamp", kind: "node", args: ["scripts/build-stamp.mjs"] },
   {
@@ -63,6 +63,36 @@ export const BUILD_ALL_STEPS = [
     args: ["--import", "tsx", "scripts/write-cli-compat.ts"],
   },
 ];
+
+export const BUILD_ALL_PROFILES = {
+  full: BUILD_ALL_STEPS.map((step) => step.label),
+  ciArtifacts: [
+    "canvas:a2ui:bundle",
+    "tsdown",
+    "runtime-postbuild",
+    "write-npm-update-compat-sidecars",
+    "build-stamp",
+    "canvas-a2ui-copy",
+    "copy-hook-metadata",
+    "copy-export-html-templates",
+    "write-build-info",
+    "write-cli-startup-metadata",
+    "write-cli-compat",
+  ],
+};
+
+export function resolveBuildAllSteps(profile = "full") {
+  const labels = BUILD_ALL_PROFILES[profile];
+  if (!labels) {
+    throw new Error(`Unknown build profile: ${profile}`);
+  }
+  const selected = labels.map((label) => BUILD_ALL_STEPS.find((step) => step.label === label));
+  if (selected.some((step) => !step)) {
+    const missing = labels.filter((label) => !BUILD_ALL_STEPS.some((step) => step.label === label));
+    throw new Error(`Build profile ${profile} references unknown steps: ${missing.join(", ")}`);
+  }
+  return selected;
+}
 
 function resolveStepEnv(step, env, platform) {
   if (platform !== "win32" || !step.windowsNodeOptions) {
@@ -121,7 +151,8 @@ function isMainModule() {
 }
 
 if (isMainModule()) {
-  for (const step of BUILD_ALL_STEPS) {
+  const profile = process.argv[2] ?? "full";
+  for (const step of resolveBuildAllSteps(profile)) {
     console.error(`[build-all] ${step.label}`);
     const invocation = resolveBuildAllStep(step);
     const result = spawnSync(invocation.command, invocation.args, invocation.options);

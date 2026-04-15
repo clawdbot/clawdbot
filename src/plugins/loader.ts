@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { createJiti } from "jiti";
 import {
   clearAgentHarnesses,
   listRegisteredAgentHarnesses,
@@ -46,6 +45,7 @@ import {
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { clearPluginInteractiveHandlers } from "./interactive-registry.js";
+import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginBundleFormat, PluginDiagnostic, PluginFormat } from "./manifest-types.js";
 import type { PluginManifestContracts } from "./manifest.js";
@@ -277,7 +277,7 @@ function toSafeImportPath(specifier: string): string {
 }
 
 function createPluginJitiLoader(options: Pick<PluginLoadOptions, "pluginSdkResolution">) {
-  const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
+  const jitiLoaders: PluginJitiLoaderCache = new Map();
   return (modulePath: string) => {
     const tryNative = shouldPreferNativeJiti(modulePath);
     const aliasMap = buildPluginLoaderAliasMap(
@@ -286,24 +286,18 @@ function createPluginJitiLoader(options: Pick<PluginLoadOptions, "pluginSdkResol
       import.meta.url,
       options.pluginSdkResolution,
     );
-    const cacheKey = JSON.stringify({
-      tryNative,
-      aliasMap: Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),
-    });
-    const cached = jitiLoaders.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
-    const loader = createJiti(import.meta.url, {
-      ...buildPluginLoaderJitiOptions(aliasMap),
+    return getCachedPluginJitiLoader({
+      cache: jitiLoaders,
+      modulePath,
+      importerUrl: import.meta.url,
+      jitiFilename: import.meta.url,
+      aliasMap,
       // Source .ts runtime shims import sibling ".js" specifiers that only exist
       // after build. Disable native loading for source entries so Jiti rewrites
       // those imports against the source graph, while keeping native dist/*.js
       // loading for the canonical built module graph.
       tryNative,
     });
-    jitiLoaders.set(cacheKey, loader);
-    return loader;
   };
 }
 
@@ -644,12 +638,64 @@ function resolvePluginModuleExport(moduleExport: unknown): {
   return {};
 }
 
+function mergeSetupPluginSection<T>(
+  baseValue: T | undefined,
+  setupValue: T | undefined,
+): T | undefined {
+  if (baseValue && setupValue && typeof baseValue === "object" && typeof setupValue === "object") {
+    const merged = {
+      ...(baseValue as Record<string, unknown>),
+    };
+    for (const [key, value] of Object.entries(setupValue as Record<string, unknown>)) {
+      if (value !== undefined) {
+        merged[key] = value;
+      }
+    }
+    return {
+      ...merged,
+    } as T;
+  }
+  return setupValue ?? baseValue;
+}
+
 function resolveSetupChannelRegistration(moduleExport: unknown): {
   plugin?: ChannelPlugin;
+  loadError?: unknown;
 } {
   const resolved = unwrapDefaultModuleExport(moduleExport);
   if (!resolved || typeof resolved !== "object") {
     return {};
+  }
+  const setupEntryRecord = resolved as {
+    kind?: unknown;
+    loadSetupPlugin?: unknown;
+    loadSetupSecrets?: unknown;
+  };
+  if (
+    setupEntryRecord.kind === "bundled-channel-setup-entry" &&
+    typeof setupEntryRecord.loadSetupPlugin === "function"
+  ) {
+    try {
+      const loadedPlugin = setupEntryRecord.loadSetupPlugin();
+      const loadedSecrets =
+        typeof setupEntryRecord.loadSetupSecrets === "function"
+          ? (setupEntryRecord.loadSetupSecrets() as ChannelPlugin["secrets"] | undefined)
+          : undefined;
+      if (loadedPlugin && typeof loadedPlugin === "object") {
+        const mergedSecrets = mergeSetupPluginSection(
+          (loadedPlugin as ChannelPlugin).secrets,
+          loadedSecrets,
+        );
+        return {
+          plugin: {
+            ...(loadedPlugin as ChannelPlugin),
+            ...(mergedSecrets !== undefined ? { secrets: mergedSecrets } : {}),
+          },
+        };
+      }
+    } catch (err) {
+      return { loadError: err };
+    }
   }
   const setup = resolved as {
     plugin?: unknown;
@@ -1635,6 +1681,21 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         manifestRecord.setupSource
       ) {
         const setupRegistration = resolveSetupChannelRegistration(mod);
+        if (setupRegistration.loadError) {
+          recordPluginError({
+            logger,
+            registry,
+            record,
+            seenIds,
+            pluginId,
+            origin: candidate.origin,
+            phase: "load",
+            error: setupRegistration.loadError,
+            logPrefix: `[plugins] ${record.id} failed to load setup entry from ${record.source}: `,
+            diagnosticMessagePrefix: "failed to load setup entry: ",
+          });
+          continue;
+        }
         if (setupRegistration.plugin) {
           if (setupRegistration.plugin.id && setupRegistration.plugin.id !== record.id) {
             pushPluginLoadError(

@@ -1,13 +1,8 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
 import {
   createGoogleThinkingPayloadWrapper,
   sanitizeGoogleThinkingPayload,
 } from "../agents/pi-embedded-runner/google-stream-wrappers.js";
 import { createMinimaxFastModeWrapper } from "../agents/pi-embedded-runner/minimax-stream-wrappers.js";
-import {
-  createMoonshotThinkingWrapper,
-  resolveMoonshotThinkingType,
-} from "../agents/pi-embedded-runner/moonshot-thinking-stream-wrappers.js";
 import {
   createCodexNativeWebSearchWrapper,
   createOpenAIAttributionHeadersWrapper,
@@ -26,28 +21,30 @@ import {
   createOpenRouterWrapper,
   isProxyReasoningUnsupported,
 } from "../agents/pi-embedded-runner/proxy-stream-wrappers.js";
-import {
-  createToolStreamWrapper,
-  createZaiToolStreamWrapper,
-} from "../agents/pi-embedded-runner/zai-stream-wrappers.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import type { ProviderWrapStreamFnContext } from "./plugin-entry.js";
-
-export type ProviderStreamWrapperFactory =
-  | ((streamFn: StreamFn | undefined) => StreamFn | undefined)
-  | null
-  | undefined
-  | false;
-
-export function composeProviderStreamWrappers(
-  baseStreamFn: StreamFn | undefined,
-  ...wrappers: ProviderStreamWrapperFactory[]
-): StreamFn | undefined {
-  return wrappers.reduce(
-    (streamFn, wrapper) => (wrapper ? wrapper(streamFn) : streamFn),
-    baseStreamFn,
-  );
-}
+import {
+  createMoonshotThinkingWrapper,
+  createToolStreamWrapper,
+  resolveMoonshotThinkingType,
+} from "./provider-stream-shared.js";
+export {
+  applyAnthropicEphemeralCacheControlMarkers,
+  applyAnthropicPayloadPolicyToParams,
+  buildCopilotDynamicHeaders,
+  composeProviderStreamWrappers,
+  createBedrockNoCacheWrapper,
+  createMoonshotThinkingWrapper,
+  createToolStreamWrapper,
+  createZaiToolStreamWrapper,
+  defaultToolStreamExtraParams,
+  hasCopilotVisionInput,
+  isAnthropicBedrockModel,
+  type ProviderStreamWrapperFactory,
+  resolveAnthropicPayloadPolicy,
+  resolveMoonshotThinkingType,
+  streamWithPayloadPatch,
+} from "./provider-stream-shared.js";
 
 export type ProviderStreamFamily =
   | "google-thinking"
@@ -142,25 +139,24 @@ export function buildProviderStreamFamilyHooks(
   throw new Error("Unsupported provider stream family");
 }
 
+export const GOOGLE_THINKING_STREAM_HOOKS = buildProviderStreamFamilyHooks("google-thinking");
+export const KILOCODE_THINKING_STREAM_HOOKS = buildProviderStreamFamilyHooks("kilocode-thinking");
+export const MOONSHOT_THINKING_STREAM_HOOKS = buildProviderStreamFamilyHooks("moonshot-thinking");
+export const MINIMAX_FAST_MODE_STREAM_HOOKS = buildProviderStreamFamilyHooks("minimax-fast-mode");
+export const OPENAI_RESPONSES_STREAM_HOOKS = buildProviderStreamFamilyHooks(
+  "openai-responses-defaults",
+);
+export const OPENROUTER_THINKING_STREAM_HOOKS =
+  buildProviderStreamFamilyHooks("openrouter-thinking");
+export const TOOL_STREAM_DEFAULT_ON_HOOKS =
+  buildProviderStreamFamilyHooks("tool-stream-default-on");
+
 // Public stream-wrapper helpers for provider plugins.
 
-export {
-  applyAnthropicPayloadPolicyToParams,
-  resolveAnthropicPayloadPolicy,
-} from "../agents/anthropic-payload-policy.js";
-export {
-  buildCopilotDynamicHeaders,
-  hasCopilotVisionInput,
-} from "../agents/copilot-dynamic-headers.js";
-export { applyAnthropicEphemeralCacheControlMarkers } from "../agents/pi-embedded-runner/anthropic-cache-control-payload.js";
 export {
   createAnthropicToolPayloadCompatibilityWrapper,
   createOpenAIAnthropicToolPayloadCompatibilityWrapper,
 } from "../agents/pi-embedded-runner/anthropic-family-tool-payload-compat.js";
-export {
-  createBedrockNoCacheWrapper,
-  isAnthropicBedrockModel,
-} from "../agents/pi-embedded-runner/bedrock-stream-wrappers.js";
 export {
   createGoogleThinkingPayloadWrapper,
   sanitizeGoogleThinkingPayload,
@@ -172,10 +168,6 @@ export {
   isProxyReasoningUnsupported,
 } from "../agents/pi-embedded-runner/proxy-stream-wrappers.js";
 export { createMinimaxFastModeWrapper } from "../agents/pi-embedded-runner/minimax-stream-wrappers.js";
-export {
-  createMoonshotThinkingWrapper,
-  resolveMoonshotThinkingType,
-} from "../agents/pi-embedded-runner/moonshot-thinking-stream-wrappers.js";
 export {
   createOpenAIAttributionHeadersWrapper,
   createCodexNativeWebSearchWrapper,
@@ -189,8 +181,6 @@ export {
   resolveOpenAIServiceTier,
   resolveOpenAITextVerbosity,
 } from "../agents/pi-embedded-runner/openai-stream-wrappers.js";
-export { streamWithPayloadPatch } from "../agents/pi-embedded-runner/stream-payload-utils.js";
-export { createToolStreamWrapper, createZaiToolStreamWrapper };
 export {
   getOpenRouterModelCapabilities,
   loadOpenRouterModelCapabilities,

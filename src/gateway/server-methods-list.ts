@@ -50,6 +50,7 @@ const BASE_METHODS = [
   "talk.mode",
   "commands.list",
   "models.list",
+  "models.authStatus",
   "tools.catalog",
   "tools.effective",
   "agents.list",

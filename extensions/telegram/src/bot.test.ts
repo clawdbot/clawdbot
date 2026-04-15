@@ -1280,6 +1280,39 @@ describe("createTelegramBot", () => {
     expect(payload.ReplyToSender).toBe("Ada");
   });
 
+  it("keeps reply linkage while omitting filtered binary reply captions", async () => {
+    onSpy.mockClear();
+    sendMessageSpy.mockClear();
+    replySpy.mockClear();
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 7, type: "private" },
+        text: "Sure, see below",
+        date: 1736380800,
+        reply_to_message: {
+          message_id: 9001,
+          caption: "PK\x00\x03\x04binary",
+          from: { first_name: "Ada" },
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0][0];
+    expect(payload.Body).toContain("[Replying to Ada id:9001]");
+    expect(payload.Body).not.toContain("PK");
+    expect(payload.Body).not.toContain("unsafe reply text omitted");
+    expect(payload.ReplyToBody).toBeUndefined();
+    expect(payload.ReplyToId).toBe("9001");
+    expect(payload.ReplyToSender).toBe("Ada");
+  });
+
   it("includes replied image media in inbound context for text replies", async () => {
     onSpy.mockClear();
     replySpy.mockClear();

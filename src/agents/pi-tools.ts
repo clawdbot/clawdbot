@@ -131,6 +131,11 @@ function applyModelProviderToolPolicy(
     modelCompat?: ModelCompatConfig;
   },
 ): AnyAgentTool[] {
+  if (params?.config?.agents?.defaults?.localModelMode === "lean") {
+    const leanDeny = new Set(["browser", "cron", "message"]);
+    tools = tools.filter((tool) => !leanDeny.has(tool.name));
+  }
+
   if (
     shouldSuppressManagedWebSearchTool({
       config: params?.config,

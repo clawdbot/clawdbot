@@ -42,4 +42,18 @@ describe("secret target registry", () => {
 
     expect(target).toBeNull();
   });
+
+  it("includes exa webSearch api key target path", () => {
+    const target = resolveConfigSecretTargetByPath([
+      "plugins",
+      "entries",
+      "exa",
+      "config",
+      "webSearch",
+      "apiKey",
+    ]);
+
+    expect(target).not.toBeNull();
+    expect(target?.entry?.id).toBe("plugins.entries.exa.config.webSearch.apiKey");
+  });
 });

@@ -3146,6 +3146,44 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent.reasoning).toEqual({ effort: "low" });
   });
 
+  it("maps low reasoning to medium for Codex mini websocket requests", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-reason-codex-mini");
+    const opts = { reasoning: "low" };
+    const stream = streamFn(
+      {
+        ...modelStub,
+        id: "gpt-5.1-codex-mini",
+        name: "gpt-5.1-codex-mini",
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+        baseUrl: "https://chatgpt.com/backend-api",
+        reasoning: true,
+      } as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      opts as unknown as Parameters<typeof streamFn>[2],
+    );
+    await new Promise<void>((resolve, reject) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          MockManager.lastInstance!.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject("resp-reason-codex-mini", "Mini thought"),
+          });
+          for await (const _ of await resolveStream(stream)) {
+            /* consume */
+          }
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    const sent = MockManager.lastInstance!.sentEvents[0] as Record<string, unknown>;
+    expect(sent.type).toBe("response.create");
+    expect(sent.reasoning).toEqual({ effort: "medium" });
+  });
+
   it("omits response.create reasoning when reasoningEffort is none", async () => {
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-reason-none");
     const opts = { reasoningEffort: "none" };

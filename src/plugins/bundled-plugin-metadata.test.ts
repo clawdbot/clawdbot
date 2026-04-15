@@ -131,11 +131,12 @@ describe("bundled plugin metadata", () => {
     },
   );
 
-  it("excludes private QA sidecars from the packaged runtime sidecar baseline", () => {
+  it("excludes non-packaged QA sidecars from the packaged runtime sidecar baseline", () => {
     expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain(
       "dist/extensions/qa-channel/runtime-api.js",
     );
     expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain("dist/extensions/qa-lab/runtime-api.js");
+    expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain("dist/extensions/qa-matrix/runtime-api.js");
   });
 
   it("captures setup-entry metadata for bundled channel plugins", () => {

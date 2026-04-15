@@ -3,6 +3,11 @@ import path from "node:path";
 import { GoogleGenAI } from "@google/genai";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import {
+  createProviderOperationDeadline,
+  resolveProviderOperationTimeoutMs,
+  waitProviderOperationPollInterval,
+} from "openclaw/plugin-sdk/provider-http";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type {
@@ -225,11 +230,18 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
 
       const configuredBaseUrl = resolveConfiguredGoogleVideoBaseUrl(req);
       const durationSeconds = resolveDurationSeconds(req.durationSeconds);
+      const deadline = createProviderOperationDeadline({
+        timeoutMs: req.timeoutMs,
+        label: "Google video generation",
+      });
       const client = new GoogleGenAI({
         apiKey: auth.apiKey,
         httpOptions: {
           ...(configuredBaseUrl ? { baseUrl: configuredBaseUrl } : {}),
-          timeout: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+          timeout: resolveProviderOperationTimeoutMs({
+            deadline,
+            defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+          }),
         },
       });
       let operation = await client.models.generateVideos({
@@ -253,7 +265,8 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
         if (attempt >= MAX_POLL_ATTEMPTS) {
           throw new Error("Google video generation did not finish in time");
         }
-        await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+        await waitProviderOperationPollInterval({ deadline, pollIntervalMs: POLL_INTERVAL_MS });
+        resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: DEFAULT_TIMEOUT_MS });
         operation = await client.operations.getVideosOperation({ operation });
       }
       if (operation.error) {

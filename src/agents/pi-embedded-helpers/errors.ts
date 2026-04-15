@@ -668,6 +668,10 @@ function isOpenRouterKeyLimitExceededError(raw: string, provider?: string): bool
   );
 }
 
+function isExactUnknownNoDetailsError(raw: string): boolean {
+  return normalizeOptionalLowercaseString(raw)?.trim() === "unknown error (no error details in response)";
+}
+
 function classifyFailoverClassificationFromMessage(
   raw: string,
   provider?: string,
@@ -736,6 +740,9 @@ function classifyFailoverClassificationFromMessage(
   }
   if (isCloudCodeAssistFormatError(raw)) {
     return toReasonClassification("format");
+  }
+  if (isExactUnknownNoDetailsError(raw)) {
+    return toReasonClassification("unknown");
   }
   if (isTimeoutErrorMessage(raw)) {
     return toReasonClassification("timeout");
@@ -1102,6 +1109,7 @@ function isCliSessionExpiredErrorMessage(raw: string): boolean {
     lower.includes("session expired") ||
     lower.includes("session invalid") ||
     lower.includes("conversation not found") ||
+    lower.includes("no conversation found") ||
     lower.includes("conversation does not exist") ||
     lower.includes("conversation expired") ||
     lower.includes("conversation invalid") ||

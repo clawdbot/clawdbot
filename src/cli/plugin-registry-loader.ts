@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loggingState } from "../logging/state.js";
 import type { PluginRegistryScope } from "./plugin-registry.js";
 
@@ -17,6 +18,8 @@ export function resolvePluginRegistryScopeForCommandPath(
 export async function ensureCliPluginRegistryLoaded(params: {
   scope: PluginRegistryScope;
   routeLogsToStderr?: boolean;
+  config?: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
 }) {
   const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
   const previousForceStderr = loggingState.forceConsoleToStderr;
@@ -24,7 +27,13 @@ export async function ensureCliPluginRegistryLoaded(params: {
     loggingState.forceConsoleToStderr = true;
   }
   try {
-    ensurePluginRegistryLoaded({ scope: params.scope });
+    ensurePluginRegistryLoaded({
+      scope: params.scope,
+      ...(params.config ? { config: params.config } : {}),
+      ...(params.activationSourceConfig
+        ? { activationSourceConfig: params.activationSourceConfig }
+        : {}),
+    });
   } finally {
     loggingState.forceConsoleToStderr = previousForceStderr;
   }

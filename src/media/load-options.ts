@@ -10,7 +10,7 @@ export type OutboundMediaAccess = {
 export type OutboundMediaLoadParams = {
   maxBytes?: number;
   mediaAccess?: OutboundMediaAccess;
-  mediaLocalRoots?: readonly string[];
+  mediaLocalRoots?: readonly string[] | "any";
   mediaReadFile?: OutboundMediaReadFile;
   optimizeImages?: boolean;
   /** Agent workspace directory for resolving relative MEDIA: paths. */
@@ -28,8 +28,11 @@ export type OutboundMediaLoadOptions = {
 };
 
 export function resolveOutboundMediaLocalRoots(
-  mediaLocalRoots?: readonly string[],
-): readonly string[] | undefined {
+  mediaLocalRoots?: readonly string[] | "any",
+): readonly string[] | "any" | undefined {
+  if (mediaLocalRoots === "any") {
+    return mediaLocalRoots;
+  }
   return mediaLocalRoots && mediaLocalRoots.length > 0 ? mediaLocalRoots : undefined;
 }
 
@@ -40,9 +43,10 @@ export function resolveOutboundMediaAccess(
     mediaReadFile?: OutboundMediaReadFile;
   } = {},
 ): OutboundMediaAccess | undefined {
-  const localRoots = resolveOutboundMediaLocalRoots(
+  const resolvedLocalRoots = resolveOutboundMediaLocalRoots(
     params.mediaAccess?.localRoots ?? params.mediaLocalRoots,
   );
+  const localRoots = resolvedLocalRoots === "any" ? undefined : resolvedLocalRoots;
   const readFile = params.mediaAccess?.readFile ?? params.mediaReadFile;
   const workspaceDir = params.mediaAccess?.workspaceDir;
   if (!localRoots && !readFile && !workspaceDir) {
@@ -58,19 +62,30 @@ export function resolveOutboundMediaAccess(
 export function buildOutboundMediaLoadOptions(
   params: OutboundMediaLoadParams = {},
 ): OutboundMediaLoadOptions {
-  const mediaAccess = resolveOutboundMediaAccess(params);
+  const explicitLocalRoots = resolveOutboundMediaLocalRoots(params.mediaLocalRoots);
+  const mediaAccess = resolveOutboundMediaAccess({
+    mediaAccess: params.mediaAccess,
+    mediaLocalRoots: explicitLocalRoots === "any" ? undefined : explicitLocalRoots,
+    mediaReadFile: params.mediaAccess?.readFile ? undefined : params.mediaReadFile,
+  });
   const workspaceDir = mediaAccess?.workspaceDir ?? params.workspaceDir;
-  if (mediaAccess?.readFile) {
+  const readFile = mediaAccess?.readFile ?? params.mediaReadFile;
+  const localRoots = mediaAccess?.localRoots ?? explicitLocalRoots;
+  if (readFile) {
+    if (!localRoots) {
+      throw new Error(
+        'Host media read requires explicit localRoots. Pass mediaAccess.localRoots or opt in with localRoots: "any".',
+      );
+    }
     return {
       ...(params.maxBytes !== undefined ? { maxBytes: params.maxBytes } : {}),
-      localRoots: "any",
-      readFile: mediaAccess.readFile,
+      localRoots,
+      readFile,
       hostReadCapability: true,
       ...(params.optimizeImages !== undefined ? { optimizeImages: params.optimizeImages } : {}),
       ...(workspaceDir ? { workspaceDir } : {}),
     };
   }
-  const localRoots = mediaAccess?.localRoots;
   return {
     ...(params.maxBytes !== undefined ? { maxBytes: params.maxBytes } : {}),
     ...(localRoots ? { localRoots } : {}),

@@ -7,6 +7,7 @@ import {
   expandTextLinks,
   getTelegramTextParts,
   hasBotMention,
+  isBinaryContent,
   normalizeForwardedContext,
   resolveTelegramDirectPeerId,
   resolveTelegramForumFlag,
@@ -324,7 +325,6 @@ describe("describeReplyTarget", () => {
         from: { id: 42, first_name: "Alice", is_bot: false },
       },
     } as any);
-    // Should not throw when reply text is malformed; return null instead.
     expect(result).toBeNull();
   });
 
@@ -343,6 +343,65 @@ describe("describeReplyTarget", () => {
       },
     } as any);
     expect(result?.body).toBe("Caption body");
+    expect(result?.kind).toBe("reply");
+  });
+
+  it("drops binary reply captions with no safe fallback", () => {
+    const result = describeReplyTarget({
+      message_id: 2,
+      date: 1000,
+      chat: { id: 1, type: "private" },
+      reply_to_message: {
+        message_id: 1,
+        date: 900,
+        chat: { id: 1, type: "private" },
+        caption: "PK\x00\x03\x04binary",
+        from: { id: 42, first_name: "Alice", is_bot: false },
+      },
+    } as any);
+    expect(result?.id).toBe("1");
+    expect(result?.sender).toBe("Alice");
+    expect(result?.body).toBeUndefined();
+  });
+
+  it("falls back to reply text when quote text is binary", () => {
+    const result = describeReplyTarget({
+      message_id: 2,
+      date: 1000,
+      chat: { id: 1, type: "private" },
+      quote: {
+        text: "\x00\x01\x02binary quote",
+      },
+      reply_to_message: {
+        message_id: 1,
+        date: 900,
+        chat: { id: 1, type: "private" },
+        text: "Original message",
+        from: { id: 42, first_name: "Alice", is_bot: false },
+      },
+    } as any);
+    expect(result?.body).toBe("Original message");
+    expect(result?.kind).toBe("reply");
+  });
+
+  it("falls back to external reply text when external quote text is binary", () => {
+    const result = describeReplyTarget({
+      message_id: 5,
+      date: 1300,
+      chat: { id: 1, type: "private" },
+      text: "Comment on forwarded message",
+      external_reply: {
+        message_id: 4,
+        date: 1200,
+        chat: { id: 1, type: "private" },
+        text: "Forwarded from elsewhere",
+        quote: {
+          text: "PK\x00\x03\x04binary quote",
+        },
+        from: { id: 123, first_name: "Eve", is_bot: false },
+      },
+    } as any);
+    expect(result?.body).toBe("Forwarded from elsewhere");
     expect(result?.kind).toBe("reply");
   });
 
@@ -441,6 +500,67 @@ describe("describeReplyTarget", () => {
     expect(result?.forwardedFrom?.fromType).toBe("user");
     expect(result?.forwardedFrom?.fromId).toBe("123");
     expect(result?.forwardedFrom?.date).toBe(700);
+  });
+});
+
+describe("isBinaryContent", () => {
+  it("returns false for normal user text", () => {
+    expect(isBinaryContent("Hello, world!")).toBe(false);
+  });
+
+  it("returns false for text with common whitespace (tabs, newlines)", () => {
+    expect(isBinaryContent("line one\nline two\ttab")).toBe(false);
+  });
+
+  it("returns true for string containing null bytes", () => {
+    expect(isBinaryContent("PK\x00\x03\x04")).toBe(true);
+  });
+
+  it("returns true for typical binary file header bytes", () => {
+    const mobiBinarySnippet = "\x00\x00\x00\x01BOOKMOBI\x00\x00\x02\x0E";
+    expect(isBinaryContent(mobiBinarySnippet)).toBe(true);
+  });
+
+  it("returns false for empty string", () => {
+    expect(isBinaryContent("")).toBe(false);
+  });
+});
+
+describe("getTelegramTextParts — binary caption filtering (#66647)", () => {
+  it("strips binary caption content to prevent token explosion", () => {
+    const binaryCaption = "PK\x03\x04\x14\x00\x08binary-ebook-data";
+    const result = getTelegramTextParts({
+      caption: binaryCaption,
+      caption_entities: [{ type: "mention", offset: 0, length: 5 }],
+      chat: { id: 1, type: "private" },
+      date: 1,
+      message_id: 1,
+    } as any);
+    expect(result.text).toBe("");
+    expect(result.entities).toEqual([]);
+  });
+
+  it("preserves normal caption text", () => {
+    const result = getTelegramTextParts({
+      caption: "Here is my document",
+      caption_entities: [],
+      chat: { id: 1, type: "private" },
+      date: 1,
+      message_id: 1,
+    } as any);
+    expect(result.text).toBe("Here is my document");
+  });
+
+  it("strips binary content in msg.text as well", () => {
+    const result = getTelegramTextParts({
+      text: "\x00\x01\x02 binary junk",
+      entities: [{ type: "bold", offset: 0, length: 3 }],
+      chat: { id: 1, type: "private" },
+      date: 1,
+      message_id: 1,
+    } as any);
+    expect(result.text).toBe("");
+    expect(result.entities).toEqual([]);
   });
 });
 

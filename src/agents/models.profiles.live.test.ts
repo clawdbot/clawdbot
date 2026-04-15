@@ -175,6 +175,14 @@ function isInstructionsRequiredError(raw: string): boolean {
   return /instructions are required/i.test(raw);
 }
 
+function isOpenAiCodexHtmlInterruption(raw: string): boolean {
+  const trimmed = raw.trim().replace(/^Error:\s*/i, "");
+  return (
+    /^(?:<!doctype\s+html\b|<html\b)/i.test(trimmed) &&
+    (/<meta\s+name=["']viewport["']/i.test(trimmed) || /<body\b/i.test(trimmed))
+  );
+}
+
 function isModelTimeoutError(raw: string): boolean {
   return /model call timed out after \d+ms/i.test(raw);
 }
@@ -276,6 +284,15 @@ describe("resolveLiveSystemPrompt", () => {
         provider: "openai",
       } as Model<Api>),
     ).toBeUndefined();
+  });
+
+  it("matches OpenAI Codex HTML interruption pages", () => {
+    expect(
+      isOpenAiCodexHtmlInterruption(
+        'Error: <html><head><meta name="viewport" content="width=device-width" /></head><body>Try again</body></html>',
+      ),
+    ).toBe(true);
+    expect(isOpenAiCodexHtmlInterruption("Error: connection reset")).toBe(false);
   });
 });
 
@@ -762,6 +779,15 @@ describeLive("live models (profile keys)", () => {
             ) {
               skipped.push({ model: id, reason: message });
               logProgress(`${progressLabel}: skip (instructions required)`);
+              break;
+            }
+            if (
+              allowNotFoundSkip &&
+              model.provider === "openai-codex" &&
+              isOpenAiCodexHtmlInterruption(message)
+            ) {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (codex html interruption)`);
               break;
             }
             if (allowNotFoundSkip && isModelTimeoutError(message)) {

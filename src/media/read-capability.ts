@@ -8,7 +8,10 @@ import type { OpenClawConfig } from "../config/types.js";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { OutboundMediaAccess, OutboundMediaReadFile } from "./load-options.js";
-import { getAgentScopedMediaLocalRootsForSources } from "./local-roots.js";
+import {
+  getAgentScopedMediaLocalRoots,
+  getAgentScopedMediaLocalRootsForSources,
+} from "./local-roots.js";
 
 type OutboundHostMediaPolicyContext = {
   sessionKey?: string;
@@ -87,13 +90,16 @@ export function resolveAgentScopedOutboundMediaAccess(
     mediaReadFile?: OutboundMediaReadFile;
   } & OutboundHostMediaPolicyContext,
 ): OutboundMediaAccess {
+  const hostMediaReadAllowed = isAgentScopedHostMediaReadAllowed(params);
   const localRoots =
     params.mediaAccess?.localRoots ??
-    getAgentScopedMediaLocalRootsForSources({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      mediaSources: params.mediaSources,
-    });
+    (hostMediaReadAllowed
+      ? getAgentScopedMediaLocalRootsForSources({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          mediaSources: params.mediaSources,
+        })
+      : getAgentScopedMediaLocalRoots(params.cfg, params.agentId));
   const resolvedWorkspaceDir =
     params.workspaceDir ??
     params.mediaAccess?.workspaceDir ??
@@ -101,21 +107,23 @@ export function resolveAgentScopedOutboundMediaAccess(
   const readFile =
     params.mediaAccess?.readFile ??
     params.mediaReadFile ??
-    createAgentScopedHostMediaReadFile({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      workspaceDir: resolvedWorkspaceDir,
-      sessionKey: params.sessionKey,
-      messageProvider: params.messageProvider,
-      groupId: params.groupId,
-      groupChannel: params.groupChannel,
-      groupSpace: params.groupSpace,
-      accountId: params.accountId,
-      requesterSenderId: params.requesterSenderId,
-      requesterSenderName: params.requesterSenderName,
-      requesterSenderUsername: params.requesterSenderUsername,
-      requesterSenderE164: params.requesterSenderE164,
-    });
+    (hostMediaReadAllowed
+      ? createAgentScopedHostMediaReadFile({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          workspaceDir: resolvedWorkspaceDir,
+          sessionKey: params.sessionKey,
+          messageProvider: params.messageProvider,
+          groupId: params.groupId,
+          groupChannel: params.groupChannel,
+          groupSpace: params.groupSpace,
+          accountId: params.accountId,
+          requesterSenderId: params.requesterSenderId,
+          requesterSenderName: params.requesterSenderName,
+          requesterSenderUsername: params.requesterSenderUsername,
+          requesterSenderE164: params.requesterSenderE164,
+        })
+      : undefined);
   return {
     ...(localRoots?.length ? { localRoots } : {}),
     ...(readFile ? { readFile } : {}),

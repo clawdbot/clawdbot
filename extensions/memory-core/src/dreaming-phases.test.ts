@@ -713,11 +713,99 @@ describe("memory-core dreaming phases", () => {
     expect(Object.keys(sessionIngestion.files)).toHaveLength(1);
     expect(Object.values(sessionIngestion.files)).toEqual([
       expect.objectContaining({
-        lineCount: 2,
-        lastContentLine: 2,
+        lineCount: 0,
+        lastContentLine: 0,
         contentHash: expect.any(String),
       }),
     ]);
+  });
+
+  it("does not reread unchanged dreaming-generated transcripts after checkpointing skip state", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const transcriptPath = path.join(sessionsDir, "dreaming-narrative.jsonl");
+    await fs.writeFile(
+      transcriptPath,
+      [
+        JSON.stringify({
+          type: "custom",
+          customType: "openclaw:bootstrap-context:full",
+          data: {
+            runId: "dreaming-narrative-light-1775894400455",
+            sessionId: "dream-session-1",
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            timestamp: "2026-04-05T18:01:00.000Z",
+            content: [
+              { type: "text", text: "Write a dream diary entry from these memory fragments." },
+            ],
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+    const mtime = new Date("2026-04-05T18:05:00.000Z");
+    await fs.utimes(transcriptPath, mtime, mtime);
+
+    const { beforeAgentReply } = createHarness(
+      {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+          },
+          list: [{ id: "main", workspace: workspaceDir }],
+        },
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: {
+                    light: {
+                      enabled: true,
+                      limit: 20,
+                      lookbackDays: 7,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+    );
+
+    try {
+      await beforeAgentReply(
+        { cleanedBody: "__openclaw_memory_core_light_sleep__" },
+        { trigger: "heartbeat", workspaceDir },
+      );
+
+      const readFileSpy = vi.spyOn(fs, "readFile");
+      await beforeAgentReply(
+        { cleanedBody: "__openclaw_memory_core_light_sleep__" },
+        { trigger: "heartbeat", workspaceDir },
+      );
+
+      expect(
+        readFileSpy.mock.calls.some(
+          ([target]) => typeof target === "string" && target === transcriptPath,
+        ),
+      ).toBe(false);
+      readFileSpy.mockRestore();
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllEnvs();
+    }
   });
 
   it("dedupes reset/deleted session archives instead of double-ingesting", async () => {

@@ -1,8 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  resetSessionStoreLockRuntimeForTests,
+  setSessionWriteLockAcquirerForTests,
+} from "../config/sessions/store.js";
 import {
   autoMigrateLegacyStateDir,
   autoMigrateLegacyState,
@@ -13,6 +17,30 @@ import {
 } from "./doctor-state-migrations.js";
 
 let tempRoot: string | null = null;
+
+vi.mock("../infra/json-files.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../infra/json-files.js")>("../infra/json-files.js");
+  return {
+    ...actual,
+    writeTextAtomic: async (
+      filePath: string,
+      content: string,
+      options?: { mode?: number; ensureDirMode?: number; appendTrailingNewline?: boolean },
+    ) => {
+      const payload =
+        options?.appendTrailingNewline && !content.endsWith("\n") ? `${content}\n` : content;
+      await fs.promises.mkdir(path.dirname(filePath), {
+        recursive: true,
+        ...(typeof options?.ensureDirMode === "number" ? { mode: options.ensureDirMode } : {}),
+      });
+      await fs.promises.writeFile(filePath, payload, {
+        encoding: "utf8",
+        mode: options?.mode ?? 0o600,
+      });
+    },
+  };
+});
 
 async function makeTempRoot() {
   const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-"));
@@ -52,9 +80,16 @@ async function runTelegramAllowFromMigration(params: { root: string; cfg: OpenCl
   return { oauthDir, detected, result };
 }
 
+beforeEach(() => {
+  setSessionWriteLockAcquirerForTests(async () => ({
+    release: async () => undefined,
+  }));
+});
+
 afterEach(async () => {
   resetAutoMigrateLegacyStateForTest();
   resetAutoMigrateLegacyStateDirForTest();
+  resetSessionStoreLockRuntimeForTests();
   if (!tempRoot) {
     return;
   }

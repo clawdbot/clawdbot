@@ -31,6 +31,7 @@ type MemoryPluginTestConfig = {
   captureMaxChars?: number;
   autoCapture?: boolean;
   autoRecall?: boolean;
+  storageOptions?: Record<string, string>;
 };
 
 const TEST_RUNTIME_MANIFEST = {
@@ -277,6 +278,95 @@ describe("memory plugin e2e", () => {
       vi.doUnmock("./lancedb-runtime.js");
       vi.resetModules();
     }
+  });
+
+  test("config schema accepts storageOptions with string values", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+
+    const config = memoryPlugin.configSchema?.parse?.({
+      embedding: {
+        apiKey: OPENAI_API_KEY,
+        model: "text-embedding-3-small",
+      },
+      dbPath: getDbPath(),
+      storageOptions: {
+        region: "us-west-2",
+        access_key: "test-key",
+        secret_key: "test-secret",
+      },
+    }) as MemoryPluginTestConfig | undefined;
+
+    expect(config?.storageOptions).toEqual({
+      region: "us-west-2",
+      access_key: "test-key",
+      secret_key: "test-secret",
+    });
+  });
+
+  test("config schema resolves env vars in storageOptions", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+    process.env.TEST_MEMORY_STORAGE_ACCESS_KEY = "env-access";
+    process.env.TEST_MEMORY_STORAGE_SECRET_KEY = "env-secret";
+
+    try {
+      const config = memoryPlugin.configSchema?.parse?.({
+        embedding: {
+          apiKey: OPENAI_API_KEY,
+          model: "text-embedding-3-small",
+        },
+        dbPath: getDbPath(),
+        storageOptions: {
+          region: "us-west-2",
+          access_key: "${TEST_MEMORY_STORAGE_ACCESS_KEY}",
+          secret_key: "${TEST_MEMORY_STORAGE_SECRET_KEY}",
+        },
+      }) as MemoryPluginTestConfig | undefined;
+
+      expect(config?.storageOptions).toEqual({
+        region: "us-west-2",
+        access_key: "env-access",
+        secret_key: "env-secret",
+      });
+    } finally {
+      delete process.env.TEST_MEMORY_STORAGE_ACCESS_KEY;
+      delete process.env.TEST_MEMORY_STORAGE_SECRET_KEY;
+    }
+  });
+
+  test("config schema rejects missing env vars in storageOptions", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+    delete process.env.TEST_MEMORY_STORAGE_MISSING;
+
+    expect(() => {
+      memoryPlugin.configSchema?.parse?.({
+        embedding: {
+          apiKey: OPENAI_API_KEY,
+          model: "text-embedding-3-small",
+        },
+        dbPath: getDbPath(),
+        storageOptions: {
+          secret_key: "${TEST_MEMORY_STORAGE_MISSING}",
+        },
+      });
+    }).toThrow("Environment variable TEST_MEMORY_STORAGE_MISSING is not set");
+  });
+
+  test("config schema rejects storageOptions with non-string values", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+
+    expect(() => {
+      memoryPlugin.configSchema?.parse?.({
+        embedding: {
+          apiKey: OPENAI_API_KEY,
+          model: "text-embedding-3-small",
+        },
+        dbPath: getDbPath(),
+        storageOptions: {
+          region: "us-west-2",
+          timeout: 30, // number, should fail
+        },
+      });
+    }).toThrow("storageOptions.timeout must be a string");
   });
 
   test("shouldCapture applies real capture rules", async () => {

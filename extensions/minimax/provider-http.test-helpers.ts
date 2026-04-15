@@ -24,9 +24,22 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
 
 vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   assertOkOrThrowHttpError: minimaxProviderHttpMocks.assertOkOrThrowHttpErrorMock,
+  createProviderOperationDeadline: ({
+    label,
+    timeoutMs,
+  }: {
+    label: string;
+    timeoutMs?: number;
+  }) => ({
+    label,
+    timeoutMs,
+  }),
   fetchWithTimeout: minimaxProviderHttpMocks.fetchWithTimeoutMock,
   postJsonRequest: minimaxProviderHttpMocks.postJsonRequestMock,
+  resolveProviderOperationTimeoutMs: ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
+    defaultTimeoutMs,
   resolveProviderHttpRequestConfig: minimaxProviderHttpMocks.resolveProviderHttpRequestConfigMock,
+  waitProviderOperationPollInterval: async () => {},
 }));
 
 export function getMinimaxProviderHttpMocks() {

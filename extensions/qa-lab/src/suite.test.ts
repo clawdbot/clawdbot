@@ -214,6 +214,16 @@ describe("qa suite failure reply handling", () => {
     });
   });
 
+  it("enables Control UI only for Control UI scenario workers", () => {
+    expect(
+      qaSuiteTesting.scenarioRequiresControlUi({
+        ...makeScenario("control-ui"),
+        surface: "control-ui",
+      }),
+    ).toBe(true);
+    expect(qaSuiteTesting.scenarioRequiresControlUi(makeScenario("plain"))).toBe(false);
+  });
+
   it("filters provider-specific scenarios from an implicit live lane", () => {
     const scenarios = [
       makeScenario("generic"),

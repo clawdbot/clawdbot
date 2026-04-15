@@ -16,7 +16,14 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 - Pass `--json` for machine-readable summaries.
 - Per-phase logs land under `/tmp/openclaw-parallels-*`.
 - Do not run local and gateway agent turns in parallel on the same fresh workspace or session.
+- For a full OS matrix, prefer running independent guest-family lanes in parallel when host capacity allows:
+  - `pnpm test:parallels:macos -- --json`
+  - `pnpm test:parallels:windows -- --json`
+  - `pnpm test:parallels:linux -- --json`
+    Keep each lane in its own shell/session and track the run directory for each one.
 - Do not run multiple smoke lanes against the same guest family at once. Tahoe lanes share the host HTTP port, and Windows/Linux lanes can collide on snapshot restore/start state if two jobs touch the same VM concurrently.
+- Do not run the aggregate `pnpm test:parallels:npm-update` wrapper in parallel with individual macOS/Windows/Linux smoke lanes; it touches the same guest families and snapshots.
+- While running or optimizing the matrix, record wall-clock duration per lane and the slowest phase from `/tmp/openclaw-parallels-*` logs. Use that timing before changing smoke order, timeouts, or helper behavior.
 - If `main` is moving under active multi-agent work, prefer a detached worktree pinned to one commit for long Parallels suites. The smoke scripts now verify the packed tgz commit instead of live `git rev-parse HEAD`, but a pinned worktree still avoids noisy rebuild/version drift during reruns.
 - For `openclaw update --channel dev` lanes, remember the guest clones GitHub `main`, not your local worktree. If a local fix exists but the rerun still fails inside the cloned dev checkout, do not treat that as disproof of the fix until the branch has been pushed.
 - For `prlctl exec`, pass the VM name before `--current-user` (`prlctl exec "$VM" --current-user ...`), not the other way around.

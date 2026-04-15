@@ -47,6 +47,11 @@ export type BundledPluginCompatibleActivationInputs = PluginActivationInputs & {
   compatPluginIds: string[];
 };
 
+export type BundledPluginCompatibleLoadValues = Pick<
+  BundledPluginCompatibleActivationInputs,
+  "rawConfig" | "config" | "activationSourceConfig" | "autoEnabledReasons" | "compatPluginIds"
+>;
+
 export function withActivatedPluginIds(params: {
   config?: OpenClawConfig;
   pluginIds: readonly string[];
@@ -232,6 +237,73 @@ export function resolveBundledPluginCompatibleActivationInputs(params: {
 
   return {
     ...activation,
+    compatPluginIds,
+  };
+}
+
+export function resolveBundledPluginCompatibleLoadValues(params: {
+  rawConfig?: OpenClawConfig;
+  resolvedConfig?: OpenClawConfig;
+  autoEnabledReasons?: Record<string, string[]>;
+  env?: NodeJS.ProcessEnv;
+  workspaceDir?: string;
+  onlyPluginIds?: readonly string[];
+  applyAutoEnable?: boolean;
+  compatMode: PluginActivationBundledCompatMode;
+  resolveCompatPluginIds: (params: {
+    config?: OpenClawConfig;
+    workspaceDir?: string;
+    env?: NodeJS.ProcessEnv;
+    onlyPluginIds?: readonly string[];
+  }) => string[];
+}): BundledPluginCompatibleLoadValues {
+  const env = params.env ?? process.env;
+  const rawConfig = params.rawConfig ?? params.resolvedConfig;
+  let resolvedConfig = params.resolvedConfig ?? params.rawConfig;
+  let autoEnabledReasons = params.autoEnabledReasons ?? {};
+
+  if (params.applyAutoEnable && rawConfig !== undefined) {
+    const autoEnabled = applyPluginAutoEnable({
+      config: rawConfig,
+      env,
+    });
+    resolvedConfig = autoEnabled.config;
+    autoEnabledReasons = autoEnabled.autoEnabledReasons;
+  }
+
+  const allowlistCompatEnabled = params.compatMode.allowlist === true;
+  const shouldResolveCompatPluginIds =
+    allowlistCompatEnabled ||
+    params.compatMode.enablement === "always" ||
+    (params.compatMode.enablement === "allowlist" && allowlistCompatEnabled) ||
+    params.compatMode.vitest === true;
+  const compatPluginIds = shouldResolveCompatPluginIds
+    ? params.resolveCompatPluginIds({
+        config: resolvedConfig,
+        workspaceDir: params.workspaceDir,
+        env,
+        onlyPluginIds: params.onlyPluginIds,
+      })
+    : [];
+  const config = applyPluginCompatibilityOverrides({
+    config: resolvedConfig,
+    compat: {
+      allowlistPluginIds: allowlistCompatEnabled ? compatPluginIds : undefined,
+      enablementPluginIds:
+        params.compatMode.enablement === "always" ||
+        (params.compatMode.enablement === "allowlist" && allowlistCompatEnabled)
+          ? compatPluginIds
+          : undefined,
+      vitestPluginIds: params.compatMode.vitest ? compatPluginIds : undefined,
+    },
+    env,
+  });
+
+  return {
+    rawConfig,
+    config,
+    activationSourceConfig: rawConfig,
+    autoEnabledReasons,
     compatPluginIds,
   };
 }

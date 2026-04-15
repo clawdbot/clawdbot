@@ -260,6 +260,18 @@ export const tr: TranslationMap = {
       cost: "Maliyet",
       skills: "Skills",
       recentSessions: "Son Oturumlar",
+      modelAuth: "Model Kimlik Doğrulaması",
+      modelAuthOk: "{count} tamam",
+      modelAuthExpired: "{count} süresi dolmuş",
+      modelAuthExpiring: "{count} süresi yakında dolacak",
+      modelAuthProviders: "{count} sağlayıcı",
+      modelAuthUsageLeft: "%{pct} kaldı",
+      modelAuthExpiresIn: "{when} süresi doluyor",
+      modelAuthAttentionExpiredTitle: "Model kimlik doğrulamasının süresi doldu",
+      modelAuthAttentionExpiringTitle: "Model kimlik doğrulamasının süresi yakında dolacak",
+      modelAuthAttentionExpiredDesc:
+        "{providers} — openclaw models auth ile yeniden kimlik doğrulayın",
+      modelAuthAttentionExpiringEntry: "{provider} ({when})",
     },
     attention: {
       title: "Dikkat",

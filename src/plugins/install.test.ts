@@ -1427,6 +1427,21 @@ describe("installPluginFromArchive", () => {
     ).toBe(true);
   });
 
+  it("does not flag the real qa-matrix plugin as dangerous install code", async () => {
+    const pluginDir = path.resolve(process.cwd(), "extensions", "qa-matrix");
+
+    const scanResult = await installSecurityScan.scanPackageInstallSource({
+      extensions: ["./index.ts"],
+      logger: { warn: vi.fn() },
+      packageDir: pluginDir,
+      pluginId: "qa-matrix",
+      packageName: "@openclaw/qa-matrix",
+      manifestId: "qa-matrix",
+    });
+
+    expect(scanResult?.blocked).toBeUndefined();
+  });
+
   it("keeps blocked dependency package checks active when forced unsafe install is set", async () => {
     const { pluginDir, extensionsDir } = setupPluginInstallDirs();
 

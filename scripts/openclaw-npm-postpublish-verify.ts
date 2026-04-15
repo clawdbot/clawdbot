@@ -15,12 +15,13 @@ import { isAbsolute, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "../src/infra/errors.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
+import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import {
   collectBundledPluginRootRuntimeMirrorErrors,
   collectRootDistBundledRuntimeMirrors,
   collectRuntimeDependencySpecs,
 } from "./lib/bundled-plugin-root-runtime-mirrors.mjs";
-import { NPM_UPDATE_COMPAT_SIDECAR_PATHS } from "./lib/npm-update-compat-sidecars.mjs";
+import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mjs";
 import { parseReleaseVersion, resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
 
 type InstalledPackageJson = {
@@ -43,13 +44,16 @@ type InstalledBundledExtensionManifestRecord = {
 const MAX_BUNDLED_EXTENSION_MANIFEST_BYTES = 1024 * 1024;
 const LEGACY_CONTEXT_ENGINE_UNRESOLVED_RUNTIME_MARKER =
   "Failed to load legacy context engine runtime.";
-const NPM_UPDATE_COMPAT_EXTENSION_DIRS = new Set(
-  [...NPM_UPDATE_COMPAT_SIDECAR_PATHS].map((relativePath) => {
-    const pathParts = relativePath.split("/");
-    pathParts.pop();
-    return pathParts.join("/");
-  }),
-);
+const LEGACY_UPDATE_COMPAT_RUNTIME_SIDECAR_PATHS = [
+  "dist/extensions/qa-channel/runtime-api.js",
+  "dist/extensions/qa-lab/runtime-api.js",
+] as const;
+const PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS = [
+  ...BUNDLED_RUNTIME_SIDECAR_PATHS.filter((relativePath) =>
+    listBundledPluginPackArtifacts().includes(relativePath),
+  ),
+  ...LEGACY_UPDATE_COMPAT_RUNTIME_SIDECAR_PATHS,
+] as const;
 
 export type PublishedInstallScenario = {
   name: string;
@@ -97,7 +101,7 @@ export function collectInstalledPackageErrors(params: {
     );
   }
 
-  for (const relativePath of BUNDLED_RUNTIME_SIDECAR_PATHS) {
+  for (const relativePath of PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS) {
     if (!existsSync(join(params.packageRoot, relativePath))) {
       errors.push(`installed package is missing required bundled runtime sidecar: ${relativePath}`);
     }
@@ -182,20 +186,6 @@ function collectExpectedBundledExtensionPackageIds(
   return ids;
 }
 
-function isNpmUpdateCompatOnlyExtensionDir(params: {
-  extensionId: string;
-  packageRoot: string;
-}): boolean {
-  const relativeExtensionDir = `dist/extensions/${params.extensionId}`;
-  if (!NPM_UPDATE_COMPAT_EXTENSION_DIRS.has(relativeExtensionDir)) {
-    return false;
-  }
-
-  return [...NPM_UPDATE_COMPAT_SIDECAR_PATHS]
-    .filter((relativePath) => relativePath.startsWith(`${relativeExtensionDir}/`))
-    .every((relativePath) => existsSync(join(params.packageRoot, relativePath)));
-}
-
 function readBundledExtensionPackageJsons(packageRoot: string): {
   manifests: InstalledBundledExtensionManifestRecord[];
   errors: string[];
@@ -217,9 +207,6 @@ function readBundledExtensionPackageJsons(packageRoot: string): {
     const extensionDirPath = join(extensionsDir, entry.name);
     const packageJsonPath = join(extensionsDir, entry.name, "package.json");
     if (!existsSync(packageJsonPath)) {
-      if (isNpmUpdateCompatOnlyExtensionDir({ extensionId: entry.name, packageRoot })) {
-        continue;
-      }
       if (expectedPackageIds === null || expectedPackageIds.has(entry.name)) {
         errors.push(`installed bundled extension manifest missing: ${packageJsonPath}.`);
       }
@@ -369,6 +356,10 @@ function verifyScenario(version: string, scenario: PublishedInstallScenario): vo
       errors.push(
         `installed openclaw binary version mismatch: expected ${scenario.expectedVersion}, found ${installedBinaryVersion || "<missing>"}.`,
       );
+    }
+
+    if (errors.length === 0) {
+      runInstalledWorkspaceBootstrapSmoke({ packageRoot });
     }
 
     if (errors.length > 0) {

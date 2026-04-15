@@ -58,13 +58,16 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     doctorFixCommand,
   });
   ({ cfg, candidate, pendingChanges, fixHints } = legacyStep.state);
-  const pluginLegacyIssues = findLegacyConfigIssues(
-    snapshot.parsed,
-    snapshot.parsed,
-    listPluginDoctorLegacyConfigRules({
-      pluginIds: collectRelevantDoctorPluginIds(snapshot.parsed),
-    }),
-  );
+  const pluginLegacyIssues =
+    snapshot.parsed === snapshot.sourceConfig
+      ? []
+      : findLegacyConfigIssues(
+          snapshot.parsed,
+          snapshot.parsed,
+          listPluginDoctorLegacyConfigRules({
+            pluginIds: collectRelevantDoctorPluginIds(snapshot.parsed),
+          }),
+        );
   const seenLegacyIssues = new Set(
     snapshot.legacyIssues.map((issue) => `${issue.path}:${issue.message}`),
   );

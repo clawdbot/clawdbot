@@ -105,4 +105,36 @@ describe("bundled plugin public surface loader", () => {
     expect(requireLoader).toHaveBeenCalledWith(pathModule.resolve(modulePath));
     expect(createJiti).not.toHaveBeenCalled();
   });
+
+  it("reuses one bundled dist jiti loader across public artifacts with the same native mode", async () => {
+    const createJiti = vi.fn(() => vi.fn((modulePath: string) => ({ modulePath })));
+    vi.doMock("jiti", () => ({
+      createJiti,
+    }));
+
+    const publicSurfaceLoader = await importFreshModule<
+      typeof import("./public-surface-loader.js")
+    >(import.meta.url, "./public-surface-loader.js?scope=shared-bundled-jiti");
+    const tempRoot = createTempDir();
+    const bundledPluginsDir = path.join(tempRoot, "dist");
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
+
+    const firstPath = path.join(bundledPluginsDir, "demo-a", "api.js");
+    const secondPath = path.join(bundledPluginsDir, "demo-b", "api.js");
+    fs.mkdirSync(path.dirname(firstPath), { recursive: true });
+    fs.mkdirSync(path.dirname(secondPath), { recursive: true });
+    fs.writeFileSync(firstPath, 'export const marker = "demo-a";\n', "utf8");
+    fs.writeFileSync(secondPath, 'export const marker = "demo-b";\n', "utf8");
+
+    publicSurfaceLoader.loadBundledPluginPublicArtifactModuleSync<{ modulePath: string }>({
+      dirName: "demo-a",
+      artifactBasename: "api.js",
+    });
+    publicSurfaceLoader.loadBundledPluginPublicArtifactModuleSync<{ modulePath: string }>({
+      dirName: "demo-b",
+      artifactBasename: "api.js",
+    });
+
+    expect(createJiti).toHaveBeenCalledTimes(1);
+  });
 });

@@ -258,6 +258,18 @@ export const uk: TranslationMap = {
       cost: "Вартість",
       skills: "Навички",
       recentSessions: "Нещодавні сеанси",
+      modelAuth: "Авторизація моделей",
+      modelAuthOk: "{count} в нормі",
+      modelAuthExpired: "{count} прострочено",
+      modelAuthExpiring: "{count} скоро спливає",
+      modelAuthProviders: "{count} провайдерів",
+      modelAuthUsageLeft: "Залишилося {pct}%",
+      modelAuthExpiresIn: "спливає {when}",
+      modelAuthAttentionExpiredTitle: "Авторизація моделей прострочена",
+      modelAuthAttentionExpiringTitle: "Термін авторизації моделей скоро спливає",
+      modelAuthAttentionExpiredDesc:
+        "{providers} — повторно виконайте авторизацію через openclaw models auth",
+      modelAuthAttentionExpiringEntry: "{provider} ({when})",
     },
     attention: {
       title: "Увага",

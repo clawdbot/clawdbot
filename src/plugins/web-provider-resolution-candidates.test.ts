@@ -2,13 +2,11 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   loadPluginManifestRegistry: vi.fn(),
-  resolveManifestContractPluginIds: vi.fn(),
 }));
 
 vi.mock("./manifest-registry.js", () => ({
   loadPluginManifestRegistry: (...args: unknown[]) => mocks.loadPluginManifestRegistry(...args),
-  resolveManifestContractPluginIds: (...args: unknown[]) =>
-    mocks.resolveManifestContractPluginIds(...args),
+  resolveManifestContractPluginIds: vi.fn(),
 }));
 
 let resolveManifestDeclaredWebProviderCandidatePluginIds: typeof import("./web-provider-resolution-shared.js").resolveManifestDeclaredWebProviderCandidatePluginIds;
@@ -20,8 +18,6 @@ describe("resolveManifestDeclaredWebProviderCandidatePluginIds", () => {
   });
 
   beforeEach(() => {
-    mocks.resolveManifestContractPluginIds.mockReset();
-    mocks.resolveManifestContractPluginIds.mockReturnValue(["alpha"]);
     mocks.loadPluginManifestRegistry.mockReset();
     mocks.loadPluginManifestRegistry.mockReturnValue({
       plugins: [
@@ -64,5 +60,15 @@ describe("resolveManifestDeclaredWebProviderCandidatePluginIds", () => {
         onlyPluginIds: ["missing-plugin"],
       }),
     ).toBeUndefined();
+  });
+
+  it("derives provider candidates from a single manifest-registry read", () => {
+    expect(
+      resolveManifestDeclaredWebProviderCandidatePluginIds({
+        contract: "webSearchProviders",
+        configKey: "webSearch",
+      }),
+    ).toEqual(["alpha", "beta"]);
+    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(1);
   });
 });

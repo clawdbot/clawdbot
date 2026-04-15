@@ -1,14 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { createJiti } from "jiti";
 import { loadConfig } from "../../config/config.js";
+import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "../jiti-loader-cache.js";
 import { loadPluginManifestRegistry } from "../manifest-registry.js";
-import {
-  buildPluginLoaderJitiOptions,
-  resolvePluginSdkAliasFile,
-  resolvePluginSdkScopedAliasMap,
-  shouldPreferNativeJiti,
-} from "../sdk-alias.js";
+import { buildPluginLoaderAliasMap, shouldPreferNativeJiti } from "../sdk-alias.js";
 
 type PluginRuntimeRecord = {
   origin?: string;
@@ -119,40 +114,22 @@ export function resolvePluginRuntimeModulePath(
   return null;
 }
 
-export function getPluginBoundaryJiti(
-  modulePath: string,
-  loaders: Map<boolean, ReturnType<typeof createJiti>>,
-) {
+export function getPluginBoundaryJiti(modulePath: string, loaders: PluginJitiLoaderCache) {
   const tryNative = shouldPreferNativeJiti(modulePath);
-  const cached = loaders.get(tryNative);
-  if (cached) {
-    return cached;
-  }
-  const pluginSdkAlias = resolvePluginSdkAliasFile({
-    srcFile: "root-alias.cjs",
-    distFile: "root-alias.cjs",
+  const aliasMap = buildPluginLoaderAliasMap(modulePath);
+  return getCachedPluginJitiLoader({
+    cache: loaders,
     modulePath,
-  });
-  const aliasMap = {
-    ...(pluginSdkAlias
-      ? {
-          "openclaw/plugin-sdk": pluginSdkAlias,
-          "@openclaw/plugin-sdk": pluginSdkAlias,
-        }
-      : {}),
-    ...resolvePluginSdkScopedAliasMap({ modulePath }),
-  };
-  const loader = createJiti(import.meta.url, {
-    ...buildPluginLoaderJitiOptions(aliasMap),
+    importerUrl: import.meta.url,
+    jitiFilename: import.meta.url,
+    aliasMap,
     tryNative,
   });
-  loaders.set(tryNative, loader);
-  return loader;
 }
 
 export function loadPluginBoundaryModuleWithJiti<TModule>(
   modulePath: string,
-  loaders: Map<boolean, ReturnType<typeof createJiti>>,
+  loaders: PluginJitiLoaderCache,
 ): TModule {
   return getPluginBoundaryJiti(modulePath, loaders)(modulePath) as TModule;
 }
@@ -162,7 +139,7 @@ export function createCachedPluginBoundaryModuleLoader<TModule>(
 ): () => TModule | null {
   let cachedModulePath: string | null = null;
   let cachedModule: TModule | null = null;
-  const loaders = new Map<boolean, ReturnType<typeof createJiti>>();
+  const loaders: PluginJitiLoaderCache = new Map();
 
   return () => {
     const missingLabel = params.missingLabel ?? `${params.pluginId} plugin runtime`;

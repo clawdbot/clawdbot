@@ -1,20 +1,20 @@
-import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { loadConfig } from "../config/config.js";
 import { loadSessionStore, resolveFreshSessionTotalTokens } from "../config/sessions.js";
-import { classifySessionKey } from "../gateway/session-utils.js";
 import { info } from "../globals.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { isRich, theme } from "../terminal/theme.js";
 import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
 import {
+  resolveSessionDisplayDefaults,
+  resolveSessionDisplayModel,
+} from "./sessions-display-model.js";
+import {
   formatSessionAgeCell,
   formatSessionFlagsCell,
   formatSessionKeyCell,
   formatSessionModelCell,
-  resolveSessionDisplayDefaults,
-  resolveSessionDisplayModel,
   SESSION_AGE_PAD,
   SESSION_KEY_PAD,
   SESSION_MODEL_PAD,
@@ -30,6 +30,7 @@ type SessionRow = SessionDisplayRow & {
 const AGENT_PAD = 10;
 const KIND_PAD = 6;
 const TOKENS_PAD = 20;
+let contextLookupRuntimePromise: Promise<typeof import("../agents/context.js")> | null = null;
 
 const formatKTokens = (value: number) => `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
 
@@ -67,6 +68,28 @@ const formatTokensCell = (
   return colorByPct(padded, pct, rich);
 };
 
+async function lookupContextTokensForDisplay(model: string): Promise<number | undefined> {
+  contextLookupRuntimePromise ??= import("../agents/context.js");
+  const { lookupContextTokens } = await contextLookupRuntimePromise;
+  return lookupContextTokens(model, { allowAsyncLoad: false });
+}
+
+function classifySessionKey(key: string, entry?: { chatType?: string | null }): SessionRow["kind"] {
+  if (key === "global") {
+    return "global";
+  }
+  if (key === "unknown") {
+    return "unknown";
+  }
+  if (entry?.chatType === "group" || entry?.chatType === "channel") {
+    return "group";
+  }
+  if (key.includes(":group:") || key.includes(":channel:")) {
+    return "group";
+  }
+  return "direct";
+}
+
 const formatKindCell = (kind: SessionRow["kind"], rich: boolean) => {
   const label = kind.padEnd(KIND_PAD);
   if (!rich) {
@@ -91,9 +114,10 @@ export async function sessionsCommand(
   const aggregateAgents = opts.allAgents === true;
   const cfg = loadConfig();
   const displayDefaults = resolveSessionDisplayDefaults(cfg);
+  const configuredContextTokens = cfg.agents?.defaults?.contextTokens;
   const configContextTokens =
-    cfg.agents?.defaults?.contextTokens ??
-    lookupContextTokens(displayDefaults.model) ??
+    configuredContextTokens ??
+    (await lookupContextTokensForDisplay(displayDefaults.model)) ??
     DEFAULT_CONTEXT_TOKENS;
   const targets = resolveSessionStoreTargetsOrExit({
     cfg,
@@ -153,18 +177,24 @@ export async function sessionsCommand(
       allAgents: aggregateAgents ? true : undefined,
       count: rows.length,
       activeMinutes: activeMinutes ?? null,
-      sessions: rows.map((r) => {
-        const model = resolveSessionDisplayModel(cfg, r, displayDefaults);
-        return {
-          ...r,
-          totalTokens: resolveFreshSessionTotalTokens(r) ?? null,
-          totalTokensFresh:
-            typeof r.totalTokens === "number" ? r.totalTokensFresh !== false : false,
-          contextTokens:
-            r.contextTokens ?? lookupContextTokens(model) ?? configContextTokens ?? null,
-          model,
-        };
-      }),
+      sessions: await Promise.all(
+        rows.map(async (r) => {
+          const model = resolveSessionDisplayModel(cfg, r);
+          return {
+            ...r,
+            totalTokens: resolveFreshSessionTotalTokens(r) ?? null,
+            totalTokensFresh:
+              typeof r.totalTokens === "number" ? r.totalTokensFresh !== false : false,
+            contextTokens:
+              r.contextTokens ??
+              configuredContextTokens ??
+              (await lookupContextTokensForDisplay(model)) ??
+              configContextTokens ??
+              null,
+            model,
+          };
+        }),
+      ),
     });
     return;
   }
@@ -200,8 +230,12 @@ export async function sessionsCommand(
   runtime.log(rich ? theme.heading(header) : header);
 
   for (const row of rows) {
-    const model = resolveSessionDisplayModel(cfg, row, displayDefaults);
-    const contextTokens = row.contextTokens ?? lookupContextTokens(model) ?? configContextTokens;
+    const model = resolveSessionDisplayModel(cfg, row);
+    const contextTokens =
+      row.contextTokens ??
+      configuredContextTokens ??
+      (await lookupContextTokensForDisplay(model)) ??
+      configContextTokens;
     const total = resolveFreshSessionTotalTokens(row);
 
     const line = [

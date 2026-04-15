@@ -10,9 +10,9 @@ import {
 import { assertNoPathAliasEscape, type PathAliasPolicy } from "../infra/path-alias-guards.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { isPassThroughRemoteMediaSource } from "../media/media-source-url.js";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
-const HTTP_URL_RE = /^https?:\/\//i;
 const DATA_URL_RE = /^data:/i;
 const SANDBOX_CONTAINER_WORKDIR = "/workspace";
 
@@ -108,7 +108,7 @@ export async function resolveSandboxedMediaSource(params: {
   if (!raw) {
     return raw;
   }
-  if (HTTP_URL_RE.test(raw)) {
+  if (isPassThroughRemoteMediaSource(raw)) {
     return raw;
   }
   let candidate = raw;

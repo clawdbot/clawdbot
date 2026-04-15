@@ -20,12 +20,14 @@ import {
   type SessionStoreTarget,
 } from "./session-store-targets.js";
 import {
+  resolveSessionDisplayDefaults,
+  resolveSessionDisplayModel,
+} from "./sessions-display-model.js";
+import {
   formatSessionAgeCell,
   formatSessionFlagsCell,
   formatSessionKeyCell,
   formatSessionModelCell,
-  resolveSessionDisplayDefaults,
-  resolveSessionDisplayModel,
   SESSION_AGE_PAD,
   SESSION_KEY_PAD,
   SESSION_MODEL_PAD,
@@ -280,7 +282,7 @@ function renderStoreDryRunPlan(params: {
   ].join(" ");
   params.runtime.log(rich ? theme.heading(header) : header);
   for (const actionRow of params.actionRows) {
-    const model = resolveSessionDisplayModel(params.cfg, actionRow, params.displayDefaults);
+    const model = resolveSessionDisplayModel(params.cfg, actionRow);
     const line = [
       formatCleanupActionCell(actionRow.action, rich),
       formatSessionKeyCell(actionRow.key, rich),

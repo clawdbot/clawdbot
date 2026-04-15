@@ -39,6 +39,7 @@ export const DEFAULT_TEST_MODEL_CATALOG: Array<{
   { id: "gpt-5.4-mini", name: "GPT-5.4 Mini", provider: "openai" },
   { id: "gpt-5.4-nano", name: "GPT-5.4 Nano", provider: "openai" },
   { id: "gpt-5.4", name: "GPT-5.4 (Codex)", provider: "openai-codex" },
+  { id: "gpt-5.4-pro", name: "GPT-5.4 Pro (Codex)", provider: "openai-codex" },
   { id: "gpt-5.4-mini", name: "GPT-5.4 Mini (Codex)", provider: "openai-codex" },
   { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
 ];
@@ -55,6 +56,7 @@ const OPENAI_XHIGH_MODEL_IDS = [
 
 const OPENAI_CODEX_XHIGH_MODEL_IDS = [
   "gpt-5.4",
+  "gpt-5.4-pro",
   "gpt-5.4-mini",
   "gpt-5.3-codex",
   "gpt-5.3-codex-spark",

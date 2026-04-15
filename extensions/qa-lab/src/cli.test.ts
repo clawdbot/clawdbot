@@ -1,22 +1,65 @@
 import { Command } from "commander";
+import type { QaRunnerCliContribution } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const TEST_QA_RUNNER = {
+  pluginId: "qa-runner-test",
+  commandName: "runner-test",
+  description: "Run the test live QA lane",
+} as const;
+
+function createAvailableQaRunnerContribution() {
+  return {
+    pluginId: TEST_QA_RUNNER.pluginId,
+    commandName: TEST_QA_RUNNER.commandName,
+    status: "available" as const,
+    registration: {
+      commandName: TEST_QA_RUNNER.commandName,
+      register: vi.fn((qa: Command) => {
+        qa.command(TEST_QA_RUNNER.commandName).action(() => undefined);
+      }),
+    },
+  } satisfies QaRunnerCliContribution;
+}
+
+function createBlockedQaRunnerContribution(): QaRunnerCliContribution {
+  return {
+    pluginId: TEST_QA_RUNNER.pluginId,
+    commandName: TEST_QA_RUNNER.commandName,
+    description: TEST_QA_RUNNER.description,
+    status: "blocked",
+  };
+}
+
+function createConflictingQaRunnerContribution(commandName: string): QaRunnerCliContribution {
+  return {
+    pluginId: TEST_QA_RUNNER.pluginId,
+    commandName,
+    description: TEST_QA_RUNNER.description,
+    status: "blocked",
+  };
+}
 
 const {
   runQaCredentialsAddCommand,
   runQaCredentialsListCommand,
   runQaCredentialsRemoveCommand,
-  runQaMatrixCommand,
   runQaTelegramCommand,
 } = vi.hoisted(() => ({
   runQaCredentialsAddCommand: vi.fn(),
   runQaCredentialsListCommand: vi.fn(),
   runQaCredentialsRemoveCommand: vi.fn(),
-  runQaMatrixCommand: vi.fn(),
   runQaTelegramCommand: vi.fn(),
 }));
 
-vi.mock("./live-transports/matrix/cli.runtime.js", () => ({
-  runQaMatrixCommand,
+const { listQaRunnerCliContributions } = vi.hoisted(() => ({
+  listQaRunnerCliContributions: vi.fn<() => QaRunnerCliContribution[]>(() => [
+    createAvailableQaRunnerContribution(),
+  ]),
+}));
+
+vi.mock("openclaw/plugin-sdk/qa-runner-runtime", () => ({
+  listQaRunnerCliContributions,
 }));
 
 vi.mock("./live-transports/telegram/cli.runtime.js", () => ({
@@ -36,63 +79,61 @@ describe("qa cli registration", () => {
 
   beforeEach(() => {
     program = new Command();
-    registerQaLabCli(program);
     runQaCredentialsAddCommand.mockReset();
     runQaCredentialsListCommand.mockReset();
     runQaCredentialsRemoveCommand.mockReset();
-    runQaMatrixCommand.mockReset();
     runQaTelegramCommand.mockReset();
+    listQaRunnerCliContributions
+      .mockReset()
+      .mockReturnValue([createAvailableQaRunnerContribution()]);
+    registerQaLabCli(program);
   });
 
   afterEach(() => {
     vi.clearAllMocks();
   });
 
-  it("registers the matrix and telegram live transport subcommands", () => {
+  it("registers discovered and built-in live transport subcommands", () => {
     const qa = program.commands.find((command) => command.name() === "qa");
     expect(qa).toBeDefined();
     expect(qa?.commands.map((command) => command.name())).toEqual(
-      expect.arrayContaining(["matrix", "telegram", "credentials"]),
+      expect.arrayContaining([TEST_QA_RUNNER.commandName, "telegram", "credentials"]),
     );
   });
 
-  it("routes matrix CLI flags into the lane runtime", async () => {
-    await program.parseAsync([
-      "node",
-      "openclaw",
-      "qa",
-      "matrix",
-      "--repo-root",
-      "/tmp/openclaw-repo",
-      "--output-dir",
-      ".artifacts/qa/matrix",
-      "--provider-mode",
-      "mock-openai",
-      "--model",
-      "mock-openai/gpt-5.4",
-      "--alt-model",
-      "mock-openai/gpt-5.4-alt",
-      "--scenario",
-      "matrix-thread-follow-up",
-      "--scenario",
-      "matrix-thread-isolation",
-      "--fast",
-      "--sut-account",
-      "sut-live",
-    ]);
+  it("delegates discovered qa runner registration through the generic host seam", () => {
+    const [{ registration }] = listQaRunnerCliContributions.mock.results[0]?.value;
+    expect(registration.register).toHaveBeenCalledTimes(1);
+  });
 
-    expect(runQaMatrixCommand).toHaveBeenCalledWith({
-      repoRoot: "/tmp/openclaw-repo",
-      outputDir: ".artifacts/qa/matrix",
-      providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.4",
-      alternateModel: "mock-openai/gpt-5.4-alt",
-      fastMode: true,
-      scenarioIds: ["matrix-thread-follow-up", "matrix-thread-isolation"],
-      sutAccountId: "sut-live",
-      credentialSource: undefined,
-      credentialRole: undefined,
-    });
+  it("keeps Telegram credential flags on the shared host CLI", () => {
+    const qa = program.commands.find((command) => command.name() === "qa");
+    const telegram = qa?.commands.find((command) => command.name() === "telegram");
+    const optionNames = telegram?.options.map((option) => option.long) ?? [];
+
+    expect(optionNames).toEqual(
+      expect.arrayContaining(["--credential-source", "--credential-role"]),
+    );
+  });
+
+  it("shows an enable hint when a discovered runner plugin is installed but blocked", async () => {
+    listQaRunnerCliContributions.mockReset().mockReturnValue([createBlockedQaRunnerContribution()]);
+    const blockedProgram = new Command();
+    registerQaLabCli(blockedProgram);
+
+    await expect(
+      blockedProgram.parseAsync(["node", "openclaw", "qa", TEST_QA_RUNNER.commandName]),
+    ).rejects.toThrow(`Enable or allow plugin "${TEST_QA_RUNNER.pluginId}"`);
+  });
+
+  it("rejects discovered runners that collide with built-in qa subcommands", () => {
+    listQaRunnerCliContributions
+      .mockReset()
+      .mockReturnValue([createConflictingQaRunnerContribution("manual")]);
+
+    expect(() => registerQaLabCli(new Command())).toThrow(
+      'QA runner command "manual" conflicts with an existing qa subcommand',
+    );
   });
 
   it("routes telegram CLI defaults into the lane runtime", async () => {

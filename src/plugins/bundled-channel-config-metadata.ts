@@ -1,21 +1,20 @@
 import fs from "node:fs";
 import path from "node:path";
-import { createJiti } from "jiti";
 import { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import {
   normalizeBundledPluginStringList,
   trimBundledPluginString,
 } from "./bundled-plugin-scan.js";
+import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
 import type { PluginConfigUiHint } from "./manifest-types.js";
 import type {
   OpenClawPackageManifest,
   PluginManifest,
   PluginManifestChannelConfig,
 } from "./manifest.js";
-import { buildPluginLoaderJitiOptions, resolvePluginLoaderJitiConfig } from "./sdk-alias.js";
+import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./public-surface-runtime.js";
 
-const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"] as const;
 const SOURCE_CONFIG_SCHEMA_CANDIDATES = [
   path.join("src", "config-schema.ts"),
   path.join("src", "config-schema.js"),
@@ -32,7 +31,7 @@ type ChannelConfigSurface = {
   runtime?: ChannelConfigRuntimeSchema;
 };
 
-const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
+const jitiLoaders: PluginJitiLoaderCache = new Map();
 
 function isBuiltChannelConfigSchema(value: unknown): value is ChannelConfigSurface {
   if (!value || typeof value !== "object") {
@@ -71,22 +70,13 @@ function resolveConfigSchemaExport(imported: Record<string, unknown>): ChannelCo
 }
 
 function getJiti(modulePath: string) {
-  const { tryNative, aliasMap, cacheKey } = resolvePluginLoaderJitiConfig({
+  return getCachedPluginJitiLoader({
+    cache: jitiLoaders,
     modulePath,
-    argv1: process.argv[1],
-    moduleUrl: import.meta.url,
+    importerUrl: import.meta.url,
     preferBuiltDist: true,
+    jitiFilename: import.meta.url,
   });
-  const cached = jitiLoaders.get(cacheKey);
-  if (cached) {
-    return cached;
-  }
-  const loader = createJiti(import.meta.url, {
-    ...buildPluginLoaderJitiOptions(aliasMap),
-    tryNative,
-  });
-  jitiLoaders.set(cacheKey, loader);
-  return loader;
 }
 
 function resolveChannelConfigSchemaModulePath(pluginDir: string): string | undefined {

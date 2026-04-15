@@ -2,8 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
+import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./public-surface-runtime.js";
 
-const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"] as const;
 const RUNTIME_SIDECAR_ARTIFACTS = new Set([
   "helper-api.js",
   "light-runtime-api.js",

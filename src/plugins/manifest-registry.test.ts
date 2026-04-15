@@ -499,6 +499,33 @@ describe("loadPluginManifestRegistry", () => {
     });
   });
 
+  it("preserves qa runner descriptors from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "qa-matrix",
+      qaRunners: [
+        {
+          commandName: "matrix",
+          description: "Run the Matrix live QA lane",
+        },
+      ],
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "qa-matrix",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.qaRunners).toEqual([
+      {
+        commandName: "matrix",
+        description: "Run the Matrix live QA lane",
+      },
+    ]);
+  });
+
   it("preserves channel config metadata from plugin manifests", () => {
     const dir = makeTempDir();
     writeManifest(dir, {

@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  collectActionMediaSourceHints,
   hydrateAttachmentParamsForAction,
   normalizeSandboxMediaList,
   normalizeSandboxMediaParams,
@@ -12,6 +13,7 @@ import {
 
 const cfg = {} as OpenClawConfig;
 const maybeIt = process.platform === "win32" ? it.skip : it;
+const matrixMediaSourceParamKeys = ["avatarPath", "avatarUrl"] as const;
 
 describe("message action media helpers", () => {
   it("prefers sandbox media policy when sandbox roots are non-blank", () => {
@@ -34,6 +36,24 @@ describe("message action media helpers", () => {
       mediaAccess: {
         localRoots: ["/tmp/a"],
       },
+      mediaLocalRoots: ["/tmp/a"],
+    });
+  });
+
+  it("preserves explicit any local roots for host read opt-ins", () => {
+    const mediaReadFile = async () => Buffer.from("x");
+    expect(
+      resolveAttachmentMediaPolicy({
+        mediaLocalRoots: "any",
+        mediaReadFile,
+      }),
+    ).toEqual({
+      mode: "host",
+      mediaAccess: {
+        readFile: mediaReadFile,
+      },
+      mediaLocalRoots: "any",
+      mediaReadFile,
     });
   });
 
@@ -98,6 +118,161 @@ describe("message action media helpers", () => {
 
       expect(args).toMatchObject({
         image: path.join(sandboxRoot, "assets", "event-cover.png"),
+      });
+    } finally {
+      await fs.rm(sandboxRoot, { recursive: true, force: true });
+    }
+  });
+
+  maybeIt("normalizes Matrix avatarPath and avatarUrl sandbox media params", async () => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-avatar-"));
+    try {
+      const args: Record<string, unknown> = {
+        avatarPath: "/workspace/avatars/profile.png",
+        avatarUrl: "file:///workspace/avatars/remote-avatar.jpg",
+      };
+
+      await normalizeSandboxMediaParams({
+        args,
+        mediaPolicy: {
+          mode: "sandbox",
+          sandboxRoot,
+        },
+        extraParamKeys: matrixMediaSourceParamKeys,
+      });
+
+      expect(args).toMatchObject({
+        avatarPath: path.join(sandboxRoot, "avatars", "profile.png"),
+        avatarUrl: path.join(sandboxRoot, "avatars", "remote-avatar.jpg"),
+      });
+    } finally {
+      await fs.rm(sandboxRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("collects host media source hints from the shared media-source key set", () => {
+    expect(
+      collectActionMediaSourceHints(
+        {
+          media: " /workspace/uploads/photo.png ",
+          filePath: "",
+          image: "file:///workspace/assets/event-cover.png",
+          avatarPath: "/workspace/avatars/profile.png",
+          avatar_url: "mxc://matrix.org/abc123def456",
+          ignored: "/workspace/not-included.png",
+        },
+        matrixMediaSourceParamKeys,
+      ),
+    ).toEqual([
+      " /workspace/uploads/photo.png ",
+      "file:///workspace/assets/event-cover.png",
+      "/workspace/avatars/profile.png",
+      "mxc://matrix.org/abc123def456",
+    ]);
+  });
+
+  maybeIt("normalizes Matrix snake_case avatar_path and avatar_url aliases", async () => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-avatar-snake-"));
+    try {
+      const args: Record<string, unknown> = {
+        avatar_path: "/workspace/avatars/profile.png",
+        avatar_url: "file:///workspace/avatars/remote-avatar.jpg",
+      };
+
+      await normalizeSandboxMediaParams({
+        args,
+        mediaPolicy: {
+          mode: "sandbox",
+          sandboxRoot,
+        },
+        extraParamKeys: matrixMediaSourceParamKeys,
+      });
+
+      expect(args).toMatchObject({
+        avatar_path: path.join(sandboxRoot, "avatars", "profile.png"),
+        avatar_url: path.join(sandboxRoot, "avatars", "remote-avatar.jpg"),
+      });
+    } finally {
+      await fs.rm(sandboxRoot, { recursive: true, force: true });
+    }
+  });
+
+  maybeIt("prefers canonical Matrix media params over invalid snake_case aliases", async () => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-avatar-canonical-"));
+    try {
+      const args: Record<string, unknown> = {
+        avatarUrl: "https://example.com/avatars/profile.png",
+        avatar_url: "data:text/plain;base64,QQ==",
+        avatarPath: "/workspace/avatars/profile.png",
+        avatar_path: "data:text/plain;base64,QQ==",
+      };
+
+      await normalizeSandboxMediaParams({
+        args,
+        mediaPolicy: {
+          mode: "sandbox",
+          sandboxRoot,
+        },
+        extraParamKeys: matrixMediaSourceParamKeys,
+      });
+
+      expect(args).toMatchObject({
+        avatarUrl: "https://example.com/avatars/profile.png",
+        avatarPath: path.join(sandboxRoot, "avatars", "profile.png"),
+        avatar_url: "data:text/plain;base64,QQ==",
+        avatar_path: "data:text/plain;base64,QQ==",
+      });
+    } finally {
+      await fs.rm(sandboxRoot, { recursive: true, force: true });
+    }
+  });
+
+  maybeIt("keeps remote HTTP avatarUrl unchanged under sandbox normalization", async () => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-avatar-remote-"));
+    try {
+      const args: Record<string, unknown> = {
+        avatarUrl: "https://example.com/avatars/profile.png",
+        avatarPath: "/workspace/avatars/local.png",
+      };
+
+      await normalizeSandboxMediaParams({
+        args,
+        mediaPolicy: {
+          mode: "sandbox",
+          sandboxRoot,
+        },
+        extraParamKeys: matrixMediaSourceParamKeys,
+      });
+
+      expect(args).toMatchObject({
+        avatarUrl: "https://example.com/avatars/profile.png",
+        avatarPath: path.join(sandboxRoot, "avatars", "local.png"),
+      });
+    } finally {
+      await fs.rm(sandboxRoot, { recursive: true, force: true });
+    }
+  });
+
+  maybeIt("keeps mxc:// avatarUrl unchanged under sandbox normalization", async () => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-avatar-mxc-"));
+    try {
+      const args: Record<string, unknown> = {
+        avatarUrl: "mxc://matrix.org/abc123def456",
+        avatarPath: "/workspace/avatars/local.png",
+      };
+
+      await normalizeSandboxMediaParams({
+        args,
+        mediaPolicy: {
+          mode: "sandbox",
+          sandboxRoot,
+        },
+        extraParamKeys: matrixMediaSourceParamKeys,
+      });
+
+      expect(args).toMatchObject({
+        avatarUrl: "mxc://matrix.org/abc123def456",
+        avatarPath: path.join(sandboxRoot, "avatars", "local.png"),
       });
     } finally {
       await fs.rm(sandboxRoot, { recursive: true, force: true });

@@ -53,7 +53,7 @@ TIMEOUT_ONBOARD_S=180
 TIMEOUT_GATEWAY_S=120
 TIMEOUT_AGENT_S=240
 TIMEOUT_PERMISSION_S=60
-TIMEOUT_DASHBOARD_S=60
+TIMEOUT_DASHBOARD_S=90
 TIMEOUT_SNAPSHOT_S=180
 TIMEOUT_CURRENT_USER_PRLCTL_S=45
 TIMEOUT_DISCORD_S=180
@@ -1410,6 +1410,7 @@ done
 }
 grep -F '<title>OpenClaw Control</title>' /tmp/openclaw-dashboard-smoke.html >/dev/null
 grep -F '<openclaw-app></openclaw-app>' /tmp/openclaw-dashboard-smoke.html >/dev/null
+echo "dashboard HTML ready at \$dashboard_http_url"
 if [ "\$headless_flag" = "1" ]; then
   exit 0
 fi
@@ -1418,10 +1419,11 @@ open -a Safari "\$dashboard_url"
 deadline=\$((SECONDS + 20))
 while [ \$SECONDS -lt \$deadline ]; do
   # Tahoe can hand dashboard sockets to WebKit helpers even after the Safari
-  # app process exits, so require a non-node client connection rather than a
-  # long-lived Safari process specifically.
-  if lsof -nPiTCP:"\$dashboard_port" -sTCP:ESTABLISHED 2>/dev/null \
-    | awk 'NR > 1 && \$1 != "node" { found = 1 } END { exit found ? 0 : 1 }'; then
+  # app process exits. Avoid lsof here because it can stall under Parallels;
+  # an established localhost client socket proves the browser reached the UI.
+  if netstat -anv -p tcp 2>/dev/null \
+    | awk -v port=".\$dashboard_port" '\$4 ~ port "\$" && \$6 == "ESTABLISHED" { found = 1 } END { exit found ? 0 : 1 }'; then
+    echo "dashboard browser connection ready on port \$dashboard_port"
     exit 0
   fi
   sleep 1

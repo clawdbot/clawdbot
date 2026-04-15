@@ -31,6 +31,33 @@ const MATRIX_PLUGIN_HANDLED_ACTIONS = new Set<ChannelMessageActionName>([
   "channel-info",
   "permissions",
 ]);
+const MATRIX_PROFILE_MEDIA_PROPERTIES = {
+  avatarUrl: Type.Optional(
+    Type.String({
+      description:
+        "Profile avatar URL for Matrix self-profile update actions. Matrix accepts mxc:// and http(s) URLs.",
+    }),
+  ),
+  avatar_url: Type.Optional(
+    Type.String({
+      description:
+        "snake_case alias of avatarUrl for Matrix self-profile update actions. Matrix accepts mxc:// and http(s) URLs.",
+    }),
+  ),
+  avatarPath: Type.Optional(
+    Type.String({
+      description:
+        "Local avatar file path for Matrix self-profile update actions. Matrix uploads this file and sets the resulting MXC URI.",
+    }),
+  ),
+  avatar_path: Type.Optional(
+    Type.String({
+      description:
+        "snake_case alias of avatarPath for Matrix self-profile update actions. Matrix uploads this file and sets the resulting MXC URI.",
+    }),
+  ),
+} as const;
+const MATRIX_PROFILE_MEDIA_SOURCE_PARAMS = Object.freeze(["avatarUrl", "avatarPath"]);
 
 function createMatrixExposedActions(params: {
   gate: ReturnType<typeof createActionGate>;
@@ -81,30 +108,7 @@ function buildMatrixProfileToolSchema(): NonNullable<ChannelMessageToolDiscovery
           description: "snake_case alias of displayName for Matrix self-profile update actions.",
         }),
       ),
-      avatarUrl: Type.Optional(
-        Type.String({
-          description:
-            "Profile avatar URL for Matrix self-profile update actions. Matrix accepts mxc:// and http(s) URLs.",
-        }),
-      ),
-      avatar_url: Type.Optional(
-        Type.String({
-          description:
-            "snake_case alias of avatarUrl for Matrix self-profile update actions. Matrix accepts mxc:// and http(s) URLs.",
-        }),
-      ),
-      avatarPath: Type.Optional(
-        Type.String({
-          description:
-            "Local avatar file path for Matrix self-profile update actions. Matrix uploads this file and sets the resulting MXC URI.",
-        }),
-      ),
-      avatar_path: Type.Optional(
-        Type.String({
-          description:
-            "snake_case alias of avatarPath for Matrix self-profile update actions. Matrix uploads this file and sets the resulting MXC URI.",
-        }),
-      ),
+      ...MATRIX_PROFILE_MEDIA_PROPERTIES,
     },
   };
 }
@@ -133,6 +137,9 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
       actions: listedActions,
       capabilities: [],
       schema: listedActions.includes("set-profile") ? buildMatrixProfileToolSchema() : null,
+      mediaSourceParams: listedActions.includes("set-profile")
+        ? { "set-profile": MATRIX_PROFILE_MEDIA_SOURCE_PARAMS }
+        : null,
     };
   },
   supportsAction: ({ action }) => MATRIX_PLUGIN_HANDLED_ACTIONS.has(action),

@@ -16,7 +16,10 @@ import {
   loadPluginManifestRegistry,
   type PluginManifestRecord,
 } from "../plugins/manifest-registry.js";
-import { normalizeBundledPluginArtifactSubpath } from "../plugins/public-surface-runtime.js";
+import {
+  PUBLIC_SURFACE_SOURCE_EXTENSIONS,
+  normalizeBundledPluginArtifactSubpath,
+} from "../plugins/public-surface-runtime.js";
 
 const ALWAYS_ALLOWED_RUNTIME_DIR_NAMES = new Set([
   "image-generation-core",
@@ -60,7 +63,6 @@ type FacadeModuleLocation = {
   modulePath: string;
   boundaryRoot: string;
 };
-const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"] as const;
 
 function readFacadeBoundaryConfigSafely(): {
   rawConfig: OpenClawConfig;

@@ -61,6 +61,7 @@ export async function createGatewayRuntimeState(params: {
   openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
   strictTransportSecurityHeader?: string;
   resolvedAuth: ResolvedGatewayAuth;
+  getResolvedAuth: () => ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
   gatewayTls?: GatewayTlsRuntime;
@@ -185,6 +186,7 @@ export async function createGatewayRuntimeState(params: {
         handlePluginRequest,
         shouldEnforcePluginGatewayAuth,
         resolvedAuth: params.resolvedAuth,
+        getResolvedAuth: params.getResolvedAuth,
         rateLimiter: params.rateLimiter,
         getReadiness: params.getReadiness,
         tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
@@ -224,6 +226,7 @@ export async function createGatewayRuntimeState(params: {
         clients,
         preauthConnectionBudget,
         resolvedAuth: params.resolvedAuth,
+        getResolvedAuth: params.getResolvedAuth,
         rateLimiter: params.rateLimiter,
       });
     }

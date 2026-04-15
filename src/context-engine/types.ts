@@ -140,6 +140,10 @@ export type ContextEngineRuntimeContext = Record<string, unknown> & {
    * consuming deferred compaction debt.
    */
   allowDeferredCompactionExecution?: boolean;
+  /** Runtime-resolved context window budget for the active model call. */
+  tokenBudget?: number;
+  /** Best-effort current prompt/context token estimate for this turn. */
+  currentTokenCount?: number;
   /** Optional prompt-cache telemetry for cache-aware engines. */
   promptCache?: ContextEnginePromptCacheInfo;
   /**

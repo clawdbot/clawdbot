@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.4.14-beta.1",
+  "version": "2026.4.14",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -33,6 +33,7 @@
     "dist/extensions/qa-channel/runtime-api.js",
     "!dist/extensions/qa-lab/**",
     "dist/extensions/qa-lab/runtime-api.js",
+    "!dist/extensions/qa-matrix/**",
     "docs/",
     "!docs/.generated/**",
     "!docs/.i18n/zh-CN.tm.jsonl",
@@ -482,6 +483,10 @@
       "types": "./dist/plugin-sdk/command-status.d.ts",
       "default": "./dist/plugin-sdk/command-status.js"
     },
+    "./plugin-sdk/command-status-runtime": {
+      "types": "./dist/plugin-sdk/command-status-runtime.d.ts",
+      "default": "./dist/plugin-sdk/command-status-runtime.js"
+    },
     "./plugin-sdk/command-detection": {
       "types": "./dist/plugin-sdk/command-detection.d.ts",
       "default": "./dist/plugin-sdk/command-detection.js"
@@ -762,6 +767,14 @@
       "types": "./dist/plugin-sdk/matrix-thread-bindings.d.ts",
       "default": "./dist/plugin-sdk/matrix-thread-bindings.js"
     },
+    "./plugin-sdk/qa-runtime": {
+      "types": "./dist/plugin-sdk/qa-runtime.d.ts",
+      "default": "./dist/plugin-sdk/qa-runtime.js"
+    },
+    "./plugin-sdk/qa-runner-runtime": {
+      "types": "./dist/plugin-sdk/qa-runner-runtime.d.ts",
+      "default": "./dist/plugin-sdk/qa-runner-runtime.js"
+    },
     "./plugin-sdk/mattermost": {
       "types": "./dist/plugin-sdk/mattermost.d.ts",
       "default": "./dist/plugin-sdk/mattermost.js"
@@ -929,6 +942,10 @@
     "./plugin-sdk/provider-model-shared": {
       "types": "./dist/plugin-sdk/provider-model-shared.d.ts",
       "default": "./dist/plugin-sdk/provider-model-shared.js"
+    },
+    "./plugin-sdk/opencode": {
+      "types": "./dist/plugin-sdk/opencode.d.ts",
+      "default": "./dist/plugin-sdk/opencode.js"
     },
     "./plugin-sdk/volc-model-catalog-shared": {
       "types": "./dist/plugin-sdk/volc-model-catalog-shared.d.ts",
@@ -1109,6 +1126,7 @@
     "android:test:third-party": "cd apps/android && ./gradlew :app:testThirdPartyDebugUnitTest",
     "audit:seams": "node scripts/audit-seams.mjs",
     "build": "node scripts/build-all.mjs",
+    "build:ci-artifacts": "node scripts/build-all.mjs ciArtifacts",
     "build:docker": "node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && node scripts/build-stamp.mjs && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --experimental-strip-types scripts/write-cli-startup-metadata.ts && node --import tsx scripts/write-cli-compat.ts",
     "build:plugin-sdk:dts": "tsc -p tsconfig.plugin-sdk.dts.json",
     "build:strict-smoke": "pnpm canvas:a2ui:bundle && node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && node scripts/build-stamp.mjs && pnpm build:plugin-sdk:dts && node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node scripts/check-plugin-sdk-exports.mjs",
@@ -1468,7 +1486,8 @@
     "openshell": "0.1.0"
   },
   "overrides": {
-    "axios": "1.15.0"
+    "axios": "1.15.0",
+    "follow-redirects": "1.16.0"
   },
   "engines": {
     "node": ">=22.14.0"
@@ -1480,6 +1499,7 @@
       "hono": "4.12.12",
       "@hono/node-server": "1.19.13",
       "axios": "1.15.0",
+      "follow-redirects": "1.16.0",
       "defu": "6.1.5",
       "fast-xml-parser": "5.5.7",
       "request": "npm:@cypress/request@3.0.10",
@@ -1519,6 +1539,9 @@
           "strip-ansi": "^7.2.0"
         }
       }
+    },
+    "patchedDependencies": {
+      "@whiskeysockets/baileys@7.0.0-rc.9": "patches/@whiskeysockets__baileys@7.0.0-rc.9.patch"
     }
   }
 }

@@ -1,9 +1,5 @@
-import { createJiti } from "jiti";
-import {
-  buildPluginLoaderAliasMap,
-  buildPluginLoaderJitiOptions,
-  shouldPreferNativeJiti,
-} from "./sdk-alias.js";
+import type { PluginJitiLoaderCache } from "./jiti-loader-cache.js";
+import { getCachedPluginJitiLoader } from "./jiti-loader-cache.js";
 
 export type PluginSourceLoader = (modulePath: string) => unknown;
 
@@ -12,22 +8,14 @@ function shouldProfilePluginSourceLoader(): boolean {
 }
 
 export function createPluginSourceLoader(): PluginSourceLoader {
-  const loaders = new Map<string, ReturnType<typeof createJiti>>();
+  const loaders: PluginJitiLoaderCache = new Map();
   return (modulePath) => {
-    const tryNative = shouldPreferNativeJiti(modulePath);
-    const aliasMap = buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url);
-    const cacheKey = JSON.stringify({
-      tryNative,
-      aliasMap: Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),
+    const jiti = getCachedPluginJitiLoader({
+      cache: loaders,
+      modulePath,
+      importerUrl: import.meta.url,
+      jitiFilename: import.meta.url,
     });
-    let jiti = loaders.get(cacheKey);
-    if (!jiti) {
-      jiti = createJiti(import.meta.url, {
-        ...buildPluginLoaderJitiOptions(aliasMap),
-        tryNative,
-      });
-      loaders.set(cacheKey, jiti);
-    }
     if (!shouldProfilePluginSourceLoader()) {
       return jiti(modulePath);
     }

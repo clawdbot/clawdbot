@@ -117,10 +117,10 @@ repos:
   # Project checks (same commands as CI)
   - repo: local
     hooks:
-      # pnpm audit --prod --audit-level=high
+      # node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high
       - id: pnpm-audit-prod
         name: pnpm-audit-prod
-        entry: pnpm audit --prod --audit-level=high
+        entry: node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high
         language: system
         pass_filenames: false
 

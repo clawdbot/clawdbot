@@ -226,6 +226,8 @@ export function buildAfterTurnRuntimeContext(params: {
   >;
   workspaceDir: string;
   agentDir: string;
+  tokenBudget?: number;
+  currentTokenCount?: number;
   promptCache?: ContextEnginePromptCacheInfo;
 }): ContextEngineRuntimeContext {
   return {
@@ -252,6 +254,16 @@ export function buildAfterTurnRuntimeContext(params: {
       extraSystemPrompt: params.attempt.extraSystemPrompt,
       ownerNumbers: params.attempt.ownerNumbers,
     }),
+    ...(typeof params.tokenBudget === "number" &&
+      Number.isFinite(params.tokenBudget) &&
+      params.tokenBudget > 0
+      ? { tokenBudget: Math.floor(params.tokenBudget) }
+      : {}),
+    ...(typeof params.currentTokenCount === "number" &&
+      Number.isFinite(params.currentTokenCount) &&
+      params.currentTokenCount > 0
+      ? { currentTokenCount: Math.floor(params.currentTokenCount) }
+      : {}),
     ...(params.promptCache ? { promptCache: params.promptCache } : {}),
   };
 }

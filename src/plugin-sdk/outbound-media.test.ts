@@ -51,7 +51,7 @@ describe("loadOutboundMediaFromUrl", () => {
     expect(loadWebMediaMock).toHaveBeenCalledWith("https://example.com/image.png", {});
   });
 
-  it("prefers host read capability over local roots when provided", async () => {
+  it("keeps local roots when host read capability is provided", async () => {
     const mediaReadFile = vi.fn(async () => Buffer.from("x"));
     loadWebMediaMock.mockResolvedValueOnce({
       buffer: Buffer.from("x"),
@@ -62,6 +62,37 @@ describe("loadOutboundMediaFromUrl", () => {
     await loadOutboundMediaFromUrl("/Users/peter/Pictures/image.png", {
       maxBytes: 2048,
       mediaLocalRoots: ["/tmp/workspace-agent"],
+      mediaReadFile,
+    });
+
+    expect(loadWebMediaMock).toHaveBeenCalledWith("/Users/peter/Pictures/image.png", {
+      maxBytes: 2048,
+      localRoots: ["/tmp/workspace-agent"],
+      readFile: mediaReadFile,
+      hostReadCapability: true,
+    });
+  });
+
+  it("rejects host read capability without explicit local roots", async () => {
+    await expect(
+      loadOutboundMediaFromUrl("/Users/peter/Pictures/image.png", {
+        maxBytes: 2048,
+        mediaReadFile: async () => Buffer.from("x"),
+      }),
+    ).rejects.toThrow("Host media read requires explicit localRoots");
+  });
+
+  it("allows explicit any opt-in for host read capability", async () => {
+    const mediaReadFile = vi.fn(async () => Buffer.from("x"));
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: Buffer.from("x"),
+      kind: "image",
+      contentType: "image/png",
+    });
+
+    await loadOutboundMediaFromUrl("/Users/peter/Pictures/image.png", {
+      maxBytes: 2048,
+      mediaLocalRoots: "any",
       mediaReadFile,
     });
 

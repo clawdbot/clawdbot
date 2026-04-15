@@ -10,6 +10,7 @@ import {
   type DispatcherAwareRequestInit,
 } from "./runtime-fetch.js";
 import {
+  assertHostnameAllowedWithPolicy,
   closeDispatcher,
   createPinnedDispatcher,
   resolvePinnedHostnameWithPolicy,
@@ -29,6 +30,7 @@ type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Respo
 export const GUARDED_FETCH_MODE = {
   STRICT: "strict",
   TRUSTED_ENV_PROXY: "trusted_env_proxy",
+  TRUSTED_EXPLICIT_PROXY: "trusted_explicit_proxy",
 } as const;
 
 export type GuardedFetchMode = (typeof GUARDED_FETCH_MODE)[keyof typeof GUARDED_FETCH_MODE];
@@ -87,6 +89,12 @@ export function withTrustedEnvProxyGuardedFetchMode(
   params: GuardedFetchPresetOptions,
 ): GuardedFetchOptions {
   return { ...params, mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY };
+}
+
+export function withTrustedExplicitProxyGuardedFetchMode(
+  params: GuardedFetchPresetOptions,
+): GuardedFetchOptions {
+  return { ...params, mode: GUARDED_FETCH_MODE.TRUSTED_EXPLICIT_PROXY };
 }
 
 function resolveGuardedFetchMode(params: GuardedFetchOptions): GuardedFetchMode {
@@ -318,12 +326,24 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
 
     let dispatcher: Dispatcher | null = null;
     try {
-      assertExplicitProxySupportsPinnedDns(parsedUrl, params.dispatcherPolicy, params.pinDns);
+      const usesTrustedExplicitProxyMode =
+        mode === GUARDED_FETCH_MODE.TRUSTED_EXPLICIT_PROXY &&
+        params.dispatcherPolicy?.mode === "explicit-proxy";
+      assertExplicitProxySupportsPinnedDns(
+        parsedUrl,
+        params.dispatcherPolicy,
+        usesTrustedExplicitProxyMode ? false : params.pinDns,
+      );
       await assertExplicitProxyAllowed(params.dispatcherPolicy, params.lookupFn, params.policy);
       const canUseTrustedEnvProxy =
         mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY && hasProxyEnvConfigured();
       if (canUseTrustedEnvProxy) {
         dispatcher = createHttp1EnvHttpProxyAgent();
+      } else if (usesTrustedExplicitProxyMode) {
+        // Explicit proxy targets are still checked against the caller's hostname
+        // policy, but the proxy does the DNS resolution for the final target.
+        assertHostnameAllowedWithPolicy(parsedUrl.hostname, params.policy);
+        dispatcher = createPolicyDispatcherWithoutPinnedDns(params.dispatcherPolicy);
       } else if (params.pinDns === false) {
         await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
           lookupFn: params.lookupFn,

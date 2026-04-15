@@ -83,6 +83,22 @@ export async function createSanitizeSessionHistoryProviderRuntimeMock(
   };
 }
 
+export function createSanitizeSessionHistoryProviderHookRuntimeMock(
+  extra: Record<string, unknown> = {},
+) {
+  return {
+    resolveProviderRuntimePlugin: vi.fn(() => undefined),
+    resolveProviderHookPlugin: vi.fn(() => undefined),
+    resolveProviderPluginsForHooks: vi.fn(() => []),
+    prepareProviderExtraParams: vi.fn(() => undefined),
+    wrapProviderStreamFn: vi.fn(() => undefined),
+    clearProviderRuntimeHookCache: vi.fn(),
+    resetProviderRuntimeHookCacheForTest: vi.fn(),
+    __testing: {},
+    ...extra,
+  };
+}
+
 export async function loadSanitizeSessionHistoryWithCleanMocks(): Promise<SanitizeSessionHistoryHarness> {
   vi.resetModules();
   vi.resetAllMocks();

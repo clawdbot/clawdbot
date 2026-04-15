@@ -1,6 +1,5 @@
-import { getChannelPlugin } from "../channels/plugins/index.js";
+import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
-import { normalizeChannelId } from "../channels/registry.js";
 import type { NativeCommandsSetting } from "./types.js";
 export { isCommandFlagEnabled, isRestartEnabled, type CommandFlagKey } from "./commands.flags.js";
 

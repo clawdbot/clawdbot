@@ -14,6 +14,20 @@ function getPathValue(root: Record<string, unknown>, path: string[]): unknown {
   return cursor;
 }
 
+function collectExplicitRuleOwnedChannelIds(
+  extraRules: readonly LegacyConfigRule[],
+): ReadonlySet<string> | undefined {
+  const channelIds = new Set<string>();
+  for (const rule of extraRules) {
+    const [first, second] = rule.path;
+    if (first !== "channels" || typeof second !== "string" || second === "defaults") {
+      continue;
+    }
+    channelIds.add(second);
+  }
+  return channelIds.size > 0 ? channelIds : undefined;
+}
+
 export function findLegacyConfigIssues(
   raw: unknown,
   sourceRaw?: unknown,
@@ -27,9 +41,10 @@ export function findLegacyConfigIssues(
   const sourceRoot =
     sourceRaw && typeof sourceRaw === "object" ? (sourceRaw as Record<string, unknown>) : root;
   const issues: LegacyConfigIssue[] = [];
+  const explicitRuleOwnedChannelIds = collectExplicitRuleOwnedChannelIds(extraRules);
   for (const rule of [
     ...LEGACY_CONFIG_RULES,
-    ...collectChannelLegacyConfigRules(raw, touchedPaths),
+    ...collectChannelLegacyConfigRules(raw, touchedPaths, explicitRuleOwnedChannelIds),
     ...extraRules,
   ]) {
     const cursor = getPathValue(root, rule.path);

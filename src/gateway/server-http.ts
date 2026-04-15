@@ -838,6 +838,7 @@ export function createGatewayHttpServer(opts: {
   handlePluginRequest?: PluginHttpRequestHandler;
   shouldEnforcePluginGatewayAuth?: (pathContext: PluginRoutePathContext) => boolean;
   resolvedAuth: ResolvedGatewayAuth;
+  getResolvedAuth?: () => ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
   getReadiness?: ReadinessChecker;
@@ -861,6 +862,7 @@ export function createGatewayHttpServer(opts: {
     rateLimiter,
     getReadiness,
   } = opts;
+  const getResolvedAuth = opts.getResolvedAuth ?? (() => resolvedAuth);
   const openAiCompatEnabled = openAiChatCompletionsEnabled || openResponsesEnabled;
   const httpServer: HttpServer = opts.tlsOptions
     ? createHttpsServer(opts.tlsOptions, (req, res) => {
@@ -896,6 +898,7 @@ export function createGatewayHttpServer(opts: {
       const pluginPathContext = handlePluginRequest
         ? resolvePluginRoutePathContext(requestPath)
         : null;
+      const resolvedAuth = getResolvedAuth();
       const requestStages: GatewayHttpRequestStage[] = [
         {
           name: "hooks",
@@ -1117,6 +1120,7 @@ export function attachGatewayUpgradeHandler(opts: {
   clients: Set<GatewayWsClient>;
   preauthConnectionBudget: PreauthConnectionBudget;
   resolvedAuth: ResolvedGatewayAuth;
+  getResolvedAuth?: () => ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
 }) {
@@ -1129,6 +1133,7 @@ export function attachGatewayUpgradeHandler(opts: {
     resolvedAuth,
     rateLimiter,
   } = opts;
+  const getResolvedAuth = opts.getResolvedAuth ?? (() => resolvedAuth);
   httpServer.on("upgrade", (req, socket, head) => {
     void (async () => {
       const configSnapshot = loadConfig();
@@ -1143,6 +1148,7 @@ export function attachGatewayUpgradeHandler(opts: {
       if (scopedCanvas.rewrittenUrl) {
         req.url = scopedCanvas.rewrittenUrl;
       }
+      const resolvedAuth = getResolvedAuth();
       if (canvasHost) {
         const url = new URL(req.url ?? "/", "http://localhost");
         if (url.pathname === CANVAS_WS_PATH) {

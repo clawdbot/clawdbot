@@ -2930,10 +2930,25 @@ describe("gateway server sessions", () => {
       reason: "new",
     });
     expect(reset.ok).toBe(true);
-    expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
-    const event = (
+    const resetHookEvents = (
       sessionHookMocks.triggerInternalHook.mock.calls as unknown as Array<[unknown]>
-    )[0]?.[0] as { context?: { previousSessionEntry?: unknown } } | undefined;
+    )
+      .map((call) => call[0])
+      .filter(
+        (
+          event,
+        ): event is {
+          type: string;
+          action: string;
+          context?: { previousSessionEntry?: unknown };
+        } =>
+          Boolean(event) &&
+          typeof event === "object" &&
+          (event as { type?: unknown }).type === "command" &&
+          (event as { action?: unknown }).action === "new",
+      );
+    expect(resetHookEvents).toHaveLength(1);
+    const event = resetHookEvents[0];
     if (!event) {
       throw new Error("expected session hook event");
     }

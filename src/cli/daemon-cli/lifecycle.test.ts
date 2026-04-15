@@ -326,6 +326,14 @@ describe("runDaemonRestart health checks", () => {
     expect(signalVerifiedGatewayPidSync).toHaveBeenCalledWith(4300, "SIGTERM");
   });
 
+  it("skips gateway port resolution on stop when the service manager handles the stop", async () => {
+    await runDaemonStop({ json: true });
+
+    expect(service.readCommand).not.toHaveBeenCalled();
+    expect(loadConfig).not.toHaveBeenCalled();
+    expect(resolveGatewayPort).not.toHaveBeenCalled();
+  });
+
   it("signals a single unmanaged gateway process on restart", async () => {
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
     mockUnmanagedRestart({ runPostRestartCheck: true });

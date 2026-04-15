@@ -739,10 +739,7 @@ async function collectSessionIngestionBatches(params: {
       mtimeMs: Math.floor(Math.max(0, stat.mtimeMs)),
       size: Math.floor(Math.max(0, stat.size)),
     };
-    const cursorAtEnd =
-      previous !== undefined &&
-      previous.lineCount > 0 &&
-      previous.lastContentLine >= previous.lineCount;
+    const cursorAtEnd = previous !== undefined && previous.lastContentLine >= previous.lineCount;
     const unchanged =
       Boolean(previous) &&
       previous.mtimeMs === fingerprint.mtimeMs &&

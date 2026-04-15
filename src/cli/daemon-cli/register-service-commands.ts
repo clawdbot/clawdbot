@@ -1,14 +1,25 @@
 import type { Command } from "commander";
 import { inheritOptionFromParent } from "../command-options.js";
-import {
-  runDaemonInstall,
-  runDaemonRestart,
-  runDaemonStart,
-  runDaemonStatus,
-  runDaemonStop,
-  runDaemonUninstall,
-} from "./runners.js";
 import type { DaemonInstallOptions, GatewayRpcOpts } from "./types.js";
+
+let daemonInstallModulePromise: Promise<typeof import("./install.runtime.js")> | undefined;
+let daemonLifecycleModulePromise: Promise<typeof import("./lifecycle.runtime.js")> | undefined;
+let daemonStatusModulePromise: Promise<typeof import("./status.runtime.js")> | undefined;
+
+function loadDaemonInstallModule() {
+  daemonInstallModulePromise ??= import("./install.runtime.js");
+  return daemonInstallModulePromise;
+}
+
+function loadDaemonLifecycleModule() {
+  daemonLifecycleModulePromise ??= import("./lifecycle.runtime.js");
+  return daemonLifecycleModulePromise;
+}
+
+function loadDaemonStatusModule() {
+  daemonStatusModulePromise ??= import("./status.runtime.js");
+  return daemonStatusModulePromise;
+}
 
 function resolveInstallOptions(
   cmdOpts: DaemonInstallOptions,
@@ -48,6 +59,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .option("--deep", "Scan system-level services", false)
     .option("--json", "Output JSON", false)
     .action(async (cmdOpts, command) => {
+      const { runDaemonStatus } = await loadDaemonStatusModule();
       await runDaemonStatus({
         rpc: resolveRpcOptions(cmdOpts, command),
         probe: Boolean(cmdOpts.probe),
@@ -66,6 +78,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .option("--force", "Reinstall/overwrite if already installed", false)
     .option("--json", "Output JSON", false)
     .action(async (cmdOpts, command) => {
+      const { runDaemonInstall } = await loadDaemonInstallModule();
       await runDaemonInstall(resolveInstallOptions(cmdOpts, command));
     });
 
@@ -74,6 +87,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .description("Uninstall the Gateway service (launchd/systemd/schtasks)")
     .option("--json", "Output JSON", false)
     .action(async (cmdOpts) => {
+      const { runDaemonUninstall } = await loadDaemonLifecycleModule();
       await runDaemonUninstall(cmdOpts);
     });
 
@@ -82,6 +96,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .description("Start the Gateway service (launchd/systemd/schtasks)")
     .option("--json", "Output JSON", false)
     .action(async (cmdOpts) => {
+      const { runDaemonStart } = await loadDaemonLifecycleModule();
       await runDaemonStart(cmdOpts);
     });
 
@@ -90,6 +105,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .description("Stop the Gateway service (launchd/systemd/schtasks)")
     .option("--json", "Output JSON", false)
     .action(async (cmdOpts) => {
+      const { runDaemonStop } = await loadDaemonLifecycleModule();
       await runDaemonStop(cmdOpts);
     });
 
@@ -98,6 +114,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .description("Restart the Gateway service (launchd/systemd/schtasks)")
     .option("--json", "Output JSON", false)
     .action(async (cmdOpts) => {
+      const { runDaemonRestart } = await loadDaemonLifecycleModule();
       await runDaemonRestart(cmdOpts);
     });
 }

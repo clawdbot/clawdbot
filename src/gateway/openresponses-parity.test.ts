@@ -6,6 +6,7 @@
  */
 
 import { beforeAll, describe, it, expect } from "vitest";
+import { wrapUntrustedFileContent } from "./openresponses-file-content.js";
 
 let InputImageContentPartSchema: typeof import("./open-responses.schema.js").InputImageContentPartSchema;
 let InputFileContentPartSchema: typeof import("./open-responses.schema.js").InputFileContentPartSchema;
@@ -13,7 +14,6 @@ let ToolDefinitionSchema: typeof import("./open-responses.schema.js").ToolDefini
 let CreateResponseBodySchema: typeof import("./open-responses.schema.js").CreateResponseBodySchema;
 let OutputItemSchema: typeof import("./open-responses.schema.js").OutputItemSchema;
 let buildAgentPrompt: typeof import("./openresponses-prompt.js").buildAgentPrompt;
-let wrapUntrustedFileContent: typeof import("./openresponses-http.js").__testing.wrapUntrustedFileContent;
 
 describe("OpenResponses Feature Parity", () => {
   beforeAll(async () => {
@@ -25,9 +25,6 @@ describe("OpenResponses Feature Parity", () => {
       OutputItemSchema,
     } = await import("./open-responses.schema.js"));
     ({ buildAgentPrompt } = await import("./openresponses-prompt.js"));
-    ({
-      __testing: { wrapUntrustedFileContent },
-    } = await import("./openresponses-http.js"));
   });
 
   describe("Schema Validation", () => {

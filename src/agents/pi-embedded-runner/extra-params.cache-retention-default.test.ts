@@ -4,15 +4,6 @@ import { isOpenRouterAnthropicModelRef } from "./anthropic-family-cache-semantic
 import { __testing as extraParamsTesting, applyExtraParamsToAgent } from "./extra-params.js";
 import { resolveCacheRetention } from "./prompt-cache-retention.js";
 
-vi.mock("../../plugins/provider-runtime.js", () => ({
-  prepareProviderExtraParams: ({
-    context,
-  }: {
-    context: { extraParams: Record<string, unknown> };
-  }) => context.extraParams,
-  wrapProviderStreamFn: () => undefined,
-}));
-
 function applyAndExpectWrapped(params: {
   cfg?: Parameters<typeof applyExtraParamsToAgent>[1];
   extraParamsOverride?: Parameters<typeof applyExtraParamsToAgent>[4];

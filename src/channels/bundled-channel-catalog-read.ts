@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import type { PluginPackageChannel } from "../plugins/manifest.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
@@ -26,23 +27,28 @@ function listPackageRoots(): string[] {
   ].filter((entry, index, all): entry is string => Boolean(entry) && all.indexOf(entry) === index);
 }
 
-function listBundledExtensionPackageJsonPaths(): string[] {
-  for (const packageRoot of listPackageRoots()) {
-    const extensionsRoot = path.join(packageRoot, "extensions");
-    if (!fs.existsSync(extensionsRoot)) {
-      continue;
-    }
-    try {
-      return fs
-        .readdirSync(extensionsRoot, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => path.join(extensionsRoot, entry.name, "package.json"))
-        .filter((entry) => fs.existsSync(entry));
-    } catch {
-      continue;
-    }
+function listBundledExtensionPackageJsonPaths(env: NodeJS.ProcessEnv = process.env): string[] {
+  // Delegate to the plugin loader's resolver so channel metadata stays in lock
+  // step with whichever bundled plugin tree is actually loaded at runtime
+  // (source extensions/ in dev/test, dist/extensions in published installs,
+  // dist-runtime/extensions when paired with dist, etc.). See
+  // src/plugins/bundled-dir.ts for the full candidate-order policy and
+  // src/plugins/bundled-dir.test.ts for the precedence coverage. Reusing the
+  // resolver also picks up OPENCLAW_BUNDLED_PLUGINS_DIR overrides and the
+  // bun --compile sibling layout for free.
+  const extensionsRoot = resolveBundledPluginsDir(env);
+  if (!extensionsRoot) {
+    return [];
   }
-  return [];
+  try {
+    return fs
+      .readdirSync(extensionsRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(extensionsRoot, entry.name, "package.json"))
+      .filter((entry) => fs.existsSync(entry));
+  } catch {
+    return [];
+  }
 }
 
 function readBundledExtensionCatalogEntriesSync(): ChannelCatalogEntryLike[] {

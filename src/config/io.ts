@@ -1413,6 +1413,45 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     );
   }
 
+  async function readSourceConfigBestEffort(): Promise<OpenClawConfig> {
+    maybeLoadDotEnvForConfig(deps.env);
+    const exists = deps.fs.existsSync(configPath);
+    if (!exists) {
+      return {};
+    }
+
+    try {
+      const raw = deps.fs.readFileSync(configPath, "utf-8");
+      const parsedRes = parseConfigJson5(raw, deps.json5);
+      if (!parsedRes.ok) {
+        return {};
+      }
+
+      const recovered = await maybeRecoverSuspiciousConfigRead({
+        deps,
+        configPath,
+        raw,
+        parsed: parsedRes.parsed,
+      });
+
+      let resolved: unknown;
+      try {
+        resolved = resolveConfigIncludesForRead(recovered.parsed, configPath, deps);
+      } catch {
+        return coerceConfig(recovered.parsed);
+      }
+
+      const readResolution = resolveConfigForRead(resolved, deps.env);
+      const legacyResolution = resolveLegacyConfigForRead(
+        readResolution.resolvedConfigRaw,
+        recovered.parsed,
+      );
+      return coerceConfig(legacyResolution.effectiveConfigRaw);
+    } catch {
+      return {};
+    }
+  }
+
   async function writeConfigFile(
     cfg: OpenClawConfig,
     options: ConfigWriteOptions = {},
@@ -1674,6 +1713,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     configPath,
     loadConfig,
     readBestEffortConfig,
+    readSourceConfigBestEffort,
     readConfigFileSnapshot,
     readConfigFileSnapshotForWrite,
     writeConfigFile,
@@ -1766,6 +1806,10 @@ export function getRuntimeConfig(): OpenClawConfig {
 
 export async function readBestEffortConfig(): Promise<OpenClawConfig> {
   return await createConfigIO().readBestEffortConfig();
+}
+
+export async function readSourceConfigBestEffort(): Promise<OpenClawConfig> {
+  return await createConfigIO().readSourceConfigBestEffort();
 }
 
 export async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {

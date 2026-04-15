@@ -134,6 +134,117 @@ describe("openai codex provider", () => {
     });
   });
 
+  it("resolves gpt-5.4-pro with pro pricing and codex-sized limits", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai-codex",
+      modelId: "gpt-5.4-pro",
+      modelRegistry: {
+        find: (providerId: string, modelId: string) => {
+          if (providerId === "openai-codex" && modelId === "gpt-5.3-codex") {
+            return {
+              id: "gpt-5.3-codex",
+              name: "gpt-5.3-codex",
+              provider: "openai-codex",
+              api: "openai-codex-responses",
+              baseUrl: "https://chatgpt.com/backend-api",
+              reasoning: true,
+              input: ["text", "image"] as const,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 272_000,
+              maxTokens: 128_000,
+            };
+          }
+          return undefined;
+        },
+      } as never,
+    });
+
+    expect(model).toMatchObject({
+      id: "gpt-5.4-pro",
+      contextWindow: 1_050_000,
+      contextTokens: 272_000,
+      maxTokens: 128_000,
+      cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
+    });
+  });
+
+  it("resolves gpt-5.4-pro from a gpt-5.4 runtime template when legacy codex rows are absent", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai-codex",
+      modelId: "gpt-5.4-pro",
+      modelRegistry: {
+        find: (providerId: string, modelId: string) => {
+          if (providerId === "openai-codex" && modelId === "gpt-5.4") {
+            return {
+              id: "gpt-5.4",
+              name: "gpt-5.4",
+              provider: "openai-codex",
+              api: "openai-codex-responses",
+              baseUrl: "https://chatgpt.com/backend-api",
+              reasoning: true,
+              input: ["text", "image"] as const,
+              cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
+              contextWindow: 1_050_000,
+              contextTokens: 272_000,
+              maxTokens: 128_000,
+            };
+          }
+          return undefined;
+        },
+      } as never,
+    });
+
+    expect(model).toMatchObject({
+      id: "gpt-5.4-pro",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      contextWindow: 1_050_000,
+      contextTokens: 272_000,
+      maxTokens: 128_000,
+      cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
+    });
+  });
+
+  it("resolves the legacy gpt-5.4-codex alias to canonical gpt-5.4", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai-codex",
+      modelId: "gpt-5.4-codex",
+      modelRegistry: {
+        find: (providerId: string, modelId: string) => {
+          if (providerId === "openai-codex" && modelId === "gpt-5.3-codex") {
+            return {
+              id: "gpt-5.3-codex",
+              name: "gpt-5.3-codex",
+              provider: "openai-codex",
+              api: "openai-codex-responses",
+              baseUrl: "https://chatgpt.com/backend-api",
+              reasoning: true,
+              input: ["text", "image"] as const,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 272_000,
+              maxTokens: 128_000,
+            };
+          }
+          return undefined;
+        },
+      } as never,
+    });
+
+    expect(model).toMatchObject({
+      id: "gpt-5.4",
+      name: "gpt-5.4",
+      contextWindow: 1_050_000,
+      contextTokens: 272_000,
+      maxTokens: 128_000,
+    });
+  });
+
   it("resolves gpt-5.4-mini from codex templates with codex-sized limits", () => {
     const provider = buildOpenAICodexProviderPlugin();
 
@@ -192,13 +303,76 @@ describe("openai codex provider", () => {
         id: "gpt-5.4",
         contextWindow: 1_050_000,
         contextTokens: 272_000,
+        cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
+      }),
+    );
+    expect(entries).toContainEqual(
+      expect.objectContaining({
+        id: "gpt-5.4-pro",
+        contextWindow: 1_050_000,
+        contextTokens: 272_000,
+        cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
       }),
     );
     expect(entries).toContainEqual(
       expect.objectContaining({
         id: "gpt-5.4-mini",
         contextWindow: 272_000,
+        cost: { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 },
       }),
     );
+  });
+
+  it("augments gpt-5.4-pro from catalog gpt-5.4 when legacy codex rows are absent", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    const entries = provider.augmentModelCatalog?.({
+      env: process.env,
+      entries: [
+        {
+          id: "gpt-5.4",
+          name: "gpt-5.4",
+          provider: "openai-codex",
+          reasoning: true,
+          input: ["text", "image"],
+          contextWindow: 272_000,
+        },
+      ],
+    } as never);
+
+    expect(entries).toContainEqual(
+      expect.objectContaining({
+        id: "gpt-5.4-pro",
+        contextWindow: 1_050_000,
+        contextTokens: 272_000,
+        cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
+      }),
+    );
+  });
+
+  it("canonicalizes legacy gpt-5.4-codex models during resolved-model normalization", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    const model = provider.normalizeResolvedModel?.({
+      provider: "openai-codex",
+      model: {
+        id: "gpt-5.4-codex",
+        name: "gpt-5.4-codex",
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+        baseUrl: "https://chatgpt.com/backend-api",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_050_000,
+        contextTokens: 272_000,
+        maxTokens: 128_000,
+      },
+    } as never);
+
+    expect(model).toMatchObject({
+      id: "gpt-5.4",
+      name: "gpt-5.4",
+    });
   });
 });

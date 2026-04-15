@@ -81,7 +81,7 @@ export async function runQaSelfCheckAgainstState(params: {
     timeline,
     notes: params.notes ?? [
       "Vertical slice: qa-channel + qa-lab bus + private debugger surface.",
-      "Docker orchestration, matrix runs, and auto-fix loops remain follow-up work.",
+      "Docker orchestration, additional QA runners, and auto-fix loops remain follow-up work.",
     ],
   });
 

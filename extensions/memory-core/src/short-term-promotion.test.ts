@@ -203,6 +203,95 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("ignores contaminated dreaming snippets when recording short-term recalls", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "action preference",
+        results: [
+          {
+            path: "memory/2026-04-03.md",
+            source: "memory",
+            startLine: 1,
+            endLine: 1,
+            score: 0.92,
+            snippet:
+              "Candidate: Default to action. confidence: 0.76 evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1 recalls: 3 status: staged",
+          },
+        ],
+      });
+
+      expect(
+        JSON.parse(await fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8")),
+      ).toMatchObject({
+        version: 1,
+        entries: {},
+      });
+    });
+  });
+
+  it("ignores bullet-prefixed dreaming snippets when recording short-term recalls", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "action preference",
+        results: [
+          {
+            path: "memory/2026-04-03.md",
+            source: "memory",
+            startLine: 1,
+            endLine: 5,
+            score: 0.92,
+            snippet: [
+              "- Candidate: Default to action.",
+              "  - confidence: 0.76",
+              "  - evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1",
+              "  - recalls: 3",
+              "  - status: staged",
+            ].join("\n"),
+          },
+        ],
+      });
+
+      expect(
+        JSON.parse(await fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8")),
+      ).toMatchObject({
+        version: 1,
+        entries: {},
+      });
+    });
+  });
+
+  it("keeps ordinary snippets that only quote dreaming prompt markers", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "debug note",
+        results: [
+          {
+            path: "memory/2026-04-03.md",
+            source: "memory",
+            startLine: 1,
+            endLine: 1,
+            score: 0.75,
+            snippet:
+              "Debug note: quote Write a dream diary entry from these memory fragments for docs, but do not use dreaming-narrative-like labels in production.",
+          },
+        ],
+      });
+
+      const store = JSON.parse(
+        await fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8"),
+      ) as { entries: Record<string, { snippet: string }> };
+      expect(Object.values(store.entries)).toEqual([
+        expect.objectContaining({
+          snippet:
+            "Debug note: quote Write a dream diary entry from these memory fragments for docs, but do not use dreaming-narrative-like labels in production.",
+        }),
+      ]);
+    });
+  });
+
   it("records recalls and ranks candidates with weighted scores", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await recordShortTermRecalls({
@@ -940,6 +1029,86 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("does not rank contaminated dreaming snippets from an existing short-term store", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            version: 1,
+            updatedAt: "2026-04-04T00:00:00.000Z",
+            entries: {
+              contaminated: {
+                key: "contaminated",
+                path: "memory/2026-04-03.md",
+                startLine: 1,
+                endLine: 1,
+                source: "memory",
+                snippet:
+                  "Reflections: Theme: assistant. confidence: 1.00 evidence: memory/.dreams/session-corpus/2026-04-08.txt:2-2 recalls: 4 status: staged",
+                recallCount: 4,
+                dailyCount: 0,
+                groundedCount: 0,
+                totalScore: 3.6,
+                maxScore: 0.95,
+                firstRecalledAt: "2026-04-03T00:00:00.000Z",
+                lastRecalledAt: "2026-04-04T00:00:00.000Z",
+                queryHashes: ["a", "b"],
+                recallDays: ["2026-04-03", "2026-04-04"],
+                conceptTags: ["assistant"],
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+
+      expect(ranked).toEqual([]);
+    });
+  });
+
+  it("treats diff-prefixed dreaming snippets as contaminated", () => {
+    expect(
+      __testing.isContaminatedDreamingSnippet(
+        "@@ -1,1 - Candidate: Default to action. confidence: 0.76 evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1 recalls: 3 status: staged",
+      ),
+    ).toBe(true);
+  });
+
+  it("treats bracket-prefixed dreaming snippets as contaminated", () => {
+    expect(
+      __testing.isContaminatedDreamingSnippet(
+        "([ Candidate: Default to action. confidence: 0.76 evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1 recalls: 3 status: staged",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not treat ordinary candidate notes with daily-memory evidence as contaminated", () => {
+    expect(
+      __testing.isContaminatedDreamingSnippet(
+        "Candidate: move backups weekly. confidence: 0.76 evidence: memory/2026-04-08.md:1-1",
+      ),
+    ).toBe(false);
+  });
+
+  it("treats transcript-style dreaming prompt echoes as contaminated", () => {
+    expect(
+      __testing.isContaminatedDreamingSnippet(
+        "[main/dreaming-narrative-light.jsonl#L1] User: Write a dream diary entry from these memory fragments:",
+      ),
+    ).toBe(true);
+  });
+
   it("skips direct candidates that exceed maxAgeDays during apply", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const applied = await applyShortTermPromotions({
@@ -966,6 +1135,53 @@ describe("short-term promotion", () => {
             score: 0.95,
             recallDays: ["2026-04-01", "2026-04-02"],
             conceptTags: ["expired"],
+            components: {
+              frequency: 1,
+              relevance: 1,
+              diversity: 1,
+              recency: 1,
+              consolidation: 1,
+              conceptual: 1,
+            },
+          },
+        ],
+      });
+
+      expect(applied.applied).toBe(0);
+      await expect(
+        fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    });
+  });
+
+  it("does not append contaminated dreaming snippets during direct apply", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        candidates: [
+          {
+            key: "memory:memory/2026-04-03.md:1:1",
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 1,
+            source: "memory",
+            snippet:
+              "Candidate: Default to action. confidence: 0.76 evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1 recalls: 3 status: staged",
+            recallCount: 4,
+            avgScore: 0.97,
+            maxScore: 0.97,
+            uniqueQueries: 2,
+            firstRecalledAt: "2026-04-03T00:00:00.000Z",
+            lastRecalledAt: "2026-04-04T00:00:00.000Z",
+            ageDays: 0,
+            score: 0.99,
+            recallDays: ["2026-04-03", "2026-04-04"],
+            conceptTags: ["assistant"],
             components: {
               frequency: 1,
               relevance: 1,

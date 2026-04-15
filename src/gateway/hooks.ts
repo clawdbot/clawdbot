@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
-import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readJsonBodyWithLimit, requestBodyErrorToText } from "../infra/http-body.js";
@@ -10,7 +10,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { normalizeMessageChannel } from "../utils/message-channel.js";
+import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import { type HookMappingResolved, resolveHookMappings } from "./hooks-mapping.js";
 import { resolveAllowedAgentIds } from "./hooks-policy.js";
 import type { HookMessageChannel } from "./hooks.types.js";

@@ -80,6 +80,9 @@ Welcome to the lobster tank! 🦞
 - **Sliverp** - Chinese Channel: QQ, WeChat, Wecom, Dingtalk, Feishu
   - GitHub: [@sliverp](https://github.com/sliverp) · X: [@sliver01234](https://x.com/sliver01234)
 
+- **Mason Huang** - Stability, Security, Speed
+  - GitHub: [@hxy91819](https://github.com/hxy91819) · X: [@chenjingtalk](https://x.com/chenjingtalk)
+
 ## How to Contribute
 
 1. **Bugs & small fixes** → Open a PR!

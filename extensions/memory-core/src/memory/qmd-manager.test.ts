@@ -3559,14 +3559,31 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
-  it("reads only requested line ranges without loading the whole file", async () => {
-    const readFileSpy = vi.spyOn(fs, "readFile");
-    const text = Array.from({ length: 50 }, (_, index) => `line-${index + 1}`).join("\n");
-    await fs.writeFile(path.join(workspaceDir, "window.md"), text, "utf-8");
+  it("rejects non-memory workspace markdown reads", async () => {
+    await fs.writeFile(path.join(workspaceDir, "window.md"), "secret", "utf-8");
+    await fs.mkdir(path.join(workspaceDir, ".memory"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, ".memory", "hidden.md"), "secret", "utf-8");
 
     const { manager } = await createManager();
 
-    const result = await manager.readFile({ relPath: "window.md", from: 10, lines: 3 });
+    await expect(manager.readFile({ relPath: "window.md" })).rejects.toThrow("path required");
+    await expect(manager.readFile({ relPath: ".memory/hidden.md" })).rejects.toThrow(
+      "path required",
+    );
+
+    await manager.close();
+  });
+
+  it("reads only requested line ranges from canonical memory files without loading the whole file", async () => {
+    const readFileSpy = vi.spyOn(fs, "readFile");
+    const text = Array.from({ length: 50 }, (_, index) => `line-${index + 1}`).join("\n");
+    const relPath = path.join("memory", "window.md");
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, relPath), text, "utf-8");
+
+    const { manager } = await createManager();
+
+    const result = await manager.readFile({ relPath, from: 10, lines: 3 });
     expect(result.text).toBe("line-10\nline-11\nline-12");
     expect(readFileSpy).not.toHaveBeenCalled();
 
@@ -3575,15 +3592,16 @@ describe("QmdMemoryManager", () => {
   });
 
   it("returns empty text when qmd files are missing before or during read", async () => {
-    const relPath = "qmd-window.md";
+    const relPath = path.join("memory", "qmd-window.md");
     const absPath = path.join(workspaceDir, relPath);
+    await fs.mkdir(path.dirname(absPath), { recursive: true });
     await fs.writeFile(absPath, "one\ntwo\nthree", "utf-8");
 
     const cases = [
       {
         name: "missing before read",
-        request: { relPath: "ghost.md" },
-        expectedPath: "ghost.md",
+        request: { relPath: path.join("memory", "ghost.md") },
+        expectedPath: path.join("memory", "ghost.md"),
       },
       {
         name: "disappears before partial read",

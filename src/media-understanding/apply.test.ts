@@ -1092,6 +1092,125 @@ describe("applyMediaUnderstanding", () => {
     expectFileNotApplied({ ctx, result, body: "<media:audio>" });
   });
 
+  it("skips archive container attachments with +zip MIME types", async () => {
+    const pseudoEpub = Buffer.from(
+      "PK\u0003\u0004mimetypeapplication/epub+zipMETA-INF/container",
+      "utf8",
+    );
+    const filePath = await createTempMediaFile({
+      fileName: "book.epub",
+      content: pseudoEpub,
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+      mediaType: "application/epub+zip",
+    });
+
+    expectFileNotApplied({ ctx, result, body: "<media:file>" });
+  });
+
+  it("does not coerce binary control-byte payloads into text/plain", async () => {
+    const pseudoZip = Buffer.from("PK\u0003\u0004mimetypeapplication/epub+zipcontent.opf", "utf8");
+    const filePath = await createTempMediaFile({
+      fileName: "payload.bin",
+      content: pseudoZip,
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+    });
+
+    expectFileNotApplied({ ctx, result, body: "<media:file>" });
+  });
+
+  it("does not trust text file extensions when the buffer starts with a ZIP signature", async () => {
+    const spoofedZip = Buffer.from("PK\u0003\u0004mimetypeapplication/epub+zipcontent.opf", "utf8");
+    const filePath = await createTempMediaFile({
+      fileName: "payload.txt",
+      content: spoofedZip,
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+    });
+
+    expectFileNotApplied({ ctx, result, body: "<media:file>" });
+  });
+
+  it("does not coerce real ZIP local headers into text/plain when UTF-16 guessing misfires", async () => {
+    const zipLikeHeader = Buffer.from([
+      0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00, 0x08, 0x00, 0x08, 0x29, 0xb9, 0x5a, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x66, 0x6f,
+      0x6f, 0x2e, 0x74, 0x78, 0x74,
+    ]);
+    const filePath = await createTempMediaFile({
+      fileName: "archive.bin",
+      content: zipLikeHeader,
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+    });
+
+    expectFileNotApplied({ ctx, result, body: "<media:file>" });
+  });
+
+  it("does not coerce ZIP central-directory headers into text/plain", async () => {
+    const zipCentralDirectory = Buffer.from([
+      0x50, 0x4b, 0x01, 0x02, 0x14, 0x00, 0x14, 0x00, 0x00, 0x00, 0x08, 0x00, 0x08, 0x29, 0xb9,
+      0x5a, 0x00, 0x00, 0x00, 0x00,
+    ]);
+    const filePath = await createTempMediaFile({
+      fileName: "central-directory.bin",
+      content: zipCentralDirectory,
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+    });
+
+    expectFileNotApplied({ ctx, result, body: "<media:file>" });
+  });
+
+  it("does not coerce empty ZIP end-of-central-directory headers into text/plain", async () => {
+    const emptyZip = Buffer.from([
+      0x50, 0x4b, 0x05, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ]);
+    const filePath = await createTempMediaFile({
+      fileName: "empty-archive.bin",
+      content: emptyZip,
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+    });
+
+    expectFileNotApplied({ ctx, result, body: "<media:file>" });
+  });
+
+  it("keeps utf16 text attachments eligible for extraction", async () => {
+    const utf16Text = Buffer.from("hello from utf16 text", "utf16le");
+    const filePath = await createTempMediaFile({
+      fileName: "notes.bin",
+      content: utf16Text,
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+    });
+
+    expect(result.appliedFile).toBe(true);
+    expect(ctx.Body).toContain("hello from utf16 text");
+  });
+
   it("does not reclassify PDF attachments as text/plain", async () => {
     const pseudoPdf = Buffer.from("%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n", "utf8");
     const filePath = await createTempMediaFile({

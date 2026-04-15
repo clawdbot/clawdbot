@@ -10,6 +10,7 @@ export {
   projectConfigOntoRuntimeSourceSnapshot,
   loadConfig,
   readBestEffortConfig,
+  readSourceConfigBestEffort,
   parseConfigJson5,
   readConfigFileSnapshot,
   readConfigFileSnapshotForWrite,

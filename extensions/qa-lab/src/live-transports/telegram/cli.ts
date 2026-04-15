@@ -20,6 +20,10 @@ async function runQaTelegram(opts: LiveTransportQaCommandOptions) {
 export const telegramQaCliRegistration: LiveTransportQaCliRegistration =
   createLiveTransportQaCliRegistration({
     commandName: "telegram",
+    credentialOptions: {
+      sourceDescription: "Credential source for Telegram QA: env or convex (default: env)",
+      roleDescription: "Credential role for convex auth: maintainer or ci (default: maintainer)",
+    },
     description: "Run the manual Telegram live QA lane against a private bot-to-bot group harness",
     outputDirHelp: "Telegram QA artifact directory",
     scenarioHelp: "Run only the named Telegram QA scenario (repeatable)",

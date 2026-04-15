@@ -1,6 +1,7 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import type {
   ProviderApplyConfigDefaultsContext,
   ProviderNormalizeConfigContext,
@@ -19,6 +20,11 @@ export type BundledProviderPolicySurface = {
 };
 
 const bundledProviderPolicySurfaceCache = new Map<string, BundledProviderPolicySurface | null>();
+
+function buildProviderPolicySurfaceCacheKey(providerId: string): string {
+  const bundledPluginsDir = resolveBundledPluginsDir();
+  return `${providerId}::${bundledPluginsDir ?? "<default>"}`;
+}
 
 function hasProviderPolicyHook(
   mod: Record<string, unknown>,
@@ -66,16 +72,17 @@ export function resolveBundledProviderPolicySurface(
   if (!normalizedProviderId) {
     return null;
   }
-  if (bundledProviderPolicySurfaceCache.has(normalizedProviderId)) {
-    return bundledProviderPolicySurfaceCache.get(normalizedProviderId) ?? null;
+  const cacheKey = buildProviderPolicySurfaceCacheKey(normalizedProviderId);
+  if (bundledProviderPolicySurfaceCache.has(cacheKey)) {
+    return bundledProviderPolicySurfaceCache.get(cacheKey) ?? null;
   }
 
   const surface = tryLoadBundledProviderPolicySurface(normalizedProviderId);
   if (surface) {
-    bundledProviderPolicySurfaceCache.set(normalizedProviderId, surface);
+    bundledProviderPolicySurfaceCache.set(cacheKey, surface);
     return surface;
   }
 
-  bundledProviderPolicySurfaceCache.set(normalizedProviderId, null);
+  bundledProviderPolicySurfaceCache.set(cacheKey, null);
   return null;
 }

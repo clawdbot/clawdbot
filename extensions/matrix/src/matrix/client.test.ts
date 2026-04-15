@@ -403,6 +403,29 @@ describe("Matrix auth/config live surfaces", () => {
     );
   });
 
+  it('uses a named "default" account implicitly when multiple Matrix accounts exist', () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          accounts: {
+            default: {
+              homeserver: "https://matrix.default.example.org",
+              accessToken: "default-token",
+            },
+            ops: {
+              homeserver: "https://matrix.ops.example.org",
+              accessToken: "ops-token",
+            },
+          },
+        },
+      },
+    } as CoreConfig;
+
+    expect(resolveMatrixAuthContext({ cfg, env: {} as NodeJS.ProcessEnv }).accountId).toBe(
+      "default",
+    );
+  });
+
   it("does not materialize a default account from shared top-level defaults alone", () => {
     const cfg = {
       channels: {
@@ -439,7 +462,7 @@ describe("Matrix auth/config live surfaces", () => {
     expect(resolveMatrixAuthContext({ cfg, env: {} as NodeJS.ProcessEnv }).accountId).toBe("ops");
   });
 
-  it("honors injected env when implicit Matrix account selection becomes ambiguous", () => {
+  it('uses the injected env-backed "default" Matrix account when implicit selection is available', () => {
     const cfg = {
       channels: {
         matrix: {},
@@ -452,9 +475,7 @@ describe("Matrix auth/config live surfaces", () => {
       MATRIX_OPS_ACCESS_TOKEN: "ops-token",
     } as NodeJS.ProcessEnv;
 
-    expect(() => resolveMatrixAuthContext({ cfg, env })).toThrow(
-      /channels\.matrix\.defaultAccount.*--account <id>/i,
-    );
+    expect(resolveMatrixAuthContext({ cfg, env }).accountId).toBe("default");
   });
 
   it("does not materialize a default env account from partial global auth fields", () => {

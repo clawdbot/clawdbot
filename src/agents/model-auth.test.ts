@@ -394,6 +394,207 @@ describe("resolveUsableCustomProviderApiKey", () => {
     }
   });
 
+  it("resolves env SecretRefs from process env for custom providers", () => {
+    const previous = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "sk-secretref-env"; // pragma: allowlist secret
+    try {
+      const resolved = resolveUsableCustomProviderApiKey({
+        cfg: {
+          models: {
+            providers: {
+              custom: {
+                baseUrl: "https://example.com/v1",
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "OPENAI_API_KEY",
+                },
+                models: [],
+              },
+            },
+          },
+        },
+        provider: "custom",
+      });
+      expect(resolved?.apiKey).toBe("sk-secretref-env");
+      expect(resolved?.source).toContain("OPENAI_API_KEY");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previous;
+      }
+    }
+  });
+
+  it("resolves env SecretRefs with unknown env IDs from process env for custom providers", () => {
+    const previous = process.env.MY_CUSTOM_KEY;
+    process.env.MY_CUSTOM_KEY = "sk-custom-secretref-env"; // pragma: allowlist secret
+    try {
+      const resolved = resolveUsableCustomProviderApiKey({
+        cfg: {
+          models: {
+            providers: {
+              custom: {
+                baseUrl: "https://example.com/v1",
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "MY_CUSTOM_KEY",
+                },
+                models: [],
+              },
+            },
+          },
+        },
+        provider: "custom",
+      });
+      expect(resolved?.apiKey).toBe("sk-custom-secretref-env");
+      expect(resolved?.source).toContain("MY_CUSTOM_KEY");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.MY_CUSTOM_KEY;
+      } else {
+        process.env.MY_CUSTOM_KEY = previous;
+      }
+    }
+  });
+
+  it("does not resolve env SecretRefs when provider allowlist excludes the env id", () => {
+    const previous = process.env.MY_CUSTOM_KEY;
+    process.env.MY_CUSTOM_KEY = "sk-custom-secretref-env"; // pragma: allowlist secret
+    try {
+      const resolved = resolveUsableCustomProviderApiKey({
+        cfg: {
+          secrets: {
+            providers: {
+              "custom-env": {
+                source: "env",
+                allowlist: ["OPENAI_API_KEY"],
+              },
+            },
+          },
+          models: {
+            providers: {
+              custom: {
+                baseUrl: "https://example.com/v1",
+                apiKey: {
+                  source: "env",
+                  provider: "custom-env",
+                  id: "MY_CUSTOM_KEY",
+                },
+                models: [],
+              },
+            },
+          },
+        },
+        provider: "custom",
+      });
+      expect(resolved).toBeNull();
+    } finally {
+      if (previous === undefined) {
+        delete process.env.MY_CUSTOM_KEY;
+      } else {
+        process.env.MY_CUSTOM_KEY = previous;
+      }
+    }
+  });
+
+  it("does not resolve env SecretRefs when provider source is not env", () => {
+    const previous = process.env.MY_CUSTOM_KEY;
+    process.env.MY_CUSTOM_KEY = "sk-custom-secretref-env"; // pragma: allowlist secret
+    try {
+      const resolved = resolveUsableCustomProviderApiKey({
+        cfg: {
+          secrets: {
+            providers: {
+              "custom-env": {
+                source: "file",
+                path: "/tmp/secrets.json",
+              },
+            },
+          },
+          models: {
+            providers: {
+              custom: {
+                baseUrl: "https://example.com/v1",
+                apiKey: {
+                  source: "env",
+                  provider: "custom-env",
+                  id: "MY_CUSTOM_KEY",
+                },
+                models: [],
+              },
+            },
+          },
+        },
+        provider: "custom",
+      });
+      expect(resolved).toBeNull();
+    } finally {
+      if (previous === undefined) {
+        delete process.env.MY_CUSTOM_KEY;
+      } else {
+        process.env.MY_CUSTOM_KEY = previous;
+      }
+    }
+  });
+
+  it("does not treat env SecretRefs with missing unknown env IDs as usable", () => {
+    const previous = process.env.MY_CUSTOM_KEY;
+    delete process.env.MY_CUSTOM_KEY;
+    try {
+      expect(
+        hasUsableCustomProviderApiKey(
+          {
+            models: {
+              providers: {
+                custom: {
+                  baseUrl: "https://example.com/v1",
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "MY_CUSTOM_KEY",
+                  },
+                  models: [],
+                },
+              },
+            },
+          },
+          "custom",
+        ),
+      ).toBe(false);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.MY_CUSTOM_KEY;
+      } else {
+        process.env.MY_CUSTOM_KEY = previous;
+      }
+    }
+  });
+
+  it("does not treat non-env SecretRefs as usable models.json credentials", () => {
+    const resolved = resolveUsableCustomProviderApiKey({
+      cfg: {
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://example.com/v1",
+              apiKey: {
+                source: "file",
+                provider: "vault",
+                id: "custom-provider-key",
+              },
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "custom",
+    });
+    expect(resolved).toBeNull();
+  });
+
   it("does not treat known env marker names as usable when env value is missing", () => {
     const previous = process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_API_KEY;

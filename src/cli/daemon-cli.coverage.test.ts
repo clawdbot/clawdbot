@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
-import { registerDaemonCli } from "./daemon-cli.js";
+import { registerDaemonCli } from "./daemon-cli/register.js";
 
 const probeGatewayStatus = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
 const resolveGatewayProgramArguments = vi.fn(async (_opts?: unknown) => ({

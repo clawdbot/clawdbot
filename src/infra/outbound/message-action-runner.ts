@@ -42,6 +42,7 @@ import {
 import type { OutboundSendDeps } from "./deliver.js";
 import { normalizeMessageActionInput } from "./message-action-normalization.js";
 import {
+  collectActionMediaSourceHints,
   hydrateAttachmentParamsForAction,
   normalizeSandboxMediaList,
   normalizeSandboxMediaParams,
@@ -51,6 +52,7 @@ import {
   parseInteractiveParam,
   readBooleanParam,
   resolveAttachmentMediaPolicy,
+  resolveExtraActionMediaSourceParamKeys,
 } from "./message-action-params.js";
 import {
   prepareOutboundMirrorRoute,
@@ -203,19 +205,6 @@ async function resolveGatewayActionIdempotencyKey(idempotencyKey?: string): Prom
   const { randomIdempotencyKey } = await loadMessageActionGatewayRuntime();
   return randomIdempotencyKey();
 }
-
-function collectActionMediaSourceHints(params: Record<string, unknown>): string[] {
-  const sources: string[] = [];
-  for (const key of ["media", "mediaUrl", "path", "filePath", "fileUrl"] as const) {
-    const source = typeof params[key] === "string" ? params[key] : undefined;
-    const normalized = normalizeOptionalString(source);
-    if (normalized && source) {
-      sources.push(source);
-    }
-  }
-  return sources;
-}
-
 function applyCrossContextMessageDecoration({
   params,
   message,
@@ -861,16 +850,28 @@ export async function runMessageAction(
     sandboxRoot: input.sandboxRoot,
     mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, resolvedAgentId),
   });
+  const extraActionMediaSourceParamKeys = resolveExtraActionMediaSourceParamKeys({
+    cfg,
+    action,
+    channel,
+    accountId,
+    sessionKey: input.sessionKey,
+    sessionId: input.sessionId,
+    agentId: resolvedAgentId,
+    requesterSenderId: input.requesterSenderId,
+    senderIsOwner: input.senderIsOwner,
+  });
 
   await normalizeSandboxMediaParams({
     args: params,
     mediaPolicy: normalizationPolicy,
+    extraParamKeys: extraActionMediaSourceParamKeys,
   });
 
   const mediaAccess = resolveAgentScopedOutboundMediaAccess({
     cfg,
     agentId: resolvedAgentId,
-    mediaSources: collectActionMediaSourceHints(params),
+    mediaSources: collectActionMediaSourceHints(params, extraActionMediaSourceParamKeys),
     sessionKey: input.sessionKey,
     messageProvider: input.sessionKey ? undefined : channel,
     accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,

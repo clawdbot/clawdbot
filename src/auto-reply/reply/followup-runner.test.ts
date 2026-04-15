@@ -12,6 +12,10 @@ const routeReplyMock = vi.fn();
 const isRoutableChannelMock = vi.fn();
 const runPreflightCompactionIfNeededMock = vi.fn();
 const resolveCommandSecretRefsViaGatewayMock = vi.fn();
+const resolveQueuedReplyExecutionConfigMock = vi.fn();
+let resolveQueuedReplyExecutionConfigActual:
+  | (typeof import("./agent-runner-utils.js"))["resolveQueuedReplyExecutionConfig"]
+  | undefined;
 let createFollowupRunner: typeof import("./followup-runner.js").createFollowupRunner;
 let clearRuntimeConfigSnapshot: typeof import("../../config/config.js").clearRuntimeConfigSnapshot;
 let loadSessionStore: typeof import("../../config/sessions/store.js").loadSessionStore;
@@ -277,12 +281,51 @@ async function loadFreshFollowupRunnerModuleForTest() {
     isRoutableChannel: (...args: unknown[]) => isRoutableChannelMock(...args),
     routeReply: (...args: unknown[]) => routeReplyMock(...args),
   }));
+  vi.doMock("./agent-runner-utils.js", async () => {
+    const actual =
+      await vi.importActual<typeof import("./agent-runner-utils.js")>("./agent-runner-utils.js");
+    resolveQueuedReplyExecutionConfigActual = actual.resolveQueuedReplyExecutionConfig;
+    resolveQueuedReplyExecutionConfigMock.mockImplementation(
+      async (...args: Parameters<typeof actual.resolveQueuedReplyExecutionConfig>) =>
+        await actual.resolveQueuedReplyExecutionConfig(...args),
+    );
+    return {
+      ...actual,
+      resolveQueuedReplyExecutionConfig: (
+        ...args: Parameters<typeof actual.resolveQueuedReplyExecutionConfig>
+      ) => resolveQueuedReplyExecutionConfigMock(...args),
+    };
+  });
   vi.doMock("../../cli/command-secret-gateway.js", () => ({
     resolveCommandSecretRefsViaGateway: (...args: unknown[]) =>
       resolveCommandSecretRefsViaGatewayMock(...args),
   }));
   vi.doMock("../../cli/command-secret-targets.js", () => ({
     getAgentRuntimeCommandSecretTargetIds: () => new Set(["skills.entries."]),
+    getScopedChannelsCommandSecretTargets: ({
+      channel,
+      accountId,
+    }: {
+      channel?: string;
+      accountId?: string;
+    }) => {
+      const normalizedChannel = channel?.trim() ?? "";
+      if (!normalizedChannel) {
+        return { targetIds: new Set<string>() };
+      }
+      const targetIds = new Set<string>([`channels.${normalizedChannel}.token`]);
+      const normalizedAccountId = accountId?.trim() ?? "";
+      if (!normalizedAccountId) {
+        return { targetIds };
+      }
+      return {
+        targetIds,
+        allowedPaths: new Set<string>([
+          `channels.${normalizedChannel}.token`,
+          `channels.${normalizedChannel}.accounts.${normalizedAccountId}.token`,
+        ]),
+      };
+    },
   }));
   ({ createFollowupRunner } = await import("./followup-runner.js"));
   ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
@@ -314,6 +357,15 @@ beforeEach(() => {
   compactEmbeddedPiSessionMock.mockReset();
   runPreflightCompactionIfNeededMock.mockReset();
   resolveCommandSecretRefsViaGatewayMock.mockReset();
+  resolveQueuedReplyExecutionConfigMock.mockReset();
+  const resolveQueuedReplyExecutionConfig = resolveQueuedReplyExecutionConfigActual;
+  if (!resolveQueuedReplyExecutionConfig) {
+    throw new Error("resolveQueuedReplyExecutionConfig mock not initialized");
+  }
+  resolveQueuedReplyExecutionConfigMock.mockImplementation(
+    async (...args: Parameters<typeof resolveQueuedReplyExecutionConfig>) =>
+      await resolveQueuedReplyExecutionConfig(...args),
+  );
   runPreflightCompactionIfNeededMock.mockImplementation(
     async (params: { sessionEntry?: SessionEntry }) => params.sessionEntry,
   );
@@ -512,6 +564,39 @@ describe("createFollowupRunner runtime config", () => {
         }
       | undefined;
     expect(call?.config).toBe(runtimeConfig);
+  });
+
+  it("passes queued origin scope into queued execution-config resolution", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+    const sourceConfig: OpenClawConfig = {};
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.4",
+    });
+    const queued = createQueuedRun({
+      originatingChannel: "discord",
+      originatingAccountId: "work",
+      run: {
+        config: sourceConfig,
+        provider: "openai",
+        model: "gpt-5.4",
+        messageProvider: "discord",
+        agentAccountId: "bot-account",
+      },
+    });
+
+    await runner(queued);
+
+    expect(resolveQueuedReplyExecutionConfigMock).toHaveBeenCalledWith(sourceConfig, {
+      originatingChannel: "discord",
+      messageProvider: "discord",
+      originatingAccountId: "work",
+      agentAccountId: "bot-account",
+    });
   });
 });
 

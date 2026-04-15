@@ -83,6 +83,8 @@ export type MediaUnderstandingProviderRequestTransportOverrides = {
   auth?: MediaUnderstandingProviderRequestAuthOverride;
   proxy?: MediaUnderstandingProviderRequestProxyOverride;
   tls?: MediaUnderstandingProviderRequestTlsOverride;
+  /** Runtime-only flag from trusted model-provider config; media config rejects it. */
+  allowPrivateNetwork?: boolean;
 };
 
 export type AudioTranscriptionRequest = {

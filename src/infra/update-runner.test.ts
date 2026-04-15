@@ -6,6 +6,7 @@ import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { pathExists } from "../utils.js";
+import { writePackageDistInventory } from "./package-dist-inventory.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
 import { runGatewayUpdate } from "./update-runner.js";
 
@@ -231,6 +232,7 @@ describe("runGatewayUpdate", () => {
       "utf-8",
     );
     await writeBundledRuntimeSidecars(pkgRoot);
+    await writePackageDistInventory(pkgRoot);
   }
 
   async function writeGlobalPackageVersion(pkgRoot: string, version = "2.0.0") {
@@ -240,6 +242,7 @@ describe("runGatewayUpdate", () => {
       "utf-8",
     );
     await writeBundledRuntimeSidecars(pkgRoot);
+    await writePackageDistInventory(pkgRoot);
   }
 
   async function writeBundledRuntimeSidecars(pkgRoot: string) {
@@ -1176,7 +1179,9 @@ describe("runGatewayUpdate", () => {
           JSON.stringify({ name: "openclaw", version: "2.0.0" }),
           "utf-8",
         );
-        await fs.rm(path.join(pkgRoot, "dist"), { recursive: true, force: true });
+        await writeBundledRuntimeSidecars(pkgRoot);
+        await writePackageDistInventory(pkgRoot);
+        await fs.rm(path.join(pkgRoot, WHATSAPP_LIGHT_RUNTIME_API), { force: true });
       },
     });
 
@@ -1185,7 +1190,7 @@ describe("runGatewayUpdate", () => {
     expect(result.status).toBe("error");
     expect(result.reason).toBe("global install verify");
     expect(result.steps.at(-1)?.stderrTail).toContain(
-      `missing bundled runtime sidecar ${WHATSAPP_LIGHT_RUNTIME_API}`,
+      `missing packaged dist file ${WHATSAPP_LIGHT_RUNTIME_API}`,
     );
   });
 

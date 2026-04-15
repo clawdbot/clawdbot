@@ -248,6 +248,20 @@ function looksLikeUtf8Text(buffer?: Buffer): boolean {
   }
 }
 
+function hasSuspiciousBinarySignal(buffer?: Buffer): boolean {
+  if (!buffer || buffer.length === 0) {
+    return false;
+  }
+  const sample = buffer.subarray(0, Math.min(buffer.length, 4096));
+  if (sample.length < 4 || sample[0] !== 0x50 || sample[1] !== 0x4b) {
+    return false;
+  }
+  const signature = (sample[2] << 8) | sample[3];
+  // Cover the ZIP local-header, central-directory, and empty-archive markers
+  // so archive payloads cannot slip past text coercion when MIME detection is weak.
+  return signature === 0x0304 || signature === 0x0102 || signature === 0x0506;
+}
+
 function decodeTextSample(buffer?: Buffer): string {
   if (!buffer || buffer.length === 0) {
     return "";
@@ -312,6 +326,9 @@ function isBinaryMediaMime(mime?: string): boolean {
   ) {
     return true;
   }
+  if (mime.endsWith("+zip")) {
+    return true;
+  }
   if (mime.startsWith("application/vnd.")) {
     // Keep vendor +json/+xml payloads eligible for text extraction while
     // treating the common binary vendor family (Office, archives, etc.) as binary.
@@ -370,6 +387,9 @@ async function extractFileBlocks(params: {
     const rawMime = bufferResult?.mime ?? attachment.mime;
     const normalizedRawMime = normalizeMimeType(rawMime);
     if (!forcedTextMimeResolved && isBinaryMediaMime(normalizedRawMime)) {
+      continue;
+    }
+    if (hasSuspiciousBinarySignal(bufferResult?.buffer)) {
       continue;
     }
     const utf16Charset = resolveUtf16Charset(bufferResult?.buffer);
