@@ -1,8 +1,0 @@
-{
-  "id": "microsoft",
-  "configSchema": {
-    "type": "object",
-    "additionalProperties": false,
-    "properties": {}
-  }
-}

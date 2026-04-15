@@ -5,6 +5,7 @@ import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../ac
 import { toAcpRuntimeError } from "../acp/runtime/errors.js";
 import { resolveAcpSessionCwd } from "../acp/runtime/session-identifiers.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { llmRouterHealth, llmRouterSelect, shouldUseLlmRouter } from "../integrations/llm-router-client.js";
 
 const log = createSubsystemLogger("agents/agent-command");
 import { normalizeReplyPayload } from "../auto-reply/reply/normalize-reply.js";
@@ -79,6 +80,7 @@ import { loadModelCatalog } from "./model-catalog.js";
 import { runWithModelFallback } from "./model-fallback.js";
 import {
   buildAllowedModelSet,
+  buildConfiguredAllowlistKeys,
   isCliProvider,
   modelKey,
   normalizeModelRef,
@@ -1169,6 +1171,23 @@ async function agentCommandInternal(
 
       // Track model fallback attempts so retries on an existing session don't
       // re-inject the original prompt as a duplicate user message.
+      if (shouldUseLlmRouter() && !isCliProvider(provider, cfg)) {
+        try {
+          const health = await llmRouterHealth();
+          if (health.status === "ok") {
+            const selected = await llmRouterSelect({ prompt: body });
+            const allowedSet = buildConfiguredAllowlistKeys({ cfg, defaultProvider: DEFAULT_PROVIDER });
+            const candidateKey = modelKey(selected.selected_provider, selected.selected_model);
+            if (!allowedSet || allowedSet.has(candidateKey)) {
+              provider = selected.selected_provider;
+              model = selected.selected_model;
+            }
+          }
+        } catch (error) {
+          log.warn(`llm-router unavailable, falling back to internal selection: ${sanitizeForLog(String(error))}`);
+        }
+      }
+
       let fallbackAttemptIndex = 0;
       const fallbackResult = await runWithModelFallback({
         cfg,

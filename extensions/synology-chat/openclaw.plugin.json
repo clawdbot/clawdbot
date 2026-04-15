@@ -1,9 +1,0 @@
-{
-  "id": "synology-chat",
-  "channels": ["synology-chat"],
-  "configSchema": {
-    "type": "object",
-    "additionalProperties": false,
-    "properties": {}
-  }
-}

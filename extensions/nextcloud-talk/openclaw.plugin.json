@@ -1,9 +1,0 @@
-{
-  "id": "nextcloud-talk",
-  "channels": ["nextcloud-talk"],
-  "configSchema": {
-    "type": "object",
-    "additionalProperties": false,
-    "properties": {}
-  }
-}

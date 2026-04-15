@@ -5,8 +5,19 @@ import {
   parseMessageWithAttachments,
 } from "./chat-attachments.js";
 
+vi.mock("../integrations/strategy-service-client.js", () => ({
+  summarizePdfViaStrategyService: vi.fn(async () => ({
+    doc_id: "pdf-doc-123",
+    model: "deepseek/deepseek-v3.2",
+    engine: "cloudflare-ai",
+    summary: "Parsed PDF summary text.",
+    annotations_cached: true,
+  })),
+}));
+
 const PNG_1x1 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+const ZIP_SIG = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00]).toString("base64");
 
 async function parseWithWarnings(message: string, attachments: ChatAttachment[]) {
   const logs: string[] = [];
@@ -77,18 +88,35 @@ describe("parseMessageWithAttachments", () => {
   });
 
   it("drops non-image payloads and logs", async () => {
-    const pdf = Buffer.from("%PDF-1.4\n").toString("base64");
     const { parsed, logs } = await parseWithWarnings("x", [
       {
         type: "file",
         mimeType: "image/png",
-        fileName: "not-image.pdf",
-        content: pdf,
+        fileName: "not-image.txt",
+        content: ZIP_SIG,
       },
     ]);
     expect(parsed.images).toHaveLength(0);
     expect(logs).toHaveLength(1);
     expect(logs[0]).toMatch(/non-image/i);
+  });
+
+  it("routes pdf attachments through strategy-service and appends the summary to the message", async () => {
+    const pdf = Buffer.from("%PDF-1.4\n").toString("base64");
+    const { parsed, logs } = await parseWithWarnings("Please review this.", [
+      {
+        type: "file",
+        mimeType: "application/pdf",
+        fileName: "brief.pdf",
+        content: pdf,
+      },
+    ]);
+    expect(parsed.images).toHaveLength(0);
+    expect(parsed.message).toContain("Please review this.");
+    expect(parsed.message).toContain("PDF attachment parsed automatically: brief.pdf");
+    expect(parsed.message).toContain("Document ID: pdf-doc-123");
+    expect(parsed.message).toContain("Parsed PDF summary text.");
+    expect(logs).toHaveLength(0);
   });
 
   it("prefers sniffed mime type and logs mismatch", async () => {
@@ -117,7 +145,6 @@ describe("parseMessageWithAttachments", () => {
   });
 
   it("keeps valid images and drops invalid ones", async () => {
-    const pdf = Buffer.from("%PDF-1.4\n").toString("base64");
     const { parsed, logs } = await parseWithWarnings("x", [
       {
         type: "image",
@@ -128,8 +155,8 @@ describe("parseMessageWithAttachments", () => {
       {
         type: "file",
         mimeType: "image/png",
-        fileName: "not-image.pdf",
-        content: pdf,
+        fileName: "not-image.txt",
+        content: ZIP_SIG,
       },
     ]);
     expect(parsed.images).toHaveLength(1);

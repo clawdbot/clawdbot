@@ -19,6 +19,13 @@ const configMocks = vi.hoisted(() => ({
   })),
 }));
 
+const browserClusterMocks = vi.hoisted(() => ({
+  browserClusterHealth: vi.fn(async () => ({ ok: true })),
+  canProxyBrowserClusterPath: vi.fn(() => false),
+  proxyBrowserCluster: vi.fn(),
+  shouldUseBrowserCluster: vi.fn(() => false),
+}));
+
 const browserConfigMocks = vi.hoisted(() => ({
   resolveBrowserConfig: vi.fn(() => ({
     enabled: true,
@@ -30,6 +37,7 @@ vi.mock("../browser/control-service.js", () => controlServiceMocks);
 vi.mock("../browser/routes/dispatcher.js", () => dispatcherMocks);
 vi.mock("../config/config.js", () => configMocks);
 vi.mock("../browser/config.js", () => browserConfigMocks);
+vi.mock("../integrations/browser-cluster-client.js", () => browserClusterMocks);
 vi.mock("../media/mime.js", () => ({
   detectMime: vi.fn(async () => "image/png"),
 }));
@@ -48,6 +56,10 @@ describe("runBrowserProxyCommand", () => {
       defaultProfile: "openclaw",
     });
     controlServiceMocks.startBrowserControlServiceFromConfig.mockResolvedValue(true);
+    browserClusterMocks.browserClusterHealth.mockResolvedValue({ ok: true });
+    browserClusterMocks.shouldUseBrowserCluster.mockReturnValue(false);
+    browserClusterMocks.canProxyBrowserClusterPath.mockReturnValue(false);
+    browserClusterMocks.proxyBrowserCluster.mockReset();
   });
 
   it("adds profile and browser status details on ws-backed timeouts", async () => {
@@ -137,6 +149,56 @@ describe("runBrowserProxyCommand", () => {
     ).rejects.toThrow(
       /status\(running=true, cdpHttp=true, cdpReady=false, cdpUrl=https:\/\/example\.com\/chrome\?token=supers…7890\)/,
     );
+  });
+
+  it("delegates supported requests to browser-cluster when enabled", async () => {
+    browserClusterMocks.shouldUseBrowserCluster.mockReturnValue(true);
+    browserClusterMocks.canProxyBrowserClusterPath.mockReturnValue(true);
+    browserClusterMocks.browserClusterHealth.mockResolvedValue({ ok: true });
+    browserClusterMocks.proxyBrowserCluster.mockResolvedValue({ ok: true, targetId: "profile:openclaw" });
+
+    const raw = await runBrowserProxyCommand(
+      JSON.stringify({
+        method: "POST",
+        path: "/act",
+        profile: "openclaw",
+        body: { request: { kind: "click", selector: "button.save" } },
+      }),
+    );
+
+    expect(JSON.parse(raw)).toEqual({ result: { ok: true, targetId: "profile:openclaw" } });
+    expect(browserClusterMocks.proxyBrowserCluster).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "POST",
+        path: "/act",
+        profile: "openclaw",
+      }),
+    );
+    expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("falls back to internal dispatcher when browser-cluster proxy errors", async () => {
+    browserClusterMocks.shouldUseBrowserCluster.mockReturnValue(true);
+    browserClusterMocks.canProxyBrowserClusterPath.mockReturnValue(true);
+    browserClusterMocks.browserClusterHealth.mockResolvedValue({ ok: true });
+    browserClusterMocks.proxyBrowserCluster.mockRejectedValue(new Error("cluster offline"));
+    dispatcherMocks.dispatch.mockResolvedValue({
+      status: 200,
+      body: { ok: true, source: "internal" },
+    });
+
+    const raw = await runBrowserProxyCommand(
+      JSON.stringify({
+        method: "POST",
+        path: "/act",
+        profile: "openclaw",
+        body: { request: { kind: "click", selector: "button.save" } },
+      }),
+    );
+
+    expect(JSON.parse(raw)).toEqual({ result: { ok: true, source: "internal" } });
+    expect(browserClusterMocks.proxyBrowserCluster).toHaveBeenCalledTimes(1);
+    expect(dispatcherMocks.dispatch).toHaveBeenCalledTimes(1);
   });
 
   it("keeps non-timeout browser errors intact", async () => {

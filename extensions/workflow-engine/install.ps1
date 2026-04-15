@@ -1,2 +1,0 @@
-$ErrorActionPreference = "Stop"
-npm install

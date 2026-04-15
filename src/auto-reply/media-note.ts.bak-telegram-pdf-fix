@@ -1,4 +1,4 @@
-﻿import type { MsgContext } from "./templating.js";
+import type { MsgContext } from "./templating.js";
 
 function formatMediaAttachedLine(params: {
   path: string;
@@ -17,6 +17,7 @@ function formatMediaAttachedLine(params: {
   return `${prefix}${params.path}${typePart}${urlPart}]`;
 }
 
+// Common audio file extensions for transcription detection
 const AUDIO_EXTENSIONS = new Set([
   ".ogg",
   ".opus",
@@ -45,67 +46,8 @@ function isAudioPath(path: string | undefined): boolean {
   return false;
 }
 
-function isPdfAttachment(path: string | undefined, type: string | undefined): boolean {
-  const normalizedType = type?.toLowerCase().trim();
-  if (normalizedType === "application/pdf") {
-    return true;
-  }
-  return Boolean(path?.toLowerCase().endsWith(".pdf"));
-}
-
-function resolveFileName(filePath: string | undefined): string {
-  if (!filePath) {
-    return "document.pdf";
-  }
-  const parts = filePath.split(/[\\/]+/).filter(Boolean);
-  return parts[parts.length - 1] || "document.pdf";
-}
-
-async function summarizePdfAttachment(params: {
-  path: string;
-  type?: string;
-}): Promise<string | undefined> {
-  const serviceBase = (process.env.STRATEGY_SERVICE_URL || "http://127.0.0.1:8011").replace(/\/+$/, "");
-  try {
-    const fs = await import("node:fs/promises");
-    const data = await fs.readFile(params.path);
-    const filename = resolveFileName(params.path);
-    const form = new FormData();
-    form.set(
-      "file",
-      new Blob([data], { type: params.type?.trim() || "application/pdf" }),
-      filename,
-    );
-    form.set(
-      "prompt",
-      "Summarize this PDF for the agent. Include the most important exact text when it is short.",
-    );
-    const response = await fetch(`${serviceBase}/pdf/summarize`, {
-      method: "POST",
-      body: form,
-    });
-    if (!response.ok) {
-      return undefined;
-    }
-    const payload = (await response.json()) as { doc_id?: unknown; summary?: unknown };
-    const summary = typeof payload.summary === "string" ? payload.summary.trim() : "";
-    if (!summary) {
-      return undefined;
-    }
-    const docId = typeof payload.doc_id === "string" ? payload.doc_id : undefined;
-    return [
-      `PDF attachment parsed automatically: ${filename}`,
-      docId ? `Document ID: ${docId}` : undefined,
-      summary,
-    ]
-      .filter(Boolean)
-      .join("\n");
-  } catch {
-    return undefined;
-  }
-}
-
-export async function buildInboundMediaNote(ctx: MsgContext): Promise<string | undefined> {
+export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
+  // Attachment indices follow MediaPaths/MediaUrls ordering as supplied by the channel.
   const suppressed = new Set<number>();
   const transcribedAudioIndices = new Set<number>();
   if (Array.isArray(ctx.MediaUnderstanding)) {
@@ -151,6 +93,8 @@ export async function buildInboundMediaNote(ctx: MsgContext): Promise<string | u
       ? ctx.MediaTypes
       : undefined;
   const hasTranscript = Boolean(ctx.Transcript?.trim());
+  // Transcript alone does not identify an attachment index; only use it as a fallback
+  // when there is a single attachment to avoid stripping unrelated audio files.
   const canStripSingleAttachmentByTranscript = hasTranscript && paths.length === 1;
 
   const entries = paths
@@ -164,6 +108,10 @@ export async function buildInboundMediaNote(ctx: MsgContext): Promise<string | u
       if (suppressed.has(entry.index)) {
         return false;
       }
+      // Strip audio attachments when transcription succeeded - the transcript is already
+      // available in the context, raw audio binary would only waste tokens (issue #4197)
+      // Note: Only trust MIME type from per-entry types array, not fallback ctx.MediaType
+      // which could misclassify non-audio attachments (greptile review feedback)
       const hasPerEntryType = types !== undefined;
       const isAudioByMime = hasPerEntryType && entry.type?.toLowerCase().startsWith("audio/");
       const isAudioEntry = isAudioPath(entry.path) || isAudioByMime;
@@ -181,26 +129,26 @@ export async function buildInboundMediaNote(ctx: MsgContext): Promise<string | u
   if (entries.length === 0) {
     return undefined;
   }
+  if (entries.length === 1) {
+    return formatMediaAttachedLine({
+      path: entries[0]?.path ?? "",
+      type: entries[0]?.type,
+      url: entries[0]?.url,
+    });
+  }
 
-  const renderedEntries: string[] = [];
+  const count = entries.length;
+  const lines: string[] = [`[media attached: ${count} files]`];
   for (const [idx, entry] of entries.entries()) {
-    let rendered: string | undefined;
-    if (isPdfAttachment(entry.path, entry.type)) {
-      rendered = await summarizePdfAttachment({ path: entry.path, type: entry.type });
-    }
-    if (!rendered) {
-      rendered = formatMediaAttachedLine({
+    lines.push(
+      formatMediaAttachedLine({
         path: entry.path,
+        index: idx + 1,
+        total: count,
         type: entry.type,
         url: entry.url,
-        index: entries.length > 1 ? idx + 1 : undefined,
-        total: entries.length > 1 ? entries.length : undefined,
-      });
-    }
-    renderedEntries.push(rendered);
+      }),
+    );
   }
-  if (renderedEntries.length === 0) {
-    return undefined;
-  }
-  return renderedEntries.join("\n\n");
+  return lines.join("\n");
 }

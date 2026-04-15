@@ -1,8 +1,0 @@
-{
-  "port": 3106,
-  "defaults": {
-    "quick_results": 5,
-    "deep_results": 8,
-    "timeout_ms": 90000
-  }
-}

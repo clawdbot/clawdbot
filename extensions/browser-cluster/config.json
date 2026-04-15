@@ -1,7 +1,0 @@
-{
-  "port": 3100,
-  "maxInstances": 10,
-  "headless": true,
-  "timeout": 30000,
-  "proxyList": []
-}

@@ -1,5 +1,6 @@
 import { estimateBase64DecodedBytes } from "../media/base64.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
+import { summarizePdfViaStrategyService } from "../integrations/strategy-service-client.js";
 
 export type ChatAttachment = {
   type?: string;
@@ -39,6 +40,18 @@ function normalizeMime(mime?: string): string | undefined {
 
 function isImageMime(mime?: string): boolean {
   return typeof mime === "string" && mime.startsWith("image/");
+}
+
+function isPdfMime(mime?: string): boolean {
+  return typeof mime === "string" && mime === "application/pdf";
+}
+
+function looksLikePdfAttachment(params: { mime?: string; fileName?: string }): boolean {
+  if (isPdfMime(params.mime)) {
+    return true;
+  }
+  const fileName = params.fileName?.trim().toLowerCase();
+  return Boolean(fileName && fileName.endsWith(".pdf"));
 }
 
 function isValidBase64(value: string): boolean {
@@ -89,6 +102,20 @@ function validateAttachmentBase64OrThrow(
   return sizeBytes;
 }
 
+function buildPdfSummaryBlock(params: {
+  fileName: string;
+  docId: string;
+  summary: string;
+}): string {
+  const trimmedSummary = params.summary.trim();
+  const body = trimmedSummary.length > 0 ? trimmedSummary : "PDF attached, but no summary text was returned.";
+  return [
+    `PDF attachment parsed automatically: ${params.fileName}`,
+    `Document ID: ${params.docId}`,
+    body,
+  ].join("\n");
+}
+
 /**
  * Parse attachments and extract images as structured content blocks.
  * Returns the message text and an array of image content blocks
@@ -106,6 +133,7 @@ export async function parseMessageWithAttachments(
   }
 
   const images: ChatImageContent[] = [];
+  const pdfSummaries: string[] = [];
 
   for (const [idx, att] of attachments.entries()) {
     if (!att) {
@@ -120,6 +148,27 @@ export async function parseMessageWithAttachments(
 
     const providedMime = normalizeMime(mime);
     const sniffedMime = normalizeMime(await sniffMimeFromBase64(b64));
+    const effectiveMime = sniffedMime ?? providedMime ?? mime;
+    if (looksLikePdfAttachment({ mime: sniffedMime ?? providedMime, fileName: att.fileName })) {
+      try {
+        const bytes = Uint8Array.from(Buffer.from(b64, "base64"));
+        const result = await summarizePdfViaStrategyService({
+          filename: att.fileName || label,
+          mimeType: "application/pdf",
+          bytes,
+        });
+        pdfSummaries.push(
+          buildPdfSummaryBlock({
+            fileName: att.fileName || label,
+            docId: result.doc_id,
+            summary: result.summary,
+          }),
+        );
+      } catch (err) {
+        log?.warn(`attachment ${label}: pdf parse failed (${String(err)})`);
+      }
+      continue;
+    }
     if (sniffedMime && !isImageMime(sniffedMime)) {
       log?.warn(`attachment ${label}: detected non-image (${sniffedMime}), dropping`);
       continue;
@@ -137,11 +186,16 @@ export async function parseMessageWithAttachments(
     images.push({
       type: "image",
       data: b64,
-      mimeType: sniffedMime ?? providedMime ?? mime,
+      mimeType: effectiveMime,
     });
   }
 
-  return { message, images };
+  const nextMessage =
+    pdfSummaries.length > 0
+      ? [message, ...pdfSummaries].filter((part) => part.trim().length > 0).join("\n\n")
+      : message;
+
+  return { message: nextMessage, images };
 }
 
 /**

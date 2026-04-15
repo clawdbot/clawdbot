@@ -7,6 +7,12 @@ import {
 } from "../browser/control-service.js";
 import { createBrowserRouteDispatcher } from "../browser/routes/dispatcher.js";
 import { loadConfig } from "../config/config.js";
+import {
+  browserClusterHealth,
+  canProxyBrowserClusterPath,
+  proxyBrowserCluster,
+  shouldUseBrowserCluster,
+} from "../integrations/browser-cluster-client.js";
 import { detectMime } from "../media/mime.js";
 import { withTimeout } from "./with-timeout.js";
 
@@ -218,7 +224,6 @@ export async function runBrowserProxyCommand(paramsJSON?: string | null): Promis
     throw new Error("UNAVAILABLE: node browser proxy disabled");
   }
 
-  await ensureBrowserControlService();
   const cfg = loadConfig();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   const requestedProfile = typeof params.profile === "string" ? params.profile.trim() : "";
@@ -252,6 +257,28 @@ export async function runBrowserProxyCommand(paramsJSON?: string | null): Promis
     query[key] = typeof value === "string" ? value : String(value);
   }
 
+  const useBrowserCluster =
+    shouldUseBrowserCluster() && canProxyBrowserClusterPath(path, method, body);
+
+  if (useBrowserCluster) {
+    try {
+      const health = await browserClusterHealth();
+      if (health.ok) {
+        const result = await proxyBrowserCluster({
+          method,
+          path,
+          body,
+          profile: requestedProfile || resolved.defaultProfile,
+        });
+        const payload: BrowserProxyResult = { result };
+        return JSON.stringify(payload);
+      }
+    } catch {
+      // Fall back to internal browser transport when browser-cluster is unavailable.
+    }
+  }
+
+  await ensureBrowserControlService();
   const dispatcher = createBrowserRouteDispatcher(createBrowserControlContext());
   let response;
   try {

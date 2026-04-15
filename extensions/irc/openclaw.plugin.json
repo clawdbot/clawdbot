@@ -1,9 +1,0 @@
-{
-  "id": "irc",
-  "channels": ["irc"],
-  "configSchema": {
-    "type": "object",
-    "additionalProperties": false,
-    "properties": {}
-  }
-}

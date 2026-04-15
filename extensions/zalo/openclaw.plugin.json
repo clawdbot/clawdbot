@@ -1,9 +1,0 @@
-{
-  "id": "zalo",
-  "channels": ["zalo"],
-  "configSchema": {
-    "type": "object",
-    "additionalProperties": false,
-    "properties": {}
-  }
-}
