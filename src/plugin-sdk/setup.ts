@@ -93,3 +93,79 @@ export {
 } from "../channels/plugins/setup-wizard-binary.js";
 
 export { formatResolvedUnresolvedNote } from "./resolution-notes.js";
+
+function hasPresentSetupValue(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+  if (Array.isArray(value)) {
+    return value.length > 0;
+  }
+  return value !== undefined && value !== null && value !== false;
+}
+
+export function createSetupInputPresenceValidator(params: {
+  defaultAccountOnlyEnvError?: string;
+  whenNotUseEnv?: Array<{ someOf: string[]; message: string }>;
+  validate?: (params: { accountId: string; input: Record<string, unknown> }) => string | null | undefined;
+}) {
+  return (validationParams: { accountId: string; input: Record<string, unknown> }) => {
+    const accountId = validationParams.accountId;
+    const input = validationParams.input ?? {};
+    const useEnv = input.useEnv === true;
+
+    if (useEnv && params.defaultAccountOnlyEnvError && accountId !== DEFAULT_ACCOUNT_ID) {
+      return params.defaultAccountOnlyEnvError;
+    }
+
+    if (!useEnv) {
+      for (const rule of params.whenNotUseEnv ?? []) {
+        const hasAny = rule.someOf.some((key) => hasPresentSetupValue(input[key]));
+        if (!hasAny) {
+          return rule.message;
+        }
+      }
+    }
+
+    return params.validate?.({ accountId, input }) ?? null;
+  };
+}
+
+export function createStandardChannelSetupStatus(params: {
+  channelLabel: string;
+  configuredLabel: string;
+  unconfiguredLabel: string;
+  configuredHint: string;
+  unconfiguredHint: string;
+  configuredScore: number;
+  unconfiguredScore: number;
+  includeStatusLine?: boolean;
+  resolveConfigured: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string;
+  }) => boolean | Promise<boolean>;
+}) {
+  return {
+    configuredLabel: params.configuredLabel,
+    unconfiguredLabel: params.unconfiguredLabel,
+    configuredHint: params.configuredHint,
+    unconfiguredHint: params.unconfiguredHint,
+    configuredScore: params.configuredScore,
+    unconfiguredScore: params.unconfiguredScore,
+    resolveConfigured: params.resolveConfigured,
+    resolveStatusLines: async (statusParams: { cfg: OpenClawConfig; accountId?: string; configured: boolean }) =>
+      params.includeStatusLine === false
+        ? []
+        : [
+            `${params.channelLabel}: ${
+              statusParams.configured ? params.configuredLabel : params.unconfiguredLabel
+            }`,
+          ],
+    resolveSelectionHint: async (hintParams: { cfg: OpenClawConfig; accountId?: string }) =>
+      (await params.resolveConfigured(hintParams)) ? params.configuredHint : params.unconfiguredHint,
+    resolveQuickstartScore: async (scoreParams: { cfg: OpenClawConfig; accountId?: string }) =>
+      (await params.resolveConfigured(scoreParams))
+        ? params.configuredScore
+        : params.unconfiguredScore,
+  };
+}

@@ -1,0 +1,60 @@
+    [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m extensions/memory-core/src/dreaming.ts:13:8 [38;5;246m][0m
+    [38;5;246m│[0m
+ [38;5;246m13 │[0m [38;5;249m}[0m[38;5;249m [0m[38;5;249mf[0m[38;5;249mr[0m[38;5;249mo[0m[38;5;249mm[0m[38;5;249m [0m"openclaw/plugin-sdk/memory-core-host-status"[38;5;249m;[0m
+ [38;5;240m   │[0m        ──────────────────────┬──────────────────────  
+ [38;5;240m   │[0m                              ╰──────────────────────── Package subpath is not defined by exports
+ [38;5;240m   │[0m 
+ [38;5;240m   │[0m [38;5;115mHelp[0m: 'extensions/memory-core/src/dreaming.ts' is imported by the following path:
+ [38;5;240m   │[0m         - extensions/memory-core/src/dreaming.ts
+ [38;5;240m   │[0m         - extensions/memory-core/index.ts
+[38;5;246m────╯[0m
+
+[31m[RESOLVE_ERROR] Error:[0m Could not resolve 'openclaw/plugin-sdk/memory-core-host-runtime-core' in extensions/memory-core/src/flush-plan.ts
+   [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m extensions/memory-core/src/flush-plan.ts:8:8 [38;5;246m][0m
+   [38;5;246m│[0m
+ [38;5;246m8 │[0m [38;5;249m}[0m[38;5;249m [0m[38;5;249mf[0m[38;5;249mr[0m[38;5;249mo[0m[38;5;249mm[0m[38;5;249m [0m"openclaw/plugin-sdk/memory-core-host-runtime-core"[38;5;249m;[0m
+ [38;5;240m  │[0m        ─────────────────────────┬─────────────────────────  
+ [38;5;240m  │[0m                                 ╰─────────────────────────── Package subpath is not defined by exports
+ [38;5;240m  │[0m 
+ [38;5;240m  │[0m [38;5;115mHelp[0m: 'extensions/memory-core/src/flush-plan.ts' is imported by the following path:
+ [38;5;240m  │[0m         - extensions/memory-core/src/flush-plan.ts
+ [38;5;240m  │[0m         - extensions/memory-core/index.ts
+[38;5;246m───╯[0m
+
+[31m[RESOLVE_ERROR] Error:[0m Could not resolve 'openclaw/plugin-sdk/memory-core-host-engine-embeddings' in extensions/memory-core/src/memory/provider-adapters.ts
+    [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m extensions/memory-core/src/memory/provider-adapters.ts:25:8 [38;5;246m][0m
+    [38;5;246m│[0m
+ [38;5;246m25 │[0m [38;5;249m}[0m[38;5;249m [0m[38;5;249mf[0m[38;5;249mr[0m[38;5;249mo[0m[38;5;249mm[0m[38;5;249m [0m"openclaw/plugin-sdk/memory-core-host-engine-embeddings"[38;5;249m;[0m
+ [38;5;240m   │[0m        ────────────────────────────┬───────────────────────────  
+ [38;5;240m   │[0m                                    ╰───────────────────────────── Package subpath is not defined by exports
+ [38;5;240m   │[0m 
+ [38;5;240m   │[0m [38;5;115mHelp[0m: 'extensions/memory-core/src/memory/provider-adapters.ts' is imported by the following path:
+ [38;5;240m   │[0m         - extensions/memory-core/src/memory/provider-adapters.ts
+ [38;5;240m   │[0m         - extensions/memory-core/index.ts
+[38;5;246m────╯[0m
+
+[31m[RESOLVE_ERROR] Error:[0m Could not resolve 'openclaw/plugin-sdk/memory-core-host-engine-foundation' in extensions/memory-core/src/memory/provider-adapters.ts
+    [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m extensions/memory-core/src/memory/provider-adapters.ts:26:33 [38;5;246m][0m
+    [38;5;246m│[0m
+ [38;5;246m26 │[0m [38;5;249mi[0m[38;5;249mm[0m[38;5;249mp[0m[38;5;249mo[0m[38;5;249mr[0m[38;5;249mt[0m[38;5;249m [0m[38;5;249m{[0m[38;5;249m [0m[38;5;249mr[0m[38;5;249me[0m[38;5;249ms[0m[38;5;249mo[0m[38;5;249ml[0m[38;5;249mv[0m[38;5;249me[0m[38;5;249mU[0m[38;5;249ms[0m[38;5;249me[0m[38;5;249mr[0m[38;5;249mP[0m[38;5;249ma[0m[38;5;249mt[0m[38;5;249mh[0m[38;5;249m [0m[38;5;249m}[0m[38;5;249m [0m[38;5;249mf[0m[38;5;249mr[0m[38;5;249mo[0m[38;5;249mm[0m[38;5;249m [0m"openclaw/plugin-sdk/memory-core-host-engine-foundation"[38;5;249m;[0m
+ [38;5;240m   │[0m                                 ────────────────────────────┬───────────────────────────  
+ [38;5;240m   │[0m                                                             ╰───────────────────────────── Package subpath is not defined by exports
+ [38;5;240m   │[0m 
+ [38;5;240m   │[0m [38;5;115mHelp[0m: 'extensions/memory-core/src/memory/provider-adapters.ts' is imported by the following path:
+ [38;5;240m   │[0m         - extensions/memory-core/src/memory/provider-adapters.ts
+ [38;5;240m   │[0m         - extensions/memory-core/index.ts
+[38;5;246m────╯[0m
+
+...
+    at aggregateBindingErrorsIntoJsError (file:///C:/Users/gmone/.openclaw/workspace/_fork_main_clone/node_modules/rolldown/dist/shared/error-CP8smW_P.mjs:48:18)
+    at unwrapBindingResult (file:///C:/Users/gmone/.openclaw/workspace/_fork_main_clone/node_modules/rolldown/dist/shared/error-CP8smW_P.mjs:18:128)
+    at #build (file:///C:/Users/gmone/.openclaw/workspace/_fork_main_clone/node_modules/rolldown/dist/shared/rolldown-build-4YnQkA76.mjs:3311:34)
+    at async build (file:///C:/Users/gmone/.openclaw/workspace/_fork_main_clone/node_modules/rolldown/dist/index.mjs:46:22)
+    at async Promise.all (index 0)
+    at async buildSingle (file:///C:/Users/gmone/.openclaw/workspace/_fork_main_clone/node_modules/tsdown/dist/build-CoLhkNXE.mjs:734:19)
+    at async Promise.all (index 0)
+    at async buildWithConfigs (file:///C:/Users/gmone/.openclaw/workspace/_fork_main_clone/node_modules/tsdown/dist/build-CoLhkNXE.mjs:690:18)
+    at async CAC.<anonymous> (file:///C:/Users/gmone/.openclaw/workspace/_fork_main_clone/node_modules/tsdown/dist/run.mjs:25:2)
+    at async runCLI (file:///C:/Users/gmone/.openclaw/workspace/_fork_main_clone/node_modules/tsdown/dist/run.mjs:49:3)
+
+ ELIFECYCLE  Command failed with exit code 1.

@@ -1,0 +1,8 @@
+ ERROR  Error: Build failed with 52 errors:
+[RESOLVE_ERROR] Error: Could not resolve 'openclaw/plugin-sdk/runtime-doctor' in extensions/discord/src/doctor.ts
+[RESOLVE_ERROR] Error: Could not resolve 'openclaw/plugin-sdk/agent-harness' in extensions/codex/src/app-server/run-attempt.ts
+[RESOLVE_ERROR] Error: Could not resolve 'openclaw/plugin-sdk/agent-harness' in extensions/codex/src/app-server/session-binding.ts
+[RESOLVE_ERROR] Error: Could not resolve 'openclaw/plugin-sdk/runtime-doctor' in extensions/discord/src/doctor-contract.ts
+[RESOLVE_ERROR] Error: Could not resolve 'openclaw/plugin-sdk/agent-harness' in extensions/codex/src/app-server/compact.ts
+    at aggregateBindingErrorsIntoJsError (file:///C:/Users/gmone/.openclaw/workspace/_fork_main_clone/node_modules/rolldown/dist/shared/error-CP8smW_P.mjs:48:18)
+    at unwrapBindingResult (file:///C:/Users/gmone/.openclaw/workspace/_fork_main_clone/node_modules/rolldown/dist/shared/error-CP8smW_P.mjs:18:128)

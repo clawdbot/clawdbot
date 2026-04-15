@@ -1,0 +1,88 @@
+
+> openclaw@2026.3.14 build:docker C:\Users\gmone\.openclaw\workspace\_fork_main_clone
+> node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-startup-metadata.ts && node --import tsx scripts/write-cli-compat.ts
+
+
+ ERROR  Error: Build failed with 50 errors:
+
+[31m[UNRESOLVED_IMPORT] Error:[0m Could not resolve '../../extensions/modelstudio/provider-catalog.js' in src/agents/models-config.providers.ts
+    [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m src/agents/models-config.providers.ts:20:8 [38;5;246m][0m
+    [38;5;246m│[0m
+ [38;5;246m20 │[0m [38;5;249m}[0m[38;5;249m [0m[38;5;249mf[0m[38;5;249mr[0m[38;5;249mo[0m[38;5;249mm[0m[38;5;249m [0m"../../extensions/modelstudio/provider-catalog.js"[38;5;249m;[0m
+ [38;5;240m   │[0m        ─────────────────────────┬────────────────────────  
+ [38;5;240m   │[0m                                 ╰────────────────────────── Module not found.
+ [38;5;240m   │[0m 
+ [38;5;240m   │[0m [38;5;115mHelp[0m: 'src/agents/models-config.providers.ts' is imported by the following path:
+ [38;5;240m   │[0m         - src/agents/models-config.providers.ts
+ [38;5;240m   │[0m         - src/agents/models-config.plan.ts
+ [38;5;240m   │[0m         - src/agents/models-config.ts
+ [38;5;240m   │[0m         - src/media-understanding/providers/image.ts
+ [38;5;240m   │[0m         - src/plugin-sdk/media-understanding.ts
+[38;5;246m────╯[0m
+
+[31m[RESOLVE_ERROR] Error:[0m Could not resolve 'openclaw/plugin-sdk/global-singleton' in extensions/discord/src/components-registry.ts
+   [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m extensions/discord/src/components-registry.ts:1:34 [38;5;246m][0m
+   [38;5;246m│[0m
+ [38;5;246m1 │[0m [38;5;249mi[0m[38;5;249mm[0m[38;5;249mp[0m[38;5;249mo[0m[38;5;249mr[0m[38;5;249mt[0m[38;5;249m [0m[38;5;249m{[0m[38;5;249m [0m[38;5;249mr[0m[38;5;249me[0m[38;5;249ms[0m[38;5;249mo[0m[38;5;249ml[0m[38;5;249mv[0m[38;5;249me[0m[38;5;249mG[0m[38;5;249ml[0m[38;5;249mo[0m[38;5;249mb[0m[38;5;249ma[0m[38;5;249ml[0m[38;5;249mM[0m[38;5;249ma[0m[38;5;249mp[0m[38;5;249m [0m[38;5;249m}[0m[38;5;249m [0m[38;5;249mf[0m[38;5;249mr[0m[38;5;249mo[0m[38;5;249mm[0m[38;5;249m [0m"openclaw/plugin-sdk/global-singleton"[38;5;249m;[0m
+ [38;5;240m  │[0m                                  ───────────────────┬──────────────────  
+ [38;5;240m  │[0m                                                     ╰──────────────────── Package subpath is not defined by exports
+ [38;5;240m  │[0m 
+ [38;5;240m  │[0m [38;5;115mHelp[0m: 'extensions/discord/src/components-registry.ts' is imported by the following path:
+ [38;5;240m  │[0m         - extensions/discord/src/components-registry.ts
+ [38;5;240m  │[0m         - extensions/discord/src/send.components.ts
+ [38;5;240m  │[0m         - extensions/discord/runtime-api.ts
+ [38;5;240m  │[0m         - src/plugin-sdk/discord.ts
+[38;5;246m───╯[0m
+
+[31m[RESOLVE_ERROR] Error:[0m Could not resolve 'openclaw/plugin-sdk/github-copilot-token' in extensions/github-copilot/token.ts
+   [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m extensions/github-copilot/token.ts:5:8 [38;5;246m][0m
+   [38;5;246m│[0m
+ [38;5;246m5 │[0m [38;5;249m}[0m[38;5;249m [0m[38;5;249mf[0m[38;5;249mr[0m[38;5;249mo[0m[38;5;249mm[0m[38;5;249m [0m"openclaw/plugin-sdk/github-copilot-token"[38;5;249m;[0m
+ [38;5;240m  │[0m        ─────────────────────┬────────────────────  
+ [38;5;240m  │[0m                             ╰────────────────────── Package subpath is not defined by exports
+ [38;5;240m  │[0m 
+ [38;5;240m  │[0m [38;5;115mHelp[0m: 'extensions/github-copilot/token.ts' is imported by the following path:
+ [38;5;240m  │[0m         - extensions/github-copilot/token.ts
+ [38;5;240m  │[0m         - extensions/github-copilot/register.runtime.ts
+ [38;5;240m  │[0m         - extensions/github-copilot/index.ts
+[38;5;246m───╯[0m
+
+[31m[RESOLVE_ERROR] Error:[0m Could not resolve 'openclaw/plugin-sdk/agent-harness' in extensions/codex/src/app-server/compact.ts
+   [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m extensions/codex/src/app-server/compact.ts:5:8 [38;5;246m][0m
+   [38;5;246m│[0m
+ [38;5;246m5 │[0m [38;5;249m}[0m[38;5;249m [0m[38;5;249mf[0m[38;5;249mr[0m[38;5;249mo[0m[38;5;249mm[0m[38;5;249m [0m"openclaw/plugin-sdk/agent-harness"[38;5;249m;[0m
+ [38;5;240m  │[0m        ─────────────────┬─────────────────  
+ [38;5;240m  │[0m                         ╰─────────────────── Package subpath is not defined by exports
+ [38;5;240m  │[0m 
+ [38;5;240m  │[0m [38;5;115mHelp[0m: 'extensions/codex/src/app-server/compact.ts' is imported by the following path:
+ [38;5;240m  │[0m         - extensions/codex/src/app-server/compact.ts
+ [38;5;240m  │[0m         - extensions/codex/harness.ts
+ [38;5;240m  │[0m         - extensions/codex/index.ts
+[38;5;246m───╯[0m
+
+[31m[RESOLVE_ERROR] Error:[0m Could not resolve 'openclaw/plugin-sdk/agent-harness' in extensions/codex/src/app-server/session-binding.ts
+   [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m extensions/codex/src/app-server/session-binding.ts:2:34 [38;5;246m][0m
+   [38;5;246m│[0m
+ [38;5;246m2 │[0m [38;5;249mi[0m[38;5;249mm[0m[38;5;249mp[0m[38;5;249mo[0m[38;5;249mr[0m[38;5;249mt[0m[38;5;249m [0m[38;5;249m{[0m[38;5;249m [0m[38;5;249me[0m[38;5;249mm[0m[38;5;249mb[0m[38;5;249me[0m[38;5;249md[0m[38;5;249md[0m[38;5;249me[0m[38;5;249md[0m[38;5;249mA[0m[38;5;249mg[0m[38;5;249me[0m[38;5;249mn[0m[38;5;249mt[0m[38;5;249mL[0m[38;5;249mo[0m[38;5;249mg[0m[38;5;249m [0m[38;5;249m}[0m[38;5;249m [0m[38;5;249mf[0m[38;5;249mr[0m[38;5;249mo[0m[38;5;249mm[0m[38;5;249m [0m"openclaw/plugin-sdk/agent-harness"[38;5;249m;[0m
+ [38;5;240m  │[0m                                  ─────────────────┬─────────────────  
+ [38;5;240m  │[0m                                                   ╰─────────────────── Package subpath is not defined by exports
+ [38;5;240m  │[0m 
+ [38;5;240m  │[0m [38;5;115mHelp[0m: 'extensions/codex/src/app-server/session-binding.ts' is imported by the following path:
+ [38;5;240m  │[0m         - extensions/codex/src/app-server/session-binding.ts
+ [38;5;240m  │[0m         - extensions/codex/harness.ts
+ [38;5;240m  │[0m         - extensions/codex/index.ts
+[38;5;246m───╯[0m
+
+...
+    at aggregateBindingErrorsIntoJsError (file:///C:/Users/gmone/.openclaw/workspace/_fork_main_clone/node_modules/rolldown/dist/shared/error-CP8smW_P.mjs:48:18)
+    at unwrapBindingResult (file:///C:/Users/gmone/.openclaw/workspace/_fork_main_clone/node_modules/rolldown/dist/shared/error-CP8smW_P.mjs:18:128)
+    at #build (file:///C:/Users/gmone/.openclaw/workspace/_fork_main_clone/node_modules/rolldown/dist/shared/rolldown-build-4YnQkA76.mjs:3311:34)
+    at async build (file:///C:/Users/gmone/.openclaw/workspace/_fork_main_clone/node_modules/rolldown/dist/index.mjs:46:22)
+    at async Promise.all (index 0)
+    at async buildSingle (file:///C:/Users/gmone/.openclaw/workspace/_fork_main_clone/node_modules/tsdown/dist/build-CoLhkNXE.mjs:734:19)
+    at async Promise.all (index 0)
+    at async buildWithConfigs (file:///C:/Users/gmone/.openclaw/workspace/_fork_main_clone/node_modules/tsdown/dist/build-CoLhkNXE.mjs:690:18)
+    at async CAC.<anonymous> (file:///C:/Users/gmone/.openclaw/workspace/_fork_main_clone/node_modules/tsdown/dist/run.mjs:25:2)
+    at async runCLI (file:///C:/Users/gmone/.openclaw/workspace/_fork_main_clone/node_modules/tsdown/dist/run.mjs:49:3)
+
+ ELIFECYCLE  Command failed with exit code 1.
