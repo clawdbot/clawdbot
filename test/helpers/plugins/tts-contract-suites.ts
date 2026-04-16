@@ -307,7 +307,8 @@ function buildTestMicrosoftSpeechProvider(): SpeechProviderPlugin {
         outputFormat: edgeConfig.outputFormat ?? "audio-24khz-48kbitrate-mono-mp3",
       };
     },
-    isConfigured: () => true,
+    isConfigured: ({ providerConfig }) =>
+      (providerConfig as Record<string, unknown> | undefined)?.enabled !== false,
     synthesize: async () => ({
       audioBuffer: createAudioBuffer(),
       outputFormat: "mp3",
@@ -368,6 +369,32 @@ function buildTestElevenLabsSpeechProvider(): SpeechProviderPlugin {
   };
 }
 
+function buildTestGoogleSpeechProvider(): SpeechProviderPlugin {
+  return {
+    id: "google",
+    label: "Google",
+    autoSelectOrder: 50,
+    resolveConfig: ({ rawConfig }) => resolveTestProviderConfig(rawConfig, "google"),
+    isConfigured: ({ cfg, providerConfig }) =>
+      typeof (providerConfig as Record<string, unknown> | undefined)?.apiKey === "string" ||
+      typeof cfg?.models?.providers?.google?.apiKey === "string" ||
+      typeof process.env.GEMINI_API_KEY === "string" ||
+      typeof process.env.GOOGLE_API_KEY === "string",
+    synthesize: async () => ({
+      audioBuffer: createAudioBuffer(),
+      outputFormat: "wav",
+      fileExtension: ".wav",
+      voiceCompatible: false,
+    }),
+    synthesizeTelephony: async () => ({
+      audioBuffer: createAudioBuffer(),
+      outputFormat: "pcm",
+      sampleRate: 24_000,
+    }),
+    listVoices: async () => [{ id: "Kore", label: "Kore" }],
+  };
+}
+
 async function loadTtsRuntime(): Promise<TtsRuntimeModule> {
   ttsRuntimePromise ??= import("../../../src/tts/tts.js");
   return await ttsRuntimePromise;
@@ -395,6 +422,7 @@ function setupTestSpeechProviderRegistry() {
     { pluginId: "openai", provider: buildTestOpenAISpeechProvider(), source: "test" },
     { pluginId: "microsoft", provider: buildTestMicrosoftSpeechProvider(), source: "test" },
     { pluginId: "elevenlabs", provider: buildTestElevenLabsSpeechProvider(), source: "test" },
+    { pluginId: "google", provider: buildTestGoogleSpeechProvider(), source: "test" },
   ];
   const { cacheKey } = pluginLoaderTesting.resolvePluginLoadCacheContext({ config: {} });
   setActivePluginRegistry(registry, cacheKey);
@@ -612,6 +640,32 @@ export function describeTtsConfigContract() {
           const provider = getTtsProvider(config, testCase.prefsPath);
           expect(provider).toBe(testCase.expected);
         });
+      });
+
+      it("passes cfg into auto-selection so model-provider Google keys can configure TTS", () => {
+        const cfg = asLegacyOpenClawConfig({
+          agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+          models: {
+            providers: {
+              google: {
+                apiKey: "model-provider-google-key",
+              },
+            },
+          },
+          messages: {
+            tts: {
+              providers: {
+                microsoft: {
+                  enabled: false,
+                },
+              },
+            },
+          },
+        });
+        const config = resolveTtsConfig(cfg);
+        const prefsPath = `/tmp/tts-prefs-google-model-provider-${Date.now()}.json`;
+
+        expect(getTtsProvider(config, prefsPath)).toBe("google");
       });
     });
 

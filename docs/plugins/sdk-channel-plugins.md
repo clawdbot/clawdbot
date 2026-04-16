@@ -493,6 +493,11 @@ should use `resolveInboundMentionDecision({ facts, policy })`.
     or unconfigured. It avoids pulling in heavy runtime code during setup flows.
     See [Setup and Config](/plugins/sdk-setup#setup-entry) for details.
 
+    Bundled workspace channels that split setup-safe exports into sidecar
+    modules can use `defineBundledChannelSetupEntry(...)` from
+    `openclaw/plugin-sdk/channel-entry-contract` when they also need an
+    explicit setup-time runtime setter.
+
   </Step>
 
   <Step title="Handle inbound messages">

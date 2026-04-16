@@ -19,12 +19,14 @@ const { nodesAction, registerNodesCli } = vi.hoisted(() => {
   return { nodesAction: action, registerNodesCli: register };
 });
 
-const { isQaLabCliAvailable, registerQaLabCli } = vi.hoisted(() => ({
-  isQaLabCliAvailable: vi.fn(() => true),
+const { registerQaLabCli } = vi.hoisted(() => ({
   registerQaLabCli: vi.fn((program: Command) => {
     const qa = program.command("qa");
     qa.command("run").action(() => undefined);
   }),
+}));
+const { loadPrivateQaCliModule } = vi.hoisted(() => ({
+  loadPrivateQaCliModule: vi.fn(async () => ({ registerQaLabCli })),
 }));
 
 const { inferAction, registerCapabilityCli } = vi.hoisted(() => {
@@ -38,11 +40,18 @@ const { inferAction, registerCapabilityCli } = vi.hoisted(() => {
 vi.mock("../acp-cli.js", () => ({ registerAcpCli }));
 vi.mock("../nodes-cli.js", () => ({ registerNodesCli }));
 vi.mock("../capability-cli.js", () => ({ registerCapabilityCli }));
-vi.mock("../../plugin-sdk/qa-lab.js", () => ({ isQaLabCliAvailable, registerQaLabCli }));
+vi.mock("./private-qa-cli.js", async () => {
+  const actual = await vi.importActual<typeof import("./private-qa-cli.js")>("./private-qa-cli.js");
+  return {
+    ...actual,
+    loadPrivateQaCliModule,
+  };
+});
 
 describe("registerSubCliCommands", () => {
   const originalArgv = process.argv;
   const originalDisableLazySubcommands = process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS;
+  const originalEnablePrivateQaCli = process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
 
   const createRegisteredProgram = (argv: string[], name?: string) => {
     process.argv = argv;
@@ -60,12 +69,13 @@ describe("registerSubCliCommands", () => {
     } else {
       process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS = originalDisableLazySubcommands;
     }
+    process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
     registerAcpCli.mockClear();
     acpAction.mockClear();
     registerNodesCli.mockClear();
     nodesAction.mockClear();
-    isQaLabCliAvailable.mockReset().mockReturnValue(true);
     registerQaLabCli.mockClear();
+    loadPrivateQaCliModule.mockClear();
     registerCapabilityCli.mockClear();
     inferAction.mockClear();
   });
@@ -76,6 +86,11 @@ describe("registerSubCliCommands", () => {
       delete process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS;
     } else {
       process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS = originalDisableLazySubcommands;
+    }
+    if (originalEnablePrivateQaCli === undefined) {
+      delete process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
+    } else {
+      process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = originalEnablePrivateQaCli;
     }
   });
 
@@ -101,8 +116,8 @@ describe("registerSubCliCommands", () => {
     expect(registerAcpCli).not.toHaveBeenCalled();
   });
 
-  it("omits the qa placeholder when the private qa bundle is unavailable", () => {
-    isQaLabCliAvailable.mockReturnValue(false);
+  it("omits the qa placeholder when the private qa cli is disabled", () => {
+    delete process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
 
     const program = createRegisteredProgram(["node", "openclaw"]);
 

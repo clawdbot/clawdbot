@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/google-plugin",
-  "version": "2026.4.12",
+  "version": "2026.4.15-beta.1",
   "private": true,
   "description": "OpenClaw Google plugin",
   "type": "module",
@@ -11,6 +11,9 @@
     "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {
+    "bundle": {
+      "stageRuntimeDependencies": true
+    },
     "extensions": [
       "./index.ts"
     ]

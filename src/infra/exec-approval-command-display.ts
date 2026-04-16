@@ -1,3 +1,4 @@
+import { redactSensitiveText } from "../logging/redact.js";
 import type { ExecApprovalRequestPayload } from "./exec-approvals.js";
 
 // Escape invisible characters that can spoof approval prompts in common UIs.
@@ -8,7 +9,8 @@ function formatCodePointEscape(char: string): string {
 }
 
 export function sanitizeExecApprovalDisplayText(commandText: string): string {
-  return commandText.replace(EXEC_APPROVAL_INVISIBLE_CHAR_REGEX, formatCodePointEscape);
+  const escaped = commandText.replace(EXEC_APPROVAL_INVISIBLE_CHAR_REGEX, formatCodePointEscape);
+  return redactSensitiveText(escaped, { mode: "tools" });
 }
 
 function normalizePreview(commandText: string, commandPreview?: string | null): string | null {

@@ -261,6 +261,45 @@ const PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS = [
   ".cjs",
 ] as const;
 
+function readPrivateLocalOnlyPluginSdkSubpaths(packageRoot: string): string[] {
+  try {
+    const raw = fs.readFileSync(
+      path.join(packageRoot, "scripts", "lib", "plugin-sdk-private-local-only-subpaths.json"),
+      "utf-8",
+    );
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed.filter((subpath): subpath is string => isSafePluginSdkSubpathSegment(subpath));
+  } catch {
+    return [];
+  }
+}
+
+function shouldIncludePrivateLocalOnlyPluginSdkSubpaths() {
+  return process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI === "1";
+}
+
+function hasPluginSdkSubpathArtifact(packageRoot: string, subpath: string) {
+  const distPath = path.join(packageRoot, "dist", "plugin-sdk", `${subpath}.js`);
+  if (fs.existsSync(distPath)) {
+    return true;
+  }
+  return PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS.some((ext) =>
+    fs.existsSync(path.join(packageRoot, "src", "plugin-sdk", `${subpath}${ext}`)),
+  );
+}
+
+function listPrivateLocalOnlyPluginSdkSubpaths(packageRoot: string): string[] {
+  if (!shouldIncludePrivateLocalOnlyPluginSdkSubpaths()) {
+    return [];
+  }
+  return readPrivateLocalOnlyPluginSdkSubpaths(packageRoot).filter((subpath) =>
+    hasPluginSdkSubpathArtifact(packageRoot, subpath),
+  );
+}
+
 export function listPluginSdkExportedSubpaths(
   params: {
     modulePath?: string;
@@ -278,12 +317,18 @@ export function listPluginSdkExportedSubpaths(
   if (!packageRoot) {
     return [];
   }
-  const cached = cachedPluginSdkExportedSubpaths.get(packageRoot);
+  const cacheKey = `${packageRoot}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}`;
+  const cached = cachedPluginSdkExportedSubpaths.get(cacheKey);
   if (cached) {
     return cached;
   }
-  const subpaths = readPluginSdkSubpathsFromPackageRoot(packageRoot) ?? [];
-  cachedPluginSdkExportedSubpaths.set(packageRoot, subpaths);
+  const subpaths = [
+    ...new Set([
+      ...(readPluginSdkSubpathsFromPackageRoot(packageRoot) ?? []),
+      ...listPrivateLocalOnlyPluginSdkSubpaths(packageRoot),
+    ]),
+  ].toSorted();
+  cachedPluginSdkExportedSubpaths.set(cacheKey, subpaths);
   return subpaths;
 }
 
@@ -309,7 +354,7 @@ export function resolvePluginSdkScopedAliasMap(
     isProduction: process.env.NODE_ENV === "production",
     pluginSdkResolution: params.pluginSdkResolution,
   });
-  const cacheKey = `${packageRoot}::${orderedKinds.join(",")}`;
+  const cacheKey = `${packageRoot}::${orderedKinds.join(",")}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}`;
   const cached = cachedPluginSdkScopedAliasMaps.get(cacheKey);
   if (cached) {
     return cached;
@@ -472,6 +517,10 @@ function supportsNativeJitiRuntime(): boolean {
   return typeof versions.bun !== "string" && process.platform !== "win32";
 }
 
+function isBundledPluginDistModulePath(modulePath: string): boolean {
+  return modulePath.replace(/\\/g, "/").includes("/dist/extensions/");
+}
+
 export function shouldPreferNativeJiti(modulePath: string): boolean {
   if (!supportsNativeJitiRuntime()) {
     return false;
@@ -493,6 +542,9 @@ export function resolvePluginLoaderJitiTryNative(
     preferBuiltDist?: boolean;
   },
 ): boolean {
+  if (isBundledPluginDistModulePath(modulePath)) {
+    return false;
+  }
   return (
     shouldPreferNativeJiti(modulePath) ||
     (supportsNativeJitiRuntime() &&

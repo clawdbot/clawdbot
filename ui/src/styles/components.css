@@ -2990,6 +2990,9 @@ td.data-table-key-col {
 
 .exec-approval-card {
   width: min(540px, 100%);
+  max-height: calc(100dvh - 48px);
+  display: flex;
+  flex-direction: column;
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -3026,10 +3029,12 @@ td.data-table-key-col {
 
 .exec-approval-command {
   margin-top: 12px;
+  max-height: min(40dvh, 320px);
   padding: 10px 12px;
   background: var(--secondary);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
+  overflow-y: auto;
   word-break: break-word;
   white-space: pre-wrap;
   font-family: var(--mono);

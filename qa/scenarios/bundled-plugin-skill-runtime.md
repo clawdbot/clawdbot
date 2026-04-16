@@ -32,8 +32,8 @@ steps:
         value:
           expr: |-
             (async () => {
-              const { spawnSync } = await import("node:child_process");
-              const fsSync = await import("node:fs");
+              const { spawnSync } = await qaImport("node:child_process");
+              const fsSync = await qaImport("node:fs");
               const distRuntimeExtensions = path.join(env.repoRoot, "dist-runtime", "extensions");
               const skillPath = path.join(
                 distRuntimeExtensions,

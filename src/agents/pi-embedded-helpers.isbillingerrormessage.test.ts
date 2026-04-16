@@ -1195,6 +1195,9 @@ describe("classifyProviderRuntimeFailureKind", () => {
     expect(classifyProviderRuntimeFailureKind("tool_use.input: Field required")).toBe(
       "replay_invalid",
     );
+    expect(
+      classifyProviderRuntimeFailureKind("401 input item ID does not belong to this connection"),
+    ).toBe("replay_invalid");
   });
 
   it("does not classify generic config errors that mention proxy settings as proxy failures", () => {

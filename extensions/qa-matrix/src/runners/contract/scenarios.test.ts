@@ -25,11 +25,15 @@ describe("matrix live qa scenarios", () => {
   it("ships the Matrix live QA scenario set by default", () => {
     expect(scenarioTesting.findMatrixQaScenarios().map((scenario) => scenario.id)).toEqual([
       "matrix-thread-follow-up",
+      "matrix-thread-root-preservation",
+      "matrix-thread-nested-reply-shape",
       "matrix-thread-isolation",
       "matrix-top-level-reply-shape",
       "matrix-room-thread-reply-override",
       "matrix-room-quiet-streaming-preview",
       "matrix-room-block-streaming",
+      "matrix-room-image-understanding-attachment",
+      "matrix-room-generated-image-delivery",
       "matrix-dm-reply-shape",
       "matrix-dm-shared-session-notice",
       "matrix-dm-thread-reply-override",
@@ -38,6 +42,8 @@ describe("matrix live qa scenarios", () => {
       "matrix-secondary-room-reply",
       "matrix-secondary-room-open-trigger",
       "matrix-reaction-notification",
+      "matrix-reaction-threaded",
+      "matrix-reaction-not-a-reply",
       "matrix-restart-resume",
       "matrix-room-membership-loss",
       "matrix-homeserver-restart-resume",
@@ -742,6 +748,171 @@ describe("matrix live qa scenarios", () => {
         since: "driver-sync-block-one",
       }),
     );
+  });
+
+  it("sends a real Matrix image attachment for image-understanding prompts", async () => {
+    const primeRoom = vi.fn().mockResolvedValue("driver-sync-start");
+    const sendMediaMessage = vi.fn().mockResolvedValue("$image-understanding-trigger");
+    const waitForRoomEvent = vi.fn().mockResolvedValue({
+      event: {
+        kind: "message",
+        roomId: "!media:matrix-qa.test",
+        eventId: "$sut-image-reply",
+        sender: "@sut:matrix-qa.test",
+        type: "m.room.message",
+        body: "Protocol note: the attached image is split horizontally, with red on top and blue on the bottom.",
+      },
+      since: "driver-sync-next",
+    });
+
+    createMatrixQaClient.mockReturnValue({
+      primeRoom,
+      sendMediaMessage,
+      waitForRoomEvent,
+    });
+
+    const scenario = MATRIX_QA_SCENARIOS.find(
+      (entry) => entry.id === "matrix-room-image-understanding-attachment",
+    );
+    expect(scenario).toBeDefined();
+
+    await expect(
+      runMatrixQaScenario(scenario!, {
+        baseUrl: "http://127.0.0.1:28008/",
+        canary: undefined,
+        driverAccessToken: "driver-token",
+        driverUserId: "@driver:matrix-qa.test",
+        observedEvents: [],
+        observerAccessToken: "observer-token",
+        observerUserId: "@observer:matrix-qa.test",
+        roomId: "!main:matrix-qa.test",
+        restartGateway: undefined,
+        syncState: {},
+        sutAccessToken: "sut-token",
+        sutUserId: "@sut:matrix-qa.test",
+        timeoutMs: 8_000,
+        topology: {
+          defaultRoomId: "!main:matrix-qa.test",
+          defaultRoomKey: "main",
+          rooms: [
+            {
+              key: scenarioTesting.MATRIX_QA_MEDIA_ROOM_KEY,
+              kind: "group",
+              memberRoles: ["driver", "observer", "sut"],
+              memberUserIds: [
+                "@driver:matrix-qa.test",
+                "@observer:matrix-qa.test",
+                "@sut:matrix-qa.test",
+              ],
+              name: "Media",
+              requireMention: true,
+              roomId: "!media:matrix-qa.test",
+            },
+          ],
+        },
+      }),
+    ).resolves.toMatchObject({
+      artifacts: {
+        attachmentFilename: "red-top-blue-bottom.png",
+        driverEventId: "$image-understanding-trigger",
+        reply: {
+          eventId: "$sut-image-reply",
+        },
+      },
+    });
+
+    expect(sendMediaMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contentType: "image/png",
+        fileName: "red-top-blue-bottom.png",
+        kind: "image",
+        mentionUserIds: ["@sut:matrix-qa.test"],
+        roomId: "!media:matrix-qa.test",
+      }),
+    );
+  });
+
+  it("waits for a real Matrix image attachment after image generation", async () => {
+    const primeRoom = vi.fn().mockResolvedValue("driver-sync-start");
+    const sendTextMessage = vi.fn().mockResolvedValue("$image-generate-trigger");
+    const waitForRoomEvent = vi.fn().mockResolvedValue({
+      event: {
+        kind: "message",
+        roomId: "!media:matrix-qa.test",
+        eventId: "$sut-image",
+        sender: "@sut:matrix-qa.test",
+        type: "m.room.message",
+        body: "Protocol note: generated the QA lighthouse image successfully.",
+        msgtype: "m.image",
+        attachment: {
+          kind: "image",
+          filename: "qa-lighthouse.png",
+        },
+      },
+      since: "driver-sync-next",
+    });
+
+    createMatrixQaClient.mockReturnValue({
+      primeRoom,
+      sendTextMessage,
+      waitForRoomEvent,
+    });
+
+    const scenario = MATRIX_QA_SCENARIOS.find(
+      (entry) => entry.id === "matrix-room-generated-image-delivery",
+    );
+    expect(scenario).toBeDefined();
+
+    await expect(
+      runMatrixQaScenario(scenario!, {
+        baseUrl: "http://127.0.0.1:28008/",
+        canary: undefined,
+        driverAccessToken: "driver-token",
+        driverUserId: "@driver:matrix-qa.test",
+        observedEvents: [],
+        observerAccessToken: "observer-token",
+        observerUserId: "@observer:matrix-qa.test",
+        roomId: "!main:matrix-qa.test",
+        restartGateway: undefined,
+        syncState: {},
+        sutAccessToken: "sut-token",
+        sutUserId: "@sut:matrix-qa.test",
+        timeoutMs: 8_000,
+        topology: {
+          defaultRoomId: "!main:matrix-qa.test",
+          defaultRoomKey: "main",
+          rooms: [
+            {
+              key: scenarioTesting.MATRIX_QA_MEDIA_ROOM_KEY,
+              kind: "group",
+              memberRoles: ["driver", "observer", "sut"],
+              memberUserIds: [
+                "@driver:matrix-qa.test",
+                "@observer:matrix-qa.test",
+                "@sut:matrix-qa.test",
+              ],
+              name: "Media",
+              requireMention: true,
+              roomId: "!media:matrix-qa.test",
+            },
+          ],
+        },
+      }),
+    ).resolves.toMatchObject({
+      artifacts: {
+        attachmentEventId: "$sut-image",
+        attachmentFilename: "qa-lighthouse.png",
+        attachmentKind: "image",
+        attachmentMsgtype: "m.image",
+        driverEventId: "$image-generate-trigger",
+      },
+    });
+
+    expect(sendTextMessage).toHaveBeenCalledWith({
+      body: expect.stringContaining("Image generation check: generate a QA lighthouse image"),
+      mentionUserIds: ["@sut:matrix-qa.test"],
+      roomId: "!media:matrix-qa.test",
+    });
   });
 
   it("uses DM thread override scenarios against the provisioned DM room", async () => {

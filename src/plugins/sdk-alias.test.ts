@@ -98,6 +98,12 @@ function createPluginSdkAliasFixture(params?: {
   if (trustedRootIndicatorMode === "bin+marker") {
     fs.writeFileSync(path.join(root, "openclaw.mjs"), "export {};\n", "utf-8");
   }
+  mkdirSafeDir(path.join(root, "scripts", "lib"));
+  fs.writeFileSync(
+    path.join(root, "scripts", "lib", "plugin-sdk-private-local-only-subpaths.json"),
+    JSON.stringify(["qa-lab", "qa-runtime"], null, 2),
+    "utf-8",
+  );
   fs.writeFileSync(srcFile, params?.srcBody ?? "export {};\n", "utf-8");
   fs.writeFileSync(distFile, params?.distBody ?? "export {};\n", "utf-8");
   return { root, srcFile, distFile };
@@ -518,6 +524,62 @@ describe("plugin sdk alias helpers", () => {
     expect(subpaths).toEqual(["compat", "core"]);
   });
 
+  it("adds private qa plugin-sdk subpaths for trusted local checkouts when enabled", () => {
+    const fixture = createPluginSdkAliasFixture({
+      packageExports: {
+        "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
+      },
+    });
+    fs.writeFileSync(
+      path.join(fixture.root, "src", "plugin-sdk", "qa-runtime.ts"),
+      "export const qaRuntime = true;\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(fixture.root, "dist", "plugin-sdk", "qa-lab.js"),
+      "export const qaLab = true;\n",
+      "utf-8",
+    );
+
+    const subpaths = withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1" }, () =>
+      listPluginSdkExportedSubpaths({
+        modulePath: path.join(fixture.root, "src", "plugins", "loader.ts"),
+      }),
+    );
+    expect(subpaths).toEqual(["core", "qa-lab", "qa-runtime"]);
+  });
+
+  it("does not reuse a non-private cached subpath list after private qa gets enabled", () => {
+    const fixture = createPluginSdkAliasFixture({
+      packageExports: {
+        "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
+      },
+    });
+    fs.writeFileSync(
+      path.join(fixture.root, "src", "plugin-sdk", "qa-runtime.ts"),
+      "export const qaRuntime = true;\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(fixture.root, "dist", "plugin-sdk", "qa-lab.js"),
+      "export const qaLab = true;\n",
+      "utf-8",
+    );
+
+    expect(
+      listPluginSdkExportedSubpaths({
+        modulePath: path.join(fixture.root, "src", "plugins", "loader.ts"),
+      }),
+    ).toEqual(["core"]);
+
+    const privateSubpaths = withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1" }, () =>
+      listPluginSdkExportedSubpaths({
+        modulePath: path.join(fixture.root, "src", "plugins", "loader.ts"),
+      }),
+    );
+    expect(privateSubpaths).toEqual(["core", "qa-lab", "qa-runtime"]);
+  });
+
   it.each([
     {
       name: "does not derive plugin-sdk subpaths from cwd fallback when package root is not an OpenClaw root",
@@ -586,6 +648,38 @@ describe("plugin sdk alias helpers", () => {
       rootAliasPath: distRootAlias,
       channelRuntimePath: distChannelRuntimePath,
     });
+  });
+
+  it("adds private qa plugin-sdk aliases for source plugins when enabled", () => {
+    const fixture = createPluginSdkAliasFixture({
+      packageExports: {
+        "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
+      },
+    });
+    const sourceRootAlias = path.join(fixture.root, "src", "plugin-sdk", "root-alias.cjs");
+    const sourceQaRuntimePath = path.join(fixture.root, "src", "plugin-sdk", "qa-runtime.ts");
+    const distQaLabPath = path.join(fixture.root, "dist", "plugin-sdk", "qa-lab.js");
+    fs.writeFileSync(sourceRootAlias, "module.exports = {};\n", "utf-8");
+    fs.writeFileSync(sourceQaRuntimePath, "export const qaRuntime = true;\n", "utf-8");
+    fs.writeFileSync(distQaLabPath, "export const qaLab = true;\n", "utf-8");
+    const sourcePluginEntry = writePluginEntry(
+      fixture.root,
+      bundledPluginFile("qa-matrix", "src/index.ts"),
+    );
+
+    const aliases = withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1", NODE_ENV: undefined }, () =>
+      buildPluginLoaderAliasMap(sourcePluginEntry),
+    );
+
+    expect(fs.realpathSync(aliases["openclaw/plugin-sdk"] ?? "")).toBe(
+      fs.realpathSync(sourceRootAlias),
+    );
+    expect(fs.realpathSync(aliases["openclaw/plugin-sdk/qa-runtime"] ?? "")).toBe(
+      fs.realpathSync(sourceQaRuntimePath),
+    );
+    expect(fs.realpathSync(aliases["openclaw/plugin-sdk/qa-lab"] ?? "")).toBe(
+      fs.realpathSync(distQaLabPath),
+    );
   });
 
   it("applies explicit dist resolution to plugin-sdk subpath aliases too", () => {
@@ -793,14 +887,19 @@ describe("plugin sdk alias helpers", () => {
     }
   });
 
-  it("allows plugin loader dist shortcuts on non-Windows hosts", () => {
+  it("keeps bundled plugin dist modules on the aliased Jiti path", () => {
     expect(
       resolvePluginLoaderJitiTryNative(`/repo/${bundledDistPluginFile("browser", "index.js")}`, {
         preferBuiltDist: true,
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       resolvePluginLoaderJitiTryNative(`/repo/${bundledDistPluginFile("browser", "helper.ts")}`, {
+        preferBuiltDist: true,
+      }),
+    ).toBe(false);
+    expect(
+      resolvePluginLoaderJitiTryNative("/repo/dist/plugins/runtime/index.js", {
         preferBuiltDist: true,
       }),
     ).toBe(true);

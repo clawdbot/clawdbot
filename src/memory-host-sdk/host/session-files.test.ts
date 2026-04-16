@@ -175,6 +175,50 @@ describe("buildSessionEntry", () => {
     expect(entry?.generatedByDreamingNarrative).toBe(true);
   });
 
+  it("flags dreaming narrative transcripts from the sibling session store before bootstrap lands", async () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const filePath = path.join(sessionsDir, "dreaming-session.jsonl");
+    await fs.writeFile(
+      filePath,
+      [
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            content:
+              "Write a dream diary entry from these memory fragments:\n- Candidate: durable note",
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            content: "A drifting archive breathed in moonlight.",
+          },
+        }),
+      ].join("\n"),
+    );
+    await fs.writeFile(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        "agent:main:dreaming-narrative-light-1775894400455": {
+          sessionId: "dreaming-session",
+          sessionFile: filePath,
+          updatedAt: Date.now(),
+        },
+      }),
+      "utf-8",
+    );
+
+    const entry = await buildSessionEntry(filePath);
+
+    expect(entry).not.toBeNull();
+    expect(entry?.generatedByDreamingNarrative).toBe(true);
+    expect(entry?.content).toBe("");
+    expect(entry?.lineMap).toEqual([]);
+  });
+
   it("does not flag ordinary transcripts that quote the dream-diary prompt", async () => {
     const jsonlLines = [
       JSON.stringify({

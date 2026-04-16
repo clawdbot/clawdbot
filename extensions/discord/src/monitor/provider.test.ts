@@ -97,21 +97,23 @@ describe("monitorDiscordProvider", () => {
     ) => Promise<{ status: string; reason?: string }>;
   };
 
-  const getConstructedEventQueue = (): { listenerTimeout?: number } | undefined => {
+  const getConstructedEventQueue = ():
+    | { listenerTimeout?: number; slowListenerThreshold?: number }
+    | undefined => {
     expect(clientConstructorOptionsMock).toHaveBeenCalledTimes(1);
     const opts = clientConstructorOptionsMock.mock.calls[0]?.[0] as {
-      eventQueue?: { listenerTimeout?: number };
+      eventQueue?: { listenerTimeout?: number; slowListenerThreshold?: number };
     };
     return opts.eventQueue;
   };
 
   const getConstructedClientOptions = (): {
-    eventQueue?: { listenerTimeout?: number };
+    eventQueue?: { listenerTimeout?: number; slowListenerThreshold?: number };
   } => {
     expect(clientConstructorOptionsMock).toHaveBeenCalledTimes(1);
     return (
       (clientConstructorOptionsMock.mock.calls[0]?.[0] as {
-        eventQueue?: { listenerTimeout?: number };
+        eventQueue?: { listenerTimeout?: number; slowListenerThreshold?: number };
       }) ?? {}
     );
   };
@@ -573,14 +575,17 @@ describe("monitorDiscordProvider", () => {
     expect(drained[0]?.message).toContain("4014");
   });
 
-  it("passes default eventQueue.listenerTimeout of 120s to Carbon Client", async () => {
+  it("passes OpenClaw EventQueue defaults to Carbon Client", async () => {
     await monitorDiscordProvider({
       config: baseConfig(),
       runtime: baseRuntime(),
     });
 
     const eventQueue = getConstructedEventQueue();
-    expect(eventQueue).toEqual({ listenerTimeout: 120_000 });
+    expect(eventQueue).toEqual({
+      listenerTimeout: 120_000,
+      slowListenerThreshold: 30_000,
+    });
   });
 
   it("forwards custom eventQueue config from discord config to Carbon Client", async () => {

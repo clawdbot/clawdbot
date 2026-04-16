@@ -252,7 +252,7 @@ describe("stageBundledPluginRuntimeDeps", () => {
     });
   });
 
-  it("strips non-runtime dependency sections before temp npm staging", async () => {
+  it("strips non-runtime dependency sections before fallback runtime staging", async () => {
     const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-manifest-");
     writeRepoFile(
       repoRoot,

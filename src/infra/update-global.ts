@@ -5,7 +5,10 @@ import path from "node:path";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { pathExists } from "../utils.js";
-import { NPM_UPDATE_COMPAT_SIDECAR_PATHS } from "./npm-update-compat-sidecars.js";
+import {
+  NPM_UPDATE_COMPAT_SIDECAR_PATHS,
+  NPM_UPDATE_OMITTED_BUNDLED_PLUGIN_ROOTS,
+} from "./npm-update-compat-sidecars.js";
 import {
   collectPackageDistInventory,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
@@ -200,6 +203,9 @@ async function collectCriticalInstalledPackageDistPaths(packageRoot: string): Pr
       }
       const pluginRoot = resolveBundledPluginRoot(relativePath);
       if (pluginRoot === null) {
+        return;
+      }
+      if (NPM_UPDATE_OMITTED_BUNDLED_PLUGIN_ROOTS.has(pluginRoot)) {
         return;
       }
       if (

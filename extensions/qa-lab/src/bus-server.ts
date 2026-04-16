@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeAccountId } from "./bus-queries.js";
 import type { QaBusState } from "./bus-state.js";
 import type {
   QaBusCreateThreadInput,
@@ -134,16 +135,17 @@ export async function handleQaBusRequest(params: {
       case "/v1/poll": {
         const input = body as unknown as QaBusPollInput;
         const timeoutMs = Math.max(0, Math.min(input.timeoutMs ?? 0, 30_000));
+        const accountId = normalizeAccountId(input.accountId);
         const initial = params.state.poll(input);
         if (initial.events.length > 0 || timeoutMs === 0) {
           writeJson(params.res, 200, initial);
           return true;
         }
         try {
-          await params.state.waitFor({
-            kind: "event-kind",
-            eventKind: "inbound-message",
-            timeoutMs,
+          await params.state.waitForCursorAdvance(input.cursor ?? 0, timeoutMs, (snapshot) => {
+            return snapshot.events.some(
+              (event) => event.accountId === accountId && event.cursor > (input.cursor ?? 0),
+            );
           });
         } catch {
           // timeout ok for long-poll

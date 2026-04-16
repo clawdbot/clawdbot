@@ -75,12 +75,19 @@ steps:
           - 60000
       - try:
           actions:
-            - set: memoryPath
+            - set: memoryDir
               value:
-                expr: "path.join(env.gateway.workspaceDir, 'MEMORY.md')"
+                expr: "path.join(env.gateway.workspaceDir, 'memory')"
+            - call: fs.mkdir
+              args:
+                - ref: memoryDir
+                - recursive: true
+            - set: staleMemoryPath
+              value:
+                expr: "path.join(memoryDir, '2020-01-01.md')"
             - call: fs.writeFile
               args:
-                - ref: memoryPath
+                - ref: staleMemoryPath
                 - expr: "`${'Project Nebula stale codename: '}${staleFact}.\\n`"
                 - utf8
             - set: staleAt
@@ -88,7 +95,7 @@ steps:
                 expr: "new Date('2020-01-01T00:00:00.000Z')"
             - call: fs.utimes
               args:
-                - ref: memoryPath
+                - ref: staleMemoryPath
                 - ref: staleAt
                 - ref: staleAt
             - set: transcriptsDir

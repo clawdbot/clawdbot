@@ -79,9 +79,6 @@ importers:
       '@larksuiteoapi/node-sdk':
         specifier: ^1.60.0
         version: 1.60.0
-      '@line/bot-sdk':
-        specifier: ^11.0.0
-        version: 11.0.0
       '@lydell/node-pty':
         specifier: 1.2.0-beta.12
         version: 1.2.0-beta.12
@@ -109,6 +106,9 @@ importers:
       '@napi-rs/canvas':
         specifier: ^0.1.89
         version: 0.1.92
+      '@pierre/diffs':
+        specifier: 1.1.13
+        version: 1.1.13(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@sinclair/typebox':
         specifier: 0.34.49
         version: 0.34.49
@@ -160,9 +160,6 @@ importers:
       grammy:
         specifier: ^1.42.0
         version: 1.42.0
-      hono:
-        specifier: 4.12.12
-        version: 4.12.12
       https-proxy-agent:
         specifier: ^9.0.0
         version: 9.0.0
@@ -339,9 +336,6 @@ importers:
       music-metadata:
         specifier: ^11.12.3
         version: 11.12.3
-      openshell:
-        specifier: 0.1.0
-        version: 0.1.0
 
   extensions/acpx:
     dependencies:
@@ -694,6 +688,10 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/line:
+    dependencies:
+      '@line/bot-sdk':
+        specifier: ^11.0.0
+        version: 11.0.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -961,6 +959,10 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/openshell:
+    dependencies:
+      openshell:
+        specifier: 0.1.0
+        version: 0.1.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -10983,8 +10985,7 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
-  '@telegraf/types@7.1.0':
-    optional: true
+  '@telegraf/types@7.1.0': {}
 
   '@thi.ng/bitstream@2.4.45':
     dependencies:
@@ -11732,21 +11733,18 @@ snapshots:
     dependencies:
       base-x: 5.0.1
 
-  buffer-alloc-unsafe@1.1.0:
-    optional: true
+  buffer-alloc-unsafe@1.1.0: {}
 
   buffer-alloc@1.2.0:
     dependencies:
       buffer-alloc-unsafe: 1.1.0
       buffer-fill: 1.0.0
-    optional: true
 
   buffer-crc32@0.2.13: {}
 
   buffer-equal-constant-time@1.0.1: {}
 
-  buffer-fill@1.0.0:
-    optional: true
+  buffer-fill@1.0.0: {}
 
   buffer-from@1.1.2: {}
 
@@ -12135,8 +12133,7 @@ snapshots:
       domelementtype: 2.3.0
       domhandler: 5.0.3
 
-  dotenv@16.6.1:
-    optional: true
+  dotenv@16.6.1: {}
 
   dotenv@17.4.1: {}
 
@@ -13444,8 +13441,7 @@ snapshots:
     dependencies:
       '@wasm-audio-decoders/common': 9.0.7
 
-  mri@1.2.0:
-    optional: true
+  mri@1.2.0: {}
 
   mrmime@2.0.1: {}
 
@@ -13677,7 +13673,6 @@ snapshots:
     transitivePeerDependencies:
       - encoding
       - supports-color
-    optional: true
 
   opus-decoder@0.7.11:
     dependencies:
@@ -13792,8 +13787,7 @@ snapshots:
     dependencies:
       p-finally: 1.0.0
 
-  p-timeout@4.1.0:
-    optional: true
+  p-timeout@4.1.0: {}
 
   p-timeout@7.0.1: {}
 
@@ -14378,14 +14372,12 @@ snapshots:
   safe-compare@1.1.4:
     dependencies:
       buffer-alloc: 1.2.0
-    optional: true
 
   safe-stable-stringify@2.5.0: {}
 
   safer-buffer@2.1.2: {}
 
-  sandwich-stream@2.0.2:
-    optional: true
+  sandwich-stream@2.0.2: {}
 
   sass-lookup@6.1.1:
     dependencies:
@@ -14781,7 +14773,6 @@ snapshots:
     transitivePeerDependencies:
       - encoding
       - supports-color
-    optional: true
 
   text-decoder@1.2.7:
     dependencies:

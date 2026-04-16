@@ -1,9 +1,14 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../scripts/lib/workspace-bootstrap-smoke.mjs";
 import {
   compareReleaseVersions,
   collectControlUiPackErrors,
+  collectForbiddenPackedContentErrors,
   collectForbiddenPackedPathErrors,
+  collectPackedTestCargoErrors,
   collectReleasePackageMetadataErrors,
   collectReleaseTagErrors,
   parseNpmPackJsonOutput,
@@ -15,10 +20,13 @@ import {
   shouldSkipPackedTarballValidation,
   utcCalendarDayDistance,
 } from "../scripts/openclaw-npm-release-check.ts";
+import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "../src/infra/package-dist-inventory.ts";
 
-const LEGACY_UPDATE_COMPAT_PACKED_PATHS = [
-  "dist/extensions/qa-channel/runtime-api.js",
-  "dist/extensions/qa-lab/runtime-api.js",
+const LEGACY_UPDATE_COMPAT_PACKED_PATHS = ["dist/extensions/qa-channel/runtime-api.js"] as const;
+const REQUIRED_PACKED_PATHS = [
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+  ...LEGACY_UPDATE_COMPAT_PACKED_PATHS,
+  ...WORKSPACE_TEMPLATE_PACK_PATHS,
 ] as const;
 
 describe("parseReleaseVersion", () => {
@@ -286,11 +294,7 @@ describe("parseNpmPackJsonOutput", () => {
 describe("collectControlUiPackErrors", () => {
   it("rejects packs that ship the dashboard HTML without the asset payload", () => {
     expect(collectControlUiPackErrors(["dist/control-ui/index.html"])).toEqual([
-      ...LEGACY_UPDATE_COMPAT_PACKED_PATHS.map(
-        (requiredPath) =>
-          `npm package is missing required path "${requiredPath}". Ensure UI assets are built and included before publish.`,
-      ),
-      ...WORKSPACE_TEMPLATE_PACK_PATHS.map(
+      ...REQUIRED_PACKED_PATHS.map(
         (requiredPath) =>
           `npm package is missing required path "${requiredPath}". Ensure UI assets are built and included before publish.`,
       ),
@@ -302,8 +306,7 @@ describe("collectControlUiPackErrors", () => {
     expect(
       collectControlUiPackErrors([
         "dist/control-ui/index.html",
-        ...LEGACY_UPDATE_COMPAT_PACKED_PATHS,
-        ...WORKSPACE_TEMPLATE_PACK_PATHS,
+        ...REQUIRED_PACKED_PATHS,
         "dist/control-ui/assets/index-Bu8rSoJV.js",
         "dist/control-ui/assets/index-BK0yXA_h.css",
       ]),
@@ -332,20 +335,107 @@ describe("collectForbiddenPackedPathErrors", () => {
         "dist/extensions/qa-channel/package.json",
         "dist/extensions/qa-lab/runtime-api.js",
         "dist/extensions/qa-lab/src/cli.js",
+        "dist/plugin-sdk/extensions/qa-lab/cli.d.ts",
+        "dist/qa-runtime-B9LDtssJ.js",
+        "qa/scenarios/index.md",
       ]),
     ).toEqual([
       'npm package must not include private QA channel artifact "dist/extensions/qa-channel/package.json".',
+      'npm package must not include private QA lab artifact "dist/extensions/qa-lab/runtime-api.js".',
       'npm package must not include private QA lab artifact "dist/extensions/qa-lab/src/cli.js".',
+      'npm package must not include private QA lab type artifact "dist/plugin-sdk/extensions/qa-lab/cli.d.ts".',
+      'npm package must not include private QA runtime chunk "dist/qa-runtime-B9LDtssJ.js".',
+      'npm package must not include private QA suite artifact "qa/scenarios/index.md".',
     ]);
   });
 
-  it("allows the legacy update verifier QA runtime sidecars", () => {
+  it("allows only the legacy update verifier QA channel runtime sidecar", () => {
     expect(
       collectForbiddenPackedPathErrors([
         "dist/extensions/qa-channel/runtime-api.js",
         "dist/extensions/qa-lab/runtime-api.js",
       ]),
+    ).toEqual([
+      'npm package must not include private QA lab artifact "dist/extensions/qa-lab/runtime-api.js".',
+    ]);
+  });
+
+  it("rejects root dist chunks that still reference the private qa lab", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "openclaw-pack-private-qa-"));
+
+    try {
+      mkdirSync(join(rootDir, "dist"), { recursive: true });
+      writeFileSync(
+        join(rootDir, "dist", "entry.js"),
+        "//#region extensions/qa-lab/src/cli.ts\n",
+        "utf8",
+      );
+      writeFileSync(join(rootDir, "README.md"), "developer docs mention extensions/qa-lab/\n");
+
+      expect(collectForbiddenPackedContentErrors(["dist/entry.js", "README.md"], rootDir)).toEqual([
+        'npm package must not include private QA lab marker "//#region extensions/qa-lab/" in "dist/entry.js".',
+      ]);
+    } finally {
+      rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("collectPackedTestCargoErrors", () => {
+  it("rejects packed test files and test directories", () => {
+    expect(
+      collectPackedTestCargoErrors([
+        "dist/extensions/webhooks/node_modules/zod/src/v3/tests/all-errors.test.ts",
+        "dist/extensions/whatsapp/node_modules/pino/test/basic.test.js",
+        "dist/extensions/whatsapp/node_modules/@jimp/plugin-crop/src/__snapshots__/crop.test.ts.snap",
+        "dist/index.js",
+      ]),
+    ).toEqual([
+      'npm package must not include test cargo "dist/extensions/webhooks/node_modules/zod/src/v3/tests/all-errors.test.ts".',
+      'npm package must not include test cargo "dist/extensions/whatsapp/node_modules/@jimp/plugin-crop/src/__snapshots__/crop.test.ts.snap".',
+      'npm package must not include test cargo "dist/extensions/whatsapp/node_modules/pino/test/basic.test.js".',
+    ]);
+  });
+
+  it("allows normal runtime files", () => {
+    expect(
+      collectPackedTestCargoErrors([
+        "dist/index.js",
+        "dist/extensions/whatsapp/node_modules/pino/lib/proto.js",
+        "dist/extensions/webhooks/node_modules/zod/v4/core/api.js",
+      ]),
     ).toEqual([]);
+  });
+
+  it("allows legitimate package roots named test under node_modules", () => {
+    expect(
+      collectPackedTestCargoErrors([
+        "dist/extensions/fixture-plugin/node_modules/direct/node_modules/test/index.js",
+        "dist/extensions/fixture-plugin/node_modules/direct/node_modules/@scope/tests/index.js",
+      ]),
+    ).toEqual([]);
+  });
+
+  it("allows leaf runtime filenames named test or tests", () => {
+    expect(
+      collectPackedTestCargoErrors([
+        "dist/extensions/fixture-plugin/node_modules/direct/bin/test",
+        "dist/extensions/fixture-plugin/node_modules/direct/bin/tests",
+      ]),
+    ).toEqual([]);
+  });
+
+  it("normalizes Windows or mixed separators before classifying test cargo", () => {
+    expect(
+      collectPackedTestCargoErrors([
+        String.raw`dist\extensions\fixture-plugin\node_modules\direct\__tests__\index.js`,
+        String.raw`dist/extensions/fixture-plugin\node_modules/direct/src/runtime.spec.ts`,
+        String.raw`dist\extensions\fixture-plugin\node_modules\direct\node_modules\test\index.js`,
+      ]),
+    ).toEqual([
+      `npm package must not include test cargo "${String.raw`dist/extensions/fixture-plugin\node_modules/direct/src/runtime.spec.ts`}".`,
+      `npm package must not include test cargo "${String.raw`dist\extensions\fixture-plugin\node_modules\direct\__tests__\index.js`}".`,
+    ]);
   });
 });
 

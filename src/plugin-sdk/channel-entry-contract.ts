@@ -44,6 +44,7 @@ type DefineBundledChannelSetupEntryOptions = {
   importMetaUrl: string;
   plugin: BundledEntryModuleRef;
   secrets?: BundledEntryModuleRef;
+  runtime?: BundledEntryModuleRef;
   features?: BundledChannelSetupEntryFeatures;
 };
 
@@ -68,6 +69,7 @@ export type BundledChannelSetupEntryContract<TPlugin = ChannelPlugin> = {
   kind: "bundled-channel-setup-entry";
   loadSetupPlugin: () => TPlugin;
   loadSetupSecrets?: () => ChannelPlugin["secrets"] | undefined;
+  setChannelRuntime?: (runtime: PluginRuntime) => void;
   features?: BundledChannelSetupEntryFeatures;
 };
 
@@ -380,8 +382,21 @@ export function defineBundledChannelSetupEntry<TPlugin = ChannelPlugin>({
   importMetaUrl,
   plugin,
   secrets,
+  runtime,
   features,
 }: DefineBundledChannelSetupEntryOptions): BundledChannelSetupEntryContract<TPlugin> {
+  // Bundled setup entries stay on a light path during setup-only/setup-runtime loads.
+  // When runtime wiring is needed, expose only the setter so the loader can hand
+  // the setup surface the active runtime without importing the full channel entry.
+  const setChannelRuntime = runtime
+    ? (pluginRuntime: PluginRuntime) => {
+        const setter = loadBundledEntryExportSync<(runtime: PluginRuntime) => void>(
+          importMetaUrl,
+          runtime,
+        );
+        setter(pluginRuntime);
+      }
+    : undefined;
   return {
     kind: "bundled-channel-setup-entry",
     loadSetupPlugin: () => loadBundledEntryExportSync<TPlugin>(importMetaUrl, plugin),
@@ -394,6 +409,7 @@ export function defineBundledChannelSetupEntry<TPlugin = ChannelPlugin>({
             ),
         }
       : {}),
+    ...(setChannelRuntime ? { setChannelRuntime } : {}),
     ...(features ? { features } : {}),
   };
 }

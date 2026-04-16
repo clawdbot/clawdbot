@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isUsageCountedSessionTranscriptFileName } from "../../config/sessions/artifacts.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
+import { loadSessionStore } from "../../config/sessions/store-load.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { hashText } from "./internal.js";
@@ -21,6 +22,11 @@ export type SessionFileEntry = {
   /** Maps each content line (0-indexed) to epoch ms; 0 means unknown timestamp. */
   messageTimestampsMs: number[];
   /** True when this transcript belongs to an internal dreaming narrative run. */
+  generatedByDreamingNarrative?: boolean;
+};
+
+export type BuildSessionEntryOptions = {
+  /** Optional preclassification from a caller-managed dreaming transcript lookup. */
   generatedByDreamingNarrative?: boolean;
 };
 
@@ -76,6 +82,79 @@ function isDreamingNarrativeGeneratedRecord(record: unknown): boolean {
     sessionKey?: unknown;
   };
   return hasDreamingNarrativeRunId(nested.runId) || hasDreamingNarrativeRunId(nested.sessionKey);
+}
+
+function isDreamingNarrativeSessionStoreKey(sessionKey: string): boolean {
+  const trimmed = sessionKey.trim();
+  if (!trimmed) {
+    return false;
+  }
+  const firstSeparator = trimmed.indexOf(":");
+  if (firstSeparator < 0) {
+    return trimmed.startsWith(DREAMING_NARRATIVE_RUN_PREFIX);
+  }
+  const secondSeparator = trimmed.indexOf(":", firstSeparator + 1);
+  const sessionSegment = secondSeparator < 0 ? trimmed : trimmed.slice(secondSeparator + 1);
+  return sessionSegment.startsWith(DREAMING_NARRATIVE_RUN_PREFIX);
+}
+
+function normalizeComparablePath(pathname: string): string {
+  const resolved = path.resolve(pathname);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+export function normalizeSessionTranscriptPathForComparison(pathname: string): string {
+  return normalizeComparablePath(pathname);
+}
+
+function resolveSessionStoreTranscriptPath(
+  sessionsDir: string,
+  entry: { sessionFile?: unknown; sessionId?: unknown } | undefined,
+): string | null {
+  if (typeof entry?.sessionFile === "string" && entry.sessionFile.trim().length > 0) {
+    const sessionFile = entry.sessionFile.trim();
+    const resolved = path.isAbsolute(sessionFile)
+      ? sessionFile
+      : path.resolve(sessionsDir, sessionFile);
+    return normalizeComparablePath(resolved);
+  }
+  if (typeof entry?.sessionId === "string" && entry.sessionId.trim().length > 0) {
+    return normalizeComparablePath(path.join(sessionsDir, `${entry.sessionId.trim()}.jsonl`));
+  }
+  return null;
+}
+
+export function loadDreamingNarrativeTranscriptPathSetForSessionsDir(
+  sessionsDir: string,
+): ReadonlySet<string> {
+  const storePath = path.join(sessionsDir, "sessions.json");
+  const store = loadSessionStore(storePath);
+  const dreamingTranscriptPaths = new Set<string>();
+  for (const [sessionKey, entry] of Object.entries(store)) {
+    if (!isDreamingNarrativeSessionStoreKey(sessionKey)) {
+      continue;
+    }
+    const transcriptPath = resolveSessionStoreTranscriptPath(sessionsDir, entry);
+    if (transcriptPath) {
+      dreamingTranscriptPaths.add(transcriptPath);
+    }
+  }
+  return dreamingTranscriptPaths;
+}
+
+export function loadDreamingNarrativeTranscriptPathSetForAgent(
+  agentId: string,
+): ReadonlySet<string> {
+  return loadDreamingNarrativeTranscriptPathSetForSessionsDir(
+    resolveSessionTranscriptsDirForAgent(agentId),
+  );
+}
+
+function isDreamingNarrativeTranscriptFromSessionStore(absPath: string): boolean {
+  const sessionsDir = path.dirname(absPath);
+  const normalizedAbsPath = normalizeComparablePath(absPath);
+  const dreamingTranscriptPaths = loadDreamingNarrativeTranscriptPathSetForSessionsDir(sessionsDir);
+  return dreamingTranscriptPaths.has(normalizedAbsPath);
 }
 
 export async function listSessionFilesForAgent(agentId: string): Promise<string[]> {
@@ -153,7 +232,10 @@ function parseSessionTimestampMs(
   return 0;
 }
 
-export async function buildSessionEntry(absPath: string): Promise<SessionFileEntry | null> {
+export async function buildSessionEntry(
+  absPath: string,
+  opts: BuildSessionEntryOptions = {},
+): Promise<SessionFileEntry | null> {
   try {
     const stat = await fs.stat(absPath);
     const raw = await fs.readFile(absPath, "utf-8");
@@ -161,7 +243,8 @@ export async function buildSessionEntry(absPath: string): Promise<SessionFileEnt
     const collected: string[] = [];
     const lineMap: number[] = [];
     const messageTimestampsMs: number[] = [];
-    let generatedByDreamingNarrative = false;
+    let generatedByDreamingNarrative =
+      opts.generatedByDreamingNarrative ?? isDreamingNarrativeTranscriptFromSessionStore(absPath);
     for (let jsonlIdx = 0; jsonlIdx < lines.length; jsonlIdx++) {
       const line = lines[jsonlIdx];
       if (!line.trim()) {

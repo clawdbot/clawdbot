@@ -5,7 +5,27 @@ import { resolveAmbientNodeProxyAgent } from "openclaw/plugin-sdk/extension-shar
 import type { FeishuConfig, FeishuDomain, ResolvedFeishuAccount } from "./types.js";
 
 const require = createRequire(import.meta.url);
-const { version: pluginVersion } = require("../package.json") as { version: string };
+const PACKAGE_JSON_CANDIDATES = [
+  "../package.json",
+  "./package.json",
+  "../../package.json",
+] as const;
+
+function readPluginVersion(): string {
+  for (const candidate of PACKAGE_JSON_CANDIDATES) {
+    try {
+      const version = (require(candidate) as { version?: unknown }).version;
+      if (typeof version === "string" && version.trim().length > 0) {
+        return version;
+      }
+    } catch {
+      // Ignore missing candidate paths across source and bundled layouts.
+    }
+  }
+  return "unknown";
+}
+
+const pluginVersion = readPluginVersion();
 
 export { pluginVersion };
 

@@ -36,6 +36,27 @@ function registerProviderWithPluginConfig(pluginConfig: Record<string, unknown>)
 }
 
 describe("github-copilot plugin", () => {
+  it("registers embedding provider", () => {
+    const registerMemoryEmbeddingProviderMock = vi.fn();
+
+    plugin.register(
+      createTestPluginApi({
+        id: "github-copilot",
+        name: "GitHub Copilot",
+        source: "test",
+        config: {},
+        pluginConfig: {},
+        runtime: {} as never,
+        registerProvider: vi.fn(),
+        registerMemoryEmbeddingProvider: registerMemoryEmbeddingProviderMock,
+      }),
+    );
+
+    expect(registerMemoryEmbeddingProviderMock).toHaveBeenCalledTimes(1);
+    const adapter = registerMemoryEmbeddingProviderMock.mock.calls[0]?.[0];
+    expect(adapter.id).toBe("github-copilot");
+  });
+
   it("skips catalog discovery when plugin discovery is disabled", async () => {
     const provider = registerProviderWithPluginConfig({ discovery: { enabled: false } });
 

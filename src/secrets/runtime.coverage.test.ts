@@ -416,7 +416,7 @@ async function prepareConfigCoverageSnapshot(params: {
   skipConfigCollectors?: boolean;
 }) {
   await ensureConfigCoverageRuntimeLoaded();
-  const sourceConfig = structuredClone(params.config);
+  const sourceConfig = params.config;
   const resolvedConfig = structuredClone(params.config);
   const context = createResolverContext({
     sourceConfig,
@@ -468,7 +468,7 @@ async function prepareAuthCoverageSnapshot(params: {
   loadAuthStore: (agentDir?: string) => AuthProfileStore;
 }) {
   await ensureAuthCoverageRuntimeLoaded();
-  const sourceConfig = structuredClone(params.config);
+  const sourceConfig = params.config;
   const context = createResolverContext({
     sourceConfig,
     env: params.env,

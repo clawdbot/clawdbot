@@ -36,6 +36,7 @@ async function runDmSharedSessionFlow(params: {
     observedEvents: params.context.observedEvents,
     roomId: firstRoomId,
     syncState: params.context.syncState,
+    syncStreams: params.context.syncStreams,
     sutUserId: params.context.sutUserId,
     timeoutMs: params.context.timeoutMs,
     tokenPrefix: "MATRIX_QA_DM_PRIMARY",
@@ -45,11 +46,19 @@ async function runDmSharedSessionFlow(params: {
 
   const replyClient = createMatrixQaScenarioClient({
     accessToken: params.context.driverAccessToken,
+    actorId: "driver",
     baseUrl: params.context.baseUrl,
+    observedEvents: params.context.observedEvents,
+    syncState: params.context.syncState,
+    syncStreams: params.context.syncStreams,
   });
   const noticeClient = createMatrixQaScenarioClient({
     accessToken: params.context.driverAccessToken,
+    actorId: "driver",
     baseUrl: params.context.baseUrl,
+    observedEvents: params.context.observedEvents,
+    syncState: params.context.syncState,
+    syncStreams: params.context.syncStreams,
   });
   const [replySince, noticeSince] = await Promise.all([
     replyClient.primeRoom(),
@@ -139,6 +148,7 @@ export async function runDmThreadReplyOverrideScenario(context: MatrixQaScenario
       event.relatesTo?.relType === "m.thread" && event.relatesTo?.eventId === params.driverEventId,
     roomId,
     syncState: context.syncState,
+    syncStreams: context.syncStreams,
     sutUserId: context.sutUserId,
     timeoutMs: context.timeoutMs,
     tokenPrefix: "MATRIX_QA_DM_THREAD",

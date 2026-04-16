@@ -39,8 +39,11 @@ const MAX_EXEC_EVENT_OUTPUT_CHARS = 180;
 const MAX_NOTIFICATION_EVENT_TEXT_CHARS = 120;
 const VOICE_TRANSCRIPT_DEDUPE_WINDOW_MS = 1500;
 const MAX_RECENT_VOICE_TRANSCRIPTS = 200;
+const EXEC_FINISHED_RUN_DEDUPE_WINDOW_MS = 10 * 60 * 1000;
+const MAX_RECENT_EXEC_FINISHED_RUNS = 2000;
 
 const recentVoiceTranscripts = new Map<string, { fingerprint: string; ts: number }>();
+const recentExecFinishedRuns = new Map<string, number>();
 
 function normalizeFiniteInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : null;
@@ -114,6 +117,48 @@ function shouldDropDuplicateVoiceTranscript(params: {
   }
 
   return false;
+}
+
+function shouldDropDuplicateExecFinished(params: {
+  sessionKey: string;
+  runId: string;
+  now: number;
+}): boolean {
+  const fingerprint = `${params.sessionKey}::${params.runId}`;
+  const previousTs = recentExecFinishedRuns.get(fingerprint);
+  if (
+    typeof previousTs === "number" &&
+    params.now - previousTs <= EXEC_FINISHED_RUN_DEDUPE_WINDOW_MS
+  ) {
+    return true;
+  }
+
+  recentExecFinishedRuns.set(fingerprint, params.now);
+  if (recentExecFinishedRuns.size > MAX_RECENT_EXEC_FINISHED_RUNS) {
+    const cutoff = params.now - EXEC_FINISHED_RUN_DEDUPE_WINDOW_MS;
+    for (const [key, ts] of recentExecFinishedRuns) {
+      if (ts < cutoff) {
+        recentExecFinishedRuns.delete(key);
+      }
+      if (recentExecFinishedRuns.size <= MAX_RECENT_EXEC_FINISHED_RUNS) {
+        break;
+      }
+    }
+    while (recentExecFinishedRuns.size > MAX_RECENT_EXEC_FINISHED_RUNS) {
+      const oldestKey = recentExecFinishedRuns.keys().next().value;
+      if (oldestKey === undefined) {
+        break;
+      }
+      recentExecFinishedRuns.delete(oldestKey);
+    }
+  }
+
+  return false;
+}
+
+export function resetNodeEventDeduplicationForTests() {
+  recentVoiceTranscripts.clear();
+  recentExecFinishedRuns.clear();
 }
 
 function compactExecEventOutput(raw: string) {
@@ -618,6 +663,16 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         if (!shouldNotify) {
           return;
         }
+        if (
+          runId &&
+          shouldDropDuplicateExecFinished({
+            sessionKey,
+            runId,
+            now: Date.now(),
+          })
+        ) {
+          return;
+        }
         text = `Exec finished (node=${nodeId}${runId ? ` id=${runId}` : ""}, ${exitLabel})`;
         if (compactOutput) {
           text += `\n${compactOutput}`;
@@ -629,15 +684,17 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         }
       }
 
-      enqueueSystemEvent(text, {
+      const queued = enqueueSystemEvent(text, {
         sessionKey,
         contextKey: runId ? `exec:${runId}` : "exec",
         trusted: false,
       });
-      // Scope wakes only for canonical agent sessions. Synthetic node-* fallback
-      // keys should keep legacy unscoped behavior so enabled non-main heartbeat
-      // agents still run when no explicit agent session is provided.
-      requestHeartbeatNow(scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event" }));
+      if (queued) {
+        // Scope wakes only for canonical agent sessions. Synthetic node-* fallback
+        // keys should keep legacy unscoped behavior so enabled non-main heartbeat
+        // agents still run when no explicit agent session is provided.
+        requestHeartbeatNow(scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event" }));
+      }
       return;
     }
     case "push.apns.register": {

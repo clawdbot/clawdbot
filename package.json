@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.4.14",
+  "version": "2026.4.15-beta.1",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -29,17 +29,21 @@
     "dist/",
     "!dist/**/*.map",
     "!dist/plugin-sdk/.tsbuildinfo",
+    "!dist/extensions/*/node_modules/**",
     "!dist/extensions/qa-channel/**",
     "dist/extensions/qa-channel/runtime-api.js",
     "!dist/extensions/qa-lab/**",
-    "dist/extensions/qa-lab/runtime-api.js",
     "!dist/extensions/qa-matrix/**",
-    "docs/",
-    "!docs/.generated/**",
-    "!docs/.i18n/zh-CN.tm.jsonl",
-    "qa/scenarios/",
+    "!dist/plugin-sdk/extensions/qa-lab/**",
+    "!dist/plugin-sdk/qa-lab.*",
+    "!dist/plugin-sdk/qa-runtime.*",
+    "!dist/plugin-sdk/src/plugin-sdk/qa-lab.d.ts",
+    "!dist/plugin-sdk/src/plugin-sdk/qa-runtime.d.ts",
+    "!dist/qa-runtime-*.js",
+    "docs/reference/templates/",
     "skills/",
     "scripts/npm-runner.mjs",
+    "scripts/preinstall-package-manager-warning.mjs",
     "scripts/postinstall-bundled-plugins.mjs",
     "scripts/windows-cmd-helpers.mjs"
   ],
@@ -767,10 +771,6 @@
       "types": "./dist/plugin-sdk/matrix-thread-bindings.d.ts",
       "default": "./dist/plugin-sdk/matrix-thread-bindings.js"
     },
-    "./plugin-sdk/qa-runtime": {
-      "types": "./dist/plugin-sdk/qa-runtime.d.ts",
-      "default": "./dist/plugin-sdk/qa-runtime.js"
-    },
     "./plugin-sdk/qa-runner-runtime": {
       "types": "./dist/plugin-sdk/qa-runner-runtime.d.ts",
       "default": "./dist/plugin-sdk/qa-runner-runtime.js"
@@ -1159,6 +1159,7 @@
     "deadcode:report:ci:ts-unused": "mkdir -p .artifacts/deadcode && pnpm deadcode:ts-unused > .artifacts/deadcode/ts-unused-exports.txt 2>&1 || true",
     "deadcode:ts-prune": "pnpm dlx ts-prune src extensions scripts",
     "deadcode:ts-unused": "pnpm dlx ts-unused-exports tsconfig.json --ignoreTestFiles --exitWithCount",
+    "deps:root-ownership": "node scripts/root-dependency-ownership-audit.mjs",
     "dev": "node scripts/run-node.mjs",
     "docs:bin": "node scripts/build-docs-list.mjs",
     "docs:check-i18n-glossary": "node scripts/check-docs-i18n-glossary.mjs",
@@ -1234,6 +1235,7 @@
     "plugin-sdk:usage": "node --import tsx scripts/analyze-plugin-sdk-usage.ts",
     "plugins:sync": "node --import tsx scripts/sync-plugin-versions.ts",
     "postinstall": "node scripts/postinstall-bundled-plugins.mjs",
+    "preinstall": "node scripts/preinstall-package-manager-warning.mjs",
     "prepack": "node --import tsx scripts/openclaw-prepack.ts",
     "prepare": "command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1 && git config core.hooksPath git-hooks || exit 0",
     "prepush:ci": "bash scripts/prepush-ci.sh",
@@ -1386,7 +1388,6 @@
     "@homebridge/ciao": "^1.3.6",
     "@lancedb/lancedb": "^0.27.2",
     "@larksuiteoapi/node-sdk": "^1.60.0",
-    "@line/bot-sdk": "^11.0.0",
     "@lydell/node-pty": "1.2.0-beta.12",
     "@mariozechner/pi-agent-core": "0.66.1",
     "@mariozechner/pi-ai": "0.66.1",
@@ -1395,6 +1396,7 @@
     "@matrix-org/matrix-sdk-crypto-wasm": "18.0.0",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@mozilla/readability": "^0.6.0",
+    "@pierre/diffs": "1.1.13",
     "@sinclair/typebox": "0.34.49",
     "@slack/bolt": "^4.7.0",
     "@slack/web-api": "^7.15.0",
@@ -1412,7 +1414,6 @@
     "gaxios": "7.1.4",
     "google-auth-library": "^10.6.2",
     "grammy": "^1.42.0",
-    "hono": "4.12.12",
     "https-proxy-agent": "^9.0.0",
     "ipaddr.js": "^2.3.0",
     "jimp": "^1.6.1",
@@ -1482,8 +1483,7 @@
     "@discordjs/opus": "^0.10.0",
     "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
     "fake-indexeddb": "^6.2.5",
-    "music-metadata": "^11.12.3",
-    "openshell": "0.1.0"
+    "music-metadata": "^11.12.3"
   },
   "overrides": {
     "axios": "1.15.0",

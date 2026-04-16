@@ -40,15 +40,19 @@ function createStubTransport(baseUrl = "http://127.0.0.1:43123") {
 
 describe("startQaLiveLaneGateway", () => {
   const gatewayStop = vi.fn();
+  const gatewayCall = vi.fn();
   const mockStop = vi.fn();
 
   beforeEach(() => {
     gatewayStop.mockReset();
+    gatewayCall.mockReset();
     mockStop.mockReset();
     startQaGatewayChild.mockReset();
     startQaMockOpenAiServer.mockReset();
 
     startQaGatewayChild.mockResolvedValue({
+      call: gatewayCall,
+      cfg: {},
       stop: gatewayStop,
     });
     startQaMockOpenAiServer.mockResolvedValue({

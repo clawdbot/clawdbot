@@ -181,6 +181,7 @@ describe("qa multipass runtime", () => {
     const fakeCodexHome = path.join(fakeHome, ".codex");
     fs.mkdirSync(fakeCodexHome, { recursive: true });
     vi.stubEnv("HOME", "");
+    vi.stubEnv("CODEX_HOME", "");
     vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
 
     try {

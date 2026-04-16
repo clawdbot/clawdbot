@@ -63,6 +63,9 @@ function resolveApiKeySecretInput(
   input: SecretInput,
   options?: ApiKeyStorageOptions,
 ): SecretInput {
+  if (options?.secretInputMode === "plaintext") {
+    return normalizeSecretInput(input);
+  }
   const coercedRef = coerceSecretRef(input);
   if (coercedRef) {
     return coercedRef;

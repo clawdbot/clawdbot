@@ -279,6 +279,12 @@ export default defineSetupPluginEntry(myChannelPlugin);
 This avoids loading heavy runtime code (crypto libraries, CLI registrations,
 background services) during setup flows.
 
+Bundled workspace channels that keep setup-safe exports in sidecar modules can
+use `defineBundledChannelSetupEntry(...)` from
+`openclaw/plugin-sdk/channel-entry-contract` instead of
+`defineSetupPluginEntry(...)`. That bundled contract also supports an optional
+`runtime` export so setup-time runtime wiring can stay lightweight and explicit.
+
 **When OpenClaw uses `setupEntry` instead of the full entry:**
 
 - The channel is disabled but needs setup/onboarding surfaces

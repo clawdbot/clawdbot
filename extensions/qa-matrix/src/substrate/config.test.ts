@@ -152,6 +152,39 @@ describe("matrix qa config", () => {
     });
   });
 
+  it("rewrites the owned Matrix QA account instead of retaining stale override fields", () => {
+    const overridden = buildMatrixQaConfig({} as OpenClawConfig, {
+      driverUserId: "@driver:matrix-qa.test",
+      homeserver: "http://127.0.0.1:28008/",
+      observerUserId: "@observer:matrix-qa.test",
+      overrides: {
+        autoJoin: "allowlist",
+        autoJoinAllowlist: ["!ops:matrix-qa.test"],
+        blockStreaming: true,
+        streaming: "quiet",
+      },
+      sutAccessToken: "sut-token",
+      sutAccountId: "sut",
+      sutUserId: "@sut:matrix-qa.test",
+      topology,
+    });
+
+    const reset = buildMatrixQaConfig(overridden, {
+      driverUserId: "@driver:matrix-qa.test",
+      homeserver: "http://127.0.0.1:28008/",
+      observerUserId: "@observer:matrix-qa.test",
+      sutAccessToken: "sut-token",
+      sutAccountId: "sut",
+      sutUserId: "@sut:matrix-qa.test",
+      topology,
+    });
+
+    expect(reset.channels?.matrix?.accounts?.sut?.autoJoin).toBeUndefined();
+    expect(reset.channels?.matrix?.accounts?.sut?.autoJoinAllowlist).toBeUndefined();
+    expect(reset.channels?.matrix?.accounts?.sut?.blockStreaming).toBeUndefined();
+    expect(reset.channels?.matrix?.accounts?.sut?.streaming).toBeUndefined();
+  });
+
   it("builds an effective Matrix QA config snapshot for reporting", () => {
     const snapshot = buildMatrixQaConfigSnapshot({
       driverUserId: "@driver:matrix-qa.test",

@@ -67,6 +67,7 @@ These are frequently reported but are typically closed with no code change:
 - Reports that depend on replacing or rewriting an already-approved executable path on a trusted host (same-path inode/content swap) without showing an untrusted path to perform that write.
 - Reports that depend on pre-existing symlinked skill/workspace filesystem state (for example symlink chains involving `skills/*/SKILL.md`) without showing an untrusted path that can create/control that state.
 - Missing HSTS findings on default local/loopback deployments.
+- Reports against test-only harnesses, QA Lab, QE Lab, E2E fixtures, benchmark rigs, or maintainer-only debugging tools when the vulnerable code is not shipped as a supported production surface.
 - Slack webhook signature findings when HTTP mode already uses signing-secret verification.
 - Discord inbound webhook signature findings for paths not used by this repo's Discord integration.
 - Claims that Microsoft Teams `fileConsent/invoke` `uploadInfo.uploadUrl` is attacker-controlled without demonstrating one of: auth boundary bypass, a real authenticated Teams/Bot Framework event carrying attacker-chosen URL, or compromise of the Microsoft/Bot trust path.
@@ -129,6 +130,7 @@ Plugins/extensions are part of OpenClaw's trusted computing base for a gateway.
 
 - Public Internet Exposure
 - Using OpenClaw in ways that the docs recommend not to
+- Test-only code and maintainer harnesses, including QA Lab, QE Lab, E2E fixtures, benchmark rigs, smoke-test containers, and local debugging proxies, unless the report demonstrates that the same vulnerable behavior is reachable from shipped OpenClaw production code or a published package artifact intended for users.
 - Deployments where mutually untrusted/adversarial operators share one gateway host and config (for example, reports expecting per-operator isolation for `sessions.list`, `sessions.preview`, `chat.history`, or similar control-plane reads)
 - Prompt-injection-only attacks (without a policy/auth/sandbox boundary bypass)
 - Reports that require write access to trusted local state (`~/.openclaw`, workspace files like `MEMORY.md` / `memory/*.md`)

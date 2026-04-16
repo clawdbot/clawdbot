@@ -1,26 +1,29 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
-import {
-  createServer,
-  request as httpRequest,
-  type IncomingMessage,
-  type ServerResponse,
-} from "node:http";
-import { request as httpsRequest } from "node:https";
-import net from "node:net";
+import { createServer, type IncomingMessage } from "node:http";
 import path from "node:path";
-import type { Duplex } from "node:stream";
-import tls from "node:tls";
-import { fileURLToPath } from "node:url";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   getDebugProxyCaptureStore,
   resolveDebugProxySettings,
 } from "openclaw/plugin-sdk/proxy-capture";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { closeQaHttpServer, handleQaBusRequest, writeError, writeJson } from "./bus-server.js";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
 import { createQaRunnerRuntime } from "./harness-runtime.js";
+import {
+  isCaptureQueryPreset,
+  mapCaptureEventForQa,
+  probeTcpReachability,
+} from "./lab-server-capture.js";
+import {
+  detectContentType,
+  isControlUiProxyPath,
+  missingUiHtml,
+  proxyHttpRequest,
+  proxyUpgradeRequest,
+  resolveAdvertisedBaseUrl,
+  resolveUiAssetVersion,
+  tryResolveUiAsset,
+} from "./lab-server-ui.js";
 import type {
   QaLabLatestReport,
   QaLabScenarioOutcome,
@@ -39,21 +42,6 @@ import { qaChannelPlugin, setQaChannelRuntime, type OpenClawConfig } from "./run
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import { runQaSelfCheckAgainstState, type QaSelfCheckResult } from "./self-check.js";
 
-const CAPTURE_QUERY_PRESETS = new Set([
-  "double-sends",
-  "retry-storms",
-  "cache-busting",
-  "ws-duplicate-frames",
-  "missing-ack",
-  "error-bursts",
-]);
-
-function isCaptureQueryPreset(
-  value: string,
-): value is Parameters<ReturnType<typeof getDebugProxyCaptureStore>["queryPreset"]>[0] {
-  return CAPTURE_QUERY_PRESETS.has(value);
-}
-
 type QaLabBootstrapDefaults = {
   conversationKind: "direct" | "channel";
   conversationId: string;
@@ -68,112 +56,6 @@ export type {
   QaLabServerHandle,
   QaLabServerStartParams,
 } from "./lab-server.types.js";
-
-function parseCaptureMeta(metaJson: unknown): Record<string, unknown> | null {
-  if (typeof metaJson !== "string" || metaJson.trim().length === 0) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(metaJson) as unknown;
-    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
-  } catch {
-    return null;
-  }
-}
-
-function readCaptureMetaString(
-  meta: Record<string, unknown> | null,
-  key: string,
-): string | undefined {
-  const value = meta?.[key];
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
-function mapCaptureEventForQa(row: Record<string, unknown>) {
-  const meta = parseCaptureMeta(row.metaJson);
-  return {
-    ...row,
-    payloadPreview: typeof row.dataText === "string" ? row.dataText : undefined,
-    provider: readCaptureMetaString(meta, "provider"),
-    api: readCaptureMetaString(meta, "api"),
-    model: readCaptureMetaString(meta, "model"),
-    captureOrigin: readCaptureMetaString(meta, "captureOrigin"),
-  };
-}
-
-type QaStartupProbeStatus = {
-  label: string;
-  url: string;
-  ok: boolean;
-  error?: string;
-};
-
-function defaultPortForProtocol(protocol: string): number {
-  if (protocol === "https:") {
-    return 443;
-  }
-  if (protocol === "http:") {
-    return 80;
-  }
-  return 0;
-}
-
-async function probeTcpReachability(
-  rawUrl: string,
-  timeoutMs = 700,
-): Promise<QaStartupProbeStatus> {
-  let parsed: URL;
-  try {
-    parsed = new URL(rawUrl);
-  } catch {
-    return {
-      label: rawUrl,
-      url: rawUrl,
-      ok: false,
-      error: "invalid url",
-    };
-  }
-  const host = parsed.hostname;
-  const port = parsed.port ? Number(parsed.port) : defaultPortForProtocol(parsed.protocol);
-  if (!host || !Number.isFinite(port) || port <= 0) {
-    return {
-      label: parsed.origin,
-      url: parsed.toString(),
-      ok: false,
-      error: "missing host or port",
-    };
-  }
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const socket = net.createConnection({ host, port });
-      const onError = (error: Error) => {
-        socket.destroy();
-        reject(error);
-      };
-      socket.setTimeout(timeoutMs, () => {
-        socket.destroy(new Error("timeout"));
-      });
-      socket.once("connect", () => {
-        socket.end();
-        resolve();
-      });
-      socket.once("error", onError);
-      socket.once("timeout", () => onError(new Error("timeout")));
-    });
-    return {
-      label: parsed.host,
-      url: parsed.toString(),
-      ok: true,
-    };
-  } catch (error) {
-    return {
-      label: parsed.host,
-      url: parsed.toString(),
-      ok: false,
-      error: formatErrorMessage(error),
-    };
-  }
-}
 
 function countQaLabScenarioRun(scenarios: QaLabScenarioOutcome[]) {
   return {
@@ -221,121 +103,6 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
   return text ? (JSON.parse(text) as unknown) : {};
 }
 
-function detectContentType(filePath: string): string {
-  if (filePath.endsWith(".css")) {
-    return "text/css; charset=utf-8";
-  }
-  if (filePath.endsWith(".js")) {
-    return "text/javascript; charset=utf-8";
-  }
-  if (filePath.endsWith(".json")) {
-    return "application/json; charset=utf-8";
-  }
-  if (filePath.endsWith(".svg")) {
-    return "image/svg+xml";
-  }
-  return "text/html; charset=utf-8";
-}
-
-function missingUiHtml() {
-  return `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>QA Lab UI Missing</title>
-    <style>
-      body { font-family: ui-sans-serif, system-ui, sans-serif; background: #0f1115; color: #f5f7fb; margin: 0; display: grid; place-items: center; min-height: 100vh; }
-      main { max-width: 42rem; padding: 2rem; background: #171b22; border: 1px solid #283140; border-radius: 18px; box-shadow: 0 30px 80px rgba(0,0,0,.35); }
-      code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #9ee8d8; }
-      h1 { margin-top: 0; }
-    </style>
-  </head>
-  <body>
-    <main>
-      <h1>QA Lab UI not built</h1>
-      <p>Build the private debugger bundle, then reload this page.</p>
-      <p><code>pnpm qa:lab:build</code></p>
-    </main>
-  </body>
-</html>`;
-}
-
-function resolveUiDistDir(overrideDir?: string | null, repoRoot = process.cwd()) {
-  if (overrideDir?.trim()) {
-    return overrideDir;
-  }
-  const candidates = [
-    path.resolve(repoRoot, "extensions/qa-lab/web/dist"),
-    path.resolve(repoRoot, "dist/extensions/qa-lab/web/dist"),
-    fileURLToPath(new URL("../web/dist", import.meta.url)),
-  ];
-  return (
-    candidates.find((candidate) => {
-      if (!fs.existsSync(candidate)) {
-        return false;
-      }
-      const indexPath = path.join(candidate, "index.html");
-      return fs.existsSync(indexPath) && fs.statSync(indexPath).isFile();
-    }) ?? candidates[0]
-  );
-}
-
-function listUiAssetFiles(rootDir: string, currentDir = rootDir): string[] {
-  const entries = fs
-    .readdirSync(currentDir, { withFileTypes: true })
-    .toSorted((left, right) => left.name.localeCompare(right.name));
-  const files: string[] = [];
-  for (const entry of entries) {
-    const resolved = path.join(currentDir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...listUiAssetFiles(rootDir, resolved));
-      continue;
-    }
-    if (!entry.isFile()) {
-      continue;
-    }
-    files.push(path.relative(rootDir, resolved));
-  }
-  return files;
-}
-
-function resolveUiAssetVersion(overrideDir?: string | null): string | null {
-  try {
-    const distDir = resolveUiDistDir(overrideDir);
-    const indexPath = path.join(distDir, "index.html");
-    if (!fs.existsSync(indexPath) || !fs.statSync(indexPath).isFile()) {
-      return null;
-    }
-    const hash = createHash("sha1");
-    for (const relativeFile of listUiAssetFiles(distDir)) {
-      hash.update(relativeFile);
-      hash.update("\0");
-      hash.update(fs.readFileSync(path.join(distDir, relativeFile)));
-      hash.update("\0");
-    }
-    return hash.digest("hex").slice(0, 12);
-  } catch {
-    return null;
-  }
-}
-
-function resolveAdvertisedBaseUrl(params: {
-  bindHost?: string;
-  bindPort: number;
-  advertiseHost?: string;
-  advertisePort?: number;
-}) {
-  const advertisedHost =
-    params.advertiseHost?.trim() ||
-    (params.bindHost && params.bindHost !== "0.0.0.0" ? params.bindHost : "127.0.0.1");
-  const advertisedPort =
-    typeof params.advertisePort === "number" && Number.isFinite(params.advertisePort)
-      ? params.advertisePort
-      : params.bindPort;
-  return `http://${advertisedHost}:${advertisedPort}`;
-}
-
 function createBootstrapDefaults(autoKickoffTarget?: string): QaLabBootstrapDefaults {
   if (autoKickoffTarget === "channel") {
     return {
@@ -351,163 +118,6 @@ function createBootstrapDefaults(autoKickoffTarget?: string): QaLabBootstrapDefa
     senderId: "qa-operator",
     senderName: "QA Operator",
   };
-}
-
-function isControlUiProxyPath(pathname: string) {
-  return pathname === "/control-ui" || pathname.startsWith("/control-ui/");
-}
-
-function rewriteControlUiProxyPath(pathname: string, search: string) {
-  const stripped = pathname === "/control-ui" ? "/" : pathname.slice("/control-ui".length) || "/";
-  return `${stripped}${search}`;
-}
-
-function rewriteEmbeddedControlUiHeaders(
-  headers: IncomingMessage["headers"],
-): Record<string, string | string[] | number | undefined> {
-  const rewritten: Record<string, string | string[] | number | undefined> = { ...headers };
-  delete rewritten["x-frame-options"];
-
-  const csp = headers["content-security-policy"];
-  if (typeof csp === "string") {
-    rewritten["content-security-policy"] = csp.includes("frame-ancestors")
-      ? csp.replace(/frame-ancestors\s+[^;]+/i, "frame-ancestors 'self'")
-      : `${csp}; frame-ancestors 'self'`;
-  }
-
-  return rewritten;
-}
-
-async function proxyHttpRequest(params: {
-  req: IncomingMessage;
-  res: ServerResponse;
-  target: URL;
-  pathname: string;
-  search: string;
-}) {
-  const client = params.target.protocol === "https:" ? httpsRequest : httpRequest;
-  const upstreamReq = client(
-    {
-      protocol: params.target.protocol,
-      hostname: params.target.hostname,
-      port: params.target.port || (params.target.protocol === "https:" ? 443 : 80),
-      method: params.req.method,
-      path: rewriteControlUiProxyPath(params.pathname, params.search),
-      headers: {
-        ...params.req.headers,
-        host: params.target.host,
-      },
-    },
-    (upstreamRes) => {
-      params.res.writeHead(
-        upstreamRes.statusCode ?? 502,
-        rewriteEmbeddedControlUiHeaders(upstreamRes.headers),
-      );
-      upstreamRes.pipe(params.res);
-    },
-  );
-
-  upstreamReq.on("error", (error) => {
-    if (!params.res.headersSent) {
-      writeError(params.res, 502, error);
-      return;
-    }
-    params.res.destroy(error);
-  });
-
-  if (params.req.method === "GET" || params.req.method === "HEAD") {
-    upstreamReq.end();
-    return;
-  }
-  params.req.pipe(upstreamReq);
-}
-
-function proxyUpgradeRequest(params: {
-  req: IncomingMessage;
-  socket: Duplex;
-  head: Buffer;
-  target: URL;
-}) {
-  const requestUrl = new URL(params.req.url ?? "/", "http://127.0.0.1");
-  const port = Number(params.target.port || (params.target.protocol === "https:" ? 443 : 80));
-  const upstream =
-    params.target.protocol === "https:"
-      ? tls.connect({
-          host: params.target.hostname,
-          port,
-          servername: params.target.hostname,
-        })
-      : net.connect({
-          host: params.target.hostname,
-          port,
-        });
-
-  const headerLines: string[] = [];
-  for (let index = 0; index < params.req.rawHeaders.length; index += 2) {
-    const name = params.req.rawHeaders[index];
-    const value = params.req.rawHeaders[index + 1] ?? "";
-    if (normalizeLowercaseStringOrEmpty(name) === "host") {
-      continue;
-    }
-    headerLines.push(`${name}: ${value}`);
-  }
-
-  upstream.once("connect", () => {
-    const requestText = [
-      `${params.req.method ?? "GET"} ${rewriteControlUiProxyPath(requestUrl.pathname, requestUrl.search)} HTTP/${params.req.httpVersion}`,
-      `Host: ${params.target.host}`,
-      ...headerLines,
-      "",
-      "",
-    ].join("\r\n");
-    upstream.write(requestText);
-    if (params.head.length > 0) {
-      upstream.write(params.head);
-    }
-    upstream.pipe(params.socket);
-    params.socket.pipe(upstream);
-  });
-
-  const closeBoth = () => {
-    if (!params.socket.destroyed) {
-      params.socket.destroy();
-    }
-    if (!upstream.destroyed) {
-      upstream.destroy();
-    }
-  };
-
-  upstream.on("error", () => {
-    if (!params.socket.destroyed) {
-      params.socket.write("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n");
-    }
-    closeBoth();
-  });
-  params.socket.on("error", closeBoth);
-  params.socket.on("close", closeBoth);
-}
-
-function tryResolveUiAsset(
-  pathname: string,
-  overrideDir?: string | null,
-  repoRoot = process.cwd(),
-): string | null {
-  const distDir = resolveUiDistDir(overrideDir, repoRoot);
-  if (!fs.existsSync(distDir)) {
-    return null;
-  }
-  const safePath = pathname === "/" ? "/index.html" : pathname;
-  const decoded = decodeURIComponent(safePath);
-  const candidate = path.resolve(distDir, `.${decoded.startsWith("/") ? decoded : `/${decoded}`}`);
-  const relative = path.relative(distDir, candidate);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    return null;
-  }
-  if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
-    return candidate;
-  }
-  const fallback = path.join(distDir, "index.html");
-  return fs.existsSync(fallback) ? fallback : null;
 }
 
 function createQaLabConfig(baseUrl: string): OpenClawConfig {

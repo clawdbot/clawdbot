@@ -13,6 +13,7 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { extractCanvasFromText } from "../../chat/canvas-render.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { isAudioFileName } from "../../media/mime.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { type SavedMedia, saveMediaBuffer } from "../../media/store.js";
@@ -121,10 +122,19 @@ function isMediaBearingPayload(payload: ReplyPayload): boolean {
   return false;
 }
 
-function buildWebchatAudioOnlyAssistantMessage(
+async function buildWebchatAudioOnlyAssistantMessage(
   payloads: ReplyPayload[],
-): { content: Array<Record<string, unknown>>; transcriptText: string } | null {
-  const audioBlocks = buildWebchatAudioContentBlocksFromReplyPayloads(payloads);
+  options?: {
+    localRoots?: readonly string[];
+    onLocalAudioAccessDenied?: (message: string) => void;
+  },
+): Promise<{ content: Array<Record<string, unknown>>; transcriptText: string } | null> {
+  const audioBlocks = await buildWebchatAudioContentBlocksFromReplyPayloads(payloads, {
+    localRoots: options?.localRoots,
+    onLocalAudioAccessDenied: (err) => {
+      options?.onLocalAudioAccessDenied?.(formatForLog(err));
+    },
+  });
   if (audioBlocks.length === 0) {
     return null;
   }
@@ -134,7 +144,7 @@ function buildWebchatAudioOnlyAssistantMessage(
   };
 }
 
-export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
+export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 8_000;
 const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
 let chatHistoryPlaceholderEmitCount = 0;
@@ -2075,11 +2085,16 @@ export const chatHandlers: GatewayRequestHandlers = {
           savedImages: await persistedImagesPromise,
         });
       };
-      const appendWebchatAgentAudioTranscriptIfNeeded = (payload: ReplyPayload) => {
+      const appendWebchatAgentAudioTranscriptIfNeeded = async (payload: ReplyPayload) => {
         if (!agentRunStarted || appendedWebchatAgentAudio || !isMediaBearingPayload(payload)) {
           return;
         }
-        const audioMessage = buildWebchatAudioOnlyAssistantMessage([payload]);
+        const audioMessage = await buildWebchatAudioOnlyAssistantMessage([payload], {
+          localRoots: getAgentScopedMediaLocalRoots(cfg, agentId),
+          onLocalAudioAccessDenied: (message) => {
+            context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
+          },
+        });
         if (!audioMessage) {
           return;
         }
@@ -2113,7 +2128,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             case "block":
             case "final":
               deliveredReplies.push({ payload, kind: info.kind });
-              appendWebchatAgentAudioTranscriptIfNeeded(payload);
+              await appendWebchatAgentAudioTranscriptIfNeeded(payload);
               break;
             case "tool":
               // Tool results that carry audio (e.g. the TTS tool) must be promoted

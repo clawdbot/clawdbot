@@ -92,8 +92,8 @@ describe("buildContextReply", () => {
         omitBootstrapLimits: true,
       }),
     );
-    expect(result.text).toContain("Bootstrap max/file: 20,000 chars");
-    expect(result.text).toContain("Bootstrap max/total: 150,000 chars");
+    expect(result.text).toContain("Bootstrap max/file: 12,000 chars");
+    expect(result.text).toContain("Bootstrap max/total: 60,000 chars");
     expect(result.text).not.toContain("Bootstrap max/file: ? chars");
   });
 

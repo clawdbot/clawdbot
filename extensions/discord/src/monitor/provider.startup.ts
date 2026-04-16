@@ -40,6 +40,7 @@ type CreateClientFn = (
   handlers: ConstructorParameters<typeof Client>[1],
   plugins: ConstructorParameters<typeof Client>[2],
 ) => Client;
+type CarbonEventQueueOptions = NonNullable<ConstructorParameters<typeof Client>[0]["eventQueue"]>;
 
 type ListenerCompatClient = Client & {
   plugins?: Array<{ id: string; plugin: Plugin }>;
@@ -116,7 +117,10 @@ export function createDiscordMonitorClient(params: {
   modals: Modal[];
   voiceEnabled: boolean;
   discordConfig: Parameters<typeof resolveDiscordPresenceUpdate>[0] & {
-    eventQueue?: { listenerTimeout?: number };
+    eventQueue?: Pick<
+      CarbonEventQueueOptions,
+      "listenerTimeout" | "maxQueueSize" | "maxConcurrency"
+    >;
   };
   runtime: RuntimeEnv;
   createClient: CreateClientFn;
@@ -145,8 +149,9 @@ export function createDiscordMonitorClient(params: {
   // Discord normalization/enqueue work).
   const eventQueueOpts = {
     listenerTimeout: 120_000,
+    slowListenerThreshold: 30_000,
     ...params.discordConfig.eventQueue,
-  };
+  } satisfies CarbonEventQueueOptions;
   const readyListener = createDiscordStatusReadyListener({
     discordConfig: params.discordConfig,
     getAutoPresenceController: () => autoPresenceController,

@@ -28,6 +28,25 @@ describe("resolveMatrixMonitorAccessState", () => {
     ]);
   });
 
+  it("does not let DM pairing-store entries authorize room control commands", () => {
+    const state = resolveMatrixMonitorAccessState({
+      allowFrom: [],
+      storeAllowFrom: ["@attacker:example.org"],
+      groupAllowFrom: [],
+      roomUsers: [],
+      senderId: "@attacker:example.org",
+      isRoom: true,
+    });
+
+    expect(state.effectiveAllowFrom).toEqual(["@attacker:example.org"]);
+    expect(state.directAllowMatch.allowed).toBe(true);
+    expect(state.commandAuthorizers).toEqual([
+      { configured: false, allowed: false },
+      { configured: false, allowed: false },
+      { configured: false, allowed: false },
+    ]);
+  });
+
   it("keeps room-user matching disabled for dm traffic", () => {
     const state = resolveMatrixMonitorAccessState({
       allowFrom: [],

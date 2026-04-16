@@ -177,6 +177,19 @@ and the effective agent skill allowlist when `agents.defaults.skills` or
 
 This keeps the base prompt small while still enabling targeted skill usage.
 
+The skills list budget is owned by the skills subsystem:
+
+- Global default: `skills.limits.maxSkillsPromptChars`
+- Per-agent override: `agents.list[].skillsLimits.maxSkillsPromptChars`
+
+Generic bounded runtime excerpts use a different surface:
+
+- `agents.defaults.contextLimits.*`
+- `agents.list[].contextLimits.*`
+
+That split keeps skills sizing separate from runtime read/injection sizing such
+as `memory_get`, live tool results, and post-compaction AGENTS.md refreshes.
+
 ## Documentation
 
 When available, the system prompt includes a **Documentation** section that points to the

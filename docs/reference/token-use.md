@@ -16,9 +16,12 @@ OpenAI-style models average ~4 characters per token for English text.
 OpenClaw assembles its own system prompt on every run. It includes:
 
 - Tool list + short descriptions
-- Skills list (only metadata; instructions are loaded on demand with `read`)
+- Skills list (only metadata; instructions are loaded on demand with `read`).
+  The compact skills block is bounded by `skills.limits.maxSkillsPromptChars`,
+  with optional per-agent override at
+  `agents.list[].skillsLimits.maxSkillsPromptChars`.
 - Self-update instructions
-- Workspace + bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md` when new, plus `MEMORY.md` when present or `memory.md` as a lowercase fallback). Large files are truncated by `agents.defaults.bootstrapMaxChars` (default: 20000), and total bootstrap injection is capped by `agents.defaults.bootstrapTotalMaxChars` (default: 150000). `memory/*.md` daily files are not part of the normal bootstrap prompt; they remain on-demand via memory tools on ordinary turns, but bare `/new` and `/reset` can prepend a one-shot startup-context block with recent daily memory for that first turn. That startup prelude is controlled by `agents.defaults.startupContext`.
+- Workspace + bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md` when new, plus `MEMORY.md` when present or `memory.md` as a lowercase fallback). Large files are truncated by `agents.defaults.bootstrapMaxChars` (default: 12000), and total bootstrap injection is capped by `agents.defaults.bootstrapTotalMaxChars` (default: 60000). `memory/*.md` daily files are not part of the normal bootstrap prompt; they remain on-demand via memory tools on ordinary turns, but bare `/new` and `/reset` can prepend a one-shot startup-context block with recent daily memory for that first turn. That startup prelude is controlled by `agents.defaults.startupContext`.
 - Time (UTC + user timezone)
 - Reply tags + heartbeat behavior
 - Runtime metadata (host/OS/model/thinking)
@@ -35,6 +38,18 @@ Everything the model receives counts toward the context limit:
 - Attachments/transcripts (images, audio, files)
 - Compaction summaries and pruning artifacts
 - Provider wrappers or safety headers (not visible, but still counted)
+
+Some runtime-heavy surfaces have their own explicit caps:
+
+- `agents.defaults.contextLimits.memoryGetMaxChars`
+- `agents.defaults.contextLimits.memoryGetDefaultLines`
+- `agents.defaults.contextLimits.toolResultMaxChars`
+- `agents.defaults.contextLimits.postCompactionMaxChars`
+
+Per-agent overrides live under `agents.list[].contextLimits`. These knobs are
+for bounded runtime excerpts and injected runtime-owned blocks. They are
+separate from bootstrap limits, startup-context limits, and skills prompt
+limits.
 
 For images, OpenClaw downscales transcript/tool image payloads before provider calls.
 Use `agents.defaults.imageMaxDimensionPx` (default: `1200`) to tune this:

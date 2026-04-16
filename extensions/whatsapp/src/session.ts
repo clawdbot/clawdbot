@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
+import fs from "node:fs/promises";
 import type { Agent } from "node:https";
+import path from "node:path";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
 import { resolveAmbientNodeProxyAgent } from "openclaw/plugin-sdk/extension-shared";
@@ -16,6 +18,7 @@ import {
 } from "./auth-store.js";
 import { formatError, getStatusCode } from "./session-errors.js";
 import {
+  BufferJSON,
   DisconnectReason,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
@@ -39,6 +42,25 @@ const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
 async function loadQrTerminal() {
   const mod = await import("qrcode-terminal");
   return mod.default ?? mod;
+}
+
+export async function writeCredsJsonAtomically(
+  authDir: string,
+  creds: unknown,
+): Promise<void> {
+  const credsPath = resolveWebCredsPath(authDir);
+  const tempPath = path.join(authDir, `.creds.${process.pid}.${Date.now()}.tmp`);
+  try {
+    await fs.writeFile(tempPath, JSON.stringify(creds, BufferJSON.replacer), { mode: 0o600 });
+    await fs.rename(tempPath, credsPath);
+  } catch (err) {
+    try {
+      await fs.rm(tempPath, { force: true });
+    } catch {
+      // best-effort cleanup
+    }
+    throw err;
+  }
 }
 
 // Per-authDir queues so multi-account creds saves don't block each other.
@@ -92,11 +114,6 @@ async function safeSaveCreds(
   }
   try {
     await Promise.resolve(saveCreds());
-    try {
-      fsSync.chmodSync(resolveWebCredsPath(authDir), 0o600);
-    } catch {
-      // best-effort on platforms that support it
-    }
   } catch (err) {
     logger.warn({ error: String(err) }, "failed saving WhatsApp creds");
   }
@@ -122,7 +139,10 @@ export async function createWaSocket(
   await ensureDir(authDir);
   const sessionLogger = getChildLogger({ module: "web-session" });
   maybeRestoreCredsFromBackup(authDir);
-  const { state, saveCreds } = await useMultiFileAuthState(authDir);
+  const { state } = await useMultiFileAuthState(authDir);
+  const saveCreds = async () => {
+    await writeCredsJsonAtomically(authDir, state.creds);
+  };
   const { version } = await fetchLatestBaileysVersion();
   const agent = await resolveEnvProxyAgent(sessionLogger);
   const fetchAgent = await resolveEnvFetchDispatcher(sessionLogger, agent);

@@ -474,9 +474,11 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
     return normalizeConfiguredSpeechProviderId(config.provider) ?? config.provider;
   }
 
-  for (const provider of sortSpeechProvidersForAutoSelection()) {
+  const effectiveCfg = config.sourceConfig;
+  for (const provider of sortSpeechProvidersForAutoSelection(effectiveCfg)) {
     if (
       provider.isConfigured({
+        cfg: effectiveCfg,
         providerConfig: config.providerConfigs[provider.id] ?? {},
         timeoutMs: config.timeoutMs,
       })

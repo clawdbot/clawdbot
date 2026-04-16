@@ -1,9 +1,14 @@
 import { normalizeMatrixAllowList, resolveMatrixAllowListMatch } from "./allowlist.js";
-import type { MatrixAllowListMatch } from "./allowlist.js";
 
 type MatrixCommandAuthorizer = {
   configured: boolean;
   allowed: boolean;
+};
+
+type MatrixMonitorAllowListMatch = {
+  allowed: boolean;
+  matchKey?: string;
+  matchSource?: "wildcard" | "id" | "prefixed-id" | "prefixed-user";
 };
 
 export type MatrixMonitorAccessState = {
@@ -11,9 +16,9 @@ export type MatrixMonitorAccessState = {
   effectiveGroupAllowFrom: string[];
   effectiveRoomUsers: string[];
   groupAllowConfigured: boolean;
-  directAllowMatch: MatrixAllowListMatch;
-  roomUserMatch: MatrixAllowListMatch | null;
-  groupAllowMatch: MatrixAllowListMatch | null;
+  directAllowMatch: MatrixMonitorAllowListMatch;
+  roomUserMatch: MatrixMonitorAllowListMatch | null;
+  groupAllowMatch: MatrixMonitorAllowListMatch | null;
   commandAuthorizers: [MatrixCommandAuthorizer, MatrixCommandAuthorizer, MatrixCommandAuthorizer];
 };
 
@@ -25,12 +30,14 @@ export function resolveMatrixMonitorAccessState(params: {
   senderId: string;
   isRoom: boolean;
 }): MatrixMonitorAccessState {
+  const configuredAllowFrom = normalizeMatrixAllowList(params.allowFrom);
   const effectiveAllowFrom = normalizeMatrixAllowList([
-    ...params.allowFrom,
+    ...configuredAllowFrom,
     ...params.storeAllowFrom,
   ]);
   const effectiveGroupAllowFrom = normalizeMatrixAllowList(params.groupAllowFrom);
   const effectiveRoomUsers = normalizeMatrixAllowList(params.roomUsers);
+  const commandAllowFrom = params.isRoom ? configuredAllowFrom : effectiveAllowFrom;
 
   const directAllowMatch = resolveMatrixAllowListMatch({
     allowList: effectiveAllowFrom,
@@ -50,6 +57,13 @@ export function resolveMatrixMonitorAccessState(params: {
           userId: params.senderId,
         })
       : null;
+  const commandAllowMatch =
+    commandAllowFrom.length > 0
+      ? resolveMatrixAllowListMatch({
+          allowList: commandAllowFrom,
+          userId: params.senderId,
+        })
+      : null;
 
   return {
     effectiveAllowFrom,
@@ -61,8 +75,8 @@ export function resolveMatrixMonitorAccessState(params: {
     groupAllowMatch,
     commandAuthorizers: [
       {
-        configured: effectiveAllowFrom.length > 0,
-        allowed: directAllowMatch.allowed,
+        configured: commandAllowFrom.length > 0,
+        allowed: commandAllowMatch?.allowed ?? false,
       },
       {
         configured: effectiveRoomUsers.length > 0,

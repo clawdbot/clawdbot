@@ -42,6 +42,15 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain("apt-get install -y --no-install-recommends xvfb");
   });
 
+  it("verifies matrix-sdk-crypto native addons without hardcoded pnpm virtual-store paths", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+    expect(dockerfile).toContain("Verifying critical native addons");
+    expect(dockerfile).toContain('find /app/node_modules -name "matrix-sdk-crypto*.node"');
+    expect(dockerfile).not.toMatch(
+      /ADDON_DIR=.*node_modules\/\.pnpm\/@matrix-org\+matrix-sdk-crypto-nodejs@/,
+    );
+  });
+
   it("prunes runtime dependencies after the build stage", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     expect(dockerfile).toContain("FROM build AS runtime-assets");

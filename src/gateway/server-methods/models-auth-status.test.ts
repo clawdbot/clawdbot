@@ -296,24 +296,137 @@ describe("models.authStatus", () => {
     expect(serialised).not.toContain("rt-SECRET-REFRESH");
   });
 
-  it("skips env-backed OAuth providers (apiKey set in config) from missing synthesis", async () => {
-    // Provider configured `auth: "oauth"` with `apiKey` present (env-backed)
-    // must not be forwarded to buildAuthHealthSummary — doing so would flag
-    // it as missing even though env auth already satisfies it.
+  it("skips env-backed OAuth providers (resolvable apiKey) from missing synthesis", async () => {
+    // Provider configured `auth: "oauth"` with a resolvable apiKey — env
+    // auth already satisfies it, so forwarding to buildAuthHealthSummary
+    // would flag it as missing and cry wolf. Inline string is the simplest
+    // "available" SecretInput for testing.
     mocks.loadConfig.mockReturnValue({
       models: {
         providers: {
-          "openai-codex": { auth: "oauth", apiKey: { env: "OPENAI_OAUTH_TOKEN" } },
+          "openai-codex": { auth: "oauth", apiKey: "sk-xxxxx" },
         },
       },
     });
     await handler(createOptions());
-    // When the only configured provider is env-backed, we pass `undefined`
-    // (meaning "no filter"), not a filter containing it.
     const call = mocks.buildAuthHealthSummary.mock.calls[0] as unknown as
       | [{ providers?: string[] }]
       | undefined;
     expect(call?.[0]?.providers).toBeUndefined();
+  });
+
+  it("still flags provider as missing when apiKey env SecretRef points at an unset env var", async () => {
+    // Config declares an env SecretRef but the referenced env var isn't
+    // set. We read process.env directly for env-source SecretRefs and fall
+    // through to the normal missing synthesis so the dashboard surfaces
+    // the broken config instead of masking it.
+    delete process.env.MODELS_AUTH_STATUS_TEST_MISSING_KEY;
+    mocks.loadConfig.mockReturnValue({
+      models: {
+        providers: {
+          "openai-codex": {
+            auth: "oauth",
+            apiKey: {
+              source: "env",
+              provider: "default",
+              id: "MODELS_AUTH_STATUS_TEST_MISSING_KEY",
+            },
+          },
+        },
+      },
+    });
+    await handler(createOptions());
+    const call = mocks.buildAuthHealthSummary.mock.calls[0] as unknown as
+      | [{ providers?: string[] }]
+      | undefined;
+    expect(call?.[0]?.providers).toEqual(["openai-codex"]);
+  });
+
+  it("env SecretRef pointing at a set env var is treated as env-backed", async () => {
+    process.env.MODELS_AUTH_STATUS_TEST_SET_KEY = "sk-real-value";
+    mocks.loadConfig.mockReturnValue({
+      models: {
+        providers: {
+          "openai-codex": {
+            auth: "oauth",
+            apiKey: {
+              source: "env",
+              provider: "default",
+              id: "MODELS_AUTH_STATUS_TEST_SET_KEY",
+            },
+          },
+        },
+      },
+    });
+    try {
+      await handler(createOptions());
+      const call = mocks.buildAuthHealthSummary.mock.calls[0] as unknown as
+        | [{ providers?: string[] }]
+        | undefined;
+      expect(call?.[0]?.providers).toBeUndefined();
+    } finally {
+      delete process.env.MODELS_AUTH_STATUS_TEST_SET_KEY;
+    }
+  });
+
+  it("env-backed escape hatch also applies to auth.profiles entries", async () => {
+    // auth.profiles loop must honor the env-backed skip from the
+    // models.providers loop — otherwise a provider with resolvable apiKey
+    // plus a matching auth.profiles entry re-adds itself and triggers the
+    // false-missing alert we just fixed.
+    mocks.loadConfig.mockReturnValue({
+      models: {
+        providers: {
+          "openai-codex": { auth: "oauth", apiKey: "sk-xxxxx" },
+        },
+      },
+      auth: {
+        profiles: {
+          "openai-codex:default": { provider: "openai-codex", mode: "oauth" },
+        },
+      },
+    });
+    await handler(createOptions());
+    const call = mocks.buildAuthHealthSummary.mock.calls[0] as unknown as
+      | [{ providers?: string[] }]
+      | undefined;
+    expect(call?.[0]?.providers).toBeUndefined();
+  });
+
+  it("normalizes expectsOAuth provider ids to match buildAuthHealthSummary", async () => {
+    // Config uses alias `z.ai`; buildAuthHealthSummary normalizes to `zai`.
+    // Without normalization, expectsOAuth.has(prov.provider) fires on the
+    // raw `z.ai` key but prov.provider is `zai`, so the "configured oauth
+    // but no oauth profile" signal silently skipped the alias path.
+    mocks.loadConfig.mockReturnValue({
+      models: { providers: { "z.ai": { auth: "oauth" } } },
+    });
+    mocks.buildAuthHealthSummary.mockReturnValue({
+      now: 0,
+      warnAfterMs: 0,
+      profiles: [],
+      providers: [
+        {
+          provider: "zai",
+          status: "static",
+          profiles: [
+            {
+              profileId: "zai:default",
+              provider: "zai",
+              type: "api_key",
+              status: "static",
+              source: "store",
+              label: "zai:default",
+            },
+          ],
+        },
+      ],
+    });
+    const opts = createOptions();
+    await handler(opts);
+    const [, payload] = opts.respond.mock.calls[0] ?? [];
+    const result = payload as ModelAuthStatusResult;
+    expect(result.providers[0]?.status).toBe("missing");
   });
 
   it("flags provider configured auth:oauth but with only api_key profile as missing", async () => {

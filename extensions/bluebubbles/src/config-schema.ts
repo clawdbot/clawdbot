@@ -50,6 +50,14 @@ const bluebubblesCatchupSchema = z
     perRunLimit: z.number().int().positive().optional(),
     /** First-run lookback used when no cursor has been persisted yet. Clamped to [1, 720]. */
     firstRunLookbackMinutes: z.number().int().positive().optional(),
+    /**
+     * Consecutive-failure ceiling per message GUID. After this many failed
+     * processMessage attempts against the same GUID, catchup logs a WARN
+     * and skips the message on subsequent sweeps (letting the cursor
+     * advance past a permanently malformed payload). Defaults to 10.
+     * Clamped to [1, 1000].
+     */
+    maxFailureRetries: z.number().int().positive().optional(),
   })
   .strict()
   .optional();

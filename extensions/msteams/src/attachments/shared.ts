@@ -402,6 +402,8 @@ export type MSTeamsAttachmentDownloadLogger = {
   error?: (message: string, meta?: Record<string, unknown>) => void;
 };
 
+export type MSTeamsAttachmentResolveFn = (hostname: string) => Promise<{ address: string }>;
+
 export function resolveAttachmentFetchPolicy(params?: {
   allowHosts?: string[];
   authAllowHosts?: string[];
@@ -453,7 +455,7 @@ export const isPrivateOrReservedIP: (ip: string) => boolean = isPrivateIpAddress
  */
 export async function resolveAndValidateIP(
   hostname: string,
-  resolveFn?: (hostname: string) => Promise<{ address: string }>,
+  resolveFn?: MSTeamsAttachmentResolveFn,
 ): Promise<string> {
   const resolve = resolveFn ?? lookup;
   let resolved: { address: string };
@@ -490,10 +492,10 @@ export async function safeFetch(params: {
   authorizationAllowHosts?: string[];
   fetchFn?: typeof fetch;
   requestInit?: RequestInit;
-  resolveFn?: (hostname: string) => Promise<{ address: string }>;
+  resolveFn?: MSTeamsAttachmentResolveFn;
 }): Promise<Response> {
   const fetchFn = params.fetchFn ?? fetch;
-  const resolveFn = params.resolveFn;
+  const resolveFn = params.resolveFn ?? lookup;
   const hasDispatcher = Boolean(
     params.requestInit &&
     typeof params.requestInit === "object" &&
@@ -577,7 +579,7 @@ export async function safeFetchWithPolicy(params: {
   policy: MSTeamsAttachmentFetchPolicy;
   fetchFn?: typeof fetch;
   requestInit?: RequestInit;
-  resolveFn?: (hostname: string) => Promise<{ address: string }>;
+  resolveFn?: MSTeamsAttachmentResolveFn;
 }): Promise<Response> {
   return await safeFetch({
     url: params.url,

@@ -86,6 +86,37 @@ describe("resolveAgentConfig", () => {
     expect(resolveAgentConfig(cfg, "main")?.verboseDefault).toBe("on");
   });
 
+  it("merges contextLimits from defaults with per-agent overrides", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          contextLimits: {
+            memoryGetMaxChars: 20_000,
+            memoryGetDefaultLines: 180,
+            toolResultMaxChars: 18_000,
+          },
+        },
+        list: [
+          {
+            id: "main",
+            skillsLimits: {
+              maxSkillsPromptChars: 30_000,
+            },
+            contextLimits: {
+              memoryGetMaxChars: 24_000,
+            },
+          },
+        ],
+      },
+    };
+
+    expect(resolveAgentConfig(cfg, "main")?.contextLimits).toEqual({
+      memoryGetMaxChars: 24_000,
+      memoryGetDefaultLines: 180,
+      toolResultMaxChars: 18_000,
+    });
+  });
+
   it("resolves explicit and effective model primary separately", () => {
     const cfgWithStringDefault = {
       agents: {

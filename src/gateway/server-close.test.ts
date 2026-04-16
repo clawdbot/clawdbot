@@ -9,7 +9,10 @@ const WEBSOCKET_CLOSE_FORCE_CONTINUE_MS = 250;
 const HTTP_CLOSE_GRACE_MS = 1_000;
 const HTTP_CLOSE_FORCE_WAIT_MS = 5_000;
 
-vi.mock("../channels/plugins/index.js", () => ({
+vi.mock("../channels/plugins/index.js", async () => ({
+  ...(await vi.importActual<typeof import("../channels/plugins/index.js")>(
+    "../channels/plugins/index.js",
+  )),
   listChannelPlugins: () => [],
 }));
 

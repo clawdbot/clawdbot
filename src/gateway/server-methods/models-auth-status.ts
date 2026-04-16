@@ -8,7 +8,9 @@ import {
   formatRemainingShort,
 } from "../../agents/auth-health.js";
 import { ensureAuthProfileStore } from "../../agents/auth-profiles.js";
+import { normalizeProviderId } from "../../agents/provider-id.js";
 import { loadConfig, type OpenClawConfig } from "../../config/config.js";
+import { isSecretRef } from "../../config/types.secrets.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.load.js";
 import { PROVIDER_LABELS, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
 import type { UsageProviderId, UsageWindow } from "../../infra/provider-usage.types.js";
@@ -201,6 +203,40 @@ function resolveConfiguredProviders(cfg: OpenClawConfig): {
 } {
   const out = new Set<string>();
   const expectsOAuth = new Set<string>();
+  // Providers with a resolvable apiKey (inline or SecretRef pointing at a
+  // set env var) are treated as env-backed and skipped from the "missing"
+  // synthesis. Captured once up front so both the models.providers scan
+  // and the auth.profiles scan apply the escape hatch consistently.
+  const envBacked = new Set<string>();
+  for (const [id, provider] of Object.entries(cfg.models?.providers ?? {})) {
+    const apiKey = provider?.apiKey;
+    if (!id || apiKey === undefined || apiKey === null) {
+      continue;
+    }
+    // Treat as env-backed when the credential is currently resolvable:
+    // - inline string literal → always resolvable (satisfies auth today)
+    // - env SecretRef → check process.env for the referenced id (the only
+    //   source we can cheaply verify synchronously on a dashboard read)
+    // - file/exec SecretRef → conservatively treat as env-backed; we can't
+    //   read files or run commands here without making this a heavy async
+    //   path, and the alternative is crying wolf on valid configs
+    // A SecretRef pointing at an unset env var falls through to the normal
+    // "missing" synthesis so the dashboard surfaces the broken config.
+    let resolvable = false;
+    if (typeof apiKey === "string" && apiKey.length > 0) {
+      resolvable = true;
+    } else if (isSecretRef(apiKey)) {
+      if (apiKey.source === "env") {
+        const envValue = process.env[apiKey.id];
+        resolvable = typeof envValue === "string" && envValue.length > 0;
+      } else {
+        resolvable = true;
+      }
+    }
+    if (resolvable) {
+      envBacked.add(normalizeProviderId(id));
+    }
+  }
   for (const [id, provider] of Object.entries(cfg.models?.providers ?? {})) {
     if (!id) {
       continue;
@@ -211,14 +247,15 @@ function resolveConfiguredProviders(cfg: OpenClawConfig): {
     if (mode !== "oauth" && mode !== "token") {
       continue;
     }
-    // Env-backed credential escape hatch — see JSDoc.
-    const hasEnvCredential = provider?.apiKey !== undefined && provider?.apiKey !== null;
-    if (hasEnvCredential) {
+    if (envBacked.has(normalizeProviderId(id))) {
       continue;
     }
     out.add(id);
     if (mode === "oauth") {
-      expectsOAuth.add(id);
+      // Store normalized id so lookups against `AuthProviderHealth.provider`
+      // (which is already normalized by buildAuthHealthSummary) match even
+      // when the config uses an alias like `z.ai` that normalizes to `zai`.
+      expectsOAuth.add(normalizeProviderId(id));
     }
   }
   // auth.profiles entries explicitly opt into the refreshable set via
@@ -227,14 +264,18 @@ function resolveConfiguredProviders(cfg: OpenClawConfig): {
     const provider = profile?.provider;
     const mode = profile?.mode;
     if (
-      typeof provider === "string" &&
-      provider.length > 0 &&
-      (mode === "oauth" || mode === "token")
+      typeof provider !== "string" ||
+      provider.length === 0 ||
+      (mode !== "oauth" && mode !== "token")
     ) {
-      out.add(provider);
-      if (mode === "oauth") {
-        expectsOAuth.add(provider);
-      }
+      continue;
+    }
+    if (envBacked.has(normalizeProviderId(provider))) {
+      continue;
+    }
+    out.add(provider);
+    if (mode === "oauth") {
+      expectsOAuth.add(normalizeProviderId(provider));
     }
   }
   return { providers: Array.from(out), expectsOAuth };

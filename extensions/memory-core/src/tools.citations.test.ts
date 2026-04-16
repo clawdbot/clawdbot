@@ -60,7 +60,12 @@ beforeEach(() => {
         source: "memory" as const,
       },
     ],
-    readFileImpl: async (params: MemoryReadParams) => ({ text: "", path: params.relPath }),
+    readFileImpl: async (params: MemoryReadParams) => ({
+      text: "",
+      path: params.relPath,
+      from: params.from ?? 1,
+      lines: params.lines ?? 120,
+    }),
   });
 });
 
@@ -155,7 +160,7 @@ describe("memory tools", () => {
 
   it("returns empty text without error when file does not exist (ENOENT)", async () => {
     setMemoryReadFileImpl(async (_params: MemoryReadParams) => {
-      return { text: "", path: "memory/2026-02-19.md" };
+      return { text: "", path: "memory/2026-02-19.md", from: 1, lines: 0 };
     });
 
     const tool = createMemoryGetToolOrThrow();
@@ -164,6 +169,8 @@ describe("memory tools", () => {
     expect(result.details).toEqual({
       text: "",
       path: "memory/2026-02-19.md",
+      from: 1,
+      lines: 0,
     });
   });
 
@@ -176,9 +183,35 @@ describe("memory tools", () => {
     expect(result.details).toEqual({
       text: "",
       path: "memory/2026-02-19.md",
+      from: 1,
+      lines: 120,
     });
     expect(getReadAgentMemoryFileMockCalls()).toBe(1);
     expect(getMemorySearchManagerMockCalls()).toBe(0);
+  });
+
+  it("returns truncation metadata and a continuation notice for partial memory_get results", async () => {
+    setMemoryBackend("builtin");
+    setMemoryReadFileImpl(async (params: MemoryReadParams) => ({
+      path: params.relPath,
+      text: "alpha\nbeta\n\n[More content available. Use from=41 to continue.]",
+      from: params.from ?? 1,
+      lines: 40,
+      truncated: true,
+      nextFrom: 41,
+    }));
+
+    const tool = createMemoryGetToolOrThrow();
+    const result = await tool.execute("call_partial", { path: "memory/partial.md" });
+
+    expect(result.details).toEqual({
+      path: "memory/partial.md",
+      text: "alpha\nbeta\n\n[More content available. Use from=41 to continue.]",
+      from: 1,
+      lines: 40,
+      truncated: true,
+      nextFrom: 41,
+    });
   });
 
   it("persists short-term recall events from memory_search tool hits", async () => {

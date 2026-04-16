@@ -33,7 +33,7 @@ const mocks = vi.hoisted(() => ({
     ...a,
   })),
   getChannelPlugin: vi.fn(() => undefined),
-  normalizeChannelId: vi.fn((channel: string) => channel),
+  normalizeChannelId: vi.fn<(channel?: string | null) => string | null>(),
   resolveOutboundTarget: vi.fn((_params?: { to?: string }) => ({
     ok: true as const,
     to: "+15550002",
@@ -74,10 +74,23 @@ vi.mock("../utils/delivery-context.shared.js", () => ({
   mergeDeliveryContext: mocks.mergeDeliveryContext,
 }));
 
-vi.mock("../channels/plugins/index.js", () => ({
-  getChannelPlugin: mocks.getChannelPlugin,
-  normalizeChannelId: mocks.normalizeChannelId,
-}));
+vi.mock("../channels/plugins/index.js", async () => {
+  return await mergeMockedModule(
+    await vi.importActual<typeof import("../channels/plugins/index.js")>(
+      "../channels/plugins/index.js",
+    ),
+    (actual) => ({
+      getChannelPlugin: mocks.getChannelPlugin,
+      normalizeChannelId: mocks.normalizeChannelId.mockImplementation(
+        (channel?: string | null) =>
+          actual.normalizeChannelId(channel) ??
+          (typeof channel === "string" && channel.trim().length > 0
+            ? channel.trim().toLowerCase()
+            : null),
+      ),
+    }),
+  );
+});
 
 vi.mock("../infra/outbound/targets.js", () => ({
   resolveOutboundTarget: mocks.resolveOutboundTarget,
@@ -139,6 +152,7 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.loadSessionEntry.mockReturnValue({ cfg: {}, entry: {} });
     mocks.deliveryContextFromSession.mockReset();
     mocks.deliveryContextFromSession.mockReturnValue(undefined);
+    mocks.normalizeChannelId.mockClear();
     mocks.resolveOutboundTarget.mockReset();
     mocks.resolveOutboundTarget.mockReturnValue({ ok: true as const, to: "+15550002" });
     mocks.deliverOutboundPayloads.mockReset();

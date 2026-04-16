@@ -44,17 +44,17 @@ SERVER_PID=""
 RUN_DIR="$(mktemp -d /tmp/openclaw-parallels-smoke.XXXXXX)"
 BUILD_LOCK_DIR="${TMPDIR:-/tmp}/openclaw-parallels-build.lock"
 
-TIMEOUT_INSTALL_SITE_S=900
-TIMEOUT_INSTALL_TGZ_S=900
-TIMEOUT_INSTALL_REGISTRY_S=480
-TIMEOUT_UPDATE_DEV_S=1500
+TIMEOUT_INSTALL_SITE_S=300
+TIMEOUT_INSTALL_TGZ_S=300
+TIMEOUT_INSTALL_REGISTRY_S=300
+TIMEOUT_UPDATE_DEV_S=300
 TIMEOUT_VERIFY_S=60
 TIMEOUT_ONBOARD_S=180
-TIMEOUT_GATEWAY_S=120
+TIMEOUT_GATEWAY_S=180
 TIMEOUT_AGENT_S=240
 TIMEOUT_PERMISSION_S=60
-TIMEOUT_DASHBOARD_S=90
-TIMEOUT_SNAPSHOT_S=180
+TIMEOUT_DASHBOARD_S=180
+TIMEOUT_SNAPSHOT_S=360
 TIMEOUT_CURRENT_USER_PRLCTL_S=45
 TIMEOUT_DISCORD_S=180
 
@@ -853,8 +853,11 @@ run_logged_guest_current_user_sh() {
   local done_path="$3"
   local timeout_s="$4"
   local runner_path="$5"
-  local deadline rc runner_body write_runner_cmd
+  local deadline rc done_rc runner_body write_runner_cmd
   local guest_home guest_log_state_path latest_npm_log_path latest_npm_log_state_path npm_state_path
+  rc=""
+  done_rc=""
+  latest_npm_log_path=""
   guest_current_user_exec /bin/rm -f "$log_path" "$done_path" "$runner_path"
   runner_body="$(cat <<EOF
 status=0
@@ -889,6 +892,33 @@ EOF
   deadline=$((SECONDS + timeout_s))
   while (( SECONDS < deadline )); do
     stream_guest_file_delta "$log_path" "$guest_log_state_path" ""
+    rc="$(
+      python3 - "$guest_log_state_path" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+if not path.exists():
+    raise SystemExit(1)
+
+text = path.read_text(encoding="utf-8", errors="replace")
+matches = re.findall(r"^__OPENCLAW_RC__:(-?\d+)$", text, flags=re.MULTILINE)
+if not matches:
+    raise SystemExit(1)
+print(matches[-1])
+PY
+    )" || rc=""
+    if [[ "$rc" =~ ^-?[0-9]+$ ]]; then
+      guest_current_user_exec /bin/rm -f "$done_path" "$runner_path" >/dev/null 2>&1 || true
+      stream_guest_file_delta "$log_path" "$guest_log_state_path" ""
+      if [[ -n "$latest_npm_log_path" ]]; then
+        stream_guest_file_delta "$latest_npm_log_path" "$latest_npm_log_state_path" "npm-debug: "
+      fi
+      rm -f "$guest_log_state_path" "$latest_npm_log_state_path" "$npm_state_path"
+      [[ -n "$rc" ]] || rc=1
+      return "$rc"
+    fi
     latest_npm_log_path="$(latest_guest_npm_debug_log_path "$guest_home" || true)"
     if [[ -n "$latest_npm_log_path" ]]; then
       if [[ "$(cat "$npm_state_path" 2>/dev/null || true)" != "$latest_npm_log_path" ]]; then
@@ -897,6 +927,18 @@ EOF
         printf 'npm-debug: %s\n' "$latest_npm_log_path"
       fi
       stream_guest_file_delta "$latest_npm_log_path" "$latest_npm_log_state_path" "npm-debug: "
+    fi
+    done_rc="$(guest_current_user_exec /bin/cat "$done_path" 2>/dev/null | tr -d '\r\n' || true)"
+    if [[ "$done_rc" =~ ^-?[0-9]+$ ]]; then
+      rc="$done_rc"
+      guest_current_user_exec /bin/rm -f "$done_path" "$runner_path" >/dev/null 2>&1 || true
+      stream_guest_file_delta "$log_path" "$guest_log_state_path" ""
+      if [[ -n "$latest_npm_log_path" ]]; then
+        stream_guest_file_delta "$latest_npm_log_path" "$latest_npm_log_state_path" "npm-debug: "
+      fi
+      rm -f "$guest_log_state_path" "$latest_npm_log_state_path" "$npm_state_path"
+      [[ -n "$rc" ]] || rc=1
+      return "$rc"
     fi
     rc="$(guest_runner_rc_from_log "$log_path" 2>/dev/null || true)"
     if [[ "$rc" =~ ^-?[0-9]+$ ]]; then
@@ -1199,27 +1241,22 @@ install_main_timeout() {
 install_main_tgz() {
   local host_ip="$1"
   local temp_name="$2"
-  local install_done install_log install_runner tgz_url_q
-  install_log="/tmp/${temp_name}.log"
-  install_done="/tmp/${temp_name}.done"
-  install_runner="/tmp/${temp_name}.runner.sh"
+  local tgz_url_q
   if target_package_installs_directly; then
-    run_logged_guest_current_user_sh "$(cat <<EOF
+    guest_current_user_sh "$(cat <<EOF
 printf 'install-source: registry-spec %s\n' $(shell_quote "$TARGET_PACKAGE_SPEC")
 $GUEST_NPM_BIN install -g $(shell_quote "$TARGET_PACKAGE_SPEC")
-$GUEST_OPENCLAW_BIN --version
 EOF
-)" "$install_log" "$install_done" "$(install_main_timeout)" "$install_runner"
+)"
     return
   fi
   tgz_url_q="$(shell_quote "http://$host_ip:$HOST_PORT/$(basename "$MAIN_TGZ_PATH")")"
-  run_logged_guest_current_user_sh "$(cat <<EOF
+  guest_current_user_sh "$(cat <<EOF
 printf 'install-source: host-tgz %s\n' $(shell_quote "$tgz_url_q")
 curl -fsSL $tgz_url_q -o /tmp/$temp_name
 $GUEST_NPM_BIN install -g /tmp/$temp_name
-$GUEST_OPENCLAW_BIN --version
 EOF
-)" "$install_log" "$install_done" "$(install_main_timeout)" "$install_runner"
+)"
 }
 
 verify_bundle_permissions() {
@@ -1276,17 +1313,20 @@ start_manual_gateway_if_needed() {
   if ! headless_guest_fallback; then
     return 0
   fi
-  local gateway_log guest_gateway_log guest_home launch_cmd
+  local gateway_log guest_gateway_log guest_home launch_cmd runner_log done_path runner_path
   guest_home="$(parallels_macos_resolve_desktop_home "$VM_NAME" "$GUEST_CURRENT_USER")"
   gateway_log="$RUN_DIR/macos-gateway-prlctl.log"
   guest_gateway_log="/tmp/openclaw-parallels-macos-gateway.log"
+  runner_log="/tmp/openclaw-parallels-gateway-start.log"
+  done_path="/tmp/openclaw-parallels-gateway-start.done"
+  runner_path="/tmp/openclaw-parallels-gateway-start.sh"
   printf 'manual gateway launch transport=%s user=%s\n' "$GUEST_CURRENT_USER_TRANSPORT" "$GUEST_CURRENT_USER"
-  guest_current_user_exec /usr/bin/pkill -f 'openclaw.*gateway run' >/dev/null 2>&1 || true
-  guest_current_user_exec /usr/bin/pkill -f 'openclaw-gateway' >/dev/null 2>&1 || true
-  guest_current_user_exec /usr/bin/pkill -f 'openclaw.mjs gateway' >/dev/null 2>&1 || true
   launch_cmd="$(cat <<EOF
 set -euo pipefail
 trap '' HUP
+/usr/bin/pkill -f 'openclaw.*gateway run' >/dev/null 2>&1 || true
+/usr/bin/pkill -f 'openclaw-gateway' >/dev/null 2>&1 || true
+/usr/bin/pkill -f 'openclaw.mjs gateway' >/dev/null 2>&1 || true
 /usr/bin/env \\
   HOME=$(shell_quote "$guest_home") \\
   USER=$(shell_quote "$GUEST_CURRENT_USER") \\
@@ -1308,7 +1348,7 @@ if ! kill -0 "\$gateway_pid" >/dev/null 2>&1; then
 fi
 EOF
 )"
-  if ! guest_current_user_sh "$launch_cmd" >"$gateway_log" 2>&1; then
+  if ! run_logged_guest_current_user_sh "$launch_cmd" "$runner_log" "$done_path" "$TIMEOUT_GATEWAY_S" "$runner_path" >"$gateway_log" 2>&1; then
     cat "$gateway_log" >&2 || true
     return 1
   fi
@@ -1611,6 +1651,14 @@ phase_log_path() {
   printf '%s/%s.log\n' "$RUN_DIR" "$1"
 }
 
+child_job_running() {
+  local target="$1"
+  local ppid
+  kill -0 "$target" >/dev/null 2>&1 || return 1
+  ppid="$(ps -o ppid= -p "$target" 2>/dev/null | tr -d '[:space:]')"
+  [[ "$ppid" == "$$" ]]
+}
+
 extract_last_version() {
   local log_path="$1"
   python3 - "$log_path" <<'PY'
@@ -1653,7 +1701,7 @@ phase_run() {
   ) >"$log_path" 2>&1 &
   pid=$!
 
-  while kill -0 "$pid" >/dev/null 2>&1; do
+  while child_job_running "$pid"; do
     if (( SECONDS - start >= timeout_s )); then
       timed_out=1
       kill "$pid" >/dev/null 2>&1 || true

@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
+  getLoadedChannelPlugin: vi.fn(),
   listChannelPlugins: mocks.listChannelPlugins,
 }));
 

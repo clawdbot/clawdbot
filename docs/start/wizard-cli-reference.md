@@ -181,8 +181,10 @@ What you set:
     More detail: [Synthetic](/providers/synthetic).
   </Accordion>
   <Accordion title="Ollama (Cloud and local open models)">
-    Prompts for base URL (default `http://127.0.0.1:11434`), then offers Cloud + Local or Local mode.
-    Discovers available models and suggests defaults.
+    Prompts for `Cloud + Local`, `Cloud only`, or `Local only` first.
+    `Cloud only` uses `OLLAMA_API_KEY` with `https://ollama.com`.
+    The host-backed modes prompt for base URL (default `http://127.0.0.1:11434`), discover available models, and suggest defaults.
+    `Cloud + Local` also checks whether that Ollama host is signed in for cloud access.
     More detail: [Ollama](/providers/ollama).
   </Accordion>
   <Accordion title="Moonshot and Kimi Coding">

@@ -1283,16 +1283,24 @@ describe("MatrixClient crypto bootstrapping", () => {
     });
   });
 
-  it("does not force-reset bootstrap when password is unavailable", async () => {
+  it("attempts repair bootstrap even when no password is configured", async () => {
     matrixJsClient.getCrypto = vi.fn(() => ({ on: vi.fn() }));
     const client = new MatrixClient("https://matrix.example.org", "token", {
       encryption: true,
+      // no password — passwordless token-auth bot
     });
-    const bootstrapSpy = vi.fn().mockResolvedValue({
-      crossSigningReady: false,
-      crossSigningPublished: false,
-      ownDeviceVerified: false,
-    });
+    const bootstrapSpy = vi
+      .fn()
+      .mockResolvedValueOnce({
+        crossSigningReady: false,
+        crossSigningPublished: false,
+        ownDeviceVerified: false,
+      })
+      .mockResolvedValueOnce({
+        crossSigningReady: true,
+        crossSigningPublished: true,
+        ownDeviceVerified: true,
+      });
     await (
       client as unknown as {
         ensureCryptoSupportInitialized: () => Promise<void>;
@@ -1306,7 +1314,45 @@ describe("MatrixClient crypto bootstrapping", () => {
 
     await client.start();
 
-    expect(bootstrapSpy).toHaveBeenCalledTimes(1);
+    expect(bootstrapSpy).toHaveBeenCalledTimes(2);
+    expect((bootstrapSpy.mock.calls as unknown[][])[1]?.[1] ?? {}).toEqual({
+      forceResetCrossSigning: true,
+      allowSecretStorageRecreateWithoutRecoveryKey: true,
+      strict: true,
+    });
+  });
+
+  it("catches and logs repair bootstrap failure when UIA is unavailable without password", async () => {
+    matrixJsClient.getCrypto = vi.fn(() => ({ on: vi.fn() }));
+    const client = new MatrixClient("https://matrix.example.org", "token", {
+      encryption: true,
+      // no password
+    });
+    const uiaError = new Error("Interactive auth required");
+    const bootstrapSpy = vi
+      .fn()
+      .mockResolvedValueOnce({
+        crossSigningReady: false,
+        crossSigningPublished: false,
+        ownDeviceVerified: false,
+      })
+      .mockRejectedValueOnce(uiaError);
+    await (
+      client as unknown as {
+        ensureCryptoSupportInitialized: () => Promise<void>;
+      }
+    ).ensureCryptoSupportInitialized();
+    (
+      client as unknown as {
+        cryptoBootstrapper: { bootstrap: typeof bootstrapSpy };
+      }
+    ).cryptoBootstrapper.bootstrap = bootstrapSpy;
+
+    // start() must NOT throw even when the repair bootstrap fails
+    await expect(client.start()).resolves.not.toThrow();
+
+    // repair was attempted
+    expect(bootstrapSpy).toHaveBeenCalledTimes(2);
   });
 
   it("provides secret storage callbacks and resolves stored recovery key", async () => {

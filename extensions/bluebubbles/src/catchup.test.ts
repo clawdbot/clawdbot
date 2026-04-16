@@ -428,9 +428,13 @@ describe("runBlueBubblesCatchup", () => {
     // Cursor is held just before the bad message's timestamp so the next
     // sweep retries it (and re-queries ok1 which dedupe will drop).
     expect(summary?.failed).toBe(1);
+    expect(summary?.givenUp).toBe(0);
     expect(summary?.cursorAfter).toBe(7 * 60 * 1000 - 1);
     const cursorAfter = await loadBlueBubblesCatchupCursor("test-account");
     expect(cursorAfter?.lastSeenMs).toBe(7 * 60 * 1000 - 1);
+    // Retry counter is persisted so subsequent sweeps know how close we
+    // are to the give-up ceiling.
+    expect(cursorAfter?.failureRetries?.bad).toBe(1);
   });
 
   it("clamps held cursor to previous cursor when failure ts is below it", async () => {
@@ -603,6 +607,494 @@ describe("runBlueBubblesCatchup", () => {
     expect(summary?.replayed).toBe(1);
     expect(summary?.skippedPreCursor).toBe(2);
     expect(processed).toEqual(["after"]);
+  });
+});
+
+describe("runBlueBubblesCatchup — per-message retry cap", () => {
+  let stateDir: string;
+  beforeEach(() => {
+    stateDir = makeStateDir();
+  });
+  afterEach(() => {
+    clearStateDir(stateDir);
+    vi.restoreAllMocks();
+  });
+
+  it("increments retry counter on each consecutive failure and holds cursor", async () => {
+    // Three sweeps, all fail on the same GUID. Counter accumulates and
+    // cursor stays pinned below the failing message so every sweep
+    // retries it. maxFailureRetries: 5 so we don't give up inside this
+    // test.
+    const now1 = 10 * 60 * 1000;
+    const now2 = now1 + 60 * 1000;
+    const now3 = now2 + 60 * 1000;
+    await saveBlueBubblesCatchupCursor("test-account", 5 * 60 * 1000);
+
+    const target = makeTarget({
+      account: {
+        accountId: "test-account",
+        enabled: true,
+        configured: true,
+        baseUrl: "http://127.0.0.1:1234",
+        config: {
+          serverUrl: "http://127.0.0.1:1234",
+          password: "x",
+          network: { dangerouslyAllowPrivateNetwork: true },
+          catchup: { maxFailureRetries: 5 },
+        } as unknown as WebhookTarget["account"]["config"],
+      },
+    });
+
+    const fetchMessages = async () => ({
+      resolved: true,
+      messages: [makeBbMessage({ guid: "wedge", dateCreated: 7 * 60 * 1000 })],
+    });
+    const processMessageFn = async () => {
+      throw new Error("boom");
+    };
+
+    const s1 = await runBlueBubblesCatchup(target, {
+      now: () => now1,
+      fetchMessages,
+      processMessageFn,
+    });
+    const s2 = await runBlueBubblesCatchup(target, {
+      now: () => now2,
+      fetchMessages,
+      processMessageFn,
+    });
+    const s3 = await runBlueBubblesCatchup(target, {
+      now: () => now3,
+      fetchMessages,
+      processMessageFn,
+    });
+
+    expect(s1?.failed).toBe(1);
+    expect(s1?.givenUp).toBe(0);
+    expect(s2?.givenUp).toBe(0);
+    expect(s3?.givenUp).toBe(0);
+    const cursor = await loadBlueBubblesCatchupCursor("test-account");
+    expect(cursor?.failureRetries?.wedge).toBe(3);
+    // Cursor still held just below the wedge message's timestamp.
+    expect(cursor?.lastSeenMs).toBe(7 * 60 * 1000 - 1);
+  });
+
+  it("gives up on the Nth consecutive failure and records count >= max", async () => {
+    const now = 10 * 60 * 1000;
+    await saveBlueBubblesCatchupCursor("test-account", 5 * 60 * 1000);
+    // Pre-seed a cursor with retries at the one-before-give-up threshold
+    // so a single run trips the ceiling. This mirrors what would happen
+    // after many runs through the incremental-retry path above.
+    await saveBlueBubblesCatchupCursor("test-account", 5 * 60 * 1000, { wedge: 2 });
+
+    const warnings: string[] = [];
+    const target = makeTarget({
+      account: {
+        accountId: "test-account",
+        enabled: true,
+        configured: true,
+        baseUrl: "http://127.0.0.1:1234",
+        config: {
+          serverUrl: "http://127.0.0.1:1234",
+          password: "x",
+          network: { dangerouslyAllowPrivateNetwork: true },
+          catchup: { maxFailureRetries: 3 },
+        } as unknown as WebhookTarget["account"]["config"],
+      },
+    });
+
+    const summary = await runBlueBubblesCatchup(target, {
+      now: () => now,
+      fetchMessages: async () => ({
+        resolved: true,
+        messages: [makeBbMessage({ guid: "wedge", dateCreated: 7 * 60 * 1000 })],
+      }),
+      processMessageFn: async () => {
+        throw new Error("malformed");
+      },
+      error: (m) => warnings.push(m),
+    });
+
+    expect(summary?.failed).toBe(1);
+    expect(summary?.givenUp).toBe(1);
+    // Give-up no longer holds the cursor: it advances to nowMs so the
+    // wedge message falls out of the next query window entirely.
+    expect(summary?.cursorAfter).toBe(now);
+
+    const persisted = await loadBlueBubblesCatchupCursor("test-account");
+    expect(persisted?.lastSeenMs).toBe(now);
+    // Counter is persisted at the give-up value so a later sweep that
+    // still sees the message (e.g., because a different GUID is holding
+    // the cursor) will recognize the GUID as given up and skip it.
+    expect(persisted?.failureRetries?.wedge).toBe(3);
+
+    // Distinct WARN log line fired on the give-up transition.
+    const giveUpWarnings = warnings.filter((w) => w.includes("giving up on guid="));
+    expect(giveUpWarnings).toHaveLength(1);
+    expect(giveUpWarnings[0]).toContain("guid=wedge");
+    expect(giveUpWarnings[0]).toContain("3 consecutive failures");
+  });
+
+  it("skips an already-given-up GUID without re-attempting processMessage", async () => {
+    // Setup: the cursor file was written with wedge already at the
+    // give-up threshold from a prior run. On this run, the cursor is
+    // held by a different, still-retrying GUID (`held`), so wedge's
+    // timestamp falls back into the query window. Catchup must skip
+    // wedge without invoking processMessage on it.
+    const now = 10 * 60 * 1000;
+    await saveBlueBubblesCatchupCursor("test-account", 5 * 60 * 1000, { wedge: 3 });
+
+    const attempted: string[] = [];
+    const target = makeTarget({
+      account: {
+        accountId: "test-account",
+        enabled: true,
+        configured: true,
+        baseUrl: "http://127.0.0.1:1234",
+        config: {
+          serverUrl: "http://127.0.0.1:1234",
+          password: "x",
+          network: { dangerouslyAllowPrivateNetwork: true },
+          catchup: { maxFailureRetries: 3 },
+        } as unknown as WebhookTarget["account"]["config"],
+      },
+    });
+
+    const summary = await runBlueBubblesCatchup(target, {
+      now: () => now,
+      fetchMessages: async () => ({
+        resolved: true,
+        messages: [
+          makeBbMessage({ guid: "held", dateCreated: 6 * 60 * 1000 }),
+          makeBbMessage({ guid: "wedge", dateCreated: 7 * 60 * 1000 }),
+        ],
+      }),
+      processMessageFn: async (m) => {
+        attempted.push(m.messageId ?? "?");
+        if (m.messageId === "held") {
+          throw new Error("transient");
+        }
+      },
+    });
+
+    // processMessage never runs for wedge.
+    expect(attempted).toEqual(["held"]);
+    expect(summary?.skippedGivenUp).toBe(1);
+    expect(summary?.failed).toBe(1);
+    expect(summary?.givenUp).toBe(0);
+    // Cursor held at `held` so held keeps retrying next sweep.
+    expect(summary?.cursorAfter).toBe(6 * 60 * 1000 - 1);
+
+    const cursor = await loadBlueBubblesCatchupCursor("test-account");
+    // Both entries preserved: held at count 1 (still retrying),
+    // wedge at count 3 (given up, sticky).
+    expect(cursor?.failureRetries?.held).toBe(1);
+    expect(cursor?.failureRetries?.wedge).toBe(3);
+  });
+
+  it("clears the retry counter on successful processing", async () => {
+    // GUID recovered after a transient failure. The counter must drop
+    // so the next failure starts fresh (not carrying forward stale
+    // retry history).
+    const now = 10 * 60 * 1000;
+    await saveBlueBubblesCatchupCursor("test-account", 5 * 60 * 1000, { flaky: 4 });
+
+    const summary = await runBlueBubblesCatchup(makeTarget(), {
+      now: () => now,
+      fetchMessages: async () => ({
+        resolved: true,
+        messages: [makeBbMessage({ guid: "flaky", dateCreated: 6 * 60 * 1000 })],
+      }),
+      processMessageFn: async () => {
+        /* succeeds */
+      },
+    });
+
+    expect(summary?.replayed).toBe(1);
+    const cursor = await loadBlueBubblesCatchupCursor("test-account");
+    expect(cursor?.failureRetries?.flaky).toBeUndefined();
+    // When the map is empty, the field itself is omitted from the file.
+    expect(cursor?.failureRetries).toBeUndefined();
+    expect(cursor?.lastSeenMs).toBe(now);
+  });
+
+  it("resolves 'earlier retry + later give-up' by holding cursor at earlier and skipping later", async () => {
+    // This is the key scenario issue #66870 exists to solve. GUID A at
+    // t=6min is still retrying (count=1). GUID B at t=7min has been
+    // failing for many runs and crosses the ceiling on this run. The
+    // wrong answer is "advance cursor past B to t=7min" — that would
+    // lose A. The right answer is "hold cursor below A, record B as
+    // given-up, skip B on sight next run".
+    const now = 10 * 60 * 1000;
+    await saveBlueBubblesCatchupCursor("test-account", 5 * 60 * 1000, { giveUpHere: 2 });
+
+    const target = makeTarget({
+      account: {
+        accountId: "test-account",
+        enabled: true,
+        configured: true,
+        baseUrl: "http://127.0.0.1:1234",
+        config: {
+          serverUrl: "http://127.0.0.1:1234",
+          password: "x",
+          network: { dangerouslyAllowPrivateNetwork: true },
+          catchup: { maxFailureRetries: 3 },
+        } as unknown as WebhookTarget["account"]["config"],
+      },
+    });
+
+    const summary = await runBlueBubblesCatchup(target, {
+      now: () => now,
+      fetchMessages: async () => ({
+        resolved: true,
+        messages: [
+          makeBbMessage({ guid: "retryEarlier", dateCreated: 6 * 60 * 1000 }),
+          makeBbMessage({ guid: "giveUpHere", dateCreated: 7 * 60 * 1000 }),
+        ],
+      }),
+      processMessageFn: async () => {
+        throw new Error("failing");
+      },
+    });
+
+    expect(summary?.failed).toBe(2);
+    expect(summary?.givenUp).toBe(1);
+    // Cursor held at (earlier message ts - 1) so retryEarlier keeps retrying.
+    expect(summary?.cursorAfter).toBe(6 * 60 * 1000 - 1);
+
+    const cursor = await loadBlueBubblesCatchupCursor("test-account");
+    expect(cursor?.failureRetries?.retryEarlier).toBe(1);
+    // Give-up counter preserved at or above the threshold.
+    expect(cursor?.failureRetries?.giveUpHere).toBe(3);
+  });
+
+  it("uses the default retry cap when maxFailureRetries is omitted from config", async () => {
+    // Boot-strap: record 9 failures, then a 10th should trigger give-up
+    // at the default threshold. We pre-seed the counter at 9 so this
+    // single-run test doesn't need to iterate the whole sequence.
+    const now = 10 * 60 * 1000;
+    await saveBlueBubblesCatchupCursor("test-account", 5 * 60 * 1000, { wedge: 9 });
+
+    const warnings: string[] = [];
+    const summary = await runBlueBubblesCatchup(makeTarget(), {
+      now: () => now,
+      fetchMessages: async () => ({
+        resolved: true,
+        messages: [makeBbMessage({ guid: "wedge", dateCreated: 6 * 60 * 1000 })],
+      }),
+      processMessageFn: async () => {
+        throw new Error("boom");
+      },
+      error: (m) => warnings.push(m),
+    });
+    expect(summary?.givenUp).toBe(1);
+    expect(warnings.some((w) => w.includes("giving up on guid=wedge"))).toBe(true);
+    expect(warnings.some((w) => w.includes("10 consecutive failures"))).toBe(true);
+  });
+
+  it("clamps maxFailureRetries to >= 1 when configured to zero or negative", async () => {
+    // With clamp floor of 1, the first failure already meets count >= 1
+    // so catchup gives up immediately on first attempt.
+    const now = 10 * 60 * 1000;
+    await saveBlueBubblesCatchupCursor("test-account", 5 * 60 * 1000);
+
+    const summary = await runBlueBubblesCatchup(
+      makeTarget({
+        account: {
+          accountId: "test-account",
+          enabled: true,
+          configured: true,
+          baseUrl: "http://127.0.0.1:1234",
+          config: {
+            serverUrl: "http://127.0.0.1:1234",
+            password: "x",
+            network: { dangerouslyAllowPrivateNetwork: true },
+            catchup: { maxFailureRetries: 0 },
+          } as unknown as WebhookTarget["account"]["config"],
+        },
+      }),
+      {
+        now: () => now,
+        fetchMessages: async () => ({
+          resolved: true,
+          messages: [makeBbMessage({ guid: "wedge", dateCreated: 6 * 60 * 1000 })],
+        }),
+        processMessageFn: async () => {
+          throw new Error("boom");
+        },
+      },
+    );
+    expect(summary?.givenUp).toBe(1);
+    expect(summary?.cursorAfter).toBe(now);
+  });
+
+  it("loads cleanly from a legacy cursor file without a failureRetries field", async () => {
+    // Older cursor files (written before this field existed) must still
+    // parse. Round-trip: save without the field (legacy path), then
+    // run catchup and confirm a normal sweep proceeds.
+    await saveBlueBubblesCatchupCursor("test-account", 5 * 60 * 1000);
+    const loaded = await loadBlueBubblesCatchupCursor("test-account");
+    expect(loaded?.lastSeenMs).toBe(5 * 60 * 1000);
+    expect(loaded?.failureRetries).toBeUndefined();
+
+    const summary = await runBlueBubblesCatchup(makeTarget(), {
+      now: () => 10 * 60 * 1000,
+      fetchMessages: async () => ({
+        resolved: true,
+        messages: [makeBbMessage({ guid: "ok", dateCreated: 6 * 60 * 1000 })],
+      }),
+      processMessageFn: async () => {},
+    });
+    expect(summary?.replayed).toBe(1);
+  });
+
+  it("drops retry entries for GUIDs that are no longer in the query window", async () => {
+    // A stale entry carried in the cursor file (e.g., from an older
+    // run whose cursor has since advanced past its timestamp) should
+    // NOT be carried forward if the GUID does not appear in the
+    // current fetch. Otherwise the map grows without bound over time.
+    const now = 10 * 60 * 1000;
+    await saveBlueBubblesCatchupCursor("test-account", 5 * 60 * 1000, {
+      staleGuid: 2,
+      alsoStale: 5,
+    });
+
+    const summary = await runBlueBubblesCatchup(makeTarget(), {
+      now: () => now,
+      fetchMessages: async () => ({
+        resolved: true,
+        // Fetch returns entirely different GUIDs from the stored map.
+        messages: [makeBbMessage({ guid: "fresh", dateCreated: 6 * 60 * 1000 })],
+      }),
+      processMessageFn: async () => {},
+    });
+    expect(summary?.replayed).toBe(1);
+    const cursor = await loadBlueBubblesCatchupCursor("test-account");
+    // Both stale entries dropped; no new entries since the fresh message
+    // succeeded.
+    expect(cursor?.failureRetries).toBeUndefined();
+  });
+
+  it("preserves stickiness when a given-up GUID reappears and fails again", async () => {
+    // Setup: cursor advanced, but held by a newer still-retrying GUID
+    // `held`. The wedge GUID is already given up from a prior run and
+    // still appears because `held` is holding the cursor below it.
+    // Catchup must continue to skip wedge on sight across many runs
+    // without ever calling processMessage on it.
+    const now = 10 * 60 * 1000;
+    await saveBlueBubblesCatchupCursor("test-account", 5 * 60 * 1000, {
+      wedge: 10,
+      held: 1,
+    });
+
+    const attempted: string[] = [];
+    const target = makeTarget({
+      account: {
+        accountId: "test-account",
+        enabled: true,
+        configured: true,
+        baseUrl: "http://127.0.0.1:1234",
+        config: {
+          serverUrl: "http://127.0.0.1:1234",
+          password: "x",
+          network: { dangerouslyAllowPrivateNetwork: true },
+          catchup: { maxFailureRetries: 5 },
+        } as unknown as WebhookTarget["account"]["config"],
+      },
+    });
+    const fetchMessages = async () => ({
+      resolved: true,
+      messages: [
+        makeBbMessage({ guid: "held", dateCreated: 6 * 60 * 1000 }),
+        makeBbMessage({ guid: "wedge", dateCreated: 7 * 60 * 1000 }),
+      ],
+    });
+    const processMessageFn = async () => {
+      throw new Error("still broken");
+    };
+
+    for (let i = 0; i < 3; i++) {
+      await runBlueBubblesCatchup(target, {
+        now: () => now + i,
+        fetchMessages,
+        processMessageFn: async (m) => {
+          attempted.push(m.messageId ?? "?");
+          return processMessageFn();
+        },
+      });
+    }
+    // wedge is NEVER attempted despite reappearing every sweep.
+    expect(attempted.filter((g) => g === "wedge")).toHaveLength(0);
+    // held is attempted every sweep.
+    expect(attempted.filter((g) => g === "held")).toHaveLength(3);
+  });
+
+  it("summary.skippedGivenUp counter is zero on a clean run", async () => {
+    const summary = await runBlueBubblesCatchup(makeTarget(), {
+      now: () => 10_000,
+      fetchMessages: async () => ({ resolved: true, messages: [] }),
+      processMessageFn: async () => {},
+    });
+    expect(summary?.skippedGivenUp).toBe(0);
+    expect(summary?.givenUp).toBe(0);
+  });
+});
+
+describe("saveBlueBubblesCatchupCursor + loadBlueBubblesCatchupCursor — retry map", () => {
+  let stateDir: string;
+  beforeEach(() => {
+    stateDir = makeStateDir();
+  });
+  afterEach(() => {
+    clearStateDir(stateDir);
+  });
+
+  it("round-trips an empty retry map by omitting the field from the persisted shape", async () => {
+    await saveBlueBubblesCatchupCursor("acct", 100, {});
+    const loaded = await loadBlueBubblesCatchupCursor("acct");
+    expect(loaded?.lastSeenMs).toBe(100);
+    expect(loaded?.failureRetries).toBeUndefined();
+  });
+
+  it("round-trips a populated retry map", async () => {
+    await saveBlueBubblesCatchupCursor("acct", 100, { a: 1, b: 9 });
+    const loaded = await loadBlueBubblesCatchupCursor("acct");
+    expect(loaded?.failureRetries).toEqual({ a: 1, b: 9 });
+  });
+
+  it("filters malformed retry entries during load (zero, negative, non-numeric)", async () => {
+    // Use the public save to produce the on-disk file, then overwrite
+    // its contents with a hand-crafted payload to exercise the loader's
+    // sanitization independently of what the saver would emit.
+    await saveBlueBubblesCatchupCursor("acct", 100);
+    const stateRoot = process.env.OPENCLAW_STATE_DIR;
+    if (!stateRoot) {
+      throw new Error("OPENCLAW_STATE_DIR must be set by the test harness");
+    }
+    const dir = path.join(stateRoot, "bluebubbles", "catchup");
+    const files = fs.readdirSync(dir);
+    expect(files).toHaveLength(1);
+    const firstFile = files[0];
+    if (!firstFile) {
+      throw new Error("expected a cursor file to exist after save");
+    }
+    const badCursor = {
+      lastSeenMs: 100,
+      updatedAt: 0,
+      failureRetries: {
+        good: 3,
+        zero: 0,
+        negative: -1,
+        notANumber: "oops",
+        infinite: Number.POSITIVE_INFINITY,
+        nan: Number.NaN,
+      },
+    };
+    fs.writeFileSync(path.join(dir, firstFile), JSON.stringify(badCursor));
+
+    const loaded = await loadBlueBubblesCatchupCursor("acct");
+    expect(loaded?.lastSeenMs).toBe(100);
+    expect(loaded?.failureRetries).toEqual({ good: 3 });
   });
 });
 

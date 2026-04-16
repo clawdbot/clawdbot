@@ -1,6 +1,9 @@
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
-import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
+import type {
+  AgentContextLimitsConfig,
+  AgentDefaultsConfig,
+} from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
@@ -23,6 +26,7 @@ export type ResolvedAgentConfig = {
   skills?: AgentEntry["skills"];
   memorySearch?: AgentEntry["memorySearch"];
   humanDelay?: AgentEntry["humanDelay"];
+  contextLimits?: AgentContextLimitsConfig;
   heartbeat?: AgentEntry["heartbeat"];
   identity?: AgentEntry["identity"];
   groupChat?: AgentEntry["groupChat"];
@@ -116,6 +120,10 @@ export function resolveAgentConfig(
     skills: Array.isArray(entry.skills) ? entry.skills : undefined,
     memorySearch: entry.memorySearch,
     humanDelay: entry.humanDelay,
+    contextLimits:
+      typeof entry.contextLimits === "object" && entry.contextLimits
+        ? { ...agentDefaults?.contextLimits, ...entry.contextLimits }
+        : agentDefaults?.contextLimits,
     heartbeat: entry.heartbeat,
     identity: entry.identity,
     groupChat: entry.groupChat,
@@ -125,6 +133,17 @@ export function resolveAgentConfig(
     sandbox: entry.sandbox,
     tools: entry.tools,
   };
+}
+
+export function resolveAgentContextLimits(
+  cfg: OpenClawConfig | undefined,
+  agentId?: string | null,
+): AgentContextLimitsConfig | undefined {
+  const defaults = cfg?.agents?.defaults?.contextLimits;
+  if (!cfg || !agentId) {
+    return defaults;
+  }
+  return resolveAgentConfig(cfg, agentId)?.contextLimits ?? defaults;
 }
 
 export function resolveAgentWorkspaceDir(cfg: OpenClawConfig, agentId: string) {

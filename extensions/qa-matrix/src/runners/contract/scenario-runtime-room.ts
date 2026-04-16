@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
+import { encodePngRgba, fillPixel } from "openclaw/plugin-sdk/media-runtime";
 import type { MatrixQaObservedEvent } from "../../substrate/events.js";
 import {
   MATRIX_QA_BLOCK_ROOM_KEY,
   MATRIX_QA_HOMESERVER_ROOM_KEY,
+  MATRIX_QA_MEDIA_ROOM_KEY,
   MATRIX_QA_MEMBERSHIP_ROOM_KEY,
   MATRIX_QA_RESTART_ROOM_KEY,
   resolveMatrixQaScenarioRoomId,
@@ -24,30 +26,190 @@ import {
   runDriverTopLevelMentionScenario,
   runNoReplyExpectedScenario,
   runTopologyScopedTopLevelScenario,
-  runTopLevelMentionScenario,
   waitForMembershipEvent,
+  type MatrixQaActorId,
   type MatrixQaScenarioContext,
   type MatrixQaSyncState,
 } from "./scenario-runtime-shared.js";
 import type { MatrixQaCanaryArtifact, MatrixQaScenarioExecution } from "./scenario-types.js";
 
-async function runThreadScenario(params: MatrixQaScenarioContext) {
-  const { client, startSince } = await primeMatrixQaActorCursor({
-    accessToken: params.driverAccessToken,
+type MatrixQaThreadScenarioResult = Awaited<ReturnType<typeof runThreadScenario>>;
+const MATRIX_QA_IMAGE_ATTACHMENT_FILENAME = "red-top-blue-bottom.png";
+const MATRIX_QA_IMAGE_COLOR_GROUPS = [["red"], ["blue"]] as const;
+
+function createMatrixQaSplitColorImagePng() {
+  const width = 16;
+  const height = 16;
+  const rgba = Buffer.alloc(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    const isTopHalf = y < height / 2;
+    for (let x = 0; x < width; x += 1) {
+      if (isTopHalf) {
+        fillPixel(rgba, x, y, width, 255, 0, 0);
+        continue;
+      }
+      fillPixel(rgba, x, y, width, 0, 0, 255);
+    }
+  }
+  return encodePngRgba(rgba, width, height);
+}
+
+function buildMatrixQaImageUnderstandingPrompt(sutUserId: string) {
+  return `${sutUserId} Image understanding check: describe the top and bottom colors in the attached image in one short sentence.`;
+}
+
+function buildMatrixQaImageGenerationPrompt(sutUserId: string) {
+  return `${sutUserId} Image generation check: generate a QA lighthouse image and summarize it in one short sentence.`;
+}
+
+function hasMatrixQaExpectedColorReply(body: string | undefined) {
+  const normalizedBody = body?.toLowerCase() ?? "";
+  return MATRIX_QA_IMAGE_COLOR_GROUPS.every((group) =>
+    group.some((color) => normalizedBody.includes(color)),
+  );
+}
+
+function requireMatrixQaImageAttachment(event: MatrixQaObservedEvent, scenarioLabel: string) {
+  if (event.msgtype !== "m.image" || event.attachment?.kind !== "image") {
+    throw new Error(
+      `${scenarioLabel} expected an m.image attachment but saw ${event.msgtype ?? "<none>"}`,
+    );
+  }
+  return event.attachment;
+}
+
+function buildMatrixQaAttachmentDetailLines(params: {
+  attachmentEvent: MatrixQaObservedEvent;
+  label: string;
+}) {
+  return [
+    `${params.label} event: ${params.attachmentEvent.eventId}`,
+    `${params.label} msgtype: ${params.attachmentEvent.msgtype ?? "<none>"}`,
+    `${params.label} attachment kind: ${params.attachmentEvent.attachment?.kind ?? "<none>"}`,
+    `${params.label} attachment filename: ${params.attachmentEvent.attachment?.filename ?? "<none>"}`,
+    `${params.label} body preview: ${params.attachmentEvent.body?.slice(0, 200) ?? "<none>"}`,
+  ];
+}
+
+function assertMatrixQaInReplyTarget(params: {
+  actualEventId?: string;
+  expectedEventId: string;
+  label: string;
+}) {
+  if (params.actualEventId !== params.expectedEventId) {
+    throw new Error(
+      `${params.label} targeted ${params.actualEventId ?? "<none>"} instead of ${params.expectedEventId}`,
+    );
+  }
+}
+
+function requireMatrixQaNestedThreadEvent(
+  nestedDriverEventId: string | undefined,
+  scenarioLabel: string,
+) {
+  if (!nestedDriverEventId) {
+    throw new Error(`${scenarioLabel} did not create a nested trigger`);
+  }
+  return nestedDriverEventId;
+}
+
+function buildMatrixQaThreadArtifacts(result: MatrixQaThreadScenarioResult) {
+  return {
+    driverEventId: result.driverEventId,
+    reply: result.reply,
+    rootEventId: result.rootEventId,
+    token: result.token,
+  };
+}
+
+function buildMatrixQaThreadDetailLines(params: {
+  result: MatrixQaThreadScenarioResult;
+  includeNestedTrigger?: boolean;
+  extraLines?: string[];
+  replyLabel?: string;
+}) {
+  return [
+    `thread root event: ${params.result.rootEventId}`,
+    ...(params.includeNestedTrigger && params.result.nestedDriverEventId
+      ? [`nested trigger event: ${params.result.nestedDriverEventId}`]
+      : []),
+    `mention trigger event: ${params.result.driverEventId}`,
+    ...(params.extraLines ?? []),
+    ...buildMatrixReplyDetails(params.replyLabel ?? "reply", params.result.reply),
+  ];
+}
+
+async function primeMatrixQaDriverScenarioClient(context: MatrixQaScenarioContext) {
+  return await primeMatrixQaActorCursor({
+    accessToken: context.driverAccessToken,
     actorId: "driver",
-    baseUrl: params.baseUrl,
-    syncState: params.syncState,
+    baseUrl: context.baseUrl,
+    observedEvents: context.observedEvents,
+    syncState: context.syncState,
+    syncStreams: context.syncStreams,
   });
+}
+
+function createMatrixQaDriverScenarioClient(context: MatrixQaScenarioContext) {
+  return createMatrixQaScenarioClient({
+    accessToken: context.driverAccessToken,
+    actorId: "driver",
+    baseUrl: context.baseUrl,
+    observedEvents: context.observedEvents,
+    syncState: context.syncState,
+    syncStreams: context.syncStreams,
+  });
+}
+
+async function runAssertedDriverTopLevelScenario(params: {
+  context: MatrixQaScenarioContext;
+  label: string;
+  roomId?: string;
+  tokenPrefix: string;
+}) {
+  const result = await runDriverTopLevelMentionScenario({
+    baseUrl: params.context.baseUrl,
+    driverAccessToken: params.context.driverAccessToken,
+    observedEvents: params.context.observedEvents,
+    roomId: params.roomId ?? params.context.roomId,
+    syncState: params.context.syncState,
+    syncStreams: params.context.syncStreams,
+    sutUserId: params.context.sutUserId,
+    timeoutMs: params.context.timeoutMs,
+    tokenPrefix: params.tokenPrefix,
+  });
+  assertTopLevelReplyArtifact(params.label, result.reply);
+  return result;
+}
+
+async function runThreadScenario(
+  params: MatrixQaScenarioContext,
+  options?: {
+    createNestedReply?: boolean;
+    tokenPrefix?: string;
+  },
+) {
+  const { client, startSince } = await primeMatrixQaDriverScenarioClient(params);
   const rootBody = `thread root ${randomUUID().slice(0, 8)}`;
   const rootEventId = await client.sendTextMessage({
     body: rootBody,
     roomId: params.roomId,
   });
-  const token = `MATRIX_QA_THREAD_${randomUUID().slice(0, 8).toUpperCase()}`;
+  const nestedDriverEventId =
+    options?.createNestedReply === true
+      ? await client.sendTextMessage({
+          body: `thread nested ${randomUUID().slice(0, 8)}`,
+          replyToEventId: rootEventId,
+          roomId: params.roomId,
+          threadRootEventId: rootEventId,
+        })
+      : undefined;
+  const triggerEventId = nestedDriverEventId ?? rootEventId;
+  const token = `${options?.tokenPrefix ?? "MATRIX_QA_THREAD"}_${randomUUID().slice(0, 8).toUpperCase()}`;
   const driverEventId = await client.sendTextMessage({
     body: buildMentionPrompt(params.sutUserId, token),
     mentionUserIds: [params.sutUserId],
-    replyToEventId: rootEventId,
+    replyToEventId: triggerEventId,
     roomId: params.roomId,
     threadRootEventId: rootEventId,
   });
@@ -72,6 +234,7 @@ async function runThreadScenario(params: MatrixQaScenarioContext) {
   });
   return {
     driverEventId,
+    nestedDriverEventId,
     reply: buildMatrixReplyArtifact(matched.event, token),
     rootEventId,
     token,
@@ -84,6 +247,7 @@ export async function runMatrixQaCanary(params: {
   observedEvents: MatrixQaObservedEvent[];
   roomId: string;
   syncState: MatrixQaSyncState;
+  syncStreams?: MatrixQaScenarioContext["syncStreams"];
   sutUserId: string;
   timeoutMs: number;
 }): Promise<{
@@ -97,6 +261,7 @@ export async function runMatrixQaCanary(params: {
     observedEvents: params.observedEvents,
     roomId: params.roomId,
     syncState: params.syncState,
+    syncStreams: params.syncStreams,
     sutUserId: params.sutUserId,
     timeoutMs: params.timeoutMs,
     tokenPrefix: "MATRIX_QA_CANARY",
@@ -112,17 +277,69 @@ export async function runThreadFollowUpScenario(context: MatrixQaScenarioContext
     label: "thread reply",
   });
   return {
-    artifacts: {
-      driverEventId: result.driverEventId,
-      reply: result.reply,
-      rootEventId: result.rootEventId,
-      token: result.token,
-    },
+    artifacts: buildMatrixQaThreadArtifacts(result),
     details: [
       `root event: ${result.rootEventId}`,
       `driver thread event: ${result.driverEventId}`,
       ...buildMatrixReplyDetails("reply", result.reply),
     ].join("\n"),
+  } satisfies MatrixQaScenarioExecution;
+}
+
+export async function runThreadRootPreservationScenario(context: MatrixQaScenarioContext) {
+  const result = await runThreadScenario(context, {
+    createNestedReply: true,
+    tokenPrefix: "MATRIX_QA_THREAD_ROOT",
+  });
+  assertThreadReplyArtifact(result.reply, {
+    expectedRootEventId: result.rootEventId,
+    label: "thread root preservation reply",
+  });
+  requireMatrixQaNestedThreadEvent(
+    result.nestedDriverEventId,
+    "Matrix thread root preservation scenario",
+  );
+  return {
+    artifacts: buildMatrixQaThreadArtifacts(result),
+    details: buildMatrixQaThreadDetailLines({
+      result,
+      includeNestedTrigger: true,
+      extraLines: [
+        `reply thread root: ${result.reply.relatesTo?.eventId ?? "<none>"}`,
+        `reply in_reply_to: ${result.reply.relatesTo?.inReplyToId ?? "<none>"}`,
+      ],
+    }).join("\n"),
+  } satisfies MatrixQaScenarioExecution;
+}
+
+export async function runThreadNestedReplyShapeScenario(context: MatrixQaScenarioContext) {
+  const result = await runThreadScenario(context, {
+    createNestedReply: true,
+    tokenPrefix: "MATRIX_QA_THREAD_NESTED",
+  });
+  assertThreadReplyArtifact(result.reply, {
+    expectedRootEventId: result.rootEventId,
+    label: "thread nested reply",
+  });
+  requireMatrixQaNestedThreadEvent(
+    result.nestedDriverEventId,
+    "Matrix thread nested reply scenario",
+  );
+  assertMatrixQaInReplyTarget({
+    actualEventId: result.reply.relatesTo?.inReplyToId,
+    expectedEventId: result.rootEventId,
+    label: "thread nested reply in_reply_to",
+  });
+  return {
+    artifacts: buildMatrixQaThreadArtifacts(result),
+    details: buildMatrixQaThreadDetailLines({
+      result,
+      includeNestedTrigger: true,
+      extraLines: [
+        `reply in_reply_to: ${result.reply.relatesTo?.inReplyToId ?? "<none>"}`,
+        `expected fallback root: ${result.rootEventId}`,
+      ],
+    }).join("\n"),
   } satisfies MatrixQaScenarioExecution;
 }
 
@@ -132,17 +349,11 @@ export async function runThreadIsolationScenario(context: MatrixQaScenarioContex
     expectedRootEventId: threadPhase.rootEventId,
     label: "thread isolation reply",
   });
-  const topLevelPhase = await runDriverTopLevelMentionScenario({
-    baseUrl: context.baseUrl,
-    driverAccessToken: context.driverAccessToken,
-    observedEvents: context.observedEvents,
-    roomId: context.roomId,
-    syncState: context.syncState,
-    sutUserId: context.sutUserId,
-    timeoutMs: context.timeoutMs,
+  const topLevelPhase = await runAssertedDriverTopLevelScenario({
+    context,
+    label: "top-level follow-up reply",
     tokenPrefix: "MATRIX_QA_TOPLEVEL",
   });
-  assertTopLevelReplyArtifact("top-level follow-up reply", topLevelPhase.reply);
   return {
     artifacts: {
       threadDriverEventId: threadPhase.driverEventId,
@@ -164,17 +375,11 @@ export async function runThreadIsolationScenario(context: MatrixQaScenarioContex
 }
 
 export async function runTopLevelReplyShapeScenario(context: MatrixQaScenarioContext) {
-  const result = await runDriverTopLevelMentionScenario({
-    baseUrl: context.baseUrl,
-    driverAccessToken: context.driverAccessToken,
-    observedEvents: context.observedEvents,
-    roomId: context.roomId,
-    syncState: context.syncState,
-    sutUserId: context.sutUserId,
-    timeoutMs: context.timeoutMs,
+  const result = await runAssertedDriverTopLevelScenario({
+    context,
+    label: "top-level reply",
     tokenPrefix: "MATRIX_QA_TOPLEVEL",
   });
-  assertTopLevelReplyArtifact("top-level reply", result.reply);
   return {
     artifacts: {
       driverEventId: result.driverEventId,
@@ -198,6 +403,7 @@ export async function runRoomThreadReplyOverrideScenario(context: MatrixQaScenar
       event.relatesTo?.relType === "m.thread" && event.relatesTo?.eventId === params.driverEventId,
     roomId: context.roomId,
     syncState: context.syncState,
+    syncStreams: context.syncStreams,
     sutUserId: context.sutUserId,
     timeoutMs: context.timeoutMs,
     tokenPrefix: "MATRIX_QA_ROOM_THREAD",
@@ -225,7 +431,9 @@ export async function runObserverAllowlistOverrideScenario(context: MatrixQaScen
     accessToken: context.observerAccessToken,
     actorId: "observer",
     baseUrl: context.baseUrl,
+    observedEvents: context.observedEvents,
     syncState: context.syncState,
+    syncStreams: context.syncStreams,
   });
   const token = `MATRIX_QA_OBSERVER_ALLOWLIST_${randomUUID().slice(0, 8).toUpperCase()}`;
   const body = buildMentionPrompt(context.sutUserId, token);
@@ -271,12 +479,7 @@ export async function runObserverAllowlistOverrideScenario(context: MatrixQaScen
 }
 
 export async function runQuietStreamingPreviewScenario(context: MatrixQaScenarioContext) {
-  const { client, startSince } = await primeMatrixQaActorCursor({
-    accessToken: context.driverAccessToken,
-    actorId: "driver",
-    baseUrl: context.baseUrl,
-    syncState: context.syncState,
-  });
+  const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
   const finalText = `MATRIX_QA_QUIET_STREAM_${randomUUID().slice(0, 8).toUpperCase()} preview complete`;
   const triggerBody = buildMatrixQuietStreamingPrompt(context.sutUserId, finalText);
   const driverEventId = await client.sendTextMessage({
@@ -337,12 +540,7 @@ export async function runQuietStreamingPreviewScenario(context: MatrixQaScenario
 
 export async function runBlockStreamingScenario(context: MatrixQaScenarioContext) {
   const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_BLOCK_ROOM_KEY);
-  const { client, startSince } = await primeMatrixQaActorCursor({
-    accessToken: context.driverAccessToken,
-    actorId: "driver",
-    baseUrl: context.baseUrl,
-    syncState: context.syncState,
-  });
+  const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
   const firstText = `MATRIX_QA_BLOCK_ONE_${randomUUID().slice(0, 8).toUpperCase()}`;
   const secondText = `MATRIX_QA_BLOCK_TWO_${randomUUID().slice(0, 8).toUpperCase()}`;
   const triggerBody = buildMatrixBlockStreamingPrompt(context.sutUserId, firstText, secondText);
@@ -405,13 +603,112 @@ export async function runBlockStreamingScenario(context: MatrixQaScenarioContext
   } satisfies MatrixQaScenarioExecution;
 }
 
-export async function runRoomAutoJoinInviteScenario(context: MatrixQaScenarioContext) {
-  const { client, startSince } = await primeMatrixQaActorCursor({
-    accessToken: context.driverAccessToken,
-    actorId: "driver",
-    baseUrl: context.baseUrl,
-    syncState: context.syncState,
+export async function runImageUnderstandingAttachmentScenario(context: MatrixQaScenarioContext) {
+  const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_MEDIA_ROOM_KEY);
+  const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
+  const triggerBody = buildMatrixQaImageUnderstandingPrompt(context.sutUserId);
+  const driverEventId = await client.sendMediaMessage({
+    body: triggerBody,
+    buffer: createMatrixQaSplitColorImagePng(),
+    contentType: "image/png",
+    fileName: MATRIX_QA_IMAGE_ATTACHMENT_FILENAME,
+    kind: "image",
+    mentionUserIds: [context.sutUserId],
+    roomId,
   });
+  const matched = await client.waitForRoomEvent({
+    observedEvents: context.observedEvents,
+    predicate: (event) =>
+      event.roomId === roomId &&
+      event.sender === context.sutUserId &&
+      event.type === "m.room.message" &&
+      event.relatesTo === undefined &&
+      isMatrixQaMessageLikeKind(event.kind) &&
+      hasMatrixQaExpectedColorReply(event.body),
+    roomId,
+    since: startSince,
+    timeoutMs: context.timeoutMs,
+  });
+  advanceMatrixQaActorCursor({
+    actorId: "driver",
+    syncState: context.syncState,
+    nextSince: matched.since,
+    startSince,
+  });
+  const reply = buildMatrixReplyArtifact(matched.event);
+  return {
+    artifacts: {
+      attachmentFilename: MATRIX_QA_IMAGE_ATTACHMENT_FILENAME,
+      driverEventId,
+      reply,
+      roomId,
+      triggerBody,
+    },
+    details: [
+      `room id: ${roomId}`,
+      `driver attachment event: ${driverEventId}`,
+      `sent attachment filename: ${MATRIX_QA_IMAGE_ATTACHMENT_FILENAME}`,
+      ...buildMatrixReplyDetails("reply", reply),
+    ].join("\n"),
+  } satisfies MatrixQaScenarioExecution;
+}
+
+export async function runGeneratedImageDeliveryScenario(context: MatrixQaScenarioContext) {
+  const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_MEDIA_ROOM_KEY);
+  const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
+  const triggerBody = buildMatrixQaImageGenerationPrompt(context.sutUserId);
+  const driverEventId = await client.sendTextMessage({
+    body: triggerBody,
+    mentionUserIds: [context.sutUserId],
+    roomId,
+  });
+  const matched = await client.waitForRoomEvent({
+    observedEvents: context.observedEvents,
+    predicate: (event) =>
+      event.roomId === roomId &&
+      event.sender === context.sutUserId &&
+      event.type === "m.room.message" &&
+      event.relatesTo === undefined &&
+      event.msgtype === "m.image" &&
+      event.attachment?.kind === "image",
+    roomId,
+    since: startSince,
+    timeoutMs: context.timeoutMs,
+  });
+  advanceMatrixQaActorCursor({
+    actorId: "driver",
+    syncState: context.syncState,
+    nextSince: matched.since,
+    startSince,
+  });
+  const attachment = requireMatrixQaImageAttachment(
+    matched.event,
+    "Matrix generated image delivery scenario",
+  );
+  return {
+    artifacts: {
+      attachmentBodyPreview: matched.event.body?.slice(0, 200),
+      attachmentEventId: matched.event.eventId,
+      attachmentFilename: attachment.filename,
+      attachmentKind: attachment.kind,
+      attachmentMsgtype: matched.event.msgtype,
+      driverEventId,
+      roomId,
+      triggerBody,
+    },
+    details: [
+      `room id: ${roomId}`,
+      `driver event: ${driverEventId}`,
+      ...buildMatrixQaAttachmentDetailLines({
+        attachmentEvent: matched.event,
+        label: "generated image",
+      }),
+    ].join("\n"),
+  } satisfies MatrixQaScenarioExecution;
+}
+
+export async function runRoomAutoJoinInviteScenario(context: MatrixQaScenarioContext) {
+  const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
   const dynamicRoomId = await client.createPrivateRoom({
     inviteUserIds: [context.observerUserId, context.sutUserId],
     name: `Matrix QA AutoJoin ${randomUUID().slice(0, 8)}`,
@@ -435,18 +732,12 @@ export async function runRoomAutoJoinInviteScenario(context: MatrixQaScenarioCon
     startSince,
   });
 
-  const result = await runTopLevelMentionScenario({
-    accessToken: context.driverAccessToken,
-    actorId: "driver",
-    baseUrl: context.baseUrl,
-    observedEvents: context.observedEvents,
+  const result = await runAssertedDriverTopLevelScenario({
+    context,
+    label: "auto-join room reply",
     roomId: dynamicRoomId,
-    syncState: context.syncState,
-    sutUserId: context.sutUserId,
-    timeoutMs: context.timeoutMs,
     tokenPrefix: "MATRIX_QA_AUTOJOIN",
   });
-  assertTopLevelReplyArtifact("auto-join room reply", result.reply);
 
   return {
     artifacts: {
@@ -468,10 +759,7 @@ export async function runRoomAutoJoinInviteScenario(context: MatrixQaScenarioCon
 
 export async function runMembershipLossScenario(context: MatrixQaScenarioContext) {
   const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_MEMBERSHIP_ROOM_KEY);
-  const driverClient = createMatrixQaScenarioClient({
-    accessToken: context.driverAccessToken,
-    baseUrl: context.baseUrl,
-  });
+  const driverClient = createMatrixQaDriverScenarioClient(context);
   const sutClient = createMatrixQaScenarioClient({
     accessToken: context.sutAccessToken,
     baseUrl: context.baseUrl,
@@ -491,6 +779,7 @@ export async function runMembershipLossScenario(context: MatrixQaScenarioContext
     roomId,
     stateKey: context.sutUserId,
     syncState: context.syncState,
+    syncStreams: context.syncStreams,
     timeoutMs: context.timeoutMs,
   });
 
@@ -505,6 +794,7 @@ export async function runMembershipLossScenario(context: MatrixQaScenarioContext
     observedEvents: context.observedEvents,
     roomId,
     syncState: context.syncState,
+    syncStreams: context.syncStreams,
     sutUserId: context.sutUserId,
     timeoutMs: Math.min(NO_REPLY_WINDOW_MS, context.timeoutMs),
     token: noReplyToken,
@@ -523,6 +813,7 @@ export async function runMembershipLossScenario(context: MatrixQaScenarioContext
     roomId,
     stateKey: context.sutUserId,
     syncState: context.syncState,
+    syncStreams: context.syncStreams,
     timeoutMs: context.timeoutMs,
   });
   await sutClient.joinRoom(roomId);
@@ -535,6 +826,7 @@ export async function runMembershipLossScenario(context: MatrixQaScenarioContext
     roomId,
     stateKey: context.sutUserId,
     syncState: context.syncState,
+    syncStreams: context.syncStreams,
     timeoutMs: context.timeoutMs,
   });
 
@@ -566,52 +858,239 @@ export async function runMembershipLossScenario(context: MatrixQaScenarioContext
 }
 
 export async function runReactionNotificationScenario(context: MatrixQaScenarioContext) {
-  const reactionTargetEventId = context.canary?.reply.eventId?.trim();
-  if (!reactionTargetEventId) {
-    throw new Error("Matrix reaction scenario requires a canary reply event id");
-  }
-  const { client, startSince } = await primeMatrixQaActorCursor({
-    accessToken: context.driverAccessToken,
+  const reactionTargetEventId = requireMatrixQaReactionTargetEventId(
+    context.canary?.reply.eventId,
+    "Matrix reaction scenario",
+  );
+  const result = await observeReactionScenario({
     actorId: "driver",
+    actorUserId: context.driverUserId,
+    accessToken: context.driverAccessToken,
     baseUrl: context.baseUrl,
+    observedEvents: context.observedEvents,
+    reactionTargetEventId,
+    roomId: context.roomId,
     syncState: context.syncState,
+    syncStreams: context.syncStreams,
+    timeoutMs: context.timeoutMs,
   });
-  const reactionEmoji = "👍";
+  return {
+    artifacts: buildMatrixQaReactionArtifacts({ reaction: result }),
+    details: buildMatrixQaReactionDetailLines({
+      actorUserId: result.actorUserId,
+      observedReactionKey: result.event.reaction?.key,
+      reactionEmoji: result.reactionEmoji,
+      reactionEventId: result.reactionEventId,
+      reactionTargetEventId: result.reactionTargetEventId,
+    }).join("\n"),
+  } satisfies MatrixQaScenarioExecution;
+}
+
+function buildMatrixQaReactionDetailLines(params: {
+  actorUserId?: string;
+  observedReactionKey?: string;
+  reactionEmoji: string;
+  reactionEventId: string;
+  reactionTargetEventId: string;
+}) {
+  return [
+    `reaction event: ${params.reactionEventId}`,
+    `reaction target: ${params.reactionTargetEventId}`,
+    `reaction emoji: ${params.reactionEmoji}`,
+    ...(params.actorUserId ? [`reaction sender: ${params.actorUserId}`] : []),
+    ...(params.observedReactionKey ? [`observed reaction key: ${params.observedReactionKey}`] : []),
+  ];
+}
+
+function requireMatrixQaReactionTargetEventId(
+  reactionTargetEventId: string | undefined,
+  scenarioLabel: string,
+) {
+  const normalizedReactionTargetEventId = reactionTargetEventId?.trim();
+  if (!normalizedReactionTargetEventId) {
+    throw new Error(`${scenarioLabel} requires a canary reply event id`);
+  }
+  return normalizedReactionTargetEventId;
+}
+
+async function observeReactionScenario(params: {
+  actorId: MatrixQaActorId;
+  actorUserId: string;
+  accessToken: string;
+  baseUrl: string;
+  observedEvents: MatrixQaObservedEvent[];
+  reactionEmoji?: string;
+  reactionTargetEventId: string;
+  roomId: string;
+  syncState: MatrixQaSyncState;
+  syncStreams?: MatrixQaScenarioContext["syncStreams"];
+  timeoutMs: number;
+}) {
+  const { client, startSince } = await primeMatrixQaActorCursor({
+    accessToken: params.accessToken,
+    actorId: params.actorId,
+    baseUrl: params.baseUrl,
+    observedEvents: params.observedEvents,
+    syncState: params.syncState,
+    syncStreams: params.syncStreams,
+  });
+  const reactionEmoji = params.reactionEmoji ?? "👍";
   const reactionEventId = await client.sendReaction({
     emoji: reactionEmoji,
-    messageId: reactionTargetEventId,
-    roomId: context.roomId,
+    messageId: params.reactionTargetEventId,
+    roomId: params.roomId,
   });
   const matched = await client.waitForRoomEvent({
-    observedEvents: context.observedEvents,
+    observedEvents: params.observedEvents,
     predicate: (event) =>
-      event.roomId === context.roomId &&
-      event.sender === context.driverUserId &&
+      event.roomId === params.roomId &&
+      event.sender === params.actorUserId &&
       event.type === "m.reaction" &&
       event.eventId === reactionEventId &&
-      event.reaction?.eventId === reactionTargetEventId &&
+      event.reaction?.eventId === params.reactionTargetEventId &&
       event.reaction?.key === reactionEmoji,
-    roomId: context.roomId,
+    roomId: params.roomId,
     since: startSince,
+    timeoutMs: params.timeoutMs,
+  });
+  return {
+    actorId: params.actorId,
+    actorUserId: params.actorUserId,
+    event: matched.event,
+    reactionEmoji,
+    reactionEventId,
+    reactionTargetEventId: params.reactionTargetEventId,
+    since: matched.since,
+    startSince,
+  };
+}
+
+function buildMatrixQaReactionArtifacts(params: {
+  actorUserId?: string;
+  expectedNoReplyWindowMs?: number;
+  reaction: Awaited<ReturnType<typeof observeReactionScenario>>;
+}) {
+  return {
+    ...(params.actorUserId ? { actorUserId: params.actorUserId } : {}),
+    ...(params.expectedNoReplyWindowMs === undefined
+      ? {}
+      : { expectedNoReplyWindowMs: params.expectedNoReplyWindowMs }),
+    reactionEmoji: params.reaction.reactionEmoji,
+    reactionEventId: params.reaction.reactionEventId,
+    reactionTargetEventId: params.reaction.reactionTargetEventId,
+  };
+}
+
+export async function runReactionThreadedScenario(context: MatrixQaScenarioContext) {
+  const thread = await runThreadScenario(context, {
+    createNestedReply: true,
+    tokenPrefix: "MATRIX_QA_REACTION_THREAD",
+  });
+  assertThreadReplyArtifact(thread.reply, {
+    expectedRootEventId: thread.rootEventId,
+    label: "threaded reaction reply",
+  });
+  const reaction = await observeReactionScenario({
+    actorId: "driver",
+    actorUserId: context.driverUserId,
+    accessToken: context.driverAccessToken,
+    baseUrl: context.baseUrl,
+    observedEvents: context.observedEvents,
+    reactionTargetEventId: thread.reply.eventId,
+    roomId: context.roomId,
+    syncState: context.syncState,
+    syncStreams: context.syncStreams,
     timeoutMs: context.timeoutMs,
   });
   advanceMatrixQaActorCursor({
-    actorId: "driver",
+    actorId: reaction.actorId,
     syncState: context.syncState,
-    nextSince: matched.since,
-    startSince,
+    nextSince: reaction.since,
+    startSince: reaction.startSince,
   });
   return {
     artifacts: {
-      reactionEmoji,
-      reactionEventId,
-      reactionTargetEventId,
+      driverEventId: thread.driverEventId,
+      ...buildMatrixQaReactionArtifacts({ reaction }),
+      reply: thread.reply,
+      rootEventId: thread.rootEventId,
+      token: thread.token,
     },
     details: [
-      `reaction event: ${reactionEventId}`,
-      `reaction target: ${reactionTargetEventId}`,
-      `reaction emoji: ${reactionEmoji}`,
-      `observed reaction key: ${matched.event.reaction?.key ?? "<none>"}`,
+      ...buildMatrixQaThreadDetailLines({
+        result: thread,
+        includeNestedTrigger: true,
+        extraLines: [`thread reply event: ${thread.reply.eventId}`],
+        replyLabel: "thread reply",
+      }),
+      ...buildMatrixQaReactionDetailLines({
+        reactionEmoji: reaction.reactionEmoji,
+        reactionEventId: reaction.reactionEventId,
+        reactionTargetEventId: reaction.reactionTargetEventId,
+      }),
+    ].join("\n"),
+  } satisfies MatrixQaScenarioExecution;
+}
+
+export async function runReactionNotAReplyScenario(context: MatrixQaScenarioContext) {
+  const reactionTargetEventId = requireMatrixQaReactionTargetEventId(
+    context.canary?.reply.eventId,
+    "Matrix reaction no-reply scenario",
+  );
+  const reaction = await observeReactionScenario({
+    actorId: "driver",
+    actorUserId: context.driverUserId,
+    accessToken: context.driverAccessToken,
+    baseUrl: context.baseUrl,
+    observedEvents: context.observedEvents,
+    reactionTargetEventId,
+    roomId: context.roomId,
+    syncState: context.syncState,
+    syncStreams: context.syncStreams,
+    timeoutMs: context.timeoutMs,
+  });
+  const client = createMatrixQaDriverScenarioClient(context);
+  const noReplyWindowMs = Math.min(NO_REPLY_WINDOW_MS, context.timeoutMs);
+  const noReplyResult = await client.waitForOptionalRoomEvent({
+    observedEvents: context.observedEvents,
+    predicate: (event) =>
+      event.roomId === context.roomId &&
+      event.sender === context.sutUserId &&
+      event.type === "m.room.message",
+    roomId: context.roomId,
+    since: reaction.since,
+    timeoutMs: noReplyWindowMs,
+  });
+  if (noReplyResult.matched) {
+    const unexpectedReply = buildMatrixReplyArtifact(noReplyResult.event);
+    throw new Error(
+      [
+        `unexpected SUT reply after reaction from ${context.driverUserId}`,
+        `reaction target: ${reaction.reactionTargetEventId}`,
+        `reaction event: ${reaction.reactionEventId}`,
+        ...buildMatrixReplyDetails("unexpected reply", unexpectedReply),
+      ].join("\n"),
+    );
+  }
+  advanceMatrixQaActorCursor({
+    actorId: reaction.actorId,
+    syncState: context.syncState,
+    nextSince: noReplyResult.since,
+    startSince: reaction.startSince,
+  });
+  return {
+    artifacts: buildMatrixQaReactionArtifacts({
+      actorUserId: context.driverUserId,
+      expectedNoReplyWindowMs: noReplyWindowMs,
+      reaction,
+    }),
+    details: [
+      ...buildMatrixQaReactionDetailLines({
+        reactionEmoji: reaction.reactionEmoji,
+        reactionEventId: reaction.reactionEventId,
+        reactionTargetEventId: reaction.reactionTargetEventId,
+      }),
+      `waited ${noReplyWindowMs}ms with no SUT reply`,
     ].join("\n"),
   } satisfies MatrixQaScenarioExecution;
 }
@@ -622,17 +1101,12 @@ export async function runHomeserverRestartResumeScenario(context: MatrixQaScenar
   }
   const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_HOMESERVER_ROOM_KEY);
   await context.interruptTransport();
-  const resumed = await runDriverTopLevelMentionScenario({
-    baseUrl: context.baseUrl,
-    driverAccessToken: context.driverAccessToken,
-    observedEvents: context.observedEvents,
+  const resumed = await runAssertedDriverTopLevelScenario({
+    context,
+    label: "post-homeserver-restart reply",
     roomId,
-    syncState: context.syncState,
-    sutUserId: context.sutUserId,
-    timeoutMs: context.timeoutMs,
     tokenPrefix: "MATRIX_QA_HOMESERVER",
   });
-  assertTopLevelReplyArtifact("post-homeserver-restart reply", resumed.reply);
   return {
     artifacts: {
       driverEventId: resumed.driverEventId,
@@ -656,17 +1130,12 @@ export async function runRestartResumeScenario(context: MatrixQaScenarioContext)
   }
   const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_RESTART_ROOM_KEY);
   await context.restartGateway();
-  const result = await runDriverTopLevelMentionScenario({
-    baseUrl: context.baseUrl,
-    driverAccessToken: context.driverAccessToken,
-    observedEvents: context.observedEvents,
+  const result = await runAssertedDriverTopLevelScenario({
+    context,
+    label: "post-restart reply",
     roomId,
-    syncState: context.syncState,
-    sutUserId: context.sutUserId,
-    timeoutMs: context.timeoutMs,
     tokenPrefix: "MATRIX_QA_RESTART",
   });
-  assertTopLevelReplyArtifact("post-restart reply", result.reply);
   return {
     artifacts: {
       driverEventId: result.driverEventId,

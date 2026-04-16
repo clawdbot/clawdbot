@@ -41,11 +41,11 @@ type ToolContentBlock = AgentToolResult<unknown>["content"][number];
 type ImageContentBlock = Extract<ToolContentBlock, { type: "image" }>;
 type TextContentBlock = Extract<ToolContentBlock, { type: "text" }>;
 
-const DEFAULT_READ_PAGE_MAX_BYTES = 50 * 1024;
-const MAX_ADAPTIVE_READ_MAX_BYTES = 512 * 1024;
-const ADAPTIVE_READ_CONTEXT_SHARE = 0.2;
+const DEFAULT_READ_PAGE_MAX_BYTES = 32 * 1024;
+const MAX_ADAPTIVE_READ_MAX_BYTES = 128 * 1024;
+const ADAPTIVE_READ_CONTEXT_SHARE = 0.1;
 const CHARS_PER_TOKEN_ESTIMATE = 4;
-const MAX_ADAPTIVE_READ_PAGES = 8;
+const MAX_ADAPTIVE_READ_PAGES = 4;
 
 type OpenClawReadToolOptions = {
   modelContextWindowTokens?: number;

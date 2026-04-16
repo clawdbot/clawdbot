@@ -31,6 +31,7 @@ export type OllamaModelWithContext = OllamaTagModel & {
 const OLLAMA_SHOW_CONCURRENCY = 8;
 const MAX_OLLAMA_SHOW_CACHE_ENTRIES = 256;
 const ollamaModelShowInfoCache = new Map<string, Promise<OllamaModelShowInfo>>();
+const OLLAMA_ALWAYS_BLOCKED_HOSTNAMES = new Set(["metadata.google.internal"]);
 
 export function buildOllamaBaseUrlSsrFPolicy(baseUrl: string) {
   const trimmed = baseUrl.trim();
@@ -42,9 +43,12 @@ export function buildOllamaBaseUrlSsrFPolicy(baseUrl: string) {
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return undefined;
     }
+    if (OLLAMA_ALWAYS_BLOCKED_HOSTNAMES.has(parsed.hostname)) {
+      return undefined;
+    }
     return {
-      allowedHostnames: [parsed.hostname],
       hostnameAllowlist: [parsed.hostname],
+      allowPrivateNetwork: true,
     };
   } catch {
     return undefined;

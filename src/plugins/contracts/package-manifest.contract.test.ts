@@ -9,6 +9,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
     mirroredRootRuntimeDeps: [
       "@buape/carbon",
       "@discordjs/opus",
+      "discord-api-types",
       "https-proxy-agent",
       "opusscript",
     ],
@@ -19,6 +20,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
     mirroredRootRuntimeDeps: ["@larksuiteoapi/node-sdk"],
     minHostVersionBaseline: "2026.3.22",
   },
+  { pluginId: "google", mirroredRootRuntimeDeps: ["@google/genai"] },
   {
     pluginId: "googlechat",
     mirroredRootRuntimeDeps: ["google-auth-library"],
@@ -26,6 +28,11 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   },
   { pluginId: "irc", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "line", minHostVersionBaseline: "2026.3.22" },
+  { pluginId: "amazon-bedrock", mirroredRootRuntimeDeps: ["@aws-sdk/client-bedrock"] },
+  {
+    pluginId: "amazon-bedrock-mantle",
+    mirroredRootRuntimeDeps: ["@aws/bedrock-token-generator"],
+  },
   { pluginId: "matrix", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "mattermost", minHostVersionBaseline: "2026.3.22" },
   {
@@ -36,6 +43,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   { pluginId: "msteams", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "nextcloud-talk", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "nostr", minHostVersionBaseline: "2026.3.22" },
+  { pluginId: "openshell", pluginLocalRuntimeDeps: ["openshell"] },
   {
     pluginId: "slack",
     mirroredRootRuntimeDeps: ["@slack/bolt", "@slack/web-api", "https-proxy-agent"],

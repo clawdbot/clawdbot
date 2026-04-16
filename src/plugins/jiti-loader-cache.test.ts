@@ -75,12 +75,20 @@ describe("getCachedPluginJitiLoader", () => {
     expect(createJiti).toHaveBeenNthCalledWith(
       1,
       "file:///repo/src/plugins/public-surface-loader.ts",
-      expect.objectContaining({ tryNative: true }),
+      expect.objectContaining({
+        tryNative: false,
+        interopDefault: true,
+        alias: expect.any(Object),
+      }),
     );
     expect(createJiti).toHaveBeenNthCalledWith(
       2,
       "file:///repo/src/plugins/bundled-channel-config-metadata.ts",
-      expect.objectContaining({ tryNative: true }),
+      expect.objectContaining({
+        tryNative: false,
+        interopDefault: true,
+        alias: expect.any(Object),
+      }),
     );
     expect(cache.size).toBe(2);
   });

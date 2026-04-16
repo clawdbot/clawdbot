@@ -16,6 +16,11 @@ export type MatrixQaCanaryArtifact = {
 };
 
 export type MatrixQaScenarioArtifacts = {
+  attachmentBodyPreview?: string;
+  attachmentEventId?: string;
+  attachmentFilename?: string;
+  attachmentKind?: string;
+  attachmentMsgtype?: string;
   actorUserId?: string;
   driverEventId?: string;
   expectedNoReplyWindowMs?: number;

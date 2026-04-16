@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/feishu",
-  "version": "2026.4.12",
+  "version": "2026.4.15-beta.1",
   "description": "OpenClaw Feishu/Lark channel plugin (community maintained by @m1heng)",
   "type": "module",
   "dependencies": {
@@ -13,7 +13,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.12"
+    "openclaw": ">=2026.4.15-beta.1"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -44,10 +44,10 @@
       "minHostVersion": ">=2026.4.10"
     },
     "compat": {
-      "pluginApi": ">=2026.4.12"
+      "pluginApi": ">=2026.4.15-beta.1"
     },
     "build": {
-      "openclawVersion": "2026.4.12"
+      "openclawVersion": "2026.4.15-beta.1"
     },
     "bundle": {
       "stageRuntimeDependencies": true

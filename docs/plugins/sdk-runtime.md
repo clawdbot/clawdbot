@@ -385,7 +385,10 @@ the `register` callback:
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 
-const store = createPluginRuntimeStore<PluginRuntime>("my-plugin runtime not initialized");
+const store = createPluginRuntimeStore<PluginRuntime>({
+  pluginId: "my-plugin",
+  errorMessage: "my-plugin runtime not initialized",
+});
 
 // In your entry point
 export default defineChannelPluginEntry({
@@ -405,6 +408,10 @@ export function tryGetRuntime() {
   return store.tryGetRuntime(); // returns null if not initialized
 }
 ```
+
+Prefer `pluginId` for the runtime-store identity. The lower-level `key` form is
+for uncommon cases where one plugin intentionally needs more than one runtime
+slot.
 
 ## Other top-level `api` fields
 

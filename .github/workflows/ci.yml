@@ -227,7 +227,7 @@ jobs:
                             check_name: "checks-node-compat-node22",
                             runtime: "node",
                             task: "compat-node22",
-                            node_version: "22.x",
+                            node_version: "22.18.0",
                             cache_key_suffix: "node22",
                           },
                         ]
@@ -888,6 +888,8 @@ jobs:
       - name: Run extension package boundary TypeScript check
         id: extension_package_boundary_tsc
         continue-on-error: true
+        env:
+          OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: 4
         run: pnpm run test:extensions:package-boundary
 
       - name: Enforce safe external URL opening policy

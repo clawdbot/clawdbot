@@ -199,7 +199,7 @@ describe("preemptive-compaction", () => {
 
     expect(potential.oversizedReducibleChars).toBeGreaterThan(0);
     expect(potential.aggregateReducibleChars).toBeGreaterThan(0);
-    expect(potential.oversizedReducibleChars).toBeLessThan(desiredOverflowTokens * 4);
+    expect(potential.oversizedReducibleChars).toBeLessThan(potential.maxReducibleChars);
     expect(potential.maxReducibleChars).toBeGreaterThan(desiredOverflowTokens * 4);
     expect(result.route).toBe("truncate_tool_results_only");
     expect(result.shouldCompact).toBe(false);

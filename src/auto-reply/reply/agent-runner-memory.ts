@@ -206,10 +206,10 @@ async function appendPostCompactionRefreshPrompt(params: {
   cfg: OpenClawConfig;
   followupRun: FollowupRun;
 }): Promise<void> {
-  const refreshPrompt = await readPostCompactionContext(
-    params.followupRun.run.workspaceDir,
-    params.cfg,
-  );
+  const refreshPrompt = await readPostCompactionContext(params.followupRun.run.workspaceDir, {
+    cfg: params.cfg,
+    agentId: params.followupRun.run.agentId,
+  });
   if (!refreshPrompt) {
     return;
   }

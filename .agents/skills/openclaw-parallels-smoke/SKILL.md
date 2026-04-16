@@ -16,13 +16,21 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 - Pass `--json` for machine-readable summaries.
 - Per-phase logs land under `/tmp/openclaw-parallels-*`.
 - Do not run local and gateway agent turns in parallel on the same fresh workspace or session.
+- Hard-cap every top-level Parallels lane with host `timeout --foreground` (or `gtimeout --foreground` if that is the available binary) so a stalled install, snapshot switch, or `prlctl exec` transport cannot consume the rest of the testing window. Defaults:
+  - macOS: `75m`
+  - Linux: `75m`
+  - Windows: `90m`
+  - aggregate npm-update wrapper: `150m`
+    If a lane hits the cap, stop there, inspect the newest `/tmp/openclaw-parallels-*` run directory and phase log, then fix or rerun the smallest affected lane. Do not keep waiting on a capped lane.
+- Actual OpenClaw npm install/update phases are a stricter budget than whole lanes: they should finish within 5 minutes. If a phase named `install-main`, `install-latest`, `install-baseline`, `install-baseline-package`, `update-dev`, or same-guest `openclaw update` exceeds 300s, treat it as a failure/harness bug and start diagnosis from that phase log. Do not wait for a longer lane cap.
 - For a full OS matrix, prefer running independent guest-family lanes in parallel when host capacity allows:
-  - `pnpm test:parallels:macos -- --json`
-  - `pnpm test:parallels:windows -- --json`
-  - `pnpm test:parallels:linux -- --json`
+  - `timeout --foreground 75m pnpm test:parallels:macos -- --json`
+  - `timeout --foreground 90m pnpm test:parallels:windows -- --json`
+  - `timeout --foreground 75m pnpm test:parallels:linux -- --json`
     Keep each lane in its own shell/session and track the run directory for each one.
 - Do not run multiple smoke lanes against the same guest family at once. Tahoe lanes share the host HTTP port, and Windows/Linux lanes can collide on snapshot restore/start state if two jobs touch the same VM concurrently.
 - Do not run the aggregate `pnpm test:parallels:npm-update` wrapper in parallel with individual macOS/Windows/Linux smoke lanes; it touches the same guest families and snapshots.
+- Do not start Parallels lanes while any host command may rebuild, clean, or restage `dist` (`pnpm build`, `pnpm ui:build`, `pnpm release:check`, `pnpm test:install:smoke`, npm pack/install smoke, or Docker lanes that run package/build prep). Run the build/package gates first, let them finish, then start the VM matrix. Concurrent `dist` mutation can make host `npm pack` fail with missing files and wastes a full VM cycle.
 - While running or optimizing the matrix, record wall-clock duration per lane and the slowest phase from `/tmp/openclaw-parallels-*` logs. Use that timing before changing smoke order, timeouts, or helper behavior.
 - If `main` is moving under active multi-agent work, prefer a detached worktree pinned to one commit for long Parallels suites. The smoke scripts now verify the packed tgz commit instead of live `git rev-parse HEAD`, but a pinned worktree still avoids noisy rebuild/version drift during reruns.
 - For `openclaw update --channel dev` lanes, remember the guest clones GitHub `main`, not your local worktree. If a local fix exists but the rerun still fails inside the cloned dev checkout, do not treat that as disproof of the fix until the branch has been pushed.

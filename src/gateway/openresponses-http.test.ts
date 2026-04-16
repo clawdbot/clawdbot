@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createClientToolNameConflictError } from "../agents/pi-tool-definition-adapter.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -322,6 +323,21 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(invalidOverrideJson.error?.message).toBe("Invalid `x-openclaw-model`.");
       expect(agentCommand).toHaveBeenCalledTimes(0);
       await ensureResponseConsumed(resInvalidOverride);
+
+      agentCommand.mockClear();
+      agentCommand.mockRejectedValueOnce(createClientToolNameConflictError(["exec"]));
+      const resToolConflict = await postResponses(port, {
+        model: "openclaw",
+        input: "hi",
+        tools: WEATHER_TOOL,
+      });
+      expect(resToolConflict.status).toBe(400);
+      const toolConflictJson = (await resToolConflict.json()) as {
+        error?: { code?: string; message?: string };
+      };
+      expect(toolConflictJson.error?.code).toBe("invalid_request_error");
+      expect(toolConflictJson.error?.message).toBe("invalid tool configuration");
+      await ensureResponseConsumed(resToolConflict);
 
       mockAgentOnce([{ text: "hello" }]);
       const resUser = await postResponses(port, {

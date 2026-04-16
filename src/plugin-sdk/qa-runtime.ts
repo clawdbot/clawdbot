@@ -1,4 +1,5 @@
 import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
+import { resolvePrivateQaBundledPluginsEnv } from "./private-qa-bundled-env.js";
 
 type QaRuntimeSurface = {
   defaultQaRuntimeModelForMode: (
@@ -20,9 +21,11 @@ function isMissingQaRuntimeError(error: unknown) {
 }
 
 export function loadQaRuntimeModule(): QaRuntimeSurface {
+  const env = resolvePrivateQaBundledPluginsEnv();
   return loadBundledPluginPublicSurfaceModuleSync<QaRuntimeSurface>({
     dirName: "qa-lab",
     artifactBasename: "runtime-api.js",
+    ...(env ? { env } : {}),
   });
 }
 

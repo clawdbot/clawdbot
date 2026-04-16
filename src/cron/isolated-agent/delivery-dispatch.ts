@@ -1,5 +1,5 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { isSilentReplyText, stripSilentToken, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import {
   resolveAgentMainSessionKey,
@@ -463,9 +463,20 @@ export async function dispatchCronDelivery(
             ? [{ text: synthesizedText }]
             : [];
       // Suppress NO_REPLY sentinel so it never leaks to external channels.
-      const payloadsForDelivery = rawPayloads.filter(
-        (p) => !isSilentReplyText(p.text, SILENT_REPLY_TOKEN),
-      );
+      // Also suppress payloads where the agent appended a trailing NO_REPLY
+      // after other text (e.g. "summary...\n\nNO_REPLY") — the token signals
+      // "do not deliver" regardless of preceding content.
+      const payloadsForDelivery = rawPayloads.filter((p) => {
+        const text = p.text ?? "";
+        if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
+          return false;
+        }
+        // Case-insensitive trailing check: uppercase before stripping since
+        // stripSilentToken's regex is case-sensitive.
+        const upper = text.toUpperCase();
+        const stripped = stripSilentToken(upper, SILENT_REPLY_TOKEN);
+        return stripped === upper.trim();
+      });
       if (payloadsForDelivery.length === 0) {
         return await finishSilentReplyDelivery();
       }
@@ -689,7 +700,15 @@ export async function dispatchCronDelivery(
         ...params.telemetry,
       });
     }
+    // Suppress delivery when synthesizedText is (or ends with) NO_REPLY.
+    // isSilentReplyText handles case-insensitive exact matches (e.g. "No_Reply");
+    // stripSilentToken catches trailing tokens after other text.
     if (isSilentReplyText(synthesizedText, SILENT_REPLY_TOKEN)) {
+      return await finishSilentReplyDelivery();
+    }
+    const upperSynthesized = synthesizedText.toUpperCase();
+    const strippedSynthesized = stripSilentToken(upperSynthesized, SILENT_REPLY_TOKEN);
+    if (strippedSynthesized !== upperSynthesized.trim()) {
       return await finishSilentReplyDelivery();
     }
     if (params.isAborted()) {

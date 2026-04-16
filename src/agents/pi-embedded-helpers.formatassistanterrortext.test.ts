@@ -70,6 +70,12 @@ describe("formatAssistantErrorText", () => {
     expect(result).toContain("Session history looks corrupted");
     expect(result).toContain("/new");
   });
+  it("returns a recovery hint for replay-invalid connection mismatch errors", () => {
+    const msg = makeAssistantError("401 input item ID does not belong to this connection");
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("Session history or replay state is invalid");
+    expect(result).toContain("/new");
+  });
   it("handles JSON-wrapped role errors", () => {
     const msg = makeAssistantError('{"error":{"message":"400 Incorrect role information"}}');
     const result = formatAssistantErrorText(msg);

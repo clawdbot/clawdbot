@@ -208,6 +208,7 @@ const _createGraphCollectionResponse = (value: unknown[]) => createJsonResponse(
 const createNotFoundResponse = () => new Response("not found", { status: 404 });
 const createRedirectResponse = (location: string, status = 302) =>
   new Response(null, { status, headers: { location } });
+const publicResolve = async () => ({ address: "13.107.136.10" });
 
 const createOkFetchMock = (contentType: string, payload = "png") =>
   vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
@@ -223,6 +224,7 @@ const buildDownloadParams = (
     attachments,
     maxBytes: DEFAULT_MAX_BYTES,
     allowHosts: DEFAULT_ALLOW_HOSTS,
+    resolveFn: publicResolve,
     ...overrides,
   };
 };

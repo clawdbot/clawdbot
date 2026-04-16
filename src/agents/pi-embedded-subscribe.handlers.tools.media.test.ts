@@ -10,6 +10,7 @@ function createMockContext(overrides?: {
   shouldEmitToolOutput?: boolean;
   onToolResult?: ReturnType<typeof vi.fn>;
   toolResultFormat?: "markdown" | "plain";
+  builtinToolNames?: ReadonlySet<string>;
 }): EmbeddedPiSubscribeContext {
   const onToolResult = overrides?.onToolResult ?? vi.fn();
   return {
@@ -39,6 +40,7 @@ function createMockContext(overrides?: {
       deterministicApprovalPromptSent: false,
     },
     log: { debug: vi.fn(), warn: vi.fn() },
+    builtinToolNames: overrides?.builtinToolNames,
     shouldEmitToolResult: vi.fn(() => false),
     shouldEmitToolOutput: vi.fn(() => overrides?.shouldEmitToolOutput ?? false),
     emitToolSummary: vi.fn(),
@@ -171,6 +173,46 @@ describe("handleToolExecutionEnd media emission", () => {
 
     expect(onToolResult).not.toHaveBeenCalled();
     expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+  });
+
+  it("does NOT emit local media for case-variant collisions with trusted built-ins", async () => {
+    const ctx = createMockContext({
+      shouldEmitToolOutput: false,
+      onToolResult: vi.fn(),
+      builtinToolNames: new Set(["web_search"]),
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "Web_Search",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "MEDIA:/tmp/secret.png" }],
+      },
+    });
+
+    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+  });
+
+  it("still emits remote media for case-variant collisions with trusted built-ins", async () => {
+    const ctx = createMockContext({
+      shouldEmitToolOutput: false,
+      onToolResult: vi.fn(),
+      builtinToolNames: new Set(["web_search"]),
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "Web_Search",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "MEDIA:https://example.com/file.png" }],
+      },
+    });
+
+    expect(ctx.state.pendingToolMediaUrls).toEqual(["https://example.com/file.png"]);
   });
 
   it("emits remote media for MCP-provenance results", async () => {

@@ -7,6 +7,7 @@ import {
   QA_CHANNEL_REQUIRED_PLUGIN_IDS,
 } from "./qa-channel-transport.js";
 import { buildQaGatewayConfig } from "./qa-gateway-config.js";
+import { resolveQaNodeExecPath } from "./node-exec.js";
 
 const QA_FRONTIER_PROVIDER_IDS = ["anthropic", "google", "openai"] as const;
 
@@ -123,11 +124,12 @@ export async function loadQaRunnerModelOptions(params: { repoRoot: string; signa
 
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
+    const nodeExecPath = await resolveQaNodeExecPath();
     await new Promise<void>((resolve, reject) => {
       let aborted = params.signal?.aborted === true;
       let forceKillTimer: NodeJS.Timeout | undefined;
       const child = spawn(
-        process.execPath,
+        nodeExecPath,
         ["dist/index.js", "models", "list", "--all", "--json"],
         {
           cwd: params.repoRoot,

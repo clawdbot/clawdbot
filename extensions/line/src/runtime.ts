@@ -25,5 +25,8 @@ const {
   setRuntime: setLineRuntime,
   clearRuntime: clearLineRuntime,
   getRuntime: getLineRuntime,
-} = createPluginRuntimeStore<LineRuntime>("LINE runtime not initialized - plugin not registered");
+} = createPluginRuntimeStore<LineRuntime>({
+  pluginId: "line",
+  errorMessage: "LINE runtime not initialized - plugin not registered",
+});
 export { clearLineRuntime, getLineRuntime, setLineRuntime };

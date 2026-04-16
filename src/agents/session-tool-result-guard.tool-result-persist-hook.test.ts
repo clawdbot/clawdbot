@@ -134,6 +134,51 @@ describe("tool_result_persist hook", () => {
     expect(toolResult.toolCallId).toBe("call_1");
     expect(Array.isArray(toolResult.content)).toBe(true);
   });
+
+  it("reapplies the cap after tool_result_persist expands a tool result", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-toolpersist-expand-"));
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+
+    const plugin = writeTempPlugin({
+      dir: tmp,
+      id: "persist-expand",
+      body: `export default { id: "persist-expand", register(api) {
+  api.on("tool_result_persist", (event) => {
+    return {
+      message: {
+        ...event.message,
+        content: [{ type: "text", text: "y".repeat(5000) }],
+      },
+    };
+  }, { priority: 10 });
+} };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: tmp,
+      config: {
+        plugins: {
+          load: { paths: [plugin] },
+          allow: ["persist-expand"],
+        },
+      },
+    });
+    initializeGlobalHookRunner(registry);
+
+    const sm = guardSessionManager(SessionManager.inMemory(), {
+      agentId: "main",
+      sessionKey: "main",
+      contextWindowTokens: 100,
+    });
+
+    appendToolCallAndResult(sm);
+    const toolResult = getPersistedToolResult(sm);
+    const text = toolResult.content.find((block: { type: string }) => block.type === "text")?.text;
+    expect(typeof text).toBe("string");
+    expect(text.length).toBeLessThanOrEqual(120);
+    expect(text).toContain("truncated");
+  });
 });
 
 describe("before_message_write hook", () => {
@@ -181,5 +226,51 @@ describe("before_message_write hook", () => {
 
     expect(messages).toHaveLength(1);
     expect(messages[0]?.role).toBe("user");
+  });
+
+  it("reapplies the cap after before_message_write expands a tool result", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-before-write-expand-"));
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+
+    const plugin = writeTempPlugin({
+      dir: tmp,
+      id: "before-write-expand",
+      body: `export default { id: "before-write-expand", register(api) {
+  api.on("before_message_write", (event) => {
+    if (event.message?.role !== "toolResult") return;
+    return {
+      message: {
+        ...event.message,
+        content: [{ type: "text", text: "z".repeat(5000) }],
+      },
+    };
+  }, { priority: 10 });
+} };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: tmp,
+      config: {
+        plugins: {
+          load: { paths: [plugin] },
+          allow: ["before-write-expand"],
+        },
+      },
+    });
+    initializeGlobalHookRunner(registry);
+
+    const sm = guardSessionManager(SessionManager.inMemory(), {
+      agentId: "main",
+      sessionKey: "main",
+      contextWindowTokens: 100,
+    });
+
+    appendToolCallAndResult(sm);
+    const toolResult = getPersistedToolResult(sm);
+    const text = toolResult.content.find((block: { type: string }) => block.type === "text")?.text;
+    expect(typeof text).toBe("string");
+    expect(text.length).toBeLessThanOrEqual(120);
+    expect(text).toContain("truncated");
   });
 });

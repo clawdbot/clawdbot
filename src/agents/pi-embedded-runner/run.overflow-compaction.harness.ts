@@ -72,6 +72,7 @@ export const mockedRunEmbeddedAttempt =
   vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 export const mockedRunContextEngineMaintenance = vi.fn(async () => undefined);
 export const mockedSessionLikelyHasOversizedToolResults = vi.fn(() => false);
+export const mockedResolveLiveToolResultMaxChars = vi.fn(() => 32_000);
 type MockTruncateOversizedToolResultsResult = {
   truncated: boolean;
   truncatedCount: number;
@@ -228,6 +229,8 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedRunContextEngineMaintenance.mockResolvedValue(undefined);
   mockedSessionLikelyHasOversizedToolResults.mockReset();
   mockedSessionLikelyHasOversizedToolResults.mockReturnValue(false);
+  mockedResolveLiveToolResultMaxChars.mockReset();
+  mockedResolveLiveToolResultMaxChars.mockReturnValue(32_000);
   mockedTruncateOversizedToolResultsInSession.mockReset();
   mockedTruncateOversizedToolResultsInSession.mockResolvedValue({
     truncated: false,
@@ -420,6 +423,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   }));
 
   vi.doMock("./tool-result-truncation.js", () => ({
+    resolveLiveToolResultMaxChars: mockedResolveLiveToolResultMaxChars,
     sessionLikelyHasOversizedToolResults: mockedSessionLikelyHasOversizedToolResults,
     truncateOversizedToolResultsInSession: mockedTruncateOversizedToolResultsInSession,
   }));

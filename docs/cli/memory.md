@@ -121,7 +121,7 @@ openclaw memory rem-harness [--agent <id>] [--include-promoted] [--json]
 - `--include-promoted`: include already promoted deep candidates.
 - `--json`: print JSON output.
 
-## Dreaming (experimental)
+## Dreaming
 
 Dreaming is the background memory consolidation system with three cooperative
 phases: **light** (sort/stage short-term material), **deep** (promote durable

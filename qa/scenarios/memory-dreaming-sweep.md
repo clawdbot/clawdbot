@@ -141,6 +141,12 @@ steps:
       - set: dailyPath
         value:
           expr: "path.join(env.gateway.workspaceDir, 'memory', `${dreamingDay}.md`)"
+      - set: lightReportPath
+        value:
+          expr: "path.join(env.gateway.workspaceDir, 'memory', 'dreaming', 'light', `${dreamingDay}.md`)"
+      - set: remReportPath
+        value:
+          expr: "path.join(env.gateway.workspaceDir, 'memory', 'dreaming', 'rem', `${dreamingDay}.md`)"
       - set: memoryPath
         value:
           expr: "path.join(env.gateway.workspaceDir, 'MEMORY.md')"
@@ -250,7 +256,7 @@ steps:
               args:
                 - lambda:
                     async: true
-                    expr: "(async () => { const status = await readDoctorMemoryStatus(env); const dailyMemory = await fs.readFile(dailyPath, 'utf8').catch(() => ''); const promotedMemory = await fs.readFile(memoryPath, 'utf8').catch(() => ''); if (!dailyMemory.includes('## Light Sleep') || !dailyMemory.includes('## REM Sleep')) return undefined; if (!promotedMemory.includes(config.expectedNeedle)) return undefined; if (status.dreaming?.phases?.deep?.managedCronPresent !== true) return undefined; if ((status.dreaming?.promotedTotal ?? 0) < 1) return undefined; if ((status.dreaming?.phaseSignalCount ?? 0) < 1) return undefined; return { status, dailyMemory, promotedMemory }; })()"
+                    expr: "(async () => { const status = await readDoctorMemoryStatus(env); const lightReport = await fs.readFile(lightReportPath, 'utf8').catch(() => ''); const remReport = await fs.readFile(remReportPath, 'utf8').catch(() => ''); const promotedMemory = await fs.readFile(memoryPath, 'utf8').catch(() => ''); if (!lightReport.includes('# Light Sleep')) return undefined; if (!remReport.includes('# REM Sleep')) return undefined; if (!promotedMemory.includes(config.expectedNeedle)) return undefined; if (status.dreaming?.phases?.deep?.managedCronPresent !== true) return undefined; if ((status.dreaming?.promotedTotal ?? 0) < 1) return undefined; return { status, lightReport, remReport, promotedMemory }; })()"
                 - expr: liveTurnTimeoutMs(env, 90000)
                 - 1000
           finally:
@@ -272,5 +278,5 @@ steps:
               args:
                 - ref: env
                 - 60000
-    detailsExpr: "JSON.stringify({ promotedTotal: promoted.status.dreaming?.promotedTotal ?? 0, shortTermCount: promoted.status.dreaming?.shortTermCount ?? 0, phaseSignalCount: promoted.status.dreaming?.phaseSignalCount ?? 0, lightSleep: promoted.dailyMemory.includes('## Light Sleep'), remSleep: promoted.dailyMemory.includes('## REM Sleep') })"
+    detailsExpr: "JSON.stringify({ promotedTotal: promoted.status.dreaming?.promotedTotal ?? 0, shortTermCount: promoted.status.dreaming?.shortTermCount ?? 0, phaseSignalCount: promoted.status.dreaming?.phaseSignalCount ?? 0, lightSleep: promoted.lightReport.includes('# Light Sleep'), remSleep: promoted.remReport.includes('# REM Sleep') })"
 ```

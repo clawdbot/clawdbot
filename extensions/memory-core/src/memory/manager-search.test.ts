@@ -9,9 +9,26 @@ import { searchKeyword } from "./manager-search.js";
 describe("searchKeyword trigram fallback", () => {
   const { DatabaseSync } = requireNodeSqlite();
 
+  function supportsTrigramFts(): boolean {
+    const db = new DatabaseSync(":memory:");
+    try {
+      const result = ensureMemoryIndexSchema({
+        db,
+        embeddingCacheTable: "embedding_cache",
+        cacheEnabled: false,
+        ftsTable: "chunks_fts",
+        ftsEnabled: true,
+        ftsTokenizer: "trigram",
+      });
+      return result.ftsAvailable;
+    } finally {
+      db.close();
+    }
+  }
+
   function createTrigramDb() {
     const db = new DatabaseSync(":memory:");
-    ensureMemoryIndexSchema({
+    const result = ensureMemoryIndexSchema({
       db,
       embeddingCacheTable: "embedding_cache",
       cacheEnabled: false,
@@ -19,6 +36,10 @@ describe("searchKeyword trigram fallback", () => {
       ftsEnabled: true,
       ftsTokenizer: "trigram",
     });
+    if (!result.ftsAvailable) {
+      db.close();
+      throw new Error(`FTS5 trigram unavailable: ${result.ftsError ?? "unknown error"}`);
+    }
     return db;
   }
 
@@ -53,7 +74,9 @@ describe("searchKeyword trigram fallback", () => {
     }
   }
 
-  it("finds short Chinese queries with substring fallback", async () => {
+  const itWithTrigramFts = supportsTrigramFts() ? it : it.skip;
+
+  itWithTrigramFts("finds short Chinese queries with substring fallback", async () => {
     const results = await runSearch({
       rows: [{ id: "1", path: "memory/zh.md", text: "今天玩成语接龙游戏" }],
       query: "成语",
@@ -62,7 +85,7 @@ describe("searchKeyword trigram fallback", () => {
     expect(results[0]?.textScore).toBe(1);
   });
 
-  it("finds short Japanese and Korean queries with substring fallback", async () => {
+  itWithTrigramFts("finds short Japanese and Korean queries with substring fallback", async () => {
     const japaneseResults = await runSearch({
       rows: [{ id: "jp", path: "memory/jp.md", text: "今日はしりとり大会" }],
       query: "しり とり",
@@ -76,19 +99,22 @@ describe("searchKeyword trigram fallback", () => {
     expect(koreanResults.map((row) => row.id)).toEqual(["ko"]);
   });
 
-  it("keeps MATCH semantics for long trigram terms while requiring short CJK substrings", async () => {
-    const results = await runSearch({
-      rows: [
-        { id: "match", path: "memory/good.md", text: "今天玩成语接龙游戏" },
-        { id: "partial", path: "memory/partial.md", text: "今天玩成语接龙" },
-      ],
-      query: "成语接龙 游戏",
-    });
-    expect(results.map((row) => row.id)).toEqual(["match"]);
-    expect(results[0]?.textScore).toBeGreaterThan(0);
-  });
+  itWithTrigramFts(
+    "keeps MATCH semantics for long trigram terms while requiring short CJK substrings",
+    async () => {
+      const results = await runSearch({
+        rows: [
+          { id: "match", path: "memory/good.md", text: "今天玩成语接龙游戏" },
+          { id: "partial", path: "memory/partial.md", text: "今天玩成语接龙" },
+        ],
+        query: "成语接龙 游戏",
+      });
+      expect(results.map((row) => row.id)).toEqual(["match"]);
+      expect(results[0]?.textScore).toBeGreaterThan(0);
+    },
+  );
 
-  it("applies fallback lexical boosts without exceeding bounded scores", async () => {
+  itWithTrigramFts("applies fallback lexical boosts without exceeding bounded scores", async () => {
     const results = await runSearch({
       rows: [
         {
@@ -133,7 +159,7 @@ describe("searchKeyword trigram fallback", () => {
     expect(boostedById.get("weak")?.score).toBeLessThanOrEqual(1);
   });
 
-  it("does not overweight repeated query tokens in fallback scoring", async () => {
+  itWithTrigramFts("does not overweight repeated query tokens in fallback scoring", async () => {
     const unique = await runSearch({
       rows: [{ id: "1", path: "memory/project.md", text: "Project memory context." }],
       query: "project memory context",

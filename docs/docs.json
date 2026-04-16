@@ -1062,7 +1062,8 @@
                   "concepts/agent-workspace",
                   "concepts/soul",
                   "concepts/oauth",
-                  "start/bootstrapping"
+                  "start/bootstrapping",
+                  "concepts/experimental-features"
                 ]
               },
               {

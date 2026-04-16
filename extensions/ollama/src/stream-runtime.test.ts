@@ -1,4 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
+  fetchWithSsrFGuardMock: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+}));
+
 import {
   buildOllamaChatRequest,
   createConfiguredOllamaStreamFn,
@@ -8,6 +17,17 @@ import {
   parseNdjsonStream,
   resolveOllamaBaseUrlForRun,
 } from "./stream.js";
+
+type GuardedFetchCall = {
+  url: string;
+  init?: RequestInit;
+  policy?: unknown;
+  auditContext?: string;
+};
+
+afterEach(() => {
+  fetchWithSsrFGuardMock.mockReset();
+});
 
 describe("buildOllamaChatRequest", () => {
   it("omits tools when none are provided", () => {
@@ -22,6 +42,17 @@ describe("buildOllamaChatRequest", () => {
       messages: [{ role: "user", content: "hello" }],
       stream: true,
       options: { num_ctx: 65536 },
+    });
+  });
+
+  it("strips the ollama/ prefix from chat model ids", () => {
+    expect(
+      buildOllamaChatRequest({
+        modelId: "ollama/qwen3:14b-q8_0",
+        messages: [{ role: "user", content: "hello" }],
+      }),
+    ).toMatchObject({
+      model: "qwen3:14b-q8_0",
     });
   });
 });
@@ -396,26 +427,23 @@ describe("parseNdjsonStream", () => {
 
 async function withMockNdjsonFetch(
   lines: string[],
-  run: (fetchMock: ReturnType<typeof vi.fn>) => Promise<void>,
+  run: (fetchMock: typeof fetchWithSsrFGuardMock) => Promise<void>,
 ): Promise<void> {
-  const originalFetch = globalThis.fetch;
-  const fetchMock = vi.fn(async () => {
+  fetchWithSsrFGuardMock.mockImplementation(async () => {
     const payload = lines.join("\n");
-    return new Response(`${payload}\n`, {
-      status: 200,
-      headers: { "Content-Type": "application/x-ndjson" },
-    });
+    return {
+      response: new Response(`${payload}\n`, {
+        status: 200,
+        headers: { "Content-Type": "application/x-ndjson" },
+      }),
+      release: vi.fn(async () => undefined),
+    };
   });
-  globalThis.fetch = fetchMock as unknown as typeof fetch;
-  try {
-    await run(fetchMock);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  await run(fetchWithSsrFGuardMock);
 }
 
 function createControlledNdjsonFetch(): {
-  fetchMock: ReturnType<typeof vi.fn>;
+  fetchImpl: () => Promise<{ response: Response; release: () => Promise<void> }>;
   pushLine: (line: string) => void;
   close: () => void;
 } {
@@ -427,11 +455,12 @@ function createControlledNdjsonFetch(): {
     },
   });
   return {
-    fetchMock: vi.fn(async () => {
-      return new Response(body, {
+    fetchImpl: async () => ({
+      response: new Response(body, {
         status: 200,
         headers: { "Content-Type": "application/x-ndjson" },
-      });
+      }),
+      release: vi.fn(async () => undefined),
     }),
     pushLine(line: string) {
       if (!controller) {
@@ -446,6 +475,10 @@ function createControlledNdjsonFetch(): {
       controller.close();
     },
   };
+}
+
+function getGuardedFetchCall(fetchMock: typeof fetchWithSsrFGuardMock): GuardedFetchCall {
+  return (fetchMock.mock.calls[0]?.[0] as GuardedFetchCall | undefined) ?? { url: "" };
 }
 
 async function createOllamaTestStream(params: {
@@ -587,9 +620,8 @@ describe("createOllamaStreamFn streaming events", () => {
   });
 
   it("emits text_end as soon as Ollama switches from text to tool calls", async () => {
-    const originalFetch = globalThis.fetch;
     const controlledFetch = createControlledNdjsonFetch();
-    globalThis.fetch = controlledFetch.fetchMock as unknown as typeof fetch;
+    fetchWithSsrFGuardMock.mockImplementation(controlledFetch.fetchImpl);
 
     try {
       const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
@@ -651,7 +683,7 @@ describe("createOllamaStreamFn streaming events", () => {
         expect(doneEvent).toMatchObject({ value: undefined, done: true });
       }
     } finally {
-      globalThis.fetch = originalFetch;
+      fetchWithSsrFGuardMock.mockReset();
     }
   });
 
@@ -713,8 +745,10 @@ describe("createOllamaStreamFn", () => {
         expect(events.at(-1)?.type).toBe("done");
 
         expect(fetchMock).toHaveBeenCalledTimes(1);
-        const [url, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-        expect(url).toBe("http://ollama-host:11434/api/chat");
+        const request = getGuardedFetchCall(fetchMock);
+        expect(request.url).toBe("http://ollama-host:11434/api/chat");
+        expect(request.auditContext).toBe("ollama-stream.chat");
+        const requestInit = request.init ?? {};
         expect(requestInit.signal).toBe(signal);
         if (typeof requestInit.body !== "string") {
           throw new Error("Expected string request body");
@@ -725,6 +759,28 @@ describe("createOllamaStreamFn", () => {
         };
         expect(requestBody.options.num_ctx).toBe(131072);
         expect(requestBody.options.num_predict).toBe(123);
+      },
+    );
+  });
+
+  it("uses the default loopback policy when baseUrl is empty", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const stream = await createOllamaTestStream({ baseUrl: "" });
+
+        const events = await collectStreamEvents(stream);
+        expect(events.at(-1)?.type).toBe("done");
+
+        const request = getGuardedFetchCall(fetchMock);
+        expect(request.url).toBe("http://127.0.0.1:11434/api/chat");
+        expect(request.policy).toMatchObject({
+          hostnameAllowlist: ["127.0.0.1"],
+          allowPrivateNetwork: true,
+        });
       },
     );
   });
@@ -753,7 +809,7 @@ describe("createOllamaStreamFn", () => {
         const events = await collectStreamEvents(stream);
         expect(events.at(-1)?.type).toBe("done");
 
-        const [, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
         expect(requestInit.headers).toMatchObject({
           "Content-Type": "application/json",
           "X-OLLAMA-KEY": "provider-secret",
@@ -785,7 +841,7 @@ describe("createOllamaStreamFn", () => {
         });
 
         await collectStreamEvents(stream);
-        const [, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
         expect(requestInit.headers).toMatchObject({
           Authorization: "Bearer proxy-token",
         });
@@ -821,7 +877,7 @@ describe("createOllamaStreamFn", () => {
         );
 
         await collectStreamEvents(stream);
-        const [, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
         expect(requestInit.headers).toMatchObject({
           Authorization: "Bearer real-token",
         });
@@ -830,14 +886,13 @@ describe("createOllamaStreamFn", () => {
   });
 
   it("surfaces non-2xx HTTP response as status-prefixed error", async () => {
-    const originalFetch = globalThis.fetch;
-    const fetchMock = vi.fn(async () => {
-      return new Response("Service Unavailable", {
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response("Service Unavailable", {
         status: 503,
         statusText: "Service Unavailable",
-      });
+      }),
+      release: vi.fn(async () => undefined),
     });
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
     try {
       const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
       const events = await collectStreamEvents(stream);
@@ -850,7 +905,7 @@ describe("createOllamaStreamFn", () => {
       // extractLeadingHttpStatus can parse it for failover/retry logic.
       expect(errorEvent!.error.errorMessage).toMatch(/^503\b/);
     } finally {
-      globalThis.fetch = originalFetch;
+      fetchWithSsrFGuardMock.mockReset();
     }
   });
 
@@ -962,8 +1017,9 @@ describe("createConfiguredOllamaStreamFn", () => {
         );
 
         await collectStreamEvents(stream);
-        const [url, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-        expect(url).toBe("http://provider-host:11434/api/chat");
+        const request = getGuardedFetchCall(fetchMock);
+        expect(request.url).toBe("http://provider-host:11434/api/chat");
+        const requestInit = request.init ?? {};
         expect(requestInit.headers).toMatchObject({
           Authorization: "Bearer proxy-token",
         });

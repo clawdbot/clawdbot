@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -203,16 +205,74 @@ func readFixtureText(t *testing.T, path string) string {
 
 func readFixtureTextInDir(t *testing.T, dir, name string) string {
 	t.Helper()
+	resolvedPath, err := resolveFixturePathInDir(dir, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return readFixtureText(t, resolvedPath)
+}
+
+func resolveFixturePathInDir(dir, name string) (string, error) {
 	if filepath.IsAbs(name) {
-		t.Fatalf("absolute fixture paths are not allowed: %q", name)
+		return "", fmt.Errorf("absolute fixture paths are not allowed: %q", name)
 	}
 	clean := filepath.Clean(name)
 	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		t.Fatalf("fixture path escapes dir: %q", name)
+		return "", fmt.Errorf("fixture path escapes dir: %q", name)
 	}
-	return readFixtureText(t, filepath.Join(dir, clean))
+
+	joined := filepath.Join(dir, clean)
+	resolvedDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return "", fmt.Errorf("EvalSymlinks(%q): %w", dir, err)
+	}
+	resolvedPath, err := filepath.EvalSymlinks(joined)
+	if err != nil {
+		return "", fmt.Errorf("EvalSymlinks(%q): %w", joined, err)
+	}
+
+	rel, err := filepath.Rel(resolvedDir, resolvedPath)
+	if err != nil {
+		return "", fmt.Errorf("Rel(%q, %q): %w", resolvedDir, resolvedPath, err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("fixture path resolves outside dir: %q", name)
+	}
+
+	return resolvedPath, nil
 }
 
 func normalizeBehaviorText(value string) string {
 	return strings.TrimSpace(strings.ReplaceAll(value, "\r\n", "\n"))
+}
+
+func TestResolveFixturePathInDirRejectsSymlinkEscape(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	fixtureDir := filepath.Join(root, "fixture")
+	if err := os.MkdirAll(fixtureDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", fixtureDir, err)
+	}
+
+	outsidePath := filepath.Join(root, "outside.txt")
+	if err := os.WriteFile(outsidePath, []byte("outside\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", outsidePath, err)
+	}
+
+	linkPath := filepath.Join(fixtureDir, "outside-link.txt")
+	if err := os.Symlink(outsidePath, linkPath); err != nil {
+		if os.IsPermission(err) || runtime.GOOS == "windows" {
+			t.Skipf("symlink creation unavailable in this test environment: %v", err)
+		}
+		t.Fatalf("Symlink(%q, %q): %v", outsidePath, linkPath, err)
+	}
+
+	_, err := resolveFixturePathInDir(fixtureDir, "outside-link.txt")
+	if err == nil {
+		t.Fatal("expected symlink escape to fail")
+	}
+	if !strings.Contains(err.Error(), "resolves outside dir") {
+		t.Fatalf("expected outside-dir error, got %v", err)
+	}
 }

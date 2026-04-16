@@ -68,6 +68,7 @@ function getPathWithParent(
 function createEvalContext(api: QaFlowApi, vars: QaFlowVars) {
   return {
     ...api,
+    qaImport: (specifier: string) => import(specifier),
     vars,
     ...vars,
   };

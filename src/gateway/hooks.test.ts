@@ -1,6 +1,5 @@
 import type { IncomingMessage } from "node:http";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { createIMessageTestPlugin } from "../../test/helpers/channels/imessage-test-plugin.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -29,6 +28,14 @@ const createDemoAliasPlugin = () => ({
     }).meta,
     aliases: ["workspace-chat"],
   },
+});
+
+const createIMessageAliasPlugin = () => ({
+  ...createChannelTestPluginBase({
+    id: "imessage",
+    label: "iMessage",
+    docsPath: "/channels/imessage",
+  }),
 });
 
 describe("gateway hooks helpers", () => {
@@ -131,7 +138,7 @@ describe("gateway hooks helpers", () => {
         {
           pluginId: "imessage",
           source: "test",
-          plugin: createIMessageTestPlugin(),
+          plugin: createIMessageAliasPlugin(),
         },
       ]),
     );

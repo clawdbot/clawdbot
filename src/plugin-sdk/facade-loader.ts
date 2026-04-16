@@ -52,16 +52,21 @@ function getOpenClawPackageRoot() {
   return cachedOpenClawPackageRoot;
 }
 
-function createFacadeResolutionKey(params: { dirName: string; artifactBasename: string }): string {
-  const bundledPluginsDir = resolveBundledPluginsDir();
+function createFacadeResolutionKey(params: {
+  dirName: string;
+  artifactBasename: string;
+  env?: NodeJS.ProcessEnv;
+}): string {
+  const bundledPluginsDir = resolveBundledPluginsDir(params.env ?? process.env);
   return `${params.dirName}::${params.artifactBasename}::${bundledPluginsDir ? path.resolve(bundledPluginsDir) : "<default>"}`;
 }
 
 function resolveFacadeModuleLocationUncached(params: {
   dirName: string;
   artifactBasename: string;
+  env?: NodeJS.ProcessEnv;
 }): { modulePath: string; boundaryRoot: string } | null {
-  const bundledPluginsDir = resolveBundledPluginsDir();
+  const bundledPluginsDir = resolveBundledPluginsDir(params.env ?? process.env);
   const preferSource = !CURRENT_MODULE_PATH.includes(`${path.sep}dist${path.sep}`);
   if (preferSource) {
     const modulePath =
@@ -71,6 +76,7 @@ function resolveFacadeModuleLocationUncached(params: {
       }) ??
       resolveBundledPluginPublicSurfacePath({
         rootDir: getOpenClawPackageRoot(),
+        env: params.env,
         ...(bundledPluginsDir ? { bundledPluginsDir } : {}),
         dirName: params.dirName,
         artifactBasename: params.artifactBasename,
@@ -88,6 +94,7 @@ function resolveFacadeModuleLocationUncached(params: {
   }
   const modulePath = resolveBundledPluginPublicSurfacePath({
     rootDir: getOpenClawPackageRoot(),
+    env: params.env,
     ...(bundledPluginsDir ? { bundledPluginsDir } : {}),
     dirName: params.dirName,
     artifactBasename: params.artifactBasename,
@@ -107,6 +114,7 @@ function resolveFacadeModuleLocationUncached(params: {
 function resolveFacadeModuleLocation(params: {
   dirName: string;
   artifactBasename: string;
+  env?: NodeJS.ProcessEnv;
 }): { modulePath: string; boundaryRoot: string } | null {
   const key = createFacadeResolutionKey(params);
   if (cachedFacadeModuleLocationsByKey.has(key)) {
@@ -253,6 +261,7 @@ export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(param
   dirName: string;
   artifactBasename: string;
   trackedPluginId?: string | (() => string);
+  env?: NodeJS.ProcessEnv;
 }): T {
   const location = resolveFacadeModuleLocation(params);
   if (!location) {

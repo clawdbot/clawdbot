@@ -209,6 +209,35 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(onPartialReply).not.toHaveBeenCalled();
   });
 
+  it("blocks local MEDIA urls from case-variant tool names in verbose output", async () => {
+    const onToolResult = vi.fn();
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      onToolResult,
+      verboseLevel: "full",
+      builtinToolNames: new Set(["web_search"]),
+    });
+
+    emitToolRun({
+      emit,
+      toolName: "Web_Search",
+      toolCallId: "tool-1",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "Fetched page\nMEDIA:/tmp/secret.png" }],
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(onToolResult).toHaveBeenCalled();
+    });
+    const payload = onToolResult.mock.calls.at(-1)?.[0] as
+      | { text?: string; mediaUrls?: string[] }
+      | undefined;
+    expect(payload?.text ?? "").toContain("Fetched page");
+    expect(payload?.mediaUrls).toBeUndefined();
+  });
+
   it("attaches media from internal completion events even when assistant omits MEDIA lines", async () => {
     const onBlockReply = vi.fn();
     const { emit } = createSubscribedHarness({

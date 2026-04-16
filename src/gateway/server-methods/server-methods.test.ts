@@ -339,7 +339,7 @@ describe("timestampOptsFromConfig", () => {
     {
       name: "falls back gracefully with empty config",
       cfg: {} as any,
-      expected: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      expected: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
     },
   ])("$name", ({ cfg, expected }) => {
     expect(timestampOptsFromConfig(cfg).timezone).toBe(expected);

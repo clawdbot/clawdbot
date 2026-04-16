@@ -20,7 +20,7 @@ COPY ui/package.json ./ui/package.json
 COPY packages ./packages
 COPY extensions ./extensions
 COPY patches ./patches
-COPY scripts/postinstall-bundled-plugins.mjs scripts/npm-runner.mjs scripts/windows-cmd-helpers.mjs ./scripts/
+COPY scripts/postinstall-bundled-plugins.mjs scripts/preinstall-package-manager-warning.mjs scripts/npm-runner.mjs scripts/windows-cmd-helpers.mjs ./scripts/
 RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
   corepack enable \
   && if ! pnpm install --frozen-lockfile >/tmp/openclaw-cleanup-pnpm-install.log 2>&1; then \

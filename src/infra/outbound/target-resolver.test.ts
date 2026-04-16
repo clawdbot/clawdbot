@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
+  getLoadedChannelPlugin: (...args: unknown[]) => mocks.getChannelPlugin(...args),
   getChannelPlugin: (...args: unknown[]) => mocks.getChannelPlugin(...args),
   normalizeChannelId: (value: string) => value,
 }));

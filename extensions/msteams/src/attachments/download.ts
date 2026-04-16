@@ -12,6 +12,7 @@ import {
   isUrlAllowed,
   type MSTeamsAttachmentDownloadLogger,
   type MSTeamsAttachmentFetchPolicy,
+  type MSTeamsAttachmentResolveFn,
   normalizeContentType,
   resolveMediaSsrfPolicy,
   resolveAttachmentFetchPolicy,
@@ -111,6 +112,7 @@ async function fetchWithAuthFallback(params: {
   tokenProvider?: MSTeamsAccessTokenProvider;
   fetchFn?: typeof fetch;
   requestInit?: RequestInit;
+  resolveFn?: MSTeamsAttachmentResolveFn;
   policy: MSTeamsAttachmentFetchPolicy;
 }): Promise<Response> {
   const firstAttempt = await safeFetchWithPolicy({
@@ -118,6 +120,7 @@ async function fetchWithAuthFallback(params: {
     policy: params.policy,
     fetchFn: params.fetchFn,
     requestInit: params.requestInit,
+    resolveFn: params.resolveFn,
   });
   if (firstAttempt.ok) {
     return firstAttempt;
@@ -147,6 +150,7 @@ async function fetchWithAuthFallback(params: {
           ...params.requestInit,
           headers: authHeaders,
         },
+        resolveFn: params.resolveFn,
       });
       if (authAttempt.ok) {
         return authAttempt;
@@ -178,6 +182,7 @@ export async function downloadMSTeamsAttachments(params: {
   allowHosts?: string[];
   authAllowHosts?: string[];
   fetchFn?: typeof fetch;
+  resolveFn?: MSTeamsAttachmentResolveFn;
   /** When true, embeds original filename in stored path for later extraction. */
   preserveFilenames?: boolean;
   /**
@@ -282,6 +287,7 @@ export async function downloadMSTeamsAttachments(params: {
             tokenProvider: params.tokenProvider,
             fetchFn: params.fetchFn,
             requestInit: init,
+            resolveFn: params.resolveFn,
             policy,
           }),
       });

@@ -486,6 +486,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const transcriptDir = path.dirname(mockState.transcriptPath);
     const audioPath = path.join(transcriptDir, "reply.mp3");
     fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
     mockState.triggerAgentRunStart = true;
     mockState.dispatchedReplies = [
       {
@@ -506,32 +513,34 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expectBroadcast: false,
     });
 
-    const assistantUpdate = mockState.emittedTranscriptUpdates.find(
-      (update) =>
-        typeof update.message === "object" &&
-        update.message !== null &&
-        (update.message as { role?: unknown }).role === "assistant" &&
-        Array.isArray((update.message as { content?: unknown }).content) &&
-        ((update.message as { content: Array<{ type?: string }> }).content.some(
-          (block) => block?.type === "audio",
-        ) ??
-          false),
-    );
-    expect(assistantUpdate).toMatchObject({
-      message: {
-        role: "assistant",
-        idempotencyKey: "idem-agent-audio:assistant-audio",
-        content: [
-          { type: "text", text: "Audio reply" },
-          {
-            type: "audio",
-            source: {
-              type: "base64",
-              media_type: "audio/mpeg",
+    await waitForAssertion(() => {
+      const assistantUpdate = mockState.emittedTranscriptUpdates.find(
+        (update) =>
+          typeof update.message === "object" &&
+          update.message !== null &&
+          (update.message as { role?: unknown }).role === "assistant" &&
+          Array.isArray((update.message as { content?: unknown }).content) &&
+          ((update.message as { content: Array<{ type?: string }> }).content.some(
+            (block) => block?.type === "audio",
+          ) ??
+            false),
+      );
+      expect(assistantUpdate).toMatchObject({
+        message: {
+          role: "assistant",
+          idempotencyKey: "idem-agent-audio:assistant-audio",
+          content: [
+            { type: "text", text: "Audio reply" },
+            {
+              type: "audio",
+              source: {
+                type: "base64",
+                media_type: "audio/mpeg",
+              },
             },
-          },
-        ],
-      },
+          ],
+        },
+      });
     });
   });
 

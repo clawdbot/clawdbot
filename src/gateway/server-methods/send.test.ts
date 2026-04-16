@@ -39,6 +39,7 @@ vi.mock("../../config/config.js", async () => {
 });
 
 vi.mock("../../channels/plugins/index.js", () => ({
+  getLoadedChannelPlugin: mocks.getChannelPlugin,
   getChannelPlugin: mocks.getChannelPlugin,
   normalizeChannelId: (value: string) => (value === "webchat" ? null : value),
 }));

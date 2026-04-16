@@ -318,6 +318,30 @@ describe("copyBundledPluginMetadata", () => {
     expect(fs.existsSync(staleDistDir)).toBe(false);
   });
 
+  it("removes non-packaged private QA plugin metadata unless private QA build is enabled", () => {
+    const repoRoot = makeRepoRoot("openclaw-private-qa-metadata-");
+    createPlugin(repoRoot, {
+      id: "qa-lab",
+      packageName: "@openclaw/qa-lab",
+      packageOpenClaw: { extensions: ["./index.ts"] },
+    });
+    const staleDistDir = path.join(repoRoot, "dist", "extensions", "qa-lab");
+    fs.mkdirSync(staleDistDir, { recursive: true });
+    fs.writeFileSync(path.join(staleDistDir, "runtime-api.js"), "export {};\n", "utf8");
+
+    copyBundledPluginMetadataWithEnv({ repoRoot, env: {} });
+
+    expect(fs.existsSync(staleDistDir)).toBe(false);
+
+    copyBundledPluginMetadataWithEnv({
+      repoRoot,
+      env: { OPENCLAW_BUILD_PRIVATE_QA: "1" } as NodeJS.ProcessEnv,
+    });
+
+    expect(fs.existsSync(path.join(staleDistDir, "openclaw.plugin.json"))).toBe(true);
+    expect(fs.existsSync(path.join(staleDistDir, "package.json"))).toBe(true);
+  });
+
   it.each([
     {
       name: "skips metadata for optional bundled clusters only when explicitly disabled",

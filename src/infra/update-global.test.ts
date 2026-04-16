@@ -533,4 +533,38 @@ describe("update global helpers", () => {
       },
     );
   });
+
+  it("ignores stale metadata for non-packaged private QA plugins during inventory verify", async () => {
+    await withTempDir(
+      { prefix: "openclaw-update-global-stale-private-qa-" },
+      async (packageRoot) => {
+        await fs.writeFile(
+          path.join(packageRoot, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "2026.4.15" }),
+          "utf-8",
+        );
+        for (const relativePath of NPM_UPDATE_COMPAT_SIDECAR_PATHS) {
+          const absolutePath = path.join(packageRoot, relativePath);
+          await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+          await fs.writeFile(absolutePath, "export {};\n", "utf-8");
+        }
+        const staleQaLabPackageJson = path.join(
+          packageRoot,
+          "dist",
+          "extensions",
+          "qa-lab",
+          "package.json",
+        );
+        await fs.mkdir(path.dirname(staleQaLabPackageJson), { recursive: true });
+        await fs.writeFile(
+          staleQaLabPackageJson,
+          JSON.stringify({ name: "@openclaw/qa-lab" }),
+          "utf-8",
+        );
+        await writePackageDistInventory(packageRoot);
+
+        await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toEqual([]);
+      },
+    );
+  });
 });

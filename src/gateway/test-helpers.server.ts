@@ -944,6 +944,14 @@ export async function connectReq(
       nonce: connectChallengeNonce,
     };
   })();
+  const isResponseForId = (o: unknown): boolean => {
+    if (!o || typeof o !== "object" || Array.isArray(o)) {
+      return false;
+    }
+    const rec = o as Record<string, unknown>;
+    return rec.type === "res" && rec.id === id;
+  };
+  const responsePromise = onceMessage<ConnectResponse>(ws, isResponseForId, opts?.timeoutMs);
   ws.send(
     JSON.stringify({
       type: "req",
@@ -971,14 +979,7 @@ export async function connectReq(
       },
     }),
   );
-  const isResponseForId = (o: unknown): boolean => {
-    if (!o || typeof o !== "object" || Array.isArray(o)) {
-      return false;
-    }
-    const rec = o as Record<string, unknown>;
-    return rec.type === "res" && rec.id === id;
-  };
-  return await onceMessage<ConnectResponse>(ws, isResponseForId, opts?.timeoutMs);
+  return await responsePromise;
 }
 
 export async function connectOk(ws: WebSocket, opts?: Parameters<typeof connectReq>[1]) {
@@ -1042,8 +1043,7 @@ export async function rpcReq<T extends Record<string, unknown>>(
   clearSessionStoreCacheForTest();
   const { randomUUID } = await import("node:crypto");
   const id = randomUUID();
-  ws.send(JSON.stringify({ type: "req", id, method, params }));
-  return await onceMessage<{
+  const responsePromise = onceMessage<{
     type: "res";
     id: string;
     ok: boolean;
@@ -1060,6 +1060,8 @@ export async function rpcReq<T extends Record<string, unknown>>(
     },
     timeoutMs,
   );
+  ws.send(JSON.stringify({ type: "req", id, method, params }));
+  return await responsePromise;
 }
 
 export async function waitForSystemEvent(timeoutMs = 2000) {

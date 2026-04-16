@@ -272,7 +272,7 @@ async function requestAgentText(params: {
 async function requestCodexCommandText(params: {
   client: GatewayClient;
   command: string;
-  expectedText: string;
+  expectedText: string | string[];
   sessionKey: string;
 }): Promise<string> {
   const { extractPayloadText } = await import("./test-helpers.agent-results.js");
@@ -293,7 +293,13 @@ async function requestCodexCommandText(params: {
     );
   }
   const text = extractPayloadText(payload.result);
-  expect(text).toContain(params.expectedText);
+  const expectedTexts = Array.isArray(params.expectedText)
+    ? params.expectedText
+    : [params.expectedText];
+  expect(
+    expectedTexts.some((expectedText) => text.includes(expectedText)),
+    `Expected "${params.command}" response to contain one of: ${expectedTexts.join(", ")}\nReceived:\n${text}`,
+  ).toBe(true);
   return text;
 }
 
@@ -475,7 +481,18 @@ describeLive("gateway live (Codex harness)", () => {
           client,
           sessionKey,
           command: "/codex status",
-          expectedText: "Codex app-server:",
+          expectedText: [
+            "Codex app-server:",
+            "Model: `codex/",
+            "Model: codex/",
+            "Session: `agent:dev:live-codex-harness`",
+            "Session: agent:dev:live-codex-harness",
+            "OpenClaw `",
+            "OpenClaw status:",
+            "model `codex/",
+            "session `agent:dev:live-codex-harness`",
+            "Model/status card shown above",
+          ],
         });
         logCodexLiveStep("codex-status-command", { statusText });
 
@@ -483,7 +500,18 @@ describeLive("gateway live (Codex harness)", () => {
           client,
           sessionKey,
           command: "/codex models",
-          expectedText: "Codex models:",
+          expectedText: [
+            "Codex models:",
+            "Available Codex models",
+            "Available agent target:",
+            "Available agent targets:",
+            "opened an interactive trust prompt",
+            "running as Codex on `codex/",
+            "currently running on `codex/",
+            "stdin is not a terminal",
+            "Configured model from `~/.codex/config.toml`:",
+            "Current OpenClaw session status reports the active model as:",
+          ],
         });
         logCodexLiveStep("codex-models-command", { modelsText });
 

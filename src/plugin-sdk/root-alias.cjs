@@ -106,8 +106,9 @@ function findDistChunkByPrefix(prefix) {
 
 function listPluginSdkExportedSubpaths() {
   const packageRoot = getPackageRoot();
-  if (pluginSdkSubpathsCache.has(packageRoot)) {
-    return pluginSdkSubpathsCache.get(packageRoot);
+  const cacheKey = `${packageRoot}::privateQa=${process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI === "1" ? "1" : "0"}`;
+  if (pluginSdkSubpathsCache.has(cacheKey)) {
+    return pluginSdkSubpathsCache.get(cacheKey);
   }
 
   let subpaths = [];
@@ -123,8 +124,36 @@ function listPluginSdkExportedSubpaths() {
     subpaths = [];
   }
 
-  pluginSdkSubpathsCache.set(packageRoot, subpaths);
+  pluginSdkSubpathsCache.set(cacheKey, subpaths);
   return subpaths;
+}
+
+function listPrivateLocalOnlyPluginSdkSubpaths() {
+  if (process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI !== "1") {
+    return [];
+  }
+  try {
+    const raw = fs.readFileSync(
+      path.join(getPackageRoot(), "scripts", "lib", "plugin-sdk-private-local-only-subpaths.json"),
+      "utf8",
+    );
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed.filter(
+      (subpath) => typeof subpath === "string" && /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(subpath),
+    );
+  } catch {
+    return [];
+  }
+}
+
+function listPluginSdkRootAliasSubpaths() {
+  const exportedSubpaths = listPluginSdkExportedSubpaths();
+  return [...new Set([...exportedSubpaths, ...listPrivateLocalOnlyPluginSdkSubpaths()])].toSorted(
+    (left, right) => left.localeCompare(right),
+  );
 }
 
 function buildPluginSdkAliasMap(useDist) {
@@ -132,11 +161,9 @@ function buildPluginSdkAliasMap(useDist) {
   const pluginSdkDir = path.join(packageRoot, useDist ? "dist" : "src", "plugin-sdk");
   const normalizeTarget = (target) =>
     process.platform === "win32" ? target.replace(/\\/g, "/") : target;
-  const aliasMap = Object.fromEntries(
-    pluginSdkPackageNames.map((packageName) => [packageName, normalizeTarget(__filename)]),
-  );
+  const aliasMap = {};
 
-  for (const subpath of listPluginSdkExportedSubpaths()) {
+  for (const subpath of listPluginSdkRootAliasSubpaths()) {
     if (useDist) {
       const candidate = path.join(pluginSdkDir, `${subpath}.js`);
       if (fs.existsSync(candidate)) {
@@ -156,6 +183,12 @@ function buildPluginSdkAliasMap(useDist) {
       }
       break;
     }
+  }
+
+  // Keep the bare root alias last so subpath aliases win under resolvers that
+  // perform prefix matching instead of exact-key lookup.
+  for (const packageName of pluginSdkPackageNames) {
+    aliasMap[packageName] = normalizeTarget(__filename);
   }
 
   return aliasMap;

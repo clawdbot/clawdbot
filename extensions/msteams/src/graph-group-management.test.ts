@@ -86,6 +86,38 @@ describe("addParticipantMSTeams", () => {
     });
   });
 
+  it("normalizes role casing and whitespace", async () => {
+    mockState.postGraphJson.mockResolvedValue({});
+
+    await addParticipantMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      userId: "user-aad-id-2",
+      role: " OWNER ",
+    });
+
+    expect(mockState.postGraphJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          roles: ["owner"],
+        }),
+      }),
+    );
+  });
+
+  it("rejects unknown roles", async () => {
+    await expect(
+      addParticipantMSTeams({
+        cfg: {} as OpenClawConfig,
+        to: CHAT_ID,
+        userId: "user-aad-id-2",
+        role: "admin",
+      }),
+    ).rejects.toThrow('role must be "member" or "owner"');
+
+    expect(mockState.postGraphJson).not.toHaveBeenCalled();
+  });
+
   it("constructs correct user@odata.bind URL", async () => {
     mockState.postGraphJson.mockResolvedValue({});
 
@@ -98,6 +130,21 @@ describe("addParticipantMSTeams", () => {
     const calledBody = mockState.postGraphJson.mock.calls[0][0].body;
     expect(calledBody["user@odata.bind"]).toBe(
       "https://graph.microsoft.com/v1.0/users('abc-def-123')",
+    );
+  });
+
+  it("escapes user ids before building the OData bind URL", async () => {
+    mockState.postGraphJson.mockResolvedValue({});
+
+    await addParticipantMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      userId: "o'hara@example.com",
+    });
+
+    const calledBody = mockState.postGraphJson.mock.calls[0][0].body;
+    expect(calledBody["user@odata.bind"]).toBe(
+      "https://graph.microsoft.com/v1.0/users('o''hara@example.com')",
     );
   });
 

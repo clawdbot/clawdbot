@@ -4,6 +4,7 @@ import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import {
   HeartbeatSchema,
   AgentSandboxSchema,
+  AgentContextLimitsSchema,
   AgentEmbeddedHarnessSchema,
   AgentModelSchema,
   MemorySearchSchema,
@@ -52,7 +53,12 @@ export const AgentDefaultsSchema = z
     contextInjection: z.union([z.literal("always"), z.literal("continuation-skip")]).optional(),
     bootstrapMaxChars: z.number().int().positive().optional(),
     bootstrapTotalMaxChars: z.number().int().positive().optional(),
-    localModelMode: z.union([z.literal("default"), z.literal("lean")]).optional(),
+    experimental: z
+      .object({
+        localModelLean: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     bootstrapPromptTruncationWarning: z
       .union([z.literal("off"), z.literal("once"), z.literal("always")])
       .optional(),
@@ -73,6 +79,7 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    contextLimits: AgentContextLimitsSchema,
     timeFormat: z.union([z.literal("auto"), z.literal("12"), z.literal("24")]).optional(),
     envelopeTimezone: z.string().optional(),
     envelopeTimestamp: z.union([z.literal("on"), z.literal("off")]).optional(),

@@ -2318,6 +2318,7 @@ describe("QmdMemoryManager", () => {
       },
     } as OpenClawConfig;
 
+    let expectedLimit = 0;
     spawnMock.mockImplementation((cmd: string, args: string[]) => {
       const child = createMockChild({ autoClose: false });
       if (isMcporterCommand(cmd) && args[0] === "call") {
@@ -2325,7 +2326,7 @@ describe("QmdMemoryManager", () => {
         const callArgs = JSON.parse(args[args.indexOf("--args") + 1]);
         expect(callArgs).toMatchObject({
           query: "hello",
-          limit: 6,
+          limit: expectedLimit,
           minScore: 0,
           collection: "workspace-main",
         });
@@ -2338,7 +2339,8 @@ describe("QmdMemoryManager", () => {
       return child;
     });
 
-    const { manager } = await createManager();
+    const { manager, resolved } = await createManager();
+    expectedLimit = resolved.qmd?.limits.maxResults ?? 0;
     await manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" });
     await manager.close();
   });
@@ -2548,6 +2550,7 @@ describe("QmdMemoryManager", () => {
     } as OpenClawConfig;
 
     const selectors: string[] = [];
+    let expectedLimit = 0;
     spawnMock.mockImplementation((cmd: string, args: string[]) => {
       const child = createMockChild({ autoClose: false });
       if (isMcporterCommand(cmd) && args[0] === "call") {
@@ -2564,7 +2567,7 @@ describe("QmdMemoryManager", () => {
         expect(selector).toBe("qmd.search");
         expect(callArgs).toMatchObject({
           query: "hello",
-          limit: 6,
+          limit: expectedLimit,
           minScore: 0,
         });
         emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
@@ -2574,7 +2577,8 @@ describe("QmdMemoryManager", () => {
       return child;
     });
 
-    const { manager } = await createManager();
+    const { manager, resolved } = await createManager();
+    expectedLimit = resolved.qmd?.limits.maxResults ?? 0;
     await manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" });
 
     expect(selectors).toEqual(["qmd.query", "qmd.search", "qmd.search"]);
@@ -2603,6 +2607,7 @@ describe("QmdMemoryManager", () => {
 
     const selectors: string[] = [];
     const collections: string[] = [];
+    let expectedLimit = 0;
     spawnMock.mockImplementation((cmd: string, args: string[]) => {
       const child = createMockChild({ autoClose: false });
       if (isMcporterCommand(cmd) && args[0] === "call") {
@@ -2611,7 +2616,7 @@ describe("QmdMemoryManager", () => {
         collections.push(String(callArgs.collection ?? ""));
         expect(callArgs).toMatchObject({
           query: "hello",
-          limit: 6,
+          limit: expectedLimit,
           minScore: 0,
         });
         expect(callArgs).not.toHaveProperty("searches");
@@ -2623,7 +2628,8 @@ describe("QmdMemoryManager", () => {
       return child;
     });
 
-    const { manager } = await createManager();
+    const { manager, resolved } = await createManager();
+    expectedLimit = resolved.qmd?.limits.maxResults ?? 0;
     await manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" });
 
     expect(selectors).toEqual(["qmd.hybrid_search", "qmd.hybrid_search"]);
@@ -3584,11 +3590,43 @@ describe("QmdMemoryManager", () => {
     const { manager } = await createManager();
 
     const result = await manager.readFile({ relPath, from: 10, lines: 3 });
-    expect(result.text).toBe("line-10\nline-11\nline-12");
+    expect(result).toEqual({
+      path: relPath,
+      text: "line-10\nline-11\nline-12\n\n[More content available. Use from=13 to continue.]",
+      from: 10,
+      lines: 3,
+      truncated: true,
+      nextFrom: 13,
+    });
     expect(readFileSpy).not.toHaveBeenCalled();
 
     await manager.close();
     readFileSpy.mockRestore();
+  });
+
+  it("returns a bounded default excerpt for qmd memory reads without explicit lines", async () => {
+    const relPath = path.join("memory", "default-window.md");
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, relPath),
+      Array.from({ length: 150 }, (_, index) => `line-${index + 1}`).join("\n"),
+      "utf-8",
+    );
+
+    const { manager } = await createManager();
+
+    const result = await manager.readFile({ relPath });
+    expect(result.path).toBe(relPath);
+    expect(result.from).toBe(1);
+    expect(result.lines).toBe(120);
+    expect(result.truncated).toBe(true);
+    expect(result.nextFrom).toBe(121);
+    expect(result.text).toContain("line-1");
+    expect(result.text).toContain("line-120");
+    expect(result.text).not.toContain("line-121");
+    expect(result.text).toContain("Use from=121 to continue.");
+
+    await manager.close();
   });
 
   it("returns empty text when qmd files are missing before or during read", async () => {
@@ -3620,7 +3658,7 @@ describe("QmdMemoryManager", () => {
                 err.code = "ENOENT";
                 throw err;
               }
-              return realOpen(target, options);
+              return await realOpen(target, options);
             });
           return () => openSpy.mockRestore();
         },
@@ -4026,6 +4064,8 @@ describe("QmdMemoryManager", () => {
       expect(readResult).toEqual({
         path: "qmd/sessions-main/session-1.md",
         text: "# Session session-1\n\nsession canary\n",
+        from: 1,
+        lines: 4,
       });
     } finally {
       lstatSpy.mockRestore();

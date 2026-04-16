@@ -2,6 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 
 const JS_EXTENSIONS = new Set([".cjs", ".js", ".mjs"]);
+const CURATED_ROOT_RUNTIME_MIRRORS = new Set([
+  "@matrix-org/matrix-sdk-crypto-nodejs",
+  "@matrix-org/matrix-sdk-crypto-wasm",
+]);
 
 export function collectRuntimeDependencySpecs(packageJson = {}) {
   return new Map(
@@ -115,7 +119,7 @@ function walkJavaScriptFiles(rootDir) {
     for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
       const fullPath = path.join(current, entry.name);
       if (entry.isDirectory()) {
-        if (fullPath.split(path.sep).includes("extensions")) {
+        if (entry.name === "node_modules") {
           continue;
         }
         queue.push(fullPath);
@@ -151,6 +155,18 @@ export function collectRootDistBundledRuntimeMirrors(params) {
   const distDir = params.distDir;
   const bundledSpecs = params.bundledRuntimeDependencySpecs;
   const mirrors = new Map();
+
+  for (const dependencyName of CURATED_ROOT_RUNTIME_MIRRORS) {
+    const bundledSpec = bundledSpecs.get(dependencyName);
+    if (!bundledSpec) {
+      continue;
+    }
+    mirrors.set(dependencyName, {
+      importers: new Set(["<curated root runtime surface>"]),
+      pluginIds: bundledSpec.pluginIds,
+      spec: bundledSpec.spec,
+    });
+  }
 
   for (const filePath of walkJavaScriptFiles(distDir)) {
     const source = fs.readFileSync(filePath, "utf8");

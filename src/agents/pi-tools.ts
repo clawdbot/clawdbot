@@ -131,7 +131,7 @@ function applyModelProviderToolPolicy(
     modelCompat?: ModelCompatConfig;
   },
 ): AnyAgentTool[] {
-  if (params?.config?.agents?.defaults?.localModelMode === "lean") {
+  if (params?.config?.agents?.defaults?.experimental?.localModelLean === true) {
     const leanDeny = new Set(["browser", "cron", "message"]);
     tools = tools.filter((tool) => !leanDeny.has(tool.name));
   }

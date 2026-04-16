@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { hasConfiguredModelFallbacks } from "../../agents/agent-scope.js";
+import { hasConfiguredModelFallbacks, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
@@ -1558,7 +1558,10 @@ export async function runReplyAgent(params: {
       // Inject post-compaction workspace context for the next agent turn
       if (sessionKey) {
         const workspaceDir = process.cwd();
-        readPostCompactionContext(workspaceDir, cfg)
+        readPostCompactionContext(workspaceDir, {
+          cfg,
+          agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
+        })
           .then((contextContent) => {
             if (contextContent) {
               enqueueSystemEvent(contextContent, { sessionKey });

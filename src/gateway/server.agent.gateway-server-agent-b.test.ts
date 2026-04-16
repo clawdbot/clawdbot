@@ -226,6 +226,11 @@ describe("gateway server agent", () => {
   test("agent accepts built-in channel alias (imsg)", async () => {
     const registry = createRegistry([
       {
+        pluginId: "imessage",
+        source: "test",
+        plugin: createStubChannelPlugin({ id: "imessage", label: "iMessage" }),
+      },
+      {
         pluginId: "msteams",
         source: "test",
         plugin: createMSTeamsPlugin({ aliases: ["teams"] }),
@@ -245,7 +250,9 @@ describe("gateway server agent", () => {
       idempotencyKey: "idem-agent-imsg",
     });
     expect(resIMessage.ok).toBe(true);
-
+    await vi.waitFor(() => {
+      expect(vi.mocked(agentCommand)).toHaveBeenCalled();
+    });
     expectAgentRoutingCall({ channel: "imessage", deliver: true, fromEnd: 1 });
   });
 

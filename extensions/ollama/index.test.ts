@@ -4,6 +4,7 @@ import plugin from "./index.js";
 
 const promptAndConfigureOllamaMock = vi.hoisted(() =>
   vi.fn(async () => ({
+    credential: "ollama-local",
     config: {
       models: {
         providers: {
@@ -81,9 +82,11 @@ describe("ollama plugin", () => {
 
     expect(promptAndConfigureOllamaMock).toHaveBeenCalledWith({
       cfg: {},
+      env: undefined,
+      opts: undefined,
       prompter: {},
-      isRemote: false,
-      openUrl: expect.any(Function),
+      secretInputMode: undefined,
+      allowSecretRefPrompt: undefined,
     });
     expect(result.configPatch).toEqual({
       models: {

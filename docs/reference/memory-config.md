@@ -37,23 +37,24 @@ plugin-owned config, transcript persistence, and safe rollout pattern.
 
 ## Provider selection
 
-| Key        | Type      | Default          | Description                                                                                 |
-| ---------- | --------- | ---------------- | ------------------------------------------------------------------------------------------- |
-| `provider` | `string`  | auto-detected    | Embedding adapter ID: `openai`, `gemini`, `voyage`, `mistral`, `bedrock`, `ollama`, `local` |
-| `model`    | `string`  | provider default | Embedding model name                                                                        |
-| `fallback` | `string`  | `"none"`         | Fallback adapter ID when the primary fails                                                  |
-| `enabled`  | `boolean` | `true`           | Enable or disable memory search                                                             |
+| Key        | Type      | Default          | Description                                                                                                   |
+| ---------- | --------- | ---------------- | ------------------------------------------------------------------------------------------------------------- |
+| `provider` | `string`  | auto-detected    | Embedding adapter ID: `bedrock`, `gemini`, `github-copilot`, `local`, `mistral`, `ollama`, `openai`, `voyage` |
+| `model`    | `string`  | provider default | Embedding model name                                                                                          |
+| `fallback` | `string`  | `"none"`         | Fallback adapter ID when the primary fails                                                                    |
+| `enabled`  | `boolean` | `true`           | Enable or disable memory search                                                                               |
 
 ### Auto-detection order
 
 When `provider` is not set, OpenClaw selects the first available:
 
 1. `local` -- if `memorySearch.local.modelPath` is configured and the file exists.
-2. `openai` -- if an OpenAI key can be resolved.
-3. `gemini` -- if a Gemini key can be resolved.
-4. `voyage` -- if a Voyage key can be resolved.
-5. `mistral` -- if a Mistral key can be resolved.
-6. `bedrock` -- if the AWS SDK credential chain resolves (instance role, access keys, profile, SSO, web identity, or shared config).
+2. `github-copilot` -- if a GitHub Copilot token can be resolved (env var or auth profile).
+3. `openai` -- if an OpenAI key can be resolved.
+4. `gemini` -- if a Gemini key can be resolved.
+5. `voyage` -- if a Voyage key can be resolved.
+6. `mistral` -- if a Mistral key can be resolved.
+7. `bedrock` -- if the AWS SDK credential chain resolves (instance role, access keys, profile, SSO, web identity, or shared config).
 
 `ollama` is supported but not auto-detected (set it explicitly).
 
@@ -62,14 +63,15 @@ When `provider` is not set, OpenClaw selects the first available:
 Remote embeddings require an API key. Bedrock uses the AWS SDK default
 credential chain instead (instance roles, SSO, access keys).
 
-| Provider | Env var                        | Config key                        |
-| -------- | ------------------------------ | --------------------------------- |
-| OpenAI   | `OPENAI_API_KEY`               | `models.providers.openai.apiKey`  |
-| Gemini   | `GEMINI_API_KEY`               | `models.providers.google.apiKey`  |
-| Voyage   | `VOYAGE_API_KEY`               | `models.providers.voyage.apiKey`  |
-| Mistral  | `MISTRAL_API_KEY`              | `models.providers.mistral.apiKey` |
-| Bedrock  | AWS credential chain           | No API key needed                 |
-| Ollama   | `OLLAMA_API_KEY` (placeholder) | --                                |
+| Provider       | Env var                                            | Config key                        |
+| -------------- | -------------------------------------------------- | --------------------------------- |
+| Bedrock        | AWS credential chain                               | No API key needed                 |
+| Gemini         | `GEMINI_API_KEY`                                   | `models.providers.google.apiKey`  |
+| GitHub Copilot | `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN` | Auth profile via device login     |
+| Mistral        | `MISTRAL_API_KEY`                                  | `models.providers.mistral.apiKey` |
+| Ollama         | `OLLAMA_API_KEY` (placeholder)                     | --                                |
+| OpenAI         | `OPENAI_API_KEY`                                   | `models.providers.openai.apiKey`  |
+| Voyage         | `VOYAGE_API_KEY`                                   | `models.providers.voyage.apiKey`  |
 
 Codex OAuth covers chat/completions only and does not satisfy embedding
 requests.
@@ -477,7 +479,7 @@ Default is DM-only. `match.keyPrefix` matches the normalized session key;
 
 ---
 
-## Dreaming (experimental)
+## Dreaming
 
 Dreaming is configured under `plugins.entries.memory-core.config.dreaming`,
 not under `agents.defaults.memorySearch`.

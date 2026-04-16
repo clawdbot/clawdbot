@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { MatrixQaObservedEvent } from "./events.js";
-import { primeMatrixQaRoom, waitForOptionalMatrixQaRoomEvent } from "./sync.js";
+import {
+  createMatrixQaRoomObserver,
+  primeMatrixQaRoom,
+  waitForOptionalMatrixQaRoomEvent,
+} from "./sync.js";
 
 describe("matrix sync helpers", () => {
   it("primes the Matrix sync cursor without recording observed events", async () => {
@@ -140,5 +144,136 @@ describe("matrix sync helpers", () => {
         }),
       ]),
     );
+  });
+
+  it("lets a second wait reuse later same-batch events without another /sync", async () => {
+    let calls = 0;
+    const fetchImpl: typeof fetch = async () => {
+      calls += 1;
+      return new Response(
+        JSON.stringify({
+          next_batch: "next-batch-2",
+          rooms: {
+            join: {
+              "!room:matrix-qa.test": {
+                timeline: {
+                  events: [
+                    {
+                      event_id: "$preview",
+                      sender: "@sut:matrix-qa.test",
+                      type: "m.room.message",
+                      content: { body: "preview", msgtype: "m.notice" },
+                    },
+                    {
+                      event_id: "$final",
+                      sender: "@sut:matrix-qa.test",
+                      type: "m.room.message",
+                      content: {
+                        body: "final",
+                        msgtype: "m.text",
+                        "m.relates_to": {
+                          rel_type: "m.replace",
+                          event_id: "$preview",
+                          "m.new_content": { body: "final", msgtype: "m.text" },
+                        },
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    };
+    const observedEvents: MatrixQaObservedEvent[] = [];
+    const observer = createMatrixQaRoomObserver({
+      accessToken: "token",
+      baseUrl: "http://127.0.0.1:28008/",
+      fetchImpl,
+      observedEvents,
+      since: "start-batch",
+    });
+
+    const preview = await observer.waitForRoomEvent({
+      predicate: (event) => event.eventId === "$preview",
+      roomId: "!room:matrix-qa.test",
+      timeoutMs: 1_000,
+    });
+    const finalized = await observer.waitForRoomEvent({
+      predicate: (event) => event.eventId === "$final",
+      roomId: "!room:matrix-qa.test",
+      timeoutMs: 1_000,
+    });
+
+    expect(preview.event.eventId).toBe("$preview");
+    expect(finalized.event.eventId).toBe("$final");
+    expect(calls).toBe(1);
+  });
+
+  it("shares one in-flight /sync poll across concurrent waits", async () => {
+    let calls = 0;
+    const fetchImpl: typeof fetch = async () => {
+      calls += 1;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return new Response(
+        JSON.stringify({
+          next_batch: "next-batch-2",
+          rooms: {
+            join: {
+              "!room:matrix-qa.test": {
+                timeline: {
+                  events: [
+                    {
+                      event_id: "$reply",
+                      sender: "@sut:matrix-qa.test",
+                      type: "m.room.message",
+                      content: { body: "reply", msgtype: "m.text" },
+                    },
+                    {
+                      event_id: "$notice",
+                      sender: "@sut:matrix-qa.test",
+                      type: "m.room.message",
+                      content: { body: "notice", msgtype: "m.notice" },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    };
+    const observer = createMatrixQaRoomObserver({
+      accessToken: "token",
+      baseUrl: "http://127.0.0.1:28008/",
+      fetchImpl,
+      observedEvents: [],
+      since: "start-batch",
+    });
+
+    const [reply, notice] = await Promise.all([
+      observer.waitForRoomEvent({
+        predicate: (event) => event.eventId === "$reply",
+        roomId: "!room:matrix-qa.test",
+        timeoutMs: 1_000,
+      }),
+      observer.waitForOptionalRoomEvent({
+        predicate: (event) => event.eventId === "$notice",
+        roomId: "!room:matrix-qa.test",
+        timeoutMs: 1_000,
+      }),
+    ]);
+
+    expect(reply.event.eventId).toBe("$reply");
+    expect(notice).toMatchObject({
+      event: expect.objectContaining({
+        eventId: "$notice",
+      }),
+      matched: true,
+    });
+    expect(calls).toBe(1);
   });
 });

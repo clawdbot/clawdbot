@@ -586,7 +586,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           senderNamePromise ??= getMemberDisplayName(roomId, senderId).catch(() => senderId);
           return await senderNamePromise;
         };
-        const storeAllowFrom = await readStoreAllowFrom();
+        const storeAllowFrom = isDirectMessage ? await readStoreAllowFrom() : [];
         const roomUsers = roomConfig?.users ?? [];
         const accessState = resolveMatrixMonitorAccessState({
           allowFrom,

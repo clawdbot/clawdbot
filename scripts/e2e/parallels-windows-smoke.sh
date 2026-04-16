@@ -39,7 +39,9 @@ RUN_DIR="$(mktemp -d /tmp/openclaw-parallels-windows.XXXXXX)"
 BUILD_LOCK_DIR="${TMPDIR:-/tmp}/openclaw-parallels-build.lock"
 
 TIMEOUT_SNAPSHOT_S=240
-TIMEOUT_INSTALL_S=1200
+TIMEOUT_GIT_SETUP_S=1200
+TIMEOUT_INSTALL_S=300
+TIMEOUT_UPDATE_S=600
 TIMEOUT_VERIFY_S=120
 TIMEOUT_ONBOARD_S=240
 TIMEOUT_ONBOARD_PHASE_S=$((TIMEOUT_ONBOARD_S + 60))
@@ -450,6 +452,9 @@ guest_powershell_poll() {
   local timeout_s="$1"
   local script="$2"
   local encoded
+  if (( timeout_s < 60 )); then
+    timeout_s=60
+  fi
   encoded="$(
     SCRIPT_CONTENT="$script" python3 - <<'PY'
 import base64
@@ -665,6 +670,15 @@ phase_log_path() {
   printf '%s/%s.log\n' "$RUN_DIR" "$1"
 }
 
+child_job_running() {
+  local target="$1"
+  local job_pid
+  while IFS= read -r job_pid; do
+    [[ "$job_pid" == "$target" ]] && return 0
+  done < <(jobs -pr)
+  return 1
+}
+
 show_log_excerpt() {
   local log_path="$1"
   warn "log tail: $log_path"
@@ -687,7 +701,7 @@ phase_run() {
   ) >"$log_path" 2>&1 &
   pid=$!
 
-  while kill -0 "$pid" >/dev/null 2>&1; do
+  while child_job_running "$pid"; do
     if (( SECONDS - start >= timeout_s )); then
       timed_out=1
       kill "$pid" >/dev/null 2>&1 || true
@@ -1739,7 +1753,7 @@ run_dev_channel_update() {
   log_state_path="$(mktemp "${TMPDIR:-/tmp}/openclaw-update-dev-log-state.XXXXXX")"
   : >"$log_state_path"
   start_seconds="$SECONDS"
-  poll_deadline=$((SECONDS + TIMEOUT_INSTALL_S + 60))
+  poll_deadline=$((SECONDS + TIMEOUT_UPDATE_S + 120))
   startup_checked=0
 
   guest_powershell "$(cat <<EOF
@@ -2249,9 +2263,9 @@ run_fresh_main_lane() {
   local install_log_phase
   phase_run "fresh.restore-snapshot" "$TIMEOUT_SNAPSHOT_S" restore_snapshot "$snapshot_id" || return $?
   phase_run "fresh.wait-for-user" "$TIMEOUT_SNAPSHOT_S" wait_for_guest_ready || return $?
-  if ! phase_run "fresh.ensure-git" "$TIMEOUT_INSTALL_S" ensure_guest_git "$host_ip"; then
+  if ! phase_run "fresh.ensure-git" "$TIMEOUT_GIT_SETUP_S" ensure_guest_git "$host_ip"; then
     phase_run "fresh.wait-for-user-retry" "$TIMEOUT_SNAPSHOT_S" wait_for_guest_ready || return $?
-    phase_run "fresh.ensure-git-retry" "$TIMEOUT_INSTALL_S" ensure_guest_git "$host_ip" || return $?
+    phase_run "fresh.ensure-git-retry" "$TIMEOUT_GIT_SETUP_S" ensure_guest_git "$host_ip" || return $?
   fi
   if phase_run "fresh.install-main" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-fresh.tgz"; then
     install_log_phase="fresh.install-main"
@@ -2275,9 +2289,9 @@ run_upgrade_lane() {
   local baseline_version
   phase_run "upgrade.restore-snapshot" "$TIMEOUT_SNAPSHOT_S" restore_snapshot "$snapshot_id" || return $?
   phase_run "upgrade.wait-for-user" "$TIMEOUT_SNAPSHOT_S" wait_for_guest_ready || return $?
-  if ! phase_run "upgrade.ensure-git" "$TIMEOUT_INSTALL_S" ensure_guest_git "$host_ip"; then
+  if ! phase_run "upgrade.ensure-git" "$TIMEOUT_GIT_SETUP_S" ensure_guest_git "$host_ip"; then
     phase_run "upgrade.wait-for-user-retry" "$TIMEOUT_SNAPSHOT_S" wait_for_guest_ready || return $?
-    phase_run "upgrade.ensure-git-retry" "$TIMEOUT_INSTALL_S" ensure_guest_git "$host_ip" || return $?
+    phase_run "upgrade.ensure-git-retry" "$TIMEOUT_GIT_SETUP_S" ensure_guest_git "$host_ip" || return $?
   fi
   if upgrade_uses_host_tgz; then
     phase_run "upgrade.install-baseline-package" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-upgrade.tgz" || return $?
@@ -2298,7 +2312,7 @@ run_upgrade_lane() {
   else
     UPGRADE_PRECHECK_STATUS="skipped"
   fi
-  phase_run "upgrade.update-dev" "$TIMEOUT_INSTALL_S" run_dev_channel_update "$host_ip" || return $?
+  phase_run "upgrade.update-dev" "$TIMEOUT_UPDATE_S" run_dev_channel_update "$host_ip" || return $?
   UPGRADE_MAIN_VERSION="$(extract_last_version "$(phase_log_path upgrade.update-dev)")"
   phase_run "upgrade.verify-dev-channel" "$TIMEOUT_VERIFY_S" verify_dev_channel_update || return $?
   # Stop the old managed gateway before ref-mode onboard rewrites config and

@@ -116,7 +116,7 @@ describe("applyModelProviderToolPolicy", () => {
     expect(toolNames(filtered)).toEqual(["read", "web_search", "exec"]);
   });
 
-  it("drops heavyweight tools when lean local-model mode is enabled", () => {
+  it("drops heavyweight tools when the experimental lean local-model flag is enabled", () => {
     const filtered = __testing.applyModelProviderToolPolicy(
       [
         { name: "read" },
@@ -129,7 +129,9 @@ describe("applyModelProviderToolPolicy", () => {
         config: {
           agents: {
             defaults: {
-              localModelMode: "lean",
+              experimental: {
+                localModelLean: true,
+              },
             },
           },
         },
@@ -142,7 +144,7 @@ describe("applyModelProviderToolPolicy", () => {
     expect(toolNames(filtered)).toEqual(["read", "exec"]);
   });
 
-  it("keeps heavyweight tools when lean local-model mode is not enabled", () => {
+  it("keeps heavyweight tools when the experimental lean local-model flag is not enabled", () => {
     const filtered = __testing.applyModelProviderToolPolicy(
       [
         { name: "read" },
@@ -155,7 +157,9 @@ describe("applyModelProviderToolPolicy", () => {
         config: {
           agents: {
             defaults: {
-              localModelMode: "default",
+              experimental: {
+                localModelLean: false,
+              },
             },
           },
         },

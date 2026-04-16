@@ -280,8 +280,9 @@ function resolveQaLiveCliAuthEnv(baseEnv: NodeJS.ProcessEnv) {
     const codexHome = resolveUserPath(configuredCodexHome, baseEnv);
     return fs.existsSync(codexHome) ? { CODEX_HOME: codexHome } : {};
   }
-  const hostHome = baseEnv.HOME?.trim() || os.homedir();
-  const codexHome = path.join(hostHome, ".codex");
+  const hostHome = baseEnv.HOME?.trim();
+  const effectiveHome = hostHome || os.homedir();
+  const codexHome = path.join(effectiveHome, ".codex");
   return fs.existsSync(codexHome) ? { CODEX_HOME: codexHome } : {};
 }
 

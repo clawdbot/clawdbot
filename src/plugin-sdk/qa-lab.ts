@@ -1,6 +1,10 @@
 // Manual facade. Keep loader boundary explicit.
-type FacadeModule = typeof import("@openclaw/qa-lab/cli.js");
 import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
+
+type FacadeModule = {
+  isQaLabCliAvailable: () => boolean;
+  registerQaLabCli: (program: unknown) => void;
+};
 
 function loadFacadeModule(): FacadeModule {
   return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({

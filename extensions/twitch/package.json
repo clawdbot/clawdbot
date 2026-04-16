@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/twitch",
-  "version": "2026.4.12",
+  "version": "2026.4.15-beta.1",
   "description": "OpenClaw Twitch channel plugin",
   "type": "module",
   "dependencies": {

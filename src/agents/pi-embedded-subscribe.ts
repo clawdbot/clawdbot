@@ -415,7 +415,12 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       return;
     }
     const { text: cleanedText, mediaUrls } = parseReplyDirectives(message);
-    const filteredMediaUrls = filterToolResultMediaUrls(toolName, mediaUrls ?? [], result);
+    const filteredMediaUrls = filterToolResultMediaUrls(
+      toolName,
+      mediaUrls ?? [],
+      result,
+      params.builtinToolNames,
+    );
     if (!cleanedText && filteredMediaUrls.length === 0) {
       return;
     }
@@ -724,6 +729,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     blockChunking,
     blockChunker,
     hookRunner: params.hookRunner,
+    builtinToolNames: params.builtinToolNames,
     noteLastAssistant,
     shouldEmitToolResult,
     shouldEmitToolOutput,

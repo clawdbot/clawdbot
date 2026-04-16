@@ -7,7 +7,10 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { CONFIG_DIR, resolveHomeDir, resolveUserPath } from "../../utils.js";
 import { resolveSandboxPath } from "../sandbox-paths.js";
-import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
+import {
+  resolveEffectiveAgentSkillFilter,
+  resolveEffectiveAgentSkillsLimits,
+} from "./agent-filter.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { shouldIncludeSkill } from "./config.js";
 import { normalizeSkillFilter } from "./filter.js";
@@ -114,7 +117,7 @@ function filterSkillEntries(
 const DEFAULT_MAX_CANDIDATES_PER_ROOT = 300;
 const DEFAULT_MAX_SKILLS_LOADED_PER_SOURCE = 200;
 const DEFAULT_MAX_SKILLS_IN_PROMPT = 150;
-const DEFAULT_MAX_SKILLS_PROMPT_CHARS = 30_000;
+const DEFAULT_MAX_SKILLS_PROMPT_CHARS = 18_000;
 const DEFAULT_MAX_SKILL_FILE_BYTES = 256_000;
 
 type ResolvedSkillsLimits = {
@@ -125,14 +128,18 @@ type ResolvedSkillsLimits = {
   maxSkillFileBytes: number;
 };
 
-function resolveSkillsLimits(config?: OpenClawConfig): ResolvedSkillsLimits {
+function resolveSkillsLimits(config?: OpenClawConfig, agentId?: string): ResolvedSkillsLimits {
   const limits = config?.skills?.limits;
+  const agentSkillsLimits = resolveEffectiveAgentSkillsLimits(config, agentId);
   return {
     maxCandidatesPerRoot: limits?.maxCandidatesPerRoot ?? DEFAULT_MAX_CANDIDATES_PER_ROOT,
     maxSkillsLoadedPerSource:
       limits?.maxSkillsLoadedPerSource ?? DEFAULT_MAX_SKILLS_LOADED_PER_SOURCE,
     maxSkillsInPrompt: limits?.maxSkillsInPrompt ?? DEFAULT_MAX_SKILLS_IN_PROMPT,
-    maxSkillsPromptChars: limits?.maxSkillsPromptChars ?? DEFAULT_MAX_SKILLS_PROMPT_CHARS,
+    maxSkillsPromptChars:
+      agentSkillsLimits?.maxSkillsPromptChars ??
+      limits?.maxSkillsPromptChars ??
+      DEFAULT_MAX_SKILLS_PROMPT_CHARS,
     maxSkillFileBytes: limits?.maxSkillFileBytes ?? DEFAULT_MAX_SKILL_FILE_BYTES,
   };
 }
@@ -342,11 +349,12 @@ function loadSkillEntries(
   workspaceDir: string,
   opts?: {
     config?: OpenClawConfig;
+    agentId?: string;
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
   },
 ): SkillEntry[] {
-  const limits = resolveSkillsLimits(opts?.config);
+  const limits = resolveSkillsLimits(opts?.config, opts?.agentId);
 
   const loadSkills = (params: { dir: string; source: string }): Skill[] => {
     const rootDir = path.resolve(params.dir);
@@ -628,12 +636,16 @@ export function formatSkillsCompact(skills: Skill[]): string {
 // Budget reserved for the compact-mode warning line prepended by the caller.
 const COMPACT_WARNING_OVERHEAD = 150;
 
-function applySkillsPromptLimits(params: { skills: Skill[]; config?: OpenClawConfig }): {
+function applySkillsPromptLimits(params: {
+  skills: Skill[];
+  config?: OpenClawConfig;
+  agentId?: string;
+}): {
   skillsForPrompt: Skill[];
   truncated: boolean;
   compact: boolean;
 } {
-  const limits = resolveSkillsLimits(params.config);
+  const limits = resolveSkillsLimits(params.config, params.agentId);
   const total = params.skills.length;
   const byCount = params.skills.slice(0, Math.max(0, limits.maxSkillsInPrompt));
 
@@ -752,6 +764,7 @@ function resolveWorkspaceSkillPromptState(
   const { skillsForPrompt, truncated, compact } = applySkillsPromptLimits({
     skills: promptSkills,
     config: opts?.config,
+    agentId: opts?.agentId,
   });
   const truncationNote = truncated
     ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length}${compact ? " (compact format, descriptions omitted)" : ""}. Run \`openclaw skills check\` to audit.`

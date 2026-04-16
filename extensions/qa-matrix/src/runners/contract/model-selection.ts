@@ -1,4 +1,4 @@
-import { loadQaRuntimeModule } from "openclaw/plugin-sdk/qa-runtime";
+import { loadQaRuntimeModule } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { normalizeQaProviderMode, type QaProviderModeInput } from "../../run-config.js";
 
 export type ResolvedMatrixQaModels = {

@@ -154,6 +154,35 @@ export function createPersistentDedupe(options: PersistentDedupeOptions): Persis
   const lockOptions = mergeLockOptions(options.lockOptions);
   const memory = createDedupeCache({ ttlMs, maxSize: memoryMaxSize });
   const inflight = new Map<string, Promise<boolean>>();
+  // In-process write queue per file path. `withFileLock` is re-entrant
+  // within the same process (a second caller for the same path gets
+  // immediate access instead of waiting), so two concurrent
+  // checkAndRecordInner calls for different keys but the same file can
+  // race: both read the same stale data, and the last writer's
+  // writeJsonFileAtomically silently overwrites the first writer's
+  // additions. This queue serializes all read-modify-write cycles
+  // targeting the same file within this process, preventing the lost
+  // update while still allowing cross-process file-lock contention to
+  // be handled by the file lock itself.
+  const fileWriteQueues = new Map<string, Promise<unknown>>();
+
+  function enqueueFileWrite<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
+    const prev = fileWriteQueues.get(filePath) ?? Promise.resolve();
+    const next = prev.then(fn, fn);
+    fileWriteQueues.set(filePath, next);
+    // Cleanup: remove the queue entry once this link settles, but only if
+    // no newer work was chained after us. The `.catch(() => {})` prevents
+    // an unhandled rejection when `next` rejects — callers still observe
+    // the rejection through the returned `next` promise directly.
+    next
+      .finally(() => {
+        if (fileWriteQueues.get(filePath) === next) {
+          fileWriteQueues.delete(filePath);
+        }
+      })
+      .catch(() => {});
+    return next;
+  }
 
   async function checkAndRecordInner(
     key: string,
@@ -168,19 +197,21 @@ export function createPersistentDedupe(options: PersistentDedupeOptions): Persis
 
     const path = options.resolveFilePath(namespace);
     try {
-      const duplicate = await withFileLock(path, lockOptions, async () => {
-        const { value } = await readJsonFileWithFallback<PersistentDedupeData>(path, {});
-        const data = sanitizeData(value);
-        const seenAt = data[key];
-        const isRecent = seenAt != null && (ttlMs <= 0 || now - seenAt < ttlMs);
-        if (isRecent) {
-          return true;
-        }
-        data[key] = now;
-        pruneData(data, now, ttlMs, fileMaxEntries);
-        await writeJsonFileAtomically(path, data);
-        return false;
-      });
+      const duplicate = await enqueueFileWrite(path, () =>
+        withFileLock(path, lockOptions, async () => {
+          const { value } = await readJsonFileWithFallback<PersistentDedupeData>(path, {});
+          const data = sanitizeData(value);
+          const seenAt = data[key];
+          const isRecent = seenAt != null && (ttlMs <= 0 || now - seenAt < ttlMs);
+          if (isRecent) {
+            return true;
+          }
+          data[key] = now;
+          pruneData(data, now, ttlMs, fileMaxEntries);
+          await writeJsonFileAtomically(path, data);
+          return false;
+        }),
+      );
       return !duplicate;
     } catch (error) {
       onDiskError?.(error);

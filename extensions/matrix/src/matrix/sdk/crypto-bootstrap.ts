@@ -47,14 +47,18 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
     options: MatrixCryptoBootstrapOptions = {},
   ): Promise<MatrixCryptoBootstrapResult> {
     const strict = options.strict === true;
+    const deferSecretStorageBootstrapUntilAfterCrossSigning =
+      options.forceResetCrossSigning === true;
     // Register verification listeners before expensive bootstrap work so incoming requests
     // are not missed during startup.
     this.registerVerificationRequestHandler(crypto);
-    await this.bootstrapSecretStorage(crypto, {
-      strict,
-      allowSecretStorageRecreateWithoutRecoveryKey:
-        options.allowSecretStorageRecreateWithoutRecoveryKey === true,
-    });
+    if (!deferSecretStorageBootstrapUntilAfterCrossSigning) {
+      await this.bootstrapSecretStorage(crypto, {
+        strict,
+        allowSecretStorageRecreateWithoutRecoveryKey:
+          options.allowSecretStorageRecreateWithoutRecoveryKey === true,
+      });
+    }
     const crossSigning = await this.bootstrapCrossSigning(crypto, {
       forceResetCrossSigning: options.forceResetCrossSigning === true,
       allowAutomaticCrossSigningReset: options.allowAutomaticCrossSigningReset !== false,
@@ -62,6 +66,9 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
         options.allowSecretStorageRecreateWithoutRecoveryKey === true,
       strict,
     });
+    // Forced repair may need password UIA to upload new cross-signing keys. Delay any
+    // secret-storage repair/recreation until after that step succeeds so passwordless bots do
+    // not partially mutate SSSS on homeservers that require password-based UIA.
     await this.bootstrapSecretStorage(crypto, {
       strict,
       allowSecretStorageRecreateWithoutRecoveryKey:

@@ -897,91 +897,95 @@ describe("applyExtraParamsToAgent", () => {
   });
 
   it("keeps anthropic tool payloads native for Kimi", () => {
-    const payloads: Record<string, unknown>[] = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      const payload: Record<string, unknown> = {
-        tools: [
-          {
-            name: "read",
-            description: "Read file",
-            input_schema: {
-              type: "object",
-              properties: { path: { type: "string" } },
-              required: ["path"],
+    withMinimalProviderRuntimeDepsForTest(() => {
+      const payloads: Record<string, unknown>[] = [];
+      const baseStreamFn: StreamFn = (_model, _context, options) => {
+        const payload: Record<string, unknown> = {
+          tools: [
+            {
+              name: "read",
+              description: "Read file",
+              input_schema: {
+                type: "object",
+                properties: { path: { type: "string" } },
+                required: ["path"],
+              },
             },
-          },
-        ],
-        tool_choice: { type: "tool", name: "read" },
+          ],
+          tool_choice: { type: "tool", name: "read" },
+        };
+        options?.onPayload?.(payload, _model);
+        payloads.push(payload);
+        return {} as ReturnType<StreamFn>;
       };
-      options?.onPayload?.(payload, _model);
-      payloads.push(payload);
-      return {} as ReturnType<StreamFn>;
-    };
-    const agent = { streamFn: baseStreamFn };
+      const agent = { streamFn: baseStreamFn };
 
-    applyExtraParamsToAgent(agent, undefined, "kimi", "kimi-code", undefined, "low");
+      applyExtraParamsToAgent(agent, undefined, "kimi", "kimi-code", undefined, "low");
 
-    const model = {
-      api: "anthropic-messages",
-      provider: "kimi",
-      id: "kimi-code",
-      baseUrl: "https://api.kimi.com/coding/",
-    } as Model<"anthropic-messages">;
-    const context: Context = { messages: [] };
-    void agent.streamFn?.(model, context, {});
+      const model = {
+        api: "anthropic-messages",
+        provider: "kimi",
+        id: "kimi-code",
+        baseUrl: "https://api.kimi.com/coding/",
+      } as Model<"anthropic-messages">;
+      const context: Context = { messages: [] };
+      void agent.streamFn?.(model, context, {});
 
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.tools).toEqual([
-      {
-        name: "read",
-        description: "Read file",
-        input_schema: {
-          type: "object",
-          properties: { path: { type: "string" } },
-          required: ["path"],
+      expect(payloads).toHaveLength(1);
+      expect(payloads[0]?.tools).toEqual([
+        {
+          name: "read",
+          description: "Read file",
+          input_schema: {
+            type: "object",
+            properties: { path: { type: "string" } },
+            required: ["path"],
+          },
         },
-      },
-    ]);
-    expect(payloads[0]?.tool_choice).toEqual({ type: "tool", name: "read" });
+      ]);
+      expect(payloads[0]?.tool_choice).toEqual({ type: "tool", name: "read" });
+    });
   });
 
   it("does not rewrite anthropic tool schema for non-kimi endpoints", () => {
-    const payloads: Record<string, unknown>[] = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      const payload: Record<string, unknown> = {
-        tools: [
-          {
-            name: "read",
-            description: "Read file",
-            input_schema: { type: "object", properties: {} },
-          },
-        ],
+    withMinimalProviderRuntimeDepsForTest(() => {
+      const payloads: Record<string, unknown>[] = [];
+      const baseStreamFn: StreamFn = (_model, _context, options) => {
+        const payload: Record<string, unknown> = {
+          tools: [
+            {
+              name: "read",
+              description: "Read file",
+              input_schema: { type: "object", properties: {} },
+            },
+          ],
+        };
+        options?.onPayload?.(payload, _model);
+        payloads.push(payload);
+        return {} as ReturnType<StreamFn>;
       };
-      options?.onPayload?.(payload, _model);
-      payloads.push(payload);
-      return {} as ReturnType<StreamFn>;
-    };
-    const agent = { streamFn: baseStreamFn };
+      const agent = { streamFn: baseStreamFn };
 
-    applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-sonnet-4-6", undefined, "low");
+      applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-sonnet-4-6", undefined, "low");
 
-    const model = {
-      api: "anthropic-messages",
-      provider: "anthropic",
-      id: "claude-sonnet-4-6",
-      baseUrl: "https://api.anthropic.com",
-    } as Model<"anthropic-messages">;
-    const context: Context = { messages: [] };
-    void agent.streamFn?.(model, context, {});
+      const model = {
+        api: "anthropic-messages",
+        provider: "anthropic",
+        id: "claude-sonnet-4-6",
+        baseUrl: "https://api.anthropic.com",
+      } as Model<"anthropic-messages">;
+      const context: Context = { messages: [] };
+      void agent.streamFn?.(model, context, {});
 
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.tools).toEqual([
-      {
-        name: "read",
-        description: "Read file",
-        input_schema: { type: "object", properties: {} },
-      },
-    ]);
+      expect(payloads).toHaveLength(1);
+      expect(payloads[0]?.tools).toEqual([
+        {
+          name: "read",
+          description: "Read file",
+          input_schema: { type: "object", properties: {} },
+        },
+      ]);
+    });
   });
 
   it("uses explicit compat metadata for anthropic tool payload normalization", () => {

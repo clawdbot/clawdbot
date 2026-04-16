@@ -22,7 +22,7 @@ COPY --chown=appuser:appuser package.json pnpm-lock.yaml pnpm-workspace.yaml .np
 COPY --chown=appuser:appuser ui/package.json ./ui/package.json
 COPY --chown=appuser:appuser extensions ./extensions
 COPY --chown=appuser:appuser patches ./patches
-COPY --chown=appuser:appuser scripts/postinstall-bundled-plugins.mjs scripts/npm-runner.mjs scripts/windows-cmd-helpers.mjs ./scripts/
+COPY --chown=appuser:appuser scripts/postinstall-bundled-plugins.mjs scripts/preinstall-package-manager-warning.mjs scripts/npm-runner.mjs scripts/windows-cmd-helpers.mjs ./scripts/
 
 RUN --mount=type=cache,id=openclaw-pnpm-store,target=/home/appuser/.local/share/pnpm/store,sharing=locked \
     pnpm install --frozen-lockfile

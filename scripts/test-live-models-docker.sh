@@ -5,9 +5,36 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/live-docker-auth.sh"
 IMAGE_NAME="${OPENCLAW_IMAGE:-openclaw:local}"
 LIVE_IMAGE_NAME="${OPENCLAW_LIVE_IMAGE:-${IMAGE_NAME}-live}"
-CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$HOME/.openclaw}"
-WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
 PROFILE_FILE="${OPENCLAW_PROFILE_FILE:-$HOME/.profile}"
+
+openclaw_live_truthy() {
+  case "${1:-}" in
+    1 | true | TRUE | yes | YES | on | ON)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+TEMP_DIRS=()
+cleanup_temp_dirs() {
+  if ((${#TEMP_DIRS[@]} > 0)); then
+    rm -rf "${TEMP_DIRS[@]}"
+  fi
+}
+trap cleanup_temp_dirs EXIT
+
+if openclaw_live_truthy "${OPENCLAW_DOCKER_PROFILE_ENV_ONLY:-}"; then
+  CONFIG_DIR="$(mktemp -d)"
+  WORKSPACE_DIR="$(mktemp -d)"
+  TEMP_DIRS+=("$CONFIG_DIR" "$WORKSPACE_DIR")
+  OPENCLAW_DOCKER_AUTH_DIRS=none
+else
+  CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$HOME/.openclaw}"
+  WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
+fi
 
 PROFILE_MOUNT=()
 if [[ -f "$PROFILE_FILE" ]]; then
@@ -124,6 +151,7 @@ EOF
 
 echo "==> Run live model tests (profile keys)"
 echo "==> Target: src/agents/models.profiles.live.test.ts"
+echo "==> Profile env only: ${OPENCLAW_DOCKER_PROFILE_ENV_ONLY:-0}"
 echo "==> External auth dirs: ${AUTH_DIRS_CSV:-none}"
 echo "==> External auth files: ${AUTH_FILES_CSV:-none}"
 docker run --rm -t \

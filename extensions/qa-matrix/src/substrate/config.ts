@@ -250,7 +250,6 @@ function buildMatrixQaAccountDmConfig(params: {
 }
 
 function buildMatrixQaChannelAccountConfig(params: {
-  existingAccount?: MatrixQaChannelAccountConfig;
   groups: Record<string, { enabled: boolean; requireMention: boolean }>;
   homeserver: string;
   overrides?: MatrixQaConfigOverrides;
@@ -274,7 +273,6 @@ function buildMatrixQaChannelAccountConfig(params: {
     params.overrides?.streaming !== undefined ? { streaming: params.overrides.streaming } : {};
 
   return {
-    ...params.existingAccount,
     accessToken: params.sutAccessToken,
     ...(params.sutDeviceId ? { deviceId: params.sutDeviceId } : {}),
     dm: buildMatrixQaAccountDmConfig({
@@ -394,7 +392,6 @@ export function buildMatrixQaConfig(
         accounts: {
           ...baseCfg.channels?.matrix?.accounts,
           [params.sutAccountId]: buildMatrixQaChannelAccountConfig({
-            existingAccount: baseCfg.channels?.matrix?.accounts?.[params.sutAccountId],
             groups,
             homeserver: params.homeserver,
             overrides: params.overrides,

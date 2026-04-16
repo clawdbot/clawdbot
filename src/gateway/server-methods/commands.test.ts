@@ -108,6 +108,27 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: vi.fn(() => "main"),
 }));
 vi.mock("../../channels/plugins/index.js", () => ({
+  getLoadedChannelPlugin: vi.fn((provider: string) => {
+    if (provider === "discord") {
+      return {
+        commands: {
+          resolveNativeCommandName: ({
+            commandKey,
+            defaultName,
+          }: {
+            commandKey: string;
+            defaultName: string;
+          }) => {
+            if (commandKey === "model") {
+              return "set_model";
+            }
+            return defaultName;
+          },
+        },
+      };
+    }
+    return undefined;
+  }),
   getChannelPlugin: vi.fn((provider: string) => {
     if (provider === "discord") {
       return {

@@ -12,7 +12,7 @@ import {
 export const DEFAULT_MEMORY_DREAMING_ENABLED = false;
 export const DEFAULT_MEMORY_DREAMING_TIMEZONE = undefined;
 export const DEFAULT_MEMORY_DREAMING_VERBOSE_LOGGING = false;
-export const DEFAULT_MEMORY_DREAMING_STORAGE_MODE = "inline";
+export const DEFAULT_MEMORY_DREAMING_STORAGE_MODE = "separate";
 export const DEFAULT_MEMORY_DREAMING_SEPARATE_REPORTS = false;
 export const DEFAULT_MEMORY_DREAMING_FREQUENCY = "0 3 * * *";
 export const DEFAULT_MEMORY_DREAMING_PLUGIN_ID = "memory-core";

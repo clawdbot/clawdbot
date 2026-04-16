@@ -16,8 +16,12 @@ const HTTP_CLOSE_GRACE_MS = 1_000;
 const HTTP_CLOSE_FORCE_WAIT_MS = 5_000;
 
 function createTimeoutRace<T>(timeoutMs: number, onTimeout: () => T) {
-  let timer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
-    timer = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  timer = setTimeout(() => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
     resolve(onTimeout());
   }, timeoutMs);
   timer.unref?.();

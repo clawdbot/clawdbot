@@ -25,6 +25,7 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
 
 vi.mock("../../channels/plugins/index.js", () => ({
   listChannelPlugins: mocks.listChannelPlugins,
+  getLoadedChannelPlugin: vi.fn(),
   getChannelPlugin: vi.fn(),
   normalizeChannelId: (value: string) => value,
 }));

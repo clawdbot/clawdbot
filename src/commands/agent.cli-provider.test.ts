@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./agent-command.test-mocks.js";
@@ -47,6 +48,19 @@ function writeSessionStoreSeed(
 
 function readSessionStore<T>(storePath: string): Record<string, T> {
   return JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<string, T>;
+}
+
+async function readSessionMessages(sessionFile: string) {
+  const raw = await fsp.readFile(sessionFile, "utf-8");
+  return raw
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as { type?: string; message?: unknown })
+    .filter((entry) => entry.type === "message")
+    .map(
+      (entry) =>
+        entry.message as { role?: string; content?: unknown; provider?: string; model?: string },
+    );
 }
 
 function expectLastEmbeddedProviderModel(provider: string, model: string): void {
@@ -134,6 +148,77 @@ describe("agentCommand CLI provider handling", () => {
         }>(store);
         expect(saved["agent:main:subagent:clear-cli-overrides"]?.providerOverride).toBeUndefined();
         expect(saved["agent:main:subagent:clear-cli-overrides"]?.modelOverride).toBeUndefined();
+      });
+    } finally {
+      vi.mocked(modelSelectionModule.isCliProvider).mockImplementation(() => false);
+    }
+  });
+
+  it("persists successful google-gemini-cli replies into the session transcript", async () => {
+    vi.mocked(modelSelectionModule.isCliProvider).mockImplementation(
+      (provider) => provider.trim().toLowerCase() === "google-gemini-cli",
+    );
+    try {
+      await withTempHome(async (home) => {
+        const store = path.join(home, "sessions.json");
+        const sessionKey = "agent:main:subagent:gemini-cli-transcript";
+        mockConfig(home, store, {
+          model: { primary: "google-gemini-cli/gemini-3.1-pro-preview", fallbacks: [] },
+          models: { "google-gemini-cli/gemini-3.1-pro-preview": {} },
+        });
+
+        runCliAgentSpy.mockResolvedValueOnce({
+          payloads: [{ text: "hello from cli" }],
+          meta: {
+            durationMs: 5,
+            finalAssistantVisibleText: "hello from cli",
+            agentMeta: {
+              sessionId: "cli-session-123",
+              provider: "google-gemini-cli",
+              model: "gemini-3.1-pro-preview",
+              compactionCount: 2,
+              usage: {
+                input: 12,
+                output: 4,
+                cacheRead: 3,
+                cacheWrite: 0,
+                total: 19,
+              },
+            },
+            executionTrace: {
+              winnerProvider: "google-gemini-cli",
+              winnerModel: "gemini-3.1-pro-preview",
+              fallbackUsed: false,
+              runner: "cli",
+            },
+          },
+        } as ReturnType<typeof createDefaultAgentCommandResult>);
+
+        await agentCommand({ message: "persist this", sessionKey }, runtime);
+
+        const saved = readSessionStore<{ sessionFile?: string }>(store);
+        const sessionFile = saved[sessionKey]?.sessionFile;
+        expect(sessionFile).toBeTruthy();
+        expect(saved[sessionKey]).toMatchObject({
+          compactionCount: 2,
+          inputTokens: 12,
+          outputTokens: 4,
+          cacheRead: 3,
+        });
+
+        const messages = await readSessionMessages(sessionFile!);
+        expect(messages).toHaveLength(2);
+        expect(messages[0]).toMatchObject({
+          role: "user",
+          content: "persist this",
+        });
+        expect(messages[1]).toMatchObject({
+          role: "assistant",
+          api: "cli",
+          provider: "google-gemini-cli",
+          model: "gemini-3.1-pro-preview",
+          content: [{ type: "text", text: "hello from cli" }],
+        });
       });
     } finally {
       vi.mocked(modelSelectionModule.isCliProvider).mockImplementation(() => false);

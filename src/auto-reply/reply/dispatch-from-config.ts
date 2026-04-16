@@ -1,6 +1,10 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { isParentOwnedBackgroundAcpSession } from "../../acp/session-interaction-mode.js";
-import { resolveAgentConfig, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import {
+  resolveAgentConfig,
+  resolveAgentWorkspaceDir,
+  resolveSessionAgentId,
+} from "../../agents/agent-scope.js";
 import {
   resolveConversationBindingRecord,
   touchConversationBindingRecord,
@@ -73,6 +77,8 @@ let getReplyFromConfigRuntimePromise: Promise<
 > | null = null;
 let abortRuntimePromise: Promise<typeof import("./abort.runtime.js")> | null = null;
 let ttsRuntimePromise: Promise<typeof import("../../tts/tts.runtime.js")> | null = null;
+let replyMediaPathsRuntimePromise: Promise<typeof import("./reply-media-paths.runtime.js")> | null =
+  null;
 
 function loadRouteReplyRuntime() {
   routeReplyRuntimePromise ??= import("./route-reply.runtime.js");
@@ -92,6 +98,11 @@ function loadAbortRuntime() {
 function loadTtsRuntime() {
   ttsRuntimePromise ??= import("../../tts/tts.runtime.js");
   return ttsRuntimePromise;
+}
+
+function loadReplyMediaPathsRuntime() {
+  replyMediaPathsRuntimePromise ??= import("./reply-media-paths.runtime.js");
+  return replyMediaPathsRuntimePromise;
 }
 
 async function maybeApplyTtsToReplyPayload(
@@ -336,6 +347,27 @@ export async function dispatchReplyFromConfig(
     });
   const originatingTo = ctx.OriginatingTo;
   const ttsChannel = shouldRouteToOriginating ? originatingChannel : currentSurface;
+  const { createReplyMediaPathNormalizer } = await loadReplyMediaPathsRuntime();
+  const normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
+    cfg,
+    sessionKey: acpDispatchSessionKey,
+    workspaceDir: resolveAgentWorkspaceDir(cfg, sessionAgentId),
+    messageProvider: ttsChannel,
+    accountId: ctx.AccountId,
+    groupId,
+    groupChannel: ctx.GroupChannel,
+    groupSpace: ctx.GroupSpace,
+    requesterSenderId: ctx.SenderId,
+    requesterSenderName: ctx.SenderName,
+    requesterSenderUsername: ctx.SenderUsername,
+    requesterSenderE164: ctx.SenderE164,
+  });
+  const normalizeReplyMediaPayload = async (payload: ReplyPayload): Promise<ReplyPayload> => {
+    if (!resolveSendableOutboundReplyParts(payload).hasMedia) {
+      return payload;
+    }
+    return await normalizeReplyMediaPaths(payload);
+  };
 
   const routeReplyToOriginating = async (
     payload: ReplyPayload,
@@ -610,7 +642,8 @@ export async function dispatchReplyFromConfig(
         inboundAudio,
         ttsAuto: sessionTtsAuto,
       });
-      const result = await routeReplyToOriginating(ttsPayload);
+      const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
+      const result = await routeReplyToOriginating(normalizedPayload);
       if (result) {
         if (!result.ok) {
           logVerbose(
@@ -623,7 +656,7 @@ export async function dispatchReplyFromConfig(
         };
       }
       return {
-        queuedFinal: dispatcher.sendFinalReply(ttsPayload),
+        queuedFinal: dispatcher.sendFinalReply(normalizedPayload),
         routedFinalCount: 0,
       };
     };
@@ -868,7 +901,8 @@ export async function dispatchReplyFromConfig(
               inboundAudio,
               ttsAuto: sessionTtsAuto,
             });
-            const deliveryPayload = resolveToolDeliveryPayload(ttsPayload);
+            const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
+            const deliveryPayload = resolveToolDeliveryPayload(normalizedPayload);
             if (!deliveryPayload) {
               return;
             }
@@ -947,10 +981,11 @@ export async function dispatchReplyFromConfig(
               inboundAudio,
               ttsAuto: sessionTtsAuto,
             });
+            const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
             if (shouldRouteToOriginating) {
-              await sendPayloadAsync(ttsPayload, context?.abortSignal, false);
+              await sendPayloadAsync(normalizedPayload, context?.abortSignal, false);
             } else {
-              dispatcher.sendBlockReply(ttsPayload);
+              dispatcher.sendBlockReply(normalizedPayload);
             }
           };
           return run();

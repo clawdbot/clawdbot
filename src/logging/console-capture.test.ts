@@ -85,20 +85,6 @@ describe("enableConsoleCapture", () => {
     vi.useRealTimers();
   });
 
-  it.each(["DiscordMessageListener", "DiscordReactionListener", "DiscordReactionRemoveListener"])(
-    "suppresses discord EventQueue slow listener duplicates for %s",
-    (listener) => {
-      setLoggerOverride({ level: "info", file: tempLogPath() });
-      const warn = vi.fn();
-      console.warn = warn;
-      enableConsoleCapture();
-      console.warn(
-        `[EventQueue] Slow listener detected: ${listener} took 12.3 seconds for event MESSAGE_CREATE`,
-      );
-      expect(warn).not.toHaveBeenCalled();
-    },
-  );
-
   it("does not double-prefix timestamps", () => {
     setLoggerOverride({ level: "info", file: tempLogPath() });
     const warn = vi.fn();

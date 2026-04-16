@@ -347,6 +347,7 @@ export class WhatsAppConnectionController {
     let sock: WaSocket | null = null;
     let connection: WhatsAppLiveConnection | null = null;
     try {
+      await waitForCredsSaveQueueWithTimeout(this.authDir);
       sock = await createWaSocket(false, this.verbose, {
         authDir: this.authDir,
       });

@@ -234,16 +234,78 @@ describe("stripAssistantInternalScaffolding", () => {
     it("strips lone closing tool-call tags", () => {
       expectVisibleText("prefix </tool_call> suffix", "prefix  suffix");
       expectVisibleText("prefix </function_calls> suffix", "prefix  suffix");
+      expectVisibleText("prefix </function> suffix", "prefix  suffix");
+    });
+
+    it("strips standalone <function> blocks with nested <parameter> XML (#67093)", () => {
+      expectVisibleText(
+        'prefix\n<function name="sessions_spawn"><parameter name="sessionKey">agent:main</parameter><parameter name="timeout">0</parameter></function>\nsuffix',
+        "prefix\n\nsuffix",
+      );
+    });
+
+    it("strips Gemma-style <function> with newlines between parameters (#67093)", () => {
+      expectVisibleText(
+        [
+          "Let me check that.",
+          '<function name="read">',
+          '<parameter name="file_path">/home/user/test.md</parameter>',
+          "</function>",
+          "After the call.",
+        ].join("\n"),
+        "Let me check that.\n\nAfter the call.",
+      );
+    });
+
+    it("strips inline standalone <function> blocks after sentence lead-ins", () => {
+      expectVisibleText(
+        'Let me check that. <function name="read"><parameter name="file_path">/tmp/test.md</parameter></function> Done.',
+        "Let me check that.  Done.",
+      );
+    });
+
+    it("strips standalone <function> blocks with apostrophes in XML payloads (#67093)", () => {
+      expectVisibleText(
+        [
+          "prefix",
+          '<function name="spawn">',
+          '<parameter name="message">what\'s up</parameter>',
+          "</function>",
+          "suffix",
+        ].join("\n"),
+        "prefix\n\nsuffix",
+      );
+    });
+
+    it("preserves dangling <function> blocks instead of hiding the tail", () => {
+      expectVisibleText(
+        'prefix\n<function name="spawn">\n<parameter name="key">value</parameter>',
+        'prefix\n<function name="spawn">\n<parameter name="key">value</parameter>',
+      );
     });
 
     it("preserves XML-style explanations after lone <tool_call> tags", () => {
       expectVisibleText("Use <tool_call><arg> literally.", "Use <tool_call><arg> literally.");
     });
 
+    it("preserves lone <function> mentions in normal prose", () => {
+      expectVisibleText(
+        "Use <function> declarations in your WASM text format.",
+        "Use <function> declarations in your WASM text format.",
+      );
+    });
+
     it("preserves literal XML-style paired tool_call examples in prose", () => {
       expectVisibleText(
         "prefix <tool_call><arg>secret</arg></tool_call> suffix",
         "prefix <tool_call><arg>secret</arg></tool_call> suffix",
+      );
+    });
+
+    it("preserves inline bare <function> XML examples in prose", () => {
+      expectVisibleText(
+        'Use <function name="read"><parameter name="path">/tmp</parameter></function> in docs.',
+        'Use <function name="read"><parameter name="path">/tmp</parameter></function> in docs.',
       );
     });
 

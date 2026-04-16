@@ -1,4 +1,5 @@
 export const OLLAMA_DEFAULT_BASE_URL = "http://127.0.0.1:11434";
+export const OLLAMA_CLOUD_BASE_URL = "https://ollama.com";
 
 export const OLLAMA_DEFAULT_CONTEXT_WINDOW = 128000;
 export const OLLAMA_DEFAULT_MAX_TOKENS = 8192;

@@ -185,6 +185,248 @@ describe("loadWebMedia", () => {
     });
   });
 
+  it("allows host-read CSV files", async () => {
+    const csvFile = path.join(fixtureRoot, "data.csv");
+    await fs.writeFile(csvFile, "name,value\nfoo,1\nbar,2\n", "utf8");
+    const result = await loadWebMedia(csvFile, {
+      maxBytes: 1024 * 1024,
+      localRoots: "any",
+      readFile: async (filePath) => await fs.readFile(filePath),
+      hostReadCapability: true,
+    });
+    expect(result.kind).toBe("document");
+    expect(result.contentType).toBe("text/csv");
+  });
+
+  it("allows host-read Markdown files", async () => {
+    const mdFile = path.join(fixtureRoot, "notes.md");
+    await fs.writeFile(mdFile, "# Title\n\nSome **bold** text.\n", "utf8");
+    const result = await loadWebMedia(mdFile, {
+      maxBytes: 1024 * 1024,
+      localRoots: "any",
+      readFile: async (filePath) => await fs.readFile(filePath),
+      hostReadCapability: true,
+    });
+    expect(result.kind).toBe("document");
+    expect(result.contentType).toBe("text/markdown");
+  });
+
+  it("rejects binary data disguised as a CSV file", async () => {
+    const fakeCsv = path.join(fixtureRoot, "evil.csv");
+    // Write ZIP magic bytes — file-type detects application/zip (not image, not CSV),
+    // so it is rejected by the host-read policy rather than allowed as an image.
+    await fs.writeFile(fakeCsv, Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+    await expect(
+      loadWebMedia(fakeCsv, {
+        maxBytes: 1024 * 1024,
+        localRoots: "any",
+        readFile: async (filePath) => await fs.readFile(filePath),
+        hostReadCapability: true,
+      }),
+    ).rejects.toMatchObject({
+      code: "path-not-allowed",
+    });
+  });
+
+  it.each([
+    { label: "CSV", fileName: "opaque.csv" },
+    { label: "Markdown", fileName: "opaque.md" },
+  ])("rejects opaque non-NUL binary data disguised as %s", async ({ fileName }) => {
+    const fakeTextFile = path.join(fixtureRoot, fileName);
+    const opaqueBinary = Buffer.alloc(9000);
+    for (let i = 0; i < opaqueBinary.length; i += 1) {
+      opaqueBinary[i] = (i % 255) + 1;
+    }
+    await fs.writeFile(fakeTextFile, opaqueBinary);
+    await expect(
+      loadWebMedia(fakeTextFile, {
+        maxBytes: 1024 * 1024,
+        localRoots: "any",
+        readFile: async (filePath) => await fs.readFile(filePath),
+        hostReadCapability: true,
+      }),
+    ).rejects.toMatchObject({
+      code: "path-not-allowed",
+    });
+  });
+
+  it.each([
+    { label: "CSV", fileName: "prefix-tail.csv" },
+    { label: "Markdown", fileName: "prefix-tail.md" },
+  ])(
+    "rejects %s files with a text prefix and binary tail after the old sample window",
+    async ({ fileName }) => {
+      const fakeTextFile = path.join(fixtureRoot, fileName);
+      const textPrefix = Buffer.from(`name,value\n${"row,1\n".repeat(1400)}`, "utf8");
+      expect(textPrefix.length).toBeGreaterThan(8192);
+      const binaryTail = Buffer.from([0x00, 0xff, 0x10, 0x80]);
+      await fs.writeFile(fakeTextFile, Buffer.concat([textPrefix, binaryTail]));
+      await expect(
+        loadWebMedia(fakeTextFile, {
+          maxBytes: 1024 * 1024,
+          localRoots: "any",
+          readFile: async (filePath) => await fs.readFile(filePath),
+          hostReadCapability: true,
+        }),
+      ).rejects.toMatchObject({
+        code: "path-not-allowed",
+      });
+    },
+  );
+
+  it.each([
+    {
+      label: "CSV",
+      fileName: "punctuation.csv",
+      contentType: "text/csv",
+      body: ",,,,,,,,,,\n",
+    },
+    {
+      label: "Markdown",
+      fileName: "punctuation.md",
+      contentType: "text/markdown",
+      body: "---\n***\n> > >\n",
+    },
+  ])(
+    "loads valid punctuation-heavy %s files when host-read capability is enabled",
+    async ({ fileName, contentType, body }) => {
+      const textFile = path.join(fixtureRoot, fileName);
+      await fs.writeFile(textFile, Buffer.from(body, "utf8"));
+      const result = await loadWebMedia(textFile, {
+        maxBytes: 1024 * 1024,
+        localRoots: "any",
+        readFile: async (filePath) => await fs.readFile(filePath),
+        hostReadCapability: true,
+      });
+      expect(result.kind).toBe("document");
+      expect(result.contentType).toBe(contentType);
+    },
+  );
+
+  it.each([
+    {
+      label: "CSV",
+      fileName: "legacy.csv",
+      contentType: "text/csv",
+      body: Buffer.from("caf\xe9,ni\xf1o\n", "latin1"),
+    },
+    {
+      label: "Markdown",
+      fileName: "legacy.md",
+      contentType: "text/markdown",
+      body: Buffer.from("R\xe9sum\xe9\nni\xf1o\n", "latin1"),
+    },
+  ])(
+    "loads valid single-byte encoded %s files when host-read capability is enabled",
+    async ({ fileName, contentType, body }) => {
+      const textFile = path.join(fixtureRoot, fileName);
+      await fs.writeFile(textFile, body);
+      const result = await loadWebMedia(textFile, {
+        maxBytes: 1024 * 1024,
+        localRoots: "any",
+        readFile: async (filePath) => await fs.readFile(filePath),
+        hostReadCapability: true,
+      });
+      expect(result.kind).toBe("document");
+      expect(result.contentType).toBe(contentType);
+    },
+  );
+
+  it.each([
+    { label: "CSV", fileName: "nul-padded.csv" },
+    { label: "Markdown", fileName: "nul-padded.md" },
+  ])("rejects NUL-padded binary data disguised as %s", async ({ fileName }) => {
+    const fakeTextFile = path.join(fixtureRoot, fileName);
+    // Alternating 0x00/0xFF — UTF-8 decode fails (0xFF is invalid UTF-8), then
+    // hasSingleByteTextShape rejects because 0x00 bytes are control chars (< 0x20).
+    const nulPadded = Buffer.alloc(9000);
+    for (let i = 0; i < nulPadded.length; i += 1) {
+      nulPadded[i] = i % 2 === 0 ? 0x00 : 0xff;
+    }
+    await fs.writeFile(fakeTextFile, nulPadded);
+    await expect(
+      loadWebMedia(fakeTextFile, {
+        maxBytes: 1024 * 1024,
+        localRoots: "any",
+        readFile: async (filePath) => await fs.readFile(filePath),
+        hostReadCapability: true,
+      }),
+    ).rejects.toMatchObject({
+      code: "path-not-allowed",
+    });
+  });
+
+  it.each([
+    { label: "CSV", fileName: "bom-binary.csv" },
+    { label: "Markdown", fileName: "bom-binary.md" },
+  ])("rejects UTF-16 BOM-prefixed binary data disguised as %s", async ({ fileName }) => {
+    const fakeTextFile = path.join(fixtureRoot, fileName);
+    // UTF-16LE BOM + repeating 0xFF bytes: if UTF-16 decoding were attempted,
+    // every byte pair would produce a printable code point and pass getTextStats.
+    // With UTF-16 decoding removed, falls through to UTF-8 strict decode (throws
+    // on 0xFF), then hasSingleByteTextShape rejects due to high-byte ratio > 30%.
+    const bom = Buffer.from([0xff, 0xfe]);
+    const garbage = Buffer.alloc(9000, 0xff);
+    await fs.writeFile(fakeTextFile, Buffer.concat([bom, garbage]));
+    await expect(
+      loadWebMedia(fakeTextFile, {
+        maxBytes: 1024 * 1024,
+        localRoots: "any",
+        readFile: async (filePath) => await fs.readFile(filePath),
+        hostReadCapability: true,
+      }),
+    ).rejects.toMatchObject({
+      code: "path-not-allowed",
+    });
+  });
+
+  it.each([
+    { label: "CSV", fileName: "alternating-high.csv" },
+    { label: "Markdown", fileName: "alternating-high.md" },
+  ])("rejects alternating ASCII/high-byte data disguised as %s", async ({ fileName }) => {
+    const fakeTextFile = path.join(fixtureRoot, fileName);
+    // Alternating 0x41 ('A') and 0xFF — exactly 50% ASCII, 50% high bytes.
+    // With the old 50% threshold hasSingleByteTextShape would accept this;
+    // the tightened 70%/30% thresholds must reject it.
+    const mixed = Buffer.alloc(9000);
+    for (let i = 0; i < mixed.length; i += 1) {
+      mixed[i] = i % 2 === 0 ? 0x41 : 0xff;
+    }
+    await fs.writeFile(fakeTextFile, mixed);
+    await expect(
+      loadWebMedia(fakeTextFile, {
+        maxBytes: 1024 * 1024,
+        localRoots: "any",
+        readFile: async (filePath) => await fs.readFile(filePath),
+        hostReadCapability: true,
+      }),
+    ).rejects.toMatchObject({
+      code: "path-not-allowed",
+    });
+  });
+
+  it.each([
+    { label: "CSV", fileName: "high-bytes.csv" },
+    { label: "Markdown", fileName: "high-bytes.md" },
+  ])("rejects high-byte opaque data disguised as %s", async ({ fileName }) => {
+    const fakeTextFile = path.join(fixtureRoot, fileName);
+    const opaqueBinary = Buffer.alloc(9000);
+    for (let i = 0; i < opaqueBinary.length; i += 1) {
+      opaqueBinary[i] = 0xa0 + (i % 96);
+    }
+    await fs.writeFile(fakeTextFile, opaqueBinary);
+    await expect(
+      loadWebMedia(fakeTextFile, {
+        maxBytes: 1024 * 1024,
+        localRoots: "any",
+        readFile: async (filePath) => await fs.readFile(filePath),
+        hostReadCapability: true,
+      }),
+    ).rejects.toMatchObject({
+      code: "path-not-allowed",
+    });
+  });
+
   it("rejects traversal-style canvas media paths before filesystem access", async () => {
     await expect(
       loadWebMedia(`${CANVAS_HOST_PATH}/documents/../collection.media/tiny.png`),

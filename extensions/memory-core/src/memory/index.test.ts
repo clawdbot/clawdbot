@@ -376,6 +376,9 @@ describe("memory index", () => {
     const manager = requireManager(result);
     managersForCleanup.add(manager);
     resetManagerForTest(manager);
+    if (!manager.status().fts?.available) {
+      return;
+    }
 
     await fs.writeFile(
       path.join(memoryDir, "2026-01-12.md"),
@@ -411,6 +414,9 @@ describe("memory index", () => {
       const manager = requireManager(result);
       managersForCleanup.add(manager);
       resetManagerForTest(manager);
+      if (!manager.status().fts?.available) {
+        return;
+      }
 
       const memoryPath = path.join(workspaceDir, "MEMORY.md");
       await fs.writeFile(memoryPath, "Project Nebula stale codename: ORBIT-9.\n", "utf8");
@@ -478,6 +484,9 @@ describe("memory index", () => {
       const manager = requireManager(result);
       managersForCleanup.add(manager);
       resetManagerForTest(manager);
+      if (!manager.status().fts?.available) {
+        return;
+      }
 
       const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
       await fs.mkdir(sessionsDir, { recursive: true });

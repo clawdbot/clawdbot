@@ -4,9 +4,11 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { MatrixQaObservedEvent } from "./events.js";
 import { requestMatrixJson, type MatrixQaFetchLike } from "./request.js";
 import {
+  createMatrixQaRoomObserver,
   primeMatrixQaRoom,
   waitForMatrixQaRoomEvent,
   waitForOptionalMatrixQaRoomEvent,
+  type MatrixQaRoomObserver,
   type MatrixQaRoomEventWaitResult,
 } from "./sync.js";
 import {
@@ -18,7 +20,7 @@ import {
 } from "./topology.js";
 
 export type { MatrixQaObservedEvent } from "./events.js";
-export type { MatrixQaRoomEventWaitResult } from "./sync.js";
+export type { MatrixQaRoomEventWaitResult, MatrixQaRoomObserver } from "./sync.js";
 
 type MatrixQaAuthStage = "m.login.dummy" | "m.login.registration_token";
 
@@ -48,6 +50,18 @@ type MatrixQaSendMessageContent = {
     };
   };
   msgtype: "m.text";
+};
+
+type MatrixQaMediaMessageType = "m.audio" | "m.file" | "m.image" | "m.video";
+
+type MatrixQaSendMediaMessageContent = Omit<MatrixQaSendMessageContent, "msgtype"> & {
+  filename?: string;
+  info?: {
+    mimetype?: string;
+    size?: number;
+  };
+  msgtype: MatrixQaMediaMessageType;
+  url: string;
 };
 
 type MatrixQaSendReactionContent = {
@@ -187,6 +201,96 @@ function buildMatrixQaMessageContent(params: {
   };
 }
 
+function resolveMatrixQaMediaMsgtype(params: {
+  contentType?: string;
+  kind?: "audio" | "file" | "image" | "video";
+}): MatrixQaMediaMessageType {
+  if (params.kind === "audio" || params.contentType?.startsWith("audio/")) {
+    return "m.audio";
+  }
+  if (params.kind === "video" || params.contentType?.startsWith("video/")) {
+    return "m.video";
+  }
+  if (params.kind === "image" || params.contentType?.startsWith("image/")) {
+    return "m.image";
+  }
+  return "m.file";
+}
+
+function buildMatrixQaMediaMessageContent(params: {
+  body?: string;
+  contentType?: string;
+  fileName?: string;
+  kind?: "audio" | "file" | "image" | "video";
+  mentionUserIds?: string[];
+  replyToEventId?: string;
+  size: number;
+  threadRootEventId?: string;
+  url: string;
+}): MatrixQaSendMediaMessageContent {
+  const normalizedBody = params.body?.trim() || params.fileName?.trim() || "(file)";
+  const content = buildMatrixQaMessageContent({
+    body: normalizedBody,
+    mentionUserIds: params.mentionUserIds,
+    replyToEventId: params.replyToEventId,
+    threadRootEventId: params.threadRootEventId,
+  });
+  return {
+    ...content,
+    filename: params.fileName?.trim() || undefined,
+    info: {
+      ...(params.contentType ? { mimetype: params.contentType } : {}),
+      size: params.size,
+    },
+    msgtype: resolveMatrixQaMediaMsgtype({
+      contentType: params.contentType,
+      kind: params.kind,
+    }),
+    url: params.url,
+  };
+}
+
+async function uploadMatrixQaContent(params: {
+  accessToken?: string;
+  baseUrl: string;
+  buffer: Buffer;
+  contentType?: string;
+  fetchImpl: MatrixQaFetchLike;
+  fileName?: string;
+}) {
+  const url = new URL("/_matrix/media/v3/upload", params.baseUrl);
+  const fileName = params.fileName?.trim();
+  if (fileName) {
+    url.searchParams.set("filename", fileName);
+  }
+  const uploadBody: Uint8Array<ArrayBuffer> =
+    params.buffer.buffer instanceof ArrayBuffer
+      ? new Uint8Array(params.buffer.buffer, params.buffer.byteOffset, params.buffer.byteLength)
+      : Uint8Array.from(params.buffer);
+  const response = await params.fetchImpl(url, {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      "content-type": params.contentType ?? "application/octet-stream",
+      ...(params.accessToken ? { authorization: `Bearer ${params.accessToken}` } : {}),
+    },
+    body: uploadBody,
+    signal: AbortSignal.timeout(20_000),
+  });
+  const body = (await response.json().catch(() => ({}))) as {
+    content_uri?: string;
+    error?: string;
+  };
+  if (response.status !== 200) {
+    throw new Error(body.error ?? `Matrix media upload failed with status ${response.status}`);
+  }
+  const contentUri = body.content_uri?.trim();
+  if (!contentUri) {
+    throw new Error("Matrix media upload did not return content_uri.");
+  }
+  return contentUri;
+}
+
 export function resolveNextRegistrationAuth(params: {
   registrationToken: string;
   response: MatrixQaUiaaResponse;
@@ -261,8 +365,10 @@ export function createMatrixQaClient(params: {
   accessToken?: string;
   baseUrl: string;
   fetchImpl?: MatrixQaFetchLike;
+  syncObserver?: MatrixQaRoomObserver;
 }) {
   const fetchImpl = params.fetchImpl ?? fetch;
+  const syncObserver = params.syncObserver;
 
   return {
     async createPrivateRoom(opts: { inviteUserIds: string[]; isDirect?: boolean; name: string }) {
@@ -294,6 +400,9 @@ export function createMatrixQaClient(params: {
       return roomId;
     },
     async primeRoom() {
+      if (syncObserver) {
+        return await syncObserver.prime();
+      }
       return await primeMatrixQaRoom({
         accessToken: params.accessToken,
         baseUrl: params.baseUrl,
@@ -361,6 +470,50 @@ export function createMatrixQaClient(params: {
       const eventId = result.body.event_id?.trim();
       if (!eventId) {
         throw new Error("Matrix sendMessage did not return event_id.");
+      }
+      return eventId;
+    },
+    async sendMediaMessage(opts: {
+      body?: string;
+      buffer: Buffer;
+      contentType?: string;
+      fileName?: string;
+      kind?: "audio" | "file" | "image" | "video";
+      mentionUserIds?: string[];
+      replyToEventId?: string;
+      roomId: string;
+      threadRootEventId?: string;
+    }) {
+      const contentUri = await uploadMatrixQaContent({
+        accessToken: params.accessToken,
+        baseUrl: params.baseUrl,
+        buffer: opts.buffer,
+        contentType: opts.contentType,
+        fetchImpl,
+        fileName: opts.fileName,
+      });
+      const txnId = randomUUID();
+      const result = await requestMatrixJson<{ event_id?: string }>({
+        accessToken: params.accessToken,
+        baseUrl: params.baseUrl,
+        body: buildMatrixQaMediaMessageContent({
+          body: opts.body,
+          contentType: opts.contentType,
+          fileName: opts.fileName,
+          kind: opts.kind,
+          mentionUserIds: opts.mentionUserIds,
+          replyToEventId: opts.replyToEventId,
+          size: opts.buffer.byteLength,
+          threadRootEventId: opts.threadRootEventId,
+          url: contentUri,
+        }),
+        endpoint: `/_matrix/client/v3/rooms/${encodeURIComponent(opts.roomId)}/send/m.room.message/${encodeURIComponent(txnId)}`,
+        fetchImpl,
+        method: "PUT",
+      });
+      const eventId = result.body.event_id?.trim();
+      if (!eventId) {
+        throw new Error("Matrix sendMediaMessage did not return event_id.");
       }
       return eventId;
     },
@@ -433,6 +586,13 @@ export function createMatrixQaClient(params: {
       since?: string;
       timeoutMs: number;
     }) {
+      if (syncObserver) {
+        return syncObserver.waitForOptionalRoomEvent({
+          predicate: opts.predicate,
+          roomId: opts.roomId,
+          timeoutMs: opts.timeoutMs,
+        });
+      }
       return waitForOptionalMatrixQaRoomEvent({
         accessToken: params.accessToken,
         baseUrl: params.baseUrl,
@@ -447,6 +607,13 @@ export function createMatrixQaClient(params: {
       since?: string;
       timeoutMs: number;
     }) {
+      if (syncObserver) {
+        return await syncObserver.waitForRoomEvent({
+          predicate: opts.predicate,
+          roomId: opts.roomId,
+          timeoutMs: opts.timeoutMs,
+        });
+      }
       return await waitForMatrixQaRoomEvent({
         accessToken: params.accessToken,
         baseUrl: params.baseUrl,
@@ -505,42 +672,42 @@ async function provisionMatrixQaTopology(params: {
   fetchImpl?: MatrixQaFetchLike;
   spec: MatrixQaTopologySpec;
 }): Promise<MatrixQaProvisionedTopology> {
-  const rooms = await Promise.all(
-    params.spec.rooms.map(async (room) => {
-      const members = resolveTopologyMemberAccounts(params.accounts, room.members);
-      const creator = members[0];
-      const invitees = members.slice(1);
-      const creatorClient = createMatrixQaClient({
-        accessToken: creator.account.accessToken,
-        baseUrl: params.baseUrl,
-        fetchImpl: params.fetchImpl,
-      });
-      const roomId = await creatorClient.createPrivateRoom({
-        inviteUserIds: invitees.map((entry) => entry.account.userId),
-        isDirect: room.kind === "dm",
-        name: room.name,
-      });
-      await Promise.all(
-        invitees.map((invitee) =>
-          joinRoomWithRetry({
-            accessToken: invitee.account.accessToken,
-            baseUrl: params.baseUrl,
-            fetchImpl: params.fetchImpl,
-            roomId,
-          }),
-        ),
-      );
-      return {
-        key: room.key,
-        kind: room.kind,
-        memberRoles: members.map((entry) => entry.role),
-        memberUserIds: members.map((entry) => entry.account.userId),
-        name: room.name,
-        requireMention: resolveProvisionedRoomRequireMention(room),
-        roomId,
-      };
-    }),
-  );
+  const rooms = [];
+
+  for (const room of params.spec.rooms) {
+    const members = resolveTopologyMemberAccounts(params.accounts, room.members);
+    const creator = members[0];
+    const invitees = members.slice(1);
+    const creatorClient = createMatrixQaClient({
+      accessToken: creator.account.accessToken,
+      baseUrl: params.baseUrl,
+      fetchImpl: params.fetchImpl,
+    });
+    const roomId = await creatorClient.createPrivateRoom({
+      inviteUserIds: invitees.map((entry) => entry.account.userId),
+      isDirect: room.kind === "dm",
+      name: room.name,
+    });
+    await Promise.all(
+      invitees.map((invitee) =>
+        joinRoomWithRetry({
+          accessToken: invitee.account.accessToken,
+          baseUrl: params.baseUrl,
+          fetchImpl: params.fetchImpl,
+          roomId,
+        }),
+      ),
+    );
+    rooms.push({
+      key: room.key,
+      kind: room.kind,
+      memberRoles: members.map((entry) => entry.role),
+      memberUserIds: members.map((entry) => entry.account.userId),
+      name: room.name,
+      requireMention: resolveProvisionedRoomRequireMention(room),
+      roomId,
+    });
+  }
 
   const defaultRoom = findMatrixQaProvisionedRoom(
     {
@@ -628,5 +795,6 @@ export const __testing = {
   buildMatrixQaMessageContent,
   buildMatrixReactionRelation,
   buildMatrixThreadRelation,
+  createMatrixQaRoomObserver,
   resolveNextRegistrationAuth,
 };

@@ -25,6 +25,20 @@ describe("provider auth env trust", () => {
     });
   });
 
+  it("buildApiKeyCredential keeps secret-ref-like input literal in plaintext mode", async () => {
+    const { buildApiKeyCredential } = await import("./provider-auth-helpers.js");
+
+    const credential = buildApiKeyCredential("ollama", "${AWS_SECRET_ACCESS_KEY}", undefined, {
+      secretInputMode: "plaintext",
+    });
+
+    expect(credential).toEqual({
+      type: "api_key",
+      provider: "ollama",
+      key: "${AWS_SECRET_ACCESS_KEY}",
+    });
+  });
+
   it("resolveRefFallbackInput excludes untrusted workspace plugin env vars", async () => {
     const { resolveRefFallbackInput } = await import("./provider-auth-ref.js");
     const config = { plugins: {} };

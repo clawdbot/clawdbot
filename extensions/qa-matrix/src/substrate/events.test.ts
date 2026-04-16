@@ -133,6 +133,53 @@ describe("matrix observed event normalization", () => {
     });
   });
 
+  it("normalizes Matrix image messages with attachment metadata", () => {
+    expect(
+      normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {
+        event_id: "$image",
+        sender: "@sut:matrix-qa.test",
+        type: "m.room.message",
+        content: {
+          body: "Protocol note: generated the QA lighthouse image successfully.",
+          filename: "qa-lighthouse.png",
+          msgtype: "m.image",
+        },
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        kind: "message",
+        eventId: "$image",
+        msgtype: "m.image",
+        attachment: {
+          kind: "image",
+          caption: "Protocol note: generated the QA lighthouse image successfully.",
+          filename: "qa-lighthouse.png",
+        },
+      }),
+    );
+  });
+
+  it("treats filename-like Matrix media bodies as attachment filenames", () => {
+    expect(
+      normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {
+        event_id: "$image",
+        sender: "@sut:matrix-qa.test",
+        type: "m.room.message",
+        content: {
+          body: "qa-lighthouse.png",
+          msgtype: "m.image",
+        },
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        attachment: {
+          kind: "image",
+          filename: "qa-lighthouse.png",
+        },
+      }),
+    );
+  });
+
   it("normalizes membership events with explicit membership kind", () => {
     expect(
       normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {

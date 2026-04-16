@@ -211,4 +211,6 @@ jobs:
           OPENCLAW_INSTALL_NONROOT_SKIP_IMAGE_BUILD: ${{ github.event_name == 'pull_request' && '0' || '1' }}
           OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT: ${{ github.event_name == 'pull_request' && '1' || '0' }}
           OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS: "1"
+          OPENCLAW_INSTALL_SMOKE_UPDATE_DIST_IMAGE: openclaw-dockerfile-smoke:local
+          OPENCLAW_INSTALL_SMOKE_UPDATE_SKIP_LOCAL_BUILD: "1"
         run: bash scripts/test-install-sh-docker.sh

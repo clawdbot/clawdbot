@@ -11,6 +11,29 @@ describe("sanitizeExecApprovalDisplayText", () => {
   ])("sanitizes exec approval display text for %j", (input, expected) => {
     expect(sanitizeExecApprovalDisplayText(input)).toBe(expected);
   });
+
+  it("redacts bearer tokens embedded in commands", () => {
+    const cmd =
+      'curl -H "Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.longtoken.sig" https://api.example.com';
+    const result = sanitizeExecApprovalDisplayText(cmd);
+    expect(result).not.toContain("eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.longtoken.sig");
+    expect(result).toContain("curl");
+    expect(result).toContain("https://api.example.com");
+  });
+
+  it("redacts API keys in environment variable assignments", () => {
+    const cmd = 'API_SECRET="sk-abc123456789012345678" python script.py';
+    const result = sanitizeExecApprovalDisplayText(cmd);
+    expect(result).not.toContain("sk-abc123456789012345678");
+    expect(result).toContain("python script.py");
+  });
+
+  it("redacts GitHub personal access tokens", () => {
+    const cmd = "git clone https://ghp_1234567890abcdefghij1234567890abcdef@github.com/user/repo";
+    const result = sanitizeExecApprovalDisplayText(cmd);
+    expect(result).not.toContain("ghp_1234567890abcdefghij1234567890abcdef");
+    expect(result).toContain("git clone");
+  });
 });
 
 describe("resolveExecApprovalCommandDisplay", () => {

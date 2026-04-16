@@ -10,6 +10,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ImageContent } from "../agents/command/types.js";
 import type { ClientToolDefinition } from "../agents/pi-embedded-runner/run/params.js";
+import { isClientToolNameConflictError } from "../agents/pi-tool-definition-adapter.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
@@ -779,6 +780,17 @@ export async function handleOpenResponsesHttpRequest(
         return true;
       }
       logWarn(`openresponses: non-stream response failed: ${String(err)}`);
+      if (isClientToolNameConflictError(err)) {
+        const response = createResponseResource({
+          id: responseId,
+          model,
+          status: "failed",
+          output: [],
+          error: { code: "invalid_request_error", message: "invalid tool configuration" },
+        });
+        sendJson(res, 400, response);
+        return true;
+      }
       const response = createResponseResource({
         id: responseId,
         model,
@@ -1101,6 +1113,24 @@ export async function handleOpenResponsesHttpRequest(
       logWarn(`openresponses: streaming response failed: ${String(err)}`);
 
       finalUsage = finalUsage ?? createEmptyUsage();
+      if (isClientToolNameConflictError(err)) {
+        const errorResponse = createResponseResource({
+          id: responseId,
+          model,
+          status: "failed",
+          output: [],
+          error: { code: "invalid_request_error", message: "invalid tool configuration" },
+          usage: finalUsage,
+        });
+
+        writeSseEvent(res, { type: "response.failed", response: errorResponse });
+        emitAgentEvent({
+          runId: responseId,
+          stream: "lifecycle",
+          data: { phase: "error" },
+        });
+        return;
+      }
       const errorResponse = createResponseResource({
         id: responseId,
         model,

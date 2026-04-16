@@ -615,7 +615,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
         bodyLines: reportLines,
         nowMs: sweepNowMs,
         timezone: params.config.timezone,
-        storage: params.config.storage ?? { mode: "inline", separateReports: false },
+        storage: params.config.storage ?? { mode: "separate", separateReports: false },
       });
       // Generate dream diary narrative from promoted memories.
       if (params.subagent && (candidates.length > 0 || applied.applied > 0)) {

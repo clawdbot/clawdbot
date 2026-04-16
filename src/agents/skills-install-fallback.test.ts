@@ -120,6 +120,8 @@ describe("skills-install fallback edge cases", () => {
   });
 
   it("handles sudo probe failures for go install without apt fallback", async () => {
+    vi.spyOn(process, "getuid").mockReturnValue(1000);
+
     for (const testCase of [
       {
         label: "sudo returns password required",
@@ -130,8 +132,9 @@ describe("skills-install fallback edge cases", () => {
             stderr: "sudo: a password is required",
           }),
         assert: (result: { message: string; stderr: string }) => {
-          expect(result.message).toContain("sudo");
+          expect(result.message).toContain("sudo is not usable");
           expect(result.message).toContain("https://go.dev/doc/install");
+          expect(result.stderr).toContain("sudo: a password is required");
         },
       },
       {
@@ -142,6 +145,7 @@ describe("skills-install fallback edge cases", () => {
           ),
         assert: (result: { message: string; stderr: string }) => {
           expect(result.message).toContain("sudo is not usable");
+          expect(result.message).toContain("https://go.dev/doc/install");
           expect(result.stderr).toContain("Executable not found");
         },
       },
@@ -167,6 +171,7 @@ describe("skills-install fallback edge cases", () => {
   });
 
   it("status-selected go installer fails gracefully when apt fallback needs sudo", async () => {
+    vi.spyOn(process, "getuid").mockReturnValue(1000);
     mockAvailableBinaries(["apt-get", "sudo"]);
 
     runCommandWithTimeoutMock.mockResolvedValueOnce({
@@ -187,6 +192,7 @@ describe("skills-install fallback edge cases", () => {
 
     expect(result.ok).toBe(false);
     expect(result.message).toContain("sudo is not usable");
+    expect(result.stderr).toContain("sudo: a password is required");
   });
 
   it("uv not installed and no brew returns helpful error without curl auto-install", async () => {

@@ -5,7 +5,7 @@ import type { MatrixCryptoBootstrapApi, MatrixRawEvent } from "./types.js";
 function createBootstrapperDeps() {
   return {
     getUserId: vi.fn(async () => "@bot:example.org"),
-    getPassword: vi.fn(() => "super-secret-password"),
+    getPassword: vi.fn<() => string | undefined>(() => "super-secret-password"),
     getDeviceId: vi.fn(() => "DEVICE123"),
     verificationManager: {
       trackVerificationRequest: vi.fn(),
@@ -275,6 +275,49 @@ describe("MatrixCryptoBootstrapper", () => {
     );
 
     expectSecretStorageRepairRetry(deps, crypto, bootstrapCrossSigning);
+  });
+
+  it("does not mutate secret storage before forced repair fails on password UIA without a password", async () => {
+    const deps = createBootstrapperDeps();
+    deps.getPassword = vi.fn<() => string | undefined>(() => undefined);
+    const bootstrapCrossSigning = vi.fn<
+      ({
+        authUploadDeviceSigningKeys,
+      }: {
+        authUploadDeviceSigningKeys?: <T>(
+          makeRequest: (authData: Record<string, unknown> | null) => Promise<T>,
+        ) => Promise<T>;
+      }) => Promise<void>
+    >(async ({ authUploadDeviceSigningKeys }) => {
+      await authUploadDeviceSigningKeys?.(async (authData) => {
+        if (authData === null) {
+          throw new Error("need auth");
+        }
+        if (authData.type === "m.login.dummy") {
+          throw new Error("dummy rejected");
+        }
+        return undefined;
+      });
+    });
+    const crypto = createCryptoApi({
+      bootstrapCrossSigning,
+      getDeviceVerificationStatus: vi.fn(async () => createVerifiedDeviceStatus()),
+    });
+    const bootstrapper = new MatrixCryptoBootstrapper(
+      deps as unknown as MatrixCryptoBootstrapperDeps<MatrixRawEvent>,
+    );
+
+    await expect(
+      bootstrapper.bootstrap(crypto, {
+        strict: true,
+        forceResetCrossSigning: true,
+        allowSecretStorageRecreateWithoutRecoveryKey: true,
+      }),
+    ).rejects.toThrow(
+      "Matrix cross-signing key upload requires UIA; provide matrix.password for m.login.password fallback",
+    );
+
+    expect(deps.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey).not.toHaveBeenCalled();
   });
 
   it("fails in strict mode when cross-signing keys are still unpublished", async () => {

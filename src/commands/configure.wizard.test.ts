@@ -109,6 +109,15 @@ vi.mock("./onboard-search.js", () => ({
   setupSearch: mocks.setupSearch,
 }));
 
+vi.mock("../config/mutate.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/mutate.js")>("../config/mutate.js");
+  return {
+    ...actual,
+    ConfigMutationConflictError: actual.ConfigMutationConflictError,
+  };
+});
+
+import { ConfigMutationConflictError } from "../config/mutate.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { runConfigureWizard } from "./configure.wizard.js";
 
@@ -450,5 +459,124 @@ describe("runConfigureWizard", () => {
       }),
     );
     expect(mocks.setupSearch).toHaveBeenCalledOnce();
+  });
+
+  it("retries without dropping nested plugin config written during wizard flow (issue #64188)", async () => {
+    const baseConfig: OpenClawConfig = {
+      plugins: {
+        entries: {
+          "github-copilot": {
+            enabled: false,
+            config: {
+              region: "us-east-1",
+            },
+          },
+        },
+      },
+    };
+    setupBaseWizardState(baseConfig);
+    queueWizardPrompts({
+      select: ["local"],
+      confirm: [],
+    });
+
+    // Simulate plugin mutation: first replaceConfigFile call throws conflict,
+    // second call after hash refresh succeeds
+    let callCount = 0;
+    const originalHash = "hash-before-plugin-mutation";
+    const newHashAfterMutation = "hash-after-plugin-mutation";
+    const finalHashAfterWrite = "hash-after-wizard-write";
+
+    mocks.replaceConfigFile.mockImplementation(
+      async (params: { nextConfig: unknown; baseHash?: string }) => {
+        callCount++;
+        if (callCount === 1) {
+          // First call: simulate plugin mutating config during promptAuthConfig
+          expect(params.baseHash).toBe(originalHash);
+          throw new ConfigMutationConflictError("config changed since last load", {
+            currentHash: newHashAfterMutation,
+          });
+        }
+        // Second call: succeeds with refreshed hash
+        expect(params.baseHash).toBe(newHashAfterMutation);
+        await mocks.writeConfigFile(params.nextConfig);
+      },
+    );
+
+    // Mock readConfigFileSnapshot to return different hashes/configs on each call
+    mocks.readConfigFileSnapshot
+      .mockResolvedValueOnce({
+        ...EMPTY_CONFIG_SNAPSHOT,
+        hash: originalHash,
+        config: baseConfig,
+        sourceConfig: baseConfig,
+      })
+      .mockResolvedValueOnce({
+        ...EMPTY_CONFIG_SNAPSHOT,
+        hash: newHashAfterMutation,
+        config: {
+          plugins: {
+            entries: {
+              "github-copilot": {
+                enabled: false,
+                config: {
+                  region: "us-east-1",
+                  accessToken: "plugin-wrote-this",
+                },
+              },
+            },
+          },
+        },
+        sourceConfig: {
+          plugins: {
+            entries: {
+              "github-copilot": {
+                enabled: false,
+                config: {
+                  region: "us-east-1",
+                  accessToken: "plugin-wrote-this",
+                },
+              },
+            },
+          },
+        },
+        valid: true,
+      })
+      .mockResolvedValueOnce({
+        ...EMPTY_CONFIG_SNAPSHOT,
+        hash: finalHashAfterWrite,
+        config: {},
+      });
+
+    await runConfigureWizard({ command: "configure", sections: ["workspace"] }, createRuntime());
+
+    // Verify retry happened: first call threw, second call succeeded
+    expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(2);
+    expect(mocks.writeConfigFile).toHaveBeenCalledTimes(1);
+    // Verify readConfigFileSnapshot was called: initial read, after conflict, after successful write
+    expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(3);
+
+    // Verify plugin-written nested config survived the retry merge.
+    const retryCall = mocks.replaceConfigFile.mock.calls[1][0] as {
+      nextConfig: Record<string, unknown>;
+    };
+    expect(retryCall.nextConfig).toMatchObject({
+      agents: {
+        defaults: {
+          workspace: expect.stringContaining("/.openclaw/workspace"),
+        },
+      },
+      plugins: {
+        entries: {
+          "github-copilot": {
+            enabled: false,
+            config: {
+              region: "us-east-1",
+              accessToken: "plugin-wrote-this",
+            },
+          },
+        },
+      },
+    });
   });
 });

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/qa-matrix",
-  "version": "2026.4.12",
+  "version": "2026.4.15-beta.1",
   "private": true,
   "description": "OpenClaw Matrix QA runner plugin",
   "type": "module",
@@ -9,7 +9,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.12"
+    "openclaw": ">=2026.4.15-beta.1"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -21,7 +21,7 @@
       "./index.ts"
     ],
     "compat": {
-      "pluginApi": ">=2026.4.12"
+      "pluginApi": ">=2026.4.15-beta.1"
     }
   }
 }

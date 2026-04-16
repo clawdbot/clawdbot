@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/moonshot-provider",
-  "version": "2026.4.12",
+  "version": "2026.4.15-beta.1",
   "private": true,
   "description": "OpenClaw Moonshot provider plugin",
   "type": "module",

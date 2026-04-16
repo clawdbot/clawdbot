@@ -12,6 +12,7 @@ import {
   closeSync,
   existsSync,
   lstatSync,
+  mkdirSync,
   openSync,
   readdirSync,
   readFileSync,
@@ -33,6 +34,14 @@ const DEFAULT_EXTENSIONS_DIR = join(__dirname, "..", "dist", "extensions");
 const DEFAULT_PACKAGE_ROOT = join(__dirname, "..");
 const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
 const DIST_INVENTORY_PATH = "dist/postinstall-inventory.json";
+const LEGACY_UPDATE_COMPAT_SIDECARS = [
+  {
+    path: "dist/extensions/qa-lab/runtime-api.js",
+    removedPrefix: "dist/extensions/qa-lab/",
+    content:
+      "// Compatibility stub for older OpenClaw updaters. QA Lab is not packaged.\nexport {};\n",
+  },
+];
 const BAILEYS_MEDIA_FILE = join(
   "node_modules",
   "@whiskeysockets",
@@ -294,6 +303,30 @@ export function pruneInstalledPackageDist(params = {}) {
     log.log(`[postinstall] pruned stale dist files: ${removed.join(", ")}`);
   }
   return removed;
+}
+
+export function restoreLegacyUpdaterCompatSidecars(params = {}) {
+  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
+  const writeFile = params.writeFileSync ?? writeFileSync;
+  const makeDirectory = params.mkdirSync ?? mkdirSync;
+  const log = params.log ?? console;
+  const restored = [];
+
+  for (const sidecar of LEGACY_UPDATE_COMPAT_SIDECARS) {
+    // Older npm updater builds verify this exact sidecar after npm has already
+    // replaced the package. npm may remove stale QA Lab files before this
+    // postinstall hook runs, so this must be generated independently of prune
+    // results. The tarball and dist inventory still omit QA Lab.
+    const sidecarPath = join(packageRoot, sidecar.path);
+    makeDirectory(dirname(sidecarPath), { recursive: true });
+    writeFile(sidecarPath, sidecar.content, "utf8");
+    restored.push(sidecar.path);
+  }
+
+  if (restored.length > 0) {
+    log.log(`[postinstall] restored legacy updater compat sidecars: ${restored.join(", ")}`);
+  }
+  return restored;
 }
 
 function dependencySentinelPath(depName) {
@@ -650,12 +683,19 @@ export function runBundledPluginPostinstall(params = {}) {
     });
     return;
   }
-  pruneInstalledPackageDist({
+  const prunedDistFiles = pruneInstalledPackageDist({
     packageRoot,
     existsSync: pathExists,
     readFileSync: params.readFileSync,
     readdirSync: params.readdirSync,
     rmSync: params.rmSync,
+    log,
+  });
+  restoreLegacyUpdaterCompatSidecars({
+    packageRoot,
+    removedFiles: prunedDistFiles,
+    mkdirSync: params.mkdirSync,
+    writeFileSync: params.writeFileSync,
     log,
   });
   if (

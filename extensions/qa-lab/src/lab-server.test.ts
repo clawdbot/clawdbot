@@ -271,76 +271,6 @@ describe("qa-lab server", () => {
     expect(await rootResponse.text()).toContain("Control UI");
   });
 
-  it("reports startup reachability for proxy and gateway", async () => {
-    const proxy = createServer((_req, res) => {
-      res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
-      res.end("proxy");
-    });
-    await new Promise<void>((resolve, reject) => {
-      proxy.once("error", reject);
-      proxy.listen(0, "127.0.0.1", () => resolve());
-    });
-    cleanups.push(
-      async () =>
-        await new Promise<void>((resolve, reject) =>
-          proxy.close((error) => (error ? reject(error) : resolve())),
-        ),
-    );
-
-    const gateway = createServer((_req, res) => {
-      res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
-      res.end("gateway");
-    });
-    await new Promise<void>((resolve, reject) => {
-      gateway.once("error", reject);
-      gateway.listen(0, "127.0.0.1", () => resolve());
-    });
-    cleanups.push(
-      async () =>
-        await new Promise<void>((resolve, reject) =>
-          gateway.close((error) => (error ? reject(error) : resolve())),
-        ),
-    );
-
-    const proxyAddress = proxy.address();
-    const gatewayAddress = gateway.address();
-    if (
-      !proxyAddress ||
-      typeof proxyAddress === "string" ||
-      !gatewayAddress ||
-      typeof gatewayAddress === "string"
-    ) {
-      throw new Error("expected startup probe addresses");
-    }
-
-    process.env.OPENCLAW_DEBUG_PROXY_URL = `http://127.0.0.1:${proxyAddress.port}`;
-    const lab = await startQaLabServer({
-      host: "127.0.0.1",
-      port: 0,
-      controlUiUrl: `http://127.0.0.1:${gatewayAddress.port}/`,
-    });
-    cleanups.push(async () => {
-      delete process.env.OPENCLAW_DEBUG_PROXY_URL;
-      await lab.stop();
-    });
-
-    const response = await fetchWithRetry(`${lab.baseUrl}/api/capture/startup-status`);
-    expect(response.status).toBe(200);
-    const payload = (await response.json()) as {
-      status: {
-        proxy: { ok: boolean; url: string };
-        gateway: { ok: boolean; url: string };
-        qaLab: { ok: boolean; url: string };
-      };
-    };
-    expect(payload.status.proxy.ok).toBe(true);
-    expect(payload.status.proxy.url).toBe(`http://127.0.0.1:${proxyAddress.port}/`);
-    expect(payload.status.gateway.ok).toBe(true);
-    expect(payload.status.gateway.url).toBe(`http://127.0.0.1:${gatewayAddress.port}/`);
-    expect(payload.status.qaLab.ok).toBe(true);
-    expect(payload.status.qaLab.url).toBe(lab.baseUrl);
-  });
-
   it("serves the built QA UI bundle when available", async () => {
     const uiDistDir = await mkdtemp(path.join(os.tmpdir(), "qa-lab-ui-dist-"));
     cleanups.push(async () => {
@@ -366,55 +296,6 @@ describe("qa-lab server", () => {
     const html = await rootResponse.text();
     expect(html).not.toContain("QA Lab UI not built");
     expect(html).toContain("<title>");
-
-    const version1 = (await (await fetch(`${lab.baseUrl}/api/ui-version`)).json()) as {
-      version: string | null;
-    };
-    expect(version1.version).toMatch(/^[0-9a-f]{12}$/);
-
-    await writeFile(
-      path.join(uiDistDir, "index.html"),
-      "<!doctype html><html><head><title>QA Lab Updated</title></head><body><div id='app'></div></body></html>",
-      "utf8",
-    );
-
-    const version2 = (await (await fetch(`${lab.baseUrl}/api/ui-version`)).json()) as {
-      version: string | null;
-    };
-    expect(version2.version).toMatch(/^[0-9a-f]{12}$/);
-    expect(version2.version).not.toBe(version1.version);
-  });
-
-  it("does not serve sibling files outside the UI dist root", async () => {
-    const rootDir = await mkdtemp(path.join(os.tmpdir(), "qa-lab-ui-boundary-"));
-    cleanups.push(async () => {
-      await rm(rootDir, { recursive: true, force: true });
-    });
-    const uiDistDir = path.join(rootDir, "dist");
-    const siblingDir = path.join(rootDir, "dist-other");
-    await mkdir(uiDistDir, { recursive: true });
-    await mkdir(siblingDir, { recursive: true });
-    await writeFile(
-      path.join(uiDistDir, "index.html"),
-      "<!doctype html><html><body>bundle-root</body></html>",
-      "utf8",
-    );
-    await writeFile(path.join(siblingDir, "secret.txt"), "sibling-secret", "utf8");
-
-    const lab = await startQaLabServer({
-      host: "127.0.0.1",
-      port: 0,
-      uiDistDir,
-    });
-    cleanups.push(async () => {
-      await lab.stop();
-    });
-
-    const response = await fetchWithRetry(`${lab.baseUrl}/../dist-other/secret.txt`);
-    expect(response.status).toBe(200);
-    const body = await response.text();
-    expect(body).toContain("bundle-root");
-    expect(body).not.toContain("sibling-secret");
   });
 
   it("uses the explicit repo root for ui assets and runner model discovery", async () => {

@@ -189,6 +189,79 @@ describe("matrix driver client", () => {
     ).resolves.toBe("$reaction-1");
   });
 
+  it("uploads Matrix media before sending the room event", async () => {
+    const requests: Array<{
+      body: RequestInit["body"];
+      headers: HeadersInit | undefined;
+      url: string;
+    }> = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      requests.push({
+        body: init?.body,
+        headers: init?.headers,
+        url: resolveRequestUrl(input),
+      });
+      if (requests.length === 1) {
+        return new Response(
+          JSON.stringify({ content_uri: "mxc://matrix-qa.test/red-top-blue-bottom" }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      return new Response(JSON.stringify({ event_id: "$media-1" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    const client = createMatrixQaClient({
+      accessToken: "token",
+      baseUrl: "http://127.0.0.1:28008/",
+      fetchImpl,
+    });
+
+    await expect(
+      client.sendMediaMessage({
+        body: "@sut:matrix-qa.test Image understanding check",
+        buffer: Buffer.from("png-bytes"),
+        contentType: "image/png",
+        fileName: "red-top-blue-bottom.png",
+        kind: "image",
+        mentionUserIds: ["@sut:matrix-qa.test"],
+        roomId: "!room:matrix-qa.test",
+      }),
+    ).resolves.toBe("$media-1");
+
+    expect(requests).toHaveLength(2);
+    expect(requests[0]?.url).toBe(
+      "http://127.0.0.1:28008/_matrix/media/v3/upload?filename=red-top-blue-bottom.png",
+    );
+    expect(requests[0]?.body).toBeInstanceOf(Uint8Array);
+    expect(Array.from(requests[0]?.body as Uint8Array)).toEqual(
+      Array.from(Buffer.from("png-bytes")),
+    );
+    expect(requests[1]?.url).toContain(
+      "/_matrix/client/v3/rooms/!room%3Amatrix-qa.test/send/m.room.message/",
+    );
+    expect(
+      typeof requests[1]?.body === "string" ? JSON.parse(requests[1].body) : requests[1]?.body,
+    ).toMatchObject({
+      body: "@sut:matrix-qa.test Image understanding check",
+      msgtype: "m.image",
+      filename: "red-top-blue-bottom.png",
+      url: "mxc://matrix-qa.test/red-top-blue-bottom",
+      info: {
+        mimetype: "image/png",
+        size: "png-bytes".length,
+      },
+      "m.mentions": {
+        user_ids: ["@sut:matrix-qa.test"],
+      },
+    });
+  });
+
   it("provisions a three-member room so Matrix QA runs in a group context", async () => {
     const createRoomBodies: Array<Record<string, unknown>> = [];
     const fetchImpl: typeof fetch = async (input, init) => {

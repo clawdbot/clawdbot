@@ -31,6 +31,10 @@ export {
   DEFAULT_MISTRAL_EMBEDDING_MODEL,
 } from "./host/embeddings-mistral.js";
 export {
+  createGitHubCopilotEmbeddingProvider,
+  type GitHubCopilotEmbeddingClient,
+} from "./host/embeddings-github-copilot.js";
+export {
   createOllamaEmbeddingProvider,
   DEFAULT_OLLAMA_EMBEDDING_MODEL,
 } from "./host/embeddings-ollama.js";

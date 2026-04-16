@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { renderQaMarkdownReport } from "../../report.js";
 import { __testing as liveTesting } from "./runtime.js";
 
 afterEach(() => {
@@ -228,6 +229,18 @@ describe("matrix live qa runtime", () => {
         scenarios: [],
         startedAt: "2026-04-10T10:00:00.000Z",
         sutAccountId: "sut",
+        timings: {
+          artifactWriteMs: 5,
+          canaryMs: 40,
+          harnessBootMs: 100,
+          initialGatewayBootMs: 200,
+          provisioningMs: 300,
+          scenarioGatewayBootMs: 50,
+          scenarioRestartGatewayMs: 60,
+          scenarioTransportInterruptMs: 70,
+          scenarios: [],
+          totalMs: 825,
+        },
         userIds: {
           driver: "@driver:matrix-qa.test",
           observer: "@observer:matrix-qa.test",
@@ -300,6 +313,27 @@ describe("matrix live qa runtime", () => {
         ],
         startedAt: "2026-04-10T10:00:00.000Z",
         sutAccountId: "sut",
+        timings: {
+          artifactWriteMs: 5,
+          canaryMs: 40,
+          harnessBootMs: 100,
+          initialGatewayBootMs: 200,
+          provisioningMs: 300,
+          scenarioGatewayBootMs: 50,
+          scenarioRestartGatewayMs: 60,
+          scenarioTransportInterruptMs: 70,
+          scenarios: [
+            {
+              durationMs: 80,
+              gatewayBootMs: 0,
+              gatewayRestartMs: 0,
+              id: "matrix-mention-gating",
+              title: "Matrix room message without mention does not trigger",
+              transportInterruptMs: 0,
+            },
+          ],
+          totalMs: 905,
+        },
         userIds: {
           driver: "@driver:matrix-qa.test",
           observer: "@observer:matrix-qa.test",
@@ -322,7 +356,126 @@ describe("matrix live qa runtime", () => {
           },
         },
       ],
+      timings: {
+        totalMs: 905,
+      },
     });
+  });
+
+  it("keeps failing Matrix scenario details and timings complete in summary + report output", () => {
+    const summary = liveTesting.buildMatrixQaSummary({
+      artifactPaths: {
+        observedEvents: "/tmp/observed.json",
+        report: "/tmp/report.md",
+        summary: "/tmp/summary.json",
+      },
+      checks: [{ name: "Matrix harness ready", status: "pass" }],
+      config: {
+        default: liveTesting.buildMatrixQaConfigSnapshot({
+          driverUserId: "@driver:matrix-qa.test",
+          observerUserId: "@observer:matrix-qa.test",
+          sutUserId: "@sut:matrix-qa.test",
+          topology: {
+            defaultRoomId: "!room:matrix-qa.test",
+            defaultRoomKey: "main",
+            rooms: [],
+          },
+        }),
+        scenarios: [],
+      },
+      finishedAt: "2026-04-10T10:05:00.000Z",
+      harness: {
+        baseUrl: "http://127.0.0.1:28008/",
+        composeFile: "/tmp/docker-compose.yml",
+        dmRoomIds: [],
+        image: "ghcr.io/matrix-construct/tuwunel:v1.5.1",
+        roomId: "!room:matrix-qa.test",
+        roomIds: ["!room:matrix-qa.test"],
+        serverName: "matrix-qa.test",
+      },
+      observedEventCount: 6,
+      scenarios: [
+        {
+          id: "matrix-reaction-not-a-reply",
+          title: "Matrix reactions do not trigger a fresh bot reply",
+          status: "fail",
+          details: [
+            "unexpected SUT reply after reaction from @driver:matrix-qa.test",
+            "reaction event: $reaction",
+            "unexpected reply event: $reply",
+          ].join("\n"),
+        },
+      ],
+      startedAt: "2026-04-10T10:00:00.000Z",
+      sutAccountId: "sut",
+      timings: {
+        artifactWriteMs: 5,
+        canaryMs: 40,
+        harnessBootMs: 100,
+        initialGatewayBootMs: 200,
+        provisioningMs: 300,
+        scenarioGatewayBootMs: 50,
+        scenarioRestartGatewayMs: 60,
+        scenarioTransportInterruptMs: 70,
+        scenarios: [
+          {
+            durationMs: 8_000,
+            gatewayBootMs: 0,
+            gatewayRestartMs: 0,
+            id: "matrix-reaction-not-a-reply",
+            title: "Matrix reactions do not trigger a fresh bot reply",
+            transportInterruptMs: 0,
+          },
+        ],
+        totalMs: 825,
+      },
+      userIds: {
+        driver: "@driver:matrix-qa.test",
+        observer: "@observer:matrix-qa.test",
+        sut: "@sut:matrix-qa.test",
+      },
+    });
+
+    expect(summary).toMatchObject({
+      counts: {
+        total: 2,
+        passed: 1,
+        failed: 1,
+      },
+      scenarios: [
+        {
+          id: "matrix-reaction-not-a-reply",
+          status: "fail",
+          details: expect.stringContaining("reaction event: $reaction"),
+        },
+      ],
+      timings: {
+        scenarios: [
+          {
+            id: "matrix-reaction-not-a-reply",
+            durationMs: 8_000,
+          },
+        ],
+      },
+    });
+
+    const report = renderQaMarkdownReport({
+      title: "Matrix QA Report",
+      startedAt: new Date(summary.startedAt),
+      finishedAt: new Date(summary.finishedAt),
+      checks: summary.checks,
+      scenarios: summary.scenarios.map((scenario) => ({
+        details: scenario.details,
+        name: scenario.title,
+        status: scenario.status,
+      })),
+      notes: [`observed events: ${summary.observedEventsPath}`],
+    });
+
+    expect(report).toContain("### Matrix reactions do not trigger a fresh bot reply");
+    expect(report).toContain("unexpected SUT reply after reaction from @driver:matrix-qa.test");
+    expect(report).toContain("reaction event: $reaction");
+    expect(report).toContain("observed events: /tmp/observed.json");
   });
 
   it("batches Matrix scenarios by config key while preserving stable in-group order", () => {

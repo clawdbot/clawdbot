@@ -2,12 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  isWhatsAppGroupJid,
-  normalizeWhatsAppTarget,
-} from "../../test/helpers/channels/command-contract.js";
-import { whatsappOutbound } from "../../test/helpers/infra/deliver-test-outbounds.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
+import type { ChannelOutboundAdapter } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAgentIdFromSessionKey,
@@ -39,6 +35,85 @@ let testRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
 let fixtureRoot = "";
 let fixtureCount = 0;
 
+function normalizeWhatsAppTargetForTest(raw: string): string | null {
+  const trimmed = raw
+    .trim()
+    .replace(/^whatsapp:/i, "")
+    .trim();
+  if (!trimmed) {
+    return null;
+  }
+  const lowered = trimmed.toLowerCase().replace(/\s+/gu, "");
+  if (/^\d+@g\.us$/u.test(lowered)) {
+    return lowered;
+  }
+  const digits = trimmed.replace(/\D/gu, "");
+  const normalized = digits ? `+${digits}` : "";
+  return /^\+\d{7,15}$/u.test(normalized) ? normalized : null;
+}
+
+function isWhatsAppGroupJidForTest(raw: string): boolean {
+  return /^\d+@g\.us$/u.test(raw.trim().toLowerCase());
+}
+
+const whatsappOutboundForTest: ChannelOutboundAdapter = {
+  deliveryMode: "gateway",
+  sendText: async ({ cfg, to, text, accountId, deps }) => {
+    const sender = deps?.whatsapp as
+      | ((
+          to: string,
+          text: string,
+          options?: Record<string, unknown>,
+        ) => Promise<{ messageId: string } & Record<string, unknown>>)
+      | undefined;
+    if (!sender) {
+      throw new Error("missing whatsapp sender");
+    }
+    const result = await sender(to, text, {
+      verbose: false,
+      cfg,
+      accountId: accountId ?? undefined,
+    });
+    return {
+      channel: "whatsapp",
+      ...result,
+    };
+  },
+  sendMedia: async ({
+    cfg,
+    to,
+    text,
+    mediaUrl,
+    mediaLocalRoots,
+    mediaReadFile,
+    accountId,
+    deps,
+  }) => {
+    const sender = deps?.whatsapp as
+      | ((
+          to: string,
+          text: string,
+          options?: Record<string, unknown>,
+        ) => Promise<{ messageId: string } & Record<string, unknown>>)
+      | undefined;
+    if (!sender) {
+      throw new Error("missing whatsapp sender");
+    }
+    const result = await sender(to, text, {
+      verbose: false,
+      cfg,
+      mediaUrl,
+      mediaLocalRoots,
+      mediaReadFile,
+      accountId: accountId ?? undefined,
+    });
+    return {
+      channel: "whatsapp",
+      ...result,
+    };
+  },
+};
+
 function resolveWhatsAppTargetForTest(params: {
   to: string | null | undefined;
   allowFrom: Array<string | number> | null | undefined;
@@ -50,9 +125,9 @@ function resolveWhatsAppTargetForTest(params: {
   const hasWildcard = allowListRaw.includes("*");
   const allowList = allowListRaw
     .filter((entry) => entry !== "*")
-    .map((entry) => normalizeWhatsAppTarget(entry))
+    .map((entry) => normalizeWhatsAppTargetForTest(entry))
     .filter((entry): entry is string => Boolean(entry));
-  const normalizedTarget = normalizeWhatsAppTarget(trimmed);
+  const normalizedTarget = normalizeWhatsAppTargetForTest(trimmed);
 
   if (!normalizedTarget) {
     return {
@@ -60,7 +135,7 @@ function resolveWhatsAppTargetForTest(params: {
       error: new Error('Missing target for WhatsApp; expected "<E.164|group JID>".'),
     };
   }
-  if (isWhatsAppGroupJid(normalizedTarget)) {
+  if (isWhatsAppGroupJidForTest(normalizedTarget)) {
     return { ok: true as const, to: normalizedTarget };
   }
   if (hasWildcard || allowList.length === 0 || allowList.includes(normalizedTarget)) {
@@ -86,7 +161,7 @@ beforeAll(async () => {
   const whatsappPlugin = createOutboundTestPlugin({
     id: "whatsapp",
     outbound: {
-      ...whatsappOutbound,
+      ...whatsappOutboundForTest,
       resolveTarget: ({ to, allowFrom }) =>
         resolveWhatsAppTargetForTest({
           to,

@@ -6,6 +6,7 @@ export {
   emitAcpLifecycleError,
   emitAcpLifecycleStart,
   persistAcpTurnTranscript,
+  persistCliTurnTranscript,
   runAgentAttempt,
   sessionFileHasContent,
 } from "./attempt-execution.js";

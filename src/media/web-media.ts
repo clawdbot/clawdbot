@@ -24,6 +24,7 @@ import {
   extensionForMime,
   getFileExtension,
   kindFromMime,
+  mimeTypeFromFilePath,
   normalizeMimeType,
 } from "./mime.js";
 
@@ -83,8 +84,94 @@ const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "text/csv",
+  "text/markdown",
 ]);
+// file-type returns undefined (no magic bytes) for plain-text formats like CSV and
+// Markdown, so host-read needs an explicit "this really decodes as text" fallback.
+const HOST_READ_TEXT_PLAIN_ALIASES = new Set(["text/csv", "text/markdown"]);
 const MB = 1024 * 1024;
+
+function getTextStats(text: string): { printableRatio: number } {
+  if (!text) {
+    return { printableRatio: 0 };
+  }
+  let printable = 0;
+  let control = 0;
+  for (const char of text) {
+    const code = char.codePointAt(0) ?? 0;
+    if (code === 9 || code === 10 || code === 13 || code === 32) {
+      printable += 1;
+      continue;
+    }
+    if (code < 32 || (code >= 0x7f && code <= 0x9f)) {
+      control += 1;
+      continue;
+    }
+    printable += 1;
+  }
+  const total = printable + control;
+  if (total === 0) {
+    return { printableRatio: 0 };
+  }
+  return { printableRatio: printable / total };
+}
+
+function hasSingleByteTextShape(buffer: Buffer): boolean {
+  if (buffer.length === 0) {
+    return true;
+  }
+  let asciiText = 0;
+  let control = 0;
+  for (const byte of buffer) {
+    if (byte === 9 || byte === 10 || byte === 13 || (byte >= 0x20 && byte <= 0x7e)) {
+      asciiText += 1;
+      continue;
+    }
+    if (byte < 0x20 || byte === 0x7f) {
+      control += 1;
+    }
+  }
+  const total = buffer.length;
+  const highBytes = total - asciiText - control;
+  return control === 0 && asciiText / total >= 0.7 && highBytes / total <= 0.3;
+}
+
+function decodeHostReadText(buffer: Buffer): string | undefined {
+  if (buffer.length === 0) {
+    return "";
+  }
+  // UTF-16 decoding is intentionally omitted: TextDecoder("utf-16le/be") never throws on
+  // arbitrary byte pairs, so every byte pair is a valid (if meaningless) Unicode scalar —
+  // an attacker can prepend a BOM and pass getTextStats with printableRatio≈1.0 on pure
+  // binary garbage. The Latin-1 path below already covers the most common non-UTF-8
+  // real-world case (Excel CSV exports with accented chars like é, ñ) while remaining
+  // safe because hasSingleByteTextShape gates on byte shape *before* any decode.
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+  } catch {
+    if (!hasSingleByteTextShape(buffer)) {
+      return undefined;
+    }
+    // WHATWG latin1 decodes common Excel-style single-byte exports via Windows-1252 mapping.
+    return new TextDecoder("latin1").decode(buffer);
+  }
+}
+
+function isValidatedHostReadText(buffer?: Buffer): boolean {
+  if (!buffer) {
+    return false;
+  }
+  if (buffer.length === 0) {
+    return true;
+  }
+  const text = decodeHostReadText(buffer);
+  if (text === undefined) {
+    return false;
+  }
+  const { printableRatio } = getTextStats(text);
+  return printableRatio > 0.95;
+}
 
 function formatMb(bytes: number, digits = 2): string {
   return (bytes / MB).toFixed(digits);
@@ -113,7 +200,23 @@ function assertHostReadMediaAllowed(params: {
   contentType?: string;
   filePath?: string;
   kind: MediaKind | undefined;
+  buffer?: Buffer;
 }): void {
+  const declaredMime = normalizeMimeType(mimeTypeFromFilePath(params.filePath));
+  const normalizedMime = normalizeMimeType(params.contentType);
+  // For extension-declared plain-text aliases such as .csv/.md, trust only the
+  // text validator path. Some opaque blobs can still produce bogus binary MIME
+  // hits (for example BOM-prefixed 0xFF data sniffing as audio/mpeg), and
+  // host-read should reject those instead of returning early on the sniff.
+  if (declaredMime && HOST_READ_TEXT_PLAIN_ALIASES.has(declaredMime)) {
+    if (!params.sniffedContentType && params.buffer && isValidatedHostReadText(params.buffer)) {
+      return;
+    }
+    throw new LocalMediaAccessError(
+      "path-not-allowed",
+      "hostReadCapability permits only validated plain-text CSV/Markdown documents for local reads",
+    );
+  }
   const sniffedKind = kindFromMime(params.sniffedContentType);
   if (sniffedKind === "image" || sniffedKind === "audio" || sniffedKind === "video") {
     return;
@@ -132,7 +235,20 @@ function assertHostReadMediaAllowed(params: {
   ) {
     return;
   }
-  const normalizedMime = normalizeMimeType(params.contentType);
+  // CSV / Markdown exception: file-type v22 returns undefined (not "text/plain") for
+  // plain-text buffers that have no binary magic bytes. Allow these formats when:
+  // - sniffedMime is undefined (no binary signature detected by file-type)
+  // - The extension-derived MIME is text/csv or text/markdown (operator intent)
+  // - The buffer decodes as actual text instead of opaque binary bytes
+  if (
+    !sniffedMime &&
+    normalizedMime &&
+    HOST_READ_TEXT_PLAIN_ALIASES.has(normalizedMime) &&
+    params.buffer &&
+    isValidatedHostReadText(params.buffer)
+  ) {
+    return;
+  }
   if (
     params.kind === "document" &&
     normalizedMime &&
@@ -392,6 +508,7 @@ async function loadWebMediaInternal(
       contentType: mime,
       filePath: mediaUrl,
       kind,
+      buffer: data,
     });
   }
   let fileName = path.basename(mediaUrl) || undefined;

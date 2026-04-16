@@ -254,6 +254,18 @@ describe("safeFetch", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("blocks private hosts with the default resolver", async () => {
+    const fetchMock = vi.fn();
+    await expect(
+      safeFetch({
+        url: "https://localhost/file.pdf",
+        allowHosts: ["localhost"],
+        fetchFn: fetchMock as unknown as typeof fetch,
+      }),
+    ).rejects.toThrow("Initial download URL blocked");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("blocks when initial URL DNS resolution fails", async () => {
     const fetchMock = vi.fn();
     await expect(

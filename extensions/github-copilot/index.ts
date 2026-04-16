@@ -1,10 +1,8 @@
 import { definePluginEntry, type ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  coerceSecretRef,
-  ensureAuthProfileStore,
-  listProfilesForProvider,
-} from "openclaw/plugin-sdk/provider-auth";
+import { ensureAuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import { resolveFirstGithubToken } from "./auth.js";
+import { githubCopilotMemoryEmbeddingProviderAdapter } from "./embeddings.js";
 import { PROVIDER_ID, resolveCopilotForwardCompatModel } from "./models.js";
 import { buildGithubCopilotReplayPolicy } from "./replay-policy.js";
 import { wrapCopilotProviderStream } from "./stream.js";
@@ -27,39 +25,6 @@ export default definePluginEntry({
   description: "Bundled GitHub Copilot provider plugin",
   register(api) {
     const pluginConfig = (api.pluginConfig ?? {}) as GithubCopilotPluginConfig;
-    function resolveFirstGithubToken(params: { agentDir?: string; env: NodeJS.ProcessEnv }): {
-      githubToken: string;
-      hasProfile: boolean;
-    } {
-      const authStore = ensureAuthProfileStore(params.agentDir, {
-        allowKeychainPrompt: false,
-      });
-      const hasProfile = listProfilesForProvider(authStore, PROVIDER_ID).length > 0;
-      const envToken =
-        params.env.COPILOT_GITHUB_TOKEN ?? params.env.GH_TOKEN ?? params.env.GITHUB_TOKEN ?? "";
-      const githubToken = envToken.trim();
-      if (githubToken || !hasProfile) {
-        return { githubToken, hasProfile };
-      }
-
-      const profileId = listProfilesForProvider(authStore, PROVIDER_ID)[0];
-      const profile = profileId ? authStore.profiles[profileId] : undefined;
-      if (profile?.type !== "token") {
-        return { githubToken: "", hasProfile };
-      }
-      const directToken = profile.token?.trim() ?? "";
-      if (directToken) {
-        return { githubToken: directToken, hasProfile };
-      }
-      const tokenRef = coerceSecretRef(profile.tokenRef);
-      if (tokenRef?.source === "env" && tokenRef.id.trim()) {
-        return {
-          githubToken: (params.env[tokenRef.id] ?? process.env[tokenRef.id] ?? "").trim(),
-          hasProfile,
-        };
-      }
-      return { githubToken: "", hasProfile };
-    }
 
     async function runGitHubCopilotAuth(ctx: ProviderAuthContext) {
       const { githubCopilotLoginCommand } = await loadGithubCopilotRuntime();
@@ -108,6 +73,8 @@ export default definePluginEntry({
       };
     }
 
+    api.registerMemoryEmbeddingProvider(githubCopilotMemoryEmbeddingProviderAdapter);
+
     api.registerProvider({
       id: PROVIDER_ID,
       label: "GitHub Copilot",
@@ -140,8 +107,9 @@ export default definePluginEntry({
           }
           const { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } =
             await loadGithubCopilotRuntime();
-          const { githubToken, hasProfile } = resolveFirstGithubToken({
+          const { githubToken, hasProfile } = await resolveFirstGithubToken({
             agentDir: ctx.agentDir,
+            config: ctx.config,
             env: ctx.env,
           });
           if (!hasProfile && !githubToken) {

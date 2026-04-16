@@ -42,8 +42,12 @@ const cachedFacadeModuleLocationsByKey = new Map<
   } | null
 >();
 
-function createFacadeResolutionKey(params: { dirName: string; artifactBasename: string }): string {
-  const bundledPluginsDir = resolveBundledPluginsDir();
+function createFacadeResolutionKey(params: {
+  dirName: string;
+  artifactBasename: string;
+  env?: NodeJS.ProcessEnv;
+}): string {
+  const bundledPluginsDir = resolveBundledPluginsDir(params.env ?? process.env);
   return `${params.dirName}::${params.artifactBasename}::${bundledPluginsDir ? path.resolve(bundledPluginsDir) : "<default>"}`;
 }
 
@@ -81,6 +85,7 @@ function resolveRegistryPluginModuleLocationFromRegistry(params: {
 function resolveRegistryPluginModuleLocation(params: {
   dirName: string;
   artifactBasename: string;
+  env?: NodeJS.ProcessEnv;
 }): { modulePath: string; boundaryRoot: string } | null {
   return loadFacadeActivationCheckRuntime().resolveRegistryPluginModuleLocation({
     ...params,
@@ -91,8 +96,9 @@ function resolveRegistryPluginModuleLocation(params: {
 function resolveFacadeModuleLocationUncached(params: {
   dirName: string;
   artifactBasename: string;
+  env?: NodeJS.ProcessEnv;
 }): { modulePath: string; boundaryRoot: string } | null {
-  const bundledPluginsDir = resolveBundledPluginsDir();
+  const bundledPluginsDir = resolveBundledPluginsDir(params.env ?? process.env);
   const preferSource = !CURRENT_MODULE_PATH.includes(`${path.sep}dist${path.sep}`);
   if (preferSource) {
     const modulePath =
@@ -102,6 +108,7 @@ function resolveFacadeModuleLocationUncached(params: {
       }) ??
       resolveBundledPluginPublicSurfacePath({
         rootDir: OPENCLAW_PACKAGE_ROOT,
+        env: params.env,
         ...(bundledPluginsDir ? { bundledPluginsDir } : {}),
         dirName: params.dirName,
         artifactBasename: params.artifactBasename,
@@ -119,6 +126,7 @@ function resolveFacadeModuleLocationUncached(params: {
   }
   const modulePath = resolveBundledPluginPublicSurfacePath({
     rootDir: OPENCLAW_PACKAGE_ROOT,
+    env: params.env,
     ...(bundledPluginsDir ? { bundledPluginsDir } : {}),
     dirName: params.dirName,
     artifactBasename: params.artifactBasename,
@@ -138,6 +146,7 @@ function resolveFacadeModuleLocationUncached(params: {
 function resolveFacadeModuleLocation(params: {
   dirName: string;
   artifactBasename: string;
+  env?: NodeJS.ProcessEnv;
 }): { modulePath: string; boundaryRoot: string } | null {
   const key = createFacadeResolutionKey(params);
   if (cachedFacadeModuleLocationsByKey.has(key)) {
@@ -151,6 +160,7 @@ function resolveFacadeModuleLocation(params: {
 type BundledPluginPublicSurfaceParams = {
   dirName: string;
   artifactBasename: string;
+  env?: NodeJS.ProcessEnv;
 };
 
 type FacadeActivationCheckRuntimeModule = typeof import("./facade-activation-check.runtime.js");
@@ -252,6 +262,7 @@ export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(
 export function canLoadActivatedBundledPluginPublicSurface(params: {
   dirName: string;
   artifactBasename: string;
+  env?: NodeJS.ProcessEnv;
 }): boolean {
   return loadFacadeActivationCheckRuntime().resolveBundledPluginPublicSurfaceAccess(
     buildFacadeActivationCheckParams(params),
@@ -261,6 +272,7 @@ export function canLoadActivatedBundledPluginPublicSurface(params: {
 export function loadActivatedBundledPluginPublicSurfaceModuleSync<T extends object>(params: {
   dirName: string;
   artifactBasename: string;
+  env?: NodeJS.ProcessEnv;
 }): T {
   loadFacadeActivationCheckRuntime().resolveActivatedBundledPluginPublicSurfaceAccessOrThrow(
     buildFacadeActivationCheckParams(params),
@@ -271,6 +283,7 @@ export function loadActivatedBundledPluginPublicSurfaceModuleSync<T extends obje
 export function tryLoadActivatedBundledPluginPublicSurfaceModuleSync<T extends object>(params: {
   dirName: string;
   artifactBasename: string;
+  env?: NodeJS.ProcessEnv;
 }): T | null {
   const access = loadFacadeActivationCheckRuntime().resolveBundledPluginPublicSurfaceAccess(
     buildFacadeActivationCheckParams(params),

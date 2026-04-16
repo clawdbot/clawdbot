@@ -2,6 +2,9 @@
   "id": "github-copilot",
   "enabledByDefault": true,
   "providers": ["github-copilot"],
+  "contracts": {
+    "memoryEmbeddingProviders": ["github-copilot"]
+  },
   "providerAuthEnvVars": {
     "github-copilot": ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"]
   },

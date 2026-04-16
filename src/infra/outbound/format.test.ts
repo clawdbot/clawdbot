@@ -8,6 +8,7 @@ import {
 const getChannelPluginMock = vi.hoisted(() => vi.fn((_channel: unknown) => undefined));
 
 vi.mock("../../channels/plugins/index.js", () => ({
+  getLoadedChannelPlugin: getChannelPluginMock,
   getChannelPlugin: getChannelPluginMock,
 }));
 describe("formatOutboundDeliverySummary", () => {

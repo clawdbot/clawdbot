@@ -613,7 +613,8 @@ if you want a shorter or longer retry window.
 Startup also performs a conservative crypto bootstrap pass automatically.
 That pass tries to reuse the current secret storage and cross-signing identity first, and avoids resetting cross-signing unless you run an explicit bootstrap repair flow.
 
-If startup finds broken bootstrap state and `channels.matrix.password` is configured, OpenClaw can attempt a stricter repair path.
+If startup still finds broken bootstrap state, OpenClaw can attempt a guarded repair path even when `channels.matrix.password` is not configured.
+If the homeserver requires password-based UIA for that repair, OpenClaw logs a warning and keeps startup non-fatal instead of aborting the bot.
 If the current device is already owner-signed, OpenClaw preserves that identity instead of resetting it automatically.
 
 See [Matrix migration](/install/migrating-matrix) for the full upgrade flow, limits, recovery commands, and common migration messages.

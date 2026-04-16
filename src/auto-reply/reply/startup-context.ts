@@ -5,8 +5,8 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 
 const STARTUP_MEMORY_FILE_MAX_BYTES = 16_384;
-const STARTUP_MEMORY_FILE_MAX_CHARS = 2_000;
-const STARTUP_MEMORY_TOTAL_MAX_CHARS = 4_500;
+const STARTUP_MEMORY_FILE_MAX_CHARS = 1_200;
+const STARTUP_MEMORY_TOTAL_MAX_CHARS = 2_800;
 const STARTUP_MEMORY_DAILY_DAYS = 2;
 const STARTUP_MEMORY_FILE_MAX_BYTES_CAP = 64 * 1024;
 const STARTUP_MEMORY_FILE_MAX_CHARS_CAP = 10_000;

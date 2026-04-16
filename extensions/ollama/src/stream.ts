@@ -27,12 +27,14 @@ import {
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty, readStringValue } from "openclaw/plugin-sdk/text-runtime";
 import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import {
   parseJsonObjectPreservingUnsafeIntegers,
   parseJsonPreservingUnsafeIntegers,
 } from "./ollama-json.js";
+import { buildOllamaBaseUrlSsrFPolicy } from "./provider-models.js";
 
 const log = createSubsystemLogger("ollama-stream");
 
@@ -220,6 +222,11 @@ export function createConfiguredOllamaCompatStreamWrapper(
 // Ollama compat wrapper now owns more than num_ctx injection.
 export const createConfiguredOllamaCompatNumCtxWrapper = createConfiguredOllamaCompatStreamWrapper;
 
+function normalizeOllamaWireModelId(modelId: string): string {
+  const trimmed = modelId.trim();
+  return trimmed.startsWith("ollama/") ? trimmed.slice("ollama/".length) : trimmed;
+}
+
 export function buildOllamaChatRequest(params: {
   modelId: string;
   messages: OllamaChatMessage[];
@@ -228,7 +235,7 @@ export function buildOllamaChatRequest(params: {
   stream?: boolean;
 }): OllamaChatRequest {
   return {
-    model: params.modelId,
+    model: normalizeOllamaWireModelId(params.modelId),
     messages: params.messages,
     stream: params.stream ?? true,
     ...(params.tools && params.tools.length > 0 ? { tools: params.tools } : {}),
@@ -606,6 +613,7 @@ export function createOllamaStreamFn(
   defaultHeaders?: Record<string, string>,
 ): StreamFn {
   const chatUrl = resolveOllamaChatUrl(baseUrl);
+  const ssrfPolicy = buildOllamaBaseUrlSsrFPolicy(chatUrl);
 
   return (model, context, options) => {
     const stream = createAssistantMessageEventStream();
@@ -646,114 +654,59 @@ export function createOllamaStreamFn(
           headers.Authorization = `Bearer ${options.apiKey}`;
         }
 
-        const response = await fetch(chatUrl, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(body),
-          signal: options?.signal,
+        const { response, release } = await fetchWithSsrFGuard({
+          url: chatUrl,
+          init: {
+            method: "POST",
+            headers,
+            body: JSON.stringify(body),
+            signal: options?.signal,
+          },
+          policy: ssrfPolicy,
+          auditContext: "ollama-stream.chat",
         });
 
-        if (!response.ok) {
-          const errorText = await response.text().catch(() => "unknown error");
-          throw new Error(`${response.status} ${errorText}`);
-        }
-        if (!response.body) {
-          throw new Error("Ollama API returned empty response body");
-        }
-
-        const reader = response.body.getReader();
-        let accumulatedContent = "";
-        let accumulatedThinking = "";
-        const accumulatedToolCalls: OllamaToolCall[] = [];
-        let finalResponse: OllamaChatResponse | undefined;
-        const modelInfo = { api: model.api, provider: model.provider, id: model.id };
-        let streamStarted = false;
-        let thinkingStarted = false;
-        let thinkingEnded = false;
-        let textBlockStarted = false;
-        let textBlockClosed = false;
-
-        // Content index tracking: thinking block (if present) is index 0,
-        // text block follows at index 1 (or 0 when no thinking).
-        const textContentIndex = () => (thinkingStarted ? 1 : 0);
-
-        const buildCurrentContent = (): (TextContent | ThinkingContent | ToolCall)[] => {
-          const parts: (TextContent | ThinkingContent | ToolCall)[] = [];
-          if (accumulatedThinking) {
-            parts.push({
-              type: "thinking",
-              thinking: accumulatedThinking,
-            });
+        try {
+          if (!response.ok) {
+            const errorText = await response.text().catch(() => "unknown error");
+            throw new Error(`${response.status} ${errorText}`);
           }
-          if (accumulatedContent) {
-            parts.push({ type: "text", text: accumulatedContent });
+          if (!response.body) {
+            throw new Error("Ollama API returned empty response body");
           }
-          return parts;
-        };
 
-        const closeThinkingBlock = () => {
-          if (!thinkingStarted || thinkingEnded) {
-            return;
-          }
-          thinkingEnded = true;
-          const partial = buildStreamAssistantMessage({
-            model: modelInfo,
-            content: buildCurrentContent(),
-            stopReason: "stop",
-            usage: buildUsageWithNoCost({}),
-          });
-          stream.push({
-            type: "thinking_end",
-            contentIndex: 0,
-            content: accumulatedThinking,
-            partial,
-          });
-        };
+          const reader = response.body.getReader();
+          let accumulatedContent = "";
+          let accumulatedThinking = "";
+          const accumulatedToolCalls: OllamaToolCall[] = [];
+          let finalResponse: OllamaChatResponse | undefined;
+          const modelInfo = { api: model.api, provider: model.provider, id: model.id };
+          let streamStarted = false;
+          let thinkingStarted = false;
+          let thinkingEnded = false;
+          let textBlockStarted = false;
+          let textBlockClosed = false;
+          const textContentIndex = () => (thinkingStarted ? 1 : 0);
 
-        const closeTextBlock = () => {
-          if (!textBlockStarted || textBlockClosed) {
-            return;
-          }
-          textBlockClosed = true;
-          const partial = buildStreamAssistantMessage({
-            model: modelInfo,
-            content: buildCurrentContent(),
-            stopReason: "stop",
-            usage: buildUsageWithNoCost({}),
-          });
-          stream.push({
-            type: "text_end",
-            contentIndex: textContentIndex(),
-            content: accumulatedContent,
-            partial,
-          });
-        };
-
-        for await (const chunk of parseNdjsonStream(reader)) {
-          // Handle thinking/reasoning deltas from Ollama's native think mode.
-          const thinkingDelta = chunk.message?.thinking ?? chunk.message?.reasoning;
-          if (thinkingDelta) {
-            if (!streamStarted) {
-              streamStarted = true;
-              const emptyPartial = buildStreamAssistantMessage({
-                model: modelInfo,
-                content: [],
-                stopReason: "stop",
-                usage: buildUsageWithNoCost({}),
+          const buildCurrentContent = (): (TextContent | ThinkingContent | ToolCall)[] => {
+            const parts: (TextContent | ThinkingContent | ToolCall)[] = [];
+            if (accumulatedThinking) {
+              parts.push({
+                type: "thinking",
+                thinking: accumulatedThinking,
               });
-              stream.push({ type: "start", partial: emptyPartial });
             }
-            if (!thinkingStarted) {
-              thinkingStarted = true;
-              const partial = buildStreamAssistantMessage({
-                model: modelInfo,
-                content: buildCurrentContent(),
-                stopReason: "stop",
-                usage: buildUsageWithNoCost({}),
-              });
-              stream.push({ type: "thinking_start", contentIndex: 0, partial });
+            if (accumulatedContent) {
+              parts.push({ type: "text", text: accumulatedContent });
             }
-            accumulatedThinking += thinkingDelta;
+            return parts;
+          };
+
+          const closeThinkingBlock = () => {
+            if (!thinkingStarted || thinkingEnded) {
+              return;
+            }
+            thinkingEnded = true;
             const partial = buildStreamAssistantMessage({
               model: modelInfo,
               content: buildCurrentContent(),
@@ -761,85 +714,146 @@ export function createOllamaStreamFn(
               usage: buildUsageWithNoCost({}),
             });
             stream.push({
-              type: "thinking_delta",
+              type: "thinking_end",
               contentIndex: 0,
-              delta: thinkingDelta,
+              content: accumulatedThinking,
               partial,
             });
-          }
+          };
 
-          if (chunk.message?.content) {
-            const delta = chunk.message.content;
-
-            // Transition from thinking to text: close the thinking block first.
-            if (thinkingStarted && !thinkingEnded) {
-              closeThinkingBlock();
+          const closeTextBlock = () => {
+            if (!textBlockStarted || textBlockClosed) {
+              return;
             }
-
-            if (!streamStarted) {
-              streamStarted = true;
-              const emptyPartial = buildStreamAssistantMessage({
-                model: modelInfo,
-                content: [],
-                stopReason: "stop",
-                usage: buildUsageWithNoCost({}),
-              });
-              stream.push({ type: "start", partial: emptyPartial });
-            }
-            if (!textBlockStarted) {
-              textBlockStarted = true;
-              const partial = buildStreamAssistantMessage({
-                model: modelInfo,
-                content: buildCurrentContent(),
-                stopReason: "stop",
-                usage: buildUsageWithNoCost({}),
-              });
-              stream.push({ type: "text_start", contentIndex: textContentIndex(), partial });
-            }
-
-            accumulatedContent += delta;
+            textBlockClosed = true;
             const partial = buildStreamAssistantMessage({
               model: modelInfo,
               content: buildCurrentContent(),
               stopReason: "stop",
               usage: buildUsageWithNoCost({}),
             });
-            stream.push({ type: "text_delta", contentIndex: textContentIndex(), delta, partial });
+            stream.push({
+              type: "text_end",
+              contentIndex: textContentIndex(),
+              content: accumulatedContent,
+              partial,
+            });
+          };
+
+          for await (const chunk of parseNdjsonStream(reader)) {
+            const thinkingDelta = chunk.message?.thinking ?? chunk.message?.reasoning;
+            if (thinkingDelta) {
+              if (!streamStarted) {
+                streamStarted = true;
+                const emptyPartial = buildStreamAssistantMessage({
+                  model: modelInfo,
+                  content: [],
+                  stopReason: "stop",
+                  usage: buildUsageWithNoCost({}),
+                });
+                stream.push({ type: "start", partial: emptyPartial });
+              }
+              if (!thinkingStarted) {
+                thinkingStarted = true;
+                const partial = buildStreamAssistantMessage({
+                  model: modelInfo,
+                  content: buildCurrentContent(),
+                  stopReason: "stop",
+                  usage: buildUsageWithNoCost({}),
+                });
+                stream.push({ type: "thinking_start", contentIndex: 0, partial });
+              }
+              accumulatedThinking += thinkingDelta;
+              const partial = buildStreamAssistantMessage({
+                model: modelInfo,
+                content: buildCurrentContent(),
+                stopReason: "stop",
+                usage: buildUsageWithNoCost({}),
+              });
+              stream.push({
+                type: "thinking_delta",
+                contentIndex: 0,
+                delta: thinkingDelta,
+                partial,
+              });
+            }
+
+            if (chunk.message?.content) {
+              const delta = chunk.message.content;
+              if (thinkingStarted && !thinkingEnded) {
+                closeThinkingBlock();
+              }
+
+              if (!streamStarted) {
+                streamStarted = true;
+                const emptyPartial = buildStreamAssistantMessage({
+                  model: modelInfo,
+                  content: [],
+                  stopReason: "stop",
+                  usage: buildUsageWithNoCost({}),
+                });
+                stream.push({ type: "start", partial: emptyPartial });
+              }
+              if (!textBlockStarted) {
+                textBlockStarted = true;
+                const partial = buildStreamAssistantMessage({
+                  model: modelInfo,
+                  content: buildCurrentContent(),
+                  stopReason: "stop",
+                  usage: buildUsageWithNoCost({}),
+                });
+                stream.push({ type: "text_start", contentIndex: textContentIndex(), partial });
+              }
+
+              accumulatedContent += delta;
+              const partial = buildStreamAssistantMessage({
+                model: modelInfo,
+                content: buildCurrentContent(),
+                stopReason: "stop",
+                usage: buildUsageWithNoCost({}),
+              });
+              stream.push({
+                type: "text_delta",
+                contentIndex: textContentIndex(),
+                delta,
+                partial,
+              });
+            }
+            if (chunk.message?.tool_calls) {
+              closeThinkingBlock();
+              closeTextBlock();
+              accumulatedToolCalls.push(...chunk.message.tool_calls);
+            }
+            if (chunk.done) {
+              finalResponse = chunk;
+              break;
+            }
           }
-          if (chunk.message?.tool_calls) {
-            closeThinkingBlock();
-            closeTextBlock();
-            accumulatedToolCalls.push(...chunk.message.tool_calls);
+
+          if (!finalResponse) {
+            throw new Error("Ollama API stream ended without a final response");
           }
-          if (chunk.done) {
-            finalResponse = chunk;
-            break;
+
+          finalResponse.message.content = accumulatedContent;
+          if (accumulatedThinking) {
+            finalResponse.message.thinking = accumulatedThinking;
           }
+          if (accumulatedToolCalls.length > 0) {
+            finalResponse.message.tool_calls = accumulatedToolCalls;
+          }
+
+          const assistantMessage = buildAssistantMessage(finalResponse, modelInfo);
+          closeThinkingBlock();
+          closeTextBlock();
+
+          stream.push({
+            type: "done",
+            reason: assistantMessage.stopReason === "toolUse" ? "toolUse" : "stop",
+            message: assistantMessage,
+          });
+        } finally {
+          await release();
         }
-
-        if (!finalResponse) {
-          throw new Error("Ollama API stream ended without a final response");
-        }
-
-        finalResponse.message.content = accumulatedContent;
-        if (accumulatedThinking) {
-          finalResponse.message.thinking = accumulatedThinking;
-        }
-        if (accumulatedToolCalls.length > 0) {
-          finalResponse.message.tool_calls = accumulatedToolCalls;
-        }
-
-        const assistantMessage = buildAssistantMessage(finalResponse, modelInfo);
-
-        // Close any open blocks before emitting the done event.
-        closeThinkingBlock();
-        closeTextBlock();
-
-        stream.push({
-          type: "done",
-          reason: assistantMessage.stopReason === "toolUse" ? "toolUse" : "stop",
-          message: assistantMessage,
-        });
       } catch (err) {
         stream.push({
           type: "error",

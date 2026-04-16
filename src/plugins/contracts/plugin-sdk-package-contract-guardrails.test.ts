@@ -73,18 +73,6 @@ function readMatrixPackageJson(): {
   };
 }
 
-function readAmazonBedrockPackageJson(): {
-  dependencies?: Record<string, string>;
-  optionalDependencies?: Record<string, string>;
-} {
-  return JSON.parse(
-    readFileSync(resolve(REPO_ROOT, "extensions/amazon-bedrock/package.json"), "utf8"),
-  ) as {
-    dependencies?: Record<string, string>;
-    optionalDependencies?: Record<string, string>;
-  };
-}
-
 function collectRuntimeDependencySpecs(packageJson: {
   dependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
@@ -318,16 +306,6 @@ describe("plugin-sdk package contract guardrails", () => {
     }
   });
 
-  it("mirrors Bedrock runtime deps needed by the bundled host graph", () => {
-    const rootRuntimeDeps = collectRuntimeDependencySpecs(readRootPackageJson());
-    const bedrockPackageJson = readAmazonBedrockPackageJson();
-    const bedrockRuntimeDeps = collectRuntimeDependencySpecs(bedrockPackageJson);
-
-    for (const dep of ["@aws-sdk/client-bedrock"]) {
-      expect(rootRuntimeDeps.get(dep)).toBe(bedrockRuntimeDeps.get(dep));
-    }
-  });
-
   it("resolves matrix crypto WASM from the root runtime surface", () => {
     const rootRequire = createRootPackageRequire();
     // Normalize filesystem separators so the package assertion stays portable.
@@ -346,13 +324,8 @@ describe("plugin-sdk package contract guardrails", () => {
     const archivePath = packOpenClawToTempDir(packDir);
     const packedPackageJson = await readPackedRootPackageJson(archivePath);
     const matrixPackageJson = readMatrixPackageJson();
-    const bedrockPackageJson = readAmazonBedrockPackageJson();
-
     expect(packedPackageJson.dependencies?.["@matrix-org/matrix-sdk-crypto-wasm"]).toBe(
       matrixPackageJson.dependencies?.["@matrix-org/matrix-sdk-crypto-wasm"],
-    );
-    expect(packedPackageJson.dependencies?.["@aws-sdk/client-bedrock"]).toBe(
-      bedrockPackageJson.dependencies?.["@aws-sdk/client-bedrock"],
     );
     expect(packedPackageJson.dependencies?.["@openclaw/plugin-package-contract"]).toBeUndefined();
   });

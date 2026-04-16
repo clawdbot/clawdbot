@@ -28,6 +28,15 @@ export type MemorySearchRuntimeDebug = {
   fallback?: string;
 };
 
+export type MemoryReadResult = {
+  text: string;
+  path: string;
+  truncated?: boolean;
+  from?: number;
+  lines?: number;
+  nextFrom?: number;
+};
+
 export type MemoryProviderStatus = {
   backend: "builtin" | "qmd";
   provider: string;
@@ -80,7 +89,7 @@ export interface MemorySearchManager {
     relPath: string;
     from?: number;
     lines?: number;
-  }): Promise<{ text: string; path: string }>;
+  }): Promise<MemoryReadResult>;
   status(): MemoryProviderStatus;
   sync?(params?: {
     reason?: string;

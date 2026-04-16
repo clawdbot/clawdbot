@@ -6,6 +6,10 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+  writePackageDistInventory,
+} from "../src/infra/package-dist-inventory.ts";
+import {
   collectBundledExtensionManifestErrors,
   type BundledExtension,
   type ExtensionPackageJson as PackageJson,
@@ -38,14 +42,15 @@ type PackFile = { path: string };
 type PackResult = { files?: PackFile[]; filename?: string; unpackedSize?: number };
 
 const requiredPathGroups = [
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   ["dist/index.js", "dist/index.mjs"],
   ["dist/entry.js", "dist/entry.mjs"],
   ...listPluginSdkDistArtifacts(),
   ...listBundledPluginPackArtifacts(),
   ...listStaticExtensionAssetOutputs(),
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
-  ...listRequiredQaScenarioPackPaths(),
   "scripts/npm-runner.mjs",
+  "scripts/preinstall-package-manager-warning.mjs",
   "scripts/postinstall-bundled-plugins.mjs",
   "dist/plugin-sdk/compat.js",
   "dist/plugin-sdk/root-alias.cjs",
@@ -56,20 +61,26 @@ const requiredPathGroups = [
 const forbiddenPrefixes = [
   "dist-runtime/",
   "dist/OpenClaw.app/",
+  "dist/extensions/qa-lab/",
+  "dist/plugin-sdk/extensions/qa-lab/",
+  "dist/plugin-sdk/qa-lab.",
+  "dist/plugin-sdk/qa-runtime.",
+  "dist/plugin-sdk/src/plugin-sdk/qa-lab.d.ts",
+  "dist/plugin-sdk/src/plugin-sdk/qa-runtime.d.ts",
+  "dist/qa-runtime-",
   "dist/plugin-sdk/.tsbuildinfo",
   "docs/.generated/",
+  "qa/",
 ];
+const forbiddenPrivateQaContentMarkers = [
+  "//#region extensions/qa-lab/",
+  "qa-lab/cli.js",
+  "qa-lab/runtime-api.js",
+] as const;
+const forbiddenPrivateQaContentScanPrefixes = ["dist/"] as const;
 const appcastPath = resolve("appcast.xml");
 const laneBuildMin = 1_000_000_000;
 const laneFloorAdoptionDateKey = 20260227;
-
-export function listRequiredQaScenarioPackPaths(): string[] {
-  const scenariosDir = resolve("qa/scenarios");
-  return readdirSync(scenariosDir, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
-    .map((entry) => `qa/scenarios/${entry.name}`)
-    .toSorted((left, right) => left.localeCompare(right));
-}
 
 function collectBundledExtensions(): BundledExtension[] {
   const extensionsDir = resolve("extensions");
@@ -260,14 +271,35 @@ export function collectMissingPackPaths(paths: Iterable<string>): string[] {
 }
 
 export function collectForbiddenPackPaths(paths: Iterable<string>): string[] {
-  const isAllowedBundledPluginNodeModulesPath = (path: string) =>
-    /^dist\/extensions\/[^/]+\/node_modules\//.test(path);
   return [...paths]
     .filter(
       (path) =>
-        forbiddenPrefixes.some((prefix) => path.startsWith(prefix)) ||
-        (/node_modules\//.test(path) && !isAllowedBundledPluginNodeModulesPath(path)),
+        forbiddenPrefixes.some((prefix) => path.startsWith(prefix)) || /node_modules\//.test(path),
     )
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+export function collectForbiddenPackContentPaths(
+  paths: Iterable<string>,
+  rootDir = process.cwd(),
+): string[] {
+  const textPathPattern = /\.(?:[cm]?js|d\.ts|json|md|mjs|cjs)$/u;
+  return [...paths]
+    .filter((packedPath) => {
+      if (!forbiddenPrivateQaContentScanPrefixes.some((prefix) => packedPath.startsWith(prefix))) {
+        return false;
+      }
+      if (!textPathPattern.test(packedPath)) {
+        return false;
+      }
+      let content: string;
+      try {
+        content = readFileSync(resolve(rootDir, packedPath), "utf8");
+      } catch {
+        return false;
+      }
+      return forbiddenPrivateQaContentMarkers.some((marker) => content.includes(marker));
+    })
     .toSorted((left, right) => left.localeCompare(right));
 }
 
@@ -432,6 +464,7 @@ async function main() {
   checkAppcastSparkleVersions();
   await checkPluginSdkExports();
   checkBundledExtensionMetadata();
+  await writePackageDistInventory(process.cwd());
 
   const results = runPackDry();
   const files = results.flatMap((entry) => entry.files ?? []);
@@ -446,9 +479,15 @@ async function main() {
     })
     .toSorted((left, right) => left.localeCompare(right));
   const forbidden = collectForbiddenPackPaths(paths);
+  const forbiddenContent = collectForbiddenPackContentPaths(paths);
   const sizeErrors = collectNpmPackUnpackedSizeErrors(results);
 
-  if (missing.length > 0 || forbidden.length > 0 || sizeErrors.length > 0) {
+  if (
+    missing.length > 0 ||
+    forbidden.length > 0 ||
+    forbiddenContent.length > 0 ||
+    sizeErrors.length > 0
+  ) {
     if (missing.length > 0) {
       console.error("release-check: missing files in npm pack:");
       for (const path of missing) {
@@ -470,6 +509,12 @@ async function main() {
     if (forbidden.length > 0) {
       console.error("release-check: forbidden files in npm pack:");
       for (const path of forbidden) {
+        console.error(`  - ${path}`);
+      }
+    }
+    if (forbiddenContent.length > 0) {
+      console.error("release-check: forbidden private QA markers in npm pack:");
+      for (const path of forbiddenContent) {
         console.error(`  - ${path}`);
       }
     }

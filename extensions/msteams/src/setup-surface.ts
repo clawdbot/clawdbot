@@ -1,4 +1,4 @@
-import { exec } from "node:child_process";
+import { spawn } from "node:child_process";
 import {
   createTopLevelChannelAllowFromSetter,
   createTopLevelChannelDmPolicy,
@@ -28,6 +28,22 @@ const setMSTeamsGroupPolicy = createTopLevelChannelGroupPolicySetter({
   channel,
   enabled: true,
 });
+
+export function openDelegatedOAuthUrl(url: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const cmd = process.platform === "darwin" ? "open" : "xdg-open";
+    const child = spawn(cmd, [url], { stdio: "ignore", shell: false });
+    child.once("error", reject);
+    child.once("exit", (code, signal) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      const reason = signal ? `signal ${signal}` : `code ${code ?? "unknown"}`;
+      reject(new Error(`${cmd} failed with ${reason}`));
+    });
+  });
+}
 
 function looksLikeGuid(value: string): boolean {
   return /^[0-9a-fA-F-]{16,}$/.test(value);
@@ -270,11 +286,7 @@ export const msteamsSetupWizard: ChannelSetupWizard = {
           const tokens = await loginMSTeamsDelegated(
             {
               isRemote: shouldUseManualOAuthFlow(isRemote),
-              openUrl: (url) =>
-                new Promise<void>((resolve, reject) => {
-                  const cmd = process.platform === "darwin" ? "open" : "xdg-open";
-                  exec(`${cmd} ${JSON.stringify(url)}`, (err) => (err ? reject(err) : resolve()));
-                }),
+              openUrl: openDelegatedOAuthUrl,
               log: (msg) => params.prompter.note(msg),
               note: (msg, title) => params.prompter.note(msg, title),
               prompt: (msg) => params.prompter.text({ message: msg }),

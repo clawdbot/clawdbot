@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/qa-lab",
-  "version": "2026.4.12",
+  "version": "2026.4.15-beta.1",
   "private": true,
   "description": "OpenClaw QA lab plugin with private debugger UI and scenario runner",
   "type": "module",
@@ -12,7 +12,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.12"
+    "openclaw": ">=2026.4.15-beta.1"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -29,7 +29,7 @@
       "minHostVersion": ">=2026.4.10"
     },
     "compat": {
-      "pluginApi": ">=2026.4.12"
+      "pluginApi": ">=2026.4.15-beta.1"
     }
   }
 }

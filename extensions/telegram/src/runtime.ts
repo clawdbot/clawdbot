@@ -6,5 +6,8 @@ const {
   setRuntime: setTelegramRuntime,
   clearRuntime: clearTelegramRuntime,
   getRuntime: getTelegramRuntime,
-} = createPluginRuntimeStore<TelegramRuntime>("Telegram runtime not initialized");
+} = createPluginRuntimeStore<TelegramRuntime>({
+  pluginId: "telegram",
+  errorMessage: "Telegram runtime not initialized",
+});
 export { clearTelegramRuntime, getTelegramRuntime, setTelegramRuntime };

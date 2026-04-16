@@ -18,6 +18,7 @@ import {
   isUrlAllowed,
   type MSTeamsAttachmentDownloadLogger,
   type MSTeamsAttachmentFetchPolicy,
+  type MSTeamsAttachmentResolveFn,
   normalizeContentType,
   resolveMediaSsrfPolicy,
   resolveAttachmentFetchPolicy,
@@ -280,6 +281,7 @@ export async function downloadMSTeamsGraphMedia(params: {
   allowHosts?: string[];
   authAllowHosts?: string[];
   fetchFn?: typeof fetch;
+  resolveFn?: MSTeamsAttachmentResolveFn;
   /** When true, embeds original filename in stored path for later extraction. */
   preserveFilenames?: boolean;
   /** Optional logger used to surface Graph/SharePoint fetch errors. */
@@ -394,6 +396,7 @@ export async function downloadMSTeamsGraphMedia(params: {
                     ...init,
                     headers,
                   },
+                  resolveFn: params.resolveFn,
                 });
               },
             });
@@ -459,6 +462,7 @@ export async function downloadMSTeamsGraphMedia(params: {
       allowHosts: policy.allowHosts,
       authAllowHosts: policy.authAllowHosts,
       fetchFn: params.fetchFn,
+      resolveFn: params.resolveFn,
       preserveFilenames: params.preserveFilenames,
       logger: params.logger,
     });

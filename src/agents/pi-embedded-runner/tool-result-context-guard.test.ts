@@ -505,14 +505,15 @@ describe("installContextEngineLoopHook", () => {
     const engine = makeMockEngine({ omitAfterTurn: true, omitIngestBatch: true });
     installHook(agent, engine, 1);
 
-    const messages = [makeUser("first"), makeToolResult("call_1", "r1")];
+    const toolResult = makeToolResult("call_1", "r1");
+    const messages = [makeUser("first"), toolResult];
     await callTransform(agent, messages);
 
     expect(engine.ingest).toHaveBeenCalledTimes(1);
     expect(engine.ingest.mock.calls[0]?.[0]).toMatchObject({
       sessionId,
       sessionKey,
-      message: makeToolResult("call_1", "r1"),
+      message: toolResult,
     });
     expect(engine.assemble).toHaveBeenCalledTimes(1);
   });

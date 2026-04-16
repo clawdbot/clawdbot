@@ -39,6 +39,23 @@ function createOllamaConfig(provider: OllamaProviderConfigOverride = {}): OpenCl
   };
 }
 
+function createOllamaConfigWithWebSearchBaseUrl(baseUrl: string): OpenClawConfig {
+  return {
+    ...createOllamaConfig(),
+    plugins: {
+      entries: {
+        ollama: {
+          config: {
+            webSearch: {
+              baseUrl,
+            },
+          },
+        },
+      },
+    },
+  };
+}
+
 function createSetupNotes() {
   const notes: Array<{ title?: string; message: string }> = [];
   return {
@@ -88,6 +105,24 @@ describe("ollama web search provider", () => {
         },
       }),
     ).toBe("http://ollama.local:11434");
+  });
+
+  it("prefers the plugin web search base URL over the model provider host", () => {
+    expect(
+      testing.resolveOllamaWebSearchBaseUrl(
+        createOllamaConfigWithWebSearchBaseUrl("http://localhost:11434/v1"),
+      ),
+    ).toBe("http://localhost:11434");
+  });
+
+  it("falls back to the local Ollama host when the model provider uses ollama cloud", () => {
+    expect(
+      testing.resolveOllamaWebSearchBaseUrl(
+        createOllamaConfig({
+          baseUrl: "https://ollama.com",
+        }),
+      ),
+    ).toBe("http://127.0.0.1:11434");
   });
 
   it("maps generic search args into the Ollama experimental search endpoint", async () => {

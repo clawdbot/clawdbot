@@ -10,6 +10,7 @@ import {
   readNumberParam,
   readResponseText,
   readStringParam,
+  resolveProviderWebSearchPluginConfig,
   resolveSearchCount,
   resolveSiteName,
   truncateText,
@@ -18,7 +19,7 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
+import { OLLAMA_CLOUD_BASE_URL, OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import {
   buildOllamaBaseUrlSsrFPolicy,
   fetchOllamaModels,
@@ -64,9 +65,18 @@ function resolveOllamaWebSearchApiKey(config?: OpenClawConfig): string | undefin
 }
 
 function resolveOllamaWebSearchBaseUrl(config?: OpenClawConfig): string {
+  const pluginBaseUrl = normalizeOptionalString(
+    resolveProviderWebSearchPluginConfig(config, "ollama")?.baseUrl,
+  );
+  if (pluginBaseUrl) {
+    return resolveOllamaApiBase(pluginBaseUrl);
+  }
   const configuredBaseUrl = config?.models?.providers?.ollama?.baseUrl;
   if (normalizeOptionalString(configuredBaseUrl)) {
-    return resolveOllamaApiBase(configuredBaseUrl);
+    const baseUrl = resolveOllamaApiBase(configuredBaseUrl);
+    if (baseUrl !== OLLAMA_CLOUD_BASE_URL) {
+      return baseUrl;
+    }
   }
   return OLLAMA_DEFAULT_BASE_URL;
 }

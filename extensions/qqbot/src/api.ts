@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import os from "node:os";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { debugLog, debugError } from "./utils/debug-log.js";
 import { sanitizeFileName } from "./utils/platform.js";
@@ -11,12 +12,26 @@ const TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken";
 
 // Plugin User-Agent format: QQBotPlugin/{version} (Node/{nodeVersion}; {os})
 const _require = createRequire(import.meta.url);
-let _pluginVersion = "unknown";
-try {
-  _pluginVersion = _require("../package.json").version ?? "unknown";
-} catch {
-  /* fallback */
+const PACKAGE_JSON_CANDIDATES = [
+  "../package.json",
+  "./package.json",
+  "../../package.json",
+] as const;
+
+function readPluginVersion(): string {
+  for (const candidate of PACKAGE_JSON_CANDIDATES) {
+    try {
+      const version = (_require(candidate) as { version?: unknown }).version;
+      if (typeof version === "string" && version.trim().length > 0) {
+        return version;
+      }
+    } catch {
+      // Ignore missing candidate paths across source and bundled layouts.
+    }
+  }
+  return "unknown";
 }
+const _pluginVersion = readPluginVersion();
 export const PLUGIN_USER_AGENT = `QQBotPlugin/${_pluginVersion} (Node/${process.versions.node}; ${os.platform()})`;
 
 // =========================================================================
@@ -98,12 +113,19 @@ async function doFetchToken(appId: string, clientSecret: string): Promise<string
   debugLog(`[qqbot-api:${appId}] >>> POST ${TOKEN_URL}`);
 
   let response: Response;
+  let release = async () => {};
   try {
-    response = await fetch(TOKEN_URL, {
-      method: "POST",
-      headers: requestHeaders,
-      body: JSON.stringify(requestBody),
+    const guarded = await fetchWithSsrFGuard({
+      url: TOKEN_URL,
+      init: {
+        method: "POST",
+        headers: requestHeaders,
+        body: JSON.stringify(requestBody),
+      },
+      auditContext: "qqbot.token",
     });
+    response = guarded.response;
+    release = guarded.release;
   } catch (err) {
     debugError(`[qqbot-api:${appId}] <<< Network error:`, err);
     throw new Error(`Network error getting access_token: ${formatErrorMessage(err)}`, {
@@ -111,44 +133,48 @@ async function doFetchToken(appId: string, clientSecret: string): Promise<string
     });
   }
 
-  const responseHeaders: Record<string, string> = {};
-  response.headers.forEach((value, key) => {
-    responseHeaders[key] = value;
-  });
-  const tokenTraceId = response.headers.get("x-tps-trace-id") ?? "";
-  debugLog(
-    `[qqbot-api:${appId}] <<< Status: ${response.status} ${response.statusText}${tokenTraceId ? ` | TraceId: ${tokenTraceId}` : ""}`,
-  );
-
-  let data: { access_token?: string; expires_in?: number };
-  let rawBody: string;
   try {
-    rawBody = await response.text();
-    // Redact the token before logging the raw response body.
-    const logBody = rawBody.replace(/"access_token"\s*:\s*"[^"]+"/g, '"access_token": "***"');
-    debugLog(`[qqbot-api:${appId}] <<< Body:`, logBody);
-    data = JSON.parse(rawBody) as { access_token?: string; expires_in?: number };
-  } catch (err) {
-    debugError(`[qqbot-api:${appId}] <<< Parse error:`, err);
-    throw new Error(`Failed to parse access_token response: ${formatErrorMessage(err)}`, {
-      cause: err,
+    const responseHeaders: Record<string, string> = {};
+    response.headers.forEach((value, key) => {
+      responseHeaders[key] = value;
     });
+    const tokenTraceId = response.headers.get("x-tps-trace-id") ?? "";
+    debugLog(
+      `[qqbot-api:${appId}] <<< Status: ${response.status} ${response.statusText}${tokenTraceId ? ` | TraceId: ${tokenTraceId}` : ""}`,
+    );
+
+    let data: { access_token?: string; expires_in?: number };
+    let rawBody: string;
+    try {
+      rawBody = await response.text();
+      // Redact the token before logging the raw response body.
+      const logBody = rawBody.replace(/"access_token"\s*:\s*"[^"]+"/g, '"access_token": "***"');
+      debugLog(`[qqbot-api:${appId}] <<< Body:`, logBody);
+      data = JSON.parse(rawBody) as { access_token?: string; expires_in?: number };
+    } catch (err) {
+      debugError(`[qqbot-api:${appId}] <<< Parse error:`, err);
+      throw new Error(`Failed to parse access_token response: ${formatErrorMessage(err)}`, {
+        cause: err,
+      });
+    }
+
+    if (!data.access_token) {
+      throw new Error(`Failed to get access_token: ${JSON.stringify(data)}`);
+    }
+
+    const expiresAt = Date.now() + (data.expires_in ?? 7200) * 1000;
+
+    tokenCacheMap.set(appId, {
+      token: data.access_token,
+      expiresAt,
+      appId,
+    });
+
+    debugLog(`[qqbot-api:${appId}] Token cached, expires at: ${new Date(expiresAt).toISOString()}`);
+    return data.access_token;
+  } finally {
+    await release();
   }
-
-  if (!data.access_token) {
-    throw new Error(`Failed to get access_token: ${JSON.stringify(data)}`);
-  }
-
-  const expiresAt = Date.now() + (data.expires_in ?? 7200) * 1000;
-
-  tokenCacheMap.set(appId, {
-    token: data.access_token,
-    expiresAt,
-    appId,
-  });
-
-  debugLog(`[qqbot-api:${appId}] Token cached, expires at: ${new Date(expiresAt).toISOString()}`);
-  return data.access_token;
 }
 
 /** Clear one token cache or all token caches. */
@@ -233,8 +259,15 @@ export async function apiRequest<T = unknown>(
   }
 
   let res: Response;
+  let release = async () => {};
   try {
-    res = await fetch(url, options);
+    const guarded = await fetchWithSsrFGuard({
+      url,
+      init: options,
+      auditContext: `qqbot.api${path}`,
+    });
+    res = guarded.response;
+    release = guarded.release;
   } catch (err) {
     clearTimeout(timeoutId);
     if (err instanceof Error && err.name === "AbortError") {
@@ -256,24 +289,25 @@ export async function apiRequest<T = unknown>(
     `[qqbot-api] <<< Status: ${res.status} ${res.statusText}${traceId ? ` | TraceId: ${traceId}` : ""}`,
   );
 
-  let data: T;
-  let rawBody: string;
   try {
-    rawBody = await res.text();
+    let data: T;
+    const rawBody = await res.text();
     debugLog(`[qqbot-api] <<< Body:`, rawBody);
     data = JSON.parse(rawBody) as T;
+
+    if (!res.ok) {
+      const error = data as { message?: string; code?: number };
+      throw new Error(`API Error [${path}]: ${error.message ?? JSON.stringify(data)}`);
+    }
+
+    return data;
   } catch (err) {
     throw new Error(`Failed to parse response[${path}]: ${formatErrorMessage(err)}`, {
       cause: err,
     });
+  } finally {
+    await release();
   }
-
-  if (!res.ok) {
-    const error = data as { message?: string; code?: number };
-    throw new Error(`API Error [${path}]: ${error.message ?? JSON.stringify(data)}`);
-  }
-
-  return data;
 }
 
 // Upload retry with exponential backoff.

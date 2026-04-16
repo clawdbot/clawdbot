@@ -622,6 +622,38 @@ describe("connectGateway", () => {
     },
   );
 
+  it.each(["aborted", "error"] as const)(
+    "replays deferred session.message reloads after %s clears the active run",
+    (terminalState) => {
+      const { host, client } = connectHostGateway();
+      host.chatRunId = "main-run-3";
+      loadChatHistoryMock.mockClear();
+
+      client.emitEvent({
+        event: "session.message",
+        payload: {
+          sessionKey: "main",
+        },
+      });
+
+      expect(loadChatHistoryMock).not.toHaveBeenCalled();
+
+      client.emitEvent({
+        event: "chat",
+        payload: {
+          runId: "main-run-3",
+          sessionKey: "main",
+          state: terminalState,
+          errorMessage: terminalState === "error" ? "chat failed" : undefined,
+        },
+      });
+
+      expect(host.chatRunId).toBeNull();
+      expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+      expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
+    },
+  );
+
   it("clears tracked BTW terminal runs after reconnect hello", () => {
     const host = createHost();
 
