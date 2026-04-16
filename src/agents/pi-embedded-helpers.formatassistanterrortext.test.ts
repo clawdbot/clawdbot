@@ -167,21 +167,21 @@ describe("formatAssistantErrorText", () => {
     expect(result).toBe("⚠️ Your quota has been exhausted, try again in 24 hours");
   });
 
-  it("falls back to generic copy for HTML quota pages", () => {
+  it("returns upstream HTML copy for HTML quota pages", () => {
     const msg = makeAssistantError(
       "429 <!DOCTYPE html><html><body>Your quota is exhausted</body></html>",
     );
     expect(formatAssistantErrorText(msg)).toBe(
-      "⚠️ API rate limit reached. Please try again later.",
+      "The provider returned an HTML error page instead of an API response. This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. Retry in a moment or check provider status.",
     );
   });
 
-  it("falls back to generic copy for prefixed HTML rate-limit pages", () => {
+  it("returns upstream HTML copy for prefixed 521 HTML rate-limit pages", () => {
     const msg = makeAssistantError(
       "Error: 521 <!DOCTYPE html><html><body>rate limit</body></html>",
     );
     expect(formatAssistantErrorText(msg)).toBe(
-      "⚠️ API rate limit reached. Please try again later.",
+      "The provider returned an HTML error page instead of an API response. This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. Retry in a moment or check provider status.",
     );
   });
 

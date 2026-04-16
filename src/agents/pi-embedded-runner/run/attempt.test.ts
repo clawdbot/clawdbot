@@ -424,19 +424,33 @@ describe("resolveAttemptFsWorkspaceOnly", () => {
 });
 
 describe("resolveUnknownToolGuardThreshold", () => {
-  it("returns undefined when loop detection is disabled", () => {
-    expect(resolveUnknownToolGuardThreshold({ enabled: false, unknownToolThreshold: 4 })).toBe(
-      undefined,
-    );
-    expect(resolveUnknownToolGuardThreshold(undefined)).toBe(undefined);
+  it("returns the default threshold when no loop-detection config is provided", () => {
+    expect(resolveUnknownToolGuardThreshold(undefined)).toBe(10);
+    expect(resolveUnknownToolGuardThreshold({})).toBe(10);
   });
 
-  it("uses the default threshold when loop detection is enabled without an override", () => {
-    expect(resolveUnknownToolGuardThreshold({ enabled: true })).toBe(10);
+  it("stays on even when tools.loopDetection.enabled is false (safety net)", () => {
+    // The unknown-tool guard has no false-positive surface — the tool is
+    // objectively not registered — so it is always on regardless of the
+    // opt-in genericRepeat/pingPong/pollNoProgress detectors.
+    expect(resolveUnknownToolGuardThreshold({ enabled: false })).toBe(10);
+    expect(resolveUnknownToolGuardThreshold({ enabled: false, unknownToolThreshold: 3 })).toBe(3);
   });
 
   it("uses the configured threshold override when provided", () => {
     expect(resolveUnknownToolGuardThreshold({ enabled: true, unknownToolThreshold: 4 })).toBe(4);
+  });
+
+  it("falls back to the default threshold when the override is non-positive", () => {
+    expect(resolveUnknownToolGuardThreshold({ unknownToolThreshold: 0 })).toBe(10);
+    expect(resolveUnknownToolGuardThreshold({ unknownToolThreshold: -5 })).toBe(10);
+    expect(
+      resolveUnknownToolGuardThreshold({ unknownToolThreshold: Number.NaN }),
+    ).toBe(10);
+  });
+
+  it("floors fractional overrides", () => {
+    expect(resolveUnknownToolGuardThreshold({ unknownToolThreshold: 3.7 })).toBe(3);
   });
 });
 

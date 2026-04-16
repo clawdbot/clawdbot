@@ -15,6 +15,68 @@ type StreamModel = Parameters<StreamFn>[0];
 
 const preloadInFlight = new Map<string, Promise<void>>();
 
+/**
+ * Cooldown state for the LM Studio preload endpoint.
+ *
+ * Without this, every chat request would retry preload ~every 2s even when
+ * LM Studio has rejected the load (for example the memory guardrail will keep
+ * rejecting until the user adjusts the setting or frees RAM). That produced
+ * hundreds of `LM Studio inference preload failed` WARN lines per hour without
+ * actually helping the user. The cooldown applies an exponential backoff per
+ * preloadKey and, while the cooldown is active, the wrapper skips the preload
+ * step entirely and proceeds directly to streaming — the model is often
+ * already loaded from the user's LM Studio UI, so inference can succeed even
+ * when preload keeps being rejected.
+ */
+type PreloadCooldownEntry = {
+  untilMs: number;
+  consecutiveFailures: number;
+};
+
+const preloadCooldown = new Map<string, PreloadCooldownEntry>();
+
+const PRELOAD_BACKOFF_BASE_MS = 5_000;
+const PRELOAD_BACKOFF_MAX_MS = 300_000;
+
+function computePreloadBackoffMs(consecutiveFailures: number): number {
+  const exponent = Math.max(0, consecutiveFailures - 1);
+  const raw = PRELOAD_BACKOFF_BASE_MS * 2 ** exponent;
+  return Math.min(PRELOAD_BACKOFF_MAX_MS, raw);
+}
+
+function recordPreloadSuccess(preloadKey: string): void {
+  preloadCooldown.delete(preloadKey);
+}
+
+function recordPreloadFailure(preloadKey: string, now: number): PreloadCooldownEntry {
+  const existing = preloadCooldown.get(preloadKey);
+  const consecutiveFailures = (existing?.consecutiveFailures ?? 0) + 1;
+  const entry: PreloadCooldownEntry = {
+    consecutiveFailures,
+    untilMs: now + computePreloadBackoffMs(consecutiveFailures),
+  };
+  preloadCooldown.set(preloadKey, entry);
+  return entry;
+}
+
+function isPreloadCoolingDown(preloadKey: string, now: number): PreloadCooldownEntry | undefined {
+  const entry = preloadCooldown.get(preloadKey);
+  if (!entry) {
+    return undefined;
+  }
+  if (entry.untilMs <= now) {
+    preloadCooldown.delete(preloadKey);
+    return undefined;
+  }
+  return entry;
+}
+
+/** Test-only hook for clearing preload cooldown state between cases. */
+export function __resetLmstudioPreloadCooldownForTest(): void {
+  preloadCooldown.clear();
+  preloadInFlight.clear();
+}
+
 function normalizeLmstudioModelKey(modelId: string): string {
   const trimmed = modelId.trim();
   if (trimmed.toLowerCase().startsWith("lmstudio/")) {
@@ -131,29 +193,67 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
       modelKey,
       requestedContextLength,
     });
+
+    const cooldownEntry = isPreloadCoolingDown(preloadKey, Date.now());
     const existing = preloadInFlight.get(preloadKey);
-    const preloadPromise =
+    const preloadPromise: Promise<void> | undefined =
       existing ??
-      ensureLmstudioModelLoadedBestEffort({
-        baseUrl: resolvedBaseUrl,
-        modelKey,
-        requestedContextLength,
-        options,
-        ctx,
-        modelHeaders: resolveModelHeaders(model),
-      }).finally(() => {
-        preloadInFlight.delete(preloadKey);
-      });
-    if (!existing) {
-      preloadInFlight.set(preloadKey, preloadPromise);
-    }
+      (cooldownEntry
+        ? undefined
+        : (() => {
+            const created = ensureLmstudioModelLoadedBestEffort({
+              baseUrl: resolvedBaseUrl,
+              modelKey,
+              requestedContextLength,
+              options,
+              ctx,
+              modelHeaders: resolveModelHeaders(model),
+            })
+              .then(
+                () => {
+                  recordPreloadSuccess(preloadKey);
+                },
+                (error) => {
+                  const entry = recordPreloadFailure(preloadKey, Date.now());
+                  throw Object.assign(new Error("preload-failed"), {
+                    cause: error,
+                    consecutiveFailures: entry.consecutiveFailures,
+                    cooldownMs: entry.untilMs - Date.now(),
+                  });
+                },
+              )
+              .finally(() => {
+                preloadInFlight.delete(preloadKey);
+              });
+            preloadInFlight.set(preloadKey, created);
+            return created;
+          })());
 
     return (async () => {
-      try {
-        await preloadPromise;
-      } catch (error) {
-        log.warn(
-          `LM Studio inference preload failed for "${modelKey}"; continuing without preload: ${String(error)}`,
+      if (preloadPromise) {
+        try {
+          await preloadPromise;
+        } catch (error) {
+          const annotated = error as {
+            cause?: unknown;
+            consecutiveFailures?: number;
+            cooldownMs?: number;
+          };
+          const cause = annotated.cause ?? error;
+          const failures = annotated.consecutiveFailures ?? 1;
+          const cooldownSec = Math.max(
+            0,
+            Math.round((annotated.cooldownMs ?? 0) / 1000),
+          );
+          log.warn(
+            `LM Studio inference preload failed for "${modelKey}" (${failures} consecutive failure${
+              failures === 1 ? "" : "s"
+            }, next preload attempt skipped for ~${cooldownSec}s); continuing without preload: ${String(cause)}`,
+          );
+        }
+      } else if (cooldownEntry) {
+        log.debug(
+          `LM Studio inference preload for "${modelKey}" skipped while backoff active (${cooldownEntry.consecutiveFailures} prior failures)`,
         );
       }
       // LM Studio uses OpenAI-compatible streaming usage payloads when requested via

@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
 import { resetPdfToolAuthEnv, withTempPdfAgentDir } from "./pdf-tool.test-support.js";
 
-const ANTHROPIC_PDF_MODEL = "anthropic/claude-opus-4-6";
+const ANTHROPIC_PDF_MODEL = "anthropic/claude-opus-4-7";
 
 function withDefaultModel(primary: string): OpenClawConfig {
   return {

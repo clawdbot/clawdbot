@@ -2,6 +2,10 @@ import chokidar from "chokidar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
+import {
+  getSkillsSnapshotVersion,
+  resetSkillsRefreshStateForTest,
+} from "../agents/skills/refresh-state.js";
 import type { ConfigFileSnapshot, ConfigWriteNotification } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -9,6 +13,7 @@ import {
   buildGatewayReloadPlan,
   diffConfigPaths,
   resolveGatewayReloadSettings,
+  shouldInvalidateSkillsSnapshotForPaths,
   startGatewayConfigReloader,
 } from "./config-reload.js";
 
@@ -614,5 +619,128 @@ describe("startGatewayConfigReloader", () => {
     expect(harness.onRestart).toHaveBeenCalledTimes(1);
 
     await harness.reloader.stop();
+  });
+
+  it("does not dedupe when initialInternalWriteHash is null (#67436)", async () => {
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(
+        makeSnapshot({
+          config: {
+            gateway: { reload: { debounceMs: 0 }, auth: { mode: "token", token: "startup" } },
+          },
+          hash: "startup-internal-1",
+        }),
+      );
+    const harness = createReloaderHarness(readSnapshot, {
+      initialInternalWriteHash: null,
+    });
+
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    // With a null hash the guard is a no-op, so the reload proceeds and
+    // detects a config diff → restart.  This is the pre-fix regression
+    // scenario from #67436 where plugin auto-enable was the only startup
+    // writer and the hash was never captured.
+    expect(harness.onRestart).toHaveBeenCalledTimes(1);
+
+    await harness.reloader.stop();
+  });
+});
+
+describe("shouldInvalidateSkillsSnapshotForPaths", () => {
+  it.each([
+    "skills",
+    "skills.allowBundled",
+    "skills.entries",
+    "skills.entries.himalaya",
+    "skills.entries.himalaya.enabled",
+    "skills.profile",
+  ])("returns true for skills path %s", (path) => {
+    expect(shouldInvalidateSkillsSnapshotForPaths([path])).toBe(true);
+  });
+
+  it.each([
+    "tools.profile",
+    "agents.defaults.model",
+    "gateway.port",
+    "skillset.allowBundled",
+    "channels.telegram.enabled",
+  ])("returns false for unrelated path %s", (path) => {
+    expect(shouldInvalidateSkillsSnapshotForPaths([path])).toBe(false);
+  });
+
+  it("returns true when any path in the list matches", () => {
+    expect(
+      shouldInvalidateSkillsSnapshotForPaths([
+        "gateway.port",
+        "skills.allowBundled",
+        "channels.telegram.enabled",
+      ]),
+    ).toBe(true);
+  });
+
+  it("returns false for empty input", () => {
+    expect(shouldInvalidateSkillsSnapshotForPaths([])).toBe(false);
+  });
+});
+
+describe("startGatewayConfigReloader skills invalidation", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    resetSkillsRefreshStateForTest();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    resetSkillsRefreshStateForTest();
+  });
+
+  it("bumps the skills snapshot version when skills.allowBundled changes", async () => {
+    const before = getSkillsSnapshotVersion();
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        config: {
+          gateway: { reload: { debounceMs: 0 } },
+          skills: { allowBundled: ["gog"] },
+        },
+        hash: "skills-change-1",
+      }),
+    );
+    const { watcher, log, reloader } = createReloaderHarness(readSnapshot);
+
+    watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    const after = getSkillsSnapshotVersion();
+    expect(after).toBeGreaterThan(before);
+    expect(log.info).toHaveBeenCalledWith(
+      expect.stringContaining("skills snapshot invalidated by config change"),
+    );
+
+    await reloader.stop();
+  });
+
+  it("does not bump the snapshot version when unrelated config changes", async () => {
+    const before = getSkillsSnapshotVersion();
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        config: {
+          gateway: { reload: { debounceMs: 0 }, port: 18790 },
+        },
+        hash: "unrelated-change-1",
+      }),
+    );
+    const { watcher, reloader } = createReloaderHarness(readSnapshot);
+
+    watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(getSkillsSnapshotVersion()).toBe(before);
+
+    await reloader.stop();
   });
 });

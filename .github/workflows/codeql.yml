@@ -2,6 +2,8 @@ name: CodeQL
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * *"
 
 concurrency:
   group: codeql-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
@@ -70,7 +72,7 @@ jobs:
             config_file: ""
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           submodules: false
 
@@ -83,13 +85,13 @@ jobs:
 
       - name: Setup Python
         if: matrix.needs_python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: "3.12"
 
       - name: Setup Java
         if: matrix.needs_java
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5
         with:
           distribution: temurin
           java-version: "21"
@@ -103,7 +105,7 @@ jobs:
           swift --version
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4
+        uses: github/codeql-action/init@b25d0ebf40e5b63ee81e1bd6e5d2a12b7c2aeb61 # v4
         with:
           languages: ${{ matrix.language }}
           queries: security-and-quality
@@ -111,7 +113,7 @@ jobs:
 
       - name: Autobuild
         if: matrix.needs_autobuild
-        uses: github/codeql-action/autobuild@v4
+        uses: github/codeql-action/autobuild@b25d0ebf40e5b63ee81e1bd6e5d2a12b7c2aeb61 # v4
 
       - name: Build Android for CodeQL
         if: matrix.language == 'java-kotlin'
@@ -132,6 +134,6 @@ jobs:
             CODE_SIGNING_ALLOWED=NO
 
       - name: Analyze
-        uses: github/codeql-action/analyze@v4
+        uses: github/codeql-action/analyze@b25d0ebf40e5b63ee81e1bd6e5d2a12b7c2aeb61 # v4
         with:
           category: "/language:${{ matrix.language }}"

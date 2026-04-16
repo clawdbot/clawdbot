@@ -118,6 +118,122 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     expect(messageLine.message.content[0].text).toBe("Hello from delivery mirror!");
   });
 
+  it("does not append a duplicate delivery mirror when the latest assistant message already matches", async () => {
+    writeTranscriptStore();
+
+    const exactResult = await appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Hello from Codex!" }],
+        api: "openai-responses",
+        provider: "codex",
+        model: "gpt-5.4",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: Date.now(),
+      },
+    });
+
+    expect(exactResult.ok).toBe(true);
+
+    const mirrorResult = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Hello from Codex!",
+      storePath: fixture.storePath(),
+    });
+
+    expect(mirrorResult.ok).toBe(true);
+    if (exactResult.ok && mirrorResult.ok) {
+      expect(mirrorResult.messageId).toBe(exactResult.messageId);
+      const lines = fs.readFileSync(mirrorResult.sessionFile, "utf-8").trim().split("\n");
+      expect(lines.length).toBe(2);
+
+      const messageLine = JSON.parse(lines[1]);
+      expect(messageLine.message.provider).toBe("codex");
+      expect(messageLine.message.model).toBe("gpt-5.4");
+      expect(messageLine.message.content[0].text).toBe("Hello from Codex!");
+    }
+  });
+
+  it("does not reuse an older matching assistant message across turns", async () => {
+    writeTranscriptStore();
+
+    const olderResult = await appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Repeated answer" }],
+        api: "openai-responses",
+        provider: "codex",
+        model: "gpt-5.4",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: Date.now(),
+      },
+    });
+
+    const latestResult = await appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Different latest answer" }],
+        api: "openai-responses",
+        provider: "codex",
+        model: "gpt-5.4",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: Date.now(),
+      },
+    });
+
+    const mirrorResult = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Repeated answer",
+      storePath: fixture.storePath(),
+    });
+
+    expect(olderResult.ok).toBe(true);
+    expect(latestResult.ok).toBe(true);
+    expect(mirrorResult.ok).toBe(true);
+    if (olderResult.ok && latestResult.ok && mirrorResult.ok) {
+      expect(mirrorResult.messageId).not.toBe(olderResult.messageId);
+      expect(mirrorResult.messageId).not.toBe(latestResult.messageId);
+
+      const lines = fs.readFileSync(mirrorResult.sessionFile, "utf-8").trim().split("\n");
+      expect(lines.length).toBe(4);
+
+      const messageLine = JSON.parse(lines[3]);
+      expect(messageLine.message.provider).toBe("openclaw");
+      expect(messageLine.message.model).toBe("delivery-mirror");
+      expect(messageLine.message.content[0].text).toBe("Repeated answer");
+    }
+  });
+
   it("finds session entry using normalized (lowercased) key", async () => {
     const storeKey = "agent:main:bluebubbles:direct:+15551234567";
     const store = {

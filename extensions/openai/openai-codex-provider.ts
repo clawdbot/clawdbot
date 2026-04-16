@@ -94,6 +94,25 @@ const OPENAI_CODEX_MODERN_MODEL_IDS = [
   OPENAI_CODEX_GPT_53_MODEL_ID,
   OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
 ] as const;
+
+function normalizeCodexTransportFields(params: {
+  api?: ProviderRuntimeModel["api"] | null;
+  baseUrl?: string;
+}): {
+  api?: ProviderRuntimeModel["api"];
+  baseUrl?: string;
+} {
+  const useCodexTransport =
+    !params.baseUrl || isOpenAIApiBaseUrl(params.baseUrl) || isOpenAICodexBaseUrl(params.baseUrl);
+  const api =
+    useCodexTransport && (!params.api || params.api === "openai-responses")
+      ? "openai-codex-responses"
+      : (params.api ?? undefined);
+  const baseUrl =
+    api === "openai-codex-responses" && useCodexTransport ? OPENAI_CODEX_BASE_URL : params.baseUrl;
+  return { api, baseUrl };
+}
+
 function normalizeCodexTransport(model: ProviderRuntimeModel): ProviderRuntimeModel {
   const lowerModelId = normalizeLowercaseStringOrEmpty(model.id);
   const canonicalModelId =
@@ -102,14 +121,12 @@ function normalizeCodexTransport(model: ProviderRuntimeModel): ProviderRuntimeMo
     normalizeLowercaseStringOrEmpty(model.name) === OPENAI_CODEX_GPT_54_LEGACY_MODEL_ID
       ? OPENAI_CODEX_GPT_54_MODEL_ID
       : model.name;
-  const useCodexTransport =
-    !model.baseUrl || isOpenAIApiBaseUrl(model.baseUrl) || isOpenAICodexBaseUrl(model.baseUrl);
-  const api =
-    useCodexTransport && model.api === "openai-responses" ? "openai-codex-responses" : model.api;
-  const baseUrl =
-    api === "openai-codex-responses" && (!model.baseUrl || isOpenAIApiBaseUrl(model.baseUrl))
-      ? OPENAI_CODEX_BASE_URL
-      : model.baseUrl;
+  const normalizedTransport = normalizeCodexTransportFields({
+    api: model.api,
+    baseUrl: model.baseUrl,
+  });
+  const api = normalizedTransport.api ?? model.api;
+  const baseUrl = normalizedTransport.baseUrl ?? model.baseUrl;
   if (
     api === model.api &&
     baseUrl === model.baseUrl &&
@@ -334,6 +351,16 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
         return undefined;
       }
       return normalizeCodexTransport(ctx.model);
+    },
+    normalizeTransport: ({ provider, api, baseUrl }) => {
+      if (normalizeProviderId(provider) !== PROVIDER_ID) {
+        return undefined;
+      }
+      const normalized = normalizeCodexTransportFields({ api, baseUrl });
+      if (normalized.api === api && normalized.baseUrl === baseUrl) {
+        return undefined;
+      }
+      return normalized;
     },
     resolveUsageAuth: async (ctx) => await ctx.resolveOAuthToken(),
     fetchUsageSnapshot: async (ctx) =>

@@ -17,11 +17,15 @@ describe("openai base URL helpers", () => {
   it("recognizes Codex ChatGPT backend routes", () => {
     expect(isOpenAICodexBaseUrl("https://chatgpt.com/backend-api")).toBe(true);
     expect(isOpenAICodexBaseUrl("https://chatgpt.com/backend-api/")).toBe(true);
+    expect(isOpenAICodexBaseUrl("https://chatgpt.com/backend-api/v1")).toBe(true);
+    expect(isOpenAICodexBaseUrl("https://chatgpt.com/backend-api/v1/")).toBe(true);
   });
 
   it("rejects non-Codex backend routes", () => {
     expect(isOpenAICodexBaseUrl("https://api.openai.com/v1")).toBe(false);
     expect(isOpenAICodexBaseUrl("https://chatgpt.com")).toBe(false);
+    expect(isOpenAICodexBaseUrl("https://chatgpt.com/backend-api/v2")).toBe(false);
+    expect(isOpenAICodexBaseUrl("https://chatgpt.com/backend-api/codex")).toBe(false);
     expect(isOpenAICodexBaseUrl(undefined)).toBe(false);
   });
 });

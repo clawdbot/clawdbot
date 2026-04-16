@@ -83,10 +83,10 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Docker Builder
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v4
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
@@ -153,7 +153,7 @@ jobs:
       - name: Build and push amd64 image
         id: build
         # WARNING: KEEP THE OFFICIAL DOCKER ACTION HERE; DO NOT SWITCH THIS BACK TO BLACKSMITH BLINDLY.
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           platforms: linux/amd64
@@ -167,7 +167,7 @@ jobs:
       - name: Build and push amd64 slim image
         id: build-slim
         # WARNING: KEEP THE OFFICIAL DOCKER ACTION HERE; DO NOT SWITCH THIS BACK TO BLACKSMITH BLINDLY.
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           platforms: linux/amd64
@@ -200,10 +200,10 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Docker Builder
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v4
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
@@ -270,7 +270,7 @@ jobs:
       - name: Build and push arm64 image
         id: build
         # WARNING: KEEP THE OFFICIAL DOCKER ACTION HERE; DO NOT SWITCH THIS BACK TO BLACKSMITH BLINDLY.
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           platforms: linux/arm64
@@ -284,7 +284,7 @@ jobs:
       - name: Build and push arm64 slim image
         id: build-slim
         # WARNING: KEEP THE OFFICIAL DOCKER ACTION HERE; DO NOT SWITCH THIS BACK TO BLACKSMITH BLINDLY.
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           platforms: linux/arm64
@@ -314,7 +314,7 @@ jobs:
           fetch-depth: 0
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v4
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}

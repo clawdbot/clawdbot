@@ -643,29 +643,41 @@ export function describeTtsConfigContract() {
       });
 
       it("passes cfg into auto-selection so model-provider Google keys can configure TTS", () => {
-        const cfg = asLegacyOpenClawConfig({
-          agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
-          models: {
-            providers: {
-              google: {
-                apiKey: "model-provider-google-key",
-              },
-            },
+        withEnv(
+          {
+            OPENAI_API_KEY: undefined,
+            ELEVENLABS_API_KEY: undefined,
+            XI_API_KEY: undefined,
+            MINIMAX_API_KEY: undefined,
+            GEMINI_API_KEY: undefined,
+            GOOGLE_API_KEY: undefined,
           },
-          messages: {
-            tts: {
-              providers: {
-                microsoft: {
-                  enabled: false,
+          () => {
+            const cfg = asLegacyOpenClawConfig({
+              agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+              models: {
+                providers: {
+                  google: {
+                    apiKey: "model-provider-google-key",
+                  },
                 },
               },
-            },
-          },
-        });
-        const config = resolveTtsConfig(cfg);
-        const prefsPath = `/tmp/tts-prefs-google-model-provider-${Date.now()}.json`;
+              messages: {
+                tts: {
+                  providers: {
+                    microsoft: {
+                      enabled: false,
+                    },
+                  },
+                },
+              },
+            });
+            const config = resolveTtsConfig(cfg);
+            const prefsPath = `/tmp/tts-prefs-google-model-provider-${Date.now()}.json`;
 
-        expect(getTtsProvider(config, prefsPath)).toBe("google");
+            expect(getTtsProvider(config, prefsPath)).toBe("google");
+          },
+        );
       });
     });
 

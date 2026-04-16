@@ -65,7 +65,7 @@ function parseHistoryPayload(text: string): Array<Record<string, unknown>> {
 }
 
 describe("buildInboundMetaSystemPrompt", () => {
-  it("includes session-stable routing fields", () => {
+  it("includes stable routing fields and omits chat ids", () => {
     const prompt = buildInboundMetaSystemPrompt({
       MessageSid: "123",
       MessageSidFull: "123",
@@ -80,9 +80,31 @@ describe("buildInboundMetaSystemPrompt", () => {
 
     const payload = parseInboundMetaPayload(prompt);
     expect(payload["schema"]).toBe("openclaw.inbound_meta.v2");
-    expect(payload["chat_id"]).toBe("telegram:5494292670");
+    expect(payload["chat_id"]).toBeUndefined();
     expect(payload["account_id"]).toBe("work");
     expect(payload["channel"]).toBe("telegram");
+  });
+
+  it("keeps task-scoped chat ids out of the system prompt for cache stability", () => {
+    const first = buildInboundMetaSystemPrompt({
+      OriginatingTo: "paperclip:issue:c585d0cc",
+      OriginatingChannel: "paperclip",
+      Provider: "paperclip",
+      Surface: "paperclip",
+      ChatType: "direct",
+      AccountId: "default",
+    } as TemplateContext);
+    const second = buildInboundMetaSystemPrompt({
+      OriginatingTo: "paperclip:issue:ca527062",
+      OriginatingChannel: "paperclip",
+      Provider: "paperclip",
+      Surface: "paperclip",
+      ChatType: "direct",
+      AccountId: "default",
+    } as TemplateContext);
+
+    expect(parseInboundMetaPayload(first)["chat_id"]).toBeUndefined();
+    expect(first).toBe(second);
   });
 
   it("does not include per-turn message identifiers (cache stability)", () => {
@@ -233,12 +255,14 @@ describe("buildInboundUserContextPrefix", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "direct",
       OriginatingChannel: "whatsapp",
+      OriginatingTo: "whatsapp:+15551230000",
       MessageSid: "short-id",
       MessageSidFull: "provider-full-id",
       SenderE164: " +15551234567 ",
     } as TemplateContext);
 
     const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["chat_id"]).toBe("whatsapp:+15551230000");
     expect(conversationInfo["message_id"]).toBe("short-id");
     expect(conversationInfo["message_id_full"]).toBeUndefined();
     expect(conversationInfo["sender"]).toBe("+15551234567");

@@ -6,7 +6,11 @@ import {
   isRedactedSessionsSpawnAttachment,
   sanitizeToolUseResultPairing,
 } from "../../session-transcript-repair.js";
-import { extractToolCallsFromAssistant } from "../../tool-call-id.js";
+import {
+  extractToolCallsFromAssistant,
+  sanitizeToolCallIdsForCloudCodeAssist,
+  type ToolCallIdMode,
+} from "../../tool-call-id.js";
 import { normalizeToolName } from "../../tool-policy.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import type { TranscriptPolicy } from "../../transcript-policy.js";
@@ -866,6 +870,25 @@ export function wrapStreamFnTrimToolCallNames(
       state: unknownToolGuardState,
     });
   };
+}
+
+export function sanitizeReplayToolCallIdsForStream(params: {
+  messages: AgentMessage[];
+  mode: ToolCallIdMode;
+  allowedToolNames?: Set<string>;
+  preserveNativeAnthropicToolUseIds?: boolean;
+  preserveReplaySafeThinkingToolCallIds?: boolean;
+  repairToolUseResultPairing?: boolean;
+}): AgentMessage[] {
+  const sanitized = sanitizeToolCallIdsForCloudCodeAssist(params.messages, params.mode, {
+    preserveNativeAnthropicToolUseIds: params.preserveNativeAnthropicToolUseIds,
+    preserveReplaySafeThinkingToolCallIds: params.preserveReplaySafeThinkingToolCallIds,
+    allowedToolNames: params.allowedToolNames,
+  });
+  if (!params.repairToolUseResultPairing) {
+    return sanitized;
+  }
+  return sanitizeToolUseResultPairing(sanitized);
 }
 
 export function wrapStreamFnSanitizeMalformedToolCalls(

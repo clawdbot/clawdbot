@@ -20,6 +20,8 @@ jobs:
   # Preflight: establish routing truth and job matrices once, then let real
   # work fan out from a single source of truth.
   preflight:
+    permissions:
+      contents: read
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
@@ -298,6 +300,8 @@ jobs:
   # Run the fast security/SCM checks in parallel with scope detection so the
   # main Node jobs do not have to wait for Python/pre-commit setup.
   security-fast:
+    permissions:
+      contents: read
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
@@ -396,6 +400,8 @@ jobs:
   # Keep this overlapping with the fast correctness lanes so green PRs get heavy
   # test/build feedback sooner instead of waiting behind a full `check` pass.
   build-artifacts:
+    permissions:
+      contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_build_artifacts == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
@@ -449,6 +455,8 @@ jobs:
           retention-days: 1
 
   checks-fast-core:
+    permissions:
+      contents: read
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast == 'true'
@@ -493,6 +501,8 @@ jobs:
           esac
 
   checks-node-extensions-shard:
+    permissions:
+      contents: read
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast == 'true'
@@ -520,6 +530,8 @@ jobs:
         run: pnpm test:extensions:batch -- "$OPENCLAW_EXTENSION_BATCH"
 
   checks-node-extensions:
+    permissions:
+      contents: read
     name: checks-node-extensions
     needs: [preflight, checks-node-extensions-shard]
     if: always() && needs.preflight.outputs.run_checks_fast == 'true'
@@ -536,6 +548,8 @@ jobs:
           fi
 
   checks:
+    permissions:
+      contents: read
     name: ${{ matrix.check_name }}
     needs: [preflight, build-artifacts]
     if: always() && needs.preflight.outputs.run_checks == 'true' && needs.build-artifacts.result == 'success'
@@ -622,6 +636,8 @@ jobs:
           esac
 
   checks-node-core-test-shard:
+    permissions:
+      contents: read
     name: ${{ matrix.check_name }}
     needs: [preflight, build-artifacts]
     if: always() && needs.preflight.outputs.run_checks == 'true' && needs.build-artifacts.result == 'success'
@@ -711,6 +727,8 @@ jobs:
           EOF
 
   checks-node-core-test:
+    permissions:
+      contents: read
     name: checks-node-core
     needs: [preflight, checks-node-core-test-shard]
     if: always() && needs.preflight.outputs.run_checks == 'true'
@@ -727,6 +745,8 @@ jobs:
           fi
 
   extension-fast:
+    permissions:
+      contents: read
     name: "extension-fast"
     needs: [preflight]
     if: needs.preflight.outputs.run_extension_fast == 'true'
@@ -755,6 +775,8 @@ jobs:
 
   # Types, lint, and format check.
   check:
+    permissions:
+      contents: read
     name: "check"
     needs: [preflight]
     if: always() && needs.preflight.outputs.run_check == 'true'
@@ -782,6 +804,8 @@ jobs:
         run: pnpm build:strict-smoke
 
   check-additional:
+    permissions:
+      contents: read
     name: "check-additional"
     needs: [preflight]
     if: always() && needs.preflight.outputs.run_check_additional == 'true'
@@ -989,6 +1013,8 @@ jobs:
           exit "$failures"
 
   build-smoke:
+    permissions:
+      contents: read
     name: "build-smoke"
     needs: [preflight, build-artifacts]
     if: always() && needs.preflight.outputs.run_build_smoke == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success')
@@ -1043,6 +1069,8 @@ jobs:
 
   # Validate docs (format, lint, broken links) only when docs files changed.
   check-docs:
+    permissions:
+      contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_check_docs == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
@@ -1064,6 +1092,8 @@ jobs:
         run: pnpm check:docs
 
   skills-python:
+    permissions:
+      contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_skills_python_job == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
@@ -1092,6 +1122,8 @@ jobs:
         run: python -m pytest -q skills
 
   checks-windows:
+    permissions:
+      contents: read
     name: ${{ matrix.check_name }}
     needs: [preflight, build-artifacts]
     if: always() && needs.preflight.outputs.run_checks_windows == 'true' && needs.build-artifacts.result == 'success'
@@ -1207,6 +1239,8 @@ jobs:
           esac
 
   macos-node:
+    permissions:
+      contents: read
     name: ${{ matrix.check_name }}
     needs: [preflight, build-artifacts]
     if: always() && needs.preflight.outputs.run_macos_node == 'true' && needs.build-artifacts.result == 'success'
@@ -1260,6 +1294,8 @@ jobs:
           esac
 
   macos-swift:
+    permissions:
+      contents: read
     name: "macos-swift"
     needs: [preflight]
     if: needs.preflight.outputs.run_macos_swift == 'true'
@@ -1324,6 +1360,8 @@ jobs:
           exit 1
 
   android:
+    permissions:
+      contents: read
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_android_job == 'true'

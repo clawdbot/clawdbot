@@ -200,10 +200,14 @@ describe("CodexAppServerClient", () => {
     expect(process.unref).toHaveBeenCalledTimes(1);
   });
   it("reads the Codex version from the app-server user agent", () => {
+    expect(readCodexVersionFromUserAgent("Codex Desktop/0.118.0")).toBe("0.118.0");
     expect(readCodexVersionFromUserAgent("openclaw/0.118.0 (macOS; test)")).toBe("0.118.0");
     expect(readCodexVersionFromUserAgent("codex_cli_rs/0.118.1-dev (linux; test)")).toBe(
       "0.118.1-dev",
     );
+    expect(readCodexVersionFromUserAgent("Codex Desktop/not-a-version")).toBeUndefined();
+    expect(readCodexVersionFromUserAgent("Codex Desktop/0.118")).toBeUndefined();
+    expect(readCodexVersionFromUserAgent("openclaw/0.118.0abc")).toBeUndefined();
     expect(readCodexVersionFromUserAgent("missing-version")).toBeUndefined();
   });
 

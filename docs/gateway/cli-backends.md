@@ -221,7 +221,7 @@ The bundled OpenAI plugin also registers a default for `codex-cli`:
 
 - `command: "codex"`
 - `args: ["exec","--json","--color","never","--sandbox","workspace-write","--skip-git-repo-check"]`
-- `resumeArgs: ["exec","resume","{sessionId}","--color","never","--sandbox","workspace-write","--skip-git-repo-check"]`
+- `resumeArgs: ["exec","resume","{sessionId}","-c","sandbox_mode=\"workspace-write\"","--skip-git-repo-check"]`
 - `output: "jsonl"`
 - `resumeOutput: "text"`
 - `modelArg: "--model"`

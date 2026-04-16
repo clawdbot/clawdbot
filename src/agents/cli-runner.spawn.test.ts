@@ -53,7 +53,7 @@ function buildPreparedCliRunContext(params: {
       : {
           command: "codex",
           args: ["exec", "--json"],
-          resumeArgs: ["exec", "resume", "{sessionId}", "--json"],
+          resumeArgs: ["exec", "resume", "{sessionId}", "--skip-git-repo-check"],
           output: "text" as const,
           input: "arg" as const,
           modelArg: "--model",
@@ -435,7 +435,16 @@ describe("runCliAgent spawn path", () => {
       scopeKey?: string;
     };
     expect(input.mode).toBe("child");
-    expect(input.argv?.[0]).toBe("codex");
+    expect(input.argv).toEqual([
+      "codex",
+      "exec",
+      "resume",
+      "thread-123",
+      "--skip-git-repo-check",
+      "--model",
+      "gpt-5.4",
+      "hi",
+    ]);
     expect(input.timeoutMs).toBe(1_000);
     expect(input.noOutputTimeoutMs).toBeGreaterThanOrEqual(1_000);
     expect(input.replaceExistingScope).toBe(true);

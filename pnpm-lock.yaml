@@ -6,8 +6,8 @@ settings:
 
 overrides:
   '@anthropic-ai/sdk': 0.81.0
-  hono: 4.12.12
-  '@hono/node-server': 1.19.13
+  hono: 4.12.14
+  '@hono/node-server': 1.19.14
   axios: 1.15.0
   follow-redirects: 1.16.0
   defu: 6.1.5
@@ -57,7 +57,7 @@ importers:
         version: 1.1.0
       '@buape/carbon':
         specifier: 0.15.0
-        version: 0.15.0(@discordjs/opus@0.10.0)(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(hono@4.12.12)(opusscript@0.1.1)
+        version: 0.15.0(@discordjs/opus@0.10.0)(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(hono@4.12.14)(opusscript@0.1.1)
       '@clack/prompts':
         specifier: ^1.2.0
         version: 1.2.0
@@ -533,7 +533,7 @@ importers:
     dependencies:
       '@buape/carbon':
         specifier: 0.15.0
-        version: 0.15.0(@discordjs/opus@0.10.0)(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(hono@4.12.12)(opusscript@0.1.1)
+        version: 0.15.0(@discordjs/opus@0.10.0)(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(hono@4.12.14)(opusscript@0.1.1)
       '@discordjs/voice':
         specifier: ^0.19.2
         version: 0.19.2(@discordjs/opus@0.10.0)(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(opusscript@0.1.1)
@@ -1315,8 +1315,8 @@ importers:
         specifier: 3.0.1
         version: 3.0.1
       dompurify:
-        specifier: ^3.3.3
-        version: 3.3.3
+        specifier: ^3.4.0
+        version: 3.4.0
       lit:
         specifier: ^3.3.2
         version: 3.3.2
@@ -2047,11 +2047,11 @@ packages:
     resolution: {integrity: sha512-2F9N/15Q/GnoBXimr8PFg7fb1QrAQBvuZpaW2kseWOOy14Lzc3yZB1mT9N1Ju/4hlkboU33uHxtOxZkvkPoE/w==}
     hasBin: true
 
-  '@hono/node-server@1.19.13':
-    resolution: {integrity: sha512-TsQLe4i2gvoTtrHje625ngThGBySOgSK3Xo2XRYOdqGN1teR8+I7vchQC46uLJi8OF62YTYA3AhSpumtkhsaKQ==}
+  '@hono/node-server@1.19.14':
+    resolution: {integrity: sha512-GwtvgtXxnWsucXvbQXkRgqksiH2Qed37H9xHZocE5sA3N8O8O8/8FA3uclQXxXVzc9XBZuEOMK7+r02FmSpHtw==}
     engines: {node: '>=18.14.1'}
     peerDependencies:
-      hono: 4.12.12
+      hono: 4.12.14
 
   '@huggingface/jinja@0.5.6':
     resolution: {integrity: sha512-MyMWyLnjqo+KRJYSH7oWNbsOn5onuIvfXYPcc0WOGxU0eHUV7oAYUoQTl2BMdu7ml+ea/bu11UM+EshbeHwtIA==}
@@ -5073,8 +5073,8 @@ packages:
     resolution: {integrity: sha512-cgwlv/1iFQiFnU96XXgROh8xTeetsnJiDsTc7TYCLFd9+/WNkIqPTxiM/8pSd8VIrhXGTf1Ny1q1hquVqDJB5w==}
     engines: {node: '>= 4'}
 
-  dompurify@3.3.3:
-    resolution: {integrity: sha512-Oj6pzI2+RqBfFG+qOaOLbFXLQ90ARpcGG6UePL82bJLtdsa6CYJD7nmiU8MW9nQNOtCHV3lZ/Bzq1X0QYbBZCA==}
+  dompurify@3.4.0:
+    resolution: {integrity: sha512-nolgK9JcaUXMSmW+j1yaSvaEaoXYHwWyGJlkoCTghc97KgGDDSnpoU/PlEnw63Ah+TGKFOyY+X5LnxaWbCSfXg==}
 
   domutils@3.2.2:
     resolution: {integrity: sha512-6kZKyUajlDuqlHKVX1w7gyslj9MPIXzIFiz/rGu35uC1wMi+kMhQwGhl4lt9unC9Vb9INnY9Z3/ZA3+FhASLaw==}
@@ -5533,8 +5533,8 @@ packages:
   highlight.js@10.7.3:
     resolution: {integrity: sha512-tzcUFauisWKNHaRkN4Wjl/ZA07gENAjFl3J/c480dprkGTg5EQstgaNFqBfUqCq54kZRIEcreTsAgF/m2quD7A==}
 
-  hono@4.12.12:
-    resolution: {integrity: sha512-p1JfQMKaceuCbpJKAPKVqyqviZdS0eUxH9v82oWo1kb9xjQ5wA6iP3FNVAPDFlz5/p7d45lO+BpSk1tuSZMF4Q==}
+  hono@4.12.14:
+    resolution: {integrity: sha512-am5zfg3yu6sqn5yjKBNqhnTX7Cv+m00ox+7jbaKkrLMRJ4rAdldd1xPd/JzbBWspqaQv6RSTrgFN95EsfhC+7w==}
     engines: {node: '>=16.9.0'}
 
   hookable@6.1.0:
@@ -8695,14 +8695,14 @@ snapshots:
     dependencies:
       css-tree: 3.2.1
 
-  '@buape/carbon@0.15.0(@discordjs/opus@0.10.0)(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(hono@4.12.12)(opusscript@0.1.1)':
+  '@buape/carbon@0.15.0(@discordjs/opus@0.10.0)(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(hono@4.12.14)(opusscript@0.1.1)':
     dependencies:
       '@types/node': 25.6.0
       discord-api-types: 0.38.45
     optionalDependencies:
       '@cloudflare/workers-types': 4.20260405.1
       '@discordjs/voice': 0.19.2(@discordjs/opus@0.10.0)(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(opusscript@0.1.1)
-      '@hono/node-server': 1.19.13(hono@4.12.12)
+      '@hono/node-server': 1.19.14(hono@4.12.14)
       '@types/bun': 1.3.11
       '@types/ws': 8.18.1
       ws: 8.20.0
@@ -9035,9 +9035,9 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@hono/node-server@1.19.13(hono@4.12.12)':
+  '@hono/node-server@1.19.14(hono@4.12.14)':
     dependencies:
-      hono: 4.12.12
+      hono: 4.12.14
 
   '@huggingface/jinja@0.5.6': {}
 
@@ -9713,7 +9713,7 @@ snapshots:
 
   '@modelcontextprotocol/sdk@1.29.0(zod@4.3.6)':
     dependencies:
-      '@hono/node-server': 1.19.13(hono@4.12.12)
+      '@hono/node-server': 1.19.14(hono@4.12.14)
       ajv: 8.18.0
       ajv-formats: 3.0.1(ajv@8.18.0)
       content-type: 1.0.5
@@ -9723,7 +9723,7 @@ snapshots:
       eventsource-parser: 3.0.6
       express: 5.2.1
       express-rate-limit: 8.3.2(express@5.2.1)
-      hono: 4.12.12
+      hono: 4.12.14
       jose: 6.2.2
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
@@ -12123,7 +12123,7 @@ snapshots:
     dependencies:
       domelementtype: 2.3.0
 
-  dompurify@3.3.3:
+  dompurify@3.4.0:
     optionalDependencies:
       '@types/trusted-types': 2.0.7
 
@@ -12692,7 +12692,7 @@ snapshots:
 
   highlight.js@10.7.3: {}
 
-  hono@4.12.12: {}
+  hono@4.12.14: {}
 
   hookable@6.1.0: {}
 

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   _resetBlueBubblesInboundDedupForTest,
   claimBlueBubblesInboundMessage,
+  resolveBlueBubblesInboundDedupeKey,
 } from "./inbound-dedupe.js";
 
 async function claimAndFinalize(guid: string | undefined, accountId: string): Promise<string> {
@@ -54,5 +55,40 @@ describe("claimBlueBubblesInboundMessage", () => {
     }
     // Released claims should be re-claimable on the next delivery.
     expect(await claimAndFinalize("g1", "acc")).toBe("claimed");
+  });
+});
+
+describe("resolveBlueBubblesInboundDedupeKey", () => {
+  it("returns messageId for new-message events", () => {
+    expect(resolveBlueBubblesInboundDedupeKey({ messageId: "msg-1" })).toBe("msg-1");
+  });
+
+  it("returns associatedMessageGuid for balloon events", () => {
+    expect(
+      resolveBlueBubblesInboundDedupeKey({
+        messageId: "balloon-1",
+        balloonBundleId: "com.apple.messages.URLBalloonProvider",
+        associatedMessageGuid: "msg-1",
+      }),
+    ).toBe("msg-1");
+  });
+
+  it("suffixes key with :updated for updated-message events", () => {
+    expect(
+      resolveBlueBubblesInboundDedupeKey({ messageId: "msg-1", eventType: "updated-message" }),
+    ).toBe("msg-1:updated");
+  });
+
+  it("updated-message and new-message for same GUID produce distinct keys", () => {
+    const newKey = resolveBlueBubblesInboundDedupeKey({ messageId: "msg-1" });
+    const updatedKey = resolveBlueBubblesInboundDedupeKey({
+      messageId: "msg-1",
+      eventType: "updated-message",
+    });
+    expect(newKey).not.toBe(updatedKey);
+  });
+
+  it("returns undefined when messageId is missing", () => {
+    expect(resolveBlueBubblesInboundDedupeKey({})).toBeUndefined();
   });
 });

@@ -284,7 +284,14 @@ export async function startGatewayServer(
         log,
       });
   cfgAtStart = controlUiSeed.config;
-  if (authBootstrap.persistedGeneratedToken || controlUiSeed.persistedAllowedOriginsSeed) {
+  // Always capture the final config hash after all startup writes (plugin
+  // auto-enable, auth token generation, control-UI origin seeding) so the
+  // config reloader can recognize its own startup writes and suppress the
+  // spurious hot-reload that would otherwise trigger a SIGUSR1 restart loop.
+  // Previously the hash was only captured when auth or control-UI persisted
+  // changes, missing the plugin auto-enable write performed earlier inside
+  // loadGatewayStartupConfigSnapshot().  See #67436.
+  {
     const startupSnapshot = await readConfigFileSnapshot();
     startupInternalWriteHash = startupSnapshot.hash ?? null;
   }

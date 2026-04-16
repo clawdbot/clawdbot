@@ -373,8 +373,11 @@ function assertSupportedCodexAppServerVersion(response: CodexInitializeResponse)
 
 export function readCodexVersionFromUserAgent(userAgent: string | undefined): string | undefined {
   // Codex returns `<originator>/<codex-version> ...`; the originator can be
-  // OpenClaw or an env override, so only the slash-delimited version is stable.
-  const match = userAgent?.match(/^[^/\s]+\/(\d+\.\d+\.\d+(?:[-+][^\s()]*)?)/);
+  // OpenClaw, Codex Desktop, or an env override, so only the slash-delimited
+  // version in the leading product field is stable.
+  const match = userAgent?.match(
+    /^[^/]+\/(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)(?:[\s(]|$)/,
+  );
   return match?.[1];
 }
 

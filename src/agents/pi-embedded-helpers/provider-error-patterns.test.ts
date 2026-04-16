@@ -16,7 +16,11 @@ vi.mock("../../plugins/provider-runtime.js", async () => {
   };
 });
 
-import { classifyFailoverReason, isContextOverflowError } from "./errors.js";
+import {
+  classifyFailoverReason,
+  classifyProviderRuntimeFailureKind,
+  isContextOverflowError,
+} from "./errors.js";
 import {
   classifyProviderSpecificError,
   matchesProviderContextOverflow,
@@ -144,5 +148,85 @@ describe("classifyFailoverReason with provider patterns", () => {
     expect(classifyFailoverReason("model_is_deactivated: this model has been deactivated")).toBe(
       "model_not_found",
     );
+  });
+});
+
+describe("Cloudflare / CDN HTML error page classification (#67517)", () => {
+  const cloudflareHtml502 =
+    "<!doctype html><html><head><title>502 Bad Gateway</title></head>" +
+    "<body><h1>502 Bad Gateway</h1><p>cloudflare-nginx</p></body></html>";
+  const cloudflareHtml503 =
+    "<!doctype html><html><head><title>503</title></head>" +
+    "<body><h1>Service Unavailable</h1><p>Please try again. Rate limit exceeded.</p></body></html>";
+  const html401 =
+    "<!doctype html><html><head><title>401 Unauthorized</title></head>" +
+    "<body><h1>Unauthorized</h1></body></html>";
+  const html403 =
+    "<!doctype html><html><head><title>403 Forbidden</title></head>" +
+    "<body><h1>Forbidden</h1></body></html>";
+  const html407 =
+    "<!doctype html><html><head><title>407 Proxy Authentication Required</title></head>" +
+    "<body><h1>Proxy Authentication Required</h1></body></html>";
+  const html402 =
+    "<!doctype html><html><head><title>402 Payment Required</title></head>" +
+    "<body><h1>Payment Required</h1><p>Your quota is exhausted.</p></body></html>";
+  const html429 =
+    "<!doctype html><html><head><title>429 Too Many Requests</title></head>" +
+    "<body><h1>Too Many Requests</h1><p>Rate limit exceeded.</p></body></html>";
+  const prefixedHtml401 = `Error: 401 ${html401}`;
+  const prefixedHtml407 = `Error: 407 ${html407}`;
+
+  it("classifies Cloudflare HTML 502 as timeout", () => {
+    expect(classifyFailoverReason(`502 ${cloudflareHtml502}`)).toBe("timeout");
+  });
+
+  it("classifies Cloudflare HTML 503 with rate-limit text as timeout", () => {
+    expect(classifyFailoverReason(`503 ${cloudflareHtml503}`)).toBe("timeout");
+  });
+
+  it("preserves auth classification for 401 HTML", () => {
+    expect(classifyFailoverReason(`401 ${html401}`)).toBe("auth");
+  });
+
+  it("preserves auth classification for 403 HTML", () => {
+    expect(classifyFailoverReason(`403 ${html403}`)).toBe("auth");
+  });
+
+  it("preserves auth classification for Error-prefixed 401 HTML", () => {
+    expect(classifyFailoverReason(prefixedHtml401)).toBe("auth");
+  });
+
+  it("preserves billing classification for 402 HTML", () => {
+    expect(classifyFailoverReason(`402 ${html402}`)).toBe("billing");
+  });
+
+  it("preserves rate-limit classification for 429 HTML", () => {
+    expect(classifyFailoverReason(`429 ${html429}`)).toBe("rate_limit");
+  });
+
+  it("classifies runtime failure kind as upstream_html for non-auth HTML", () => {
+    expect(classifyProviderRuntimeFailureKind({ status: 502, message: cloudflareHtml502 })).toBe(
+      "upstream_html",
+    );
+  });
+
+  it("classifies 403 HTML runtime failures as auth_html_403", () => {
+    expect(classifyProviderRuntimeFailureKind({ status: 403, message: html403 })).toBe(
+      "auth_html_403",
+    );
+  });
+
+  it("classifies 407 HTML runtime failures as proxy", () => {
+    expect(classifyProviderRuntimeFailureKind({ status: 407, message: html407 })).toBe("proxy");
+  });
+
+  it("classifies Error-prefixed 407 HTML runtime failures as proxy", () => {
+    expect(classifyProviderRuntimeFailureKind(prefixedHtml407)).toBe("proxy");
+  });
+
+  it("does not misclassify JSON API rate-limit responses as HTML", () => {
+    const jsonRateLimit =
+      '429 {"error":{"type":"rate_limit_error","message":"Rate limit exceeded"}}';
+    expect(classifyFailoverReason(jsonRateLimit)).toBe("rate_limit");
   });
 });

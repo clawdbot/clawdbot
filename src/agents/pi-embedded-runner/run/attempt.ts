@@ -115,7 +115,6 @@ import { resolveSystemPromptOverride } from "../../system-prompt-override.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
-import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import {
   resolveTranscriptPolicy,
@@ -225,6 +224,7 @@ import {
   wrapStreamFnRepairMalformedToolCallArguments,
 } from "./attempt.tool-call-argument-repair.js";
 import {
+  sanitizeReplayToolCallIdsForStream,
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.tool-call-normalization.js";
@@ -294,11 +294,21 @@ const MAX_BTW_SNAPSHOT_MESSAGES = 100;
 export function resolveUnknownToolGuardThreshold(loopDetection?: {
   enabled?: boolean;
   unknownToolThreshold?: number;
-}): number | undefined {
-  if (loopDetection?.enabled !== true) {
-    return undefined;
+}): number {
+  // The unknown-tool guard is a safety net against the model hallucinating a
+  // tool name or calling a tool that has since been removed from the allowlist
+  // (for example after a `skills.allowBundled` config change). After `threshold`
+  // consecutive unknown-tool attempts the stream wrapper rewrites the assistant
+  // message content to tell the model to stop, which breaks otherwise-infinite
+  // Tool-not-found loops against the provider. Unlike the genericRepeat /
+  // pingPong / pollNoProgress detectors this guard has no false-positive
+  // surface because the tool is objectively not registered in this run, so it
+  // stays on regardless of `tools.loopDetection.enabled`.
+  const raw = loopDetection?.unknownToolThreshold;
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+    return Math.floor(raw);
   }
-  return loopDetection.unknownToolThreshold ?? UNKNOWN_TOOL_THRESHOLD;
+  return UNKNOWN_TOOL_THRESHOLD;
 }
 
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
@@ -1241,25 +1251,23 @@ export async function runEmbeddedAttempt(
           if (!Array.isArray(messages)) {
             return inner(model, context, options);
           }
-          const allowProviderOwnedThinkingReplay = shouldAllowProviderOwnedThinkingReplay({
-            modelApi: (model as { api?: unknown })?.api as string | null | undefined,
-            policy: transcriptPolicy,
-          });
-          const sanitized = sanitizeToolCallIdsForCloudCodeAssist(
-            messages as AgentMessage[],
+          const nextMessages = sanitizeReplayToolCallIdsForStream({
+            messages: messages as AgentMessage[],
             mode,
-            {
-              preserveNativeAnthropicToolUseIds: transcriptPolicy.preserveNativeAnthropicToolUseIds,
-              preserveReplaySafeThinkingToolCallIds: allowProviderOwnedThinkingReplay,
-              allowedToolNames,
-            },
-          );
-          if (sanitized === messages) {
+            allowedToolNames,
+            preserveNativeAnthropicToolUseIds: transcriptPolicy.preserveNativeAnthropicToolUseIds,
+            preserveReplaySafeThinkingToolCallIds: shouldAllowProviderOwnedThinkingReplay({
+              modelApi: (model as { api?: unknown })?.api as string | null | undefined,
+              policy: transcriptPolicy,
+            }),
+            repairToolUseResultPairing: transcriptPolicy.repairToolUseResultPairing,
+          });
+          if (nextMessages === messages) {
             return inner(model, context, options);
           }
           const nextContext = {
             ...(context as unknown as Record<string, unknown>),
-            messages: sanitized,
+            messages: nextMessages,
           } as unknown;
           return inner(model, nextContext as typeof context, options);
         };

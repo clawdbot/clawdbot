@@ -1,4 +1,10 @@
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import {
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+  startsWithSilentToken,
+  stripLeadingSilentToken,
+  stripSilentToken,
+} from "../auto-reply/tokens.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -125,6 +131,27 @@ function isWakeContinuationRun(runId: string): boolean {
     return false;
   }
   return stripWakeRunSuffixes(trimmed) !== trimmed;
+}
+
+function stripAndClassifyReply(text: string): string | null {
+  let result = text;
+  let didStrip = false;
+  const hasLeadingSilentToken = startsWithSilentToken(result, SILENT_REPLY_TOKEN);
+  if (hasLeadingSilentToken) {
+    result = stripLeadingSilentToken(result, SILENT_REPLY_TOKEN);
+    didStrip = true;
+  }
+  if (hasLeadingSilentToken || result.toLowerCase().includes(SILENT_REPLY_TOKEN.toLowerCase())) {
+    result = stripSilentToken(result, SILENT_REPLY_TOKEN);
+    didStrip = true;
+  }
+  if (
+    didStrip &&
+    (!result.trim() || isSilentReplyText(result, SILENT_REPLY_TOKEN) || isAnnounceSkip(result))
+  ) {
+    return null;
+  }
+  return result;
 }
 
 async function wakeSubagentRunAfterDescendants(params: {
@@ -385,9 +412,28 @@ export async function runSubagentAnnounceFlow(params: {
 
       if (isAnnounceSkip(reply) || isSilentReplyText(reply, SILENT_REPLY_TOKEN)) {
         if (fallbackReply && !fallbackIsSilent) {
-          reply = fallbackReply;
+          const cleaned = stripAndClassifyReply(fallbackReply);
+          if (cleaned === null) {
+            return true;
+          }
+          reply = cleaned;
         } else {
           return true;
+        }
+      } else if (reply) {
+        const cleaned = stripAndClassifyReply(reply);
+        if (cleaned === null) {
+          if (fallbackReply && !fallbackIsSilent) {
+            const cleanedFallback = stripAndClassifyReply(fallbackReply);
+            if (cleanedFallback === null) {
+              return true;
+            }
+            reply = cleanedFallback;
+          } else {
+            return true;
+          }
+        } else {
+          reply = cleaned;
         }
       }
     }

@@ -29,6 +29,10 @@ type ProviderRuntimeModelLike = Model<Api> & {
   contextTokens?: number;
 };
 
+type DiscoveredProviderRuntimeModelLike = Omit<ProviderRuntimeModelLike, "api"> & {
+  api?: string | null;
+};
+
 type InMemoryAuthStorageBackendLike = {
   withLock<T>(
     update: (current: string) => {
@@ -65,19 +69,18 @@ export function normalizeDiscoveredPiModel<T>(value: T, agentDir: string): T {
   if (
     typeof value.id !== "string" ||
     typeof value.name !== "string" ||
-    typeof value.provider !== "string" ||
-    typeof value.api !== "string"
+    typeof value.provider !== "string"
   ) {
     return value;
   }
-  const model = value as unknown as ProviderRuntimeModelLike;
+  const model = value as unknown as DiscoveredProviderRuntimeModelLike;
   const pluginNormalized =
     normalizeProviderResolvedModelWithPlugin({
       provider: model.provider,
       context: {
         provider: model.provider,
         modelId: model.id,
-        model,
+        model: model as unknown as ProviderRuntimeModelLike,
         agentDir,
       },
     }) ?? model;
@@ -87,7 +90,7 @@ export function normalizeDiscoveredPiModel<T>(value: T, agentDir: string): T {
       context: {
         provider: model.provider,
         modelId: model.id,
-        model: pluginNormalized,
+        model: pluginNormalized as unknown as ProviderRuntimeModelLike,
         agentDir,
       },
     }) ?? pluginNormalized;
@@ -97,10 +100,19 @@ export function normalizeDiscoveredPiModel<T>(value: T, agentDir: string): T {
       context: {
         provider: model.provider,
         modelId: model.id,
-        model: compatNormalized,
+        model: compatNormalized as unknown as ProviderRuntimeModelLike,
         agentDir,
       },
     }) ?? compatNormalized;
+  if (
+    !isRecord(transportNormalized) ||
+    typeof transportNormalized.id !== "string" ||
+    typeof transportNormalized.name !== "string" ||
+    typeof transportNormalized.provider !== "string" ||
+    typeof transportNormalized.api !== "string"
+  ) {
+    return value;
+  }
   return normalizeModelCompat(transportNormalized as Model<Api>) as T;
 }
 

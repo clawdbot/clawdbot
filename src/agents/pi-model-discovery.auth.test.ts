@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { resolvePiCredentialMapFromStore } from "./pi-auth-credentials.js";
 import {
   addEnvBackedPiCredentials,
+  normalizeDiscoveredPiModel,
   scrubLegacyStaticAuthJsonEntriesForDiscovery,
 } from "./pi-model-discovery.js";
 
@@ -152,5 +153,58 @@ describe("discoverAuthStorage", () => {
         process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = previousDisableBundledPlugins;
       }
     }
+  });
+
+  it("normalizes stale discovered openai-codex rows when api metadata is missing", () => {
+    const normalized = normalizeDiscoveredPiModel(
+      {
+        id: "gpt-5.4",
+        name: "gpt-5.4",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_050_000,
+        contextTokens: 272_000,
+        maxTokens: 128_000,
+      },
+      "/tmp/agent",
+    ) as {
+      api?: string;
+      baseUrl?: string;
+    };
+
+    expect(normalized).toMatchObject({
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+    });
+  });
+
+  it("canonicalizes stale discovered openai-codex backend-api/v1 rows", () => {
+    const normalized = normalizeDiscoveredPiModel(
+      {
+        id: "gpt-5.4",
+        name: "gpt-5.4",
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+        baseUrl: "https://chatgpt.com/backend-api/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_050_000,
+        contextTokens: 272_000,
+        maxTokens: 128_000,
+      },
+      "/tmp/agent",
+    ) as {
+      api?: string;
+      baseUrl?: string;
+    };
+
+    expect(normalized).toMatchObject({
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+    });
   });
 });

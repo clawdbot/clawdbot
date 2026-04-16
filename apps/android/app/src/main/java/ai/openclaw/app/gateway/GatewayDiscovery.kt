@@ -12,6 +12,7 @@ import java.io.IOException
 import java.net.InetSocketAddress
 import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
+import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
@@ -132,38 +133,38 @@ class GatewayDiscovery(
       object : NsdManager.ResolveListener {
         override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {}
 
-      override fun onServiceResolved(resolved: NsdServiceInfo) {
-        val host = resolved.host?.hostAddress ?: return
-        val port = resolved.port
-        if (port <= 0) return
+        override fun onServiceResolved(resolved: NsdServiceInfo) {
+          val host = resolved.host?.hostAddress ?: return
+          val port = resolved.port
+          if (port <= 0) return
 
-        val rawServiceName = resolved.serviceName
-        val serviceName = BonjourEscapes.decode(rawServiceName)
-        val displayName = BonjourEscapes.decode(txt(resolved, "displayName") ?: serviceName)
-        val lanHost = txt(resolved, "lanHost")
-        val tailnetDns = txt(resolved, "tailnetDns")
-        val gatewayPort = txtInt(resolved, "gatewayPort")
-        val canvasPort = txtInt(resolved, "canvasPort")
-        val tlsEnabled = txtBool(resolved, "gatewayTls")
-        val tlsFingerprint = txt(resolved, "gatewayTlsSha256")
-        val id = stableId(serviceName, "local.")
-        localById[id] =
-          GatewayEndpoint(
-            stableId = id,
-            name = displayName,
-            host = host,
-            port = port,
-            lanHost = lanHost,
-            tailnetDns = tailnetDns,
-            gatewayPort = gatewayPort,
-            canvasPort = canvasPort,
-            tlsEnabled = tlsEnabled,
-            tlsFingerprintSha256 = tlsFingerprint,
-          )
-        publish()
-      }
-    },
-  )
+          val rawServiceName = resolved.serviceName
+          val serviceName = BonjourEscapes.decode(rawServiceName)
+          val displayName = BonjourEscapes.decode(txt(resolved, "displayName") ?: serviceName)
+          val lanHost = txt(resolved, "lanHost")
+          val tailnetDns = txt(resolved, "tailnetDns")
+          val gatewayPort = txtInt(resolved, "gatewayPort")
+          val canvasPort = txtInt(resolved, "canvasPort")
+          val tlsEnabled = txtBool(resolved, "gatewayTls")
+          val tlsFingerprint = txt(resolved, "gatewayTlsSha256")
+          val id = stableId(serviceName, "local.")
+          localById[id] =
+            GatewayEndpoint(
+              stableId = id,
+              name = displayName,
+              host = host,
+              port = port,
+              lanHost = lanHost,
+              tailnetDns = tailnetDns,
+              gatewayPort = gatewayPort,
+              canvasPort = canvasPort,
+              tlsEnabled = tlsEnabled,
+              tlsFingerprintSha256 = tlsFingerprint,
+            )
+          publish()
+        }
+      },
+    )
   }
 
   private fun publish() {
@@ -350,7 +351,7 @@ class GatewayDiscovery(
   }
 
   private fun records(msg: Message?, section: Int): List<Record> {
-    return msg?.getSectionArray(section)?.toList() ?: emptyList()
+    return msg?.getSection(section).orEmpty()
   }
 
   private fun keyName(raw: String): String {
@@ -426,14 +427,14 @@ class GatewayDiscovery(
           try {
             SimpleResolver().apply {
               setAddress(InetSocketAddress(addr, 53))
-              setTimeout(3)
+              setTimeout(Duration.ofSeconds(3))
             }
           } catch (_: Throwable) {
             null
           }
         }
       if (resolvers.isEmpty()) return null
-      ExtendedResolver(resolvers.toTypedArray()).apply { setTimeout(3) }
+      ExtendedResolver(resolvers.toTypedArray()).apply { setTimeout(Duration.ofSeconds(3)) }
     } catch (_: Throwable) {
       null
     }

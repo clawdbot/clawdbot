@@ -1,5 +1,6 @@
 {
   "id": "elevenlabs",
+  "enabledByDefault": true,
   "contracts": {
     "speechProviders": ["elevenlabs"]
   },

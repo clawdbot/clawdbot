@@ -13,5 +13,5 @@ export function isOpenAICodexBaseUrl(baseUrl?: string): boolean {
   if (!trimmed) {
     return false;
   }
-  return /^https?:\/\/chatgpt\.com\/backend-api\/?$/i.test(trimmed);
+  return /^https?:\/\/chatgpt\.com\/backend-api(?:\/v1)?\/?$/i.test(trimmed);
 }

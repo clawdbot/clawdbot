@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEventHandlers } from "./tui-event-handlers.js";
 import type { AgentEvent, BtwEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
 
@@ -649,5 +649,225 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     expect(loadHistory).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("tui-event-handlers: streaming watchdog", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const makeState = (overrides?: Partial<TuiStateAccess>): TuiStateAccess => ({
+    agentDefaultId: "main",
+    sessionMainKey: "agent:main:main",
+    sessionScope: "global",
+    agents: [],
+    currentAgentId: "main",
+    currentSessionKey: "agent:main:main",
+    currentSessionId: "session-1",
+    activeChatRunId: null,
+    pendingOptimisticUserMessage: false,
+    historyLoaded: true,
+    sessionInfo: { verboseLevel: "on" },
+    initialSessionApplied: true,
+    isConnected: true,
+    autoMessageSent: false,
+    toolsExpanded: false,
+    showThinking: false,
+    connectionStatus: "connected",
+    activityStatus: "idle",
+    statusTimeout: null,
+    lastCtrlCAt: 0,
+    ...overrides,
+  });
+
+  const createHarness = (options?: { streamingWatchdogMs?: number }) => {
+    const state = makeState();
+    const chatLog = createMockChatLog();
+    const btw = createMockBtwPresenter();
+    const tui = { requestRender: vi.fn() } as unknown as MockTui & HandlerTui;
+    const setActivityStatus = vi.fn();
+    const handlers = createEventHandlers({
+      chatLog,
+      btw,
+      tui,
+      state,
+      setActivityStatus,
+      streamingWatchdogMs: options?.streamingWatchdogMs,
+    });
+    return { state, chatLog, tui, setActivityStatus, handlers };
+  };
+
+  it("resets activityStatus to idle when no stream delta arrives for the watchdog window", () => {
+    const { state, chatLog, setActivityStatus, handlers } = createHarness({
+      streamingWatchdogMs: 5_000,
+    });
+
+    handlers.handleChatEvent({
+      runId: "run-stuck",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "hello" },
+    } satisfies ChatEvent);
+
+    expect(setActivityStatus).toHaveBeenLastCalledWith("streaming");
+    expect(state.activeChatRunId).toBe("run-stuck");
+
+    vi.advanceTimersByTime(5_001);
+
+    expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
+    expect(state.activeChatRunId).toBeNull();
+    expect(chatLog.addSystem).toHaveBeenCalledWith(expect.stringContaining("streaming watchdog"));
+
+    handlers.dispose?.();
+  });
+
+  it("refreshes the watchdog window on each new stream delta", () => {
+    const { state, setActivityStatus, handlers } = createHarness({
+      streamingWatchdogMs: 5_000,
+    });
+
+    handlers.handleChatEvent({
+      runId: "run-flow",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "first" },
+    } satisfies ChatEvent);
+
+    vi.advanceTimersByTime(3_000);
+
+    handlers.handleChatEvent({
+      runId: "run-flow",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "second" },
+    } satisfies ChatEvent);
+
+    vi.advanceTimersByTime(3_000);
+
+    expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
+    expect(state.activeChatRunId).toBe("run-flow");
+
+    vi.advanceTimersByTime(2_500);
+
+    expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
+    expect(state.activeChatRunId).toBeNull();
+
+    handlers.dispose?.();
+  });
+
+  it("cancels the watchdog when the run finalizes normally", () => {
+    const { state, chatLog, setActivityStatus, handlers } = createHarness({
+      streamingWatchdogMs: 5_000,
+    });
+
+    handlers.handleChatEvent({
+      runId: "run-normal",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "hi" },
+    } satisfies ChatEvent);
+    handlers.handleChatEvent({
+      runId: "run-normal",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }], stopReason: "stop" },
+    } satisfies ChatEvent);
+
+    vi.advanceTimersByTime(10_000);
+
+    const statusCalls = setActivityStatus.mock.calls.map((c) => c[0]);
+    expect(statusCalls.filter((s) => s === "idle").length).toBe(1);
+    expect(chatLog.addSystem).not.toHaveBeenCalledWith(
+      expect.stringContaining("streaming watchdog"),
+    );
+    expect(state.activeChatRunId).toBeNull();
+
+    handlers.dispose?.();
+  });
+
+  it("is disabled when streamingWatchdogMs is 0", () => {
+    const { state, chatLog, setActivityStatus, handlers } = createHarness({
+      streamingWatchdogMs: 0,
+    });
+
+    handlers.handleChatEvent({
+      runId: "run-no-watchdog",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "hi" },
+    } satisfies ChatEvent);
+
+    vi.advanceTimersByTime(60_000);
+
+    expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
+    expect(chatLog.addSystem).not.toHaveBeenCalled();
+    expect(state.activeChatRunId).toBe("run-no-watchdog");
+
+    handlers.dispose?.();
+  });
+
+  it("does not let an older run steal the active run watchdog", () => {
+    const { state, chatLog, setActivityStatus, handlers } = createHarness({
+      streamingWatchdogMs: 5_000,
+    });
+
+    handlers.handleChatEvent({
+      runId: "run-old",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "old" },
+    } satisfies ChatEvent);
+
+    vi.advanceTimersByTime(5_001);
+    expect(state.activeChatRunId).toBeNull();
+
+    handlers.handleChatEvent({
+      runId: "run-new",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "new" },
+    } satisfies ChatEvent);
+    expect(state.activeChatRunId).toBe("run-new");
+
+    vi.advanceTimersByTime(3_000);
+
+    handlers.handleChatEvent({
+      runId: "run-old",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "old again" },
+    } satisfies ChatEvent);
+
+    vi.advanceTimersByTime(2_001);
+
+    expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
+    expect(state.activeChatRunId).toBeNull();
+    expect(chatLog.addSystem).toHaveBeenCalledTimes(2);
+
+    handlers.dispose?.();
+  });
+
+  it("dispose clears a pending watchdog without firing it", () => {
+    const { setActivityStatus, chatLog, handlers, state } = createHarness({
+      streamingWatchdogMs: 5_000,
+    });
+
+    handlers.handleChatEvent({
+      runId: "run-dispose",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "hi" },
+    } satisfies ChatEvent);
+
+    handlers.dispose?.();
+    vi.advanceTimersByTime(10_000);
+
+    expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
+    expect(chatLog.addSystem).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-mocks.js";
-import { downloadBlueBubblesAttachment, sendBlueBubblesAttachment } from "./attachments.js";
+import {
+  downloadBlueBubblesAttachment,
+  fetchBlueBubblesMessageAttachments,
+  sendBlueBubblesAttachment,
+} from "./attachments.js";
 import { fetchBlueBubblesServerInfo, getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import type { PluginRuntime } from "./runtime-api.js";
 import { setBlueBubblesRuntime } from "./runtime.js";
@@ -767,5 +771,88 @@ describe("sendBlueBubblesAttachment", () => {
         opts: { serverUrl: "http://localhost:1234", password: "test" },
       }),
     ).rejects.toThrow("chatGuid not found");
+  });
+});
+
+describe("fetchBlueBubblesMessageAttachments", () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  it("returns attachments from the BB API response", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          data: {
+            attachments: [
+              {
+                guid: "att-1",
+                mimeType: "image/jpeg",
+                transferName: "photo.jpg",
+                totalBytes: 1024,
+              },
+              {
+                guid: "att-2",
+                mime_type: "image/png",
+                transfer_name: "screenshot.png",
+                total_bytes: 2048,
+              },
+            ],
+          },
+        }),
+    });
+    const result = await fetchBlueBubblesMessageAttachments("msg-guid", {
+      baseUrl: "http://localhost:1234",
+      password: "test",
+    });
+    expect(result).toHaveLength(2);
+    expect(result[0].guid).toBe("att-1");
+    expect(result[0].mimeType).toBe("image/jpeg");
+    expect(result[1].guid).toBe("att-2");
+    expect(result[1].mimeType).toBe("image/png");
+  });
+
+  it("returns empty array on non-ok HTTP response", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+    });
+    const result = await fetchBlueBubblesMessageAttachments("msg-guid", {
+      baseUrl: "http://localhost:1234",
+      password: "test",
+    });
+    expect(result).toEqual([]);
+  });
+
+  it("returns empty array when data has no attachments", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ data: {} }),
+    });
+    const result = await fetchBlueBubblesMessageAttachments("msg-guid", {
+      baseUrl: "http://localhost:1234",
+      password: "test",
+    });
+    expect(result).toEqual([]);
+  });
+
+  it("includes entries without a guid (downstream download handles filtering)", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          data: {
+            attachments: [{ mimeType: "image/jpeg" }, { guid: "att-valid", mimeType: "image/png" }],
+          },
+        }),
+    });
+    const result = await fetchBlueBubblesMessageAttachments("msg-guid", {
+      baseUrl: "http://localhost:1234",
+      password: "test",
+    });
+    expect(result).toHaveLength(2);
+    expect(result[0].guid).toBeUndefined();
+    expect(result[1].guid).toBe("att-valid");
   });
 });

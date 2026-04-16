@@ -47,6 +47,8 @@ export type PluginManifestActivation = {
    * This is metadata only; runtime loading still happens through the loader.
    */
   onProviders?: string[];
+  /** Agent harness runtime ids that should activate this plugin. */
+  onAgentHarnesses?: string[];
   /** Command ids that should activate this plugin. */
   onCommands?: string[];
   /** Channel ids that should activate this plugin. */
@@ -427,6 +429,7 @@ function normalizeManifestActivation(value: unknown): PluginManifestActivation |
   }
 
   const onProviders = normalizeTrimmedStringList(value.onProviders);
+  const onAgentHarnesses = normalizeTrimmedStringList(value.onAgentHarnesses);
   const onCommands = normalizeTrimmedStringList(value.onCommands);
   const onChannels = normalizeTrimmedStringList(value.onChannels);
   const onRoutes = normalizeTrimmedStringList(value.onRoutes);
@@ -440,6 +443,7 @@ function normalizeManifestActivation(value: unknown): PluginManifestActivation |
 
   const activation = {
     ...(onProviders.length > 0 ? { onProviders } : {}),
+    ...(onAgentHarnesses.length > 0 ? { onAgentHarnesses } : {}),
     ...(onCommands.length > 0 ? { onCommands } : {}),
     ...(onChannels.length > 0 ? { onChannels } : {}),
     ...(onRoutes.length > 0 ? { onRoutes } : {}),

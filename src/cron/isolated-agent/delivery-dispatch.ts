@@ -1,5 +1,11 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import { isSilentReplyText, stripSilentToken, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import {
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+  startsWithSilentToken,
+  stripLeadingSilentToken,
+  stripSilentToken,
+} from "../../auto-reply/tokens.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import {
   resolveAgentMainSessionKey,
@@ -10,6 +16,7 @@ import { sleepWithAbort } from "../../infra/backoff.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { OutboundDeliveryResult } from "../../infra/outbound/deliver.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
+import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -18,13 +25,46 @@ import {
 import { hasScheduledNextRunAtMs } from "../service/jobs.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
-import { pickSummaryFromOutput } from "./helpers.js";
+import { pickLastNonEmptyTextFromPayloads, pickSummaryFromOutput } from "./helpers.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
 import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 function normalizeDeliveryTarget(channel: string, to: string): string {
   const toTrimmed = to.trim();
   return normalizeTargetForProvider(channel, toTrimmed) ?? toTrimmed;
+}
+
+type NormalizedSilentReplyText = {
+  text: string | undefined;
+  strippedTrailingSilentToken: boolean;
+};
+
+function normalizeSilentReplyText(text: string | undefined): NormalizedSilentReplyText {
+  if (!text) {
+    return { text, strippedTrailingSilentToken: false };
+  }
+  if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
+    return { text: undefined, strippedTrailingSilentToken: false };
+  }
+
+  let next = text;
+  const hasLeadingSilentToken = startsWithSilentToken(next, SILENT_REPLY_TOKEN);
+  if (hasLeadingSilentToken) {
+    next = stripLeadingSilentToken(next, SILENT_REPLY_TOKEN);
+  }
+
+  let strippedTrailingSilentToken = false;
+  if (hasLeadingSilentToken || next.toLowerCase().includes(SILENT_REPLY_TOKEN.toLowerCase())) {
+    const trimmedBefore = next.trim();
+    const stripped = stripSilentToken(next, SILENT_REPLY_TOKEN);
+    strippedTrailingSilentToken = stripped !== trimmedBefore;
+    next = stripped;
+  }
+
+  if (!next.trim() || isSilentReplyText(next, SILENT_REPLY_TOKEN)) {
+    return { text: undefined, strippedTrailingSilentToken };
+  }
+  return { text: next, strippedTrailingSilentToken };
 }
 
 export function matchesMessagingToolDeliveryTarget(
@@ -293,9 +333,12 @@ async function queueCronAwarenessSystemEvent(params: {
   deliveryIdempotencyKey: string;
   outputText?: string;
   synthesizedText?: string;
+  deliveryPayloads?: ReplyPayload[];
 }): Promise<void> {
-  const text =
-    normalizeOptionalString(params.outputText) ?? normalizeOptionalString(params.synthesizedText);
+  const text = params.deliveryPayloads
+    ? pickLastNonEmptyTextFromPayloads(params.deliveryPayloads)
+    : (normalizeOptionalString(params.outputText) ??
+      normalizeOptionalString(params.synthesizedText));
   if (!text) {
     return;
   }
@@ -462,21 +505,18 @@ export async function dispatchCronDelivery(
           : synthesizedText
             ? [{ text: synthesizedText }]
             : [];
-      // Suppress NO_REPLY sentinel so it never leaks to external channels.
-      // Also suppress payloads where the agent appended a trailing NO_REPLY
-      // after other text (e.g. "summary...\n\nNO_REPLY") — the token signals
-      // "do not deliver" regardless of preceding content.
-      const payloadsForDelivery = rawPayloads.filter((p) => {
-        const text = p.text ?? "";
-        if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
-          return false;
-        }
-        // Case-insensitive trailing check: uppercase before stripping since
-        // stripSilentToken's regex is case-sensitive.
-        const upper = text.toUpperCase();
-        const stripped = stripSilentToken(upper, SILENT_REPLY_TOKEN);
-        return stripped === upper.trim();
-      });
+      const payloadsForDelivery = rawPayloads
+        .map((p) => {
+          if (!p.text) {
+            return p;
+          }
+          const normalized = normalizeSilentReplyText(p.text);
+          return {
+            ...p,
+            text: normalized.strippedTrailingSilentToken ? undefined : normalized.text,
+          };
+        })
+        .filter((p) => hasReplyPayloadContent(p, { trimText: true }));
       if (payloadsForDelivery.length === 0) {
         return await finishSilentReplyDelivery();
       }
@@ -583,6 +623,7 @@ export async function dispatchCronDelivery(
           deliveryIdempotencyKey,
           outputText,
           synthesizedText,
+          deliveryPayloads: payloadsForDelivery,
         });
       }
       if (delivered) {
@@ -700,17 +741,15 @@ export async function dispatchCronDelivery(
         ...params.telemetry,
       });
     }
-    // Suppress delivery when synthesizedText is (or ends with) NO_REPLY.
-    // isSilentReplyText handles case-insensitive exact matches (e.g. "No_Reply");
-    // stripSilentToken catches trailing tokens after other text.
-    if (isSilentReplyText(synthesizedText, SILENT_REPLY_TOKEN)) {
+    const normalizedSynthesizedText = normalizeSilentReplyText(synthesizedText);
+    if (
+      normalizedSynthesizedText.text === undefined ||
+      normalizedSynthesizedText.strippedTrailingSilentToken
+    ) {
       return await finishSilentReplyDelivery();
     }
-    const upperSynthesized = synthesizedText.toUpperCase();
-    const strippedSynthesized = stripSilentToken(upperSynthesized, SILENT_REPLY_TOKEN);
-    if (strippedSynthesized !== upperSynthesized.trim()) {
-      return await finishSilentReplyDelivery();
-    }
+    synthesizedText = normalizedSynthesizedText.text;
+    outputText = synthesizedText;
     if (params.isAborted()) {
       return params.withRunSession({
         status: "error",

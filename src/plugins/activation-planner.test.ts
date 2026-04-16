@@ -42,6 +42,9 @@ describe("resolveManifestActivationPluginIds", () => {
         {
           id: "openai",
           providers: ["openai"],
+          activation: {
+            onAgentHarnesses: ["codex"],
+          },
           setup: {
             providers: [{ id: "openai-codex" }],
           },
@@ -101,7 +104,7 @@ describe("resolveManifestActivationPluginIds", () => {
     ).toEqual(["demo-channel"]);
   });
 
-  it("matches provider, channel, and route triggers from manifest-owned metadata", () => {
+  it("matches provider, agent harness, channel, and route triggers from manifest-owned metadata", () => {
     expect(
       resolveManifestActivationPluginIds({
         trigger: {
@@ -116,6 +119,15 @@ describe("resolveManifestActivationPluginIds", () => {
         trigger: {
           kind: "provider",
           provider: "openai-codex",
+        },
+      }),
+    ).toEqual(["openai"]);
+
+    expect(
+      resolveManifestActivationPluginIds({
+        trigger: {
+          kind: "agentHarness",
+          runtime: "codex",
         },
       }),
     ).toEqual(["openai"]);

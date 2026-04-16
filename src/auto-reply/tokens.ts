@@ -24,7 +24,7 @@ function getSilentTrailingRegex(token: string): RegExp {
     return cached;
   }
   const escaped = escapeRegExp(token);
-  const regex = new RegExp(`(?:^|\\s+|\\*+)${escaped}\\s*$`);
+  const regex = new RegExp(`(?:^|\\s+|\\*+)${escaped}\\s*$`, "i");
   silentTrailingRegexByToken.set(token, regex);
   return regex;
 }

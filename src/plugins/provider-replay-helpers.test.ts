@@ -93,7 +93,6 @@ describe("provider replay helpers", () => {
   });
 
   it("builds hybrid anthropic or openai replay policy", () => {
-    // Sonnet 4.6 preserves thinking blocks even when flag is set
     const sonnet46Policy = buildHybridAnthropicOrOpenAIReplayPolicy(
       {
         provider: "minimax",
@@ -107,7 +106,6 @@ describe("provider replay helpers", () => {
     });
     expect(sonnet46Policy).not.toHaveProperty("dropThinkingBlocks");
 
-    // Legacy model still drops
     expect(
       buildHybridAnthropicOrOpenAIReplayPolicy(
         {

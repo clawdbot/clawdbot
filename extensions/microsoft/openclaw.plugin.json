@@ -1,5 +1,6 @@
 {
   "id": "microsoft",
+  "enabledByDefault": true,
   "contracts": {
     "speechProviders": ["microsoft"]
   },

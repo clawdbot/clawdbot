@@ -9,6 +9,7 @@ import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.j
 export type PluginActivationPlannerTrigger =
   | { kind: "command"; command: string }
   | { kind: "provider"; provider: string }
+  | { kind: "agentHarness"; runtime: string }
   | { kind: "channel"; channel: string }
   | { kind: "route"; route: string }
   | { kind: "capability"; capability: PluginManifestActivationCapability };
@@ -52,6 +53,8 @@ function matchesManifestActivationTrigger(
       return listActivationCommandIds(plugin).includes(normalizeCommandId(trigger.command));
     case "provider":
       return listActivationProviderIds(plugin).includes(normalizeProviderId(trigger.provider));
+    case "agentHarness":
+      return listActivationAgentHarnessIds(plugin).includes(normalizeCommandId(trigger.runtime));
     case "channel":
       return listActivationChannelIds(plugin).includes(normalizeCommandId(trigger.channel));
     case "route":
@@ -61,6 +64,10 @@ function matchesManifestActivationTrigger(
   }
   const unreachableTrigger: never = trigger;
   return unreachableTrigger;
+}
+
+function listActivationAgentHarnessIds(plugin: PluginManifestRecord): string[] {
+  return [...(plugin.activation?.onAgentHarnesses ?? [])].map(normalizeCommandId).filter(Boolean);
 }
 
 function listActivationCommandIds(plugin: PluginManifestRecord): string[] {

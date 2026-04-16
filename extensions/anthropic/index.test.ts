@@ -1,3 +1,7 @@
+import type {
+  ProviderResolveDynamicModelContext,
+  ProviderRuntimeModel,
+} from "openclaw/plugin-sdk/plugin-entry";
 import { capturePluginRegistration } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it, vi } from "vitest";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
@@ -17,6 +21,19 @@ vi.mock("./cli-auth-seam.js", () => {
 });
 
 import anthropicPlugin from "./index.js";
+
+function createModelRegistry(models: ProviderRuntimeModel[]) {
+  return {
+    find(providerId: string, modelId: string) {
+      return (
+        models.find(
+          (model) =>
+            model.provider === providerId && model.id.toLowerCase() === modelId.toLowerCase(),
+        ) ?? null
+      );
+    },
+  };
+}
 
 describe("anthropic provider replay hooks", () => {
   it("registers the claude-cli backend", async () => {
@@ -129,9 +146,9 @@ describe("anthropic provider replay hooks", () => {
         },
         agents: {
           defaults: {
-            model: { primary: "claude-cli/claude-sonnet-4-6" },
+            model: { primary: "claude-cli/claude-opus-4-7" },
             models: {
-              "claude-cli/claude-sonnet-4-6": {},
+              "claude-cli/claude-opus-4-7": {},
             },
           },
         },
@@ -142,12 +159,47 @@ describe("anthropic provider replay hooks", () => {
       every: "1h",
     });
     expect(next?.agents?.defaults?.models).toMatchObject({
+      "claude-cli/claude-opus-4-7": {},
       "claude-cli/claude-sonnet-4-6": {},
       "claude-cli/claude-opus-4-6": {},
       "claude-cli/claude-opus-4-5": {},
       "claude-cli/claude-sonnet-4-5": {},
       "claude-cli/claude-haiku-4-5": {},
     });
+  });
+
+  it("resolves explicit claude-opus-4-7 refs from the 4.6 template family", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+    const resolved = provider.resolveDynamicModel?.({
+      provider: "anthropic",
+      modelId: "claude-opus-4-7",
+      modelRegistry: createModelRegistry([
+        {
+          id: "claude-opus-4-6",
+          name: "Claude Opus 4.6",
+          provider: "anthropic",
+          api: "anthropic-messages",
+          reasoning: true,
+          input: ["text", "image"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 200_000,
+          maxTokens: 32_000,
+        } as ProviderRuntimeModel,
+      ]),
+    } as ProviderResolveDynamicModelContext);
+
+    expect(resolved).toMatchObject({
+      provider: "anthropic",
+      id: "claude-opus-4-7",
+      api: "anthropic-messages",
+      reasoning: true,
+    });
+    expect(
+      provider.resolveDefaultThinkingLevel?.({
+        provider: "anthropic",
+        modelId: "claude-opus-4-7",
+      } as never),
+    ).toBe("adaptive");
   });
 
   it("resolves claude-cli synthetic oauth auth", async () => {

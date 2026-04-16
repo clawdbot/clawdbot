@@ -9,7 +9,7 @@ import {
   resolvePdfToolMaxTokens,
 } from "./pdf-tool.helpers.js";
 
-const ANTHROPIC_PDF_MODEL = "anthropic/claude-opus-4-6";
+const ANTHROPIC_PDF_MODEL = "anthropic/claude-opus-4-7";
 
 describe("parsePageRange", () => {
   it("parses a single page number", () => {
@@ -117,7 +117,7 @@ describe("pdf-tool.helpers", () => {
     expect(
       coercePdfAssistantText({
         provider: "anthropic",
-        model: "claude-opus-4-6",
+        model: "claude-opus-4-7",
         message: {
           role: "assistant",
           stopReason: "stop",

@@ -136,15 +136,27 @@ function sanitizeGuid(guid: string | undefined | null): string | null {
 export function resolveBlueBubblesInboundDedupeKey(
   message: Pick<
     NormalizedWebhookMessage,
-    "messageId" | "balloonBundleId" | "associatedMessageGuid"
+    "messageId" | "balloonBundleId" | "associatedMessageGuid" | "eventType"
   >,
 ): string | undefined {
   const balloonBundleId = message.balloonBundleId?.trim();
   const associatedMessageGuid = message.associatedMessageGuid?.trim();
+  let base: string | undefined;
   if (balloonBundleId && associatedMessageGuid) {
-    return associatedMessageGuid;
+    base = associatedMessageGuid;
+  } else {
+    base = message.messageId?.trim() || undefined;
   }
-  return message.messageId?.trim() || undefined;
+  if (!base) {
+    return undefined;
+  }
+  // `updated-message` events get a distinct key so they are not rejected as
+  // duplicates of the already-committed `new-message` for the same GUID.
+  // This lets attachment-carrying follow-up webhooks through. (#65430, #52277)
+  if (message.eventType === "updated-message") {
+    return `${base}:updated`;
+  }
+  return base;
 }
 
 export type InboundDedupeClaim =

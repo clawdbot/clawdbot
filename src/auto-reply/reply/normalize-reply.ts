@@ -69,7 +69,7 @@ export function normalizeReplyPayload(
     if (hasLeadingSilentToken) {
       text = stripLeadingSilentToken(text, silentToken);
     }
-    if (hasLeadingSilentToken || text.includes(silentToken)) {
+    if (hasLeadingSilentToken || text.toLowerCase().includes(silentToken.toLowerCase())) {
       text = stripSilentToken(text, silentToken);
       if (!hasContent(text)) {
         opts.onSkip?.("silent");

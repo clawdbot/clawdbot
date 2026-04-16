@@ -1,3 +1,4 @@
+import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
 import { listPotentialConfiguredChannelIds } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -272,6 +273,23 @@ export function resolveGatewayStartupPluginIds(params: {
   const activationSource = createPluginActivationSource({
     config: params.activationSourceConfig ?? params.config,
   });
+  const requiredAgentHarnessPluginIds = new Set(
+    collectConfiguredAgentHarnessRuntimes(
+      params.activationSourceConfig ?? params.config,
+      params.env,
+    ).flatMap((runtime) =>
+      resolveManifestActivationPluginIds({
+        trigger: {
+          kind: "agentHarness",
+          runtime,
+        },
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+        cache: true,
+      }),
+    ),
+  );
   const startupDreamingPluginIds = resolveGatewayStartupDreamingPluginIds(params.config);
   const explicitMemorySlotStartupPluginId = resolveExplicitMemorySlotStartupPluginId(
     params.activationSourceConfig ?? params.config,
@@ -284,6 +302,17 @@ export function resolveGatewayStartupPluginIds(params: {
     .plugins.filter((plugin) => {
       if (plugin.channels.some((channelId) => configuredChannelIds.has(channelId))) {
         return true;
+      }
+      if (requiredAgentHarnessPluginIds.has(plugin.id)) {
+        const activationState = resolveEffectivePluginActivationState({
+          id: plugin.id,
+          origin: plugin.origin,
+          config: pluginsConfig,
+          rootConfig: params.config,
+          enabledByDefault: plugin.enabledByDefault,
+          activationSource,
+        });
+        return activationState.enabled;
       }
       if (
         !shouldConsiderForGatewayStartup({

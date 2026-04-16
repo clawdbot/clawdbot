@@ -14,6 +14,9 @@ on:
       - Dockerfile.sandbox-common
       - scripts/sandbox-common-setup.sh
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -32,7 +35,7 @@ jobs:
           submodules: false
 
       - name: Set up Docker Builder
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
 
       - name: Build minimal sandbox base (USER sandbox)
         shell: bash

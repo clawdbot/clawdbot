@@ -375,4 +375,70 @@ describe("openai codex provider", () => {
       name: "gpt-5.4",
     });
   });
+
+  it("defaults missing codex api metadata to openai-codex-responses", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    const model = provider.normalizeResolvedModel?.({
+      provider: "openai-codex",
+      model: {
+        id: "gpt-5.4",
+        name: "gpt-5.4",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_050_000,
+        contextTokens: 272_000,
+        maxTokens: 128_000,
+      },
+    } as never);
+
+    expect(model).toMatchObject({
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+    });
+  });
+
+  it("normalizes stale /backend-api/v1 codex metadata to the canonical base url", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    const model = provider.normalizeResolvedModel?.({
+      provider: "openai-codex",
+      model: {
+        id: "gpt-5.4",
+        name: "gpt-5.4",
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+        baseUrl: "https://chatgpt.com/backend-api/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_050_000,
+        contextTokens: 272_000,
+        maxTokens: 128_000,
+      },
+    } as never);
+
+    expect(model).toMatchObject({
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+    });
+  });
+
+  it("normalizes transport metadata for stale /backend-api/v1 codex routes", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    expect(
+      provider.normalizeTransport?.({
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+        baseUrl: "https://chatgpt.com/backend-api/v1",
+      } as never),
+    ).toEqual({
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+    });
+  });
 });

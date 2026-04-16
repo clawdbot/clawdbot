@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { formatExecCommand } from "../infra/system-run-command.js";
 import {
   buildSystemRunApprovalPlan,
@@ -118,6 +118,43 @@ function withFakeRuntimeBins<T>(params: {
     } else {
       process.env.PATH = oldPath;
     }
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function resolveNativeBinaryFixturePath(): string {
+  for (const candidate of ["/bin/ls", "/usr/bin/ls", "/bin/echo", "/usr/bin/printf"]) {
+    try {
+      if (fs.statSync(candidate).isFile()) {
+        return candidate;
+      }
+    } catch {
+      continue;
+    }
+  }
+  throw new Error("expected a native binary fixture path");
+}
+
+function expectShellPayloadApprovalDenied(params: {
+  tmpPrefix: string;
+  fileName: string;
+  body: string;
+}) {
+  if (process.platform === "win32") {
+    return;
+  }
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), params.tmpPrefix));
+  try {
+    const scriptPath = path.join(tmp, params.fileName);
+    fs.writeFileSync(scriptPath, params.body);
+    fs.chmodSync(scriptPath, 0o755);
+    const prepared = buildSystemRunApprovalPlan({
+      command: ["/bin/sh", "-lc", scriptPath],
+      rawCommand: scriptPath,
+      cwd: tmp,
+    });
+    expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
+  } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 }
@@ -767,6 +804,184 @@ describe("hardenApprovedExecutionPaths", () => {
         expectMutableFileOperandApprovalPlan(fixture, tmp);
       },
     );
+  });
+
+  it("allows shell payloads that invoke absolute-path native binaries", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const binaryPath = resolveNativeBinaryFixturePath();
+    const prepared = buildSystemRunApprovalPlan({
+      command: ["/bin/sh", "-lc", binaryPath],
+      rawCommand: binaryPath,
+      cwd: process.cwd(),
+    });
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) {
+      throw new Error("unreachable");
+    }
+    expect(prepared.plan.mutableFileOperand).toBeUndefined();
+  });
+
+  it("keeps fail-closed behavior for relative native-binary shell payloads", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-relative-binary-binding-"));
+    try {
+      const binaryPath = resolveNativeBinaryFixturePath();
+      const relativeBinaryPath = path.join(tmp, "tool");
+      fs.copyFileSync(binaryPath, relativeBinaryPath);
+      fs.chmodSync(relativeBinaryPath, 0o755);
+      const prepared = buildSystemRunApprovalPlan({
+        command: ["/bin/sh", "-lc", "./tool"],
+        rawCommand: "./tool",
+        cwd: tmp,
+      });
+      expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps fail-closed behavior for writable absolute native-binary shell payloads", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-absolute-binary-binding-"));
+    try {
+      const binaryPath = resolveNativeBinaryFixturePath();
+      const copiedBinaryPath = path.join(tmp, "tool");
+      fs.copyFileSync(binaryPath, copiedBinaryPath);
+      fs.chmodSync(copiedBinaryPath, 0o755);
+      const prepared = buildSystemRunApprovalPlan({
+        command: ["/bin/sh", "-lc", copiedBinaryPath],
+        rawCommand: copiedBinaryPath,
+        cwd: tmp,
+      });
+      expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps fail-closed behavior for owner-controlled read-only absolute binaries", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-owned-readonly-binding-"));
+    const binaryPath = path.join(tmp, "tool");
+    try {
+      fs.copyFileSync(resolveNativeBinaryFixturePath(), binaryPath);
+      fs.chmodSync(binaryPath, 0o555);
+      fs.chmodSync(tmp, 0o555);
+      const prepared = buildSystemRunApprovalPlan({
+        command: ["/bin/sh", "-lc", binaryPath],
+        rawCommand: binaryPath,
+        cwd: tmp,
+      });
+      expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
+    } finally {
+      fs.chmodSync(tmp, 0o755);
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps fail-closed behavior for symlinked binaries with writable targets", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-symlink-binary-binding-"));
+    const stableDir = path.join(tmp, "stable");
+    const mutableDir = path.join(tmp, "mutable");
+    try {
+      const binaryPath = resolveNativeBinaryFixturePath();
+      fs.mkdirSync(stableDir);
+      fs.mkdirSync(mutableDir);
+      const targetBinaryPath = path.join(mutableDir, "tool");
+      const symlinkPath = path.join(stableDir, "tool");
+      fs.copyFileSync(binaryPath, targetBinaryPath);
+      fs.chmodSync(targetBinaryPath, 0o755);
+      fs.symlinkSync(targetBinaryPath, symlinkPath);
+      fs.chmodSync(stableDir, 0o555);
+      const prepared = buildSystemRunApprovalPlan({
+        command: ["/bin/sh", "-lc", symlinkPath],
+        rawCommand: symlinkPath,
+        cwd: tmp,
+      });
+      expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
+    } finally {
+      fs.chmodSync(stableDir, 0o755);
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps fail-closed behavior for shell payloads that invoke mutable script files", () => {
+    expectShellPayloadApprovalDenied({
+      tmpPrefix: "openclaw-shell-script-binding-",
+      fileName: "run.sh",
+      body: "#!/bin/sh\necho SAFE\n",
+    });
+  });
+
+  it("keeps fail-closed behavior for empty shell payload files", () => {
+    expectShellPayloadApprovalDenied({
+      tmpPrefix: "openclaw-shell-empty-binding-",
+      fileName: "empty",
+      body: "",
+    });
+  });
+
+  it("does not treat weak MZ text headers as native binaries", () => {
+    expectShellPayloadApprovalDenied({
+      tmpPrefix: "openclaw-shell-mz-text-binding-",
+      fileName: "mz-script",
+      body: "MZ not really a PE file\n",
+    });
+  });
+
+  it("keeps fail-closed behavior for unknown NUL-bearing headers", () => {
+    expectShellPayloadApprovalDenied({
+      tmpPrefix: "openclaw-shell-nul-header-binding-",
+      fileName: "nul-script",
+      body: "SAFE\u0000maybe-binary\n",
+    });
+  });
+
+  it("keeps fail-closed behavior when the shell payload probe stops seeing a file", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-race-binding-"));
+    try {
+      const scriptPath = path.join(tmp, "run.sh");
+      fs.writeFileSync(scriptPath, "#!/bin/sh\necho SAFE\n");
+      fs.chmodSync(scriptPath, 0o755);
+      const realStatSync = fs.statSync;
+      let targetStatCalls = 0;
+      const statSyncSpy = vi.spyOn(fs, "statSync").mockImplementation((pathLike, options) => {
+        const targetPath = typeof pathLike === "string" ? pathLike : pathLike.toString();
+        if (targetPath === scriptPath) {
+          targetStatCalls += 1;
+          if (targetStatCalls === 2) {
+            return realStatSync(tmp, options);
+          }
+        }
+        return realStatSync(pathLike, options);
+      });
+      try {
+        const prepared = buildSystemRunApprovalPlan({
+          command: ["/bin/sh", "-lc", scriptPath],
+          rawCommand: scriptPath,
+          cwd: tmp,
+        });
+        expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
+      } finally {
+        statSyncSpy.mockRestore();
+      }
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
   it.each(unsafeRuntimeInvocationCases)("$name", (testCase) => {

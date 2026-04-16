@@ -31,7 +31,8 @@ UPDATE_EXPECTED_NEEDLE=""
 API_KEY_VALUE=""
 PROGRESS_INTERVAL_S=15
 PROGRESS_STALE_S=60
-TIMEOUT_UPDATE_S=600
+TIMEOUT_UPDATE_S=300
+TIMEOUT_UPDATE_POLL_GRACE_S=60
 
 child_job_running() {
   local target="$1"
@@ -372,7 +373,8 @@ param(
   [Parameter(Mandatory = $true)][string]$SessionId,
   [Parameter(Mandatory = $true)][string]$ModelId,
   [Parameter(Mandatory = $true)][string]$ProviderKeyEnv,
-  [Parameter(Mandatory = $true)][string]$ProviderKey,
+  [Parameter(Mandatory = $false)][string]$ProviderKey,
+  [Parameter(Mandatory = $false)][string]$ProviderKeyFile,
   [Parameter(Mandatory = $true)][string]$LogPath,
   [Parameter(Mandatory = $true)][string]$DonePath
 )
@@ -555,6 +557,13 @@ try {
   $env:PATH = "$env:LOCALAPPDATA\OpenClaw\deps\portable-git\cmd;$env:LOCALAPPDATA\OpenClaw\deps\portable-git\mingw64\bin;$env:LOCALAPPDATA\OpenClaw\deps\portable-git\usr\bin;$env:PATH"
   Remove-Item $LogPath, $DonePath -Force -ErrorAction SilentlyContinue
   Write-ProgressLog 'update.start'
+  if ($ProviderKeyFile) {
+    $ProviderKey = [Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes($ProviderKeyFile))
+    Remove-Item $ProviderKeyFile -Force -ErrorAction SilentlyContinue
+  }
+  if (-not $ProviderKey) {
+    throw "$ProviderKeyEnv is required"
+  }
   Set-Item -Path ('Env:' + $ProviderKeyEnv) -Value $ProviderKey
   $openclaw = Join-Path $env:APPDATA 'npm\openclaw.cmd'
   Stop-OpenClawGatewayProcesses
@@ -622,6 +631,14 @@ wait_job() {
     warn "$label exited nonzero after completion markers; treating as pass"
     return 0
   fi
+  if [[ "$label" == "macOS update" ]] && verify_macos_update_after_transport_loss "$UPDATE_EXPECTED_NEEDLE"; then
+    warn "$label transport failed after product verification passed; treating as pass"
+    return 0
+  fi
+  if [[ "$label" == "Windows update" ]] && verify_windows_update_after_transport_loss "$UPDATE_EXPECTED_NEEDLE"; then
+    warn "$label transport failed after product verification passed; treating as pass"
+    return 0
+  fi
   warn "$label failed"
   if [[ -n "$log_path" ]]; then
     dump_log_tail "$label" "$log_path"
@@ -645,6 +662,134 @@ if '"finalAssistantVisibleText": "OK"' in text:
     raise SystemExit(0)
 raise SystemExit(1)
 PY
+}
+
+verify_macos_update_after_transport_loss() {
+  local expected_needle="$1"
+  local script_path="/tmp/openclaw-npm-update-macos-recover.sh"
+  cat <<EOF | prlctl exec "$MACOS_VM" /usr/bin/tee "$script_path" >/dev/null
+set -euo pipefail
+export PATH=/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin
+busy="\$(/bin/ps -axo command | /usr/bin/egrep 'openclaw update|npm install|pnpm install|pnpm run build' | /usr/bin/egrep -v 'egrep|openclaw-npm-update-macos-recover' || true)"
+if [ -n "\$busy" ]; then
+  printf 'update still has active npm/pnpm/openclaw processes\n%s\n' "\$busy" >&2
+  exit 1
+fi
+version="\$(/opt/homebrew/bin/openclaw --version)"
+printf '%s\n' "\$version"
+if [ -n "$expected_needle" ]; then
+  case "\$version" in
+    *"$expected_needle"*) ;;
+    *)
+      echo "version mismatch after transport loss: expected substring $expected_needle" >&2
+      exit 1
+      ;;
+  esac
+fi
+/opt/homebrew/bin/openclaw gateway status --deep --require-rpc >/dev/null 2>&1 || /opt/homebrew/bin/openclaw gateway restart || true
+gateway_ready=0
+for _ in 1 2 3 4 5 6; do
+  if /opt/homebrew/bin/openclaw gateway status --deep --require-rpc; then
+    gateway_ready=1
+    break
+  fi
+  sleep 2
+done
+if [ "\$gateway_ready" != "1" ]; then
+  /opt/homebrew/bin/openclaw gateway start || true
+  for _ in 1 2 3 4 5 6; do
+    if /opt/homebrew/bin/openclaw gateway status --deep --require-rpc; then
+      gateway_ready=1
+      break
+    fi
+    sleep 2
+  done
+fi
+if [ "\$gateway_ready" != "1" ]; then
+  echo "gateway did not become RPC-ready after transport recovery" >&2
+  exit 1
+fi
+/opt/homebrew/bin/openclaw models set "$MODEL_ID"
+/opt/homebrew/bin/openclaw agent --agent main --session-id "parallels-npm-update-macos-transport-recovery-$expected_needle" --message "Reply with exact ASCII text OK only." --json
+EOF
+  macos_desktop_user_exec /bin/bash "$script_path"
+}
+
+verify_windows_update_after_transport_loss() {
+  local expected_needle="$1"
+  local provider_key_b64
+  provider_key_b64="$(
+    PROVIDER_KEY="$API_KEY_VALUE" "$PYTHON_BIN" - <<'PY'
+import base64
+import os
+
+print(base64.b64encode(os.environ["PROVIDER_KEY"].encode("utf-8")).decode("ascii"))
+PY
+  )"
+  set +e
+  guest_powershell_poll 120 "$(cat <<EOF
+\$ErrorActionPreference = 'Stop'
+\$openclaw = Join-Path \$env:APPDATA 'npm\\openclaw.cmd'
+if (-not (Test-Path \$openclaw)) {
+  throw "openclaw shim missing: \$openclaw"
+}
+\$busy = Get-CimInstance Win32_Process |
+  Where-Object {
+    \$_.CommandLine -and
+    (\$_.CommandLine -match 'openclaw update|npm install|pnpm install|pnpm run build')
+  }
+if (\$busy) {
+  throw 'update still has active npm/pnpm/openclaw processes'
+}
+\$version = & \$openclaw --version
+Write-Output \$version
+if ('$expected_needle' -and \$version -notmatch [regex]::Escape('$expected_needle')) {
+  throw "version mismatch after transport loss: expected substring $expected_needle"
+}
+\$gatewayReady = \$false
+for (\$i = 0; \$i -lt 6; \$i++) {
+  & \$openclaw gateway status --deep --require-rpc
+  if (\$LASTEXITCODE -eq 0) {
+    \$gatewayReady = \$true
+    break
+  }
+  Start-Sleep -Seconds 2
+}
+if (-not \$gatewayReady) {
+  & \$openclaw gateway restart
+  for (\$i = 0; \$i -lt 6; \$i++) {
+    & \$openclaw gateway status --deep --require-rpc
+    if (\$LASTEXITCODE -eq 0) {
+      \$gatewayReady = \$true
+      break
+    }
+    Start-Sleep -Seconds 2
+  }
+}
+if (-not \$gatewayReady) {
+  & \$openclaw gateway start
+  for (\$i = 0; \$i -lt 6; \$i++) {
+    & \$openclaw gateway status --deep --require-rpc
+    if (\$LASTEXITCODE -eq 0) {
+      \$gatewayReady = \$true
+      break
+    }
+    Start-Sleep -Seconds 2
+  }
+}
+if (-not \$gatewayReady) {
+  throw 'gateway did not become RPC-ready after transport recovery'
+}
+\$providerBytes = [Convert]::FromBase64String('$provider_key_b64')
+\$providerValue = [Text.Encoding]::UTF8.GetString(\$providerBytes)
+Set-Item -Path ('Env:' + '$API_KEY_ENV') -Value \$providerValue
+& \$openclaw models set '$MODEL_ID'
+& \$openclaw agent --agent main --session-id 'parallels-npm-update-windows-transport-recovery-$expected_needle' --message 'Reply with exact ASCII text OK only.' --json
+EOF
+  )"
+  local rc=$?
+  set -e
+  return "$rc"
 }
 
 start_timeout_guard() {
@@ -745,10 +890,10 @@ monitor_jobs_progress() {
       running=1
       summary="$(extract_log_progress "${logs[$i]}")"
       [[ -n "$summary" ]] || summary="waiting for first log line"
-      if [[ "${last_progress[$i]}" != "$summary" ]] || (( now - last_print[$i] >= PROGRESS_STALE_S )); then
+      if [[ "${last_progress[i]}" != "$summary" ]] || (( now - last_print[i] >= PROGRESS_STALE_S )); then
         say "$group ${labels[$i]}: $summary"
-        last_progress[$i]="$summary"
-        last_print[$i]=$now
+        last_progress[i]="$summary"
+        last_print[i]=$now
       fi
     done
     (( running )) || break
@@ -846,21 +991,32 @@ run_windows_script_via_log() {
   local provider_key="$7"
   local runner_name log_name done_name done_status launcher_state guest_log
   local start_seconds poll_deadline startup_checked poll_rc state_rc log_rc
-  local log_state_path
+  local log_state_path provider_key_b64
   runner_name="openclaw-update-$RANDOM-$RANDOM.ps1"
   log_name="openclaw-update-$RANDOM-$RANDOM.log"
   done_name="openclaw-update-$RANDOM-$RANDOM.done"
   log_state_path="$(mktemp "${TMPDIR:-/tmp}/openclaw-update-log-state.XXXXXX")"
   : >"$log_state_path"
+  provider_key_b64="$(
+    PROVIDER_KEY="$provider_key" "$PYTHON_BIN" - <<'PY'
+import base64
+import os
+
+print(base64.b64encode(os.environ["PROVIDER_KEY"].encode("utf-8")).decode("ascii"))
+PY
+  )"
   start_seconds="$SECONDS"
-  poll_deadline=$((SECONDS + TIMEOUT_UPDATE_S + 60))
+  poll_deadline=$((SECONDS + TIMEOUT_UPDATE_S + TIMEOUT_UPDATE_POLL_GRACE_S))
   startup_checked=0
 
   guest_powershell "$(cat <<EOF
 \$runner = Join-Path \$env:TEMP '$runner_name'
 \$log = Join-Path \$env:TEMP '$log_name'
 \$done = Join-Path \$env:TEMP '$done_name'
-Remove-Item \$runner, \$log, \$done -Force -ErrorAction SilentlyContinue
+\$providerKeyFile = Join-Path \$env:TEMP '$runner_name.key'
+Remove-Item \$runner, \$log, \$done, \$providerKeyFile -Force -ErrorAction SilentlyContinue
+\$providerBytes = [Convert]::FromBase64String('$provider_key_b64')
+[IO.File]::WriteAllBytes(\$providerKeyFile, \$providerBytes)
 curl.exe -fsSL '$script_url' -o \$runner
 Start-Process powershell.exe -ArgumentList @(
   '-NoProfile',
@@ -871,7 +1027,7 @@ Start-Process powershell.exe -ArgumentList @(
   '-SessionId', '$session_id',
   '-ModelId', '$model_id',
   '-ProviderKeyEnv', '$provider_key_env',
-  '-ProviderKey', '$provider_key',
+  '-ProviderKeyFile', \$providerKeyFile,
   '-LogPath', \$log,
   '-DonePath', \$done
 ) -WindowStyle Hidden | Out-Null

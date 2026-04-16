@@ -7,6 +7,9 @@ on:
     types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.event_name == 'pull_request' && format('{0}-{1}', github.workflow, github.event.pull_request.number) || format('{0}-{1}', github.workflow, github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -92,12 +95,12 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up Docker Builder
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
 
       # Blacksmith can fall back to the local docker driver, which rejects gha
       # cache export/import. Keep smoke builds driver-agnostic.
       - name: Build root Dockerfile smoke image
-        uses: useblacksmith/build-push-action@v2
+        uses: useblacksmith/build-push-action@cbd1f60d194a98cb3be5523b15134501eaf0fbf3 # v2
         with:
           context: .
           file: ./Dockerfile
@@ -116,7 +119,7 @@ jobs:
       # runtime deps declared by the plugin and that matrix discovery stays
       # healthy in the final runtime image.
       - name: Build extension Dockerfile smoke image
-        uses: useblacksmith/build-push-action@v2
+        uses: useblacksmith/build-push-action@cbd1f60d194a98cb3be5523b15134501eaf0fbf3 # v2
         with:
           context: .
           file: ./Dockerfile
@@ -174,7 +177,7 @@ jobs:
           '
 
       - name: Build installer smoke image
-        uses: useblacksmith/build-push-action@v2
+        uses: useblacksmith/build-push-action@cbd1f60d194a98cb3be5523b15134501eaf0fbf3 # v2
         with:
           context: ./scripts/docker
           file: ./scripts/docker/install-sh-smoke/Dockerfile
@@ -185,7 +188,7 @@ jobs:
 
       - name: Build installer non-root image
         if: github.event_name != 'pull_request'
-        uses: useblacksmith/build-push-action@v2
+        uses: useblacksmith/build-push-action@cbd1f60d194a98cb3be5523b15134501eaf0fbf3 # v2
         with:
           context: ./scripts/docker
           file: ./scripts/docker/install-sh-nonroot/Dockerfile

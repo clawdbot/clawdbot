@@ -41,7 +41,8 @@ BUILD_LOCK_DIR="${TMPDIR:-/tmp}/openclaw-parallels-build.lock"
 TIMEOUT_SNAPSHOT_S=240
 TIMEOUT_GIT_SETUP_S=1200
 TIMEOUT_INSTALL_S=300
-TIMEOUT_UPDATE_S=600
+TIMEOUT_UPDATE_S=300
+TIMEOUT_UPDATE_POLL_GRACE_S=60
 TIMEOUT_VERIFY_S=120
 TIMEOUT_ONBOARD_S=240
 TIMEOUT_ONBOARD_PHASE_S=$((TIMEOUT_ONBOARD_S + 60))
@@ -1753,7 +1754,7 @@ run_dev_channel_update() {
   log_state_path="$(mktemp "${TMPDIR:-/tmp}/openclaw-update-dev-log-state.XXXXXX")"
   : >"$log_state_path"
   start_seconds="$SECONDS"
-  poll_deadline=$((SECONDS + TIMEOUT_UPDATE_S + 120))
+  poll_deadline=$((SECONDS + TIMEOUT_UPDATE_S + TIMEOUT_UPDATE_POLL_GRACE_S))
   startup_checked=0
 
   guest_powershell "$(cat <<EOF
@@ -1812,6 +1813,11 @@ PY
       warn "windows dev update helper poll failed; retrying"
       if (( SECONDS >= poll_deadline )); then
         warn "windows dev update helper timed out while polling done file"
+        if verify_windows_dev_update_after_transport_loss; then
+          warn "windows dev update poll timed out after product verification passed; treating as pass"
+          rm -f "$log_state_path"
+          return 0
+        fi
         rm -f "$log_state_path"
         return 1
       fi
@@ -1853,11 +1859,41 @@ PY
         warn "windows dev update helper log drain failed after timeout"
       fi
       warn "windows dev update helper timed out waiting for done file"
+      if verify_windows_dev_update_after_transport_loss; then
+        warn "windows dev update transport timed out after product verification passed; treating as pass"
+        rm -f "$log_state_path"
+        return 0
+      fi
       rm -f "$log_state_path"
       return 1
     fi
     sleep 2
   done
+}
+
+verify_windows_dev_update_after_transport_loss() {
+  set +e
+  guest_powershell_poll 90 "$(cat <<'EOF'
+$ErrorActionPreference = 'Stop'
+$busy = Get-CimInstance Win32_Process |
+  Where-Object {
+    $_.CommandLine -and
+    ($_.CommandLine -match 'openclaw update|npm install|pnpm install|pnpm run build')
+  }
+if ($busy) {
+  throw 'dev update still has active npm/pnpm/openclaw processes'
+}
+$gitEntry = Join-Path $env:USERPROFILE 'openclaw\openclaw.mjs'
+if (-not (Test-Path $gitEntry)) {
+  throw "git entry missing after transport loss: $gitEntry"
+}
+& node.exe $gitEntry --version
+& node.exe $gitEntry update status --json
+EOF
+  )"
+  local rc=$?
+  set -e
+  return "$rc"
 }
 
 write_install_runner_script() {

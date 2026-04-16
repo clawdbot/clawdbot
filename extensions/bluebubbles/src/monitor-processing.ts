@@ -9,7 +9,10 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
-import { downloadBlueBubblesAttachment } from "./attachments.js";
+import {
+  downloadBlueBubblesAttachment,
+  fetchBlueBubblesMessageAttachments,
+} from "./attachments.js";
 import { markBlueBubblesChatRead, sendBlueBubblesTyping } from "./chat.js";
 import { resolveBlueBubblesConversationRoute } from "./conversation-route.js";
 import { fetchBlueBubblesHistory } from "./history.js";
@@ -692,8 +695,52 @@ async function processMessageAfterDedupe(
   const isGroup = typeof groupFlag === "boolean" ? groupFlag : message.isGroup;
 
   const text = message.text.trim();
-  const attachments = message.attachments ?? [];
-  const placeholder = buildMessagePlaceholder(message);
+  let attachments = message.attachments ?? [];
+  const baseUrl = normalizeSecretInputString(account.config.serverUrl);
+  const password = normalizeSecretInputString(account.config.password);
+
+  // BlueBubbles may fire the webhook before attachment indexing is complete,
+  // so the initial `attachments` array can be empty for messages that actually
+  // have media. When the message text is empty (image-only) or this is an
+  // `updated-message` event, wait briefly and re-fetch from the BB API as a
+  // fallback for cases where BB doesn't send a follow-up webhook. (#65430, #67437)
+  // This must run before the !rawBody guard below, otherwise image-only messages
+  // with empty attachments are dropped before the retry can fire.
+  const retryMessageId = message.messageId?.trim();
+  const shouldRetryAttachments =
+    attachments.length === 0 &&
+    retryMessageId &&
+    baseUrl &&
+    password &&
+    (text.length === 0 || message.eventType === "updated-message");
+  if (shouldRetryAttachments) {
+    try {
+      await new Promise<void>((resolve) => setTimeout(resolve, 2_000));
+      const fetched = await fetchBlueBubblesMessageAttachments(retryMessageId, {
+        baseUrl,
+        password,
+        timeoutMs: 10_000,
+        allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
+      });
+      if (fetched.length > 0) {
+        logVerbose(
+          core,
+          runtime,
+          `attachment retry found ${fetched.length} attachment(s) for msgId=${message.messageId}`,
+        );
+        attachments = fetched;
+      }
+    } catch (err) {
+      logVerbose(
+        core,
+        runtime,
+        `attachment retry failed for msgId=${message.messageId}: ${String(err)}`,
+      );
+    }
+  }
+
+  // Recompute placeholder from resolved attachments (may have been updated by retry).
+  const placeholder = buildMessagePlaceholder({ ...message, attachments });
   // Check if text is a tapback pattern (e.g., 'Loved "hello"') and transform to emoji format
   // For tapbacks, we'll append [[reply_to:N]] at the end; for regular messages, prepend it
   const tapbackContext = resolveTapbackContext(message);
@@ -1018,9 +1065,6 @@ async function processMessageAfterDedupe(
     logVerbose(core, runtime, `bluebubbles: skipping group message (no mention)`);
     return;
   }
-
-  const baseUrl = normalizeSecretInputString(account.config.serverUrl);
-  const password = normalizeSecretInputString(account.config.password);
 
   if (isGroup && !message.participants?.length && baseUrl && password) {
     try {

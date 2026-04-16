@@ -11,6 +11,7 @@ import {
   readFileWithinRoot,
   writeFileWithinRoot,
 } from "../infra/fs-safe.js";
+import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
 import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "../infra/local-file-access.js";
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
@@ -746,8 +747,13 @@ function createSandboxEditOperations(params: SandboxToolParams) {
   } as const;
 }
 
+function expandTildeToOsHome(filePath: string): string {
+  const home = resolveOsHomeDir();
+  return home ? expandHomePrefix(filePath, { home }) : filePath;
+}
+
 async function writeHostFile(absolutePath: string, content: string) {
-  const resolved = path.resolve(absolutePath);
+  const resolved = path.resolve(expandTildeToOsHome(absolutePath));
   await fs.mkdir(path.dirname(resolved), { recursive: true });
   await fs.writeFile(resolved, content, "utf-8");
 }
@@ -759,7 +765,7 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
     // When workspaceOnly is false, allow writes anywhere on the host
     return {
       mkdir: async (dir: string) => {
-        const resolved = path.resolve(dir);
+        const resolved = path.resolve(expandTildeToOsHome(dir));
         await fs.mkdir(resolved, { recursive: true });
       },
       writeFile: writeHostFile,
@@ -793,12 +799,12 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
     // When workspaceOnly is false, allow edits anywhere on the host
     return {
       readFile: async (absolutePath: string) => {
-        const resolved = path.resolve(absolutePath);
+        const resolved = path.resolve(expandTildeToOsHome(absolutePath));
         return await fs.readFile(resolved);
       },
       writeFile: writeHostFile,
       access: async (absolutePath: string) => {
-        const resolved = path.resolve(absolutePath);
+        const resolved = path.resolve(expandTildeToOsHome(absolutePath));
         await fs.access(resolved);
       },
     } as const;

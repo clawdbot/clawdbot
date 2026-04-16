@@ -1496,8 +1496,8 @@
   "pnpm": {
     "overrides": {
       "@anthropic-ai/sdk": "0.81.0",
-      "hono": "4.12.12",
-      "@hono/node-server": "1.19.13",
+      "hono": "4.12.14",
+      "@hono/node-server": "1.19.14",
       "axios": "1.15.0",
       "follow-redirects": "1.16.0",
       "defu": "6.1.5",

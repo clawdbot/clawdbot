@@ -38,14 +38,23 @@ import { buildAnthropicReplayPolicy } from "./replay-policy.js";
 import { wrapAnthropicProviderStream } from "./stream-wrappers.js";
 
 const PROVIDER_ID = "anthropic";
-const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-sonnet-4-6";
+const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-opus-4-7";
+const ANTHROPIC_OPUS_47_MODEL_ID = "claude-opus-4-7";
+const ANTHROPIC_OPUS_47_DOT_MODEL_ID = "claude-opus-4.7";
 const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
 const ANTHROPIC_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
+const ANTHROPIC_OPUS_47_TEMPLATE_MODEL_IDS = [
+  ANTHROPIC_OPUS_46_MODEL_ID,
+  ANTHROPIC_OPUS_46_DOT_MODEL_ID,
+  "claude-opus-4-5",
+  "claude-opus-4.5",
+] as const;
 const ANTHROPIC_OPUS_TEMPLATE_MODEL_IDS = ["claude-opus-4-5", "claude-opus-4.5"] as const;
 const ANTHROPIC_SONNET_46_MODEL_ID = "claude-sonnet-4-6";
 const ANTHROPIC_SONNET_46_DOT_MODEL_ID = "claude-sonnet-4.6";
 const ANTHROPIC_SONNET_TEMPLATE_MODEL_IDS = ["claude-sonnet-4-5", "claude-sonnet-4.5"] as const;
 const ANTHROPIC_MODERN_MODEL_PREFIXES = [
+  "claude-opus-4-7",
   "claude-opus-4-6",
   "claude-sonnet-4-6",
   "claude-opus-4-5",
@@ -223,6 +232,14 @@ function resolveAnthropicForwardCompatModel(
   return (
     resolveAnthropic46ForwardCompatModel({
       ctx,
+      dashModelId: ANTHROPIC_OPUS_47_MODEL_ID,
+      dotModelId: ANTHROPIC_OPUS_47_DOT_MODEL_ID,
+      dashTemplateId: ANTHROPIC_OPUS_46_MODEL_ID,
+      dotTemplateId: ANTHROPIC_OPUS_46_DOT_MODEL_ID,
+      fallbackTemplateIds: ANTHROPIC_OPUS_47_TEMPLATE_MODEL_IDS,
+    }) ??
+    resolveAnthropic46ForwardCompatModel({
+      ctx,
       dashModelId: ANTHROPIC_OPUS_46_MODEL_ID,
       dotModelId: ANTHROPIC_OPUS_46_DOT_MODEL_ID,
       dashTemplateId: "claude-opus-4-5",
@@ -243,6 +260,8 @@ function resolveAnthropicForwardCompatModel(
 function shouldUseAnthropicAdaptiveThinkingDefault(modelId: string): boolean {
   const lowerModelId = normalizeLowercaseStringOrEmpty(modelId);
   return (
+    lowerModelId.startsWith(ANTHROPIC_OPUS_47_MODEL_ID) ||
+    lowerModelId.startsWith(ANTHROPIC_OPUS_47_DOT_MODEL_ID) ||
     lowerModelId.startsWith(ANTHROPIC_OPUS_46_MODEL_ID) ||
     lowerModelId.startsWith(ANTHROPIC_OPUS_46_DOT_MODEL_ID) ||
     lowerModelId.startsWith(ANTHROPIC_SONNET_46_MODEL_ID) ||
@@ -372,7 +391,7 @@ async function runAnthropicCliMigrationNonInteractive(ctx: {
 
 export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
   const providerId = "anthropic";
-  const defaultAnthropicModel = "anthropic/claude-sonnet-4-6";
+  const defaultAnthropicModel = DEFAULT_ANTHROPIC_MODEL;
   api.registerCliBackend(buildAnthropicCliBackend());
   api.registerProvider({
     id: providerId,
