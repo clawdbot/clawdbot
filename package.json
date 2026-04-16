@@ -958,6 +958,74 @@
       "types": "./dist/plugin-sdk/browser-security-runtime.d.ts",
       "default": "./dist/plugin-sdk/browser-security-runtime.js"
     },
+    "./plugin-sdk/browser-setup-tools": {
+      "types": "./dist/plugin-sdk/browser-setup-tools.d.ts",
+      "default": "./dist/plugin-sdk/browser-setup-tools.js"
+    },
+    "./plugin-sdk/browser-config-runtime": {
+      "types": "./dist/plugin-sdk/browser-config-runtime.d.ts",
+      "default": "./dist/plugin-sdk/browser-config-runtime.js"
+    },
+    "./plugin-sdk/github-copilot-token": {
+      "types": "./dist/plugin-sdk/github-copilot-token.d.ts",
+      "default": "./dist/plugin-sdk/github-copilot-token.js"
+    },
+    "./plugin-sdk/param-readers": {
+      "types": "./dist/plugin-sdk/param-readers.d.ts",
+      "default": "./dist/plugin-sdk/param-readers.js"
+    },
+    "./plugin-sdk/collection-runtime": {
+      "types": "./dist/plugin-sdk/collection-runtime.d.ts",
+      "default": "./dist/plugin-sdk/collection-runtime.js"
+    },
+    "./plugin-sdk/markdown-table-runtime": {
+      "types": "./dist/plugin-sdk/markdown-table-runtime.d.ts",
+      "default": "./dist/plugin-sdk/markdown-table-runtime.js"
+    },
+    "./plugin-sdk/approval-gateway-runtime": {
+      "types": "./dist/plugin-sdk/approval-gateway-runtime.d.ts",
+      "default": "./dist/plugin-sdk/approval-gateway-runtime.js"
+    },
+    "./plugin-sdk/approval-handler-runtime": {
+      "types": "./dist/plugin-sdk/approval-handler-runtime.d.ts",
+      "default": "./dist/plugin-sdk/approval-handler-runtime.js"
+    },
+    "./plugin-sdk/browser-config-support": {
+      "types": "./dist/plugin-sdk/browser-config-support.d.ts",
+      "default": "./dist/plugin-sdk/browser-config-support.js"
+    },
+    "./plugin-sdk/models-provider-runtime": {
+      "types": "./dist/plugin-sdk/models-provider-runtime.d.ts",
+      "default": "./dist/plugin-sdk/models-provider-runtime.js"
+    },
+    "./plugin-sdk/conversation-binding-runtime": {
+      "types": "./dist/plugin-sdk/conversation-binding-runtime.d.ts",
+      "default": "./dist/plugin-sdk/conversation-binding-runtime.js"
+    },
+    "./plugin-sdk/simple-completion-runtime": {
+      "types": "./dist/plugin-sdk/simple-completion-runtime.d.ts",
+      "default": "./dist/plugin-sdk/simple-completion-runtime.js"
+    },
+    "./plugin-sdk/session-store-runtime": {
+      "types": "./dist/plugin-sdk/session-store-runtime.d.ts",
+      "default": "./dist/plugin-sdk/session-store-runtime.js"
+    },
+    "./plugin-sdk/skill-commands-runtime": {
+      "types": "./dist/plugin-sdk/skill-commands-runtime.d.ts",
+      "default": "./dist/plugin-sdk/skill-commands-runtime.js"
+    },
+    "./plugin-sdk/tool-payload": {
+      "types": "./dist/plugin-sdk/tool-payload.d.ts",
+      "default": "./dist/plugin-sdk/tool-payload.js"
+    },
+    "./plugin-sdk/realtime-transcription": {
+      "types": "./dist/plugin-sdk/realtime-transcription.d.ts",
+      "default": "./dist/plugin-sdk/realtime-transcription.js"
+    },
+    "./plugin-sdk/realtime-voice": {
+      "types": "./dist/plugin-sdk/realtime-voice.d.ts",
+      "default": "./dist/plugin-sdk/realtime-voice.js"
+    },
     "./plugin-sdk/ssrf-runtime": {
       "types": "./dist/plugin-sdk/ssrf-runtime.d.ts",
       "default": "./dist/plugin-sdk/ssrf-runtime.js"
