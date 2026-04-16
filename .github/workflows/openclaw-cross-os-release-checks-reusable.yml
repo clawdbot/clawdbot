@@ -1,11 +1,66 @@
 name: OpenClaw Cross-OS Release Checks (Reusable)
 
 on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Public OpenClaw ref to validate (tag, branch, or full commit SHA)
+        required: true
+        default: main
+        type: string
+      workflow_ref:
+        description: Optional openclaw/openclaw ref that provides the reusable workflow harness
+        required: false
+        default: ""
+        type: string
+      provider:
+        description: Provider lane to use for onboarding and the end-to-end turn
+        required: true
+        default: openai
+        type: choice
+        options:
+          - openai
+          - anthropic
+          - minimax
+      mode:
+        description: Which release-check lanes to run
+        required: true
+        default: both
+        type: choice
+        options:
+          - fresh
+          - upgrade
+          - both
+      previous_version:
+        description: Optional baseline version for installer/dev-update and packaged upgrade
+        required: false
+        default: ""
+        type: string
+      ubuntu_runner:
+        description: Optional Linux runner label override
+        required: false
+        default: ""
+        type: string
+      windows_runner:
+        description: Optional Windows runner label override
+        required: false
+        default: ""
+        type: string
+      macos_runner:
+        description: Optional macOS runner label override
+        required: false
+        default: ""
+        type: string
   workflow_call:
     inputs:
       ref:
         description: Public OpenClaw ref to validate (tag, branch, or full commit SHA)
         required: true
+        type: string
+      workflow_ref:
+        description: Optional openclaw/openclaw ref that provides the reusable workflow harness
+        required: false
+        default: ""
         type: string
       provider:
         description: Provider lane to use for onboarding and the end-to-end turn
@@ -42,6 +97,14 @@ on:
         required: false
       MINIMAX_API_KEY:
         required: false
+      OPENCLAW_DISCORD_SMOKE_BOT_TOKEN:
+        required: false
+      OPENCLAW_DISCORD_SMOKE_GUILD_ID:
+        required: false
+      OPENCLAW_DISCORD_SMOKE_CHANNEL_ID:
+        required: false
+
+permissions: read-all
 
 concurrency:
   group: openclaw-cross-os-release-checks-${{ inputs.ref }}-${{ inputs.provider }}-${{ inputs.mode }}
@@ -52,12 +115,11 @@ env:
   NODE_VERSION: "24.x"
   PNPM_VERSION: "10.32.1"
   OPENCLAW_REPOSITORY: openclaw/openclaw
+  TSX_VERSION: "4.21.0"
 
 jobs:
   prepare:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     outputs:
       baseline_file_name: ${{ steps.baseline_metadata.outputs.file_name }}
       baseline_spec: ${{ steps.baseline.outputs.value }}
@@ -65,6 +127,7 @@ jobs:
       candidate_version: ${{ steps.candidate_metadata.outputs.version }}
       matrix: ${{ steps.matrix.outputs.value }}
       source_sha: ${{ steps.candidate_metadata.outputs.source_sha }}
+      workflow_ref: ${{ steps.workflow_ref.outputs.value }}
     steps:
       - name: Validate provider secret availability
         env:
@@ -90,9 +153,109 @@ jobs:
               ;;
           esac
 
-      - name: Checkout caller release workflow repo
+      - name: Resolve workflow ref
+        id: workflow_ref
+        env:
+          INPUT_WORKFLOW_REF: ${{ inputs.workflow_ref }}
+          CALLER_REPOSITORY: ${{ github.repository }}
+          CURRENT_SHA: ${{ github.sha }}
+          WORKFLOW_CONTEXT_REF: ${{ github.workflow_ref }}
+          WORKFLOW_REPOSITORY: ${{ env.OPENCLAW_REPOSITORY }}
+        run: |
+          set -euo pipefail
+          resolve_unique_remote_ref() {
+            local remote_url="$1"
+            shift
+            local -a refs=("$@")
+            local -a matches=()
+            local ref=""
+
+            for ref in "${refs[@]}"; do
+              [[ -n "${ref}" ]] || continue
+              mapfile -t matches < <(
+                git ls-remote "${remote_url}" "${ref}" | awk '{print $1}' | awk '!seen[$0]++'
+              )
+              if [[ "${#matches[@]}" -eq 0 ]]; then
+                continue
+              fi
+              if [[ "${#matches[@]}" -ne 1 ]]; then
+                return 2
+              fi
+
+              printf '%s\n' "${matches[0]}"
+              return 0
+            done
+            return 1
+          }
+
+          if [[ -n "${INPUT_WORKFLOW_REF}" ]]; then
+            TARGET_REF="${INPUT_WORKFLOW_REF}"
+          elif [[ "${CALLER_REPOSITORY}" == "${WORKFLOW_REPOSITORY}" ]]; then
+            TARGET_REF="${CURRENT_SHA}"
+          elif [[ "${WORKFLOW_CONTEXT_REF}" == "${WORKFLOW_REPOSITORY}/"* ]] && [[ "${WORKFLOW_CONTEXT_REF}" == *"@"* ]]; then
+            TARGET_REF="${WORKFLOW_CONTEXT_REF##*@}"
+          else
+            echo "Failed to infer workflow ref from github.workflow_ref=${WORKFLOW_CONTEXT_REF}" >&2
+            exit 1
+          fi
+
+          if [[ "${TARGET_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "value=${TARGET_REF}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          REMOTE_URL="https://github.com/${WORKFLOW_REPOSITORY}.git"
+          if [[ "${TARGET_REF}" == refs/* ]]; then
+            if [[ "${TARGET_REF}" == refs/tags/* ]]; then
+              mapfile -t MATCHES < <(
+                resolve_unique_remote_ref "${REMOTE_URL}" "${TARGET_REF}^{}" "${TARGET_REF}" || true
+              )
+            else
+              mapfile -t MATCHES < <(resolve_unique_remote_ref "${REMOTE_URL}" "${TARGET_REF}" || true)
+            fi
+          else
+            mapfile -t BRANCH_MATCHES < <(
+              resolve_unique_remote_ref "${REMOTE_URL}" "refs/heads/${TARGET_REF}" || true
+            )
+            mapfile -t TAG_MATCHES < <(
+              resolve_unique_remote_ref "${REMOTE_URL}" "refs/tags/${TARGET_REF}^{}" "refs/tags/${TARGET_REF}" || true
+            )
+
+            MATCH_COUNT=$(( ${#BRANCH_MATCHES[@]} + ${#TAG_MATCHES[@]} ))
+            if [[ "${MATCH_COUNT}" -eq 1 ]]; then
+              if [[ "${#BRANCH_MATCHES[@]}" -eq 1 ]]; then
+                MATCHES=("${BRANCH_MATCHES[0]}")
+              else
+                MATCHES=("${TAG_MATCHES[0]}")
+              fi
+            elif [[ "${MATCH_COUNT}" -eq 0 ]]; then
+              MATCHES=()
+            else
+              echo "Workflow ref resolved ambiguously: ${TARGET_REF}" >&2
+              exit 1
+            fi
+          fi
+
+          case "${#MATCHES[@]}" in
+            1)
+              echo "value=${MATCHES[0]}" >> "$GITHUB_OUTPUT"
+              ;;
+            0)
+              echo "Failed to resolve workflow ref: ${TARGET_REF}" >&2
+              exit 1
+              ;;
+            *)
+              echo "Workflow ref resolved ambiguously: ${TARGET_REF}" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Checkout workflow repo
         uses: actions/checkout@v6
         with:
+          repository: ${{ env.OPENCLAW_REPOSITORY }}
+          ref: ${{ steps.workflow_ref.outputs.value }}
+          path: workflow
           fetch-depth: 1
           persist-credentials: false
 
@@ -123,7 +286,7 @@ jobs:
         env:
           OUTPUT_DIR: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare
         run: |
-          node --disable-warning=ExperimentalWarning scripts/openclaw-cross-os-release-checks.ts \
+          pnpm dlx "tsx@${TSX_VERSION}" workflow/scripts/openclaw-cross-os-release-checks.ts \
             --prepare-only \
             --source-dir source \
             --output-dir "${OUTPUT_DIR}"
@@ -198,6 +361,7 @@ jobs:
       - name: Resolve runner matrix
         id: matrix
         env:
+          INPUT_REF: ${{ inputs.ref }}
           INPUT_MODE: ${{ inputs.mode }}
           INPUT_UBUNTU_RUNNER: ${{ inputs.ubuntu_runner }}
           INPUT_WINDOWS_RUNNER: ${{ inputs.windows_runner }}
@@ -206,53 +370,30 @@ jobs:
           VAR_WINDOWS_RUNNER: ${{ vars.OPENCLAW_RELEASE_CHECKS_WINDOWS_RUNNER }}
           VAR_MACOS_RUNNER: ${{ vars.OPENCLAW_RELEASE_CHECKS_MACOS_RUNNER }}
         run: |
-          node <<'NODE' >>"$GITHUB_OUTPUT"
-          const pick = (...values) => values.find((value) => typeof value === "string" && value.trim().length > 0)?.trim();
-          const lanes = (process.env.INPUT_MODE ?? "both") === "both" ? ["fresh", "upgrade"] : [process.env.INPUT_MODE ?? "both"];
-          const runners = [
-            {
-              os_id: "ubuntu",
-              display_name: "Linux",
-              runner: pick(process.env.INPUT_UBUNTU_RUNNER, process.env.VAR_UBUNTU_RUNNER, "ubuntu-latest"),
-              artifact_name: "linux",
-            },
-            {
-              os_id: "windows",
-              display_name: "Windows",
-              runner: pick(
-                process.env.INPUT_WINDOWS_RUNNER,
-                process.env.VAR_WINDOWS_RUNNER,
-                "blacksmith-32vcpu-windows-2025",
-              ),
-              artifact_name: "windows",
-            },
-            {
-              os_id: "macos",
-              display_name: "macOS",
-              runner: pick(process.env.INPUT_MACOS_RUNNER, process.env.VAR_MACOS_RUNNER, "macos-latest-xlarge"),
-              artifact_name: "macos",
-            },
-          ];
-          const matrix = {
-            include: runners.flatMap((runner) => lanes.map((lane) => ({ ...runner, lane }))),
-          };
-          process.stdout.write(`value=${JSON.stringify(matrix)}\n`);
-          NODE
+          MATRIX_JSON="$(pnpm dlx "tsx@${TSX_VERSION}" workflow/scripts/openclaw-cross-os-release-checks.ts \
+            --resolve-matrix \
+            --ref "${INPUT_REF}" \
+            --mode "${INPUT_MODE}" \
+            --ubuntu-runner "${INPUT_UBUNTU_RUNNER}" \
+            --windows-runner "${INPUT_WINDOWS_RUNNER}" \
+            --macos-runner "${INPUT_MACOS_RUNNER}")"
+          echo "value=${MATRIX_JSON}" >> "$GITHUB_OUTPUT"
 
   cross_os_release_checks:
-    name: "${{ matrix.display_name }} / ${{ matrix.lane }}"
+    name: "${{ matrix.display_name }} / ${{ matrix.suite_label }}"
     needs: prepare
-    permissions:
-      contents: read
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     steps:
-      - name: Checkout caller release workflow repo
+      - name: Checkout workflow repo
         uses: actions/checkout@v6
         with:
+          repository: ${{ env.OPENCLAW_REPOSITORY }}
+          ref: ${{ needs.prepare.outputs.workflow_ref }}
+          path: workflow
           fetch-depth: 1
           persist-credentials: false
 
@@ -274,7 +415,7 @@ jobs:
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/candidate
 
       - name: Download baseline artifact
-        if: ${{ matrix.lane == 'upgrade' }}
+        if: ${{ matrix.suite == 'packaged-upgrade' }}
         uses: actions/download-artifact@v8
         with:
           name: openclaw-cross-os-release-checks-baseline-${{ github.run_id }}
@@ -286,24 +427,35 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          OPENCLAW_DISCORD_SMOKE_BOT_TOKEN: ${{ secrets.OPENCLAW_DISCORD_SMOKE_BOT_TOKEN }}
+          OPENCLAW_DISCORD_SMOKE_GUILD_ID: ${{ secrets.OPENCLAW_DISCORD_SMOKE_GUILD_ID }}
+          OPENCLAW_DISCORD_SMOKE_CHANNEL_ID: ${{ secrets.OPENCLAW_DISCORD_SMOKE_CHANNEL_ID }}
           OPENCLAW_RELEASE_CHECK_OS: ${{ matrix.os_id }}
           OPENCLAW_RELEASE_CHECK_RUNNER: ${{ matrix.runner }}
         run: |
-          node --disable-warning=ExperimentalWarning scripts/openclaw-cross-os-release-checks.ts \
+          DISCORD_ARGS=()
+          if [[ -n "${OPENCLAW_DISCORD_SMOKE_BOT_TOKEN}" ]] && [[ -n "${OPENCLAW_DISCORD_SMOKE_GUILD_ID}" ]] && [[ -n "${OPENCLAW_DISCORD_SMOKE_CHANNEL_ID}" ]]; then
+            DISCORD_ARGS+=(--run-discord-roundtrip true)
+          fi
+          pnpm dlx "tsx@${TSX_VERSION}" workflow/scripts/openclaw-cross-os-release-checks.ts \
             --candidate-tgz "$RUNNER_TEMP/openclaw-cross-os-release-checks/candidate/${{ needs.prepare.outputs.candidate_file_name }}" \
             --candidate-version "${{ needs.prepare.outputs.candidate_version }}" \
             --source-sha "${{ needs.prepare.outputs.source_sha }}" \
             --baseline-spec "${{ needs.prepare.outputs.baseline_spec }}" \
+            --previous-version "${{ inputs.previous_version }}" \
             --baseline-tgz "$RUNNER_TEMP/openclaw-cross-os-release-checks/baseline/${{ needs.prepare.outputs.baseline_file_name }}" \
             --provider "${{ inputs.provider }}" \
             --mode "${{ matrix.lane }}" \
-            --output-dir "$RUNNER_TEMP/openclaw-cross-os-release-checks/${{ matrix.artifact_name }}-${{ matrix.lane }}"
+            --suite "${{ matrix.suite }}" \
+            --ref "${{ inputs.ref }}" \
+            "${DISCORD_ARGS[@]}" \
+            --output-dir "$RUNNER_TEMP/openclaw-cross-os-release-checks/${{ matrix.artifact_name }}-${{ matrix.suite }}"
 
       - name: Summarize release checks
         if: always()
         shell: bash
         env:
-          SUMMARY_PATH: ${{ runner.temp }}/openclaw-cross-os-release-checks/${{ matrix.artifact_name }}-${{ matrix.lane }}/summary.md
+          SUMMARY_PATH: ${{ runner.temp }}/openclaw-cross-os-release-checks/${{ matrix.artifact_name }}-${{ matrix.suite }}/summary.md
         run: |
           if [[ -f "${SUMMARY_PATH}" ]]; then
             cat "${SUMMARY_PATH}" >> "$GITHUB_STEP_SUMMARY"
@@ -315,6 +467,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: openclaw-cross-os-release-checks-${{ matrix.artifact_name }}-${{ matrix.lane }}-${{ github.run_id }}
-          path: ${{ runner.temp }}/openclaw-cross-os-release-checks/${{ matrix.artifact_name }}-${{ matrix.lane }}
+          name: openclaw-cross-os-release-checks-${{ matrix.artifact_name }}-${{ matrix.suite }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/openclaw-cross-os-release-checks/${{ matrix.artifact_name }}-${{ matrix.suite }}
           if-no-files-found: error

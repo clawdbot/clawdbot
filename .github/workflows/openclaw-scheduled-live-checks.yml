@@ -1,0 +1,29 @@
+name: OpenClaw Scheduled Live And E2E Checks
+
+on:
+  schedule:
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openclaw-scheduled-live-checks-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  live_and_openwebui_checks:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
+    with:
+      ref: ${{ github.sha }}
+      include_repo_e2e: true
+      include_release_path_suites: false
+      include_openwebui: true
+      include_live_suites: true
+    secrets: inherit

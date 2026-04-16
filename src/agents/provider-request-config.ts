@@ -162,6 +162,7 @@ type ResolveProviderRequestPolicyConfigParams = {
   authHeader?: boolean;
   compat?: {
     supportsStore?: boolean;
+    supportsPromptCacheKey?: boolean;
   } | null;
   modelId?: string | null;
   allowPrivateNetwork?: boolean;

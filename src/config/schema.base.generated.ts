@@ -2798,6 +2798,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           supportsStore: {
                             type: "boolean",
                           },
+                          supportsPromptCacheKey: {
+                            type: "boolean",
+                          },
                           supportsDeveloperRole: {
                             type: "boolean",
                           },

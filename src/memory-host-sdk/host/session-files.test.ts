@@ -151,6 +151,101 @@ describe("buildSessionEntry", () => {
     ]);
   });
 
+  it("strips inbound metadata envelope from user messages before normalization", async () => {
+    // Real Telegram inbound envelope: Conversation info + Sender blocks prepended
+    // to the actual user text. Without stripping, the JSON envelope dominates
+    // the corpus entry and the user's real words get truncated by the
+    // SESSION_INGESTION_MAX_SNIPPET_CHARS cap downstream.
+    // See: https://github.com/openclaw/openclaw/issues/63921
+    const envelopedUserText = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"message_id":"msg-100","chat_id":"-100123","sender":"Chris"}',
+      "```",
+      "",
+      "Sender (untrusted metadata):",
+      "```json",
+      '{"label":"Chris","name":"Chris","id":"42"}',
+      "```",
+      "",
+      "帮我看看今天的 Oura 数据",
+    ].join("\n");
+
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: envelopedUserText },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "好的,我来查一下" },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "enveloped-session.jsonl");
+    await fs.writeFile(filePath, jsonlLines.join("\n"));
+
+    const entry = await buildSessionEntry(filePath);
+    expect(entry).not.toBeNull();
+
+    const contentLines = entry!.content.split("\n");
+    expect(contentLines).toHaveLength(2);
+    // User line should contain ONLY the real user text, not the JSON envelope.
+    expect(contentLines[0]).toBe("User: 帮我看看今天的 Oura 数据");
+    expect(contentLines[0]).not.toContain("untrusted metadata");
+    expect(contentLines[0]).not.toContain("message_id");
+    expect(contentLines[0]).not.toContain("```json");
+    expect(contentLines[1]).toBe("Assistant: 好的,我来查一下");
+  });
+
+  it("strips inbound metadata when a user envelope is split across text blocks", async () => {
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: [
+            { type: "text", text: "Conversation info (untrusted metadata):" },
+            { type: "text", text: "```json" },
+            { type: "text", text: '{"message_id":"msg-100","chat_id":"-100123"}' },
+            { type: "text", text: "```" },
+            { type: "text", text: "" },
+            { type: "text", text: "Sender (untrusted metadata):" },
+            { type: "text", text: "```json" },
+            { type: "text", text: '{"label":"Chris","id":"42"}' },
+            { type: "text", text: "```" },
+            { type: "text", text: "" },
+            { type: "text", text: "Actual user text" },
+          ],
+        },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "enveloped-session-array.jsonl");
+    await fs.writeFile(filePath, jsonlLines.join("\n"));
+
+    const entry = await buildSessionEntry(filePath);
+    expect(entry).not.toBeNull();
+    expect(entry!.content).toBe("User: Actual user text");
+  });
+
+  it("preserves assistant messages that happen to contain sentinel-like text", async () => {
+    // Assistant role must NOT be stripped — only user messages carry inbound
+    // envelopes, and assistants may legitimately discuss metadata formats.
+    const assistantText =
+      "The envelope format uses 'Conversation info (untrusted metadata):' as a sentinel";
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: assistantText },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "assistant-sentinel.jsonl");
+    await fs.writeFile(filePath, jsonlLines.join("\n"));
+
+    const entry = await buildSessionEntry(filePath);
+    expect(entry).not.toBeNull();
+    expect(entry!.content).toBe(`Assistant: ${assistantText}`);
+  });
+
   it("flags dreaming narrative transcripts from bootstrap metadata", async () => {
     const jsonlLines = [
       JSON.stringify({

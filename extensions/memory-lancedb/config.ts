@@ -99,7 +99,15 @@ export const memoryConfigSchema = {
     const cfg = value as Record<string, unknown>;
     assertAllowedKeys(
       cfg,
-      ["embedding", "dreaming", "dbPath", "autoCapture", "autoRecall", "captureMaxChars", "storageOptions"],
+      [
+        "embedding",
+        "dreaming",
+        "dbPath",
+        "autoCapture",
+        "autoRecall",
+        "captureMaxChars",
+        "storageOptions",
+      ],
       "memory config",
     );
 

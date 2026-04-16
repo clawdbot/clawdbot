@@ -37,6 +37,7 @@ type SupportedThinkingFormat =
 export type ModelCompatConfig = SupportedOpenAICompatFields & {
   thinkingFormat?: SupportedThinkingFormat;
   supportsTools?: boolean;
+  supportsPromptCacheKey?: boolean;
   requiresStringContent?: boolean;
   toolSchemaProfile?: string;
   unsupportedToolSchemaKeywords?: string[];

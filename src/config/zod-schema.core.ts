@@ -186,6 +186,7 @@ export const ModelApiSchema = z.enum(MODEL_APIS);
 export const ModelCompatSchema = z
   .object({
     supportsStore: z.boolean().optional(),
+    supportsPromptCacheKey: z.boolean().optional(),
     supportsDeveloperRole: z.boolean().optional(),
     supportsReasoningEffort: z.boolean().optional(),
     supportsUsageInStreaming: z.boolean().optional(),

@@ -213,8 +213,11 @@ function normalizeTaskResultCode(value?: string): string | null {
 }
 
 const RUNNING_RESULT_CODES = new Set(["0x41301"]);
+const NOT_YET_RUN_RESULT_CODES = new Set(["0x41303"]);
 const UNKNOWN_STATUS_DETAIL =
   "Task status is locale-dependent and no numeric Last Run Result was available.";
+const SCHEDULED_TASK_FALLBACK_POLL_MS = 250;
+const SCHEDULED_TASK_FALLBACK_TIMEOUT_MS = 15_000;
 
 export function deriveScheduledTaskRuntimeStatus(parsed: ScheduledTaskInfo): {
   status: GatewayServiceRuntime["status"];
@@ -401,6 +404,24 @@ async function resolveScheduledTaskGatewayListenerPids(port: number): Promise<nu
         .filter((pid): pid is number => typeof pid === "number" && Number.isFinite(pid) && pid > 0),
     ),
   );
+}
+
+async function resolveListenerBackedScheduledTaskRuntime(
+  env: GatewayServiceEnv,
+): Promise<Pick<GatewayServiceRuntime, "status" | "pid" | "detail"> | null> {
+  const port = await resolveScheduledTaskPort(env);
+  if (!port) {
+    return null;
+  }
+  const pids = findVerifiedGatewayListenerPidsOnPortSync(port);
+  if (pids.length === 0) {
+    return null;
+  }
+  return {
+    status: "running",
+    pid: pids[0],
+    detail: `Verified gateway listener detected on port ${port} even though schtasks did not report a running task.`,
+  };
 }
 
 async function terminateScheduledTaskGatewayListeners(env: GatewayServiceEnv): Promise<number[]> {
@@ -602,7 +623,11 @@ async function updateExistingScheduledTask(params: {
   if (change.code !== 0) {
     return false;
   }
-  await runScheduledTaskOrThrow(params.taskName);
+  await runScheduledTaskOrThrow({
+    taskName: params.taskName,
+    env: params.env,
+    scriptPath: params.scriptPath,
+  });
   writeFormattedLines(
     params.stdout,
     [
@@ -614,11 +639,152 @@ async function updateExistingScheduledTask(params: {
   return true;
 }
 
-async function runScheduledTaskOrThrow(taskName: string): Promise<void> {
-  const run = await execSchtasks(["/Run", "/TN", taskName]);
+async function shouldFallbackScheduledTaskLaunch(params: {
+  env: GatewayServiceEnv;
+  scriptPath: string;
+}): Promise<boolean> {
+  const readLaunchObservation = async (): Promise<{
+    state: "running" | "not-yet-run" | "other";
+    signature: string;
+  }> => {
+    const runtime = await readScheduledTaskRuntime(params.env).catch(() => null);
+    if (runtime?.status === "running") {
+      return {
+        state: "running",
+        signature: [runtime.state, runtime.lastRunTime, runtime.lastRunResult, runtime.detail]
+          .filter(Boolean)
+          .join("|"),
+      };
+    }
+    const normalizedResult = normalizeTaskResultCode(runtime?.lastRunResult);
+    if (normalizedResult && NOT_YET_RUN_RESULT_CODES.has(normalizedResult)) {
+      return {
+        state: "not-yet-run",
+        signature: [runtime?.state, runtime?.lastRunTime, runtime?.lastRunResult, runtime?.detail]
+          .filter(Boolean)
+          .join("|"),
+      };
+    }
+    return {
+      state: "other",
+      signature: [runtime?.state, runtime?.lastRunTime, runtime?.lastRunResult, runtime?.detail]
+        .filter(Boolean)
+        .join("|"),
+    };
+  };
+
+  const hasLaunchEvidence = async (): Promise<boolean> => {
+    const port = await resolveScheduledTaskPort(params.env);
+    if (port) {
+      const listenerPids = await resolveScheduledTaskGatewayListenerPids(port);
+      if (listenerPids.length > 0) {
+        return true;
+      }
+    }
+
+    if (process.platform !== "win32") {
+      return false;
+    }
+
+    const scriptPathNeedle = normalizeLowercaseStringOrEmpty(
+      params.scriptPath.replaceAll("/", "\\"),
+    );
+    if (!scriptPathNeedle) {
+      return false;
+    }
+
+    const processSnapshot = spawnSync(
+      "powershell",
+      [
+        "-NoProfile",
+        "-Command",
+        "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+      ],
+      {
+        encoding: "utf8",
+        timeout: 1_500,
+        windowsHide: true,
+      },
+    );
+    if (processSnapshot.error || processSnapshot.status !== 0) {
+      return false;
+    }
+
+    type WindowsProcessSnapshotEntry = {
+      ProcessId?: number;
+      CommandLine?: string | null;
+    };
+
+    let parsedSnapshot: unknown;
+    try {
+      parsedSnapshot = JSON.parse(processSnapshot.stdout.trim() || "[]");
+    } catch {
+      return false;
+    }
+
+    const entries = (Array.isArray(parsedSnapshot) ? parsedSnapshot : [parsedSnapshot]).filter(
+      (entry): entry is WindowsProcessSnapshotEntry => typeof entry === "object" && entry !== null,
+    );
+    const matchingTaskScriptProcess = entries.some((entry) =>
+      normalizeLowercaseStringOrEmpty(entry.CommandLine ?? "")
+        .replaceAll("/", "\\")
+        .includes(scriptPathNeedle),
+    );
+    if (matchingTaskScriptProcess) {
+      return true;
+    }
+
+    if (!port) {
+      return false;
+    }
+
+    return entries.some((entry) => {
+      const commandLine = normalizeLowercaseStringOrEmpty(entry.CommandLine ?? "");
+      if (!commandLine) {
+        return false;
+      }
+      const argv = parseCmdScriptCommandLine(entry.CommandLine ?? "");
+      if (!isGatewayArgv(argv, { allowGatewayBinary: true })) {
+        return false;
+      }
+      return parsePortFromProgramArguments(argv) === port;
+    });
+  };
+
+  const initial = await readLaunchObservation();
+  if (initial.state !== "not-yet-run") {
+    return false;
+  }
+
+  const deadline = Date.now() + SCHEDULED_TASK_FALLBACK_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    await sleep(SCHEDULED_TASK_FALLBACK_POLL_MS);
+    const current = await readLaunchObservation();
+    if (current.state !== "not-yet-run") {
+      return false;
+    }
+    if (current.signature !== initial.signature) {
+      return false;
+    }
+  }
+  return !(await hasLaunchEvidence());
+}
+
+async function runScheduledTaskOrThrow(params: {
+  taskName: string;
+  env: GatewayServiceEnv;
+  scriptPath: string;
+}): Promise<void> {
+  const run = await execSchtasks(["/Run", "/TN", params.taskName]);
   if (run.code !== 0) {
     throw new Error(`schtasks run failed: ${run.stderr || run.stdout}`.trim());
   }
+  if (
+    !(await shouldFallbackScheduledTaskLaunch({ env: params.env, scriptPath: params.scriptPath }))
+  ) {
+    return;
+  }
+  launchFallbackTaskScript(params.scriptPath);
 }
 
 async function activateScheduledTask(params: {
@@ -679,7 +845,11 @@ async function activateScheduledTask(params: {
     throw new Error(`schtasks create failed: ${detail}`.trim());
   }
 
-  await runScheduledTaskOrThrow(taskName);
+  await runScheduledTaskOrThrow({
+    taskName,
+    env: params.env,
+    scriptPath: params.scriptPath,
+  });
   // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
   writeFormattedLines(
     params.stdout,
@@ -806,7 +976,11 @@ export async function restartScheduledTask({
       }
     }
   }
-  await runScheduledTaskOrThrow(taskName);
+  await runScheduledTaskOrThrow({
+    taskName,
+    env: effectiveEnv,
+    scriptPath: resolveTaskScriptPath(effectiveEnv),
+  });
   stdout.write(`${formatLine("Restarted Scheduled Task", taskName)}\n`);
   return { outcome: "completed" };
 }
@@ -849,6 +1023,17 @@ export async function readScheduledTaskRuntime(
   }
   const parsed = parseSchtasksQuery(res.stdout || "");
   const derived = deriveScheduledTaskRuntimeStatus(parsed);
+  if (derived.status !== "running") {
+    const observedRuntime = await resolveListenerBackedScheduledTaskRuntime(env);
+    if (observedRuntime) {
+      return {
+        ...observedRuntime,
+        state: parsed.status,
+        lastRunTime: parsed.lastRunTime,
+        lastRunResult: parsed.lastRunResult,
+      };
+    }
+  }
   return {
     status: derived.status,
     state: parsed.status,

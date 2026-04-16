@@ -87,6 +87,7 @@ type UpdateRunnerOptions = {
   argv1?: string;
   tag?: string;
   channel?: UpdateChannel;
+  devTargetRef?: string;
   timeoutMs?: number;
   runCommand?: CommandRunner;
   progress?: UpdateStepProgress;
@@ -355,6 +356,76 @@ function normalizeTag(tag?: string) {
   return normalizePackageTagInput(tag, ["openclaw", DEFAULT_PACKAGE_NAME]) ?? "latest";
 }
 
+function normalizeDevTargetRef(value?: string | null): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function looksLikeFullCommitSha(value: string): boolean {
+  return /^[0-9a-f]{40}$/i.test(value.trim());
+}
+
+function buildDevTargetRefResolutionCandidates(devTargetRef: string): string[] {
+  const trimmed = devTargetRef.trim();
+  const candidates: string[] = [];
+  const addCandidate = (candidate?: string | null) => {
+    if (!candidate || candidates.includes(candidate)) {
+      return;
+    }
+    candidates.push(candidate);
+  };
+
+  if (looksLikeFullCommitSha(trimmed)) {
+    addCandidate(trimmed);
+    return candidates;
+  }
+
+  if (trimmed.startsWith("refs/remotes/")) {
+    addCandidate(trimmed);
+    return candidates;
+  }
+
+  if (trimmed.startsWith("refs/heads/")) {
+    addCandidate(`refs/remotes/origin/${trimmed.slice("refs/heads/".length)}`);
+    return candidates;
+  }
+
+  if (trimmed.startsWith("origin/")) {
+    addCandidate(`refs/remotes/${trimmed}`);
+    return candidates;
+  }
+
+  if (trimmed.startsWith("refs/tags/")) {
+    addCandidate(`${trimmed}^{}`);
+    addCandidate(trimmed);
+    return candidates;
+  }
+
+  // Resolve plain branch names from the freshly fetched remote ref instead of
+  // a possibly stale local branch checkout.
+  addCandidate(`refs/remotes/origin/${trimmed}`);
+  addCandidate(`refs/tags/${trimmed}^{}`);
+  addCandidate(`refs/tags/${trimmed}`);
+  return candidates;
+}
+
+async function resolveComparablePath(target: string): Promise<string> {
+  return await fs.realpath(target).catch(() => path.resolve(target));
+}
+
+async function pathsReferToSameLocation(left: string, right: string): Promise<boolean> {
+  return (await resolveComparablePath(left)) === (await resolveComparablePath(right));
+}
+
+async function looksLikeGitCheckout(root: string): Promise<boolean> {
+  try {
+    await fs.access(path.join(root, ".git"));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function shouldRetryWindowsInstallIgnoringScripts(manager: "pnpm" | "bun" | "npm"): boolean {
   return process.platform === "win32" && manager === "pnpm";
 }
@@ -476,7 +547,17 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
   const pkgRoot = await findPackageRoot(candidates);
 
   let gitRoot = await resolveGitRoot(runCommand, candidates, timeoutMs);
-  if (gitRoot && pkgRoot && path.resolve(gitRoot) !== path.resolve(pkgRoot)) {
+  if (!gitRoot && pkgRoot) {
+    const cwdRoot = normalizeDir(opts.cwd);
+    if (
+      cwdRoot &&
+      (await pathsReferToSameLocation(cwdRoot, pkgRoot)) &&
+      (await looksLikeGitCheckout(cwdRoot))
+    ) {
+      gitRoot = await resolveComparablePath(cwdRoot);
+    }
+  }
+  if (gitRoot && pkgRoot && !(await pathsReferToSameLocation(gitRoot, pkgRoot))) {
     gitRoot = null;
   }
 
@@ -491,7 +572,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     };
   }
 
-  if (gitRoot && pkgRoot && path.resolve(gitRoot) === path.resolve(pkgRoot)) {
+  if (gitRoot && pkgRoot && (await pathsReferToSameLocation(gitRoot, pkgRoot))) {
     // Get current SHA (not a visible step, no progress)
     const beforeShaResult = await runCommand(["git", "-C", gitRoot, "rev-parse", "HEAD"], {
       cwd: gitRoot,
@@ -500,8 +581,9 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     const beforeSha = beforeShaResult.stdout.trim() || null;
     const beforeVersion = await readPackageVersion(gitRoot);
     const channel: UpdateChannel = opts.channel ?? "dev";
+    const devTargetRef = channel === "dev" ? normalizeDevTargetRef(opts.devTargetRef) : null;
     const branch = channel === "dev" ? await readBranchName(runCommand, gitRoot, timeoutMs) : null;
-    const needsCheckoutMain = channel === "dev" && branch !== DEV_BRANCH;
+    const needsCheckoutMain = channel === "dev" && !devTargetRef && branch !== DEV_BRANCH;
     gitTotalSteps = channel === "dev" ? (needsCheckoutMain ? 11 : 10) : 9;
     const buildGitErrorResult = (reason: string): UpdateRunResult => ({
       status: "error",
@@ -557,90 +639,135 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         }
       }
 
-      const upstreamStep = await runStep(
-        step(
-          "upstream check",
-          [
-            "git",
-            "-C",
-            gitRoot,
-            "rev-parse",
-            "--abbrev-ref",
-            "--symbolic-full-name",
-            "@{upstream}",
-          ],
-          gitRoot,
-        ),
-      );
-      steps.push(upstreamStep);
-      if (upstreamStep.exitCode !== 0) {
-        return {
-          status: "skipped",
-          mode: "git",
-          root: gitRoot,
-          reason: "no-upstream",
-          before: { sha: beforeSha, version: beforeVersion },
-          steps,
-          durationMs: Date.now() - startedAt,
-        };
-      }
-
       const fetchStep = await runStep(
         step("git fetch", ["git", "-C", gitRoot, "fetch", "--all", "--prune", "--tags"], gitRoot),
       );
       steps.push(fetchStep);
+      let preflightBaseSha: string | null = null;
+      let candidates: string[] = [];
+      if (devTargetRef) {
+        let targetSha: string | null = null;
+        for (const targetRefCandidate of buildDevTargetRefResolutionCandidates(devTargetRef)) {
+          const targetShaStep = await runStep(
+            step(
+              `git rev-parse ${targetRefCandidate}`,
+              ["git", "-C", gitRoot, "rev-parse", targetRefCandidate],
+              gitRoot,
+            ),
+          );
+          steps.push(targetShaStep);
+          const resolvedTargetSha = targetShaStep.stdoutTail?.trim();
+          if (targetShaStep.exitCode === 0 && resolvedTargetSha) {
+            targetSha = resolvedTargetSha;
+            break;
+          }
+        }
+        if (!targetSha) {
+          return {
+            status: "error",
+            mode: "git",
+            root: gitRoot,
+            reason: "no-target-sha",
+            before: { sha: beforeSha, version: beforeVersion },
+            steps,
+            durationMs: Date.now() - startedAt,
+          };
+        }
+        preflightBaseSha = targetSha;
+        candidates = [targetSha];
+      } else {
+        const upstreamStep = await runStep(
+          step(
+            "upstream check",
+            [
+              "git",
+              "-C",
+              gitRoot,
+              "rev-parse",
+              "--abbrev-ref",
+              "--symbolic-full-name",
+              "@{upstream}",
+            ],
+            gitRoot,
+          ),
+        );
+        steps.push(upstreamStep);
+        if (upstreamStep.exitCode !== 0) {
+          return {
+            status: "skipped",
+            mode: "git",
+            root: gitRoot,
+            reason: "no-upstream",
+            before: { sha: beforeSha, version: beforeVersion },
+            steps,
+            durationMs: Date.now() - startedAt,
+          };
+        }
 
-      const upstreamShaStep = await runStep(
-        step(
-          "git rev-parse @{upstream}",
-          ["git", "-C", gitRoot, "rev-parse", "@{upstream}"],
-          gitRoot,
-        ),
-      );
-      steps.push(upstreamShaStep);
-      const upstreamSha = upstreamShaStep.stdoutTail?.trim();
-      if (!upstreamShaStep.stdoutTail || !upstreamSha) {
-        return {
-          status: "error",
-          mode: "git",
-          root: gitRoot,
-          reason: "no-upstream-sha",
-          before: { sha: beforeSha, version: beforeVersion },
-          steps,
-          durationMs: Date.now() - startedAt,
-        };
+        const upstreamShaStep = await runStep(
+          step(
+            "git rev-parse @{upstream}",
+            ["git", "-C", gitRoot, "rev-parse", "@{upstream}"],
+            gitRoot,
+          ),
+        );
+        steps.push(upstreamShaStep);
+        const upstreamSha = upstreamShaStep.stdoutTail?.trim();
+        if (!upstreamShaStep.stdoutTail || !upstreamSha) {
+          return {
+            status: "error",
+            mode: "git",
+            root: gitRoot,
+            reason: "no-upstream-sha",
+            before: { sha: beforeSha, version: beforeVersion },
+            steps,
+            durationMs: Date.now() - startedAt,
+          };
+        }
+
+        const revListStep = await runStep(
+          step(
+            "git rev-list",
+            ["git", "-C", gitRoot, "rev-list", `--max-count=${PREFLIGHT_MAX_COMMITS}`, upstreamSha],
+            gitRoot,
+          ),
+        );
+        steps.push(revListStep);
+        if (revListStep.exitCode !== 0) {
+          return {
+            status: "error",
+            mode: "git",
+            root: gitRoot,
+            reason: "preflight-revlist-failed",
+            before: { sha: beforeSha, version: beforeVersion },
+            steps,
+            durationMs: Date.now() - startedAt,
+          };
+        }
+
+        candidates = (revListStep.stdoutTail ?? "")
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean);
+        if (candidates.length === 0) {
+          return {
+            status: "error",
+            mode: "git",
+            root: gitRoot,
+            reason: "preflight-no-candidates",
+            before: { sha: beforeSha, version: beforeVersion },
+            steps,
+            durationMs: Date.now() - startedAt,
+          };
+        }
+        preflightBaseSha = upstreamSha;
       }
-
-      const revListStep = await runStep(
-        step(
-          "git rev-list",
-          ["git", "-C", gitRoot, "rev-list", `--max-count=${PREFLIGHT_MAX_COMMITS}`, upstreamSha],
-          gitRoot,
-        ),
-      );
-      steps.push(revListStep);
-      if (revListStep.exitCode !== 0) {
+      if (!preflightBaseSha) {
         return {
           status: "error",
           mode: "git",
           root: gitRoot,
-          reason: "preflight-revlist-failed",
-          before: { sha: beforeSha, version: beforeVersion },
-          steps,
-          durationMs: Date.now() - startedAt,
-        };
-      }
-
-      const candidates = (revListStep.stdoutTail ?? "")
-        .split("\n")
-        .map((line) => line.trim())
-        .filter(Boolean);
-      if (candidates.length === 0) {
-        return {
-          status: "error",
-          mode: "git",
-          root: gitRoot,
-          reason: "preflight-no-candidates",
+          reason: "preflight-base-missing",
           before: { sha: beforeSha, version: beforeVersion },
           steps,
           durationMs: Date.now() - startedAt,
@@ -670,7 +797,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       const worktreeStep = await runStep(
         step(
           "preflight worktree",
-          ["git", "-C", gitRoot, "worktree", "add", "--detach", worktreeDir, upstreamSha],
+          ["git", "-C", gitRoot, "worktree", "add", "--detach", worktreeDir, preflightBaseSha],
           gitRoot,
         ),
       );
@@ -815,33 +942,47 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         };
       }
 
-      const rebaseStep = await runStep(
-        step("git rebase", ["git", "-C", gitRoot, "rebase", selectedSha], gitRoot),
-      );
-      steps.push(rebaseStep);
-      if (rebaseStep.exitCode !== 0) {
-        const abortResult = await runCommand(["git", "-C", gitRoot, "rebase", "--abort"], {
-          cwd: gitRoot,
-          timeoutMs,
-        });
-        steps.push({
-          name: "git rebase --abort",
-          command: "git rebase --abort",
-          cwd: gitRoot,
-          durationMs: 0,
-          exitCode: abortResult.code,
-          stdoutTail: trimLogTail(abortResult.stdout, MAX_LOG_CHARS),
-          stderrTail: trimLogTail(abortResult.stderr, MAX_LOG_CHARS),
-        });
-        return {
-          status: "error",
-          mode: "git",
-          root: gitRoot,
-          reason: "rebase-failed",
-          before: { sha: beforeSha, version: beforeVersion },
-          steps,
-          durationMs: Date.now() - startedAt,
-        };
+      if (devTargetRef) {
+        const failure = await runGitCheckoutOrFail(`git checkout ${selectedSha}`, [
+          "git",
+          "-C",
+          gitRoot,
+          "checkout",
+          "--detach",
+          selectedSha,
+        ]);
+        if (failure) {
+          return failure;
+        }
+      } else {
+        const rebaseStep = await runStep(
+          step("git rebase", ["git", "-C", gitRoot, "rebase", selectedSha], gitRoot),
+        );
+        steps.push(rebaseStep);
+        if (rebaseStep.exitCode !== 0) {
+          const abortResult = await runCommand(["git", "-C", gitRoot, "rebase", "--abort"], {
+            cwd: gitRoot,
+            timeoutMs,
+          });
+          steps.push({
+            name: "git rebase --abort",
+            command: "git rebase --abort",
+            cwd: gitRoot,
+            durationMs: 0,
+            exitCode: abortResult.code,
+            stdoutTail: trimLogTail(abortResult.stdout, MAX_LOG_CHARS),
+            stderrTail: trimLogTail(abortResult.stderr, MAX_LOG_CHARS),
+          });
+          return {
+            status: "error",
+            mode: "git",
+            root: gitRoot,
+            reason: "rebase-failed",
+            before: { sha: beforeSha, version: beforeVersion },
+            steps,
+            durationMs: Date.now() - startedAt,
+          };
+        }
       }
     } else {
       const fetchStep = await runStep(

@@ -108,6 +108,21 @@ function loadVitestMusicGenerationFallbackEntries(
   });
 }
 
+function loadVitestSpeechFallbackEntries(
+  pluginIds: readonly string[],
+): SpeechProviderContractEntry[] {
+  return loadVitestCapabilityContractEntries({
+    contract: "speechProviders",
+    pluginSdkResolution: "src",
+    pluginIds,
+    pickEntries: (registry) =>
+      registry.speechProviders.map((entry) => ({
+        pluginId: entry.pluginId,
+        provider: entry.provider,
+      })),
+  });
+}
+
 function hasExplicitVideoGenerationModes(provider: VideoGenerationProviderPlugin): boolean {
   return Boolean(
     provider.capabilities.generate &&
@@ -156,7 +171,7 @@ function loadVitestCapabilityContractEntries<T>(params: {
 }
 
 export function loadVitestSpeechProviderContractRegistry(): SpeechProviderContractEntry[] {
-  return loadVitestCapabilityContractEntries({
+  const entries = loadVitestCapabilityContractEntries({
     contract: "speechProviders",
     pickEntries: (registry) =>
       registry.speechProviders.map((entry) => ({
@@ -164,6 +179,19 @@ export function loadVitestSpeechProviderContractRegistry(): SpeechProviderContra
         provider: entry.provider,
       })),
   });
+  const coveredPluginIds = new Set(entries.map((entry) => entry.pluginId));
+  const missingPluginIds = VITEST_CONTRACT_PLUGIN_IDS.speechProviders.filter(
+    (pluginId) => !coveredPluginIds.has(pluginId),
+  );
+  if (missingPluginIds.length === 0) {
+    return entries;
+  }
+  const replacementEntries = loadVitestSpeechFallbackEntries(missingPluginIds);
+  const replacedPluginIds = new Set(replacementEntries.map((entry) => entry.pluginId));
+  return [
+    ...entries.filter((entry) => !replacedPluginIds.has(entry.pluginId)),
+    ...replacementEntries,
+  ];
 }
 
 export function loadVitestMediaUnderstandingProviderContractRegistry(): MediaUnderstandingProviderContractEntry[] {

@@ -392,12 +392,13 @@ export async function checkUpdateStatus(params: {
     };
   }
 
+  const rootRealpath = await fs.realpath(root).catch(() => root);
   const [pm, gitRoot, registry] = await Promise.all([
     detectPackageManager(root),
     detectGitRoot(root),
     params.includeRegistry ? fetchNpmLatestVersion({ timeoutMs }) : Promise.resolve(undefined),
   ]);
-  const isGit = gitRoot && path.resolve(gitRoot) === root;
+  const isGit = gitRoot && path.resolve(gitRoot) === path.resolve(rootRealpath);
 
   const installKind: UpdateCheckResult["installKind"] = isGit ? "git" : "package";
   const [git, deps] = await Promise.all([

@@ -216,6 +216,42 @@ describe("external-content security", () => {
 
       expect(result).toContain(`keep${zws}me [[MARKER_SANITIZED]] safe`);
     });
+
+    it("sanitizes fullwidth uppercase homoglyph markers (foldMarkerChar lines 152-153)", () => {
+      // Fullwidth uppercase letters: U+FF21-U+FF3A
+      // Only convert letters (A-Z), leave underscores as-is so the regex still matches
+      const fwLetters = (s: string) =>
+        s
+          .split("")
+          .map((c) => (/[A-Z]/.test(c) ? String.fromCharCode(c.charCodeAt(0) + 0xfee0) : c))
+          .join("");
+      const startMarker = `<<<${fwLetters("EXTERNAL_UNTRUSTED_CONTENT")}>>>`;
+      const result = wrapExternalContent(`Before ${startMarker} after`, { source: "email" });
+      expect(result).toContain("[[MARKER_SANITIZED]]");
+    });
+
+    it("sanitizes fullwidth lowercase homoglyph markers (foldMarkerChar lines 154-155)", () => {
+      // Fullwidth lowercase letters: U+FF41-U+FF5A
+      const fwLetters = (s: string) =>
+        s
+          .split("")
+          .map((c) => (/[a-z]/.test(c) ? String.fromCharCode(c.charCodeAt(0) + 0xfee0) : c))
+          .join("");
+      const startMarker = `<<<${fwLetters("external_untrusted_content")}>>>`;
+      const result = wrapExternalContent(`Before ${startMarker} after`, { source: "email" });
+      expect(result).toContain("[[MARKER_SANITIZED]]");
+    });
+
+    it("returns content unchanged when phrase is present but no marker delimiters found (line 240)", () => {
+      // The early check /external[\s_]+untrusted[\s_]+content/ passes,
+      // but no <<< ... >>> delimiters exist — replacements is empty — returns content unchanged
+      const content = "This is external untrusted content without any angle bracket markers.";
+      const result = wrapExternalContent(content, { source: "email" });
+      // The raw content (after the --- separator) should be unchanged
+      expect(result).toContain(content);
+      // And critically: no [[MARKER_SANITIZED]] since no markers were found
+      expect(result).not.toContain("[[MARKER_SANITIZED]]");
+    });
   });
 
   describe("wrapWebContent", () => {

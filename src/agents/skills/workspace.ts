@@ -500,7 +500,7 @@ function loadSkillEntries(
     if (loadedSkills.length > limits.maxSkillsLoadedPerSource) {
       return loadedSkills
         .slice()
-        .sort((a, b) => a.name.localeCompare(b.name))
+        .sort((a, b) => a.name.localeCompare(b.name, "en"))
         .slice(0, limits.maxSkillsLoadedPerSource);
     }
 
@@ -574,29 +574,31 @@ function loadSkillEntries(
     merged.set(skill.name, skill);
   }
 
-  const skillEntries: SkillEntry[] = Array.from(merged.values()).map((skill) => {
-    const frontmatter =
-      readSkillFrontmatterSafe({
-        rootDir: skill.baseDir,
-        filePath: skill.filePath,
-        maxBytes: limits.maxSkillFileBytes,
-      }) ?? ({} as ParsedSkillFrontmatter);
-    const invocation = resolveSkillInvocationPolicy(frontmatter);
-    return {
-      skill,
-      frontmatter,
-      metadata: resolveOpenClawMetadata(frontmatter),
-      invocation,
-      exposure: {
-        includeInRuntimeRegistry: true,
-        // Freshly loaded entries preserve the documented disable-model-invocation
-        // contract, while legacy entries without exposure metadata still use the
-        // fallback in isSkillVisibleInAvailableSkillsPrompt().
-        includeInAvailableSkillsPrompt: invocation.disableModelInvocation !== true,
-        userInvocable: invocation.userInvocable !== false,
-      },
-    };
-  });
+  const skillEntries: SkillEntry[] = Array.from(merged.values())
+    .sort((a, b) => a.name.localeCompare(b.name, "en"))
+    .map((skill) => {
+      const frontmatter =
+        readSkillFrontmatterSafe({
+          rootDir: skill.baseDir,
+          filePath: skill.filePath,
+          maxBytes: limits.maxSkillFileBytes,
+        }) ?? ({} as ParsedSkillFrontmatter);
+      const invocation = resolveSkillInvocationPolicy(frontmatter);
+      return {
+        skill,
+        frontmatter,
+        metadata: resolveOpenClawMetadata(frontmatter),
+        invocation,
+        exposure: {
+          includeInRuntimeRegistry: true,
+          // Freshly loaded entries preserve the documented disable-model-invocation
+          // contract, while legacy entries without exposure metadata still use the
+          // fallback in isSkillVisibleInAvailableSkillsPrompt().
+          includeInAvailableSkillsPrompt: invocation.disableModelInvocation !== true,
+          userInvocable: invocation.userInvocable !== false,
+        },
+      };
+    });
   return skillEntries;
 }
 
@@ -760,7 +762,9 @@ function resolveWorkspaceSkillPromptState(
   // Budget checks and final render both use this same representation so the
   // tier decision is based on the exact strings that end up in the prompt.
   // resolvedSkills keeps canonical paths for snapshot / runtime consumers.
-  const promptSkills = compactSkillPaths(resolvedSkills);
+  const promptSkills = compactSkillPaths(resolvedSkills)
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name, "en"));
   const { skillsForPrompt, truncated, compact } = applySkillsPromptLimits({
     skills: promptSkills,
     config: opts?.config,

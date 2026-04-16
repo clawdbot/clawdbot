@@ -7,6 +7,24 @@ on:
         description: Existing release tag or current full 40-character main commit SHA to validate (for example v2026.4.12 or 0123456789abcdef0123456789abcdef01234567)
         required: true
         type: string
+      provider:
+        description: Provider lane for cross-OS onboarding and the end-to-end agent turn
+        required: false
+        default: openai
+        type: choice
+        options:
+          - openai
+          - anthropic
+          - minimax
+      mode:
+        description: Which cross-OS release lanes to run
+        required: false
+        default: both
+        type: choice
+        options:
+          - fresh
+          - upgrade
+          - both
 
 concurrency:
   group: openclaw-release-checks-${{ inputs.ref }}
@@ -14,18 +32,18 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.x"
-  PNPM_VERSION: "10.32.1"
 
 jobs:
-  # THIS WORKFLOW EXISTS SO RELEASE-TIME LIVE CHECKS CAN RUN WITHOUT BLOCKING npm PUBLISH.
-  # PUT THE SLOWER, EXTERNAL, OR SOMETIMES-FLAKY RELEASE CHECKS HERE INSTEAD OF
-  # RECOUPLING THEM TO openclaw-npm-release.yml.
-  validate_release_live_cache:
+  resolve_target:
     runs-on: blacksmith-32vcpu-ubuntu-2404
-    timeout-minutes: 60
+    timeout-minutes: 30
     permissions:
       contents: read
+    outputs:
+      ref: ${{ steps.inputs.outputs.ref }}
+      sha: ${{ steps.ref.outputs.sha }}
+      provider: ${{ steps.inputs.outputs.provider }}
+      mode: ${{ steps.inputs.outputs.mode }}
     steps:
       - name: Require main workflow ref for release checks
         env:
@@ -73,48 +91,53 @@ jobs:
             git merge-base --is-ancestor HEAD origin/main
           fi
 
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
-          install-bun: "true"
-          use-sticky-disk: "false"
-
-      - name: Validate live cache credentials
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      - name: Capture selected inputs
+        id: inputs
         run: |
           set -euo pipefail
-          if [[ -z "${OPENAI_API_KEY}" ]]; then
-            echo "Missing OPENAI_API_KEY secret for release checks." >&2
-            exit 1
-          fi
-          if [[ -z "${ANTHROPIC_API_KEY}" ]]; then
-            echo "Missing ANTHROPIC_API_KEY secret for release checks." >&2
-            exit 1
-          fi
-
-      # KEEP RELEASE-TIME LIVE COVERAGE HERE SO OPERATORS CAN RUN IT ON DEMAND
-      # WITHOUT MAKING THE PUBLISH PATH WAIT FOR A SLOW OR FLAKY EXTERNAL CHECK.
-      - name: Verify live prompt cache floors
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENCLAW_LIVE_CACHE_TEST: "1"
-          OPENCLAW_LIVE_TEST: "1"
-        run: pnpm test:live:cache
+          {
+            echo "ref=${{ inputs.ref }}"
+            echo "provider=${{ inputs.provider }}"
+            echo "mode=${{ inputs.mode }}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Summarize validated ref
         env:
           RELEASE_REF: ${{ inputs.ref }}
           RELEASE_SHA: ${{ steps.ref.outputs.sha }}
+          RELEASE_PROVIDER: ${{ inputs.provider }}
+          RELEASE_MODE: ${{ inputs.mode }}
         run: |
           {
             echo "## Release checks"
             echo
             echo "- Requested ref: \`${RELEASE_REF}\`"
             echo "- Validated SHA: \`${RELEASE_SHA}\`"
-            echo "- Check: \`pnpm test:live:cache\`"
+            echo "- Cross-OS provider: \`${RELEASE_PROVIDER}\`"
+            echo "- Cross-OS mode: \`${RELEASE_MODE}\`"
+            echo "- This run will execute cross-OS release validation plus the non-Parallels Docker/live/openwebui coverage from the CI migration plan."
           } >> "$GITHUB_STEP_SUMMARY"
+
+  cross_os_release_checks:
+    needs: [resolve_target]
+    permissions:
+      contents: read
+    uses: ./.github/workflows/openclaw-cross-os-release-checks-reusable.yml
+    with:
+      ref: ${{ needs.resolve_target.outputs.ref }}
+      provider: ${{ needs.resolve_target.outputs.provider }}
+      mode: ${{ needs.resolve_target.outputs.mode }}
+    secrets: inherit
+
+  live_and_e2e_release_checks:
+    needs: [resolve_target]
+    permissions:
+      contents: read
+    uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
+    with:
+      ref: ${{ needs.resolve_target.outputs.ref }}
+      include_repo_e2e: true
+      include_release_path_suites: true
+      include_openwebui: true
+      include_live_suites: true
+    secrets: inherit

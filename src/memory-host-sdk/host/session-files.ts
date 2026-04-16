@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
 import { isUsageCountedSessionTranscriptFileName } from "../../config/sessions/artifacts.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
 import { loadSessionStore } from "../../config/sessions/store-load.js";
@@ -182,10 +183,9 @@ function normalizeSessionText(value: string): string {
     .trim();
 }
 
-export function extractSessionText(content: unknown): string | null {
+function collectRawSessionText(content: unknown): string | null {
   if (typeof content === "string") {
-    const normalized = normalizeSessionText(content);
-    return normalized ? normalized : null;
+    return content;
   }
   if (!Array.isArray(content)) {
     return null;
@@ -196,18 +196,44 @@ export function extractSessionText(content: unknown): string | null {
       continue;
     }
     const record = block as { type?: unknown; text?: unknown };
-    if (record.type !== "text" || typeof record.text !== "string") {
-      continue;
-    }
-    const normalized = normalizeSessionText(record.text);
-    if (normalized) {
-      parts.push(normalized);
+    if (record.type === "text" && typeof record.text === "string") {
+      parts.push(record.text);
     }
   }
-  if (parts.length === 0) {
+  return parts.length > 0 ? parts.join("\n") : null;
+}
+
+/**
+ * Strip OpenClaw-injected inbound metadata envelopes from a raw text block.
+ *
+ * User-role messages arriving from external channels (Telegram, Discord,
+ * Slack, …) are stored with a multi-line prefix containing Conversation info,
+ * Sender info, and other AI-facing metadata blocks. These envelopes must be
+ * removed BEFORE normalization, because `stripInboundMetadata` relies on
+ * newline structure and fenced `json` code fences to locate sentinels; once
+ * `normalizeSessionText` collapses newlines into spaces, stripping is
+ * impossible.
+ *
+ * See: https://github.com/openclaw/openclaw/issues/63921
+ */
+function stripInboundMetadataForUserRole(text: string, role: "user" | "assistant"): string {
+  if (role !== "user") {
+    return text;
+  }
+  return stripInboundMetadata(text);
+}
+
+export function extractSessionText(
+  content: unknown,
+  role: "user" | "assistant" = "assistant",
+): string | null {
+  const rawText = collectRawSessionText(content);
+  if (rawText === null) {
     return null;
   }
-  return parts.join(" ");
+  const stripped = stripInboundMetadataForUserRole(rawText, role);
+  const normalized = normalizeSessionText(stripped);
+  return normalized ? normalized : null;
 }
 
 function parseSessionTimestampMs(
@@ -275,7 +301,7 @@ export async function buildSessionEntry(
       if (message.role !== "user" && message.role !== "assistant") {
         continue;
       }
-      const text = extractSessionText(message.content);
+      const text = extractSessionText(message.content, message.role);
       if (!text) {
         continue;
       }

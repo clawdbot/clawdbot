@@ -1942,6 +1942,11 @@ resolve_beta_version() {
     echo "$beta"
 }
 
+to_lowercase_ascii() {
+    # macOS still ships Bash 3.2, so avoid `${value,,}` here.
+    printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]'
+}
+
 is_explicit_package_install_spec() {
     local value="${1:-}"
     [[ "$value" == *"://"* || "$value" == *"#"* || "$value" =~ ^(file|github|git\+ssh|git\+https|git\+http|git\+file|npm): ]]
@@ -1949,10 +1954,12 @@ is_explicit_package_install_spec() {
 
 can_resolve_registry_package_version() {
     local value="${1:-}"
+    local normalized_value=""
+    normalized_value="$(to_lowercase_ascii "$value")"
     if [[ -z "$value" ]]; then
         return 0
     fi
-    if [[ "${value,,}" == "main" ]]; then
+    if [[ "$normalized_value" == "main" ]]; then
         return 1
     fi
     if is_explicit_package_install_spec "$value"; then
@@ -1964,7 +1971,9 @@ can_resolve_registry_package_version() {
 resolve_package_install_spec() {
     local package_name="$1"
     local value="$2"
-    if [[ "${value,,}" == "main" ]]; then
+    local normalized_value=""
+    normalized_value="$(to_lowercase_ascii "$value")"
+    if [[ "$normalized_value" == "main" ]]; then
         echo "github:openclaw/openclaw#main"
         return 0
     fi

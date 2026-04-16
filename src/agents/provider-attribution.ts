@@ -92,6 +92,7 @@ export type ProviderRequestCapabilitiesInput = ProviderRequestPolicyInput & {
   modelId?: string | null;
   compat?: {
     supportsStore?: boolean;
+    supportsPromptCacheKey?: boolean;
   } | null;
 };
 
@@ -607,8 +608,20 @@ export function resolveProviderRequestCapabilities(
       OPENAI_RESPONSES_APIS.has(api) &&
       OPENAI_RESPONSES_PROVIDERS.has(provider) &&
       policy.usesKnownNativeOpenAIEndpoint,
+    // Default strip behavior (proxy-like endpoints with responses APIs) is
+    // preserved as a safety net for providers that reject prompt_cache_key —
+    // see #48155 (Volcano Engine DeepSeek). Operators running their payload
+    // through an OpenAI-compatible proxy known to forward the field
+    // (CLIProxy, LiteLLM, etc.) can opt out via compat.supportsPromptCacheKey
+    // to recover prompt caching; providers known to reject the field can
+    // force the strip with compat.supportsPromptCacheKey = false even on
+    // native endpoints.
     shouldStripResponsesPromptCache:
-      api !== undefined && OPENAI_RESPONSES_APIS.has(api) && policy.usesExplicitProxyLikeEndpoint,
+      input.compat?.supportsPromptCacheKey === true
+        ? false
+        : input.compat?.supportsPromptCacheKey === false
+          ? api !== undefined && OPENAI_RESPONSES_APIS.has(api)
+          : api !== undefined && OPENAI_RESPONSES_APIS.has(api) && policy.usesExplicitProxyLikeEndpoint,
     // Native endpoint class is the real signal here. Users can point a generic
     // provider key at Moonshot or DashScope and still need streaming usage.
     supportsNativeStreamingUsageCompat:

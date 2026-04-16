@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { collectWorkspaceSkillSymlinkEscapeFindings } from "./audit-extra.async.js";
 
@@ -72,5 +72,92 @@ describe("security audit workspace skill path escape findings", () => {
     ];
 
     await Promise.all(runs);
+  });
+
+  it("treats an unresolvable realpath (timeout/error simulation) as a potential symlink escape", async () => {
+    const tmp = await makeTmpDir("workspace-skill-realpath-unresolvable");
+    const workspaceDir = path.join(tmp, "workspace");
+    const skillsDir = path.join(workspaceDir, "skills", "suspect-skill");
+    await fs.mkdir(skillsDir, { recursive: true });
+    await fs.writeFile(path.join(skillsDir, "SKILL.md"), "# suspect\n", "utf-8");
+
+    // Simulate realpath failing for the skill file path — this mirrors what
+    // happens when a slow/hanging NFS or SMB mount causes the 2 s deadline in
+    // realpathWithTimeout to fire. The .catch(() => null) inside the helper
+    // converts any rejection to null, which is the same signal produced by a
+    // genuine timeout. All other paths resolve to their string value so the BFS
+    // and workspace-root detection work normally.
+    const realpathSpy = vi
+      .spyOn(fs, "realpath")
+      .mockImplementation(async (p: unknown): Promise<string> => {
+        if (String(p).endsWith("SKILL.md")) {
+          throw new Error("simulated realpath timeout");
+        }
+        return String(p);
+      });
+
+    try {
+      const findings = await collectWorkspaceSkillSymlinkEscapeFindings({
+        cfg: { agents: { defaults: { workspace: workspaceDir } } } satisfies OpenClawConfig,
+      });
+      const escapeFinding = findings.find((f) => f.checkId === "skills.workspace.symlink_escape");
+      expect(escapeFinding).toBeDefined();
+      expect(escapeFinding?.severity).toBe("warn");
+      // The finding must call out that realpath was unverifiable, not that it
+      // resolved to a path outside the workspace.
+      expect(escapeFinding?.detail).toContain("realpath timed out");
+    } finally {
+      realpathSpy.mockRestore();
+    }
+  });
+
+  it("surfaces scan_truncated finding when BFS visit cap is hit", async () => {
+    const tmp = await makeTmpDir("workspace-skill-bfs-truncated");
+    const workspaceDir = path.join(tmp, "workspace");
+    const skillsRoot = path.join(workspaceDir, "skills");
+    await fs.mkdir(skillsRoot, { recursive: true });
+
+    // Strategy: the first readdir (on skillsRoot) returns 41 001 unique subdir
+    // entries, filling the queue beyond the BFS visit cap
+    // (MAX_TOTAL_DIR_VISITS = 2000 * 20 = 40 000). All subsequent readdir calls
+    // return [] so no further queue growth occurs. After 40 000 dequeues the
+    // loop exits with ~1 001 entries still in queue → truncated = true.
+    //
+    // fs.realpath is also mocked to return paths immediately (no real I/O),
+    // keeping the 40 000 iterations fast (pure microtask overhead, <200 ms).
+    const FAKE_DIRS = 41_001;
+    const fakeDirEntries = Array.from({ length: FAKE_DIRS }, (_, i) => ({
+      name: `d${i}`,
+      isDirectory: () => true,
+      isFile: () => false,
+      isSymbolicLink: () => false,
+      isBlockDevice: () => false,
+      isCharacterDevice: () => false,
+      isFIFO: () => false,
+      isSocket: () => false,
+      parentPath: skillsRoot,
+      path: skillsRoot,
+    })) as unknown as Awaited<ReturnType<typeof fs.readdir>>;
+
+    let readdirCalls = 0;
+    const readdirSpy = vi.spyOn(fs, "readdir").mockImplementation(async () => {
+      return readdirCalls++ === 0 ? fakeDirEntries : ([] as unknown as typeof fakeDirEntries);
+    });
+    const realpathSpy = vi
+      .spyOn(fs, "realpath")
+      .mockImplementation(async (p: unknown) => String(p));
+
+    try {
+      const findings = await collectWorkspaceSkillSymlinkEscapeFindings({
+        cfg: { agents: { defaults: { workspace: workspaceDir } } } satisfies OpenClawConfig,
+      });
+      const truncFinding = findings.find((f) => f.checkId === "skills.workspace.scan_truncated");
+      expect(truncFinding).toBeDefined();
+      expect(truncFinding?.severity).toBe("warn");
+      expect(truncFinding?.detail).toContain(workspaceDir);
+    } finally {
+      readdirSpy.mockRestore();
+      realpathSpy.mockRestore();
+    }
   });
 });

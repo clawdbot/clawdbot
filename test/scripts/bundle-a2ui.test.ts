@@ -64,17 +64,21 @@ describe("scripts/bundle-a2ui.mjs", () => {
   it("tracks only the resolved bundle dependency manifests from node_modules", () => {
     const repoRoot = process.cwd();
     const dependencyPaths = getResolvedBundleDependencyPackageJsonPaths(repoRoot);
+    const relativeDependencyPaths = dependencyPaths.map((dependencyPath) =>
+      path.relative(repoRoot, dependencyPath),
+    );
 
-    expect(dependencyPaths).toContain(path.join(repoRoot, "node_modules", "lit", "package.json"));
-    expect(dependencyPaths).toContain(
-      path.join(repoRoot, "node_modules", "@lit/context", "package.json"),
-    );
-    expect(dependencyPaths).toContain(
-      path.join(repoRoot, "node_modules", "@lit-labs/signals", "package.json"),
-    );
-    expect(dependencyPaths).toContain(
-      path.join(repoRoot, "node_modules", "signal-utils", "package.json"),
-    );
+    expect(
+      relativeDependencyPaths.map((relativePath) => relativePath.replace(/^ui\//u, "")),
+    ).toEqual([
+      path.join("node_modules", "lit", "package.json"),
+      path.join("node_modules", "@lit/context", "package.json"),
+      path.join("node_modules", "@lit-labs/signals", "package.json"),
+      path.join("node_modules", "signal-utils", "package.json"),
+    ]);
+    expect(
+      relativeDependencyPaths.every((relativePath) => /^(ui\/)?node_modules\//u.test(relativePath)),
+    ).toBe(true);
     expect(getBundleHashInputPaths(repoRoot)).not.toContain(path.join(repoRoot, "package.json"));
     expect(getBundleHashInputPaths(repoRoot)).not.toContain(path.join(repoRoot, "pnpm-lock.yaml"));
   });

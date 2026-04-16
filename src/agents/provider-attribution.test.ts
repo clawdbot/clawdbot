@@ -620,6 +620,55 @@ describe("provider attribution", () => {
     });
   });
 
+  it("respects compat.supportsPromptCacheKey override on prompt cache stripping", () => {
+    // compat.supportsPromptCacheKey = true disables the strip even on a
+    // proxy-like endpoint that would otherwise trigger it.
+    expect(
+      resolveProviderRequestCapabilities({
+        provider: "custom-proxy",
+        api: "openai-responses",
+        baseUrl: "https://proxy.example.com/v1",
+        capability: "llm",
+        transport: "stream",
+        compat: { supportsPromptCacheKey: true },
+      }),
+    ).toMatchObject({
+      endpointClass: "custom",
+      shouldStripResponsesPromptCache: false,
+    });
+
+    // compat.supportsPromptCacheKey = false forces the strip even on a
+    // native OpenAI endpoint that would otherwise forward the field.
+    expect(
+      resolveProviderRequestCapabilities({
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        capability: "llm",
+        transport: "stream",
+        compat: { supportsPromptCacheKey: false },
+      }),
+    ).toMatchObject({
+      endpointClass: "openai-public",
+      shouldStripResponsesPromptCache: true,
+    });
+
+    // compat.supportsPromptCacheKey unset preserves the existing default
+    // (strip on proxy-like responses endpoints, preserving the fix from
+    // #48155 for providers that reject the field).
+    expect(
+      resolveProviderRequestCapabilities({
+        provider: "custom-proxy",
+        api: "openai-responses",
+        baseUrl: "https://proxy.example.com/v1",
+        capability: "llm",
+        transport: "stream",
+      }),
+    ).toMatchObject({
+      shouldStripResponsesPromptCache: true,
+    });
+  });
+
   it("resolves shared compat families and native streaming-usage gates", () => {
     expect(
       resolveProviderRequestCapabilities({

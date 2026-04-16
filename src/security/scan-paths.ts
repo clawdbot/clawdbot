@@ -27,7 +27,10 @@ export function isPathInsideWithRealpath(
   const baseReal = safeRealpathSync(basePath);
   const candidateReal = safeRealpathSync(candidatePath);
   if (!baseReal || !candidateReal) {
-    return opts?.requireRealpath !== true;
+    // Default to false (safe): only bypass the realpath check when the caller
+    // explicitly opts out with requireRealpath: false. All production callers
+    // already pass requireRealpath: true; this change makes the default secure.
+    return opts?.requireRealpath === false;
   }
   return isPathInside(baseReal, candidateReal);
 }

@@ -1,0 +1,563 @@
+name: OpenClaw Live And E2E Checks (Reusable)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Ref, tag, or SHA to validate
+        required: true
+        default: main
+        type: string
+      include_repo_e2e:
+        description: Whether to run pnpm test:e2e plus repo-specific extra E2E lanes
+        required: false
+        default: true
+        type: boolean
+      include_release_path_suites:
+        description: Whether to run the Docker release-path suites
+        required: false
+        default: true
+        type: boolean
+      include_openwebui:
+        description: Whether to run the Open WebUI Docker smoke
+        required: false
+        default: true
+        type: boolean
+      include_live_suites:
+        description: Whether to run live-provider coverage
+        required: false
+        default: true
+        type: boolean
+  workflow_call:
+    inputs:
+      ref:
+        description: Ref, tag, or SHA to validate
+        required: true
+        type: string
+      include_repo_e2e:
+        description: Whether to run pnpm test:e2e
+        required: false
+        default: false
+        type: boolean
+      include_release_path_suites:
+        description: Whether to run the Docker release-path suites
+        required: false
+        default: false
+        type: boolean
+      include_openwebui:
+        description: Whether to run the Open WebUI Docker smoke
+        required: false
+        default: true
+        type: boolean
+      include_live_suites:
+        description: Whether to run live-provider coverage
+        required: false
+        default: true
+        type: boolean
+    secrets:
+      OPENAI_API_KEY:
+        required: false
+      OPENAI_BASE_URL:
+        required: false
+      ANTHROPIC_API_KEY:
+        required: false
+      ANTHROPIC_API_KEY_OLD:
+        required: false
+      ANTHROPIC_API_TOKEN:
+        required: false
+      BYTEPLUS_API_KEY:
+        required: false
+      CEREBRAS_API_KEY:
+        required: false
+      DASHSCOPE_API_KEY:
+        required: false
+      GROQ_API_KEY:
+        required: false
+      KIMI_API_KEY:
+        required: false
+      MODELSTUDIO_API_KEY:
+        required: false
+      MOONSHOT_API_KEY:
+        required: false
+      MISTRAL_API_KEY:
+        required: false
+      MINIMAX_API_KEY:
+        required: false
+      OPENCODE_API_KEY:
+        required: false
+      OPENCODE_ZEN_API_KEY:
+        required: false
+      OPENCLAW_LIVE_BROWSER_CDP_URL:
+        required: false
+      OPENCLAW_LIVE_SETUP_TOKEN:
+        required: false
+      OPENCLAW_LIVE_SETUP_TOKEN_MODEL:
+        required: false
+      OPENCLAW_LIVE_SETUP_TOKEN_PROFILE:
+        required: false
+      OPENCLAW_LIVE_SETUP_TOKEN_VALUE:
+        required: false
+      GEMINI_API_KEY:
+        required: false
+      GOOGLE_API_KEY:
+        required: false
+      OPENROUTER_API_KEY:
+        required: false
+      QWEN_API_KEY:
+        required: false
+      FAL_KEY:
+        required: false
+      RUNWAY_API_KEY:
+        required: false
+      DEEPGRAM_API_KEY:
+        required: false
+      TOGETHER_API_KEY:
+        required: false
+      VYDRA_API_KEY:
+        required: false
+      XAI_API_KEY:
+        required: false
+      ZAI_API_KEY:
+        required: false
+      Z_AI_API_KEY:
+        required: false
+      BYTEPLUS_ACCESS_KEY_ID:
+        required: false
+      BYTEPLUS_SECRET_ACCESS_KEY:
+        required: false
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: false
+      OPENCLAW_CODEX_AUTH_JSON:
+        required: false
+      OPENCLAW_CODEX_CONFIG_TOML:
+        required: false
+      OPENCLAW_CLAUDE_JSON:
+        required: false
+      OPENCLAW_CLAUDE_CREDENTIALS_JSON:
+        required: false
+      OPENCLAW_CLAUDE_SETTINGS_JSON:
+        required: false
+      OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON:
+        required: false
+      OPENCLAW_GEMINI_SETTINGS_JSON:
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.x"
+  PNPM_VERSION: "10.32.1"
+
+jobs:
+  validate_release_live_cache:
+    if: inputs.include_live_suites
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    timeout-minutes: 60
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENCLAW_LIVE_CACHE_TEST: "1"
+      OPENCLAW_LIVE_TEST: "1"
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+          use-sticky-disk: "false"
+
+      - name: Validate live cache credentials
+        run: |
+          set -euo pipefail
+          if [[ -z "${OPENAI_API_KEY:-}" ]]; then
+            echo "Missing OPENAI_API_KEY secret for live-cache validation." >&2
+            exit 1
+          fi
+          if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
+            echo "Missing ANTHROPIC_API_KEY secret for live-cache validation." >&2
+            exit 1
+          fi
+
+      - name: Verify live prompt cache floors
+        run: pnpm test:live:cache
+
+  validate_repo_e2e:
+    if: inputs.include_repo_e2e
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    timeout-minutes: 90
+    env:
+      OPENCLAW_VITEST_MAX_WORKERS: "2"
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+          use-sticky-disk: "false"
+
+      - name: Run repo E2E suite
+        run: pnpm test:e2e
+
+  validate_special_e2e:
+    if: inputs.include_repo_e2e || inputs.include_live_suites
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    timeout-minutes: ${{ matrix.timeout_minutes }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite_id: openshell-e2e
+            label: OpenShell repo E2E
+            command: pnpm test:e2e:openshell
+            timeout_minutes: 120
+            requires_repo_e2e: true
+            requires_live_suites: false
+          - suite_id: openai-ws-stream-live-e2e
+            label: OpenAI WebSocket live E2E
+            command: pnpm test:e2e -- src/agents/openai-ws-stream.e2e.test.ts
+            timeout_minutes: 90
+            requires_repo_e2e: false
+            requires_live_suites: true
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENCLAW_E2E_WORKERS: "1"
+      OPENCLAW_VITEST_MAX_WORKERS: "1"
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+          use-sticky-disk: "false"
+
+      - name: Configure suite-specific env
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ matrix.suite_id }}" in
+            openai-ws-stream-live-e2e)
+              echo "OPENAI_LIVE_TEST=1" >> "$GITHUB_ENV"
+              echo "OPENCLAW_LIVE_TEST=1" >> "$GITHUB_ENV"
+              ;;
+          esac
+
+      - name: Validate suite credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ matrix.suite_id }}" in
+            openai-ws-stream-live-e2e)
+              [[ -n "${OPENAI_API_KEY:-}" ]] || {
+                echo "OPENAI_API_KEY is required for the OpenAI WebSocket live E2E suite." >&2
+                exit 1
+              }
+              ;;
+          esac
+
+      - name: Run ${{ matrix.label }}
+        if: |
+          (inputs.include_repo_e2e && matrix.requires_repo_e2e) ||
+          (inputs.include_live_suites && matrix.requires_live_suites)
+        run: ${{ matrix.command }}
+
+  validate_docker_e2e:
+    if: inputs.include_release_path_suites || inputs.include_openwebui
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    timeout-minutes: ${{ matrix.timeout_minutes }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite_id: docker-onboard
+            label: Onboarding Docker E2E
+            command: pnpm test:docker:onboard
+            timeout_minutes: 60
+            release_path: true
+            openwebui_only: false
+          - suite_id: docker-gateway-network
+            label: Gateway Network Docker E2E
+            command: pnpm test:docker:gateway-network
+            timeout_minutes: 60
+            release_path: true
+            openwebui_only: false
+          - suite_id: docker-mcp-channels
+            label: MCP Channels Docker E2E
+            command: pnpm test:docker:mcp-channels
+            timeout_minutes: 60
+            release_path: true
+            openwebui_only: false
+          - suite_id: docker-plugins
+            label: Plugins Docker E2E
+            command: pnpm test:docker:plugins
+            timeout_minutes: 75
+            release_path: true
+            openwebui_only: false
+          - suite_id: docker-doctor-switch
+            label: Doctor Install Switch Docker E2E
+            command: pnpm test:docker:doctor-switch
+            timeout_minutes: 60
+            release_path: true
+            openwebui_only: false
+          - suite_id: docker-qr
+            label: QR Import Docker E2E
+            command: pnpm test:docker:qr
+            timeout_minutes: 60
+            release_path: true
+            openwebui_only: false
+          - suite_id: docker-install-e2e
+            label: Installer Docker E2E
+            command: pnpm test:install:e2e
+            timeout_minutes: 120
+            release_path: true
+            openwebui_only: false
+          - suite_id: docker-openwebui
+            label: Open WebUI Docker E2E
+            command: pnpm test:docker:openwebui
+            timeout_minutes: 75
+            release_path: false
+            openwebui_only: true
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
+      ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
+      BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
+      CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+      DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+      MODELSTUDIO_API_KEY: ${{ secrets.MODELSTUDIO_API_KEY }}
+      MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+      MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+      OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
+      OPENCLAW_LIVE_BROWSER_CDP_URL: ${{ secrets.OPENCLAW_LIVE_BROWSER_CDP_URL }}
+      OPENCLAW_LIVE_SETUP_TOKEN: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN }}
+      OPENCLAW_LIVE_SETUP_TOKEN_MODEL: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_MODEL }}
+      OPENCLAW_LIVE_SETUP_TOKEN_PROFILE: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_PROFILE }}
+      OPENCLAW_LIVE_SETUP_TOKEN_VALUE: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_VALUE }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+      FAL_KEY: ${{ secrets.FAL_KEY }}
+      RUNWAY_API_KEY: ${{ secrets.RUNWAY_API_KEY }}
+      DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
+      TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
+      VYDRA_API_KEY: ${{ secrets.VYDRA_API_KEY }}
+      XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+      ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+      Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
+      BYTEPLUS_ACCESS_KEY_ID: ${{ secrets.BYTEPLUS_ACCESS_KEY_ID }}
+      BYTEPLUS_SECRET_ACCESS_KEY: ${{ secrets.BYTEPLUS_SECRET_ACCESS_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      OPENCLAW_CODEX_AUTH_JSON: ${{ secrets.OPENCLAW_CODEX_AUTH_JSON }}
+      OPENCLAW_CODEX_CONFIG_TOML: ${{ secrets.OPENCLAW_CODEX_CONFIG_TOML }}
+      OPENCLAW_CLAUDE_JSON: ${{ secrets.OPENCLAW_CLAUDE_JSON }}
+      OPENCLAW_CLAUDE_CREDENTIALS_JSON: ${{ secrets.OPENCLAW_CLAUDE_CREDENTIALS_JSON }}
+      OPENCLAW_CLAUDE_SETTINGS_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_JSON }}
+      OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON }}
+      OPENCLAW_GEMINI_SETTINGS_JSON: ${{ secrets.OPENCLAW_GEMINI_SETTINGS_JSON }}
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+          use-sticky-disk: "false"
+
+      - name: Hydrate live auth/profile inputs
+        run: bash scripts/ci-hydrate-live-auth.sh
+
+      - name: Configure suite-specific env
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ matrix.suite_id }}" in
+            docker-install-e2e)
+              echo "OPENCLAW_E2E_MODELS=both" >> "$GITHUB_ENV"
+              ;;
+          esac
+
+      - name: Validate suite credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ matrix.suite_id }}" in
+            docker-install-e2e)
+              [[ -n "${OPENAI_API_KEY:-}" ]] || {
+                echo "OPENAI_API_KEY is required for installer Docker E2E." >&2
+                exit 1
+              }
+              if [[ -z "${ANTHROPIC_API_TOKEN:-}" && -z "${ANTHROPIC_API_KEY:-}" ]]; then
+                echo "ANTHROPIC_API_TOKEN or ANTHROPIC_API_KEY is required for installer Docker E2E." >&2
+                exit 1
+              fi
+              ;;
+            docker-openwebui)
+              [[ -n "${OPENAI_API_KEY:-}" ]] || {
+                echo "OPENAI_API_KEY is required for the Open WebUI Docker smoke." >&2
+                exit 1
+              }
+              ;;
+          esac
+
+      - name: Run ${{ matrix.label }}
+        if: |
+          (inputs.include_release_path_suites && matrix.release_path) ||
+          (inputs.include_openwebui && matrix.openwebui_only)
+        run: ${{ matrix.command }}
+
+  validate_live_provider_suites:
+    if: inputs.include_live_suites
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    timeout-minutes: ${{ matrix.timeout_minutes }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite_id: live-all
+            label: pnpm test:live
+            command: pnpm test:live
+            timeout_minutes: 180
+            profile_env_only: false
+          - suite_id: live-models-docker
+            label: Docker live models
+            command: pnpm test:docker:live-models
+            timeout_minutes: 120
+            profile_env_only: true
+          - suite_id: live-gateway-docker
+            label: Docker live gateway
+            command: pnpm test:docker:live-gateway
+            timeout_minutes: 120
+            profile_env_only: true
+          - suite_id: live-cli-backend-docker
+            label: Docker live CLI backend
+            command: pnpm test:docker:live-cli-backend
+            timeout_minutes: 120
+            profile_env_only: false
+          - suite_id: live-acp-bind-docker
+            label: Docker live ACP bind
+            command: pnpm test:docker:live-acp-bind
+            timeout_minutes: 120
+            profile_env_only: false
+          - suite_id: live-codex-harness-docker
+            label: Docker live Codex harness
+            command: pnpm test:docker:live-codex-harness
+            timeout_minutes: 120
+            profile_env_only: false
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
+      ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
+      BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
+      CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+      DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+      MODELSTUDIO_API_KEY: ${{ secrets.MODELSTUDIO_API_KEY }}
+      MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+      MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+      OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
+      OPENCLAW_LIVE_BROWSER_CDP_URL: ${{ secrets.OPENCLAW_LIVE_BROWSER_CDP_URL }}
+      OPENCLAW_LIVE_SETUP_TOKEN: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN }}
+      OPENCLAW_LIVE_SETUP_TOKEN_MODEL: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_MODEL }}
+      OPENCLAW_LIVE_SETUP_TOKEN_PROFILE: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_PROFILE }}
+      OPENCLAW_LIVE_SETUP_TOKEN_VALUE: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_VALUE }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+      FAL_KEY: ${{ secrets.FAL_KEY }}
+      RUNWAY_API_KEY: ${{ secrets.RUNWAY_API_KEY }}
+      DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
+      TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
+      VYDRA_API_KEY: ${{ secrets.VYDRA_API_KEY }}
+      XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+      ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+      Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
+      BYTEPLUS_ACCESS_KEY_ID: ${{ secrets.BYTEPLUS_ACCESS_KEY_ID }}
+      BYTEPLUS_SECRET_ACCESS_KEY: ${{ secrets.BYTEPLUS_SECRET_ACCESS_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      OPENCLAW_CODEX_AUTH_JSON: ${{ secrets.OPENCLAW_CODEX_AUTH_JSON }}
+      OPENCLAW_CODEX_CONFIG_TOML: ${{ secrets.OPENCLAW_CODEX_CONFIG_TOML }}
+      OPENCLAW_CLAUDE_JSON: ${{ secrets.OPENCLAW_CLAUDE_JSON }}
+      OPENCLAW_CLAUDE_CREDENTIALS_JSON: ${{ secrets.OPENCLAW_CLAUDE_CREDENTIALS_JSON }}
+      OPENCLAW_CLAUDE_SETTINGS_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_JSON }}
+      OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON }}
+      OPENCLAW_GEMINI_SETTINGS_JSON: ${{ secrets.OPENCLAW_GEMINI_SETTINGS_JSON }}
+      OPENCLAW_LIVE_VIDEO_GENERATION_SKIP_PROVIDERS: ""
+      OPENCLAW_LIVE_VYDRA_VIDEO: "1"
+      OPENCLAW_VITEST_MAX_WORKERS: "2"
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+          use-sticky-disk: "false"
+
+      - name: Hydrate live auth/profile inputs
+        run: bash scripts/ci-hydrate-live-auth.sh
+
+      - name: Configure suite-specific env
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ matrix.profile_env_only }}" == "true" ]]; then
+            echo "OPENCLAW_DOCKER_PROFILE_ENV_ONLY=1" >> "$GITHUB_ENV"
+          fi
+          case "${{ matrix.suite_id }}" in
+            live-cli-backend-docker)
+              echo "OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.4" >> "$GITHUB_ENV"
+              ;;
+            live-acp-bind-docker)
+              echo "OPENCLAW_LIVE_ACP_BIND_AGENTS=claude,codex,gemini" >> "$GITHUB_ENV"
+              ;;
+          esac
+
+      - name: Run ${{ matrix.label }}
+        run: ${{ matrix.command }}

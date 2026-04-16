@@ -372,23 +372,41 @@ describe("gateway-status command", () => {
 
   it("surfaces unresolved SecretRef auth diagnostics when probe fails", async () => {
     const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
-    await withEnvAsync({ MISSING_GATEWAY_TOKEN: undefined }, async () => {
-      mockLocalTokenEnvRefConfig();
-      probeGateway.mockResolvedValueOnce({
-        ok: false,
-        url: "ws://127.0.0.1:18789",
-        connectLatencyMs: null,
-        error: "connection refused",
-        close: null,
-        health: null,
-        status: null,
-        presence: null,
-        configSnapshot: null,
+    const defaultReadBestEffortConfig = readBestEffortConfig.getMockImplementation();
+    const defaultProbeGateway = probeGateway.getMockImplementation();
+    try {
+      await withEnvAsync({ MISSING_GATEWAY_TOKEN: undefined }, async () => {
+        readBestEffortConfig.mockReset();
+        probeGateway.mockReset();
+        mockLocalTokenEnvRefConfig();
+        probeGateway.mockImplementation(async (opts: { url: string }) => {
+          const { url } = opts;
+          return {
+            ok: false,
+            url,
+            connectLatencyMs: null,
+            error: "connection refused",
+            close: null,
+            health: null,
+            status: null,
+            presence: null,
+            configSnapshot: null,
+          };
+        });
+        await expect(runGatewayStatus(runtime, { timeout: "1000", json: true })).rejects.toThrow(
+          "__exit__:1",
+        );
       });
-      await expect(runGatewayStatus(runtime, { timeout: "1000", json: true })).rejects.toThrow(
-        "__exit__:1",
-      );
-    });
+    } finally {
+      readBestEffortConfig.mockReset();
+      if (defaultReadBestEffortConfig) {
+        readBestEffortConfig.mockImplementation(defaultReadBestEffortConfig);
+      }
+      probeGateway.mockReset();
+      if (defaultProbeGateway) {
+        probeGateway.mockImplementation(defaultProbeGateway);
+      }
+    }
 
     expect(runtimeErrors).toHaveLength(0);
     const unresolvedWarning = findUnresolvedSecretRefWarning(runtimeLogs);

@@ -261,6 +261,38 @@ describe("scanDirectory", () => {
       expectedRuleId: "dynamic-code-execution",
       expectedPresent: true,
     },
+    {
+      name: "skips non-scannable includeFiles entries like .png (line 406)",
+      files: {
+        "logo.png": "binary-content",
+        "clean.js": `export const x = 1;`,
+      },
+      includeFiles: ["logo.png"],
+      expectedRuleId: "dynamic-code-execution",
+      expectedPresent: false,
+    },
+    {
+      name: "skips missing files in includeFiles (lines 468-471 — ENOENT in resolveForcedFiles)",
+      files: {
+        "clean.js": `export const x = 1;`,
+      },
+      // "nonexistent.js" doesn't exist — stat throws ENOENT → continue at line 418
+      includeFiles: ["nonexistent.js"],
+      expectedRuleId: "dynamic-code-execution",
+      expectedPresent: false,
+    },
+    {
+      name: "deduplicates file present in both includeFiles and walked directory (line 451)",
+      files: {
+        // regular.js is in the root and will be found by both walkDirWithLimit and includeFiles
+        "regular.js": `const x = eval("hack");`,
+      },
+      // Including the same file ensures it appears in forcedFiles AND walkedFiles
+      includeFiles: ["regular.js"],
+      expectedRuleId: "dynamic-code-execution",
+      expectedPresent: true,
+      expectedMinFindings: 1,
+    },
   ] as const)(
     "$name",
     async ({ files, includeFiles, expectedRuleId, expectedPresent, expectedMinFindings }) => {
@@ -375,6 +407,29 @@ describe("scanDirectoryWithSummary", () => {
     }
   });
 
+  it("includes warn-severity findings in summary counts (lines 568-569)", async () => {
+    const root = makeTmpDir();
+    writeFixtureFiles(root, {
+      // obfuscated-code rule produces 'warn' severity
+      "a.js": `const payload = "\\x72\\x65\\x71\\x75\\x69\\x72\\x65";`,
+    });
+    const summary = await scanDirectoryWithSummary(root);
+    expect(summary.warn).toBeGreaterThanOrEqual(1);
+  });
+
+  it("skips non-scanned files in scanDirectory (line 535)", async () => {
+    const root = makeTmpDir();
+    writeFixtureFiles(root, {
+      // File bigger than maxFileBytes — scanned=false → hits the continue at line 535
+      "large.js": `eval("${"A".repeat(4096)}");`,
+      // Small clean file to confirm the scan ran
+      "clean.js": `export const ok = true;`,
+    });
+    const findings = await scanDirectory(root, { maxFileBytes: 64 });
+    // large.js is skipped (too big), clean.js has no findings
+    expect(findings).toHaveLength(0);
+  });
+
   it("throws when reading a scannable file fails", async () => {
     const root = makeTmpDir();
     const filePath = path.join(root, "bad.js");
@@ -393,6 +448,273 @@ describe("scanDirectoryWithSummary", () => {
 
     try {
       await expect(scanDirectoryWithSummary(root)).rejects.toMatchObject({ code: "EACCES" });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("returns scanned=false when readFile throws ENOENT after stat (line 506 — TOCTOU)", async () => {
+    const root = makeTmpDir();
+    const filePath = path.join(root, "vanishing.js");
+    fsSync.writeFileSync(filePath, `const x = eval("1+1");`);
+
+    const realReadFile = fs.readFile;
+    const spy = vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+      const pathArg = args[0];
+      if (typeof pathArg === "string" && pathArg === filePath) {
+        const err = new Error("ENOENT: no such file or directory") as NodeJS.ErrnoException;
+        err.code = "ENOENT";
+        throw err;
+      }
+      return await realReadFile(...args);
+    });
+
+    try {
+      // File vanishes between stat and readFile — should return empty findings, not throw
+      const findings = await scanDirectory(root);
+      expect(findings).toHaveLength(0);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("returns scanned=false when stat returns non-file for a walked path (line 474)", async () => {
+    const root = makeTmpDir();
+    const filePath = path.join(root, "became-a-dir.js");
+    fsSync.writeFileSync(filePath, `const x = eval("1+1");`);
+
+    const realStat = fs.stat;
+    const spy = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+      const pathArg = args[0];
+      if (typeof pathArg === "string" && pathArg === filePath) {
+        // Return a stat that looks like a directory after the walk collected it
+        const realSt = await realStat(pathArg);
+        const fake = Object.assign(Object.create(Object.getPrototypeOf(realSt)), realSt);
+        fake.isFile = () => false;
+        fake.isDirectory = () => true;
+        return fake;
+      }
+      return await realStat(...args);
+    });
+
+    try {
+      const findings = await scanDirectory(root);
+      expect(findings).toHaveLength(0);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("invalidates file scan cache when maxFileBytes changes between scans (line 94)", async () => {
+    // First scan with maxFileBytes=1024: populates cache with entry
+    // Second scan with maxFileBytes=64: size/mtime same but maxFileBytes differs →
+    // getCachedFileScanResult returns undefined (deletes stale entry)
+    const root = makeTmpDir();
+    writeFixtureFiles(root, { "a.js": `export const x = 1;` });
+    await scanDirectory(root, { maxFileBytes: 1024 });
+    // Change maxFileBytes — cache entry has different maxFileBytes → lines 93-94 hit
+    const findings = await scanDirectory(root, { maxFileBytes: 64 });
+    expect(findings).toHaveLength(0);
+  });
+
+  it("returns empty entries when dir stat throws ENOENT during walk (line 361)", async () => {
+    // readDirEntriesWithCache: stat(dirPath) throws ENOENT → return [] (line 361)
+    const root = makeTmpDir();
+    writeFixtureFiles(root, { "a.js": `const x = eval("hack");` });
+
+    const realStat = fs.stat;
+    const spy = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+      const pathArg = args[0];
+      if (typeof pathArg === "string" && pathArg === root) {
+        const err = new Error("ENOENT: no such file or directory") as NodeJS.ErrnoException;
+        err.code = "ENOENT";
+        throw err;
+      }
+      return await realStat(...args);
+    });
+
+    try {
+      const findings = await scanDirectory(root);
+      expect(findings).toHaveLength(0);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("hits dir entry cache on second scan of same directory (line 371)", async () => {
+    const root = makeTmpDir();
+    writeFixtureFiles(root, { "a.js": `export const x = 1;` });
+    // First scan populates the cache
+    await scanDirectory(root);
+    // Second scan within the same test (before afterEach clears cache) hits line 371
+    const findings2 = await scanDirectory(root);
+    expect(findings2).toHaveLength(0);
+  });
+
+  it("breaks collectScannableFiles merge loop when maxFiles reached (line 447)", async () => {
+    // Key: forced file is hidden (not walked), two regular files are walked.
+    // forcedFiles=[.hidden/h.js](1) + walkDir returns [a.js, b.js](2, maxFiles=2)
+    // Merge loop:
+    //   iter 1 (a.js): out.length(1) >= 2? false → add → out.length=2
+    //   iter 2 (b.js): out.length(2) >= 2? true → BREAK (line 447)
+    const root = makeTmpDir();
+    writeFixtureFiles(root, {
+      ".hidden/h.js": `export const h = 1;`, // forced (hidden, not walked)
+      "a.js": `export const x = 1;`, // walked
+      "b.js": `export const y = 2;`, // walked, triggers break
+    });
+    const findings = await scanDirectory(root, {
+      includeFiles: [".hidden/h.js"],
+      maxFiles: 2,
+    });
+    expect(findings).toHaveLength(0);
+  });
+
+  it("returns empty findings when stat throws ENOENT during file scan (line 469)", async () => {
+    // scanFileWithCache: stat throws ENOENT (file deleted between walk and scan)
+    const root = makeTmpDir();
+    const filePath = path.join(root, "ghost.js");
+    fsSync.writeFileSync(filePath, `const x = eval("1+1");`);
+
+    const realStat = fs.stat;
+    const spy = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+      const pathArg = args[0];
+      if (typeof pathArg === "string" && pathArg === filePath) {
+        const err = new Error("ENOENT: no such file or directory") as NodeJS.ErrnoException;
+        err.code = "ENOENT";
+        throw err;
+      }
+      return await realStat(...args);
+    });
+
+    try {
+      const findings = await scanDirectory(root);
+      expect(findings).toHaveLength(0);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("skips includeFiles entries that escape the root directory (line 404)", async () => {
+    const root = makeTmpDir();
+    writeFixtureFiles(root, { "clean.js": `export const x = 1;` });
+    // "../../etc/passwd" resolves outside root — isPathInside returns false → continue
+    const findings = await scanDirectory(root, { includeFiles: ["../../etc/passwd"] });
+    expect(findings).toHaveLength(0);
+  });
+
+  it("returns empty entries when stat returns non-directory for a walked path (line 366)", async () => {
+    // readDirEntriesWithCache: stat succeeds but returns a non-directory
+    const root = makeTmpDir();
+    writeFixtureFiles(root, { "a.js": `const x = eval("1+1");` });
+
+    const realStat = fs.stat;
+    const spy = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+      const pathArg = args[0];
+      if (typeof pathArg === "string" && pathArg === root) {
+        // Make the root directory look like a file to readDirEntriesWithCache
+        const realSt = await realStat(pathArg);
+        const fake = Object.assign(Object.create(Object.getPrototypeOf(realSt)), realSt);
+        fake.isDirectory = () => false;
+        fake.isFile = () => true;
+        return fake;
+      }
+      return await realStat(...args);
+    });
+
+    try {
+      const findings = await scanDirectory(root);
+      // Scan returns nothing because readDirEntriesWithCache returns [] for non-dir
+      expect(findings).toHaveLength(0);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("re-throws when stat throws non-ENOENT for a directory entry (line 363)", async () => {
+    // readDirEntriesWithCache: stat throws EACCES (not ENOENT) for the root dir
+    const root = makeTmpDir();
+    writeFixtureFiles(root, { "a.js": `export const x = 1;` });
+
+    const realStat = fs.stat;
+    const spy = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+      const pathArg = args[0];
+      if (typeof pathArg === "string" && pathArg === root) {
+        const err = new Error("EACCES: permission denied") as NodeJS.ErrnoException;
+        err.code = "EACCES";
+        throw err;
+      }
+      return await realStat(...args);
+    });
+
+    try {
+      await expect(scanDirectory(root)).rejects.toMatchObject({ code: "EACCES" });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("skips duplicate entries in includeFiles (line 410 — resolveForcedFiles dedup)", async () => {
+    const root = makeTmpDir();
+    writeFixtureFiles(root, { "a.js": `const x = eval("hack");` });
+    // Pass the same path twice — second occurrence hits seen.has(includePath) → continue
+    const findings = await scanDirectory(root, { includeFiles: ["a.js", "a.js"] });
+    expect(findings.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("skips forced file when stat returns a directory (line 423)", async () => {
+    const root = makeTmpDir();
+    // Create a DIRECTORY named like a .js file via renaming a dir
+    const dirPath = path.join(root, "notafile.js");
+    fsSync.mkdirSync(dirPath);
+    // includeFiles points at a directory path ending in .js — isScannable passes, stat.isFile() fails
+    const findings = await scanDirectory(root, { includeFiles: ["notafile.js"] });
+    expect(findings).toHaveLength(0);
+  });
+
+  it("re-throws when stat throws a non-ENOENT error for a forced file (line 420)", async () => {
+    const root = makeTmpDir();
+    const filePath = path.join(root, "forbidden.js");
+    fsSync.writeFileSync(filePath, `export const x = 1;`);
+
+    const realStat = fs.stat;
+    const spy = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+      const pathArg = args[0];
+      if (typeof pathArg === "string" && pathArg === filePath) {
+        const err = new Error("EACCES: permission denied") as NodeJS.ErrnoException;
+        err.code = "EACCES";
+        throw err;
+      }
+      return await realStat(...args);
+    });
+
+    try {
+      await expect(scanDirectory(root, { includeFiles: ["forbidden.js"] })).rejects.toMatchObject({
+        code: "EACCES",
+      });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("re-throws when stat throws a non-ENOENT error during file scan (line 471)", async () => {
+    const root = makeTmpDir();
+    const filePath = path.join(root, "noperm.js");
+    fsSync.writeFileSync(filePath, `export const x = 1;`);
+
+    const realStat = fs.stat;
+    const spy = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+      const pathArg = args[0];
+      if (typeof pathArg === "string" && pathArg === filePath) {
+        const err = new Error("EACCES: permission denied") as NodeJS.ErrnoException;
+        err.code = "EACCES";
+        throw err;
+      }
+      return await realStat(...args);
+    });
+
+    try {
+      await expect(scanDirectory(root)).rejects.toMatchObject({ code: "EACCES" });
     } finally {
       spy.mockRestore();
     }

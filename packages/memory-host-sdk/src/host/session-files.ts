@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { isUsageCountedSessionTranscriptFileName } from "../../../../src/config/sessions/artifacts.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../../../src/config/sessions/paths.js";
 import { redactSensitiveText } from "../../../../src/logging/redact.js";
@@ -68,10 +69,9 @@ function normalizeSessionText(value: string): string {
     .trim();
 }
 
-export function extractSessionText(content: unknown): string | null {
+function collectRawSessionText(content: unknown): string | null {
   if (typeof content === "string") {
-    const normalized = normalizeSessionText(content);
-    return normalized ? normalized : null;
+    return content;
   }
   if (!Array.isArray(content)) {
     return null;
@@ -82,18 +82,37 @@ export function extractSessionText(content: unknown): string | null {
       continue;
     }
     const record = block as { type?: unknown; text?: unknown };
-    if (record.type !== "text" || typeof record.text !== "string") {
-      continue;
-    }
-    const normalized = normalizeSessionText(record.text);
-    if (normalized) {
-      parts.push(normalized);
+    if (record.type === "text" && typeof record.text === "string") {
+      parts.push(record.text);
     }
   }
-  if (parts.length === 0) {
+  return parts.length > 0 ? parts.join("\n") : null;
+}
+
+/**
+ * Strip OpenClaw-injected inbound metadata envelopes from a raw text block
+ * on user-role messages before normalization. See the authoritative
+ * implementation in `src/memory-host-sdk/host/session-files.ts` for the
+ * full rationale; duplicated here to keep this parallel copy bug-free.
+ */
+function stripInboundMetadataForUserRole(text: string, role: "user" | "assistant"): string {
+  if (role !== "user") {
+    return text;
+  }
+  return stripInboundMetadata(text);
+}
+
+export function extractSessionText(
+  content: unknown,
+  role: "user" | "assistant" = "assistant",
+): string | null {
+  const rawText = collectRawSessionText(content);
+  if (rawText === null) {
     return null;
   }
-  return parts.join(" ");
+  const stripped = stripInboundMetadataForUserRole(rawText, role);
+  const normalized = normalizeSessionText(stripped);
+  return normalized ? normalized : null;
 }
 
 export async function buildSessionEntry(absPath: string): Promise<SessionFileEntry | null> {
@@ -134,7 +153,7 @@ export async function buildSessionEntry(absPath: string): Promise<SessionFileEnt
       if (message.role !== "user" && message.role !== "assistant") {
         continue;
       }
-      const text = extractSessionText(message.content);
+      const text = extractSessionText(message.content, message.role);
       if (!text) {
         continue;
       }

@@ -648,6 +648,16 @@ jobs:
       matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_test_matrix) }}
     steps:
       - name: Checkout
+        id: checkout
+        uses: actions/checkout@v6
+        timeout-minutes: 2
+        continue-on-error: true
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Checkout (retry)
+        if: steps.checkout.outcome == 'failure'
         uses: actions/checkout@v6
         with:
           persist-credentials: false
