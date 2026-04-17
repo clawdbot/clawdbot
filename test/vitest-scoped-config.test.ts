@@ -281,6 +281,14 @@ describe("scoped vitest configs", () => {
     ]);
   });
 
+  it("keeps the ui lane off both the openclaw runtime setup and unit-fast excludes", () => {
+    expect(normalizeConfigPaths(defaultUiConfig.test?.setupFiles)).toEqual([
+      "test/setup.ts",
+      "ui/src/test-helpers/lit-warnings.setup.ts",
+    ]);
+    expect(defaultUiConfig.test?.exclude).not.toContain("chat/slash-command-executor.node.test.ts");
+  });
+
   it("defaults channel tests to threads with the non-isolated runner", () => {
     expect(defaultChannelsConfig.test?.isolate).toBe(false);
     expect(defaultChannelsConfig.test?.pool).toBe("threads");

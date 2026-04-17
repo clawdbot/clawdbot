@@ -437,7 +437,7 @@ describe("session binding service", () => {
     }
   });
 
-  it("keeps the first live adapter authoritative until it unregisters", () => {
+  it("keeps the newest live adapter authoritative until it unregisters", () => {
     const firstBinding = {
       bindingId: "first-binding",
       targetSessionKey: "agent:main",
@@ -457,17 +457,30 @@ describe("session binding service", () => {
         targetSessionKey === "agent:main" ? [firstBinding] : [],
       resolveByConversation: () => null,
     };
+    const secondBinding = {
+      bindingId: "second-binding",
+      targetSessionKey: "agent:main",
+      targetKind: "session" as const,
+      conversation: {
+        channel: "demo-binding",
+        accountId: "default",
+        conversationId: "thread-2",
+      },
+      status: "active" as const,
+      boundAt: 2,
+    };
     const secondAdapter: SessionBindingAdapter = {
       channel: "Demo-Binding",
       accountId: "DEFAULT",
-      listBySession: () => [],
+      listBySession: (targetSessionKey) =>
+        targetSessionKey === "agent:main" ? [secondBinding] : [],
       resolveByConversation: () => null,
     };
 
     registerSessionBindingAdapter(firstAdapter);
     registerSessionBindingAdapter(secondAdapter);
 
-    expect(getSessionBindingService().listBySession("agent:main")).toEqual([firstBinding]);
+    expect(getSessionBindingService().listBySession("agent:main")).toEqual([secondBinding]);
 
     unregisterSessionBindingAdapter({
       channel: "demo-binding",
@@ -529,13 +542,13 @@ describe("session binding service", () => {
         conversationId: "thread-1",
       }),
     });
-    expect(firstBind).toHaveBeenCalledTimes(1);
-    expect(secondBind).not.toHaveBeenCalled();
+    expect(firstBind).not.toHaveBeenCalled();
+    expect(secondBind).toHaveBeenCalledTimes(1);
 
-    first.unregisterSessionBindingAdapter({
+    second.unregisterSessionBindingAdapter({
       channel: "demo-binding",
       accountId: "default",
-      adapter: firstAdapter,
+      adapter: secondAdapter,
     });
 
     await expect(
@@ -558,10 +571,10 @@ describe("session binding service", () => {
     expect(firstBind).toHaveBeenCalledTimes(1);
     expect(secondBind).toHaveBeenCalledTimes(1);
 
-    second.unregisterSessionBindingAdapter({
+    first.unregisterSessionBindingAdapter({
       channel: "demo-binding",
       accountId: "default",
-      adapter: secondAdapter,
+      adapter: firstAdapter,
     });
 
     await expect(

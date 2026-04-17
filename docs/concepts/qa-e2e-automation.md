@@ -62,7 +62,10 @@ That lane provisions a disposable Tuwunel homeserver in Docker, registers
 temporary driver, SUT, and observer users, creates one private room, then runs
 the real Matrix plugin inside a QA gateway child. The live transport lane keeps
 the child config scoped to the transport under test, so Matrix runs without
-`qa-channel` in the child config.
+`qa-channel` in the child config. It writes the structured report artifacts and
+a combined stdout/stderr log into the selected Matrix QA output directory. To
+capture the outer `scripts/run-node.mjs` build/launcher output too, set
+`OPENCLAW_RUN_NODE_OUTPUT_LOG=<path>` to a repo-local log file.
 
 For a transport-real Telegram smoke lane, run:
 
@@ -147,6 +150,22 @@ The baseline list should stay broad enough to cover:
 - subagent handoff
 - repo-reading and docs-reading
 - one small build task such as Lobster Invaders
+
+## Provider mock lanes
+
+`qa suite` has two local provider mock lanes:
+
+- `mock-openai` is the scenario-aware OpenClaw mock. It remains the default
+  deterministic mock lane for repo-backed QA and parity gates.
+- `aimock` starts an AIMock-backed provider server for experimental protocol,
+  fixture, record/replay, and chaos coverage. It is additive and does not
+  replace the `mock-openai` scenario dispatcher.
+
+Provider-lane implementation lives under `extensions/qa-lab/src/providers/`.
+Each provider owns its defaults, local server startup, gateway model config,
+auth-profile staging needs, and live/mock capability flags. Shared suite and
+gateway code should route through the provider registry instead of branching on
+provider names.
 
 ## Transport adapters
 

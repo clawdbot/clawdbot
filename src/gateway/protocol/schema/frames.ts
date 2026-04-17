@@ -92,7 +92,7 @@ export const HelloOkSchema = Type.Object(
     auth: Type.Optional(
       Type.Object(
         {
-          deviceToken: NonEmptyString,
+          deviceToken: Type.Optional(NonEmptyString),
           role: NonEmptyString,
           scopes: Type.Array(NonEmptyString),
           issuedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),

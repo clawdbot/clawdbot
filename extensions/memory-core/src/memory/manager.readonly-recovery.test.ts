@@ -16,10 +16,12 @@ type ReadonlyRecoveryHarness = MemoryReadonlyRecoveryState & {
   syncing: Promise<void> | null;
   queuedSessionFiles: Set<string>;
   queuedSessionSync: Promise<void> | null;
+  vectorDegradedWriteWarningShown: boolean;
   ensureProviderInitialized: ReturnType<typeof vi.fn>;
   enqueueTargetedSessionSync: ReturnType<typeof vi.fn>;
   runSync: ReturnType<typeof vi.fn>;
   openDatabase: ReturnType<typeof vi.fn>;
+  resetVectorState: ReturnType<typeof vi.fn>;
   ensureSchema: ReturnType<typeof vi.fn>;
   readMeta: ReturnType<typeof vi.fn>;
 };
@@ -66,13 +68,10 @@ describe("memory manager readonly recovery", () => {
       queuedSessionFiles: new Set<string>(),
       queuedSessionSync: null,
       db: initialDb,
-      vectorReady: null,
       vector: {
-        enabled: false,
-        available: null,
-        loadError: "stale",
         dims: 123,
       },
+      vectorDegradedWriteWarningShown: true,
       readonlyRecoveryAttempts: 0,
       readonlyRecoverySuccesses: 0,
       readonlyRecoveryFailures: 0,
@@ -81,6 +80,10 @@ describe("memory manager readonly recovery", () => {
       enqueueTargetedSessionSync: vi.fn(async () => {}),
       runSync: vi.fn(async (_params) => undefined) as ReadonlyRecoveryHarness["runSync"],
       openDatabase: vi.fn(() => reopenedDb),
+      resetVectorState: vi.fn(function (this: ReadonlyRecoveryHarness) {
+        this.vector.dims = undefined;
+        this.vectorDegradedWriteWarningShown = false;
+      }) as ReadonlyRecoveryHarness["resetVectorState"],
       ensureSchema: vi.fn(() => undefined) as ReadonlyRecoveryHarness["ensureSchema"],
       readMeta: vi.fn(() => undefined),
     };
@@ -132,6 +135,8 @@ describe("memory manager readonly recovery", () => {
 
     expect(harness.runSync).toHaveBeenCalledTimes(2);
     expect(harness.openDatabase).toHaveBeenCalledTimes(1);
+    expect(harness.resetVectorState).toHaveBeenCalledTimes(1);
+    expect(harness.vector.dims).toBe(123);
     expect(initialClose).toHaveBeenCalledTimes(1);
     expectReadonlyRecoveryStatus(harness, params.expectedLastError);
   }
@@ -173,7 +178,35 @@ describe("memory manager readonly recovery", () => {
     ).rejects.toThrow("embedding timeout");
     expect(harness.runSync).toHaveBeenCalledTimes(1);
     expect(harness.openDatabase).not.toHaveBeenCalled();
+    expect(harness.resetVectorState).not.toHaveBeenCalled();
     expect(initialClose).not.toHaveBeenCalled();
+  });
+
+  it("clears the degraded warning latch before retrying", async () => {
+    const { harness } = createReadonlyRecoveryHarness();
+    harness.runSync.mockRejectedValueOnce(new Error("attempt to write a readonly database"));
+
+    await expect(
+      runSyncWithReadonlyRecovery(harness, {
+        reason: "test",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(harness.vectorDegradedWriteWarningShown).toBe(false);
+  });
+
+  it("prefers reopened vector dims when metadata is available", async () => {
+    const { harness } = createReadonlyRecoveryHarness();
+    harness.readMeta.mockReturnValueOnce({ vectorDims: 768 });
+    harness.runSync.mockRejectedValueOnce(new Error("attempt to write a readonly database"));
+
+    await expect(
+      runSyncWithReadonlyRecovery(harness, {
+        reason: "test",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(harness.vector.dims).toBe(768);
   });
 
   it("sets busy_timeout on memory sqlite connections", async () => {

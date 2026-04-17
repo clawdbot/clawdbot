@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMockIncomingRequest } from "../../../test/helpers/mock-incoming-request.js";
-import { WEBHOOK_RATE_LIMIT_DEFAULTS } from "../runtime-api.js";
 import {
   NextcloudTalkRetryableWebhookError,
   processNextcloudTalkReplayGuardedMessage,
@@ -274,8 +273,10 @@ describe("createNextcloudTalkWebhookServer payload validation", () => {
 
 describe("createNextcloudTalkWebhookServer auth rate limiting", () => {
   it("rate limits repeated invalid signature attempts from the same source", async () => {
+    const maxRequests = 2;
     const harness = await startWebhookServer({
       path: "/nextcloud-auth-rate-limit",
+      authRateLimit: { maxRequests },
       onMessage: vi.fn(),
     });
     const { body, headers } = createSignedCreateMessageRequest();
@@ -286,7 +287,7 @@ describe("createNextcloudTalkWebhookServer auth rate limiting", () => {
 
     let firstResponse: Response | undefined;
     let lastResponse: Response | undefined;
-    for (let attempt = 0; attempt <= WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests; attempt += 1) {
+    for (let attempt = 0; attempt <= maxRequests; attempt += 1) {
       const response = await fetch(harness.webhookUrl, {
         method: "POST",
         headers: invalidHeaders,
@@ -306,14 +307,16 @@ describe("createNextcloudTalkWebhookServer auth rate limiting", () => {
   });
 
   it("does not rate limit valid signed webhook bursts from the same source", async () => {
+    const maxRequests = 2;
     const harness = await startWebhookServer({
       path: "/nextcloud-auth-rate-limit-valid",
+      authRateLimit: { maxRequests },
       onMessage: vi.fn(),
     });
     const { body, headers } = createSignedCreateMessageRequest();
 
     let lastResponse: Response | undefined;
-    for (let attempt = 0; attempt <= WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests; attempt += 1) {
+    for (let attempt = 0; attempt <= maxRequests; attempt += 1) {
       lastResponse = await fetch(harness.webhookUrl, {
         method: "POST",
         headers,

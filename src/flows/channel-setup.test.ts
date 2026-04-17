@@ -4,9 +4,8 @@ const resolveAgentWorkspaceDir = vi.hoisted(() =>
   vi.fn((_cfg?: unknown, _agentId?: unknown) => "/tmp/openclaw-workspace"),
 );
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn((_cfg?: unknown) => "default"));
-const listChannelPluginCatalogEntries = vi.hoisted(() => vi.fn((_opts?: unknown): unknown[] => []));
-const getChannelPluginCatalogEntry = vi.hoisted(() =>
-  vi.fn((_id?: unknown, _opts?: unknown) => undefined),
+const listTrustedChannelPluginCatalogEntries = vi.hoisted(() =>
+  vi.fn((_params?: unknown): unknown[] => []),
 );
 const getChannelSetupPlugin = vi.hoisted(() => vi.fn((_channel?: unknown) => undefined));
 const listChannelSetupPlugins = vi.hoisted(() => vi.fn((): unknown[] => []));
@@ -28,12 +27,6 @@ vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: (cfg?: unknown, agentId?: unknown) =>
     resolveAgentWorkspaceDir(cfg, agentId),
   resolveDefaultAgentId: (cfg?: unknown) => resolveDefaultAgentId(cfg),
-}));
-
-vi.mock("../channels/plugins/catalog.js", () => ({
-  listChannelPluginCatalogEntries: (opts?: unknown) => listChannelPluginCatalogEntries(opts),
-  getChannelPluginCatalogEntry: (id?: unknown, opts?: unknown) =>
-    getChannelPluginCatalogEntry(id, opts),
 }));
 
 vi.mock("../channels/plugins/setup-registry.js", () => ({
@@ -63,6 +56,11 @@ vi.mock("../commands/channel-setup/registry.js", () => ({
   resolveChannelSetupWizardAdapterForPlugin: () => undefined,
 }));
 
+vi.mock("../commands/channel-setup/trusted-catalog.js", () => ({
+  listTrustedChannelPluginCatalogEntries: (params?: unknown) =>
+    listTrustedChannelPluginCatalogEntries(params),
+}));
+
 vi.mock("../config/channel-configured.js", () => ({
   isChannelConfigured: (cfg?: unknown, channel?: unknown) => isChannelConfigured(cfg, channel),
 }));
@@ -90,10 +88,11 @@ describe("setupChannels workspace shadow exclusion", () => {
     vi.clearAllMocks();
     resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw-workspace");
     resolveDefaultAgentId.mockReturnValue("default");
-    listChannelPluginCatalogEntries.mockReturnValue([
+    listTrustedChannelPluginCatalogEntries.mockReturnValue([
       {
         id: "telegram",
         pluginId: "@openclaw/telegram-plugin",
+        origin: "bundled",
       },
     ]);
     getChannelSetupPlugin.mockReturnValue(undefined);
@@ -112,13 +111,7 @@ describe("setupChannels workspace shadow exclusion", () => {
     isChannelConfigured.mockReturnValue(true);
   });
 
-  it("preloads configured external plugins from the bundled fallback for untrusted shadows", async () => {
-    listChannelPluginCatalogEntries.mockImplementation((opts?: unknown) =>
-      (opts as { excludeWorkspace?: boolean } | undefined)?.excludeWorkspace
-        ? [{ id: "telegram", pluginId: "@openclaw/telegram-plugin", origin: "bundled" }]
-        : [{ id: "telegram", pluginId: "evil-telegram-shadow", origin: "workspace" }],
-    );
-
+  it("preloads configured external plugins from the trusted catalog boundary", async () => {
     await setupChannels(
       {} as never,
       {} as never,
@@ -128,10 +121,12 @@ describe("setupChannels workspace shadow exclusion", () => {
       } as never,
     );
 
-    const fallbackCall = listChannelPluginCatalogEntries.mock.calls.find(
-      ([opts]) => (opts as { excludeWorkspace?: boolean } | undefined)?.excludeWorkspace === true,
+    expect(listTrustedChannelPluginCatalogEntries).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: {},
+        workspaceDir: "/tmp/openclaw-workspace",
+      }),
     );
-    expect(fallbackCall).toBeTruthy();
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "telegram",
@@ -142,7 +137,7 @@ describe("setupChannels workspace shadow exclusion", () => {
   });
 
   it("keeps trusted workspace overrides eligible during preload", async () => {
-    listChannelPluginCatalogEntries.mockReturnValue([
+    listTrustedChannelPluginCatalogEntries.mockReturnValue([
       { id: "telegram", pluginId: "trusted-telegram-shadow", origin: "workspace" },
     ]);
 

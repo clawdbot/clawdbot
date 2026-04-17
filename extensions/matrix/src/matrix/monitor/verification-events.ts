@@ -280,6 +280,7 @@ async function resolveVerificationSasNoticeForSignal(
     senderId: string;
     flowId: string | null;
     stage: MatrixVerificationStage;
+    sasNoticeRetryDelayMs?: number;
   },
 ): Promise<{ summary: MatrixVerificationSummaryLike | null; sasNotice: string | null }> {
   const summary = await resolveVerificationSummaryForSignal(client, params);
@@ -292,7 +293,9 @@ async function resolveVerificationSasNoticeForSignal(
     };
   }
 
-  await new Promise((resolve) => setTimeout(resolve, SAS_NOTICE_RETRY_DELAY_MS));
+  await new Promise((resolve) =>
+    setTimeout(resolve, params.sasNoticeRetryDelayMs ?? SAS_NOTICE_RETRY_DELAY_MS),
+  );
   const retriedSummary = await resolveVerificationSummaryForSignal(client, params);
   return {
     summary: retriedSummary,
@@ -385,6 +388,8 @@ export function createMatrixVerificationEventRouter(params: {
   dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
   readStoreAllowFrom: () => Promise<string[]>;
   logVerboseMessage: (message: string) => void;
+  sasNoticeRetryDelayMs?: number;
+  runDetachedTask?: (label: string, task: () => Promise<void>) => Promise<void>;
 }) {
   const routerStartedAtMs = Date.now();
   const routedVerificationEvents = new Set<string>();
@@ -539,7 +544,7 @@ export function createMatrixVerificationEventRouter(params: {
     }
     rememberVerificationRoom(roomId, event, signal.flowId);
 
-    void (async () => {
+    const routeTask = async () => {
       if (!shouldEmitVerificationEventNotice(event)) {
         params.logVerboseMessage(
           `matrix: ignoring historical verification event room=${roomId} id=${event.event_id ?? "unknown"} type=${event.type ?? "unknown"}`,
@@ -586,6 +591,7 @@ export function createMatrixVerificationEventRouter(params: {
         senderId,
         flowId,
         stage: signal.stage,
+        sasNoticeRetryDelayMs: params.sasNoticeRetryDelayMs,
       }).catch(() => ({ summary: null, sasNotice: null }));
 
       const notices: string[] = [];
@@ -613,9 +619,17 @@ export function createMatrixVerificationEventRouter(params: {
           logVerboseMessage: params.logVerboseMessage,
         });
       }
-    })().catch((err) => {
-      params.logVerboseMessage(`matrix: failed routing verification event: ${String(err)}`);
-    });
+    };
+    if (params.runDetachedTask) {
+      void params.runDetachedTask(
+        `verification event handler room=${roomId} id=${event.event_id ?? "unknown"}`,
+        routeTask,
+      );
+    } else {
+      void routeTask().catch((err) => {
+        params.logVerboseMessage(`matrix: failed routing verification event: ${String(err)}`);
+      });
+    }
 
     return true;
   }

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/stepfun-provider",
-  "version": "2026.4.15-beta.1",
+  "version": "2026.4.16",
   "private": true,
   "description": "OpenClaw StepFun provider plugin",
   "type": "module",

@@ -96,6 +96,29 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.plugins?.allow).toEqual(["memory-core"]);
   });
 
+  it("can wire AIMock as a separate mock provider lane", () => {
+    const cfg = buildQaGatewayConfig({
+      bind: "loopback",
+      gatewayPort: 18789,
+      gatewayToken: "token",
+      providerBaseUrl: "http://127.0.0.1:45080/v1",
+      workspaceDir: "/tmp/qa-workspace",
+      providerMode: "aimock",
+      primaryModel: "aimock/gpt-5.4",
+      alternateModel: "aimock/gpt-5.4-alt",
+    });
+
+    expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("aimock/gpt-5.4");
+    expect(cfg.agents?.defaults?.imageGenerationModel).toEqual({
+      primary: "aimock/gpt-image-1",
+    });
+    expect(cfg.models?.providers?.aimock?.baseUrl).toBe("http://127.0.0.1:45080/v1");
+    expect(cfg.models?.providers?.aimock?.api).toBe("openai-responses");
+    expect(cfg.models?.providers?.openai?.baseUrl).toBe("http://127.0.0.1:45080/v1");
+    expect(cfg.models?.providers?.anthropic?.baseUrl).toBe("http://127.0.0.1:45080");
+    expect(cfg.models?.providers?.["mock-openai"]).toBeUndefined();
+  });
+
   it("can omit qa-channel for live transport gateway children", () => {
     const cfg = buildQaGatewayConfig({
       bind: "loopback",

@@ -23,6 +23,10 @@ type SetupRuntime = Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]["
 type WhatsAppConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["whatsapp"]>;
 type WhatsAppAccountConfig = NonNullable<NonNullable<WhatsAppConfig["accounts"]>[string]>;
 
+function trimPromptText(value: string | null | undefined): string {
+  return value?.trim() ?? "";
+}
+
 function mergeWhatsAppConfig(
   cfg: OpenClawConfig,
   accountId: string,
@@ -124,7 +128,7 @@ async function promptWhatsAppOwnerAllowFrom(params: {
     placeholder: "+15555550123",
     initialValue: existingAllowFrom[0],
     validate: (value) => {
-      const raw = value.trim();
+      const raw = trimPromptText(value);
       if (!raw) {
         return "Required";
       }
@@ -136,7 +140,7 @@ async function promptWhatsAppOwnerAllowFrom(params: {
     },
   });
 
-  const normalized = normalizeE164(entry.trim());
+  const normalized = normalizeE164(trimPromptText(entry));
   if (!normalized) {
     throw new Error("Invalid WhatsApp owner number (expected E.164 after validation).");
   }
@@ -311,7 +315,7 @@ async function promptWhatsAppDmAccess(params: {
     message: "Allowed sender numbers (comma-separated, E.164)",
     placeholder: "+15555550123, +447700900123",
     validate: (value) => {
-      const raw = value.trim();
+      const raw = trimPromptText(value);
       if (!raw) {
         return "Required";
       }
@@ -326,7 +330,13 @@ async function promptWhatsAppDmAccess(params: {
     },
   });
 
-  const parsed = parseWhatsAppAllowFromEntries(allowRaw);
+  const parsed = parseWhatsAppAllowFromEntries(trimPromptText(allowRaw));
+  if (parsed.invalidEntry) {
+    throw new Error(`Invalid number: ${parsed.invalidEntry}`);
+  }
+  if (parsed.entries.length === 0) {
+    throw new Error("Invalid WhatsApp allowFrom list (expected at least one E.164 number).");
+  }
   return setWhatsAppAllowFrom(next, accountId, parsed.entries);
 }
 

@@ -100,6 +100,31 @@ describe("plugin-sdk qa-runner-runtime", () => {
     });
   });
 
+  it("loads bundled plugin test APIs with the private QA source tree override", async () => {
+    const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-qa-test-api-root-"));
+    tempDirs.push(sourceRoot);
+    fs.mkdirSync(path.join(sourceRoot, "src"), { recursive: true });
+    fs.mkdirSync(path.join(sourceRoot, "extensions"), { recursive: true });
+    fs.writeFileSync(path.join(sourceRoot, ".git"), "gitdir: /tmp/mock\n", "utf8");
+    process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
+    resolveOpenClawPackageRootSync.mockReturnValue(sourceRoot);
+
+    const testApi = { marker: "matrix-test-api" };
+    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue(testApi);
+
+    const module = await import("./qa-runner-runtime.js");
+
+    expect(module.loadQaRunnerBundledPluginTestApi("matrix")).toBe(testApi);
+    expect(loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
+      dirName: "matrix",
+      artifactBasename: "test-api.js",
+      env: expect.objectContaining({
+        OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(sourceRoot, "extensions"),
+      }),
+    });
+  });
+
   it("reports the qa runtime as unavailable when the qa-lab surface is missing", async () => {
     loadBundledPluginPublicSurfaceModuleSync.mockImplementation(() => {
       throw new Error("Unable to resolve bundled plugin public surface qa-lab/runtime-api.js");

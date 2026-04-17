@@ -11,13 +11,9 @@ const hoisted = vi.hoisted(() => ({
   monitorNextcloudTalkProvider: vi.fn(),
 }));
 
-vi.mock("./monitor.js", async () => {
-  const actual = await vi.importActual<typeof import("./monitor.js")>("./monitor.js");
-  return {
-    ...actual,
-    monitorNextcloudTalkProvider: hoisted.monitorNextcloudTalkProvider,
-  };
-});
+vi.mock("./monitor-runtime.js", () => ({
+  monitorNextcloudTalkProvider: hoisted.monitorNextcloudTalkProvider,
+}));
 
 const { nextcloudTalkGatewayAdapter } = await import("./gateway.js");
 

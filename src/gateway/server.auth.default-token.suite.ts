@@ -248,6 +248,91 @@ export function registerDefaultAuthTokenSuite(): void {
       }
     });
 
+    test("hello-ok reports granted auth metadata for device-less shared token auth", async () => {
+      const ws = await openWs(port);
+      try {
+        const res = await connectReq(ws, { scopes: ["operator.read"], device: null });
+        expect(res.ok).toBe(true);
+        const helloOk = res.payload as
+          | {
+              auth?: {
+                role?: unknown;
+                scopes?: unknown;
+                deviceToken?: unknown;
+              };
+            }
+          | undefined;
+        expect(helloOk?.auth?.role).toBe("operator");
+        expect(helloOk?.auth?.scopes).toEqual([]);
+        expect(helloOk?.auth?.deviceToken).toBeUndefined();
+      } finally {
+        ws.close();
+      }
+    });
+
+    test("hello-ok reports persisted token scopes when reusing an existing device token", async () => {
+      const { randomUUID } = await import("node:crypto");
+      const os = await import("node:os");
+      const path = await import("node:path");
+      const token = resolveGatewayTokenOrEnv();
+      const deviceIdentityPath = path.join(
+        os.tmpdir(),
+        `openclaw-shared-auth-scope-reuse-${randomUUID()}.json`,
+      );
+      const wsInitial = await openWs(port);
+      let pairedDeviceToken: string | undefined;
+      let pairedDeviceScopes: unknown;
+      try {
+        const initial = await connectReq(wsInitial, {
+          token,
+          scopes: ["operator.admin"],
+          deviceIdentityPath,
+        });
+        expect(initial.ok).toBe(true);
+        const helloOk = initial.payload as
+          | {
+              auth?: {
+                role?: unknown;
+                scopes?: unknown;
+                deviceToken?: unknown;
+              };
+            }
+          | undefined;
+        expect(helloOk?.auth?.role).toBe("operator");
+        expect(Array.isArray(helloOk?.auth?.scopes)).toBe(true);
+        expect(typeof helloOk?.auth?.deviceToken).toBe("string");
+        pairedDeviceToken = helloOk?.auth?.deviceToken as string | undefined;
+        pairedDeviceScopes = helloOk?.auth?.scopes;
+      } finally {
+        wsInitial.close();
+      }
+
+      const wsReconnect = await openWs(port);
+      try {
+        const reconnect = await connectReq(wsReconnect, {
+          token,
+          scopes: ["operator.read"],
+          deviceIdentityPath,
+        });
+        expect(reconnect.ok).toBe(true);
+        const helloOk = reconnect.payload as
+          | {
+              auth?: {
+                role?: unknown;
+                scopes?: unknown;
+                deviceToken?: unknown;
+              };
+            }
+          | undefined;
+        expect(helloOk?.auth?.role).toBe("operator");
+        expect(helloOk?.auth?.deviceToken).toBe(pairedDeviceToken);
+        expect(helloOk?.auth?.scopes).toEqual(pairedDeviceScopes);
+        expect(helloOk?.auth?.scopes).not.toEqual(["operator.read"]);
+      } finally {
+        wsReconnect.close();
+      }
+    });
+
     test("does not grant admin when scopes are omitted", async () => {
       const ws = await openWs(port);
       const token = resolveGatewayTokenOrEnv();

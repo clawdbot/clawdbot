@@ -4,14 +4,14 @@ import type { OpenClawPluginApi, ProviderPlugin } from "../plugins/types.js";
 export { createCapturedPluginRegistration };
 
 type RegistrablePlugin = {
-  register(api: OpenClawPluginApi): void | Promise<void>;
+  register(api: OpenClawPluginApi): void;
 };
 
 export async function registerSingleProviderPlugin(params: {
-  register(api: OpenClawPluginApi): void | Promise<void>;
+  register(api: OpenClawPluginApi): void;
 }): Promise<ProviderPlugin> {
   const captured = createCapturedPluginRegistration();
-  await params.register(captured.api);
+  params.register(captured.api);
   const provider = captured.providers[0];
   if (!provider) {
     throw new Error("provider registration missing");
@@ -24,7 +24,7 @@ export async function registerProviderPlugins(
 ): Promise<ProviderPlugin[]> {
   const captured = createCapturedPluginRegistration();
   for (const plugin of plugins) {
-    await plugin.register(captured.api);
+    plugin.register(captured.api);
   }
   return captured.providers;
 }

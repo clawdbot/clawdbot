@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 export const PACKAGE_DIST_INVENTORY_RELATIVE_PATH = "dist/postinstall-inventory.json";
-const PACKAGED_QA_RUNTIME_PATHS = new Set(["dist/extensions/qa-channel/runtime-api.js"]);
+const PACKAGED_QA_RUNTIME_PATHS = new Set([
+  "dist/extensions/qa-channel/runtime-api.js",
+  "dist/extensions/qa-lab/runtime-api.js",
+]);
 const OMITTED_QA_EXTENSION_PREFIXES = [
   "dist/extensions/qa-channel/",
   "dist/extensions/qa-lab/",
@@ -20,7 +23,6 @@ const OMITTED_PRIVATE_QA_PLUGIN_SDK_FILES = new Set([
 const OMITTED_PRIVATE_QA_DIST_PREFIXES = ["dist/qa-runtime-"];
 const OMITTED_DIST_SUBTREE_PATTERNS = [
   /^dist\/extensions\/[^/]+\/node_modules(?:\/|$)/u,
-  /^dist\/extensions\/qa-lab(?:\/|$)/u,
   /^dist\/extensions\/qa-matrix(?:\/|$)/u,
   /^dist\/plugin-sdk\/extensions\/qa-lab(?:\/|$)/u,
 ] as const;

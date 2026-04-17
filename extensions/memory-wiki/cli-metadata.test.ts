@@ -51,7 +51,7 @@ describe("memory-wiki cli metadata entry", () => {
     const resolvedConfig = { vaultMode: "bridge", vault: { path: "/vault" } };
     mocks.resolveMemoryWikiConfig.mockReturnValue(resolvedConfig);
 
-    await plugin.register(api);
+    plugin.register(api);
 
     const register = registerCli.mock.calls[0]?.[0];
 

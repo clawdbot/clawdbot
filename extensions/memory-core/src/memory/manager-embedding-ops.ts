@@ -36,6 +36,7 @@ import {
 } from "./manager-embedding-policy.js";
 import { deleteMemoryFtsRows } from "./manager-fts-state.js";
 import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
+import { logMemoryVectorDegradedWrite } from "./manager-vector-warning.js";
 import { replaceMemoryVectorRow } from "./manager-vector-write.js";
 
 const VECTOR_TABLE = "chunks_vec";
@@ -568,12 +569,14 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           .run(chunk.text, id, entry.path, source, model, chunk.startLine, chunk.endLine);
       }
     }
-    if (this.vector.enabled && !vectorReady && chunks.length > 0) {
-      const errDetail = this.vector.loadError ? `: ${this.vector.loadError}` : "";
-      log.warn(
-        `chunks written for ${entry.path} without vector embeddings — chunks_vec not updated (sqlite-vec unavailable${errDetail}). Vector recall degraded for this file.`,
-      );
-    }
+    this.vectorDegradedWriteWarningShown = logMemoryVectorDegradedWrite({
+      vectorEnabled: this.vector.enabled,
+      vectorReady,
+      chunkCount: chunks.length,
+      warningShown: this.vectorDegradedWriteWarningShown,
+      loadError: this.vector.loadError,
+      warn: (message) => log.warn(message),
+    });
     this.upsertFileRecord(entry, source);
   }
 

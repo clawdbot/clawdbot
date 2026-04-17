@@ -1,10 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../runtime-api.js";
+import { describe, expect, it } from "vitest";
 import { resolveWebhooksPluginConfig } from "./config.js";
 
 describe("resolveWebhooksPluginConfig", () => {
-  it("resolves default paths and SecretRef-backed secrets", async () => {
-    const routes = await resolveWebhooksPluginConfig({
+  it("keeps SecretRef-backed secrets on the route config", () => {
+    const routes = resolveWebhooksPluginConfig({
       pluginConfig: {
         routes: {
           zapier: {
@@ -17,10 +16,6 @@ describe("resolveWebhooksPluginConfig", () => {
           },
         },
       },
-      cfg: {} as OpenClawConfig,
-      env: {
-        OPENCLAW_WEBHOOK_SECRET: "shared-secret",
-      },
     });
 
     expect(routes).toEqual([
@@ -28,16 +23,18 @@ describe("resolveWebhooksPluginConfig", () => {
         routeId: "zapier",
         path: "/plugins/webhooks/zapier",
         sessionKey: "agent:main:main",
-        secret: "shared-secret",
+        secret: {
+          source: "env",
+          provider: "default",
+          id: "OPENCLAW_WEBHOOK_SECRET",
+        },
         controllerId: "webhooks/zapier",
       },
     ]);
   });
 
-  it("skips routes whose secret cannot be resolved", async () => {
-    const warn = vi.fn();
-
-    const routes = await resolveWebhooksPluginConfig({
+  it("keeps routes whose secret needs runtime resolution", () => {
+    const routes = resolveWebhooksPluginConfig({
       pluginConfig: {
         routes: {
           missing: {
@@ -50,19 +47,25 @@ describe("resolveWebhooksPluginConfig", () => {
           },
         },
       },
-      cfg: {} as OpenClawConfig,
-      env: {},
-      logger: { warn } as never,
     });
 
-    expect(routes).toEqual([]);
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("[webhooks] skipping route missing:"),
-    );
+    expect(routes).toEqual([
+      {
+        routeId: "missing",
+        path: "/plugins/webhooks/missing",
+        sessionKey: "agent:main:main",
+        secret: {
+          source: "env",
+          provider: "default",
+          id: "MISSING_SECRET",
+        },
+        controllerId: "webhooks/missing",
+      },
+    ]);
   });
 
-  it("rejects duplicate normalized paths", async () => {
-    await expect(
+  it("rejects duplicate normalized paths", () => {
+    expect(() =>
       resolveWebhooksPluginConfig({
         pluginConfig: {
           routes: {
@@ -78,9 +81,7 @@ describe("resolveWebhooksPluginConfig", () => {
             },
           },
         },
-        cfg: {} as OpenClawConfig,
-        env: {},
       }),
-    ).rejects.toThrow(/conflicts with routes\.first\.path/i);
+    ).toThrow(/conflicts with routes\.first\.path/i);
   });
 });

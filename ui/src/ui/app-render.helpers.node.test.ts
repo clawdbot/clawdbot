@@ -34,6 +34,7 @@ import {
   isCronSessionKey,
   parseSessionKey,
   resolveAssistantAttachmentAuthToken,
+  resolveSessionOptionGroups,
   resolveSessionDisplayName,
   switchChatSession,
 } from "./app-render.helpers.ts";
@@ -44,6 +45,28 @@ type SessionRow = SessionsListResult["sessions"][number];
 
 function row(overrides: Partial<SessionRow> & { key: string }): SessionRow {
   return { kind: "direct", updatedAt: 0, ...overrides };
+}
+
+function labelsForSessionOptions(params: {
+  sessionKey: string;
+  sessions?: SessionRow[];
+  agentsList?: AppViewState["agentsList"];
+}) {
+  const groups = resolveSessionOptionGroups(
+    {
+      sessionsHideCron: true,
+      agentsList: params.agentsList ?? null,
+    } as AppViewState,
+    params.sessionKey,
+    {
+      ts: 0,
+      path: "",
+      count: params.sessions?.length ?? 0,
+      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+      sessions: params.sessions ?? [],
+    },
+  );
+  return groups.flatMap((group) => group.options.map((option) => option.label));
 }
 
 /* ================================================================
@@ -345,6 +368,94 @@ describe("isCronSessionKey", () => {
     expect(isCronSessionKey("main")).toBe(false);
     expect(isCronSessionKey("discord:group:eng")).toBe(false);
     expect(isCronSessionKey("agent:main:slack:cron:job:run:uuid")).toBe(false);
+  });
+});
+
+describe("resolveSessionOptionGroups", () => {
+  it("prefers grouped session labels over display names", () => {
+    const sessionKey = "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b";
+    const labels = labelsForSessionOptions({
+      sessionKey,
+      sessions: [
+        row({
+          key: sessionKey,
+          label: "cron-config-check",
+          displayName: "webchat:g-agent-main-subagent-4f2146de-887b-4176-9abe-91140082959b",
+        }),
+      ],
+    });
+
+    expect(labels).toContain("Subagent: cron-config-check");
+    expect(labels).not.toContain(sessionKey);
+    expect(labels).not.toContain(
+      "subagent:4f2146de-887b-4176-9abe-91140082959b · webchat:g-agent-main-subagent-4f2146de-887b-4176-9abe-91140082959b",
+    );
+  });
+
+  it("keeps scoped fallbacks for active grouped sessions without useful row metadata", () => {
+    const sessionKey = "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b";
+
+    expect(labelsForSessionOptions({ sessionKey })).toContain(
+      "subagent:4f2146de-887b-4176-9abe-91140082959b",
+    );
+    expect(
+      labelsForSessionOptions({
+        sessionKey,
+        sessions: [row({ key: sessionKey })],
+      }),
+    ).toContain("subagent:4f2146de-887b-4176-9abe-91140082959b");
+  });
+
+  it("disambiguates duplicate grouped labels with scoped suffixes", () => {
+    const labels = labelsForSessionOptions({
+      sessionKey: "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b",
+      sessions: [
+        row({
+          key: "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b",
+          label: "cron-config-check",
+        }),
+        row({
+          key: "agent:main:subagent:6fb8b84b-c31f-410f-b7df-1553c82e43c9",
+          label: "cron-config-check",
+        }),
+      ],
+    });
+
+    expect(labels).toContain(
+      "Subagent: cron-config-check · subagent:4f2146de-887b-4176-9abe-91140082959b",
+    );
+    expect(labels).toContain(
+      "Subagent: cron-config-check · subagent:6fb8b84b-c31f-410f-b7df-1553c82e43c9",
+    );
+    expect(labels).not.toContain("Subagent: cron-config-check");
+  });
+
+  it("uses agent group labels to keep duplicate main sessions unique", () => {
+    const labels = labelsForSessionOptions({
+      sessionKey: "agent:alpha:main",
+      agentsList: {
+        defaultId: "alpha",
+        mainKey: "agent:alpha:main",
+        scope: "all",
+        agents: [
+          { id: "alpha", name: "Deep Chat" },
+          { id: "beta", name: "Coding" },
+        ],
+      },
+      sessions: [
+        row({ key: "agent:alpha:main" }),
+        row({ key: "agent:beta:main" }),
+        row({
+          key: "agent:alpha:named-main",
+          label: "Deep Chat (alpha) / main",
+        }),
+      ],
+    });
+
+    expect(labels.filter((label) => label === "Deep Chat (alpha) / main")).toHaveLength(1);
+    expect(labels).toContain("Deep Chat (alpha) / main · named-main");
+    expect(labels).toContain("Coding (beta) / main");
+    expect(labels).not.toContain("main");
   });
 });
 

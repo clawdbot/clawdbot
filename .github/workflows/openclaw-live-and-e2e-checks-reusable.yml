@@ -211,6 +211,9 @@ jobs:
           install-bun: "true"
           use-sticky-disk: "false"
 
+      - name: Build dist for repo E2E
+        run: pnpm build
+
       - name: Run repo E2E suite
         run: pnpm test:e2e
 
@@ -252,6 +255,12 @@ jobs:
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
           use-sticky-disk: "false"
+
+      - name: Build dist for special E2E
+        if: |
+          (inputs.include_repo_e2e && matrix.requires_repo_e2e) ||
+          (inputs.include_live_suites && matrix.requires_live_suites)
+        run: pnpm build
 
       - name: Configure suite-specific env
         shell: bash
@@ -457,12 +466,12 @@ jobs:
             label: Docker live models
             command: pnpm test:docker:live-models
             timeout_minutes: 120
-            profile_env_only: true
+            profile_env_only: false
           - suite_id: live-gateway-docker
             label: Docker live gateway
             command: pnpm test:docker:live-gateway
             timeout_minutes: 120
-            profile_env_only: true
+            profile_env_only: false
           - suite_id: live-cli-backend-docker
             label: Docker live CLI backend
             command: pnpm test:docker:live-cli-backend

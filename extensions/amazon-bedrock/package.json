@@ -1,11 +1,13 @@
 {
   "name": "@openclaw/amazon-bedrock-provider",
-  "version": "2026.4.15-beta.1",
+  "version": "2026.4.16",
   "private": true,
   "description": "OpenClaw Amazon Bedrock provider plugin",
   "type": "module",
   "dependencies": {
-    "@aws-sdk/client-bedrock": "3.1028.0"
+    "@aws-sdk/client-bedrock": "3.1028.0",
+    "@aws-sdk/client-bedrock-runtime": "3.1028.0",
+    "@aws-sdk/credential-provider-node": "3.972.30"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

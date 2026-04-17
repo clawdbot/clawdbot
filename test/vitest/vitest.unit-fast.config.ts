@@ -1,7 +1,7 @@
 import { defineConfig } from "vitest/config";
 import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pattern-file.ts";
 import { sharedVitestConfig } from "./vitest.shared.config.ts";
-import { unitFastTestFiles } from "./vitest.unit-fast-paths.mjs";
+import { getUnitFastTestFiles } from "./vitest.unit-fast-paths.mjs";
 
 export function createUnitFastVitestConfig(
   env: Record<string, string | undefined> = process.env,
@@ -9,6 +9,7 @@ export function createUnitFastVitestConfig(
 ) {
   const sharedTest = sharedVitestConfig.test ?? {};
   const includeFromEnv = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
+  const unitFastTestFiles = getUnitFastTestFiles();
   const cliInclude = narrowIncludePatternsForCli(unitFastTestFiles, options.argv);
 
   return defineConfig({

@@ -12,12 +12,13 @@ import type {
   QaLabServerStartParams,
 } from "./lab-server.types.js";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
-import { startQaMockOpenAiServer } from "./mock-openai-server.js";
 import {
   isQaFastModeEnabled,
   normalizeQaProviderMode,
   type QaProviderMode,
 } from "./model-selection.js";
+import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "./providers/index.js";
+import { startQaProviderServer } from "./providers/server-runtime.js";
 import type { QaThinkingLevel } from "./qa-gateway-config.js";
 import {
   createQaTransportAdapter,
@@ -69,7 +70,7 @@ export type QaSuiteStartLabFn = (params?: QaLabServerStartParams) => Promise<QaL
 export type QaSuiteRunParams = {
   repoRoot?: string;
   outputDir?: string;
-  providerMode?: QaProviderMode | "live-openai";
+  providerMode?: QaProviderMode;
   transportId?: QaTransportId;
   primaryModel?: string;
   alternateModel?: string;
@@ -195,7 +196,7 @@ async function runScenarioDefinition(
 
 function createQaSuiteReportNotes(params: {
   transport: QaTransportAdapter;
-  providerMode: "mock-openai" | "live-frontier";
+  providerMode: QaProviderMode;
   primaryModel: string;
   alternateModel: string;
   fastMode: boolean;
@@ -331,7 +332,9 @@ async function writeQaSuiteArtifacts(params: {
 export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResult> {
   const startedAt = new Date();
   const repoRoot = path.resolve(params?.repoRoot ?? process.cwd());
-  const providerMode = normalizeQaProviderMode(params?.providerMode ?? "live-frontier");
+  const providerMode = normalizeQaProviderMode(
+    params?.providerMode ?? DEFAULT_QA_LIVE_PROVIDER_MODE,
+  );
   const transportId = normalizeQaTransportId(params?.transportId);
   const primaryModel = params?.primaryModel ?? defaultQaModelForMode(providerMode);
   const alternateModel = params?.alternateModel ?? defaultQaModelForMode(providerMode, true);
@@ -538,13 +541,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     id: transportId,
     state: lab.state,
   });
-  const mock =
-    providerMode === "mock-openai"
-      ? await startQaMockOpenAiServer({
-          host: "127.0.0.1",
-          port: 0,
-        })
-      : null;
+  const mock = await startQaProviderServer(providerMode);
   const gateway = await startQaGatewayChild({
     repoRoot,
     providerBaseUrl: mock ? `${mock.baseUrl}/v1` : undefined,

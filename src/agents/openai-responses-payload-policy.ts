@@ -1,4 +1,5 @@
 import { readStringValue } from "../shared/string-coerce.js";
+import { isOpenAIResponsesApi } from "./provider-attribution.js";
 import { resolveProviderRequestPolicyConfig } from "./provider-request-config.js";
 
 type OpenAIResponsesPayloadModel = {
@@ -25,12 +26,6 @@ export type OpenAIResponsesPayloadPolicy = {
   shouldStripStore: boolean;
   useServerCompaction: boolean;
 };
-
-const OPENAI_RESPONSES_APIS = new Set([
-  "openai-responses",
-  "azure-openai-responses",
-  "openai-codex-responses",
-]);
 
 function parsePositiveInteger(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value) && value > 0) {
@@ -112,7 +107,7 @@ export function resolveOpenAIResponsesPayloadPolicy(
         : capabilities.allowsResponsesStore
           ? true
           : undefined;
-  const isResponsesApi = typeof model.api === "string" && OPENAI_RESPONSES_APIS.has(model.api);
+  const isResponsesApi = isOpenAIResponsesApi(readStringValue(model.api));
 
   return {
     allowsServiceTier: capabilities.allowsOpenAIServiceTier,

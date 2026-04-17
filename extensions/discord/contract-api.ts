@@ -1,4 +1,5 @@
 export { createThreadBindingManager } from "./src/monitor/thread-bindings.manager.js";
+export { __testing as discordThreadBindingTesting } from "./src/monitor/thread-bindings.manager.js";
 export {
   listDiscordDirectoryGroupsFromConfig,
   listDiscordDirectoryPeersFromConfig,

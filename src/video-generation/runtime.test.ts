@@ -757,12 +757,10 @@ describe("video-generation runtime", () => {
     ]);
     mocks.getProviderEnvVars.mockReturnValue(["MOTION_ONE_API_KEY"]);
 
-    const promise = generateVideo({ cfg: {} as OpenClawConfig, prompt: "animate a cat" });
-
-    await expect(promise).rejects.toThrow("No video-generation model configured.");
-    await expect(promise).rejects.toThrow(
-      'Set agents.defaults.videoGenerationModel.primary to a provider/model like "motion-one/animate-v1".',
+    await expect(
+      generateVideo({ cfg: {} as OpenClawConfig, prompt: "animate a cat" }),
+    ).rejects.toThrow(
+      'No video-generation model configured. Set agents.defaults.videoGenerationModel.primary to a provider/model like "motion-one/animate-v1". If you want a specific provider, also configure that provider\'s auth/API key first (motion-one: MOTION_ONE_API_KEY).',
     );
-    await expect(promise).rejects.toThrow("motion-one: MOTION_ONE_API_KEY");
   });
 });

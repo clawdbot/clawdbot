@@ -81,6 +81,12 @@ describe("listThinkingLevels", () => {
     expect(listThinkingLevels("demo", "demo-model")).toContain("xhigh");
   });
 
+  it("uses provider runtime hooks for xhigh labels", () => {
+    providerRuntimeMocks.resolveProviderXHighThinking.mockReturnValue(true);
+
+    expect(listThinkingLevelLabels("demo", "demo-model")).toContain("xhigh");
+  });
+
   it("includes xhigh for provider-advertised models", () => {
     providerRuntimeMocks.resolveProviderXHighThinking.mockImplementation(({ provider, context }) =>
       (provider === "openai" && ["gpt-5.4", "gpt-5.4", "gpt-5.4-pro"].includes(context.modelId)) ||

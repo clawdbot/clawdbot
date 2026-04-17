@@ -25,6 +25,10 @@ const manifestRegistryMocks = vi.hoisted(() => ({
   loadPluginManifestRegistry: vi.fn(() => ({ plugins: [], diagnostics: [] })),
 }));
 
+const discoveryMocks = vi.hoisted(() => ({
+  isCatalogChannelInstalled: vi.fn(() => false),
+}));
+
 vi.mock("../channels/plugins/catalog.js", async () => {
   const actual = await vi.importActual<typeof import("../channels/plugins/catalog.js")>(
     "../channels/plugins/catalog.js",
@@ -42,6 +46,20 @@ vi.mock("../plugins/manifest-registry.js", async () => {
   return {
     ...actual,
     loadPluginManifestRegistry: manifestRegistryMocks.loadPluginManifestRegistry,
+  };
+});
+
+vi.mock("./channel-setup/discovery.js", () => ({
+  isCatalogChannelInstalled: discoveryMocks.isCatalogChannelInstalled,
+}));
+
+vi.mock("../channels/plugins/bundled.js", async () => {
+  const actual = await vi.importActual<typeof import("../channels/plugins/bundled.js")>(
+    "../channels/plugins/bundled.js",
+  );
+  return {
+    ...actual,
+    getBundledChannelPlugin: vi.fn(() => undefined),
   };
 });
 
@@ -250,6 +268,8 @@ describe("channelsAddCommand", () => {
       plugins: [],
       diagnostics: [],
     });
+    discoveryMocks.isCatalogChannelInstalled.mockClear();
+    discoveryMocks.isCatalogChannelInstalled.mockReturnValue(false);
     vi.mocked(ensureChannelSetupPluginInstalled).mockClear();
     vi.mocked(ensureChannelSetupPluginInstalled).mockImplementation(async ({ cfg }) => ({
       cfg,
@@ -321,13 +341,13 @@ describe("channelsAddCommand", () => {
     expect(ensureChannelSetupPluginInstalled).toHaveBeenCalledWith(
       expect.objectContaining({ entry: catalogEntry }),
     );
-    expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(1);
     expect(configMocks.writeConfigFile).toHaveBeenCalledWith(
       expect.objectContaining({
         channels: {
-          msteams: {
+          msteams: expect.objectContaining({
             enabled: true,
-          },
+          }),
         },
       }),
     );
@@ -349,6 +369,7 @@ describe("channelsAddCommand", () => {
       ],
       diagnostics: [],
     });
+    discoveryMocks.isCatalogChannelInstalled.mockReturnValue(true);
     registerMSTeamsSetupPlugin("msteams");
 
     await channelsAddCommand(
@@ -362,13 +383,13 @@ describe("channelsAddCommand", () => {
     );
 
     expect(ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
-    expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(1);
     expect(configMocks.writeConfigFile).toHaveBeenCalledWith(
       expect.objectContaining({
         channels: {
-          msteams: {
+          msteams: expect.objectContaining({
             enabled: true,
-          },
+          }),
         },
       }),
     );
@@ -435,13 +456,13 @@ describe("channelsAddCommand", () => {
       { hasFlags: true },
     );
 
-    expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(1);
     expect(configMocks.writeConfigFile).toHaveBeenCalledWith(
       expect.objectContaining({
         channels: {
-          msteams: {
+          msteams: expect.objectContaining({
             enabled: true,
-          },
+          }),
         },
       }),
     );

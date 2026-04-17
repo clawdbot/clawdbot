@@ -6,6 +6,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { z } from "zod";
 import { startQaGatewayChild } from "../../gateway-child.js";
+import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "../../providers/index.js";
 import {
   defaultQaModelForMode,
   normalizeQaProviderMode,
@@ -858,7 +859,9 @@ export async function runTelegramQaLive(params: {
   };
 
   const runtimeEnv = credentialLease.payload;
-  const providerMode = normalizeQaProviderMode(params.providerMode ?? "live-frontier");
+  const providerMode = normalizeQaProviderMode(
+    params.providerMode ?? DEFAULT_QA_LIVE_PROVIDER_MODE,
+  );
   const primaryModel = params.primaryModel?.trim() || defaultQaModelForMode(providerMode);
   const alternateModel = params.alternateModel?.trim() || defaultQaModelForMode(providerMode, true);
   const sutAccountId = params.sutAccountId?.trim() || "sut";

@@ -39,6 +39,34 @@ describe("chat-model-select-state", () => {
     expect(resolveChatModelOverrideValue(state)).toBe("openai/gpt-5-mini");
   });
 
+  it("normalizes cached bare overrides to the matching catalog option", () => {
+    const state = {
+      sessionKey: "main",
+      chatModelOverrides: { main: { kind: "raw", value: "gpt-5-mini" } },
+      chatModelCatalog: createModelCatalog(...DEFAULT_CHAT_MODEL_CATALOG),
+      sessionsResult: createSessionsListResult({ model: null, modelProvider: null }),
+    } as const;
+
+    const resolved = resolveChatModelSelectState(state);
+    expect(resolved.currentOverride).toBe("openai/gpt-5-mini");
+    expect(resolved.options.map((option) => option.value)).toContain("openai/gpt-5-mini");
+    expect(resolved.options.map((option) => option.value)).not.toContain("gpt-5-mini");
+  });
+
+  it("prefers catalog provider matches over stale session providers", () => {
+    const state = {
+      sessionKey: "main",
+      chatModelOverrides: {},
+      chatModelCatalog: createModelCatalog(DEEPSEEK_CHAT_MODEL),
+      sessionsResult: createSessionsListResult({
+        model: "deepseek-chat",
+        modelProvider: "zai",
+      }),
+    };
+
+    expect(resolveChatModelSelectState(state).currentOverride).toBe("deepseek/deepseek-chat");
+  });
+
   it("preserves already-qualified active-session models when the provider is stale and the catalog is empty", () => {
     const state = {
       sessionKey: "main",

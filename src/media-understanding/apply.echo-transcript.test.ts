@@ -51,7 +51,6 @@ const { MediaFetchErrorMock } = vi.hoisted(() => {
 // ---------------------------------------------------------------------------
 
 let applyMediaUnderstanding: typeof import("./apply.js").applyMediaUnderstanding;
-let clearMediaUnderstandingBinaryCacheForTests: () => void;
 
 const TEMP_MEDIA_PREFIX = "openclaw-echo-transcript-test-";
 let suiteTempMediaRootDir = "";
@@ -211,8 +210,6 @@ describe("applyMediaUnderstanding – echo transcript", () => {
     suiteTempMediaRootDir = await fs.mkdtemp(path.join(baseDir, TEMP_MEDIA_PREFIX));
     const mod = await import("./apply.js");
     applyMediaUnderstanding = mod.applyMediaUnderstanding;
-    const runner = await import("./runner.js");
-    clearMediaUnderstandingBinaryCacheForTests = runner.clearMediaUnderstandingBinaryCacheForTests;
   });
 
   beforeEach(() => {
@@ -224,7 +221,6 @@ describe("applyMediaUnderstanding – echo transcript", () => {
     runCommandWithTimeoutMock.mockReset();
     mockDeliverOutboundPayloads.mockClear();
     mockDeliverOutboundPayloads.mockResolvedValue([{ channel: "whatsapp", messageId: "echo-1" }]);
-    clearMediaUnderstandingBinaryCacheForTests?.();
   });
 
   afterAll(async () => {

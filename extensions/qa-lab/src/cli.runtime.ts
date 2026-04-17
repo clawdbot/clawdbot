@@ -14,8 +14,13 @@ import { runQaDockerUp } from "./docker-up.runtime.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import { startQaLabServer } from "./lab-server.js";
 import { runQaManualLane } from "./manual-lane.runtime.js";
-import { startQaMockOpenAiServer } from "./mock-openai-server.js";
 import { runQaMultipass } from "./multipass.runtime.js";
+import { DEFAULT_QA_LIVE_PROVIDER_MODE, getQaProvider } from "./providers/index.js";
+import {
+  QA_FRONTIER_PARITY_BASELINE_LABEL,
+  QA_FRONTIER_PARITY_CANDIDATE_LABEL,
+} from "./providers/live-frontier/parity.js";
+import { startQaProviderServer } from "./providers/server-runtime.js";
 import {
   addQaCredentialSet,
   listQaCredentialSets,
@@ -419,8 +424,8 @@ export async function runQaParityReportCommand(opts: {
   ) as QaParitySuiteSummary;
 
   const comparison = buildQaAgenticParityComparison({
-    candidateLabel: opts.candidateLabel?.trim() || "openai/gpt-5.4",
-    baselineLabel: opts.baselineLabel?.trim() || "anthropic/claude-opus-4-6",
+    candidateLabel: opts.candidateLabel?.trim() || QA_FRONTIER_PARITY_CANDIDATE_LABEL,
+    baselineLabel: opts.baselineLabel?.trim() || QA_FRONTIER_PARITY_BASELINE_LABEL,
     candidateSummary,
     baselineSummary,
   });
@@ -488,7 +493,9 @@ export async function runQaManualLaneCommand(opts: {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const transportId = normalizeQaTransportId(opts.transportId);
   const providerMode: QaProviderMode =
-    opts.providerMode === undefined ? "live-frontier" : normalizeQaProviderMode(opts.providerMode);
+    opts.providerMode === undefined
+      ? DEFAULT_QA_LIVE_PROVIDER_MODE
+      : normalizeQaProviderMode(opts.providerMode);
   const models = resolveQaManualLaneModels({
     providerMode,
     primaryModel: opts.primaryModel,
@@ -748,12 +755,23 @@ export async function runQaDockerUpCommand(opts: {
   process.stdout.write(`Stop: ${result.stopCommand}\n`);
 }
 
-export async function runQaMockOpenAiCommand(opts: { host?: string; port?: number }) {
-  const server = await startQaMockOpenAiServer({
+export async function runQaProviderServerCommand(
+  providerMode: QaProviderMode,
+  opts: { host?: string; port?: number },
+) {
+  const provider = getQaProvider(providerMode);
+  const standaloneCommand = provider.standaloneCommand;
+  if (!standaloneCommand) {
+    throw new Error(`QA provider "${providerMode}" does not expose a standalone server command.`);
+  }
+  const server = await startQaProviderServer(providerMode, {
     host: opts.host,
     port: Number.isFinite(opts.port) ? opts.port : undefined,
   });
-  await runInterruptibleServer("QA mock OpenAI", server);
+  if (!server) {
+    throw new Error(`QA provider "${providerMode}" does not expose a standalone server command.`);
+  }
+  await runInterruptibleServer(standaloneCommand.serverLabel, server);
 }
 
 export const __testing = {

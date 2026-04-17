@@ -6,7 +6,10 @@ import {
 import type { AgentHarness } from "../agents/harness/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-import { registerContextEngineForOwner } from "../context-engine/registry.js";
+import {
+  clearContextEnginesForOwner,
+  registerContextEngineForOwner,
+} from "../context-engine/registry.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
@@ -23,13 +26,17 @@ import { resolveUserPath } from "../utils.js";
 import { buildPluginApi } from "./api-builder.js";
 import { normalizeRegisteredChannelPlugin } from "./channel-validation.js";
 import { registerPluginCommand, validatePluginCommandDefinition } from "./command-registration.js";
+import { clearPluginCommandsForPlugin } from "./command-registry-state.js";
 import {
   getRegisteredCompactionProvider,
   registerCompactionProvider,
 } from "./compaction-provider.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
-import { registerPluginInteractiveHandler } from "./interactive-registry.js";
+import {
+  clearPluginInteractiveHandlersForPlugin,
+  registerPluginInteractiveHandler,
+} from "./interactive-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import {
   getRegisteredMemoryEmbeddingProvider,
@@ -173,9 +180,13 @@ const activePluginHookRegistrations = resolveGlobalSingleton<
   Map<string, Array<{ event: string; handler: Parameters<typeof registerInternalHook>[1] }>>
 >(ACTIVE_PLUGIN_HOOK_REGISTRATIONS_KEY, () => new Map());
 
+type HookRegistration = { event: string; handler: Parameters<typeof registerInternalHook>[1] };
+type HookRollbackEntry = { name: string; previousRegistrations: HookRegistration[] };
+
 export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const registry = createEmptyPluginRegistry();
   const coreGatewayMethods = new Set(Object.keys(registryParams.coreGatewayHandlers ?? {}));
+  const pluginHookRollback = new Map<string, HookRollbackEntry[]>();
 
   const pushDiagnostic = (diag: PluginDiagnostic) => {
     registry.diagnostics.push(diag);
@@ -303,6 +314,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       nextRegistrations.push({ event, handler });
     }
     activePluginHookRegistrations.set(name, nextRegistrations);
+    const rollbackEntries = pluginHookRollback.get(record.id) ?? [];
+    rollbackEntries.push({
+      name,
+      previousRegistrations: [...previousRegistrations],
+    });
+    pluginHookRollback.set(record.id, rollbackEntries);
   };
 
   const registerGatewayMethod = (
@@ -1413,9 +1430,39 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const rollbackPluginGlobalSideEffects = (pluginId: string) => {
+    if (registryParams.activateGlobalSideEffects === false) {
+      return;
+    }
+
+    clearPluginCommandsForPlugin(pluginId);
+    clearPluginInteractiveHandlersForPlugin(pluginId);
+    clearContextEnginesForOwner(`plugin:${pluginId}`);
+
+    const hookRollbackEntries = pluginHookRollback.get(pluginId) ?? [];
+    for (const entry of hookRollbackEntries.toReversed()) {
+      const activeRegistrations = activePluginHookRegistrations.get(entry.name) ?? [];
+      for (const registration of activeRegistrations) {
+        unregisterInternalHook(registration.event, registration.handler);
+      }
+
+      if (entry.previousRegistrations.length === 0) {
+        activePluginHookRegistrations.delete(entry.name);
+        continue;
+      }
+
+      for (const registration of entry.previousRegistrations) {
+        registerInternalHook(registration.event, registration.handler);
+      }
+      activePluginHookRegistrations.set(entry.name, [...entry.previousRegistrations]);
+    }
+    pluginHookRollback.delete(pluginId);
+  };
+
   return {
     registry,
     createApi,
+    rollbackPluginGlobalSideEffects,
     pushDiagnostic,
     registerTool,
     registerChannel,

@@ -465,6 +465,7 @@ export async function compactEmbeddedPiSessionDirect(
       sessionId: params.sessionId,
       warn: makeBootstrapWarn({
         sessionLabel,
+        workspaceDir: effectiveWorkspace,
         warn: (message) => log.warn(message),
       }),
     });

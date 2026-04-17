@@ -98,6 +98,7 @@ export function resolveMatrixRoomKeyBackupIssue(
 export function resolveMatrixRoomKeyBackupReadinessError(
   backup: MatrixRoomKeyBackupStatusLike,
   opts: {
+    allowUntrustedMatchingKey?: boolean;
     requireServerBackup: boolean;
   },
 ): string | null {
@@ -106,6 +107,14 @@ export function resolveMatrixRoomKeyBackupReadinessError(
     return opts.requireServerBackup ? "Matrix room key backup is missing on the homeserver." : null;
   }
   if (issue.code === "ok") {
+    return null;
+  }
+  if (
+    issue.code === "untrusted-signature" &&
+    opts.allowUntrustedMatchingKey === true &&
+    backup.matchesDecryptionKey === true &&
+    backup.decryptionKeyCached === true
+  ) {
     return null;
   }
   if (issue.message) {

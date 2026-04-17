@@ -21,6 +21,9 @@
       "groupHint": "Self-hosted open-weight models"
     }
   ],
+  "contracts": {
+    "memoryEmbeddingProviders": ["lmstudio"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

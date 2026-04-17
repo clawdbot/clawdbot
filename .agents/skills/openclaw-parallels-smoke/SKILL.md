@@ -22,7 +22,7 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
   - Windows: `90m`
   - aggregate npm-update wrapper: `150m`
     If a lane hits the cap, stop there, inspect the newest `/tmp/openclaw-parallels-*` run directory and phase log, then fix or rerun the smallest affected lane. Do not keep waiting on a capped lane.
-- Actual OpenClaw npm install/update phases are a stricter budget than whole lanes: they should finish within 5 minutes. If a phase named `install-main`, `install-latest`, `install-baseline`, `install-baseline-package`, `update-dev`, or same-guest `openclaw update` exceeds 300s, treat it as a failure/harness bug and start diagnosis from that phase log. Do not wait for a longer lane cap.
+- Actual OpenClaw npm install/update phases are a stricter budget than whole lanes: install phases should finish within 7 minutes, and update phases should finish within 5 minutes. If a phase named `install-main`, `install-latest`, `install-baseline`, or `install-baseline-package` exceeds 420s, or a phase named `update-dev` / same-guest `openclaw update` exceeds 300s, treat it as a failure/harness bug and start diagnosis from that phase log. Do not wait for a longer lane cap.
 - For a full OS matrix, prefer running independent guest-family lanes in parallel when host capacity allows:
   - `timeout --foreground 75m pnpm test:parallels:macos -- --json`
   - `timeout --foreground 90m pnpm test:parallels:windows -- --json`

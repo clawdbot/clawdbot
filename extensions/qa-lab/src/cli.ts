@@ -1,7 +1,16 @@
 import type { Command } from "commander";
 import { collectString } from "./cli-options.js";
 import { listLiveTransportQaCliRegistrations } from "./live-transports/cli.js";
-import type { QaProviderModeInput } from "./run-config.js";
+import {
+  DEFAULT_QA_LIVE_PROVIDER_MODE,
+  formatQaProviderModeHelp,
+  listQaStandaloneProviderCommands,
+} from "./providers/index.js";
+import {
+  QA_FRONTIER_PARITY_BASELINE_LABEL,
+  QA_FRONTIER_PARITY_CANDIDATE_LABEL,
+} from "./providers/live-frontier/parity.js";
+import type { QaProviderMode, QaProviderModeInput } from "./run-config.js";
 import { hasQaScenarioPack } from "./scenario-catalog.js";
 
 type QaLabCliRuntime = typeof import("./cli.runtime.js");
@@ -174,9 +183,12 @@ async function runQaDockerUp(opts: {
   await runtime.runQaDockerUpCommand(opts);
 }
 
-async function runQaMockOpenAi(opts: { host?: string; port?: number }) {
+async function runQaProviderServer(
+  providerMode: QaProviderMode,
+  opts: { host?: string; port?: number },
+) {
   const runtime = await loadQaLabCliRuntime();
-  await runtime.runQaMockOpenAiCommand(opts);
+  await runtime.runQaProviderServerCommand(providerMode, opts);
 }
 
 export function isQaLabCliAvailable(): boolean {
@@ -208,11 +220,7 @@ export function registerQaLabCli(program: Command) {
     .option("--output-dir <path>", "Suite artifact directory")
     .option("--runner <kind>", "Execution runner: host or multipass", "host")
     .option("--transport <id>", "QA transport id", "qa-channel")
-    .option(
-      "--provider-mode <mode>",
-      "Provider mode: mock-openai or live-frontier (legacy live-openai still works)",
-      "live-frontier",
-    )
+    .option("--provider-mode <mode>", formatQaProviderModeHelp(), DEFAULT_QA_LIVE_PROVIDER_MODE)
     .option("--model <ref>", "Primary provider/model ref")
     .option("--alt-model <ref>", "Alternate provider/model ref")
     .option(
@@ -274,8 +282,12 @@ export function registerQaLabCli(program: Command) {
     .requiredOption("--candidate-summary <path>", "Candidate qa-suite-summary.json path")
     .requiredOption("--baseline-summary <path>", "Baseline qa-suite-summary.json path")
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
-    .option("--candidate-label <label>", "Candidate display label", "openai/gpt-5.4")
-    .option("--baseline-label <label>", "Baseline display label", "anthropic/claude-opus-4-6")
+    .option(
+      "--candidate-label <label>",
+      "Candidate display label",
+      QA_FRONTIER_PARITY_CANDIDATE_LABEL,
+    )
+    .option("--baseline-label <label>", "Baseline display label", QA_FRONTIER_PARITY_BASELINE_LABEL)
     .option("--output-dir <path>", "Artifact directory for the parity report")
     .action(
       async (opts: {
@@ -355,11 +367,7 @@ export function registerQaLabCli(program: Command) {
     .requiredOption("--message <text>", "Prompt to send to the QA agent")
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option("--transport <id>", "QA transport id", "qa-channel")
-    .option(
-      "--provider-mode <mode>",
-      "Provider mode: mock-openai or live-frontier (legacy live-openai still works)",
-      "live-frontier",
-    )
+    .option("--provider-mode <mode>", formatQaProviderModeHelp(), DEFAULT_QA_LIVE_PROVIDER_MODE)
     .option("--model <ref>", "Primary provider/model ref (defaults by provider mode)")
     .option("--alt-model <ref>", "Alternate provider/model ref")
     .option("--fast", "Enable provider fast mode where supported", false)
@@ -574,13 +582,15 @@ export function registerQaLabCli(program: Command) {
       },
     );
 
-  qa.command("mock-openai")
-    .description("Run the local mock OpenAI Responses API server for QA")
-    .option("--host <host>", "Bind host", "127.0.0.1")
-    .option("--port <port>", "Bind port", (value: string) => Number(value))
-    .action(async (opts: { host?: string; port?: number }) => {
-      await runQaMockOpenAi(opts);
-    });
+  for (const providerCommand of listQaStandaloneProviderCommands()) {
+    qa.command(providerCommand.name)
+      .description(providerCommand.description)
+      .option("--host <host>", "Bind host", "127.0.0.1")
+      .option("--port <port>", "Bind port", (value: string) => Number(value))
+      .action(async (opts: { host?: string; port?: number }) => {
+        await runQaProviderServer(providerCommand.providerMode, opts);
+      });
+  }
 
   for (const lane of listLiveTransportQaCliRegistrations()) {
     assertNoQaSubcommandCollision(qa, lane.commandName);

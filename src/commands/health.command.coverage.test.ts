@@ -23,6 +23,10 @@ vi.mock("../gateway/call.js", () => ({
     Reflect.apply(buildGatewayConnectionDetailsMock, undefined, args),
 }));
 
+vi.mock("../config/config.js", () => ({
+  readBestEffortConfig: vi.fn(async () => ({})),
+}));
+
 vi.mock("../channels/plugins/index.js", () => {
   const whatsappPlugin = {
     id: "whatsapp",

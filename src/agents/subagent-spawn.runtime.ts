@@ -10,7 +10,12 @@ export {
 } from "../gateway/session-utils.js";
 export { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 export { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
-export { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+export {
+  mergeDeliveryContext,
+  normalizeDeliveryContext,
+} from "../utils/delivery-context.shared.js";
+export { resolveConversationDeliveryTarget } from "../utils/delivery-context.js";
+export { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 export { resolveAgentConfig } from "./agent-scope.js";
 export { AGENT_LANE_SUBAGENT } from "./lanes.js";
 export { resolveSubagentSpawnModelSelection } from "./model-selection.js";

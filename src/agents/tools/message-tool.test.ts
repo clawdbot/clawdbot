@@ -337,7 +337,6 @@ describe("message tool agent routing", () => {
 describe("message tool explicit target guard", () => {
   it("requires an explicit target for upload-file when configured", async () => {
     const tool = createMessageTool({
-      config: {} as never,
       runMessageAction: mocks.runMessageAction as never,
       requireExplicitTarget: true,
       currentChannelProvider: "slack",
@@ -365,7 +364,6 @@ describe("message tool explicit target guard", () => {
     });
 
     const tool = createMessageTool({
-      config: {} as never,
       runMessageAction: mocks.runMessageAction as never,
       requireExplicitTarget: true,
       currentChannelProvider: "slack",

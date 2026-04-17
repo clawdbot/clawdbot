@@ -93,12 +93,16 @@ jobs:
 
       - name: Capture selected inputs
         id: inputs
+        env:
+          RELEASE_REF_INPUT: ${{ inputs.ref }}
+          RELEASE_PROVIDER_INPUT: ${{ inputs.provider }}
+          RELEASE_MODE_INPUT: ${{ inputs.mode }}
         run: |
           set -euo pipefail
           {
-            echo "ref=${{ inputs.ref }}"
-            echo "provider=${{ inputs.provider }}"
-            echo "mode=${{ inputs.mode }}"
+            printf 'ref=%s\n' "$RELEASE_REF_INPUT"
+            printf 'provider=%s\n' "$RELEASE_PROVIDER_INPUT"
+            printf 'mode=%s\n' "$RELEASE_MODE_INPUT"
           } >> "$GITHUB_OUTPUT"
 
       - name: Summarize validated ref
@@ -120,8 +124,7 @@ jobs:
 
   cross_os_release_checks:
     needs: [resolve_target]
-    permissions:
-      contents: read
+    permissions: read-all
     uses: ./.github/workflows/openclaw-cross-os-release-checks-reusable.yml
     with:
       ref: ${{ needs.resolve_target.outputs.ref }}

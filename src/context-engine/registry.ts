@@ -396,6 +396,16 @@ export function listContextEngineIds(): string[] {
   return [...getContextEngineRegistryState().engines.keys()];
 }
 
+export function clearContextEnginesForOwner(owner: string): void {
+  const normalizedOwner = requireContextEngineOwner(owner);
+  const registry = getContextEngineRegistryState().engines;
+  for (const [id, entry] of registry.entries()) {
+    if (entry.owner === normalizedOwner) {
+      registry.delete(id);
+    }
+  }
+}
+
 function describeResolvedContextEngineContractError(
   engineId: string,
   engine: unknown,

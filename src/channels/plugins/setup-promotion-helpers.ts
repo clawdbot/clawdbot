@@ -67,19 +67,22 @@ function getChannelSetupPromotionSurface(channelKey: string): ChannelSetupPromot
   return setup as ChannelSetupPromotionSurface;
 }
 
+function isStaticSingleAccountPromotionKey(channelKey: string, key: string): boolean {
+  if (COMMON_SINGLE_ACCOUNT_KEYS_TO_MOVE.has(key)) {
+    return true;
+  }
+  return BUNDLED_SINGLE_ACCOUNT_PROMOTION_FALLBACKS[channelKey]?.includes(key) ?? false;
+}
+
 export function shouldMoveSingleAccountChannelKey(params: {
   channelKey: string;
   key: string;
 }): boolean {
-  if (COMMON_SINGLE_ACCOUNT_KEYS_TO_MOVE.has(params.key)) {
+  if (isStaticSingleAccountPromotionKey(params.channelKey, params.key)) {
     return true;
   }
   const contractKeys = getChannelSetupPromotionSurface(params.channelKey)?.singleAccountKeysToMove;
   if (contractKeys?.includes(params.key)) {
-    return true;
-  }
-  const fallbackKeys = BUNDLED_SINGLE_ACCOUNT_PROMOTION_FALLBACKS[params.channelKey];
-  if (fallbackKeys?.includes(params.key)) {
     return true;
   }
   return false;
@@ -92,27 +95,36 @@ export function resolveSingleAccountKeysToMove(params: {
   const hasNamedAccounts =
     Object.keys((params.channel.accounts as Record<string, unknown>) ?? {}).filter(Boolean).length >
     0;
-  const namedAccountPromotionKeys =
-    getChannelSetupPromotionSurface(params.channelKey)?.namedAccountPromotionKeys ??
-    BUNDLED_NAMED_ACCOUNT_PROMOTION_FALLBACKS[params.channelKey];
-  return Object.entries(params.channel)
-    .filter(([key, value]) => {
-      if (key === "accounts" || key === "enabled" || value === undefined) {
-        return false;
-      }
-      if (!shouldMoveSingleAccountChannelKey({ channelKey: params.channelKey, key })) {
-        return false;
-      }
-      if (
-        hasNamedAccounts &&
-        namedAccountPromotionKeys &&
-        !namedAccountPromotionKeys.includes(key)
-      ) {
-        return false;
-      }
-      return true;
-    })
+  const entries = Object.entries(params.channel)
+    .filter(([key, value]) => key !== "accounts" && key !== "enabled" && value !== undefined)
     .map(([key]) => key);
+  if (entries.length === 0) {
+    return [];
+  }
+
+  let setupSurface: ChannelSetupPromotionSurface | null | undefined;
+  const resolveSetupSurface = () => {
+    setupSurface ??= getChannelSetupPromotionSurface(params.channelKey);
+    return setupSurface;
+  };
+
+  const keysToMove = entries.filter((key) => {
+    if (isStaticSingleAccountPromotionKey(params.channelKey, key)) {
+      return true;
+    }
+    return Boolean(resolveSetupSurface()?.singleAccountKeysToMove?.includes(key));
+  });
+  if (!hasNamedAccounts || keysToMove.length === 0) {
+    return keysToMove;
+  }
+
+  const namedAccountPromotionKeys =
+    resolveSetupSurface()?.namedAccountPromotionKeys ??
+    BUNDLED_NAMED_ACCOUNT_PROMOTION_FALLBACKS[params.channelKey];
+  if (!namedAccountPromotionKeys) {
+    return keysToMove;
+  }
+  return keysToMove.filter((key) => namedAccountPromotionKeys.includes(key));
 }
 
 export function resolveSingleAccountPromotionTarget(params: {

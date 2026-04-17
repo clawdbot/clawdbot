@@ -11,6 +11,10 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
   validateProviderReplayTurnsWithPlugin: () => undefined,
 }));
 
+vi.mock("../../plugins/provider-hook-runtime.js", () => ({
+  resolveProviderRuntimePlugin: () => undefined,
+}));
+
 describe("sanitizeSessionHistory toolResult details stripping", () => {
   it("strips toolResult.details so untrusted payloads are not fed back to the model", async () => {
     const sm = SessionManager.inMemory();

@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { QaBusState } from "./bus-state.js";
+import { getQaProvider } from "./providers/index.js";
 import { QaStateBackedTransportAdapter, waitForQaTransportCondition } from "./qa-transport.js";
 import type {
   QaTransportActionName,
@@ -71,9 +72,10 @@ export function createQaChannelGatewayConfig(params: {
 }
 
 function createQaChannelReportNotes(params: QaTransportReportParams) {
+  const provider = getQaProvider(params.providerMode);
   return [
-    params.providerMode === "mock-openai"
-      ? "Runs against qa-channel + qa-lab bus + real gateway child + mock OpenAI provider."
+    provider.kind === "mock"
+      ? `Runs against qa-channel + qa-lab bus + real gateway child + ${params.providerMode} provider.`
       : `Runs against qa-channel + qa-lab bus + real gateway child + live frontier models (${params.primaryModel}, ${params.alternateModel})${params.fastMode ? " with fast mode enabled" : ""}.`,
     params.concurrency > 1
       ? `Scenarios run in isolated gateway workers with concurrency ${params.concurrency}.`

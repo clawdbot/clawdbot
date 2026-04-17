@@ -16,7 +16,6 @@ type MockWatcher = {
   __emit: (event: string, ...args: unknown[]) => void;
 };
 
-const CANVAS_RELOAD_TIMEOUT_MS = 10_000;
 const CANVAS_RELOAD_TEST_TIMEOUT_MS = 20_000;
 
 type TrackingWebSocket = {
@@ -358,26 +357,10 @@ describe("canvas host", () => {
         const ws = TrackingWebSocketServerClass.latestSocket;
         expect(ws).toBeTruthy();
 
-        const msg = new Promise<string>((resolve, reject) => {
-          const deadline = Date.now() + CANVAS_RELOAD_TIMEOUT_MS;
-          const poll = () => {
-            const value = ws?.sent[0];
-            if (value) {
-              resolve(value);
-              return;
-            }
-            if (Date.now() >= deadline) {
-              reject(new Error("reload timeout"));
-              return;
-            }
-            void sleep(10).then(poll, reject);
-          };
-          poll();
-        });
-
         await fs.writeFile(index, "<html><body>v2</body></html>", "utf8");
         watcher.__emit("all", "change", index);
-        expect(await msg).toBe("reload");
+        await sleep(15);
+        expect(ws?.sent[0]).toBe("reload");
       } finally {
         await handler.close();
       }

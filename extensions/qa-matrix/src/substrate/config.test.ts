@@ -108,11 +108,20 @@ describe("matrix qa config", () => {
         groupsByKey: {
           secondary: {
             requireMention: false,
+            tools: {
+              allow: ["sessions_spawn"],
+            },
           },
         },
         replyToMode: "all",
         streaming: "quiet",
+        threadBindings: {
+          enabled: true,
+          idleHours: 1,
+          spawnSubagentSessions: true,
+        },
         threadReplies: "always",
+        toolProfile: "coding",
       },
       sutAccessToken: "sut-token",
       sutAccountId: "sut",
@@ -132,6 +141,9 @@ describe("matrix qa config", () => {
         minChars: 1,
       },
     });
+    expect(next.tools).toMatchObject({
+      profile: "coding",
+    });
     expect(next.channels?.matrix?.accounts?.sut).toMatchObject({
       autoJoin: "allowlist",
       autoJoinAllowlist: ["!dm:matrix-qa.test", "#ops:matrix-qa.test"],
@@ -144,10 +156,21 @@ describe("matrix qa config", () => {
       groupAllowFrom: ["@driver:matrix-qa.test", "@observer:matrix-qa.test"],
       groups: {
         "!main:matrix-qa.test": { enabled: true, requireMention: true },
-        "!secondary:matrix-qa.test": { enabled: true, requireMention: false },
+        "!secondary:matrix-qa.test": {
+          enabled: true,
+          requireMention: false,
+          tools: {
+            allow: ["sessions_spawn"],
+          },
+        },
       },
       replyToMode: "all",
       streaming: "quiet",
+      threadBindings: {
+        enabled: true,
+        idleHours: 1,
+        spawnSubagentSessions: true,
+      },
       threadReplies: "always",
     });
   });
@@ -231,6 +254,7 @@ describe("matrix qa config", () => {
       },
       replyToMode: "off",
       streaming: "partial",
+      threadBindings: {},
       threadReplies: "inbound",
     });
     expect(summarizeMatrixQaConfigSnapshot(snapshot)).toContain("autoJoin=allowlist");

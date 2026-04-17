@@ -297,7 +297,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
 
     try {
       const captured = createCapturedPluginRegistration();
-      void register(captured.api);
+      register(captured.api);
       record.cliBackendIds.push(...captured.cliBackends.map((entry) => entry.id));
       record.providerIds.push(...captured.providers.map((entry) => entry.id));
       record.speechProviderIds.push(...captured.speechProviders.map((entry) => entry.id));

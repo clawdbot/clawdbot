@@ -12,7 +12,15 @@ import {
 } from "../acp/runtime/session-identifiers.js";
 import type { AcpRuntimeSessionMode } from "../acp/runtime/types.js";
 import { DEFAULT_HEARTBEAT_EVERY } from "../auto-reply/heartbeat.js";
-import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
+import {
+  getChannelPlugin,
+  getLoadedChannelPlugin,
+  normalizeChannelId,
+} from "../channels/plugins/index.js";
+import {
+  resolveBundledChannelThreadBindingDefaultPlacement,
+  resolveBundledChannelThreadBindingInboundConversation,
+} from "../channels/plugins/thread-binding-api.js";
 import {
   resolveThreadBindingIntroText,
   resolveThreadBindingThreadName,
@@ -277,15 +285,30 @@ function resolvePluginConversationRefForThreadBinding(params: {
   threadId?: string | number;
   groupId?: string;
 }): { conversationId: string; parentConversationId?: string } | null {
-  const resolvedConversation = getChannelPlugin(
-    params.channelId,
-  )?.messaging?.resolveInboundConversation?.({
+  const resolverParams = {
     // Keep the live delivery target authoritative; conversationId is only a fallback hint.
     to: params.to,
     conversationId: params.groupId ?? params.to,
     threadId: params.threadId,
     isGroup: true,
-  });
+  };
+  const loadedPluginConversation = getLoadedChannelPlugin(
+    params.channelId,
+  )?.messaging?.resolveInboundConversation?.(resolverParams);
+  const bundledApiConversation =
+    loadedPluginConversation === undefined
+      ? resolveBundledChannelThreadBindingInboundConversation({
+          channelId: params.channelId,
+          ...resolverParams,
+        })
+      : undefined;
+  const resolvedConversation =
+    loadedPluginConversation ??
+    (bundledApiConversation !== undefined
+      ? bundledApiConversation
+      : getChannelPlugin(params.channelId)?.messaging?.resolveInboundConversation?.(
+          resolverParams,
+        ));
   const conversationId = normalizeOptionalString(resolvedConversation?.conversationId);
   if (!conversationId) {
     return null;
@@ -644,8 +667,13 @@ function prepareAcpThreadBinding(params: {
       error: `Thread bindings are unavailable for ${policy.channel}.`,
     };
   }
-  const pluginPlacement = getChannelPlugin(policy.channel)?.conversationBindings
+  const loadedPluginPlacement = getLoadedChannelPlugin(policy.channel)?.conversationBindings
     ?.defaultTopLevelPlacement;
+  const bundledApiPlacement =
+    loadedPluginPlacement ?? resolveBundledChannelThreadBindingDefaultPlacement(policy.channel);
+  const pluginPlacement =
+    bundledApiPlacement ??
+    getChannelPlugin(policy.channel)?.conversationBindings?.defaultTopLevelPlacement;
   const placementToUse =
     pluginPlacement ??
     resolvePlacementWithoutChannelPlugin({

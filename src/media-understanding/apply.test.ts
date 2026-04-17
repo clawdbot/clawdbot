@@ -317,7 +317,6 @@ describe("applyMediaUnderstanding", () => {
       contentType: "audio/ogg",
       fileName: "note.ogg",
     });
-    clearMediaUnderstandingBinaryCacheForTests();
   });
 
   afterAll(async () => {
@@ -653,6 +652,7 @@ describe("applyMediaUnderstanding", () => {
   });
 
   it("auto-detects sherpa for audio when binary and model files are available", async () => {
+    clearMediaUnderstandingBinaryCacheForTests();
     const binDir = await createTempMediaDir();
     const modelDir = await createTempMediaDir();
     await createMockExecutable(binDir, "sherpa-onnx-offline");
@@ -683,6 +683,7 @@ describe("applyMediaUnderstanding", () => {
   });
 
   it("auto-detects whisper-cli when sherpa is unavailable", async () => {
+    clearMediaUnderstandingBinaryCacheForTests();
     const binDir = await createTempMediaDir();
     const modelDir = await createTempMediaDir();
     await createMockExecutable(binDir, "whisper-cli");
@@ -711,6 +712,7 @@ describe("applyMediaUnderstanding", () => {
   });
 
   it("transcodes non-wav audio before auto-detected whisper-cli runs", async () => {
+    clearMediaUnderstandingBinaryCacheForTests();
     const binDir = await createTempMediaDir();
     const modelDir = await createTempMediaDir();
     await createMockExecutable(binDir, "whisper-cli");
@@ -770,6 +772,7 @@ describe("applyMediaUnderstanding", () => {
   });
 
   it("skips audio auto-detect when no supported binaries or provider keys are available", async () => {
+    clearMediaUnderstandingBinaryCacheForTests();
     const emptyBinDir = await createTempMediaDir();
     const isolatedAgentDir = await createTempMediaDir();
     const ctx = await createAudioCtx({

@@ -62,6 +62,15 @@ export function loadQaRuntimeModule(): QaRuntimeSurface {
   });
 }
 
+export function loadQaRunnerBundledPluginTestApi<T extends object>(pluginId: string): T {
+  const env = resolvePrivateQaBundledPluginsEnv();
+  return loadBundledPluginPublicSurfaceModuleSync<T>({
+    dirName: pluginId,
+    artifactBasename: "test-api.js",
+    ...(env ? { env } : {}),
+  });
+}
+
 export function isQaRuntimeAvailable(): boolean {
   try {
     loadQaRuntimeModule();

@@ -44,11 +44,13 @@ const {
   runQaCredentialsAddCommand,
   runQaCredentialsListCommand,
   runQaCredentialsRemoveCommand,
+  runQaProviderServerCommand,
   runQaTelegramCommand,
 } = vi.hoisted(() => ({
   runQaCredentialsAddCommand: vi.fn(),
   runQaCredentialsListCommand: vi.fn(),
   runQaCredentialsRemoveCommand: vi.fn(),
+  runQaProviderServerCommand: vi.fn(),
   runQaTelegramCommand: vi.fn(),
 }));
 
@@ -70,6 +72,7 @@ vi.mock("./cli.runtime.js", () => ({
   runQaCredentialsAddCommand,
   runQaCredentialsListCommand,
   runQaCredentialsRemoveCommand,
+  runQaProviderServerCommand,
 }));
 
 import { registerQaLabCli } from "./cli.js";
@@ -82,6 +85,7 @@ describe("qa cli registration", () => {
     runQaCredentialsAddCommand.mockReset();
     runQaCredentialsListCommand.mockReset();
     runQaCredentialsRemoveCommand.mockReset();
+    runQaProviderServerCommand.mockReset();
     runQaTelegramCommand.mockReset();
     listQaRunnerCliContributions
       .mockReset()
@@ -114,6 +118,20 @@ describe("qa cli registration", () => {
     expect(optionNames).toEqual(
       expect.arrayContaining(["--credential-source", "--credential-role"]),
     );
+  });
+
+  it("registers standalone provider server commands from the provider registry", async () => {
+    const qa = program.commands.find((command) => command.name() === "qa");
+    expect(qa?.commands.map((command) => command.name())).toEqual(
+      expect.arrayContaining(["mock-openai", "aimock"]),
+    );
+
+    await program.parseAsync(["node", "openclaw", "qa", "aimock", "--port", "44080"]);
+
+    expect(runQaProviderServerCommand).toHaveBeenCalledWith("aimock", {
+      host: "127.0.0.1",
+      port: 44080,
+    });
   });
 
   it("shows an enable hint when a discovered runner plugin is installed but blocked", async () => {

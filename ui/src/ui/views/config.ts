@@ -70,6 +70,10 @@ export type ConfigProps = {
   includeSections?: string[];
   excludeSections?: string[];
   includeVirtualSections?: boolean;
+  /** Layout mode: "tabs" (default flat scroll) or "accordion" (grouped collapsible). */
+  settingsLayout?: "tabs" | "accordion";
+  /** Callback to navigate back to Quick Settings. Shown in accordion mode. */
+  onBackToQuick?: () => void;
   onRequestUpdate?: () => void;
 };
 
@@ -760,6 +764,93 @@ export function renderConfig(props: ConfigProps) {
     ),
   ];
 
+  const settingsLayout = props.settingsLayout ?? "tabs";
+  const allCategories = [...visibleCategories, ...(otherCategory ? [otherCategory] : [])];
+
+  function renderAccordionNav() {
+    return html`
+      <div class="config-accordion-nav">
+        ${props.onBackToQuick
+          ? html`
+              <button class="config-accordion-nav__back" @click=${props.onBackToQuick}>
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  width="14"
+                  height="14"
+                >
+                  <polyline points="15 18 9 12 15 6"></polyline>
+                </svg>
+                Quick Settings
+              </button>
+            `
+          : nothing}
+        ${allCategories.map(
+          (cat) => html`
+            <div class="config-accordion-group">
+              <button
+                class="config-accordion-group__header ${props.activeSection != null &&
+                cat.sections.some((s) => s.key === props.activeSection)
+                  ? "config-accordion-group__header--active"
+                  : ""}"
+                @click=${() => {
+                  const firstKey = cat.sections[0]?.key ?? null;
+                  const isCurrentlyInGroup = cat.sections.some(
+                    (s) => s.key === props.activeSection,
+                  );
+                  props.onSectionChange(isCurrentlyInGroup ? null : firstKey);
+                }}
+              >
+                <span class="config-accordion-group__icon">
+                  ${getSectionIcon(cat.sections[0]?.key ?? "default")}
+                </span>
+                <span>${cat.label}</span>
+                <svg
+                  class="config-accordion-group__chevron ${cat.sections.some(
+                    (s) => s.key === props.activeSection,
+                  )
+                    ? "config-accordion-group__chevron--open"
+                    : ""}"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  width="14"
+                  height="14"
+                >
+                  <polyline points="6 9 12 15 18 9"></polyline>
+                </svg>
+              </button>
+              ${cat.sections.some((s) => s.key === props.activeSection)
+                ? html`
+                    <div class="config-accordion-group__items">
+                      ${cat.sections.map(
+                        (s) => html`
+                          <button
+                            class="config-accordion-group__item ${props.activeSection === s.key
+                              ? "config-accordion-group__item--active"
+                              : ""}"
+                            @click=${() => props.onSectionChange(s.key)}
+                          >
+                            <span class="config-accordion-group__item-icon">
+                              ${getSectionIcon(s.key)}
+                            </span>
+                            ${s.label}
+                          </button>
+                        `,
+                      )}
+                    </div>
+                  `
+                : nothing}
+            </div>
+          `,
+        )}
+      </div>
+    `;
+  }
+
   // Compute diff for showing changes (works for both form and raw modes)
   const diff = formMode === "form" ? computeDiff(props.originalValue, props.formValue) : [];
   const hasRawChanges = formMode === "raw" && props.raw !== props.originalRaw;
@@ -857,67 +948,72 @@ export function renderConfig(props: ConfigProps) {
           </div>
         </div>
 
-        <div class="config-top-tabs">
-          ${formMode === "form"
-            ? html`
-                <div class="config-search config-search--top">
-                  <div class="config-search__input-row">
-                    <svg
-                      class="config-search__icon"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2"
-                    >
-                      <circle cx="11" cy="11" r="8"></circle>
-                      <path d="M21 21l-4.35-4.35"></path>
-                    </svg>
-                    <input
-                      type="text"
-                      class="config-search__input"
-                      placeholder="Search settings..."
-                      aria-label="Search settings"
-                      .value=${props.searchQuery}
-                      @input=${(e: Event) =>
-                        props.onSearchChange((e.target as HTMLInputElement).value)}
-                    />
-                    ${props.searchQuery
-                      ? html`
-                          <button
-                            class="config-search__clear"
-                            aria-label="Clear search"
-                            @click=${() => props.onSearchChange("")}
+        ${settingsLayout === "accordion"
+          ? renderAccordionNav()
+          : html`
+              <div class="config-top-tabs">
+                ${formMode === "form"
+                  ? html`
+                      <div class="config-search config-search--top">
+                        <div class="config-search__input-row">
+                          <svg
+                            class="config-search__icon"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
                           >
-                            ×
-                          </button>
-                        `
-                      : nothing}
-                  </div>
-                </div>
-              `
-            : nothing}
+                            <circle cx="11" cy="11" r="8"></circle>
+                            <path d="M21 21l-4.35-4.35"></path>
+                          </svg>
+                          <input
+                            type="text"
+                            class="config-search__input"
+                            placeholder="Search settings..."
+                            aria-label="Search settings"
+                            .value=${props.searchQuery}
+                            @input=${(e: Event) =>
+                              props.onSearchChange((e.target as HTMLInputElement).value)}
+                          />
+                          ${props.searchQuery
+                            ? html`
+                                <button
+                                  class="config-search__clear"
+                                  aria-label="Clear search"
+                                  @click=${() => props.onSearchChange("")}
+                                >
+                                  ×
+                                </button>
+                              `
+                            : nothing}
+                        </div>
+                      </div>
+                    `
+                  : nothing}
 
-          <div
-            class="config-top-tabs__scroller"
-            role="tablist"
-            aria-label="${t("common.settingsSections")}"
-          >
-            ${topTabs.map(
-              (tab) => html`
-                <button
-                  class="config-top-tabs__tab ${props.activeSection === tab.key ? "active" : ""}"
-                  role="tab"
-                  aria-selected=${props.activeSection === tab.key}
-                  @click=${() => props.onSectionChange(tab.key)}
-                  title=${tab.label}
+                <div
+                  class="config-top-tabs__scroller"
+                  role="tablist"
+                  aria-label="${t("common.settingsSections")}"
                 >
-                  ${tab.label}
-                </button>
-              `,
-            )}
-          </div>
-        </div>
-
+                  ${topTabs.map(
+                    (tab) => html`
+                      <button
+                        class="config-top-tabs__tab ${props.activeSection === tab.key
+                          ? "active"
+                          : ""}"
+                        role="tab"
+                        aria-selected=${props.activeSection === tab.key}
+                        @click=${() => props.onSectionChange(tab.key)}
+                        title=${tab.label}
+                      >
+                        ${tab.label}
+                      </button>
+                    `,
+                  )}
+                </div>
+              </div>
+            `}
         ${validity === "invalid" && !cvs.validityDismissed
           ? html`
               <div class="config-validity-warning">

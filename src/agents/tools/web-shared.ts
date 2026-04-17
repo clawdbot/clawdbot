@@ -151,11 +151,9 @@ export async function readResponseText(
       // Best-effort: return whatever we decoded so far.
     } finally {
       if (truncated) {
-        try {
-          await reader.cancel();
-        } catch {
-          // ignore
-        }
+        // Some mocked or non-compliant streams never settle cancel(); do not
+        // let cleanup turn a bounded read into a hung fetch.
+        void reader.cancel().catch(() => undefined);
       }
     }
 

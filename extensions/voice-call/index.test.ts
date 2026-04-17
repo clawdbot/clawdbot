@@ -37,7 +37,7 @@ type Registered = {
   methods: Map<string, unknown>;
   tools: unknown[];
 };
-type RegisterVoiceCall = (api: Record<string, unknown>) => void | Promise<void>;
+type RegisterVoiceCall = (api: Record<string, unknown>) => void;
 type RegisterCliContext = {
   program: Command;
   config: Record<string, unknown>;
@@ -83,7 +83,7 @@ async function registerVoiceCallCli(program: Command) {
   const { register } = plugin as unknown as {
     register: RegisterVoiceCall;
   };
-  await register({
+  register({
     id: "voice-call",
     name: "Voice Call",
     description: "test",

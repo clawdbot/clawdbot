@@ -27,12 +27,14 @@ import {
 } from "./channel.adapters.js";
 import { listZalouserDirectoryGroupMembers } from "./directory.js";
 import type { ZalouserProbeResult } from "./probe.js";
-import { zalouserSetupAdapter } from "./setup-core.js";
-import { zalouserSetupWizard } from "./setup-surface.js";
+import { createZalouserSetupWizardProxy, zalouserSetupAdapter } from "./setup-core.js";
 import { createZalouserPluginBase } from "./shared.js";
 import { collectZalouserStatusIssues } from "./status-issues.js";
 
 const loadZalouserChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
+const zalouserSetupWizardProxy = createZalouserSetupWizardProxy(
+  async () => (await import("./setup-surface.js")).zalouserSetupWizard,
+);
 
 function mapUser(params: {
   id: string;
@@ -66,7 +68,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
   createChatChannelPlugin({
     base: {
       ...createZalouserPluginBase({
-        setupWizard: zalouserSetupWizard,
+        setupWizard: zalouserSetupWizardProxy,
         setup: zalouserSetupAdapter,
       }),
       groups: zalouserGroupsAdapter,

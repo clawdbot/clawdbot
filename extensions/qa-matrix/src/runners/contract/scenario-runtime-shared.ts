@@ -19,14 +19,21 @@ export type MatrixQaScenarioContext = {
   baseUrl: string;
   canary?: MatrixQaCanaryArtifact;
   driverAccessToken: string;
+  driverDeviceId?: string;
+  driverPassword?: string;
   driverUserId: string;
   observedEvents: MatrixQaObservedEvent[];
   observerAccessToken: string;
+  observerDeviceId?: string;
+  observerPassword?: string;
   observerUserId: string;
+  outputDir?: string;
   restartGateway?: () => Promise<void>;
   roomId: string;
   interruptTransport?: () => Promise<void>;
   sutAccessToken: string;
+  sutDeviceId?: string;
+  sutPassword?: string;
   syncState: MatrixQaSyncState;
   syncStreams?: MatrixQaSyncStreams;
   sutUserId: string;
@@ -44,8 +51,12 @@ export function buildExactMarkerPrompt(token: string) {
   return `reply with only this exact marker: ${token}`;
 }
 
+export function buildMatrixQaToken(prefix: string) {
+  return `${prefix}_${randomUUID().slice(0, 8).toUpperCase()}`;
+}
+
 export function buildMatrixQuietStreamingPrompt(sutUserId: string, text: string) {
-  return `${sutUserId} Matrix quiet streaming QA check: reply exactly \`${text}\`.`;
+  return `${sutUserId} Quiet streaming QA check: reply exactly \`${text}\`.`;
 }
 
 export function buildMatrixBlockStreamingPrompt(
@@ -55,7 +66,7 @@ export function buildMatrixBlockStreamingPrompt(
 ) {
   return [
     sutUserId,
-    "Matrix block streaming QA check:",
+    "Block streaming QA check:",
     "emit exactly two assistant message blocks in order.",
     `First exact marker: \`${firstText}\`.`,
     `Second exact marker: \`${secondText}\`.`,
@@ -64,6 +75,27 @@ export function buildMatrixBlockStreamingPrompt(
 
 export function isMatrixQaMessageLikeKind(kind: MatrixQaObservedEvent["kind"]) {
   return kind === "message" || kind === "notice";
+}
+
+export function doesMatrixQaReplyBodyMatchToken(event: MatrixQaObservedEvent, token: string) {
+  return event.body?.trim() === token;
+}
+
+export function isMatrixQaExactMarkerReply(
+  event: MatrixQaObservedEvent,
+  params: {
+    roomId: string;
+    sutUserId: string;
+    token: string;
+  },
+) {
+  return (
+    event.roomId === params.roomId &&
+    event.sender === params.sutUserId &&
+    event.type === "m.room.message" &&
+    isMatrixQaMessageLikeKind(event.kind) &&
+    doesMatrixQaReplyBodyMatchToken(event, params.token)
+  );
 }
 
 export function buildMatrixReplyArtifact(
@@ -77,7 +109,7 @@ export function buildMatrixReplyArtifact(
     mentions: event.mentions,
     relatesTo: event.relatesTo,
     sender: event.sender,
-    ...(token ? { tokenMatched: replyBody === token } : {}),
+    ...(token ? { tokenMatched: doesMatrixQaReplyBodyMatchToken(event, token) } : {}),
   };
 }
 
@@ -200,6 +232,17 @@ export function createMatrixQaScenarioClient(params: {
   });
 }
 
+export function createMatrixQaDriverScenarioClient(context: MatrixQaScenarioContext) {
+  return createMatrixQaScenarioClient({
+    accessToken: context.driverAccessToken,
+    actorId: "driver",
+    baseUrl: context.baseUrl,
+    observedEvents: context.observedEvents,
+    syncState: context.syncState,
+    syncStreams: context.syncStreams,
+  });
+}
+
 export async function primeMatrixQaActorCursor(params: {
   accessToken: string;
   actorId: MatrixQaActorId;
@@ -227,6 +270,17 @@ export async function primeMatrixQaActorCursor(params: {
   return { client, startSince };
 }
 
+export async function primeMatrixQaDriverScenarioClient(context: MatrixQaScenarioContext) {
+  return await primeMatrixQaActorCursor({
+    accessToken: context.driverAccessToken,
+    actorId: "driver",
+    baseUrl: context.baseUrl,
+    observedEvents: context.observedEvents,
+    syncState: context.syncState,
+    syncStreams: context.syncStreams,
+  });
+}
+
 export function advanceMatrixQaActorCursor(params: {
   actorId: MatrixQaActorId;
   syncState: MatrixQaSyncState;
@@ -234,6 +288,50 @@ export function advanceMatrixQaActorCursor(params: {
   startSince: string;
 }) {
   writeMatrixQaSyncCursor(params.syncState, params.actorId, params.nextSince ?? params.startSince);
+}
+
+type MatrixQaScenarioClient = ReturnType<typeof createMatrixQaScenarioClient>;
+
+export async function assertNoSutReplyWindow(params: {
+  actorId: MatrixQaActorId;
+  client: MatrixQaScenarioClient;
+  context: MatrixQaScenarioContext;
+  roomId: string;
+  since?: string;
+  startSince: string;
+  unexpectedLines?: string[];
+  unexpectedMessage: string;
+}) {
+  const noReplyWindowMs = Math.min(NO_REPLY_WINDOW_MS, params.context.timeoutMs);
+  const result = await params.client.waitForOptionalRoomEvent({
+    observedEvents: params.context.observedEvents,
+    predicate: (event) =>
+      event.roomId === params.roomId &&
+      event.sender === params.context.sutUserId &&
+      event.type === "m.room.message",
+    roomId: params.roomId,
+    since: params.since,
+    timeoutMs: noReplyWindowMs,
+  });
+  if (result.matched) {
+    throw new Error(
+      [
+        params.unexpectedMessage,
+        ...(params.unexpectedLines ?? []),
+        ...buildMatrixReplyDetails("unexpected reply", buildMatrixReplyArtifact(result.event)),
+      ].join("\n"),
+    );
+  }
+  advanceMatrixQaActorCursor({
+    actorId: params.actorId,
+    syncState: params.context.syncState,
+    nextSince: result.since,
+    startSince: params.startSince,
+  });
+  return {
+    noReplyWindowMs,
+    since: result.since,
+  };
 }
 
 export async function runConfigurableTopLevelScenario(params: {
@@ -261,7 +359,7 @@ export async function runConfigurableTopLevelScenario(params: {
     syncState: params.syncState,
     syncStreams: params.syncStreams,
   });
-  const token = `${params.tokenPrefix}_${randomUUID().slice(0, 8).toUpperCase()}`;
+  const token = buildMatrixQaToken(params.tokenPrefix);
   const body =
     params.withMention === false
       ? buildExactMarkerPrompt(token)
@@ -274,10 +372,11 @@ export async function runConfigurableTopLevelScenario(params: {
   const matched = await client.waitForRoomEvent({
     observedEvents: params.observedEvents,
     predicate: (event) =>
-      event.roomId === params.roomId &&
-      event.sender === params.sutUserId &&
-      event.type === "m.room.message" &&
-      (event.body ?? "").includes(token) &&
+      isMatrixQaExactMarkerReply(event, {
+        roomId: params.roomId,
+        sutUserId: params.sutUserId,
+        token,
+      }) &&
       (params.replyPredicate?.(event, { driverEventId, token }) ?? event.relatesTo === undefined),
     roomId: params.roomId,
     since: startSince,
@@ -336,6 +435,27 @@ export async function runDriverTopLevelMentionScenario(params: {
     timeoutMs: params.timeoutMs,
     tokenPrefix: params.tokenPrefix,
   });
+}
+
+export async function runAssertedDriverTopLevelScenario(params: {
+  context: MatrixQaScenarioContext;
+  label: string;
+  roomId?: string;
+  tokenPrefix: string;
+}) {
+  const result = await runDriverTopLevelMentionScenario({
+    baseUrl: params.context.baseUrl,
+    driverAccessToken: params.context.driverAccessToken,
+    observedEvents: params.context.observedEvents,
+    roomId: params.roomId ?? params.context.roomId,
+    syncState: params.context.syncState,
+    syncStreams: params.context.syncStreams,
+    sutUserId: params.context.sutUserId,
+    timeoutMs: params.context.timeoutMs,
+    tokenPrefix: params.tokenPrefix,
+  });
+  assertTopLevelReplyArtifact(params.label, result.reply);
+  return result;
 }
 
 export async function waitForMembershipEvent(params: {

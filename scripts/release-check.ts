@@ -57,7 +57,13 @@ const requiredPathGroups = [
   "dist/build-info.json",
   "dist/channel-catalog.json",
   "dist/control-ui/index.html",
+  "dist/extensions/qa-channel/runtime-api.js",
+  "dist/extensions/qa-lab/runtime-api.js",
 ];
+const legacyUpdateCompatPackPaths = new Set([
+  "dist/extensions/qa-channel/runtime-api.js",
+  "dist/extensions/qa-lab/runtime-api.js",
+]);
 const forbiddenPrefixes = [
   "dist-runtime/",
   "dist/OpenClaw.app/",
@@ -274,7 +280,9 @@ export function collectForbiddenPackPaths(paths: Iterable<string>): string[] {
   return [...paths]
     .filter(
       (path) =>
-        forbiddenPrefixes.some((prefix) => path.startsWith(prefix)) || /node_modules\//.test(path),
+        !legacyUpdateCompatPackPaths.has(path) &&
+        (forbiddenPrefixes.some((prefix) => path.startsWith(prefix)) ||
+          /node_modules\//.test(path)),
     )
     .toSorted((left, right) => left.localeCompare(right));
 }

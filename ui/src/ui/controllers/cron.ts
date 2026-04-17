@@ -47,6 +47,9 @@ export type CronState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   cronLoading: boolean;
+  cronQuickCreateOpen: boolean;
+  cronQuickCreateStep: import("../views/cron-quick-create.ts").CronQuickCreateStep;
+  cronQuickCreateDraft: import("../views/cron-quick-create.ts").CronQuickCreateDraft | null;
   cronJobsLoadingMore: boolean;
   cronJobs: CronJob[];
   cronJobsTotal: number;

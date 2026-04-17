@@ -100,6 +100,10 @@ describe("buildGatewayInstallPlan", () => {
   afterEach(() => {
     fs.rmSync(isolatedHome, { recursive: true, force: true });
   });
+  const isolatedPlanEnv = (env: Record<string, string | undefined> = {}) => ({
+    HOME: isolatedHome,
+    ...env,
+  });
 
   it("uses provided nodePath and returns plan", async () => {
     mockNodeGatewayPlanFixture();
@@ -152,7 +156,7 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     await buildGatewayInstallPlan({
-      env: {},
+      env: isolatedPlanEnv(),
       port: 3000,
       runtime: "node",
       warn,
@@ -171,7 +175,7 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     const plan = await buildGatewayInstallPlan({
-      env: {},
+      env: isolatedPlanEnv(),
       port: 3000,
       runtime: "node",
       config: {
@@ -201,7 +205,7 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     const plan = await buildGatewayInstallPlan({
-      env: {},
+      env: isolatedPlanEnv(),
       port: 3000,
       runtime: "node",
       config: {
@@ -222,7 +226,7 @@ describe("buildGatewayInstallPlan", () => {
     mockNodeGatewayPlanFixture();
 
     const plan = await buildGatewayInstallPlan({
-      env: {},
+      env: isolatedPlanEnv(),
       port: 3000,
       runtime: "node",
       config: {
@@ -243,7 +247,7 @@ describe("buildGatewayInstallPlan", () => {
     mockNodeGatewayPlanFixture({ serviceEnvironment: {} });
 
     const plan = await buildGatewayInstallPlan({
-      env: {},
+      env: isolatedPlanEnv(),
       port: 3000,
       runtime: "node",
       config: {
@@ -269,7 +273,7 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     const plan = await buildGatewayInstallPlan({
-      env: {},
+      env: isolatedPlanEnv(),
       port: 3000,
       runtime: "node",
       config: {
@@ -295,7 +299,7 @@ describe("buildGatewayInstallPlan", () => {
     mocks.hasAnyAuthProfileStoreSource.mockReturnValue(false);
 
     const plan = await buildGatewayInstallPlan({
-      env: {},
+      env: isolatedPlanEnv(),
       port: 3000,
       runtime: "node",
     });
@@ -312,9 +316,9 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     const plan = await buildGatewayInstallPlan({
-      env: {
+      env: isolatedPlanEnv({
         OPENAI_API_KEY: "sk-openai-test",
-      },
+      }),
       port: 3000,
       runtime: "node",
       authStore: {
@@ -357,10 +361,10 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     const plan = await buildGatewayInstallPlan({
-      env: {
+      env: isolatedPlanEnv({
         OPENAI_API_KEY: "sk-openai-test", // pragma: allowlist secret
         ANTHROPIC_TOKEN: "ant-test-token",
-      },
+      }),
       port: 3000,
       runtime: "node",
     });
@@ -398,11 +402,11 @@ describe("buildGatewayInstallPlan", () => {
 
     const warn = vi.fn();
     const plan = await buildGatewayInstallPlan({
-      env: {
+      env: isolatedPlanEnv({
         NODE_OPTIONS: "--require ./pwn.js",
         GIT_ASKPASS: "/tmp/askpass.sh",
         OPENAI_API_KEY: "sk-openai-test", // pragma: allowlist secret
-      },
+      }),
       port: 3000,
       runtime: "node",
       warn,
@@ -433,9 +437,9 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     const plan = await buildGatewayInstallPlan({
-      env: {
+      env: isolatedPlanEnv({
         "BAD KEY": "should-not-pass",
-      },
+      }),
       port: 3000,
       runtime: "node",
     });
@@ -461,7 +465,7 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     const plan = await buildGatewayInstallPlan({
-      env: {},
+      env: isolatedPlanEnv(),
       port: 3000,
       runtime: "node",
     });

@@ -32,6 +32,7 @@ import {
   withPlaywrightRouteContext,
   withRouteTabContext,
 } from "./agent.shared.js";
+import { resolveTargetIdAfterNavigate } from "./agent.snapshot-target.js";
 import {
   resolveSnapshotPlan,
   shouldUsePlaywrightForAriaSnapshot,
@@ -170,48 +171,6 @@ async function saveBrowserMediaResponse(params: {
     targetId: params.targetId,
     url: params.url,
   });
-}
-
-/** Resolve the correct targetId after a navigation that may trigger a renderer swap. */
-export async function resolveTargetIdAfterNavigate(opts: {
-  oldTargetId: string;
-  navigatedUrl: string;
-  listTabs: () => Promise<Array<{ targetId: string; url: string }>>;
-}): Promise<string> {
-  let currentTargetId = opts.oldTargetId;
-  try {
-    const pickReplacement = (
-      tabs: Array<{ targetId: string; url: string }>,
-      options?: { allowSingleTabFallback?: boolean },
-    ) => {
-      if (tabs.some((tab) => tab.targetId === opts.oldTargetId)) {
-        return opts.oldTargetId;
-      }
-      const byUrl = tabs.filter((tab) => tab.url === opts.navigatedUrl);
-      if (byUrl.length === 1) {
-        return byUrl[0]?.targetId ?? opts.oldTargetId;
-      }
-      const uniqueReplacement = byUrl.filter((tab) => tab.targetId !== opts.oldTargetId);
-      if (uniqueReplacement.length === 1) {
-        return uniqueReplacement[0]?.targetId ?? opts.oldTargetId;
-      }
-      if (options?.allowSingleTabFallback && tabs.length === 1) {
-        return tabs[0]?.targetId ?? opts.oldTargetId;
-      }
-      return opts.oldTargetId;
-    };
-
-    currentTargetId = pickReplacement(await opts.listTabs());
-    if (currentTargetId === opts.oldTargetId) {
-      await new Promise((r) => setTimeout(r, 800));
-      currentTargetId = pickReplacement(await opts.listTabs(), {
-        allowSingleTabFallback: true,
-      });
-    }
-  } catch {
-    // Best-effort: fall back to pre-navigation targetId
-  }
-  return currentTargetId;
 }
 
 export function registerBrowserAgentSnapshotRoutes(

@@ -88,7 +88,8 @@ export function normalizeAgentCommandReplyPayloads(params: {
   if (!channel) {
     return payloads as ReplyPayload[];
   }
-  const deliveryPlugin = getChannelPlugin(channel);
+  const applyChannelTransforms = params.applyChannelTransforms ?? true;
+  const deliveryPlugin = applyChannelTransforms ? getChannelPlugin(channel) : undefined;
 
   const sessionKey = params.outboundSession?.key ?? params.opts.sessionKey;
   const agentId =
@@ -113,7 +114,6 @@ export function normalizeAgentCommandReplyPayloads(params: {
     });
   }
   const responsePrefixContext = replyPrefix.responsePrefixContextProvider();
-  const applyChannelTransforms = params.applyChannelTransforms ?? true;
   const transformReplyPayload = deliveryPlugin?.messaging?.transformReplyPayload
     ? (payload: ReplyPayload) =>
         deliveryPlugin.messaging?.transformReplyPayload?.({
@@ -186,9 +186,10 @@ export async function deliverAgentCommandResult(params: {
           resolvedChannel: deliveryChannel,
         };
   // Channel docking: delivery channels are resolved via plugin registry.
-  const deliveryPlugin = !isInternalMessageChannel(deliveryChannel)
-    ? getChannelPlugin(normalizeChannelId(deliveryChannel) ?? deliveryChannel)
-    : undefined;
+  const deliveryPlugin =
+    deliver && !isInternalMessageChannel(deliveryChannel)
+      ? getChannelPlugin(normalizeChannelId(deliveryChannel) ?? deliveryChannel)
+      : undefined;
 
   const isDeliveryChannelKnown =
     isInternalMessageChannel(deliveryChannel) || Boolean(deliveryPlugin);

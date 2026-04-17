@@ -67,6 +67,7 @@ import {
 import { matrixSetupAdapter } from "./setup-core.js";
 import { matrixSetupWizard } from "./setup-surface.js";
 import { runMatrixStartupMaintenance } from "./startup-maintenance.js";
+import { resolveMatrixInboundConversation } from "./thread-binding-api.js";
 import type { CoreConfig } from "./types.js";
 // Mutex for serializing account startup (workaround for concurrent dynamic import race condition)
 let matrixStartupLock: Promise<void> = Promise.resolve();
@@ -261,25 +262,6 @@ function resolveMatrixCommandConversation(params: {
   if (params.threadId) {
     return {
       conversationId: params.threadId,
-      ...(parentConversationId ? { parentConversationId } : {}),
-    };
-  }
-  return parentConversationId ? { conversationId: parentConversationId } : null;
-}
-
-function resolveMatrixInboundConversation(params: {
-  to?: string;
-  conversationId?: string;
-  threadId?: string | number;
-}) {
-  const rawTarget = params.to?.trim() || params.conversationId?.trim() || "";
-  const target = rawTarget ? resolveMatrixTargetIdentity(rawTarget) : null;
-  const parentConversationId = target?.kind === "room" ? target.id : undefined;
-  const threadId =
-    params.threadId != null ? normalizeOptionalString(String(params.threadId)) : undefined;
-  if (threadId) {
-    return {
-      conversationId: threadId,
       ...(parentConversationId ? { parentConversationId } : {}),
     };
   }

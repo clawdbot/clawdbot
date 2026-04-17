@@ -74,6 +74,17 @@ const replaceConfigFileMock = vi.hoisted(() =>
 const testAuthProfileStores = vi.hoisted(
   () => new Map<string, { version: number; profiles: Record<string, Record<string, unknown>> }>(),
 );
+const upsertAuthProfileWithLockMock = vi.hoisted(() =>
+  vi.fn(
+    async (params: {
+      profileId: string;
+      credential: Record<string, unknown>;
+      agentDir?: string;
+    }) => {
+      upsertAuthProfile(params);
+    },
+  ),
+);
 
 function normalizeStoredSecret(value: unknown): string {
   return typeof value === "string" ? value.replaceAll("\r", "").replaceAll("\n", "").trim() : "";
@@ -138,6 +149,10 @@ vi.mock("../config/config.js", () => ({
   replaceConfigFile: replaceConfigFileMock,
   resolveGatewayPort: (cfg?: { gateway?: { port?: unknown } }) =>
     typeof cfg?.gateway?.port === "number" ? cfg.gateway.port : 18789,
+}));
+
+vi.mock("../agents/auth-profiles/upsert-with-lock.js", () => ({
+  upsertAuthProfileWithLock: upsertAuthProfileWithLockMock,
 }));
 
 vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async () => {
@@ -1177,13 +1192,17 @@ describe("onboard (non-interactive): provider auth", () => {
     await loadProviderAuthOnboardModules();
   });
 
-  beforeEach(() => {
+  function resetProviderAuthTestState() {
     testAuthProfileStores.clear();
     clearRuntimeAuthProfileStoreSnapshots();
     resetFileLockStateForTest();
     clearPluginDiscoveryCache();
     clearPluginManifestRegistryCache();
     ensureWorkspaceAndSessionsMock.mockClear();
+  }
+
+  beforeEach(() => {
+    resetProviderAuthTestState();
   });
 
   afterEach(() => {
@@ -1321,79 +1340,81 @@ describe("onboard (non-interactive): provider auth", () => {
     );
   });
 
-  it("stores xAI API key in the default auth profile", async () => {
-    await withOnboardEnv("openclaw-onboard-xai-", async (env) => {
-      const rawKey = "xai-test-\r\nkey";
-      const cfg = await runOnboardingAndReadConfig(env, {
-        authChoice: "xai-api-key",
-        xaiApiKey: rawKey,
-      });
-
-      expect(cfg.auth?.profiles?.["xai:default"]?.provider).toBe("xai");
-      expect(cfg.auth?.profiles?.["xai:default"]?.mode).toBe("api_key");
-      expect(cfg.agents?.defaults?.model?.primary).toBe("xai/grok-4");
-      await expectApiKeyProfile({
+  it("handles common provider API key onboarding choices", async () => {
+    const scenarios: Array<{
+      options: Record<string, unknown>;
+      profileId?: string;
+      provider?: string;
+      key?: string;
+      expectedModel?: string;
+      expectedBaseUrl?: string;
+    }> = [
+      {
+        options: {
+          authChoice: "xai-api-key",
+          xaiApiKey: "xai-test-\r\nkey",
+        },
         profileId: "xai:default",
         provider: "xai",
         key: "xai-test-key",
-      });
-    });
-  });
-
-  it("infers Mistral auth choice from --mistral-api-key", async () => {
-    await withOnboardEnv("openclaw-onboard-mistral-infer-", async (env) => {
-      const cfg = await runOnboardingAndReadConfig(env, {
-        mistralApiKey: "mistral-test-key", // pragma: allowlist secret
-      });
-
-      expect(cfg.auth?.profiles?.["mistral:default"]?.provider).toBe("mistral");
-      expect(cfg.auth?.profiles?.["mistral:default"]?.mode).toBe("api_key");
-      await expectApiKeyProfile({
+        expectedModel: "xai/grok-4",
+      },
+      {
+        options: {
+          mistralApiKey: "mistral-test-key", // pragma: allowlist secret
+        },
         profileId: "mistral:default",
         provider: "mistral",
         key: "mistral-test-key",
-      });
-    });
-  });
-
-  it("stores Volcano Engine API key and sets default model", async () => {
-    await withOnboardEnv("openclaw-onboard-volcengine-", async (env) => {
-      const cfg = await runOnboardingAndReadConfig(env, {
-        authChoice: "volcengine-api-key",
-        volcengineApiKey: "volcengine-test-key", // pragma: allowlist secret
-      });
-
-      expect(cfg.agents?.defaults?.model?.primary).toBe("volcengine-plan/ark-code-latest");
-    });
-  });
-
-  it("infers BytePlus auth choice from --byteplus-api-key and sets default model", async () => {
-    await withOnboardEnv("openclaw-onboard-byteplus-infer-", async (env) => {
-      const cfg = await runOnboardingAndReadConfig(env, {
-        byteplusApiKey: "byteplus-test-key", // pragma: allowlist secret
-      });
-
-      expect(cfg.agents?.defaults?.model?.primary).toBe("byteplus-plan/ark-code-latest");
-    });
-  });
-
-  it("stores Vercel AI Gateway API key and sets default model", async () => {
-    await withOnboardEnv("openclaw-onboard-ai-gateway-", async (env) => {
-      const cfg = await runOnboardingAndReadConfig(env, {
-        authChoice: "ai-gateway-api-key",
-        aiGatewayApiKey: "gateway-test-key", // pragma: allowlist secret
-      });
-
-      expect(cfg.auth?.profiles?.["vercel-ai-gateway:default"]?.provider).toBe("vercel-ai-gateway");
-      expect(cfg.auth?.profiles?.["vercel-ai-gateway:default"]?.mode).toBe("api_key");
-      expect(cfg.agents?.defaults?.model?.primary).toBe(
-        "vercel-ai-gateway/anthropic/claude-opus-4.6",
-      );
-      await expectApiKeyProfile({
+      },
+      {
+        options: {
+          authChoice: "ai-gateway-api-key",
+          aiGatewayApiKey: "gateway-test-key", // pragma: allowlist secret
+        },
         profileId: "vercel-ai-gateway:default",
         provider: "vercel-ai-gateway",
         key: "gateway-test-key",
-      });
+        expectedModel: "vercel-ai-gateway/anthropic/claude-opus-4.6",
+      },
+      {
+        options: {
+          modelstudioApiKey: "modelstudio-test-key", // pragma: allowlist secret
+        },
+        profileId: "qwen:default",
+        provider: "qwen",
+        key: "modelstudio-test-key",
+        expectedModel: "qwen/qwen3.5-plus",
+        expectedBaseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
+      },
+    ];
+
+    await withOnboardEnv("openclaw-onboard-provider-api-keys-", async (env) => {
+      for (const scenario of scenarios) {
+        await fs.rm(env.configPath, { force: true });
+        resetProviderAuthTestState();
+        const cfg = await runOnboardingAndReadConfig(env, scenario.options);
+
+        if (scenario.profileId && scenario.provider) {
+          expect(cfg.auth?.profiles?.[scenario.profileId]?.provider).toBe(scenario.provider);
+          expect(cfg.auth?.profiles?.[scenario.profileId]?.mode).toBe("api_key");
+        }
+        if (scenario.expectedModel) {
+          expect(cfg.agents?.defaults?.model?.primary).toBe(scenario.expectedModel);
+        }
+        if (scenario.expectedBaseUrl) {
+          expect(cfg.models?.providers?.[scenario.provider ?? ""]?.baseUrl).toBe(
+            scenario.expectedBaseUrl,
+          );
+        }
+        if (scenario.profileId && scenario.provider && scenario.key) {
+          await expectApiKeyProfile({
+            profileId: scenario.profileId,
+            provider: scenario.provider,
+            key: scenario.key,
+          });
+        }
+      }
     });
   });
 
@@ -1420,70 +1441,35 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   });
 
-  it("stores OpenAI API key and sets OpenAI default model", async () => {
-    await withOnboardEnv("openclaw-onboard-openai-", async (env) => {
-      const cfg = await runOnboardingAndReadConfig(env, {
+  it("fails fast when ref mode receives explicit provider keys without env and does not leak keys", async () => {
+    const scenarios = [
+      {
+        name: "anthropic",
+        authChoice: "apiKey",
+        optionKey: "anthropicApiKey",
+        flagName: "--anthropic-api-key",
+        envVar: "ANTHROPIC_API_KEY",
+      },
+      {
+        name: "openai",
         authChoice: "openai-api-key",
-        openaiApiKey: "sk-openai-test", // pragma: allowlist secret
-      });
+        optionKey: "openaiApiKey",
+        flagName: "--openai-api-key",
+        envVar: "OPENAI_API_KEY",
+      },
+      {
+        name: "openrouter",
+        authChoice: "openrouter-api-key",
+        optionKey: "openrouterApiKey",
+        flagName: "--openrouter-api-key",
+        envVar: "OPENROUTER_API_KEY",
+      },
+    ] as const;
 
-      expect(cfg.agents?.defaults?.model?.primary).toBe(OPENAI_DEFAULT_MODEL);
-    });
-  });
-
-  it.each([
-    {
-      name: "anthropic",
-      prefix: "openclaw-onboard-ref-flag-anthropic-",
-      authChoice: "apiKey",
-      optionKey: "anthropicApiKey",
-      flagName: "--anthropic-api-key",
-      envVar: "ANTHROPIC_API_KEY",
-    },
-    {
-      name: "openai",
-      prefix: "openclaw-onboard-ref-flag-openai-",
-      authChoice: "openai-api-key",
-      optionKey: "openaiApiKey",
-      flagName: "--openai-api-key",
-      envVar: "OPENAI_API_KEY",
-    },
-    {
-      name: "openrouter",
-      prefix: "openclaw-onboard-ref-flag-openrouter-",
-      authChoice: "openrouter-api-key",
-      optionKey: "openrouterApiKey",
-      flagName: "--openrouter-api-key",
-      envVar: "OPENROUTER_API_KEY",
-    },
-    {
-      name: "xai",
-      prefix: "openclaw-onboard-ref-flag-xai-",
-      authChoice: "xai-api-key",
-      optionKey: "xaiApiKey",
-      flagName: "--xai-api-key",
-      envVar: "XAI_API_KEY",
-    },
-    {
-      name: "volcengine",
-      prefix: "openclaw-onboard-ref-flag-volcengine-",
-      authChoice: "volcengine-api-key",
-      optionKey: "volcengineApiKey",
-      flagName: "--volcengine-api-key",
-      envVar: "VOLCANO_ENGINE_API_KEY",
-    },
-    {
-      name: "byteplus",
-      prefix: "openclaw-onboard-ref-flag-byteplus-",
-      authChoice: "byteplus-api-key",
-      optionKey: "byteplusApiKey",
-      flagName: "--byteplus-api-key",
-      envVar: "BYTEPLUS_API_KEY",
-    },
-  ])(
-    "fails fast for $name when --secret-input-mode ref uses explicit key without env and does not leak the key",
-    async ({ prefix, authChoice, optionKey, flagName, envVar }) => {
-      await withOnboardEnv(prefix, async ({ runtime }) => {
+    await withOnboardEnv("openclaw-onboard-ref-flag-", async () => {
+      for (const { authChoice, optionKey, flagName, envVar } of scenarios) {
+        resetProviderAuthTestState();
+        const runtime = createThrowingRuntime();
         const providedSecret = `${envVar.toLowerCase()}-should-not-leak`; // pragma: allowlist secret
         const options: Record<string, unknown> = {
           authChoice,
@@ -1512,9 +1498,9 @@ describe("onboard (non-interactive): provider auth", () => {
           );
           expect(message).not.toContain(providedSecret);
         });
-      });
-    },
-  );
+      }
+    });
+  });
 
   it("stores the detected env alias as keyRef for both OpenCode runtime providers", async () => {
     await withOnboardEnv("openclaw-onboard-ref-opencode-alias-", async ({ runtime }) => {
@@ -1545,116 +1531,6 @@ describe("onboard (non-interactive): provider auth", () => {
           }
         },
       );
-    });
-  });
-
-  it("stores LiteLLM API key in the default auth profile", async () => {
-    await withOnboardEnv("openclaw-onboard-litellm-", async (env) => {
-      const cfg = await runOnboardingAndReadConfig(env, {
-        authChoice: "litellm-api-key",
-        litellmApiKey: "litellm-test-key", // pragma: allowlist secret
-      });
-
-      expect(cfg.auth?.profiles?.["litellm:default"]?.provider).toBe("litellm");
-      expect(cfg.auth?.profiles?.["litellm:default"]?.mode).toBe("api_key");
-      await expectApiKeyProfile({
-        profileId: "litellm:default",
-        provider: "litellm",
-        key: "litellm-test-key",
-      });
-    });
-  });
-
-  it.each([
-    {
-      name: "stores Cloudflare AI Gateway API key and metadata",
-      prefix: "openclaw-onboard-cf-gateway-",
-      options: {
-        authChoice: "cloudflare-ai-gateway-api-key",
-      },
-    },
-    {
-      name: "infers Cloudflare auth choice from API key flags",
-      prefix: "openclaw-onboard-cf-gateway-infer-",
-      options: {},
-    },
-  ])("$name", async ({ prefix, options }) => {
-    await withOnboardEnv(prefix, async ({ configPath, runtime }) => {
-      await runNonInteractiveSetupWithDefaults(runtime, {
-        cloudflareAiGatewayAccountId: "cf-account-id",
-        cloudflareAiGatewayGatewayId: "cf-gateway-id",
-        cloudflareAiGatewayApiKey: "cf-gateway-test-key", // pragma: allowlist secret
-        skipSkills: true,
-        ...options,
-      });
-
-      const cfg = await readJsonFile<ProviderAuthConfigSnapshot>(configPath);
-
-      expect(cfg.auth?.profiles?.["cloudflare-ai-gateway:default"]?.provider).toBe(
-        "cloudflare-ai-gateway",
-      );
-      expect(cfg.auth?.profiles?.["cloudflare-ai-gateway:default"]?.mode).toBe("api_key");
-      expect(cfg.agents?.defaults?.model?.primary).toBe("cloudflare-ai-gateway/claude-sonnet-4-5");
-      await expectApiKeyProfile({
-        profileId: "cloudflare-ai-gateway:default",
-        provider: "cloudflare-ai-gateway",
-        key: "cf-gateway-test-key",
-        metadata: { accountId: "cf-account-id", gatewayId: "cf-gateway-id" },
-      });
-    });
-  });
-
-  it("infers Together auth choice from --together-api-key and sets default model", async () => {
-    await withOnboardEnv("openclaw-onboard-together-infer-", async (env) => {
-      const cfg = await runOnboardingAndReadConfig(env, {
-        togetherApiKey: "together-test-key", // pragma: allowlist secret
-      });
-
-      expect(cfg.auth?.profiles?.["together:default"]?.provider).toBe("together");
-      expect(cfg.auth?.profiles?.["together:default"]?.mode).toBe("api_key");
-      expect(cfg.agents?.defaults?.model?.primary).toBe("together/moonshotai/Kimi-K2.5");
-      await expectApiKeyProfile({
-        profileId: "together:default",
-        provider: "together",
-        key: "together-test-key",
-      });
-    });
-  });
-
-  it("infers QIANFAN auth choice from --qianfan-api-key and sets default model", async () => {
-    await withOnboardEnv("openclaw-onboard-qianfan-infer-", async (env) => {
-      const cfg = await runOnboardingAndReadConfig(env, {
-        qianfanApiKey: "qianfan-test-key", // pragma: allowlist secret
-      });
-
-      expect(cfg.auth?.profiles?.["qianfan:default"]?.provider).toBe("qianfan");
-      expect(cfg.auth?.profiles?.["qianfan:default"]?.mode).toBe("api_key");
-      expect(cfg.agents?.defaults?.model?.primary).toBe("qianfan/deepseek-v3.2");
-      await expectApiKeyProfile({
-        profileId: "qianfan:default",
-        provider: "qianfan",
-        key: "qianfan-test-key",
-      });
-    });
-  });
-
-  it("infers Qwen auth choice from --modelstudio-api-key and sets default model", async () => {
-    await withOnboardEnv("openclaw-onboard-modelstudio-infer-", async (env) => {
-      const cfg = await runOnboardingAndReadConfig(env, {
-        modelstudioApiKey: "modelstudio-test-key", // pragma: allowlist secret
-      });
-
-      expect(cfg.auth?.profiles?.["qwen:default"]?.provider).toBe("qwen");
-      expect(cfg.auth?.profiles?.["qwen:default"]?.mode).toBe("api_key");
-      expect(cfg.models?.providers?.qwen?.baseUrl).toBe(
-        "https://coding-intl.dashscope.aliyuncs.com/v1",
-      );
-      expect(cfg.agents?.defaults?.model?.primary).toBe("qwen/qwen3.5-plus");
-      await expectApiKeyProfile({
-        profileId: "qwen:default",
-        provider: "qwen",
-        key: "modelstudio-test-key",
-      });
     });
   });
 

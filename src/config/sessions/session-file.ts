@@ -18,9 +18,13 @@ export async function resolveAndPersistSessionFile(params: {
   const { sessionId, sessionKey, sessionStore, storePath } = params;
   const baseEntry = params.sessionEntry ??
     sessionStore[sessionKey] ?? { sessionId, updatedAt: Date.now() };
+  const shouldReusePersistedSessionFile = baseEntry.sessionId === sessionId;
   const fallbackSessionFile = params.fallbackSessionFile?.trim();
-  const entryForResolve =
-    !baseEntry.sessionFile && fallbackSessionFile
+  const entryForResolve = !shouldReusePersistedSessionFile
+    ? fallbackSessionFile
+      ? { ...baseEntry, sessionFile: fallbackSessionFile }
+      : { ...baseEntry, sessionFile: undefined }
+    : !baseEntry.sessionFile && fallbackSessionFile
       ? { ...baseEntry, sessionFile: fallbackSessionFile }
       : baseEntry;
   const sessionFile = resolveSessionFilePath(sessionId, entryForResolve, {

@@ -564,6 +564,32 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(resolveAgentRoute).toHaveBeenCalledTimes(1);
   });
 
+  it("drops root events that carry a bundled replacement relation", async () => {
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      mentionRegexes: [/@bot/i],
+      getMemberDisplayName: async () => "sender",
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$edited-root",
+        body: "@bot please reply",
+        mentions: { user_ids: ["@bot:example.org"] },
+        unsigned: {
+          "m.relations": {
+            "m.replace": {
+              event_id: "$edit",
+            },
+          },
+        },
+      }),
+    );
+
+    expect(recordInboundSession).not.toHaveBeenCalled();
+  });
+
   it("skips media downloads for unmentioned group media messages", async () => {
     const downloadContent = vi.fn(async () => Buffer.from("image"));
     const getMemberDisplayName = vi.fn(async () => "sender");

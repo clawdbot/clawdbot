@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveSetupWizardAllowFromEntries,
   resolveSetupWizardGroupAllowlist,
@@ -102,7 +102,7 @@ function resolveMatrixSingleAccountPromotionTarget(params: {
   return namedAccounts.length === 1 ? namedAccounts[0] : DEFAULT_ACCOUNT_ID;
 }
 
-beforeAll(() => {
+beforeEach(() => {
   setActivePluginRegistry(
     createTestRegistry([
       {

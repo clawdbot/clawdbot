@@ -1,12 +1,8 @@
-import { logger as matrixJsSdkRootLogger } from "matrix-js-sdk/lib/logger.js";
 import { ConsoleLogger, LogService, setMatrixConsoleLogging } from "../sdk/logger.js";
 
 let matrixSdkLoggingConfigured = false;
 let matrixSdkLogMode: "default" | "quiet" = "default";
 const matrixSdkBaseLogger = new ConsoleLogger();
-const matrixSdkSilentMethodFactory = () => () => {};
-let matrixSdkRootMethodFactory: unknown;
-let matrixSdkRootLoggerInitialized = false;
 
 type MatrixJsSdkLogger = {
   trace: (...messageOrObject: unknown[]) => void;
@@ -52,22 +48,7 @@ export function createMatrixJsSdkClientLogger(prefix = "matrix"): MatrixJsSdkLog
   return createMatrixJsSdkLoggerInstance(prefix);
 }
 
-function applyMatrixJsSdkRootLoggerMode(): void {
-  const rootLogger = matrixJsSdkRootLogger as {
-    methodFactory?: unknown;
-    rebuild?: () => void;
-  };
-  if (!matrixSdkRootLoggerInitialized) {
-    matrixSdkRootMethodFactory = rootLogger.methodFactory;
-    matrixSdkRootLoggerInitialized = true;
-  }
-  rootLogger.methodFactory =
-    matrixSdkLogMode === "quiet" ? matrixSdkSilentMethodFactory : matrixSdkRootMethodFactory;
-  rootLogger.rebuild?.();
-}
-
 function applyMatrixSdkLogger(): void {
-  applyMatrixJsSdkRootLoggerMode();
   if (matrixSdkLogMode === "quiet") {
     LogService.setLogger({
       trace: () => {},

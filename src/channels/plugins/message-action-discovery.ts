@@ -4,8 +4,12 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeAnyChannelId } from "../registry.js";
-import { getChannelPlugin, listChannelPlugins } from "./index.js";
+import { getChannelPlugin, getLoadedChannelPlugin, listChannelPlugins } from "./index.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
+import {
+  resolveBundledChannelMessageToolDiscoveryAdapter,
+  type ChannelMessageToolDiscoveryAdapter,
+} from "./message-tool-api.js";
 import type {
   ChannelMessageActionDiscoveryContext,
   ChannelMessageActionName,
@@ -27,8 +31,6 @@ export type ChannelMessageActionDiscoveryInput = {
   requesterSenderId?: string | null;
   senderIsOwner?: boolean;
 };
-
-type ChannelActions = NonNullable<NonNullable<ReturnType<typeof getChannelPlugin>>["actions"]>;
 
 const loggedMessageActionErrors = new Set<string>();
 
@@ -77,7 +79,7 @@ function logMessageActionError(params: {
 function describeMessageToolSafely(params: {
   pluginId: string;
   context: ChannelMessageActionDiscoveryContext;
-  describeMessageTool: NonNullable<ChannelActions["describeMessageTool"]>;
+  describeMessageTool: NonNullable<ChannelMessageToolDiscoveryAdapter["describeMessageTool"]>;
 }): ChannelMessageToolDiscovery | null {
   try {
     return params.describeMessageTool(params.context) ?? null;
@@ -133,13 +135,27 @@ function normalizeMessageToolMediaSourceParams(
   );
 }
 
-function resolveCurrentChannelPluginActions(channel?: string): {
+export function resolveCurrentChannelMessageToolDiscoveryAdapter(channel?: string): {
   pluginId: string;
-  actions: ChannelActions;
+  actions: ChannelMessageToolDiscoveryAdapter;
 } | null {
   const channelId = resolveMessageActionDiscoveryChannelId(channel);
   if (!channelId) {
     return null;
+  }
+  const loadedPlugin = getLoadedChannelPlugin(channelId as Parameters<typeof getChannelPlugin>[0]);
+  if (loadedPlugin?.actions) {
+    return {
+      pluginId: loadedPlugin.id,
+      actions: loadedPlugin.actions,
+    };
+  }
+  const bundledActions = resolveBundledChannelMessageToolDiscoveryAdapter(channelId);
+  if (bundledActions) {
+    return {
+      pluginId: channelId,
+      actions: bundledActions,
+    };
   }
   const plugin = getChannelPlugin(channelId as Parameters<typeof getChannelPlugin>[0]);
   if (!plugin?.actions) {
@@ -153,7 +169,7 @@ function resolveCurrentChannelPluginActions(channel?: string): {
 
 export function resolveMessageActionDiscoveryForPlugin(params: {
   pluginId: string;
-  actions?: ChannelActions;
+  actions?: ChannelMessageToolDiscoveryAdapter;
   context: ChannelMessageActionDiscoveryContext;
   action?: ChannelMessageActionName;
   includeActions?: boolean;
@@ -235,7 +251,7 @@ export function listChannelMessageCapabilitiesForChannel(params: {
   requesterSenderId?: string | null;
   senderIsOwner?: boolean;
 }): ChannelMessageCapability[] {
-  const pluginActions = resolveCurrentChannelPluginActions(params.channel);
+  const pluginActions = resolveCurrentChannelMessageToolDiscoveryAdapter(params.channel);
   if (!pluginActions) {
     return [];
   }
@@ -279,11 +295,13 @@ export function resolveChannelMessageToolSchemaProperties(params: {
   const properties: Record<string, TSchema> = {};
   const currentChannel = resolveMessageActionDiscoveryChannelId(params.channel);
   const discoveryBase = createMessageActionDiscoveryContext(params);
+  const seenPluginIds = new Set<string>();
 
   for (const plugin of listChannelPlugins()) {
     if (!plugin.actions) {
       continue;
     }
+    seenPluginIds.add(plugin.id);
     for (const contribution of resolveMessageActionDiscoveryForPlugin({
       pluginId: plugin.id,
       actions: plugin.actions,
@@ -298,6 +316,22 @@ export function resolveChannelMessageToolSchemaProperties(params: {
         continue;
       }
       mergeToolSchemaProperties(properties, contribution.properties);
+    }
+  }
+  if (currentChannel && !seenPluginIds.has(currentChannel)) {
+    const currentActions = resolveCurrentChannelMessageToolDiscoveryAdapter(currentChannel);
+    if (currentActions?.actions) {
+      for (const contribution of resolveMessageActionDiscoveryForPlugin({
+        pluginId: currentActions.pluginId,
+        actions: currentActions.actions,
+        context: discoveryBase,
+        includeSchema: true,
+      }).schemaContributions) {
+        const visibility = contribution.visibility ?? "current-channel";
+        if (visibility === "all-configured" || currentActions.pluginId === currentChannel) {
+          mergeToolSchemaProperties(properties, contribution.properties);
+        }
+      }
     }
   }
 
@@ -318,7 +352,7 @@ export function resolveChannelMessageToolMediaSourceParamKeys(params: {
   requesterSenderId?: string | null;
   senderIsOwner?: boolean;
 }): string[] {
-  const pluginActions = resolveCurrentChannelPluginActions(params.channel);
+  const pluginActions = resolveCurrentChannelMessageToolDiscoveryAdapter(params.channel);
   if (!pluginActions) {
     return [];
   }

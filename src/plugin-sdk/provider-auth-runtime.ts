@@ -5,6 +5,10 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 export { resolveEnvApiKey } from "../agents/model-auth-env.js";
+export {
+  collectProviderApiKeysForExecution,
+  executeWithApiKeyRotation,
+} from "../agents/api-key-rotation.js";
 export { NON_ENV_SECRETREF_MARKER } from "../agents/model-auth-markers.js";
 export {
   requireApiKey,

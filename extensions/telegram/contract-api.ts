@@ -20,7 +20,10 @@ export {
   buildCommandsPaginationKeyboard,
   buildTelegramModelsProviderChannelData,
 } from "./src/command-ui.js";
-export { createTelegramThreadBindingManager } from "./src/thread-bindings.js";
+export {
+  createTelegramThreadBindingManager,
+  resetTelegramThreadBindingsForTests,
+} from "./src/thread-bindings.js";
 export type {
   TelegramInteractiveHandlerContext,
   TelegramInteractiveHandlerRegistration,

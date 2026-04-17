@@ -322,7 +322,6 @@ describe("collectForbiddenPackPaths", () => {
         "qa/scenarios/index.md",
       ]),
     ).toEqual([
-      "dist/extensions/qa-lab/runtime-api.js",
       "dist/plugin-sdk/extensions/qa-lab/cli.d.ts",
       "dist/plugin-sdk/qa-lab.js",
       "dist/plugin-sdk/qa-runtime.js",
@@ -392,6 +391,8 @@ describe("collectMissingPackPaths", () => {
         "dist/index.js",
         "dist/entry.js",
         "dist/control-ui/index.html",
+        "dist/extensions/qa-channel/runtime-api.js",
+        "dist/extensions/qa-lab/runtime-api.js",
         "dist/extensions/acpx/mcp-proxy.mjs",
         bundledDistPluginFile("diffs", "assets/viewer-runtime.js"),
         ...requiredBundledPluginPackPaths,

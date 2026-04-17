@@ -63,6 +63,33 @@ describe("matrix driver client", () => {
     });
   });
 
+  it("builds Matrix replacement messages with replacement-local mention metadata", () => {
+    expect(
+      __testing.buildMatrixQaReplacementMessageContent({
+        body: "@sut:matrix-qa.test updated prompt",
+        mentionUserIds: ["@sut:matrix-qa.test"],
+        targetEventId: " $msg-1 ",
+      }),
+    ).toEqual({
+      body: "* @sut:matrix-qa.test updated prompt",
+      msgtype: "m.text",
+      "m.new_content": {
+        body: "@sut:matrix-qa.test updated prompt",
+        msgtype: "m.text",
+        format: "org.matrix.custom.html",
+        formatted_body:
+          '<a href="https://matrix.to/#/%40sut%3Amatrix-qa.test">@sut:matrix-qa.test</a> updated prompt',
+        "m.mentions": {
+          user_ids: ["@sut:matrix-qa.test"],
+        },
+      },
+      "m.relates_to": {
+        rel_type: "m.replace",
+        event_id: "$msg-1",
+      },
+    });
+  });
+
   it("advances Matrix registration through token then dummy auth stages", () => {
     const firstStage = __testing.resolveNextRegistrationAuth({
       registrationToken: "reg-token",
@@ -103,6 +130,57 @@ describe("matrix driver client", () => {
         },
       }),
     ).toThrow("Matrix registration requires unsupported auth stages:");
+  });
+
+  it("logs in with Matrix password auth to create a secondary QA device", async () => {
+    const requests: Array<{ body: Record<string, unknown>; url: string }> = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      requests.push({
+        body: parseJsonRequestBody(init),
+        url: resolveRequestUrl(input),
+      });
+      return new Response(
+        JSON.stringify({
+          access_token: "secondary-token",
+          device_id: "SECONDARYDEVICE",
+          user_id: "@qa-driver:matrix-qa.test",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    };
+
+    const client = createMatrixQaClient({
+      baseUrl: "http://127.0.0.1:28008/",
+      fetchImpl,
+    });
+
+    await expect(
+      client.loginWithPassword({
+        deviceName: "OpenClaw Matrix QA Stale Device",
+        password: "driver-password",
+        userId: "@qa-driver:matrix-qa.test",
+      }),
+    ).resolves.toMatchObject({
+      accessToken: "secondary-token",
+      deviceId: "SECONDARYDEVICE",
+      password: "driver-password",
+      userId: "@qa-driver:matrix-qa.test",
+    });
+
+    expect(requests).toEqual([
+      {
+        url: "http://127.0.0.1:28008/_matrix/client/v3/login",
+        body: {
+          type: "m.login.password",
+          identifier: {
+            type: "m.id.user",
+            user: "@qa-driver:matrix-qa.test",
+          },
+          initial_device_display_name: "OpenClaw Matrix QA Stale Device",
+          password: "driver-password",
+        },
+      },
+    ]);
   });
 
   it("issues Matrix room membership control requests for QA topology changes", async () => {
@@ -189,6 +267,61 @@ describe("matrix driver client", () => {
     ).resolves.toBe("$reaction-1");
   });
 
+  it("sends Matrix replacements and redactions through protocol endpoints", async () => {
+    const requests: Array<{ body: Record<string, unknown>; url: string }> = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      requests.push({
+        body: parseJsonRequestBody(init),
+        url: resolveRequestUrl(input),
+      });
+      const eventId = requests.length === 1 ? "$replacement-1" : "$redaction-1";
+      return new Response(JSON.stringify({ event_id: eventId }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    const client = createMatrixQaClient({
+      accessToken: "token",
+      baseUrl: "http://127.0.0.1:28008/",
+      fetchImpl,
+    });
+
+    await expect(
+      client.sendReplacementMessage({
+        body: "@sut:matrix-qa.test updated prompt",
+        mentionUserIds: ["@sut:matrix-qa.test"],
+        roomId: "!room:matrix-qa.test",
+        targetEventId: "$msg-1",
+      }),
+    ).resolves.toBe("$replacement-1");
+    await expect(
+      client.redactEvent({
+        eventId: "$reaction-1",
+        reason: "qa cleanup",
+        roomId: "!room:matrix-qa.test",
+      }),
+    ).resolves.toBe("$redaction-1");
+
+    expect(requests[0]?.url).toContain(
+      "/_matrix/client/v3/rooms/!room%3Amatrix-qa.test/send/m.room.message/",
+    );
+    expect(requests[0]?.body).toMatchObject({
+      "m.relates_to": {
+        rel_type: "m.replace",
+        event_id: "$msg-1",
+      },
+    });
+    expect(requests[1]).toEqual({
+      url: expect.stringContaining(
+        "/_matrix/client/v3/rooms/!room%3Amatrix-qa.test/redact/%24reaction-1/",
+      ),
+      body: {
+        reason: "qa cleanup",
+      },
+    });
+  });
+
   it("uploads Matrix media before sending the room event", async () => {
     const requests: Array<{
       body: RequestInit["body"];
@@ -259,6 +392,38 @@ describe("matrix driver client", () => {
       "m.mentions": {
         user_ids: ["@sut:matrix-qa.test"],
       },
+    });
+  });
+
+  it("adds Matrix room encryption state when provisioning encrypted QA rooms", async () => {
+    const createRoomBodies: Array<Record<string, unknown>> = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      createRoomBodies.push(parseJsonRequestBody(init));
+      expect(resolveRequestUrl(input)).toBe("http://127.0.0.1:28008/_matrix/client/v3/createRoom");
+      return new Response(JSON.stringify({ room_id: "!encrypted:matrix-qa.test" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    const client = createMatrixQaClient({
+      accessToken: "token",
+      baseUrl: "http://127.0.0.1:28008/",
+      fetchImpl,
+    });
+
+    await expect(
+      client.createPrivateRoom({
+        encrypted: true,
+        inviteUserIds: ["@sut:matrix-qa.test"],
+        name: "Encrypted QA Room",
+      }),
+    ).resolves.toBe("!encrypted:matrix-qa.test");
+
+    expect(createRoomBodies[0]?.initial_state).toContainEqual({
+      type: "m.room.encryption",
+      state_key: "",
+      content: { algorithm: "m.megolm.v1.aes-sha2" },
     });
   });
 

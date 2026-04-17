@@ -58,26 +58,11 @@ export async function resolveProvidersForModelsJsonWithDeps(
   });
 }
 
-function resolveExplicitBaseUrlProviders(
-  providers: OpenClawConfig["models"] | undefined,
-): ReadonlySet<string> {
-  return new Set(
-    Object.entries(providers?.providers ?? {})
-      .map(([key, provider]) => [key.trim(), provider] as const)
-      .filter(
-        ([key, provider]) =>
-          Boolean(key) && typeof provider?.baseUrl === "string" && provider.baseUrl.trim(),
-      )
-      .map(([key]) => key),
-  );
-}
-
 function resolveProvidersForMode(params: {
   mode: NonNullable<ModelsConfig["mode"]>;
   existingParsed: unknown;
   providers: Record<string, ProviderConfig>;
   secretRefManagedProviders: ReadonlySet<string>;
-  explicitBaseUrlProviders: ReadonlySet<string>;
 }): Record<string, ProviderConfig> {
   if (params.mode !== "merge") {
     return params.providers;
@@ -94,7 +79,6 @@ function resolveProvidersForMode(params: {
     nextProviders: params.providers,
     existingProviders: existingProviders as Record<string, ExistingProviderConfig>,
     secretRefManagedProviders: params.secretRefManagedProviders,
-    explicitBaseUrlProviders: params.explicitBaseUrlProviders,
   });
 }
 
@@ -135,7 +119,6 @@ export async function planOpenClawModelsJsonWithDeps(
     existingParsed: params.existingParsed,
     providers: normalizedProviders,
     secretRefManagedProviders,
-    explicitBaseUrlProviders: resolveExplicitBaseUrlProviders(cfg.models),
   });
   const secretEnforcedProviders =
     enforceSourceManagedProviderSecrets({

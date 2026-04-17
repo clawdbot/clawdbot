@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { bundledDistPluginFile } from "../../test/helpers/bundled-plugin-paths.js";
 import { clearPluginDiscoveryCache, discoverOpenClawPlugins } from "./discovery.js";
 import {
@@ -258,6 +258,7 @@ async function expectRejectedPackageExtensionEntry(params: {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   clearPluginDiscoveryCache();
   cleanupTrackedTempDirs(tempDirs);
 });
@@ -854,6 +855,56 @@ describe("discoverOpenClawPlugins", () => {
 
     const third = discoverWithCachedEnv({ env: cachedEnv });
     expect(third.candidates.some((candidate) => candidate.idHint === "cached")).toBe(false);
+  });
+
+  it("reuses bundled and global discovery across workspace-specific cache misses", () => {
+    const stateDir = makeTempDir();
+    const bundledDir = path.join(stateDir, "bundled");
+    const globalExt = path.join(stateDir, "extensions");
+    const workspaceA = path.join(stateDir, "workspace-a");
+    const workspaceB = path.join(stateDir, "workspace-b");
+
+    createPackagePluginWithEntry({
+      packageDir: path.join(bundledDir, "bundled-plugin"),
+      packageName: "@openclaw/bundled-plugin",
+      pluginId: "bundled-plugin",
+    });
+    createPackagePluginWithEntry({
+      packageDir: path.join(globalExt, "global-plugin"),
+      packageName: "@openclaw/global-plugin",
+      pluginId: "global-plugin",
+    });
+    createPackagePluginWithEntry({
+      packageDir: path.join(workspaceA, ".openclaw", "extensions", "workspace-a-plugin"),
+      packageName: "@openclaw/workspace-a-plugin",
+      pluginId: "workspace-a-plugin",
+    });
+    createPackagePluginWithEntry({
+      packageDir: path.join(workspaceB, ".openclaw", "extensions", "workspace-b-plugin"),
+      packageName: "@openclaw/workspace-b-plugin",
+      pluginId: "workspace-b-plugin",
+    });
+
+    const env = buildCachedDiscoveryEnv(stateDir, {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+    });
+    const readdirSync = vi.spyOn(fs, "readdirSync");
+    const countSharedRootReads = () =>
+      readdirSync.mock.calls.filter(([dir]) => dir === bundledDir || dir === globalExt).length;
+
+    const first = discoverWithCachedEnv({ workspaceDir: workspaceA, env });
+    expectCandidatePresence(first, {
+      present: ["bundled-plugin", "global-plugin", "workspace-a-plugin"],
+      absent: ["workspace-b-plugin"],
+    });
+    expect(countSharedRootReads()).toBe(2);
+
+    const second = discoverWithCachedEnv({ workspaceDir: workspaceB, env });
+    expectCandidatePresence(second, {
+      present: ["bundled-plugin", "global-plugin", "workspace-b-plugin"],
+      absent: ["workspace-a-plugin"],
+    });
+    expect(countSharedRootReads()).toBe(2);
   });
 
   it.each([

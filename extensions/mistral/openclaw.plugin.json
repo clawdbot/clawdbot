@@ -21,6 +21,7 @@
     }
   ],
   "contracts": {
+    "memoryEmbeddingProviders": ["mistral"],
     "mediaUnderstandingProviders": ["mistral"]
   },
   "configSchema": {

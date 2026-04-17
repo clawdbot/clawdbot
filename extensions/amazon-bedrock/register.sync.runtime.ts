@@ -14,6 +14,7 @@ import {
   resolveBedrockConfigApiKey,
   resolveImplicitBedrockProvider,
 } from "./api.js";
+import { bedrockMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 
 type GuardrailConfig = {
   guardrailIdentifier: string;
@@ -77,6 +78,8 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
   const anthropicByModelReplayHooks = ANTHROPIC_BY_MODEL_REPLAY_HOOKS;
   const pluginConfig = (api.pluginConfig ?? {}) as AmazonBedrockPluginConfig;
   const guardrail = pluginConfig.guardrail;
+
+  api.registerMemoryEmbeddingProvider(bedrockMemoryEmbeddingProviderAdapter);
 
   const baseWrapStreamFn = ({ modelId, streamFn }: { modelId: string; streamFn?: StreamFn }) =>
     isAnthropicBedrockModel(modelId) ? streamFn : createBedrockNoCacheWrapper(streamFn);

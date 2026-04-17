@@ -396,4 +396,43 @@ describe("resolveAndPersistSessionFile", () => {
     const saved = loadSessionStore(fixture.storePath(), { skipCache: true });
     expect(saved[sessionKey]?.sessionFile).toBe(fallbackSessionFile);
   });
+
+  it("rotates to a new transcript path when sessionId changes on the same session key", async () => {
+    const previousSessionId = "old-session-id";
+    const nextSessionId = "new-session-id";
+    const sessionKey = "agent:main:telegram:group:123";
+    const previousSessionFile = resolveSessionTranscriptPathInDir(
+      previousSessionId,
+      fixture.sessionsDir(),
+    );
+    const expectedNextSessionFile = resolveSessionTranscriptPathInDir(
+      nextSessionId,
+      fixture.sessionsDir(),
+    );
+    const store = {
+      [sessionKey]: {
+        sessionId: previousSessionId,
+        updatedAt: Date.now(),
+        sessionFile: previousSessionFile,
+      },
+    };
+    fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
+    const sessionStore = loadSessionStore(fixture.storePath(), { skipCache: true });
+
+    const result = await resolveAndPersistSessionFile({
+      sessionId: nextSessionId,
+      sessionKey,
+      sessionStore,
+      storePath: fixture.storePath(),
+      sessionEntry: sessionStore[sessionKey],
+      sessionsDir: fixture.sessionsDir(),
+    });
+
+    expect(result.sessionFile).toBe(expectedNextSessionFile);
+    expect(result.sessionFile).not.toBe(previousSessionFile);
+    expect(result.sessionEntry.sessionFile).toBe(expectedNextSessionFile);
+
+    const saved = loadSessionStore(fixture.storePath(), { skipCache: true });
+    expect(saved[sessionKey]?.sessionFile).toBe(expectedNextSessionFile);
+  });
 });

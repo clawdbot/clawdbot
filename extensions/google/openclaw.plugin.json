@@ -46,6 +46,7 @@
   },
   "contracts": {
     "mediaUnderstandingProviders": ["google"],
+    "memoryEmbeddingProviders": ["gemini"],
     "imageGenerationProviders": ["google"],
     "musicGenerationProviders": ["google"],
     "speechProviders": ["google"],

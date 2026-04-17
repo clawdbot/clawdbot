@@ -78,6 +78,19 @@ struct MacNodeRuntimeTests {
     @Test func `handle invoke screen record uses injected services`() async throws {
         @MainActor
         final class FakeMainActorServices: MacNodeRuntimeMainActorServices, @unchecked Sendable {
+            func snapshotScreen(
+                screenIndex: Int?,
+                maxWidth: Int?,
+                quality: Double?,
+                format: OpenClawScreenSnapshotFormat?) async throws
+                -> (data: Data, format: OpenClawScreenSnapshotFormat, width: Int, height: Int)
+            {
+                _ = screenIndex
+                _ = maxWidth
+                _ = quality
+                return (Data("snapshot".utf8), format ?? .jpeg, 640, 360)
+            }
+
             func recordScreen(
                 screenIndex: Int?,
                 durationMs: Int?,
@@ -125,6 +138,94 @@ struct MacNodeRuntimeTests {
         let payload = try JSONDecoder().decode(Payload.self, from: Data(payloadJSON.utf8))
         #expect(payload.format == "mp4")
         #expect(!payload.base64.isEmpty)
+    }
+
+    @Test func `handle invoke screen snapshot uses injected services`() async throws {
+        @MainActor
+        final class FakeMainActorServices: MacNodeRuntimeMainActorServices, @unchecked Sendable {
+            var snapshotCalledAtMs: Int64?
+
+            func snapshotScreen(
+                screenIndex: Int?,
+                maxWidth: Int?,
+                quality: Double?,
+                format: OpenClawScreenSnapshotFormat?) async throws
+                -> (data: Data, format: OpenClawScreenSnapshotFormat, width: Int, height: Int)
+            {
+                self.snapshotCalledAtMs = Int64(Date().timeIntervalSince1970 * 1000)
+                #expect(screenIndex == 0)
+                #expect(maxWidth == 800)
+                #expect(quality == 0.5)
+                return (Data("ok".utf8), format ?? .jpeg, 800, 450)
+            }
+
+            func recordScreen(
+                screenIndex: Int?,
+                durationMs: Int?,
+                fps: Double?,
+                includeAudio: Bool?,
+                outPath: String?) async throws -> (path: String, hasAudio: Bool)
+            {
+                let url = FileManager().temporaryDirectory
+                    .appendingPathComponent("openclaw-test-screen-record-\(UUID().uuidString).mp4")
+                try Data("ok".utf8).write(to: url)
+                return (path: url.path, hasAudio: false)
+            }
+
+            func locationAuthorizationStatus() -> CLAuthorizationStatus {
+                .authorizedAlways
+            }
+
+            func locationAccuracyAuthorization() -> CLAccuracyAuthorization {
+                .fullAccuracy
+            }
+
+            func currentLocation(
+                desiredAccuracy: OpenClawLocationAccuracy,
+                maxAgeMs: Int?,
+                timeoutMs: Int?) async throws -> CLLocation
+            {
+                _ = desiredAccuracy
+                _ = maxAgeMs
+                _ = timeoutMs
+                return CLLocation(latitude: 0, longitude: 0)
+            }
+        }
+
+        let services = await MainActor.run { FakeMainActorServices() }
+        let runtime = MacNodeRuntime(makeMainActorServices: { services })
+
+        let params = MacNodeScreenSnapshotParams(
+            screenIndex: 0,
+            maxWidth: 800,
+            quality: 0.5,
+            format: .jpeg)
+        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
+        let response = await runtime.handleInvoke(
+            BridgeInvokeRequest(
+                id: "req-screen-snapshot",
+                command: MacNodeScreenCommand.snapshot.rawValue,
+                paramsJSON: json))
+        #expect(response.ok == true)
+        let payloadJSON = try #require(response.payloadJSON)
+
+        struct Payload: Decodable {
+            var format: String
+            var base64: String
+            var width: Int
+            var height: Int
+            var capturedAtMs: Int64
+        }
+
+        let payload = try JSONDecoder().decode(Payload.self, from: Data(payloadJSON.utf8))
+        #expect(payload.format == "jpeg")
+        #expect(payload.base64 == Data("ok".utf8).base64EncodedString())
+        #expect(payload.width == 800)
+        #expect(payload.height == 450)
+        #expect(payload.capturedAtMs > 0)
+        let snapshotCalledAtMs = await MainActor.run { services.snapshotCalledAtMs }
+        #expect(snapshotCalledAtMs != nil)
+        #expect(payload.capturedAtMs <= snapshotCalledAtMs!)
     }
 
     @Test func `handle invoke browser proxy uses injected request`() async {

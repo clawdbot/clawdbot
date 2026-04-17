@@ -173,6 +173,7 @@ const LINE_RULES: LineRule[] = [
 ];
 
 const STANDARD_PORTS = new Set([80, 443, 8080, 8443, 3000]);
+const NETWORK_SEND_CONTEXT_PATTERN = /\bfetch\s*\(|\bpost\s*\(|\.\s*post\s*\(|http\.request\s*\(/i;
 
 const SOURCE_RULES: SourceRule[] = [
   {
@@ -180,7 +181,7 @@ const SOURCE_RULES: SourceRule[] = [
     severity: "warn",
     message: "File read combined with network send — possible data exfiltration",
     pattern: /readFileSync|readFile/,
-    requiresContext: /\bfetch\b|\bpost\b|http\.request/i,
+    requiresContext: NETWORK_SEND_CONTEXT_PATTERN,
   },
   {
     ruleId: "obfuscated-code",
@@ -200,7 +201,7 @@ const SOURCE_RULES: SourceRule[] = [
     message:
       "Environment variable access combined with network send — possible credential harvesting",
     pattern: /process\.env/,
-    requiresContext: /\bfetch\b|\bpost\b|http\.request/i,
+    requiresContext: NETWORK_SEND_CONTEXT_PATTERN,
   },
 ];
 

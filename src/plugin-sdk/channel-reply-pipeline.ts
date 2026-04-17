@@ -34,21 +34,26 @@ export function createChannelReplyPipeline(params: {
   const channelId = params.channel
     ? (normalizeChannelId(params.channel) ?? params.channel)
     : undefined;
-  const plugin = params.transformReplyPayload
-    ? undefined
+  let plugin: ReturnType<typeof getChannelPlugin> | undefined;
+  let pluginTransformResolved = false;
+  const resolvePluginTransform = () => {
+    if (pluginTransformResolved) {
+      return plugin?.messaging?.transformReplyPayload;
+    }
+    pluginTransformResolved = true;
+    plugin = channelId ? getChannelPlugin(channelId) : undefined;
+    return plugin?.messaging?.transformReplyPayload;
+  };
+  const transformReplyPayload = params.transformReplyPayload
+    ? params.transformReplyPayload
     : channelId
-      ? getChannelPlugin(channelId)
-      : undefined;
-  const transformReplyPayload =
-    params.transformReplyPayload ??
-    (plugin?.messaging?.transformReplyPayload
       ? (payload: ReplyPayload) =>
-          plugin.messaging?.transformReplyPayload?.({
+          resolvePluginTransform()?.({
             payload,
             cfg: params.cfg,
             accountId: params.accountId,
           }) ?? payload
-      : undefined);
+      : undefined;
   return {
     ...createReplyPrefixOptions({
       cfg: params.cfg,

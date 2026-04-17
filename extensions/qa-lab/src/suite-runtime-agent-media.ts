@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { buildQaImageGenerationConfigPatch } from "./providers/image-generation.js";
 import {
   fetchJson,
   patchConfig,
@@ -70,63 +71,13 @@ async function resolveGeneratedImagePath(params: {
 }
 
 async function ensureImageGenerationConfigured(env: QaSuiteRuntimeEnv) {
-  const imageModelRef = "openai/gpt-image-1";
   await patchConfig({
     env,
-    patch:
-      env.providerMode === "mock-openai"
-        ? {
-            plugins: {
-              allow: [...new Set(["memory-core", "openai", ...env.transport.requiredPluginIds])],
-              entries: {
-                openai: {
-                  enabled: true,
-                },
-              },
-            },
-            models: {
-              providers: {
-                openai: {
-                  baseUrl: `${env.mock?.baseUrl}/v1`,
-                  apiKey: "test",
-                  api: "openai-responses",
-                  models: [
-                    {
-                      id: "gpt-image-1",
-                      name: "gpt-image-1",
-                      api: "openai-responses",
-                      reasoning: false,
-                      input: ["text"],
-                      cost: {
-                        input: 0,
-                        output: 0,
-                        cacheRead: 0,
-                        cacheWrite: 0,
-                      },
-                      contextWindow: 128_000,
-                      maxTokens: 4096,
-                    },
-                  ],
-                },
-              },
-            },
-            agents: {
-              defaults: {
-                imageGenerationModel: {
-                  primary: imageModelRef,
-                },
-              },
-            },
-          }
-        : {
-            agents: {
-              defaults: {
-                imageGenerationModel: {
-                  primary: imageModelRef,
-                },
-              },
-            },
-          },
+    patch: buildQaImageGenerationConfigPatch({
+      providerMode: env.providerMode,
+      providerBaseUrl: env.mock ? `${env.mock.baseUrl}/v1` : undefined,
+      requiredPluginIds: env.transport.requiredPluginIds,
+    }),
   });
   await waitForGatewayHealthy(env);
   await waitForTransportReady(env, 60_000);

@@ -80,7 +80,7 @@ async function withRegisteredPhoneControl(
     });
 
     let command: OpenClawPluginCommandDefinition | undefined;
-    void registerPhoneControl.register(
+    registerPhoneControl.register(
       createApi({
         stateDir,
         getConfig: () => config,

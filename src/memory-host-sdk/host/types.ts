@@ -85,11 +85,7 @@ export interface MemorySearchManager {
       onDebug?: (debug: MemorySearchRuntimeDebug) => void;
     },
   ): Promise<MemorySearchResult[]>;
-  readFile(params: {
-    relPath: string;
-    from?: number;
-    lines?: number;
-  }): Promise<MemoryReadResult>;
+  readFile(params: { relPath: string; from?: number; lines?: number }): Promise<MemoryReadResult>;
   status(): MemoryProviderStatus;
   sync?(params?: {
     reason?: string;

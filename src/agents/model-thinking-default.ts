@@ -56,6 +56,12 @@ export function resolveThinkingDefault(params: {
   }
   if (
     normalizedProvider === "anthropic" &&
+    (normalizedModel.startsWith("claude-opus-4-7") || normalizedModel.startsWith("claude-opus-4.7"))
+  ) {
+    return "off";
+  }
+  if (
+    normalizedProvider === "anthropic" &&
     explicitModelConfigured &&
     typeof catalogCandidate?.name === "string" &&
     /4\.6\b/.test(catalogCandidate.name) &&

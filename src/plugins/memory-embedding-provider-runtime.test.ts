@@ -36,7 +36,7 @@ afterEach(() => {
 });
 
 describe("memory embedding provider runtime resolution", () => {
-  it("prefers registered adapters over capability fallback adapters", () => {
+  it("merges registered and declared capability fallback adapters", () => {
     registerMemoryEmbeddingProvider({
       id: "registered",
       create: async () => ({ provider: null }),
@@ -45,9 +45,10 @@ describe("memory embedding provider runtime resolution", () => {
 
     expect(runtimeModule.listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual([
       "registered",
+      "capability",
     ]);
     expect(runtimeModule.getMemoryEmbeddingProvider("registered")?.id).toBe("registered");
-    expect(mocks.resolvePluginCapabilityProviders).not.toHaveBeenCalled();
+    expect(mocks.resolvePluginCapabilityProviders).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to declared capability adapters when the registry is cold", () => {
@@ -60,14 +61,22 @@ describe("memory embedding provider runtime resolution", () => {
     expect(mocks.resolvePluginCapabilityProviders).toHaveBeenCalledTimes(2);
   });
 
-  it("does not consult capability fallback once runtime adapters are registered", () => {
-    registerMemoryEmbeddingProvider({
+  it("prefers registered adapters over declared capability fallback adapters with the same id", () => {
+    const registered = {
       id: "openai",
       create: async () => ({ provider: null }),
+    } satisfies MemoryEmbeddingProviderAdapter;
+    registerMemoryEmbeddingProvider({
+      ...registered,
     });
-    mocks.resolvePluginCapabilityProviders.mockReturnValue([createCapabilityAdapter("ollama")]);
+    mocks.resolvePluginCapabilityProviders.mockReturnValue([createCapabilityAdapter("openai")]);
 
-    expect(runtimeModule.getMemoryEmbeddingProvider("ollama")).toBeUndefined();
-    expect(mocks.resolvePluginCapabilityProviders).not.toHaveBeenCalled();
+    expect(runtimeModule.getMemoryEmbeddingProvider("openai")).toEqual(
+      expect.objectContaining({ id: "openai" }),
+    );
+    expect(runtimeModule.listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual([
+      "openai",
+    ]);
+    expect(mocks.resolvePluginCapabilityProviders).toHaveBeenCalledTimes(1);
   });
 });

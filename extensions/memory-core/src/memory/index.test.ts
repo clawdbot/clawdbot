@@ -11,9 +11,9 @@ import {
 } from "../../../../src/plugins/memory-embedding-providers.js";
 import "./test-runtime-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
-import { getMemorySearchManager, closeAllMemorySearchManagers } from "./index.js";
+import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
 import {
-  DEFAULT_OLLAMA_EMBEDDING_MODEL,
+  DEFAULT_LOCAL_MODEL,
   registerBuiltInMemoryEmbeddingProviders,
 } from "./provider-adapters.js";
 
@@ -112,14 +112,14 @@ vi.mock("./embeddings.js", () => {
 });
 
 describe("memory index", () => {
-  it("registers the builtin ollama embedding provider", () => {
-    const adapter = listRegisteredAdapters().find((entry) => entry.id === "ollama");
+  it("registers the builtin local embedding provider", () => {
+    const adapter = listRegisteredAdapters().find((entry) => entry.id === "local");
 
     expect(adapter).toBeDefined();
     expect(adapter).toEqual(
       expect.objectContaining({
-        id: "ollama",
-        defaultModel: DEFAULT_OLLAMA_EMBEDDING_MODEL,
+        id: "local",
+        defaultModel: DEFAULT_LOCAL_MODEL,
       }),
     );
   });

@@ -15,12 +15,14 @@ title: "Thinking Levels"
   - low → “think hard”
   - medium → “think harder”
   - high → “ultrathink” (max budget)
-  - xhigh → “ultrathink+” (GPT-5.2 + Codex models only)
-  - adaptive → provider-managed adaptive reasoning budget (supported for Anthropic Claude 4.6 model family)
+  - xhigh → “ultrathink+” (GPT-5.2 + Codex models and Anthropic Claude Opus 4.7 effort)
+  - adaptive → provider-managed adaptive thinking (supported for Anthropic Claude 4.6 and Opus 4.7)
   - `x-high`, `x_high`, `extra-high`, `extra high`, and `extra_high` map to `xhigh`.
   - `highest`, `max` map to `high`.
 - Provider notes:
   - Anthropic Claude 4.6 models default to `adaptive` when no explicit thinking level is set.
+  - Anthropic Claude Opus 4.7 does not default to adaptive thinking. Its API effort default remains provider-owned unless you explicitly set a thinking level.
+  - Anthropic Claude Opus 4.7 maps `/think xhigh` to adaptive thinking plus `output_config.effort: "xhigh"`, because `/think` is a thinking directive and `xhigh` is the Opus 4.7 effort setting.
   - MiniMax (`minimax/*`) on the Anthropic-compatible streaming path defaults to `thinking: { type: "disabled" }` unless you explicitly set thinking in model params or request params. This avoids leaked `reasoning_content` deltas from MiniMax's non-native Anthropic stream format.
   - Z.AI (`zai/*`) only supports binary thinking (`on`/`off`). Any non-`off` level is treated as `on` (mapped to `low`).
   - Moonshot (`moonshot/*`) maps `/think off` to `thinking: { type: "disabled" }` and any non-`off` level to `thinking: { type: "enabled" }`. When thinking is enabled, Moonshot only accepts `tool_choice` `auto|none`; OpenClaw normalizes incompatible values to `auto`.
@@ -31,7 +33,7 @@ title: "Thinking Levels"
 2. Session override (set by sending a directive-only message).
 3. Per-agent default (`agents.list[].thinkingDefault` in config).
 4. Global default (`agents.defaults.thinkingDefault` in config).
-5. Fallback: `adaptive` for Anthropic Claude 4.6 models, `low` for other reasoning-capable models, `off` otherwise.
+5. Fallback: `adaptive` for Anthropic Claude 4.6 models, `off` for Anthropic Claude Opus 4.7 unless explicitly configured, `low` for other reasoning-capable models, `off` otherwise.
 
 ## Setting a session default
 
@@ -104,8 +106,9 @@ title: "Thinking Levels"
 
 - The web chat thinking selector mirrors the session's stored level from the inbound session store/config when the page loads.
 - Picking another level writes the session override immediately via `sessions.patch`; it does not wait for the next send and it is not a one-shot `thinkingOnce` override.
-- The first option is always `Default (<resolved level>)`, where the resolved default comes from the active session model: `adaptive` for Claude 4.6 on Anthropic/Bedrock, `low` for other reasoning-capable models, `off` otherwise.
+- The first option is always `Default (<resolved level>)`, where the resolved default comes from the active session model: `adaptive` for Claude 4.6 on Anthropic, `off` for Anthropic Claude Opus 4.7 unless configured, `low` for other reasoning-capable models, `off` otherwise.
 - The picker stays provider-aware:
   - most providers show `off | minimal | low | medium | high | adaptive`
+  - Anthropic Claude Opus 4.7 shows `off | minimal | low | medium | high | xhigh | adaptive`
   - Z.AI shows binary `off | on`
 - `/think:<level>` still works and updates the same stored session level, so chat directives and the picker stay in sync.

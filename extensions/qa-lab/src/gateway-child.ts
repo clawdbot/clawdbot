@@ -8,11 +8,6 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  applyAuthProfileConfig,
-  upsertAuthProfile,
-  validateAnthropicSetupToken,
-} from "openclaw/plugin-sdk/provider-auth";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
@@ -25,72 +20,27 @@ import {
 import { assertRepoBoundPath, ensureRepoBoundDirectory } from "./cli-paths.js";
 import { formatQaGatewayLogsForError, redactQaGatewayDebugText } from "./gateway-log-redaction.js";
 import { startQaGatewayRpcClient } from "./gateway-rpc-client.js";
-import { splitQaModelRef } from "./model-selection.js";
+import { splitQaModelRef, type QaProviderMode } from "./model-selection.js";
 import { resolveQaNodeExecPath } from "./node-exec.js";
+import {
+  normalizeQaProviderModeEnv,
+  QA_LIVE_PROVIDER_CONFIG_PATH_ENV,
+  resolveQaLiveCliAuthEnv,
+  resolveQaLiveProviderConfigPath,
+  type QaCliBackendAuthMode,
+} from "./providers/env.js";
+import { DEFAULT_QA_PROVIDER_MODE, getQaProvider } from "./providers/index.js";
+import {
+  QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV,
+  QA_LIVE_SETUP_TOKEN_VALUE_ENV,
+  stageQaLiveAnthropicSetupToken,
+} from "./providers/live-frontier/auth.js";
+import { stageQaMockAuthProfiles } from "./providers/shared/mock-auth.js";
 import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
 import { buildQaGatewayConfig, type QaThinkingLevel } from "./qa-gateway-config.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 
-const QA_LIVE_ENV_ALIASES = Object.freeze([
-  {
-    liveVar: "OPENCLAW_LIVE_OPENAI_KEY",
-    providerVar: "OPENAI_API_KEY",
-  },
-  {
-    liveVar: "OPENCLAW_LIVE_ANTHROPIC_KEY",
-    providerVar: "ANTHROPIC_API_KEY",
-  },
-  {
-    liveVar: "OPENCLAW_LIVE_GEMINI_KEY",
-    providerVar: "GEMINI_API_KEY",
-  },
-]);
-
-const QA_MOCK_BLOCKED_ENV_VARS = Object.freeze([
-  "ANTHROPIC_API_KEY",
-  "ANTHROPIC_OAUTH_TOKEN",
-  "AWS_ACCESS_KEY_ID",
-  "AWS_BEARER_TOKEN_BEDROCK",
-  "AWS_REGION",
-  "AWS_SECRET_ACCESS_KEY",
-  "AWS_SESSION_TOKEN",
-  "GEMINI_API_KEY",
-  "GEMINI_API_KEYS",
-  "GOOGLE_API_KEY",
-  "MISTRAL_API_KEY",
-  "OPENAI_API_KEY",
-  "OPENAI_API_KEYS",
-  "OPENAI_BASE_URL",
-  "CODEX_HOME",
-  "OPENCLAW_LIVE_ANTHROPIC_KEY",
-  "OPENCLAW_LIVE_ANTHROPIC_KEYS",
-  "OPENCLAW_LIVE_GEMINI_KEY",
-  "OPENCLAW_LIVE_OPENAI_KEY",
-  "VOYAGE_API_KEY",
-]);
-
-const QA_MOCK_BLOCKED_ENV_KEY_PATTERNS = Object.freeze([
-  /^DISCORD_/i,
-  /^TELEGRAM_/i,
-  /^SLACK_/i,
-  /^MATRIX_/i,
-  /^SIGNAL_/i,
-  /^WHATSAPP_/i,
-  /^IMESSAGE_/i,
-  /^ZALO/i,
-  /^TWILIO_/i,
-  /^PLIVO_/i,
-  /^NGROK_/i,
-]);
-
-const QA_LIVE_PROVIDER_CONFIG_PATH_ENV = "OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH";
-const QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV = "OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN";
-const QA_LIVE_SETUP_TOKEN_VALUE_ENV = "OPENCLAW_LIVE_SETUP_TOKEN_VALUE";
-const QA_LIVE_ANTHROPIC_SETUP_TOKEN_PROFILE_ENV = "OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN_PROFILE";
-const QA_LIVE_ANTHROPIC_SETUP_TOKEN_PROFILE_ID = "anthropic:qa-setup-token";
-const QA_LIVE_CLI_BACKEND_PRESERVE_ENV = "OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV";
-const QA_LIVE_CLI_BACKEND_AUTH_MODE_ENV = "OPENCLAW_LIVE_CLI_BACKEND_AUTH_MODE";
-export type QaCliBackendAuthMode = "auto" | "api-key" | "subscription";
+export type { QaCliBackendAuthMode } from "./providers/env.js";
 const QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS = 5;
 async function getFreePort() {
   return await new Promise<number>((resolve, reject) => {
@@ -199,108 +149,8 @@ function appendQaGatewayTempRoot(details: string, tempRoot: string) {
     : `${details}\nQA gateway temp root preserved at ${tempRoot}`;
 }
 
-export function normalizeQaProviderModeEnv(
-  env: NodeJS.ProcessEnv,
-  providerMode?: "mock-openai" | "live-frontier",
-) {
-  if (providerMode === "mock-openai") {
-    for (const key of QA_MOCK_BLOCKED_ENV_VARS) {
-      delete env[key];
-    }
-    for (const key of Object.keys(env)) {
-      if (QA_MOCK_BLOCKED_ENV_KEY_PATTERNS.some((pattern) => pattern.test(key))) {
-        delete env[key];
-      }
-    }
-    return env;
-  }
-
-  if (providerMode === "live-frontier") {
-    for (const { liveVar, providerVar } of QA_LIVE_ENV_ALIASES) {
-      const liveValue = env[liveVar]?.trim();
-      if (!liveValue || env[providerVar]?.trim()) {
-        continue;
-      }
-      env[providerVar] = liveValue;
-    }
-  }
-
-  return env;
-}
-
-export function resolveQaGatewayChildProviderMode(
-  providerMode?: "mock-openai" | "live-frontier",
-): "mock-openai" | "live-frontier" {
-  return providerMode ?? "mock-openai";
-}
-
-function resolveQaLiveCliAuthEnv(
-  baseEnv: NodeJS.ProcessEnv,
-  opts?: {
-    forwardHostHomeForClaudeCli?: boolean;
-    claudeCliAuthMode?: QaCliBackendAuthMode;
-  },
-) {
-  const parsePreservedCliEnv = () => {
-    const raw = baseEnv[QA_LIVE_CLI_BACKEND_PRESERVE_ENV]?.trim();
-    if (raw?.startsWith("[")) {
-      try {
-        const parsed = JSON.parse(raw) as unknown;
-        return Array.isArray(parsed)
-          ? parsed.filter((entry): entry is string => typeof entry === "string")
-          : [];
-      } catch {
-        return [];
-      }
-    }
-    return (raw ?? "").split(/[,\s]+/).filter((entry) => entry.length > 0);
-  };
-  const renderPreservedCliEnv = (values: string[]) => JSON.stringify([...new Set(values)]);
-  const authMode = opts?.claudeCliAuthMode ?? "auto";
-  const hasAnthropicKey = Boolean(
-    baseEnv.ANTHROPIC_API_KEY?.trim() || baseEnv.OPENCLAW_LIVE_ANTHROPIC_KEY?.trim(),
-  );
-  if (opts?.forwardHostHomeForClaudeCli && authMode === "api-key" && !hasAnthropicKey) {
-    throw new Error(
-      "Claude CLI API-key QA mode requires ANTHROPIC_API_KEY or OPENCLAW_LIVE_ANTHROPIC_KEY",
-    );
-  }
-  const preserveEnvValues = (() => {
-    if (!opts?.forwardHostHomeForClaudeCli) {
-      return undefined;
-    }
-    const values = parsePreservedCliEnv().filter((entry) => entry !== "ANTHROPIC_API_KEY");
-    if (authMode === "api-key" || (authMode === "auto" && hasAnthropicKey)) {
-      values.push("ANTHROPIC_API_KEY");
-    }
-    return renderPreservedCliEnv(values);
-  })();
-  const claudeCliEnv = opts?.forwardHostHomeForClaudeCli
-    ? {
-        [QA_LIVE_CLI_BACKEND_AUTH_MODE_ENV]: authMode,
-        ...(preserveEnvValues ? { [QA_LIVE_CLI_BACKEND_PRESERVE_ENV]: preserveEnvValues } : {}),
-      }
-    : {};
-  const configuredCodexHome = baseEnv.CODEX_HOME?.trim();
-  if (configuredCodexHome) {
-    return {
-      CODEX_HOME: configuredCodexHome,
-      ...claudeCliEnv,
-      ...(opts?.forwardHostHomeForClaudeCli && baseEnv.HOME?.trim()
-        ? { HOME: baseEnv.HOME.trim() }
-        : {}),
-    };
-  }
-  const hostHome = baseEnv.HOME?.trim();
-  if (!hostHome) {
-    return {};
-  }
-  const codexHome = path.join(hostHome, ".codex");
-  return {
-    ...(existsSync(codexHome) ? { CODEX_HOME: codexHome } : {}),
-    ...claudeCliEnv,
-    ...(opts?.forwardHostHomeForClaudeCli ? { HOME: hostHome } : {}),
-  };
+export function resolveQaGatewayChildProviderMode(providerMode?: QaProviderMode): QaProviderMode {
+  return providerMode ?? DEFAULT_QA_PROVIDER_MODE;
 }
 
 export function buildQaRuntimeEnv(params: {
@@ -314,19 +164,20 @@ export function buildQaRuntimeEnv(params: {
   xdgCacheHome: string;
   bundledPluginsDir?: string;
   compatibilityHostVersion?: string;
-  providerMode?: "mock-openai" | "live-frontier";
+  providerMode?: QaProviderMode;
   baseEnv?: NodeJS.ProcessEnv;
   forwardHostHomeForClaudeCli?: boolean;
   claudeCliAuthMode?: QaCliBackendAuthMode;
 }) {
   const baseEnv = params.baseEnv ?? process.env;
+  const provider = params.providerMode ? getQaProvider(params.providerMode) : null;
   const forwardedHostHome = params.forwardHostHome
     ? baseEnv.HOME?.trim() || os.homedir()
     : undefined;
   const env: NodeJS.ProcessEnv = {
     ...baseEnv,
     HOME: forwardedHostHome ?? params.homeDir,
-    ...(params.providerMode === "live-frontier"
+    ...(provider?.appliesLiveEnvAliases
       ? resolveQaLiveCliAuthEnv(baseEnv, {
           forwardHostHomeForClaudeCli: params.forwardHostHomeForClaudeCli,
           claudeCliAuthMode: params.claudeCliAuthMode,
@@ -358,119 +209,6 @@ export function buildQaRuntimeEnv(params: {
   delete normalizedEnv[QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV];
   delete normalizedEnv[QA_LIVE_SETUP_TOKEN_VALUE_ENV];
   return normalizedEnv;
-}
-
-function resolveQaLiveAnthropicSetupToken(env: NodeJS.ProcessEnv = process.env) {
-  const token = (
-    env[QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV]?.trim() ||
-    env[QA_LIVE_SETUP_TOKEN_VALUE_ENV]?.trim() ||
-    ""
-  ).replaceAll(/\s+/g, "");
-  if (!token) {
-    return null;
-  }
-  const tokenError = validateAnthropicSetupToken(token);
-  if (tokenError) {
-    throw new Error(`Invalid QA Anthropic setup-token: ${tokenError}`);
-  }
-  const profileId =
-    env[QA_LIVE_ANTHROPIC_SETUP_TOKEN_PROFILE_ENV]?.trim() ||
-    QA_LIVE_ANTHROPIC_SETUP_TOKEN_PROFILE_ID;
-  return { token, profileId };
-}
-
-export async function stageQaLiveAnthropicSetupToken(params: {
-  cfg: OpenClawConfig;
-  stateDir: string;
-  env?: NodeJS.ProcessEnv;
-}): Promise<OpenClawConfig> {
-  const resolved = resolveQaLiveAnthropicSetupToken(params.env);
-  if (!resolved) {
-    return params.cfg;
-  }
-  const agentDir = path.join(params.stateDir, "agents", "main", "agent");
-  await fs.mkdir(agentDir, { recursive: true });
-  upsertAuthProfile({
-    profileId: resolved.profileId,
-    credential: {
-      type: "token",
-      provider: "anthropic",
-      token: resolved.token,
-    },
-    agentDir,
-  });
-  return applyAuthProfileConfig(params.cfg, {
-    profileId: resolved.profileId,
-    provider: "anthropic",
-    mode: "token",
-    displayName: "QA setup-token",
-  });
-}
-
-/** Providers the mock-openai harness stages placeholder credentials for. */
-export const QA_MOCK_AUTH_PROVIDERS = Object.freeze(["openai", "anthropic"] as const);
-
-/** Agent IDs the mock-openai harness stages credentials under. */
-export const QA_MOCK_AUTH_AGENT_IDS = Object.freeze(["main", "qa"] as const);
-
-export function buildQaMockProfileId(provider: string): string {
-  return `qa-mock-${provider}`;
-}
-
-/**
- * In mock-openai mode the qa suite runs against the embedded mock server
- * instead of a real provider API. The mock does not validate credentials, but
- * the agent auth layer still needs a matching `api_key` auth profile in
- * `auth-profiles.json` before it will route the request through
- * `providerBaseUrl`. Without this staging step, every scenario fails with
- * `FailoverError: No API key found for provider "openai"` before the mock
- * server ever sees a request.
- *
- * Stages a placeholder `api_key` profile per provider in each of the agent
- * dirs the qa suite uses (`main` for the runtime config, `qa` for scenario
- * runs) and returns a config with matching `auth.profiles` entries so the
- * runtime accepts the profile on the first lookup.
- *
- * The placeholder value `qa-mock-not-a-real-key` is intentionally not
- * shaped like a real API key (no `sk-` prefix that would trip secret
- * scanners). It only needs to be non-empty to pass the credential
- * serializer; anything beyond that is ignored by the mock.
- */
-export async function stageQaMockAuthProfiles(params: {
-  cfg: OpenClawConfig;
-  stateDir: string;
-  agentIds?: readonly string[];
-  providers?: readonly string[];
-}): Promise<OpenClawConfig> {
-  const agentIds = [...new Set(params.agentIds ?? QA_MOCK_AUTH_AGENT_IDS)];
-  const providers = [...new Set(params.providers ?? QA_MOCK_AUTH_PROVIDERS)];
-  let next = params.cfg;
-  for (const agentId of agentIds) {
-    const agentDir = path.join(params.stateDir, "agents", agentId, "agent");
-    await fs.mkdir(agentDir, { recursive: true });
-    for (const provider of providers) {
-      const profileId = buildQaMockProfileId(provider);
-      upsertAuthProfile({
-        profileId,
-        credential: {
-          type: "api_key",
-          provider,
-          key: "qa-mock-not-a-real-key",
-          displayName: `QA mock ${provider} credential`,
-        },
-        agentDir,
-      });
-    }
-  }
-  for (const provider of providers) {
-    next = applyAuthProfileConfig(next, {
-      profileId: buildQaMockProfileId(provider),
-      provider,
-      mode: "api_key",
-      displayName: `QA mock ${provider} credential`,
-    });
-  }
-  return next;
 }
 
 function isRetryableGatewayCallError(details: string): boolean {
@@ -519,7 +257,6 @@ export const __testing = {
   redactQaGatewayDebugText,
   readQaLiveProviderConfigOverrides,
   resolveQaGatewayChildProviderMode,
-  resolveQaLiveAnthropicSetupToken,
   stageQaLiveAnthropicSetupToken,
   stageQaMockAuthProfiles,
   resolveQaLiveCliAuthEnv,
@@ -576,24 +313,6 @@ async function stopQaGatewayChildProcessTree(
   }
   signalQaGatewayChildProcessTree(child, "SIGKILL");
   await waitForQaGatewayChildExit(child, opts?.forceTimeoutMs ?? 2_000);
-}
-
-function resolveQaUserPath(value: string, env: NodeJS.ProcessEnv = process.env) {
-  if (value === "~") {
-    return env.HOME ?? os.homedir();
-  }
-  if (value.startsWith("~/")) {
-    return path.join(env.HOME ?? os.homedir(), value.slice(2));
-  }
-  return path.resolve(value);
-}
-
-function resolveQaLiveProviderConfigPath(env: NodeJS.ProcessEnv = process.env) {
-  const explicit =
-    env[QA_LIVE_PROVIDER_CONFIG_PATH_ENV]?.trim() || env.OPENCLAW_CONFIG_PATH?.trim();
-  return explicit
-    ? { path: resolveQaUserPath(explicit, env), explicit: true }
-    : { path: path.join(os.homedir(), ".openclaw", "openclaw.json"), explicit: false };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -705,7 +424,7 @@ export async function startQaGatewayChild(params: {
   transport: Pick<QaTransportAdapter, "requiredPluginIds" | "createGatewayConfig">;
   transportBaseUrl: string;
   controlUiAllowedOrigins?: string[];
-  providerMode?: "mock-openai" | "live-frontier";
+  providerMode?: QaProviderMode;
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;
@@ -741,14 +460,14 @@ export async function startQaGatewayChild(params: {
     fs.mkdir(xdgCacheHome, { recursive: true }),
   ]);
   const providerMode = resolveQaGatewayChildProviderMode(params.providerMode);
-  const liveProviderIds =
-    providerMode === "live-frontier"
-      ? [params.primaryModel, params.alternateModel]
-          .map((modelRef) =>
-            typeof modelRef === "string" ? splitQaModelRef(modelRef)?.provider : undefined,
-          )
-          .filter((providerId): providerId is string => Boolean(providerId))
-      : [];
+  const resolvedProvider = getQaProvider(providerMode);
+  const liveProviderIds = resolvedProvider.usesModelProviderPlugins
+    ? [params.primaryModel, params.alternateModel]
+        .map((modelRef) =>
+          typeof modelRef === "string" ? splitQaModelRef(modelRef)?.provider : undefined,
+        )
+        .filter((providerId): providerId is string => Boolean(providerId))
+    : [];
   const liveProviderConfigs = await readQaLiveProviderConfigOverrides({
     providerIds: liveProviderIds,
   });
@@ -794,10 +513,12 @@ export async function startQaGatewayChild(params: {
       cfg,
       stateDir,
     });
-    if (providerMode === "mock-openai") {
+    const mockAuthProviders = getQaProvider(providerMode).mockAuthProviders;
+    if (mockAuthProviders && mockAuthProviders.length > 0) {
       cfg = await stageQaMockAuthProfiles({
         cfg,
         stateDir,
+        providers: mockAuthProviders,
       });
     }
     return params.mutateConfig ? params.mutateConfig(cfg) : cfg;

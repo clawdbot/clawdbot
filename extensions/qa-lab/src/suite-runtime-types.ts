@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { QaProviderMode } from "./model-selection.js";
 import type { QaTransportActionName, QaTransportAdapter } from "./qa-transport.js";
 
 export type QaRuntimeGatewayClient = {
@@ -21,7 +22,7 @@ export type QaSuiteRuntimeEnv = {
   gateway: QaRuntimeGatewayClient;
   transport: QaRuntimeTransport;
   repoRoot: string;
-  providerMode: "mock-openai" | "live-frontier";
+  providerMode: QaProviderMode;
   primaryModel: string;
   alternateModel: string;
   mock: {

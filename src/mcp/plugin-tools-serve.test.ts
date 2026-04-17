@@ -30,7 +30,10 @@ afterEach(() => {
 });
 
 describe("plugin tools MCP server", () => {
-  it("lists registered plugin tools with their input schema", async () => {
+  it("lists registered plugin tools and serializes non-array tool content", async () => {
+    const execute = vi.fn().mockResolvedValue({
+      content: "Stored.",
+    });
     const tool = {
       name: "memory_recall",
       description: "Recall stored memory",
@@ -41,7 +44,7 @@ describe("plugin tools MCP server", () => {
         },
         required: ["query"],
       },
-      execute: vi.fn(),
+      execute,
     } as unknown as AnyAgentTool;
 
     const session = await connectPluginToolsServer([tool]);
@@ -57,32 +60,15 @@ describe("plugin tools MCP server", () => {
           }),
         }),
       ]);
-    } finally {
-      await session.close();
-    }
-  });
 
-  it("serializes non-array tool content as text for MCP callers", async () => {
-    const execute = vi.fn().mockResolvedValue({
-      content: "Stored.",
-    });
-    const tool = {
-      name: "memory_store",
-      description: "Store memory",
-      parameters: { type: "object", properties: {} },
-      execute,
-    } as unknown as AnyAgentTool;
-
-    const session = await connectPluginToolsServer([tool]);
-    try {
       const result = await session.client.callTool({
-        name: "memory_store",
-        arguments: { text: "remember this" },
+        name: "memory_recall",
+        arguments: { query: "remember this" },
       });
       expect(execute).toHaveBeenCalledWith(
         expect.stringMatching(/^mcp-\d+$/),
         {
-          text: "remember this",
+          query: "remember this",
         },
         undefined,
         undefined,
@@ -162,38 +148,6 @@ describe("plugin tools MCP server", () => {
       expect(result.content).toEqual([
         { type: "text", text: "Tool error: Plugin approval required (gateway unavailable)" },
       ]);
-    } finally {
-      await session.close();
-    }
-  });
-
-  it("still executes plugin tools on the MCP bridge when no before_tool_call hook is registered", async () => {
-    const execute = vi.fn().mockResolvedValue({
-      content: "Stored.",
-    });
-    const tool = {
-      name: "memory_store",
-      description: "Store memory",
-      parameters: { type: "object", properties: {} },
-      execute,
-    } as unknown as AnyAgentTool;
-
-    const session = await connectPluginToolsServer([tool]);
-    try {
-      const result = await session.client.callTool({
-        name: "memory_store",
-        arguments: { text: "remember this" },
-      });
-      expect(execute).toHaveBeenCalledWith(
-        expect.stringMatching(/^mcp-\d+$/),
-        {
-          text: "remember this",
-        },
-        undefined,
-        undefined,
-      );
-      expect(result.isError).toBeUndefined();
-      expect(result.content).toEqual([{ type: "text", text: "Stored." }]);
     } finally {
       await session.close();
     }

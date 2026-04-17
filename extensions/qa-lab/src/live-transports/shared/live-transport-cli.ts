@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { collectString } from "../../cli-options.js";
+import { DEFAULT_QA_LIVE_PROVIDER_MODE, formatQaProviderModeHelp } from "../../providers/index.js";
 import type { QaProviderModeInput } from "../../run-config.js";
 
 export type LiveTransportQaCommandOptions = {
@@ -78,11 +79,7 @@ export function registerLiveTransportQaCli(params: {
     .description(params.description)
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option("--output-dir <path>", params.outputDirHelp)
-    .option(
-      "--provider-mode <mode>",
-      "Provider mode: mock-openai or live-frontier (legacy live-openai still works)",
-      "live-frontier",
-    )
+    .option("--provider-mode <mode>", formatQaProviderModeHelp(), DEFAULT_QA_LIVE_PROVIDER_MODE)
     .option("--model <ref>", "Primary provider/model ref")
     .option("--alt-model <ref>", "Alternate provider/model ref")
     .option("--scenario <id>", params.scenarioHelp, collectString, [])

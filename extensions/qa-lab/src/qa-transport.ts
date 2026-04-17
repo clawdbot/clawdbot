@@ -1,5 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { QaProviderMode } from "./model-selection.js";
 import { extractQaFailureReplyText } from "./reply-failure.js";
 import type {
   QaBusInboundMessageInput,
@@ -24,7 +25,7 @@ export type QaTransportGatewayClient = {
 export type QaTransportActionName = "delete" | "edit" | "react" | "thread-create";
 
 export type QaTransportReportParams = {
-  providerMode: "mock-openai" | "live-frontier";
+  providerMode: QaProviderMode;
   primaryModel: string;
   alternateModel: string;
   fastMode: boolean;

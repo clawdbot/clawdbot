@@ -73,8 +73,27 @@ function createHarness(params?: {
       emoji?: Array<[string, string]>;
     };
   } | null>;
+  sasNoticeRetryDelayMs?: number;
 }) {
   const listeners = new Map<string, (...args: unknown[]) => void>();
+  const pendingTasks = new Set<Promise<void>>();
+  const runDetachedTask = vi.fn((_label: string, task: () => Promise<void>) => {
+    const promise = Promise.resolve()
+      .then(task)
+      .catch((error) => {
+        throw error;
+      })
+      .finally(() => {
+        pendingTasks.delete(promise);
+      });
+    pendingTasks.add(promise);
+    return promise;
+  });
+  const flushTasks = async () => {
+    while (pendingTasks.size > 0) {
+      await Promise.all(Array.from(pendingTasks));
+    }
+  };
   const onRoomMessage = vi.fn(async () => {});
   const listVerifications = vi.fn(async () => params?.verifications ?? []);
   const ensureVerificationDmTracked = vi.fn(
@@ -154,6 +173,8 @@ function createHarness(params?: {
       (typeof params?.startupMs === "number" ? () => params.startupMs : undefined),
     formatNativeDependencyHint,
     onRoomMessage,
+    runDetachedTask,
+    sasNoticeRetryDelayMs: params?.sasNoticeRetryDelayMs ?? 0,
   });
 
   const roomEventListener = listeners.get("room.event") as RoomEventListener | undefined;
@@ -172,6 +193,8 @@ function createHarness(params?: {
     logger,
     formatNativeDependencyHint,
     logVerboseMessage,
+    flushTasks,
+    runDetachedTask,
     roomMessageListener: listeners.get("room.message") as RoomEventListener | undefined,
     failedDecryptListener: listeners.get("room.failed_decryption") as
       | FailedDecryptListener
@@ -885,6 +908,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
         "!dm:example.org": ["@alice:example.org", "@bot:example.org"],
       },
       verifications,
+      sasNoticeRetryDelayMs: 750,
     });
 
     try {

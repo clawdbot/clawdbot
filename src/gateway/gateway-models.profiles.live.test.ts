@@ -548,6 +548,10 @@ function isRefreshTokenReused(error: string): boolean {
   return /refresh_token_reused/i.test(error);
 }
 
+function isAccountIdExtractionError(error: string): boolean {
+  return /failed to extract accountid from token/i.test(error);
+}
+
 function isChatGPTUsageLimitErrorMessage(raw: string): boolean {
   const msg = raw.toLowerCase();
   return msg.includes("hit your chatgpt usage limit") && msg.includes("try again in");
@@ -675,10 +679,10 @@ describe("getHighSignalLiveModelPriorityIndex", () => {
   it("prefers curated Google replacements over big-pickle", () => {
     expect(
       getHighSignalLiveModelPriorityIndex({ provider: "google", id: "gemini-3.1-pro-preview" }),
-    ).toBe(2);
+    ).toBe(3);
     expect(
       getHighSignalLiveModelPriorityIndex({ provider: "google", id: "gemini-3-flash-preview" }),
-    ).toBe(3);
+    ).toBe(4);
     expect(getHighSignalLiveModelPriorityIndex({ provider: "opencode", id: "big-pickle" })).toBe(
       null,
     );
@@ -1924,6 +1928,11 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           if (model.provider === "openai-codex" && isRefreshTokenReused(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (codex refresh token reused)`);
+            break;
+          }
+          if (model.provider === "openai-codex" && isAccountIdExtractionError(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (codex account id extraction)`);
             break;
           }
           if (model.provider === "openai-codex" && isChatGPTUsageLimitErrorMessage(message)) {

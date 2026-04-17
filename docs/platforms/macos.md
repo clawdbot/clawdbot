@@ -55,7 +55,7 @@ The macOS app presents itself as a node. Common commands:
 
 - Canvas: `canvas.present`, `canvas.navigate`, `canvas.eval`, `canvas.snapshot`, `canvas.a2ui.*`
 - Camera: `camera.snap`, `camera.clip`
-- Screen: `screen.record`
+- Screen: `screen.snapshot`, `screen.record`
 - System: `system.run`, `system.notify`
 
 The node reports a `permissions` map so agents can decide what’s allowed.

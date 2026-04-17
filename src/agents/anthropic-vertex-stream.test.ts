@@ -146,6 +146,22 @@ describe("createAnthropicVertexStreamFn", () => {
     );
   });
 
+  it("maps xhigh reasoning to xhigh effort for Opus 4.7", () => {
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5");
+    const model = makeModel({ id: "claude-opus-4-7", maxTokens: 64000 });
+
+    void streamFn(model, { messages: [] }, { reasoning: "xhigh" });
+
+    expect(hoisted.streamAnthropicMock).toHaveBeenCalledWith(
+      model,
+      { messages: [] },
+      expect.objectContaining({
+        thinkingEnabled: true,
+        effort: "xhigh",
+      }),
+    );
+  });
+
   it("applies Anthropic cache-boundary shaping before forwarding payload hooks", async () => {
     const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5");
     const model = makeModel({ id: "claude-sonnet-4-6", maxTokens: 64000 });

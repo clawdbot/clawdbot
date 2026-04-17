@@ -14,6 +14,7 @@ import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-pr
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../../music-generation-task-status.js";
 import { prependSystemPromptAdditionAfterCacheBoundary } from "../../system-prompt-cache-boundary.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
+import { derivePromptTokens, type NormalizedUsage } from "../../usage.js";
 import { buildActiveVideoGenerationTaskPromptContextForSession } from "../../video-generation-task-status.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import { log } from "../logger.js";
@@ -255,15 +256,26 @@ export function buildAfterTurnRuntimeContext(params: {
       ownerNumbers: params.attempt.ownerNumbers,
     }),
     ...(typeof params.tokenBudget === "number" &&
-      Number.isFinite(params.tokenBudget) &&
-      params.tokenBudget > 0
+    Number.isFinite(params.tokenBudget) &&
+    params.tokenBudget > 0
       ? { tokenBudget: Math.floor(params.tokenBudget) }
       : {}),
     ...(typeof params.currentTokenCount === "number" &&
-      Number.isFinite(params.currentTokenCount) &&
-      params.currentTokenCount > 0
+    Number.isFinite(params.currentTokenCount) &&
+    params.currentTokenCount > 0
       ? { currentTokenCount: Math.floor(params.currentTokenCount) }
       : {}),
     ...(params.promptCache ? { promptCache: params.promptCache } : {}),
   };
+}
+
+export function buildAfterTurnRuntimeContextFromUsage(
+  params: Omit<Parameters<typeof buildAfterTurnRuntimeContext>[0], "currentTokenCount"> & {
+    lastCallUsage?: NormalizedUsage;
+  },
+): ContextEngineRuntimeContext {
+  return buildAfterTurnRuntimeContext({
+    ...params,
+    currentTokenCount: derivePromptTokens(params.lastCallUsage),
+  });
 }

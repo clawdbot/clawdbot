@@ -7,7 +7,7 @@ import {
   type ChannelPlugin,
   type OpenClawConfig,
 } from "./channel-api.js";
-import { monitorNextcloudTalkProvider } from "./monitor.js";
+import { monitorNextcloudTalkProvider } from "./monitor-runtime.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 

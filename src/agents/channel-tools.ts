@@ -3,6 +3,7 @@ import {
   createMessageActionDiscoveryContext,
   resolveMessageActionDiscoveryForPlugin,
   resolveMessageActionDiscoveryChannelId,
+  resolveCurrentChannelMessageToolDiscoveryAdapter,
   __testing as messageActionTesting,
 } from "../channels/plugins/message-action-discovery.js";
 import type {
@@ -50,13 +51,13 @@ export function listChannelSupportedActions(params: {
   if (!channelId) {
     return [];
   }
-  const plugin = getChannelPlugin(channelId as Parameters<typeof getChannelPlugin>[0]);
-  if (!plugin?.actions) {
+  const pluginActions = resolveCurrentChannelMessageToolDiscoveryAdapter(channelId);
+  if (!pluginActions?.actions) {
     return [];
   }
   return resolveMessageActionDiscoveryForPlugin({
-    pluginId: plugin.id,
-    actions: plugin.actions,
+    pluginId: pluginActions.pluginId,
+    actions: pluginActions.actions,
     context: createMessageActionDiscoveryContext(params),
     includeActions: true,
   }).actions;

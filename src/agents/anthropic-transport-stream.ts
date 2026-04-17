@@ -59,6 +59,7 @@ type AnthropicTransportModel = Model<"anthropic-messages"> & {
 
 type AnthropicTransportOptions = AnthropicOptions &
   Pick<SimpleStreamOptions, "reasoning" | "thinkingBudgets">;
+type AnthropicAdaptiveEffort = NonNullable<AnthropicOptions["effort"]> | "xhigh";
 
 type TransportContentBlock =
   | { type: "text"; text: string; index?: number }
@@ -98,19 +99,24 @@ type MutableAssistantOutput = {
   errorMessage?: string;
 };
 
+function isClaudeOpus47Model(modelId: string): boolean {
+  return modelId.includes("opus-4-7") || modelId.includes("opus-4.7");
+}
+
+function isClaudeOpus46Model(modelId: string): boolean {
+  return modelId.includes("opus-4-6") || modelId.includes("opus-4.6");
+}
+
 function supportsAdaptiveThinking(modelId: string): boolean {
   return (
-    modelId.includes("opus-4-6") ||
-    modelId.includes("opus-4.6") ||
+    isClaudeOpus47Model(modelId) ||
+    isClaudeOpus46Model(modelId) ||
     modelId.includes("sonnet-4-6") ||
     modelId.includes("sonnet-4.6")
   );
 }
 
-function mapThinkingLevelToEffort(
-  level: ThinkingLevel,
-  modelId: string,
-): NonNullable<AnthropicOptions["effort"]> {
+function mapThinkingLevelToEffort(level: ThinkingLevel, modelId: string): AnthropicAdaptiveEffort {
   switch (level) {
     case "minimal":
     case "low":
@@ -118,7 +124,10 @@ function mapThinkingLevelToEffort(
     case "medium":
       return "medium";
     case "xhigh":
-      return modelId.includes("opus-4-6") || modelId.includes("opus-4.6") ? "max" : "high";
+      if (isClaudeOpus47Model(modelId)) {
+        return "xhigh";
+      }
+      return isClaudeOpus46Model(modelId) ? "max" : "high";
     default:
       return "high";
   }
@@ -616,7 +625,9 @@ function resolveAnthropicTransportOptions(
   }
   if (supportsAdaptiveThinking(model.id)) {
     resolved.thinkingEnabled = true;
-    resolved.effort = mapThinkingLevelToEffort(options.reasoning, model.id);
+    resolved.effort = mapThinkingLevelToEffort(options.reasoning, model.id) as NonNullable<
+      AnthropicOptions["effort"]
+    >;
     return resolved;
   }
   const adjusted = adjustMaxTokensForThinking({

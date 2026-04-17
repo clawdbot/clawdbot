@@ -169,6 +169,14 @@ function resolveMatrixMentionPrecheckText(params: {
   return "";
 }
 
+function hasBundledMatrixReplacementRelation(event: MatrixRawEvent) {
+  const relations = event.unsigned?.["m.relations"];
+  if (!relations || typeof relations !== "object") {
+    return false;
+  }
+  return relations[RelationType.Replace] !== undefined;
+}
+
 function resolveMatrixInboundBodyText(params: {
   rawBody: string;
   filename?: string;
@@ -498,6 +506,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
 
         const relates = content["m.relates_to"];
         if (relates && "rel_type" in relates && relates.rel_type === RelationType.Replace) {
+          return undefined;
+        }
+        if (hasBundledMatrixReplacementRelation(event)) {
           return undefined;
         }
         if (eventId && inboundDeduper) {

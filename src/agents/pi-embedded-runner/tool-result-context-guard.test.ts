@@ -29,6 +29,15 @@ function makeToolResult(id: string, text: string, toolName = "grep"): AgentMessa
   });
 }
 
+function makeAssistant(text: string, extras: Record<string, unknown> = {}): AgentMessage {
+  return castAgentMessage({
+    role: "assistant",
+    content: text,
+    timestamp: Date.now(),
+    ...extras,
+  });
+}
+
 function makeReadToolResult(id: string, text: string): AgentMessage {
   return makeToolResult(id, text, "read");
 }
@@ -319,6 +328,10 @@ describe("installContextEngineLoopHook", () => {
     agent: ReturnType<typeof makeGuardableAgent>,
     engine: MockedEngine,
     prePromptCount?: number,
+    getRuntimeContext?: (params: {
+      messages: AgentMessage[];
+      prePromptMessageCount: number;
+    }) => Record<string, unknown> | undefined,
   ): () => void {
     return installContextEngineLoopHook({
       agent,
@@ -329,6 +342,7 @@ describe("installContextEngineLoopHook", () => {
       tokenBudget,
       modelId,
       ...(prePromptCount !== undefined ? { getPrePromptMessageCount: () => prePromptCount } : {}),
+      ...(getRuntimeContext ? { getRuntimeContext } : {}),
     });
   }
 
@@ -359,6 +373,54 @@ describe("installContextEngineLoopHook", () => {
       messages,
     });
     expect(engine.assemble).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes runtimeContext through loop-hook afterTurn calls", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    installHook(agent, engine, 1, () => ({
+      provider: "anthropic",
+      modelId: modelId,
+      promptCache: {
+        retention: "short",
+        lastCacheTouchAt: 123,
+      },
+    }));
+
+    const messages = [makeUser("first"), makeToolResult("call_1", "result")];
+    await callTransform(agent, messages);
+
+    expect(engine.afterTurn).toHaveBeenCalledTimes(1);
+    expect(engine.afterTurn.mock.calls[0]?.[0]).toMatchObject({
+      prePromptMessageCount: 1,
+      runtimeContext: {
+        provider: "anthropic",
+        modelId,
+        promptCache: {
+          retention: "short",
+          lastCacheTouchAt: 123,
+        },
+      },
+    });
+  });
+
+  it("passes loop messages and the prompt fence into the runtimeContext callback", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    const getRuntimeContext = vi.fn(() => ({ provider: "anthropic" }));
+    installHook(agent, engine, 1, getRuntimeContext);
+
+    const messages = [
+      makeUser("first"),
+      makeAssistant("tool use", { usage: { cacheRead: 40, total: 50 }, timestamp: 456 }),
+      makeToolResult("call_1", "result"),
+    ];
+    await callTransform(agent, messages);
+
+    expect(getRuntimeContext).toHaveBeenCalledWith({
+      messages,
+      prePromptMessageCount: 1,
+    });
   });
 
   it("calls afterTurn and assemble when new messages are appended after the first call", async () => {

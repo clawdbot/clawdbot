@@ -37,7 +37,7 @@ const MERGE_SUMMARIES_INSTRUCTIONS = [
 ].join("\n");
 const IDENTIFIER_PRESERVATION_INSTRUCTIONS =
   "Preserve all opaque identifiers exactly as written (no shortening or reconstruction), " +
-  "including UUIDs, hashes, IDs, tokens, API keys, hostnames, IPs, ports, URLs, and file names.";
+  "including UUIDs, hashes, IDs, hostnames, IPs, ports, URLs, and file names.";
 
 export type CompactionSummarizationInstructions = {
   identifierPolicy?: AgentCompactionIdentifierPolicy;

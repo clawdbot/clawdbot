@@ -91,7 +91,7 @@ describe("qa suite runtime agent media helpers", () => {
     ).resolves.toBe(mediaPath);
   });
 
-  it("applies mock image generation config with transport-required plugins", async () => {
+  it("applies provider image generation config with transport-required plugins", async () => {
     await ensureImageGenerationConfigured({
       providerMode: "mock-openai",
       mock: { baseUrl: "http://127.0.0.1:9999" },
@@ -102,7 +102,7 @@ describe("qa suite runtime agent media helpers", () => {
       expect.objectContaining({
         patch: expect.objectContaining({
           plugins: expect.objectContaining({
-            allow: expect.arrayContaining(["memory-core", "openai", "qa-channel", "browser"]),
+            allow: expect.arrayContaining(["memory-core", "qa-channel", "browser"]),
           }),
         }),
       }),

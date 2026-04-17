@@ -1,8 +1,3 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { generateSecureToken } from "../infra/secure-random.js";
-import { runExec } from "../process/exec.js";
 import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
 
 type CloseTrackedBrowserTabsParams = {
@@ -44,6 +39,19 @@ export async function closeTrackedBrowserTabsForSessions(
 }
 
 export async function movePathToTrash(targetPath: string): Promise<string> {
+  const [
+    { default: fs },
+    { default: os },
+    { default: path },
+    { generateSecureToken },
+    { runExec },
+  ] = await Promise.all([
+    import("node:fs"),
+    import("node:os"),
+    import("node:path"),
+    import("../infra/secure-random.js"),
+    import("../process/exec.js"),
+  ]);
   try {
     await runExec("trash", [targetPath], { timeoutMs: 10_000 });
     return targetPath;

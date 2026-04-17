@@ -1,4 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
+import type { SessionEntry } from "../config/sessions.js";
+import type { ParsedAgentSessionKey } from "../routing/session-key.js";
+import {
+  resetTaskRegistryMaintenanceRuntimeForTests,
+  runTaskRegistryMaintenance,
+  setTaskRegistryMaintenanceRuntimeForTests,
+  stopTaskRegistryMaintenanceForTests,
+} from "./task-registry.maintenance.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
 const GRACE_EXPIRED_MS = 10 * 60_000;
@@ -22,54 +31,66 @@ function makeStaleTask(overrides: Partial<TaskRecord>): TaskRecord {
   };
 }
 
-async function loadMaintenanceModule(params: {
+type TaskRegistryMaintenanceRuntime = Parameters<
+  typeof setTaskRegistryMaintenanceRuntimeForTests
+>[0];
+
+afterEach(() => {
+  stopTaskRegistryMaintenanceForTests();
+  resetTaskRegistryMaintenanceRuntimeForTests();
+});
+
+function createTaskRegistryMaintenanceHarness(params: {
   tasks: TaskRecord[];
-  sessionStore?: Record<string, unknown>;
-  acpEntry?: unknown;
+  sessionStore?: Record<string, SessionEntry>;
+  acpEntry?: AcpSessionStoreEntry["entry"];
   activeCronJobIds?: string[];
   activeRunIds?: string[];
 }) {
-  vi.resetModules();
-
   const sessionStore = params.sessionStore ?? {};
   const acpEntry = params.acpEntry;
   const activeCronJobIds = new Set(params.activeCronJobIds ?? []);
   const activeRunIds = new Set(params.activeRunIds ?? []);
   const currentTasks = new Map(params.tasks.map((task) => [task.taskId, { ...task }]));
 
-  vi.doMock("../acp/runtime/session-meta.js", () => ({
+  const runtime: TaskRegistryMaintenanceRuntime = {
     readAcpSessionEntry: () =>
       acpEntry !== undefined
-        ? { entry: acpEntry, storeReadFailed: false }
-        : { entry: undefined, storeReadFailed: false },
-  }));
-
-  vi.doMock("../config/sessions.js", () => ({
+        ? ({
+            cfg: {} as never,
+            storePath: "",
+            sessionKey: "",
+            storeSessionKey: "",
+            entry: acpEntry,
+            storeReadFailed: false,
+          } satisfies AcpSessionStoreEntry)
+        : ({
+            cfg: {} as never,
+            storePath: "",
+            sessionKey: "",
+            storeSessionKey: "",
+            entry: undefined,
+            storeReadFailed: false,
+          } satisfies AcpSessionStoreEntry),
     loadSessionStore: () => sessionStore,
     resolveStorePath: () => "",
-  }));
-
-  vi.doMock("../cron/active-jobs.js", () => ({
     isCronJobActive: (jobId: string) => activeCronJobIds.has(jobId),
-  }));
-
-  vi.doMock("../infra/agent-events.js", () => ({
     getAgentRunContext: (runId: string) =>
       activeRunIds.has(runId) ? { sessionKey: "main" } : undefined,
-  }));
-
-  vi.doMock("./runtime-internal.js", () => ({
+    parseAgentSessionKey: (sessionKey: string | null | undefined): ParsedAgentSessionKey | null => {
+      if (!sessionKey) {
+        return null;
+      }
+      const [kind, agentId, ...rest] = sessionKey.split(":");
+      return kind === "agent" && agentId && rest.length > 0
+        ? { agentId, rest: rest.join(":") }
+        : null;
+    },
     deleteTaskRecordById: (taskId: string) => currentTasks.delete(taskId),
     ensureTaskRegistryReady: () => {},
     getTaskById: (taskId: string) => currentTasks.get(taskId),
-    listTaskRecords: () => params.tasks,
-    markTaskLostById: (patch: {
-      taskId: string;
-      endedAt: number;
-      lastEventAt?: number;
-      error?: string;
-      cleanupAfter?: number;
-    }) => {
+    listTaskRecords: () => Array.from(currentTasks.values()),
+    markTaskLostById: (patch) => {
       const current = currentTasks.get(patch.taskId);
       if (!current) {
         return null;
@@ -85,9 +106,9 @@ async function loadMaintenanceModule(params: {
       currentTasks.set(patch.taskId, next);
       return next;
     },
-    maybeDeliverTaskTerminalUpdate: () => false,
+    maybeDeliverTaskTerminalUpdate: async () => null,
     resolveTaskForLookupToken: () => undefined,
-    setTaskCleanupAfterById: (patch: { taskId: string; cleanupAfter: number }) => {
+    setTaskCleanupAfterById: (patch) => {
       const current = currentTasks.get(patch.taskId);
       if (!current) {
         return null;
@@ -96,10 +117,10 @@ async function loadMaintenanceModule(params: {
       currentTasks.set(patch.taskId, next);
       return next;
     },
-  }));
+  };
 
-  const mod = await import("./task-registry.maintenance.js");
-  return { mod, currentTasks };
+  setTaskRegistryMaintenanceRuntimeForTests(runtime);
+  return { currentTasks };
 }
 
 describe("task-registry maintenance issue #60299", () => {
@@ -111,12 +132,12 @@ describe("task-registry maintenance issue #60299", () => {
       childSessionKey,
     });
 
-    const { mod, currentTasks } = await loadMaintenanceModule({
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
       tasks: [task],
-      sessionStore: { [childSessionKey]: { updatedAt: Date.now() } },
+      sessionStore: { [childSessionKey]: { sessionId: childSessionKey, updatedAt: Date.now() } },
     });
 
-    expect(await mod.runTaskRegistryMaintenance()).toMatchObject({ reconciled: 1 });
+    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 1 });
     expect(currentTasks.get(task.taskId)).toMatchObject({ status: "lost" });
   });
 
@@ -127,12 +148,12 @@ describe("task-registry maintenance issue #60299", () => {
       childSessionKey: undefined,
     });
 
-    const { mod, currentTasks } = await loadMaintenanceModule({
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
       tasks: [task],
       activeCronJobIds: ["cron-job-2"],
     });
 
-    expect(await mod.runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });
+    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });
     expect(currentTasks.get(task.taskId)).toMatchObject({ status: "running" });
   });
 
@@ -147,12 +168,12 @@ describe("task-registry maintenance issue #60299", () => {
       childSessionKey: channelKey,
     });
 
-    const { mod, currentTasks } = await loadMaintenanceModule({
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
       tasks: [task],
-      sessionStore: { [channelKey]: { updatedAt: Date.now() } },
+      sessionStore: { [channelKey]: { sessionId: channelKey, updatedAt: Date.now() } },
     });
 
-    expect(await mod.runTaskRegistryMaintenance()).toMatchObject({ reconciled: 1 });
+    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 1 });
     expect(currentTasks.get(task.taskId)).toMatchObject({ status: "lost" });
   });
 
@@ -167,13 +188,13 @@ describe("task-registry maintenance issue #60299", () => {
       childSessionKey: channelKey,
     });
 
-    const { mod, currentTasks } = await loadMaintenanceModule({
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
       tasks: [task],
-      sessionStore: { [channelKey]: { updatedAt: Date.now() } },
+      sessionStore: { [channelKey]: { sessionId: channelKey, updatedAt: Date.now() } },
       activeRunIds: ["run-chat-cli-live"],
     });
 
-    expect(await mod.runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });
+    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });
     expect(currentTasks.get(task.taskId)).toMatchObject({ status: "running" });
   });
 });

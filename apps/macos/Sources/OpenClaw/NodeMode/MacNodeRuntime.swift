@@ -63,6 +63,8 @@ actor MacNodeRuntime {
                 return try await self.handleCameraInvoke(req)
             case OpenClawLocationCommand.get.rawValue:
                 return try await self.handleLocationInvoke(req)
+            case MacNodeScreenCommand.snapshot.rawValue:
+                return try await self.handleScreenSnapshotInvoke(req)
             case MacNodeScreenCommand.record.rawValue:
                 return try await self.handleScreenRecordInvoke(req)
             case OpenClawSystemCommand.run.rawValue:
@@ -349,6 +351,34 @@ actor MacNodeRuntime {
             fps: params.fps,
             screenIndex: params.screenIndex,
             hasAudio: res.hasAudio))
+        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+    }
+
+    private func handleScreenSnapshotInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        let params = (try? Self.decodeParams(MacNodeScreenSnapshotParams.self, from: req.paramsJSON)) ??
+            MacNodeScreenSnapshotParams()
+        let services = await self.mainActorServices()
+        let capturedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let res = try await services.snapshotScreen(
+            screenIndex: params.screenIndex,
+            maxWidth: params.maxWidth,
+            quality: params.quality,
+            format: params.format)
+        struct ScreenSnapshotPayload: Encodable {
+            var format: String
+            var base64: String
+            var width: Int
+            var height: Int
+            var screenIndex: Int?
+            var capturedAtMs: Int64
+        }
+        let payload = try Self.encodePayload(ScreenSnapshotPayload(
+            format: res.format.rawValue,
+            base64: res.data.base64EncodedString(),
+            width: res.width,
+            height: res.height,
+            screenIndex: params.screenIndex,
+            capturedAtMs: capturedAtMs))
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
     }
 

@@ -549,7 +549,7 @@ module.exports = {
     );
   });
 
-  it("awaits async plugin registration when collecting CLI metadata", async () => {
+  it("rejects async plugin registration when collecting CLI metadata", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "async-cli",
@@ -580,10 +580,11 @@ module.exports = {
       },
     });
 
-    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain("async-cli");
-    expect(
-      registry.diagnostics.some((entry) => entry.message.includes("async registration is ignored")),
-    ).toBe(false);
+    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).not.toContain("async-cli");
+    const loaded = registry.plugins.find((entry) => entry.id === "async-cli");
+    expect(loaded?.status).toBe("error");
+    expect(loaded?.failurePhase).toBe("register");
+    expect(loaded?.error).toContain("plugin register must be synchronous");
   });
 
   it("applies memory slot gating to non-bundled CLI metadata loads", async () => {

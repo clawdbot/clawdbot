@@ -91,6 +91,7 @@ export async function prepareCliRunContext(
     sessionId: params.sessionId,
     warn: prepareDeps.makeBootstrapWarn({
       sessionLabel,
+      workspaceDir,
       warn: (message) => cliBackendLog.warn(message),
     }),
   });

@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/voyage-provider",
+  "version": "2026.4.15-beta.1",
+  "private": true,
+  "description": "OpenClaw Voyage embedding provider plugin",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

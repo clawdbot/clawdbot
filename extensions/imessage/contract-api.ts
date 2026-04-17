@@ -7,3 +7,7 @@ export {
   resolveIMessageAttachmentRoots,
   resolveIMessageRemoteAttachmentRoots,
 } from "./src/media-contract.js";
+export {
+  __testing as imessageConversationBindingTesting,
+  createIMessageConversationBindingManager,
+} from "./src/conversation-bindings.js";

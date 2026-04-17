@@ -65,16 +65,16 @@ describe("scripts/bundle-a2ui.mjs", () => {
     const repoRoot = process.cwd();
     const dependencyPaths = getResolvedBundleDependencyPackageJsonPaths(repoRoot);
     const relativeDependencyPaths = dependencyPaths.map((dependencyPath) =>
-      path.relative(repoRoot, dependencyPath),
+      path.relative(repoRoot, dependencyPath).replaceAll(path.sep, "/"),
     );
 
     expect(
       relativeDependencyPaths.map((relativePath) => relativePath.replace(/^ui\//u, "")),
     ).toEqual([
-      path.join("node_modules", "lit", "package.json"),
-      path.join("node_modules", "@lit/context", "package.json"),
-      path.join("node_modules", "@lit-labs/signals", "package.json"),
-      path.join("node_modules", "signal-utils", "package.json"),
+      path.posix.join("node_modules", "lit", "package.json"),
+      path.posix.join("node_modules", "@lit/context", "package.json"),
+      path.posix.join("node_modules", "@lit-labs/signals", "package.json"),
+      path.posix.join("node_modules", "signal-utils", "package.json"),
     ]);
     expect(
       relativeDependencyPaths.every((relativePath) => /^(ui\/)?node_modules\//u.test(relativePath)),

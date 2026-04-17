@@ -12,6 +12,10 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
   resolveProviderRuntimePlugin: () => undefined,
 }));
 
+vi.mock("../../plugins/provider-hook-runtime.js", () => ({
+  resolveProviderRuntimePlugin: () => undefined,
+}));
+
 function buildSafeguardFactories(cfg: OpenClawConfig) {
   const sessionManager = {} as SessionManager;
   const model = {

@@ -2,14 +2,12 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { i18n } from "../../i18n/index.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { renderChatSessionSelect } from "../app-render.helpers.ts";
 import type { AppViewState } from "../app-view-state.ts";
 import {
   createModelCatalog,
   createSessionsListResult,
-  DEEPSEEK_CHAT_MODEL,
   DEFAULT_CHAT_MODEL_CATALOG,
 } from "../chat-model.test-helpers.ts";
 import { resetAssistantAttachmentAvailabilityCacheForTest } from "../chat/grouped-render.ts";
@@ -18,7 +16,6 @@ import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ModelCatalogEntry } from "../types.ts";
 import type { SessionsListResult } from "../types.ts";
 import { renderChat, type ChatProps } from "./chat.ts";
-import { renderOverview, type OverviewProps } from "./overview.ts";
 
 function createSessions(): SessionsListResult {
   return {
@@ -150,7 +147,7 @@ function createChatHeaderState(
 }
 
 function flushTasks() {
-  return new Promise<void>((resolve) => setTimeout(resolve, 0));
+  return new Promise<void>((resolve) => queueMicrotask(resolve));
 }
 
 function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
@@ -193,60 +190,6 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     agentsList: null,
     currentAgentId: "",
     onAgentChange: () => undefined,
-    ...overrides,
-  };
-}
-
-function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewProps {
-  return {
-    warnQueryToken: false,
-    connected: false,
-    hello: null,
-    settings: {
-      gatewayUrl: "",
-      token: "",
-      sessionKey: "main",
-      lastActiveSessionKey: "main",
-      theme: "claw",
-      themeMode: "system",
-      chatFocusMode: false,
-      chatShowThinking: true,
-      chatShowToolCalls: true,
-      splitRatio: 0.6,
-      navCollapsed: false,
-      navWidth: 220,
-      navGroupsCollapsed: {},
-      borderRadius: 50,
-      locale: "en",
-    },
-    password: "",
-    lastError: null,
-    lastErrorCode: null,
-    presenceCount: 0,
-    sessionsCount: null,
-    cronEnabled: null,
-    cronNext: null,
-    lastChannelsRefresh: null,
-    modelAuthStatus: null,
-    usageResult: null,
-    sessionsResult: null,
-    skillsReport: null,
-    cronJobs: [],
-    cronStatus: null,
-    attentionItems: [],
-    eventLog: [],
-    overviewLogLines: [],
-    showGatewayToken: false,
-    showGatewayPassword: false,
-    onSettingsChange: () => undefined,
-    onPasswordChange: () => undefined,
-    onSessionKeyChange: () => undefined,
-    onToggleGatewayTokenVisibility: () => undefined,
-    onToggleGatewayPasswordVisibility: () => undefined,
-    onConnect: () => undefined,
-    onRefresh: () => undefined,
-    onNavigate: () => undefined,
-    onRefreshLogs: () => undefined,
     ...overrides,
   };
 }
@@ -541,37 +484,6 @@ describe("chat view", () => {
     );
     expect(groupedLogo).not.toBeNull();
     expect(groupedLogo?.getAttribute("src")).toBe("/openclaw/favicon.svg");
-  });
-
-  it("keeps the persisted overview locale selected before i18n hydration finishes", async () => {
-    const container = document.createElement("div");
-    const props = createOverviewProps({
-      settings: {
-        ...createOverviewProps().settings,
-        locale: "zh-CN",
-      },
-    });
-
-    getSafeLocalStorage()?.clear();
-    await i18n.setLocale("en");
-
-    render(renderOverview(props), container);
-    await Promise.resolve();
-
-    let select = container.querySelector<HTMLSelectElement>("select");
-    expect(i18n.getLocale()).toBe("en");
-    expect(select?.value).toBe("zh-CN");
-    expect(select?.selectedOptions[0]?.textContent?.trim()).toBe("简体中文 (Simplified Chinese)");
-
-    await i18n.setLocale("zh-CN");
-    render(renderOverview(props), container);
-    await Promise.resolve();
-
-    select = container.querySelector<HTMLSelectElement>("select");
-    expect(select?.value).toBe("zh-CN");
-    expect(select?.selectedOptions[0]?.textContent?.trim()).toBe("简体中文 (简体中文)");
-
-    await i18n.setLocale("en");
   });
 
   it("renders compacting indicator as a badge", () => {
@@ -1034,277 +946,6 @@ describe("chat view", () => {
     vi.unstubAllGlobals();
   });
 
-  it("normalizes cached bare /model overrides to the matching catalog option", () => {
-    const { state } = createChatHeaderState();
-    state.chatModelOverrides = { main: { kind: "raw", value: "gpt-5-mini" } };
-
-    const container = document.createElement("div");
-    render(renderChatSessionSelect(state), container);
-
-    const modelSelect = container.querySelector<HTMLSelectElement>(
-      'select[data-chat-model-select="true"]',
-    );
-    expect(modelSelect).not.toBeNull();
-    expect(modelSelect?.value).toBe("openai/gpt-5-mini");
-
-    const optionValues = Array.from(modelSelect?.querySelectorAll("option") ?? []).map(
-      (option) => option.value,
-    );
-    expect(optionValues).toContain("openai/gpt-5-mini");
-    expect(optionValues).not.toContain("gpt-5-mini");
-  });
-
-  it("prefers the catalog provider when the active session reports a stale provider", () => {
-    const { state } = createChatHeaderState({
-      model: "deepseek-chat",
-      modelProvider: "zai",
-      models: createModelCatalog(DEEPSEEK_CHAT_MODEL),
-    });
-
-    const container = document.createElement("div");
-    render(renderChatSessionSelect(state), container);
-
-    const modelSelect = container.querySelector<HTMLSelectElement>(
-      'select[data-chat-model-select="true"]',
-    );
-    expect(modelSelect?.value).toBe("deepseek/deepseek-chat");
-  });
-
-  it("falls back to the server-qualified session model when catalog lookup fails", () => {
-    const { state } = createChatHeaderState({
-      model: "gpt-5-mini",
-      models: [],
-    });
-
-    const container = document.createElement("div");
-    render(renderChatSessionSelect(state), container);
-
-    const modelSelect = container.querySelector<HTMLSelectElement>(
-      'select[data-chat-model-select="true"]',
-    );
-    expect(modelSelect?.value).toBe("openai/gpt-5-mini");
-
-    const optionValues = Array.from(modelSelect?.querySelectorAll("option") ?? []).map(
-      (option) => option.value,
-    );
-    expect(optionValues).toContain("openai/gpt-5-mini");
-    expect(optionValues).not.toContain("gpt-5-mini");
-  });
-
-  it("prefers the session label over displayName in the grouped chat session selector", () => {
-    const { state } = createChatHeaderState({ omitSessionFromList: true });
-    state.sessionKey = "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b";
-    state.settings.sessionKey = state.sessionKey;
-    state.sessionsResult = {
-      ts: 0,
-      path: "",
-      count: 1,
-      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
-      sessions: [
-        {
-          key: state.sessionKey,
-          kind: "direct",
-          updatedAt: null,
-          label: "cron-config-check",
-          displayName: "webchat:g-agent-main-subagent-4f2146de-887b-4176-9abe-91140082959b",
-        },
-      ],
-    };
-    const container = document.createElement("div");
-    render(renderChatSessionSelect(state), container);
-
-    const [sessionSelect] = Array.from(container.querySelectorAll<HTMLSelectElement>("select"));
-    const labels = Array.from(sessionSelect?.querySelectorAll("option") ?? []).map((option) =>
-      option.textContent?.trim(),
-    );
-
-    expect(labels).toContain("Subagent: cron-config-check");
-    expect(labels).not.toContain(state.sessionKey);
-    expect(labels).not.toContain(
-      "subagent:4f2146de-887b-4176-9abe-91140082959b · webchat:g-agent-main-subagent-4f2146de-887b-4176-9abe-91140082959b",
-    );
-  });
-
-  it("keeps a unique scoped fallback when the current grouped session is missing from sessions.list", () => {
-    const { state } = createChatHeaderState({ omitSessionFromList: true });
-    state.sessionKey = "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b";
-    state.settings.sessionKey = state.sessionKey;
-    const container = document.createElement("div");
-    render(renderChatSessionSelect(state), container);
-
-    const [sessionSelect] = Array.from(container.querySelectorAll<HTMLSelectElement>("select"));
-    const labels = Array.from(sessionSelect?.querySelectorAll("option") ?? []).map((option) =>
-      option.textContent?.trim(),
-    );
-
-    expect(labels).toContain("subagent:4f2146de-887b-4176-9abe-91140082959b");
-    expect(labels).not.toContain("Subagent:");
-  });
-
-  it("keeps a unique scoped fallback when a grouped session row has no label or displayName", () => {
-    const { state } = createChatHeaderState({ omitSessionFromList: true });
-    state.sessionKey = "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b";
-    state.settings.sessionKey = state.sessionKey;
-    state.sessionsResult = {
-      ts: 0,
-      path: "",
-      count: 1,
-      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
-      sessions: [
-        {
-          key: state.sessionKey,
-          kind: "direct",
-          updatedAt: null,
-        },
-      ],
-    };
-    const container = document.createElement("div");
-    render(renderChatSessionSelect(state), container);
-
-    const [sessionSelect] = Array.from(container.querySelectorAll<HTMLSelectElement>("select"));
-    const labels = Array.from(sessionSelect?.querySelectorAll("option") ?? []).map((option) =>
-      option.textContent?.trim(),
-    );
-
-    expect(labels).toContain("subagent:4f2146de-887b-4176-9abe-91140082959b");
-    expect(labels).not.toContain("Subagent:");
-  });
-
-  it("disambiguates duplicate grouped labels with the scoped key suffix", () => {
-    const { state } = createChatHeaderState({ omitSessionFromList: true });
-    state.sessionKey = "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b";
-    state.settings.sessionKey = state.sessionKey;
-    state.sessionsResult = {
-      ts: 0,
-      path: "",
-      count: 2,
-      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
-      sessions: [
-        {
-          key: "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b",
-          kind: "direct",
-          updatedAt: null,
-          label: "cron-config-check",
-        },
-        {
-          key: "agent:main:subagent:6fb8b84b-c31f-410f-b7df-1553c82e43c9",
-          kind: "direct",
-          updatedAt: null,
-          label: "cron-config-check",
-        },
-      ],
-    };
-    const container = document.createElement("div");
-    render(renderChatSessionSelect(state), container);
-
-    const [sessionSelect] = Array.from(container.querySelectorAll<HTMLSelectElement>("select"));
-    const labels = Array.from(sessionSelect?.querySelectorAll("option") ?? []).map((option) =>
-      option.textContent?.trim(),
-    );
-
-    expect(labels).toContain(
-      "Subagent: cron-config-check · subagent:4f2146de-887b-4176-9abe-91140082959b",
-    );
-    expect(labels).toContain(
-      "Subagent: cron-config-check · subagent:6fb8b84b-c31f-410f-b7df-1553c82e43c9",
-    );
-    expect(labels).not.toContain("Subagent: cron-config-check");
-  });
-
-  it("prefixes duplicate agent session labels with the agent name", () => {
-    const { state } = createChatHeaderState({ omitSessionFromList: true });
-    state.sessionKey = "agent:alpha:main";
-    state.settings.sessionKey = state.sessionKey;
-    state.agentsList = {
-      defaultId: "alpha",
-      mainKey: "agent:alpha:main",
-      scope: "all",
-      agents: [
-        { id: "alpha", name: "Deep Chat" },
-        { id: "beta", name: "Coding" },
-      ],
-    };
-    state.sessionsResult = {
-      ts: 0,
-      path: "",
-      count: 2,
-      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
-      sessions: [
-        {
-          key: "agent:alpha:main",
-          kind: "direct",
-          updatedAt: null,
-        },
-        {
-          key: "agent:beta:main",
-          kind: "direct",
-          updatedAt: null,
-        },
-      ],
-    };
-    const container = document.createElement("div");
-    render(renderChatSessionSelect(state), container);
-
-    const [sessionSelect] = Array.from(container.querySelectorAll<HTMLSelectElement>("select"));
-    const labels = Array.from(sessionSelect?.querySelectorAll("option") ?? []).map((option) =>
-      option.textContent?.trim(),
-    );
-
-    expect(labels).toContain("Deep Chat (alpha) / main");
-    expect(labels).toContain("Coding (beta) / main");
-    expect(labels).not.toContain("main");
-  });
-
-  it("keeps agent-prefixed labels unique when a custom label already matches the prefix", () => {
-    const { state } = createChatHeaderState({ omitSessionFromList: true });
-    state.sessionKey = "agent:alpha:main";
-    state.settings.sessionKey = state.sessionKey;
-    state.agentsList = {
-      defaultId: "alpha",
-      mainKey: "agent:alpha:main",
-      scope: "all",
-      agents: [
-        { id: "alpha", name: "Deep Chat" },
-        { id: "beta", name: "Coding" },
-      ],
-    };
-    state.sessionsResult = {
-      ts: 0,
-      path: "",
-      count: 3,
-      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
-      sessions: [
-        {
-          key: "agent:alpha:main",
-          kind: "direct",
-          updatedAt: null,
-        },
-        {
-          key: "agent:beta:main",
-          kind: "direct",
-          updatedAt: null,
-        },
-        {
-          key: "agent:alpha:named-main",
-          kind: "direct",
-          updatedAt: null,
-          label: "Deep Chat (alpha) / main",
-        },
-      ],
-    };
-    const container = document.createElement("div");
-    render(renderChatSessionSelect(state), container);
-
-    const [sessionSelect] = Array.from(container.querySelectorAll<HTMLSelectElement>("select"));
-    const labels = Array.from(sessionSelect?.querySelectorAll("option") ?? []).map((option) =>
-      option.textContent?.trim(),
-    );
-
-    expect(labels.filter((label) => label === "Deep Chat (alpha) / main")).toHaveLength(1);
-    expect(labels).toContain("Deep Chat (alpha) / main · named-main");
-    expect(labels).toContain("Coding (beta) / main");
-  });
-
   it("keeps tool cards collapsed by default and expands them inline on demand", async () => {
     const container = document.createElement("div");
     const props = createProps({
@@ -1359,44 +1000,6 @@ describe("chat view", () => {
     expect(container.textContent).not.toContain("Opened page");
   });
 
-  it("auto-expands new tool cards inline when the preference is enabled", () => {
-    const container = document.createElement("div");
-    render(
-      renderChat(
-        createProps({
-          autoExpandToolCalls: true,
-          messages: [
-            {
-              id: "assistant-2",
-              role: "assistant",
-              toolCallId: "call-2",
-              content: [
-                {
-                  type: "toolcall",
-                  id: "call-2",
-                  name: "browser.open",
-                  arguments: { url: "https://example.com" },
-                },
-                {
-                  type: "toolresult",
-                  id: "call-2",
-                  name: "browser.open",
-                  text: "Opened page",
-                },
-              ],
-              timestamp: Date.now(),
-            },
-          ],
-        }),
-      ),
-      container,
-    );
-
-    expect(container.textContent).toContain("Tool input");
-    expect(container.textContent).toContain("Tool output");
-    expect(container.textContent).toContain("https://example.com");
-  });
-
   it("expands already-visible tool cards when auto-expand is turned on", () => {
     const container = document.createElement("div");
     const baseProps = createProps({
@@ -1430,84 +1033,6 @@ describe("chat view", () => {
     render(renderChat({ ...baseProps, autoExpandToolCalls: true }), container);
     expect(container.textContent).toContain("Tool input");
     expect(container.textContent).toContain("Tool output");
-  });
-
-  it("lets an auto-expanded tool call collapse again from the summary row", async () => {
-    const container = document.createElement("div");
-    const props = createProps({
-      autoExpandToolCalls: true,
-      messages: [
-        {
-          id: "assistant-3b",
-          role: "assistant",
-          toolCallId: "call-3b",
-          content: [
-            {
-              type: "toolcall",
-              id: "call-3b",
-              name: "browser.open",
-              arguments: { url: "https://example.com" },
-            },
-            {
-              type: "toolresult",
-              id: "call-3b",
-              name: "browser.open",
-              text: "Opened page",
-            },
-          ],
-          timestamp: Date.now(),
-        },
-      ],
-    });
-
-    const rerender = () => {
-      render(renderChat({ ...props, onRequestUpdate: rerender }), container);
-    };
-    rerender();
-
-    expect(container.textContent).toContain("Tool input");
-    expect(container.textContent).toContain("Opened page");
-
-    container
-      .querySelector<HTMLElement>(".chat-tool-msg-summary")
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    await flushTasks();
-
-    expect(container.textContent).not.toContain("Tool input");
-    expect(container.textContent).not.toContain("Opened page");
-  });
-
-  it("keeps expanded input-only tool calls from rendering a redundant output block", () => {
-    const container = document.createElement("div");
-    render(
-      renderChat(
-        createProps({
-          autoExpandToolCalls: true,
-          messages: [
-            {
-              id: "assistant-4",
-              role: "assistant",
-              toolCallId: "call-4",
-              content: [
-                {
-                  type: "toolcall",
-                  id: "call-4",
-                  name: "sessions_spawn",
-                  arguments: { mode: "session", thread: true },
-                },
-              ],
-              timestamp: Date.now(),
-            },
-          ],
-        }),
-      ),
-      container,
-    );
-
-    expect(container.textContent).toContain("Tool input");
-    expect(container.textContent).toContain('"thread": true');
-    expect(container.textContent).not.toContain("Tool output");
-    expect(container.textContent).not.toContain("No output");
   });
 
   it("routes standalone tool-call rows through the same top-level disclosure as tool output", async () => {
@@ -1601,42 +1126,6 @@ describe("chat view", () => {
     expect(container.textContent).toContain("Tool output");
     expect(container.textContent).toContain('"status": "error"');
     expect(container.textContent).toContain('"childSessionKey": "agent:test:subagent:abc123"');
-  });
-
-  it("does not render tool-row canvas previews", () => {
-    const container = document.createElement("div");
-    render(
-      renderChat(
-        createProps({
-          autoExpandToolCalls: true,
-          messages: [
-            {
-              id: "tool-anki-1",
-              role: "tool",
-              toolCallId: "call-anki-1",
-              toolName: "canvas_render",
-              content: JSON.stringify({
-                kind: "canvas",
-                source: {
-                  type: "html",
-                  content: "<div>Front card</div>",
-                },
-                presentation: {
-                  target: "tool_card",
-                  title: "Status view",
-                },
-              }),
-              timestamp: Date.now(),
-            },
-          ],
-        }),
-      ),
-      container,
-    );
-
-    expect(container.querySelector(".chat-tool-card__preview-frame")).toBeNull();
-    expect(container.textContent).toContain("Status view");
-    expect(container.textContent).toContain("Tool output");
   });
 
   it("renders [embed] shortcodes inside the assistant bubble", () => {

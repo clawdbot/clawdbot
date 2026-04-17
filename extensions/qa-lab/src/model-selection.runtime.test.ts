@@ -56,7 +56,7 @@ describe("qa model selection runtime", () => {
     expect(defaultQaRuntimeModelForMode("live-frontier")).toBe("openai/gpt-5.4");
   });
 
-  it("leaves mock-openai defaults unchanged", () => {
+  it("leaves mock defaults unchanged", () => {
     listProfilesForProvider.mockImplementation((_store: unknown, provider: string) =>
       provider === "openai-codex" ? ["openai-codex:user@example.com"] : [],
     );
@@ -65,5 +65,7 @@ describe("qa model selection runtime", () => {
     expect(defaultQaRuntimeModelForMode("mock-openai", { alternate: true })).toBe(
       "mock-openai/gpt-5.4-alt",
     );
+    expect(defaultQaRuntimeModelForMode("aimock")).toBe("aimock/gpt-5.4");
+    expect(defaultQaRuntimeModelForMode("aimock", { alternate: true })).toBe("aimock/gpt-5.4-alt");
   });
 });

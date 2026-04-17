@@ -6,14 +6,13 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import {
   normalizePluginDiscoveryResult,
-  resolvePluginDiscoveryProviders,
   runProviderCatalog,
 } from "../plugins/provider-discovery.js";
 import type { ProviderPlugin } from "../plugins/types.js";
+import { loadBundledPluginPublicSurfaceSync } from "../test-utils/bundled-plugin-public-surface.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { OLLAMA_LOCAL_AUTH_MARKER } from "./model-auth-markers.js";
-import { resolveImplicitProviders } from "./models-config.providers.js";
-import type { ProviderConfig } from "./models-config.providers.js";
+import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -49,50 +48,28 @@ describe("Ollama provider", () => {
     }
   }
 
-  async function resolveProvidersWithOllamaKey(agentDir: string) {
-    return withOllamaApiKey(() =>
-      resolveProvidersWithOllamaOnly({
-        agentDir,
-        env: { VITEST: "", NODE_ENV: "development" },
-      }),
-    );
-  }
+  let ollamaCatalogProvider: ProviderPlugin | undefined;
 
-  async function resolveProvidersWithOllamaOnly(params: {
-    agentDir: string;
-    explicitProviders?: Record<string, ProviderConfig>;
-    env?: NodeJS.ProcessEnv;
-  }) {
-    const env = {
-      ...process.env,
-      OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS: "ollama",
-      VITEST: "1",
-      NODE_ENV: "test",
-      ...params.env,
-    } satisfies NodeJS.ProcessEnv;
-
-    return resolveImplicitProviders({
-      agentDir: params.agentDir,
-      explicitProviders: params.explicitProviders,
-      env,
+  function loadOllamaCatalogProvider(): ProviderPlugin | undefined {
+    if (ollamaCatalogProvider) {
+      return ollamaCatalogProvider;
+    }
+    const surface = loadBundledPluginPublicSurfaceSync<{
+      default?: ProviderPlugin;
+      ollamaProviderDiscovery?: ProviderPlugin;
+    }>({
+      pluginId: "ollama",
+      artifactBasename: "provider-discovery.js",
     });
-  }
-
-  let ollamaCatalogProviderPromise: Promise<ProviderPlugin | undefined> | undefined;
-
-  async function loadOllamaCatalogProvider(): Promise<ProviderPlugin | undefined> {
-    ollamaCatalogProviderPromise ??= resolvePluginDiscoveryProviders({
-      env: { ...process.env, OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS: "ollama", VITEST: "1" },
-      onlyPluginIds: ["ollama"],
-    }).then((providers) => providers.find((provider) => provider.id === "ollama"));
-    return ollamaCatalogProviderPromise;
+    ollamaCatalogProvider = surface.default ?? surface.ollamaProviderDiscovery;
+    return ollamaCatalogProvider;
   }
 
   async function runOllamaCatalog(params: {
     config?: OpenClawConfig;
     env?: NodeJS.ProcessEnv;
   }): Promise<ProviderConfig | undefined> {
-    const provider = await loadOllamaCatalogProvider();
+    const provider = loadOllamaCatalogProvider();
     if (!provider) {
       return undefined;
     }
@@ -157,14 +134,23 @@ describe("Ollama provider", () => {
   });
 
   it("should use native ollama api type", async () => {
-    const agentDir = createAgentDir();
-    await withOllamaApiKey(async () => {
-      const providers = await resolveProvidersWithOllamaOnly({ agentDir });
+    const fetchMock = vi.fn(async (input: unknown) => {
+      const url = String(input);
+      if (url.endsWith("/api/tags")) {
+        return tagsResponse([]);
+      }
+      return notFoundJsonResponse();
+    });
+    vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
 
-      expect(providers?.ollama).toBeDefined();
-      expect(providers?.ollama?.apiKey).toBe("OLLAMA_API_KEY");
-      expect(providers?.ollama?.api).toBe("ollama");
-      expect(providers?.ollama?.baseUrl).toBe("http://127.0.0.1:11434");
+    await withOllamaApiKey(async () => {
+      const provider = await runOllamaCatalog({});
+
+      expect(provider).toBeDefined();
+      expect(provider?.apiKey).toBe("OLLAMA_API_KEY");
+      expect(provider?.api).toBe("ollama");
+      expect(provider?.baseUrl).toBe("http://127.0.0.1:11434");
+      expectDiscoveryCallCounts(fetchMock, { tags: 1, show: 0 });
     });
   });
 
@@ -202,7 +188,6 @@ describe("Ollama provider", () => {
   });
 
   it("discovers per-model context windows from /api/show", async () => {
-    const agentDir = createAgentDir();
     enableDiscoveryEnv();
     const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
       const url = String(input);
@@ -230,8 +215,10 @@ describe("Ollama provider", () => {
     });
     vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
 
-    const providers = await resolveProvidersWithOllamaKey(agentDir);
-    const models = providers?.ollama?.models ?? [];
+    const provider = await runOllamaCatalog({
+      env: { OLLAMA_API_KEY: "test-key", VITEST: "", NODE_ENV: "development" },
+    });
+    const models = provider?.models ?? [];
     const qwen = models.find((model) => model.id === "qwen3:32b");
     const llama = models.find((model) => model.id === "llama3.3:70b");
     expect(qwen?.contextWindow).toBe(131072);
@@ -325,7 +312,6 @@ describe("Ollama provider", () => {
   });
 
   it("falls back to default context window when /api/show fails", async () => {
-    const agentDir = createAgentDir();
     enableDiscoveryEnv();
     const fetchMock = vi.fn(async (input: unknown) => {
       const url = String(input);
@@ -342,14 +328,15 @@ describe("Ollama provider", () => {
     });
     vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
 
-    const providers = await resolveProvidersWithOllamaKey(agentDir);
-    const model = providers?.ollama?.models?.find((entry) => entry.id === "qwen3:32b");
+    const provider = await runOllamaCatalog({
+      env: { OLLAMA_API_KEY: "test-key", VITEST: "", NODE_ENV: "development" },
+    });
+    const model = provider?.models?.find((entry) => entry.id === "qwen3:32b");
     expect(model?.contextWindow).toBe(128000);
     expectDiscoveryCallCounts(fetchMock, { tags: 1, show: 1 });
   });
 
   it("caps /api/show requests when /api/tags returns a very large model list", async () => {
-    const agentDir = createAgentDir();
     enableDiscoveryEnv();
     const manyModels = Array.from({ length: 250 }, (_, idx) => ({
       name: `model-${idx}`,
@@ -372,8 +359,10 @@ describe("Ollama provider", () => {
     });
     vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
 
-    const providers = await resolveProvidersWithOllamaKey(agentDir);
-    const models = providers?.ollama?.models ?? [];
+    const provider = await runOllamaCatalog({
+      env: { OLLAMA_API_KEY: "test-key", VITEST: "", NODE_ENV: "development" },
+    });
+    const models = provider?.models ?? [];
     // 1 call for /api/tags + 200 capped /api/show calls.
     expectDiscoveryCallCounts(fetchMock, { tags: 1, show: 200 });
     expect(models).toHaveLength(200);

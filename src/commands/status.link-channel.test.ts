@@ -7,6 +7,10 @@ vi.mock("../channels/plugins/index.js", () => ({
   listChannelPlugins: () => pluginRegistry.list,
 }));
 
+vi.mock("../channels/read-only-account-inspect.js", () => ({
+  inspectReadOnlyChannelAccount: () => undefined,
+}));
+
 import { resolveLinkChannelContext } from "./status.link-channel.js";
 
 describe("resolveLinkChannelContext", () => {

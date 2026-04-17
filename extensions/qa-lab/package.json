@@ -1,10 +1,11 @@
 {
   "name": "@openclaw/qa-lab",
-  "version": "2026.4.15-beta.1",
+  "version": "2026.4.16",
   "private": true,
   "description": "OpenClaw QA lab plugin with private debugger UI and scenario runner",
   "type": "module",
   "dependencies": {
+    "@copilotkit/aimock": "1.13.0",
     "playwright-core": "1.59.1"
   },
   "devDependencies": {
@@ -12,7 +13,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.15-beta.1"
+    "openclaw": ">=2026.4.16"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -29,7 +30,7 @@
       "minHostVersion": ">=2026.4.10"
     },
     "compat": {
-      "pluginApi": ">=2026.4.15-beta.1"
+      "pluginApi": ">=2026.4.16"
     }
   }
 }

@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/setup";
+import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
+import type { OpenClawConfig } from "../runtime-api.js";
 import { asRecord, hasNonEmptyString } from "./comment-shared.js";
 
 function isFeishuDocToolEnabled(cfg: OpenClawConfig): boolean {

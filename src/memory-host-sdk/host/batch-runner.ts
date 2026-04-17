@@ -1,5 +1,5 @@
+import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { splitBatchRequests } from "./batch-utils.js";
-import { runWithConcurrency } from "./internal.js";
 
 export type EmbeddingBatchExecutionParams = {
   wait: boolean;
@@ -43,7 +43,14 @@ export async function runEmbeddingBatchGroups<TRequest>(params: {
     timeoutMs: params.timeoutMs,
   });
 
-  await runWithConcurrency(tasks, params.concurrency);
+  const { firstError, hasError } = await runTasksWithConcurrency({
+    tasks,
+    limit: params.concurrency,
+    errorMode: "stop",
+  });
+  if (hasError) {
+    throw firstError;
+  }
   return byCustomId;
 }
 

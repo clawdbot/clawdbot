@@ -359,11 +359,14 @@ describe("gateway-status command", () => {
 
   it("suppresses unresolved SecretRef auth warnings when probe is reachable", async () => {
     const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
-    await withEnvAsync({ MISSING_GATEWAY_TOKEN: undefined }, async () => {
-      mockLocalTokenEnvRefConfig();
+    await withEnvAsync(
+      { MISSING_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_TOKEN: undefined },
+      async () => {
+        mockLocalTokenEnvRefConfig();
 
-      await runGatewayStatus(runtime, { timeout: "1000", json: true });
-    });
+        await runGatewayStatus(runtime, { timeout: "1000", json: true });
+      },
+    );
 
     expect(runtimeErrors).toHaveLength(0);
     const unresolvedWarning = findUnresolvedSecretRefWarning(runtimeLogs);
@@ -375,28 +378,31 @@ describe("gateway-status command", () => {
     const defaultReadBestEffortConfig = readBestEffortConfig.getMockImplementation();
     const defaultProbeGateway = probeGateway.getMockImplementation();
     try {
-      await withEnvAsync({ MISSING_GATEWAY_TOKEN: undefined }, async () => {
-        readBestEffortConfig.mockReset();
-        probeGateway.mockReset();
-        mockLocalTokenEnvRefConfig();
-        probeGateway.mockImplementation(async (opts: { url: string }) => {
-          const { url } = opts;
-          return {
-            ok: false,
-            url,
-            connectLatencyMs: null,
-            error: "connection refused",
-            close: null,
-            health: null,
-            status: null,
-            presence: null,
-            configSnapshot: null,
-          };
-        });
-        await expect(runGatewayStatus(runtime, { timeout: "1000", json: true })).rejects.toThrow(
-          "__exit__:1",
-        );
-      });
+      await withEnvAsync(
+        { MISSING_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_TOKEN: undefined },
+        async () => {
+          readBestEffortConfig.mockReset();
+          probeGateway.mockReset();
+          mockLocalTokenEnvRefConfig();
+          probeGateway.mockImplementation(async (opts: { url: string }) => {
+            const { url } = opts;
+            return {
+              ok: false,
+              url,
+              connectLatencyMs: null,
+              error: "connection refused",
+              close: null,
+              health: null,
+              status: null,
+              presence: null,
+              configSnapshot: null,
+            };
+          });
+          await expect(runGatewayStatus(runtime, { timeout: "1000", json: true })).rejects.toThrow(
+            "__exit__:1",
+          );
+        },
+      );
     } finally {
       readBestEffortConfig.mockReset();
       if (defaultReadBestEffortConfig) {

@@ -222,6 +222,26 @@ describe("MatrixCryptoBootstrapper", () => {
     );
   });
 
+  it("refreshes published cross-signing keys before importing private keys from secret storage", async () => {
+    const bootstrapCrossSigning = vi.fn(async () => {});
+    const userHasCrossSigningKeys = vi.fn(async () => true);
+    const { bootstrapper, crypto } = createBootstrapperHarness({
+      bootstrapCrossSigning,
+      getDeviceVerificationStatus: vi.fn(async () => createVerifiedDeviceStatus()),
+      isCrossSigningReady: vi.fn(async () => true),
+      userHasCrossSigningKeys,
+    });
+
+    await bootstrapper.bootstrap(crypto, {
+      allowAutomaticCrossSigningReset: false,
+    });
+
+    expect(userHasCrossSigningKeys).toHaveBeenCalledWith("@bot:example.org", true);
+    expect(userHasCrossSigningKeys.mock.invocationCallOrder[0]).toBeLessThan(
+      bootstrapCrossSigning.mock.invocationCallOrder[0],
+    );
+  });
+
   it("passes explicit secret-storage repair allowance only when requested", async () => {
     const deps = createBootstrapperDeps();
     const crypto = createCryptoApi({
@@ -318,6 +338,84 @@ describe("MatrixCryptoBootstrapper", () => {
     );
 
     expect(deps.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey).not.toHaveBeenCalled();
+  });
+
+  it("recreates secret storage and retries a forced reset when stale server SSSS blocks it", async () => {
+    const bootstrapCrossSigning = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("getSecretStorageKey callback returned falsey"))
+      .mockResolvedValueOnce(undefined);
+    const { deps, crypto, bootstrapper } = createBootstrapperHarness({
+      bootstrapCrossSigning,
+      isCrossSigningReady: vi.fn(async () => true),
+      userHasCrossSigningKeys: vi.fn(async () => true),
+      getDeviceVerificationStatus: vi.fn(async () => createVerifiedDeviceStatus()),
+    });
+
+    await bootstrapper.bootstrap(crypto, {
+      strict: true,
+      forceResetCrossSigning: true,
+      allowSecretStorageRecreateWithoutRecoveryKey: true,
+    });
+
+    expect(deps.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey).toHaveBeenCalledWith(
+      crypto,
+      {
+        allowSecretStorageRecreateWithoutRecoveryKey: true,
+        forceNewSecretStorage: true,
+      },
+    );
+    expect(bootstrapCrossSigning).toHaveBeenCalledTimes(3);
+    expect(bootstrapCrossSigning).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        setupNewCrossSigning: true,
+        authUploadDeviceSigningKeys: expect.any(Function),
+      }),
+    );
+    expect(bootstrapCrossSigning).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        authUploadDeviceSigningKeys: expect.any(Function),
+      }),
+    );
+  });
+
+  it("re-exports cross-signing keys after forced reset creates secret storage", async () => {
+    const bootstrapCrossSigning = vi.fn(async () => {});
+    const { deps, crypto, bootstrapper } = createBootstrapperHarness({
+      bootstrapCrossSigning,
+      isCrossSigningReady: vi.fn(async () => true),
+      userHasCrossSigningKeys: vi.fn(async () => true),
+      getDeviceVerificationStatus: vi.fn(async () => createVerifiedDeviceStatus()),
+    });
+
+    await bootstrapper.bootstrap(crypto, {
+      strict: true,
+      forceResetCrossSigning: true,
+      allowSecretStorageRecreateWithoutRecoveryKey: true,
+    });
+
+    expect(deps.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey).toHaveBeenCalledWith(
+      crypto,
+      {
+        allowSecretStorageRecreateWithoutRecoveryKey: true,
+      },
+    );
+    expect(bootstrapCrossSigning).toHaveBeenCalledTimes(2);
+    expect(bootstrapCrossSigning).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        setupNewCrossSigning: true,
+        authUploadDeviceSigningKeys: expect.any(Function),
+      }),
+    );
+    expect(bootstrapCrossSigning).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        authUploadDeviceSigningKeys: expect.any(Function),
+      }),
+    );
   });
 
   it("fails in strict mode when cross-signing keys are still unpublished", async () => {

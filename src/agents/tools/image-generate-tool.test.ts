@@ -202,6 +202,8 @@ describe("createImageGenerateTool", () => {
     vi.stubEnv("OPENAI_API_KEYS", "");
     vi.stubEnv("GEMINI_API_KEY", "");
     vi.stubEnv("GEMINI_API_KEYS", "");
+    vi.stubEnv("GOOGLE_API_KEY", "");
+    vi.stubEnv("GOOGLE_API_KEYS", "");
   });
 
   afterEach(() => {

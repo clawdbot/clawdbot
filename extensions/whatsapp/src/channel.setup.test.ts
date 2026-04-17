@@ -169,6 +169,19 @@ describe("whatsapp setup wizard", () => {
     expectWhatsAppAllowlistModeSetup(result.cfg);
   });
 
+  it("throws a user-facing error instead of crashing when allowlist input is undefined", async () => {
+    const harness = createSeparatePhoneHarness({
+      selectValues: ["separate", "allowlist", "list"],
+    });
+    harness.text.mockResolvedValueOnce(undefined as never);
+
+    await expect(
+      runConfigureWithHarness({
+        harness,
+      }),
+    ).rejects.toThrow("Invalid WhatsApp allowFrom list");
+  });
+
   it("enables allowlist self-chat mode for personal-phone setup", async () => {
     hoisted.pathExists.mockResolvedValue(true);
     const harness = createWhatsAppPersonalPhoneHarness(createQueuedWizardPrompter);
@@ -178,6 +191,18 @@ describe("whatsapp setup wizard", () => {
     });
 
     expectWhatsAppPersonalPhoneSetup(result.cfg);
+  });
+
+  it("throws a user-facing error instead of crashing when personal-phone input is undefined", async () => {
+    hoisted.pathExists.mockResolvedValue(true);
+    const harness = createWhatsAppPersonalPhoneHarness(createQueuedWizardPrompter);
+    harness.text.mockResolvedValueOnce(undefined as never);
+
+    await expect(
+      runConfigureWithHarness({
+        harness,
+      }),
+    ).rejects.toThrow("Invalid WhatsApp owner number");
   });
 
   it("forces wildcard allowFrom for open policy without allowFrom follow-up prompts", async () => {

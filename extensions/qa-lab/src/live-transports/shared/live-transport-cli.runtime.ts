@@ -1,5 +1,6 @@
 import path from "node:path";
 import { resolveRepoRelativeOutputDir } from "../../cli-paths.js";
+import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "../../providers/index.js";
 import type { QaProviderMode } from "../../run-config.js";
 import { normalizeQaProviderMode } from "../../run-config.js";
 import type { LiveTransportQaCommandOptions } from "./live-transport-cli.js";
@@ -18,7 +19,7 @@ export function resolveLiveTransportQaRunOptions(
     ),
     providerMode:
       opts.providerMode === undefined
-        ? "live-frontier"
+        ? DEFAULT_QA_LIVE_PROVIDER_MODE
         : normalizeQaProviderMode(opts.providerMode),
     primaryModel: opts.primaryModel,
     alternateModel: opts.alternateModel,

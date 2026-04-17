@@ -247,27 +247,35 @@ describe("parseSlashCommand", () => {
   it("caps remote command payload size and long metadata before it reaches UI state", async () => {
     const longName = "x".repeat(260);
     const longDescription = "d".repeat(2_500);
-    const request = async () => ({
-      commands: Array.from({ length: 520 }, (_, index) => ({
-        name: `plugin-${index}`,
-        textAliases: Array.from(
-          { length: 25 },
-          (_, aliasIndex) => `/plugin-${index}-${aliasIndex}`,
-        ),
+    const oversizedCommand = {
+      name: "plugin-0",
+      textAliases: Array.from({ length: 25 }, (_, aliasIndex) => `/plugin-0-${aliasIndex}`),
+      description: longDescription,
+      source: "plugin" as const,
+      scope: "both" as const,
+      acceptsArgs: true,
+      args: Array.from({ length: 25 }, (_, argIndex) => ({
+        name: `${longName}-${argIndex}`,
         description: longDescription,
-        source: "plugin" as const,
-        scope: "both" as const,
-        acceptsArgs: true,
-        args: Array.from({ length: 25 }, (_, argIndex) => ({
-          name: `${longName}-${argIndex}`,
-          description: longDescription,
-          type: "string" as const,
-          choices: Array.from({ length: 55 }, (_, choiceIndex) => ({
-            value: `${longName}-${choiceIndex}`,
-            label: `${longName}-${choiceIndex}`,
-          })),
+        type: "string" as const,
+        choices: Array.from({ length: 55 }, (_, choiceIndex) => ({
+          value: `${longName}-${choiceIndex}`,
+          label: `${longName}-${choiceIndex}`,
         })),
       })),
+    };
+    const request = async () => ({
+      commands: [
+        oversizedCommand,
+        ...Array.from({ length: 519 }, (_, index) => ({
+          name: `plugin-${index + 1}`,
+          textAliases: [`/plugin-${index + 1}`],
+          description: "Plugin command.",
+          source: "plugin" as const,
+          scope: "both" as const,
+          acceptsArgs: false,
+        })),
+      ],
     });
 
     await refreshSlashCommands({

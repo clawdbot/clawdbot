@@ -8,6 +8,7 @@ import {
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
+import { lmstudioMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 import {
   LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
   LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
@@ -52,6 +53,7 @@ export default definePluginEntry({
   name: "LM Studio Provider",
   description: "Bundled LM Studio provider plugin",
   register(api: OpenClawPluginApi) {
+    api.registerMemoryEmbeddingProvider(lmstudioMemoryEmbeddingProviderAdapter);
     api.registerProvider({
       id: PROVIDER_ID,
       label: "LM Studio",

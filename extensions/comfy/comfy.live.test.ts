@@ -42,7 +42,7 @@ describeLive("comfy live", () => {
   beforeAll(async () => {
     cfg = withPluginsEnabled(loadConfig());
     agentDir = resolveOpenClawAgentDir();
-    await plugin.register(
+    plugin.register(
       createTestPluginApi({
         config: cfg as never,
         registerImageGenerationProvider(provider) {

@@ -93,10 +93,11 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   const normalizedChannel = normalizeMessageChannel(channel);
   const channelId =
     normalizeChannelId(channel) ?? normalizeOptionalLowercaseString(channel) ?? null;
-  const loadedPlugin = channelId ? getLoadedChannelPlugin(channelId) : undefined;
-  const bundledPlugin = channelId ? getBundledChannelPlugin(channelId) : undefined;
-  const messaging = loadedPlugin?.messaging ?? bundledPlugin?.messaging;
-  const threading = loadedPlugin?.threading ?? bundledPlugin?.threading;
+  const plugin = channelId
+    ? (getLoadedChannelPlugin(channelId) ?? getBundledChannelPlugin(channelId))
+    : undefined;
+  const messaging = plugin?.messaging;
+  const threading = plugin?.threading;
   const resolvedAgentId = params.sessionKey
     ? resolveSessionAgentId({
         sessionKey: params.sessionKey,

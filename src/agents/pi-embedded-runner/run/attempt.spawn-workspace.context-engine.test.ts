@@ -7,15 +7,16 @@ import {
 } from "../../../plugins/memory-state.js";
 import {
   type AttemptContextEngine,
+  buildLoopPromptCacheInfo,
   assembleAttemptContextEngine,
   buildContextEnginePromptCacheInfo,
   findCurrentAttemptAssistantMessage,
   finalizeAttemptContextEngineTurn,
+  resolvePromptCacheTouchTimestamp,
   runAttemptContextEngineBootstrap,
 } from "./attempt.context-engine-helpers.js";
 import {
   cleanupTempPaths,
-  createContextEngineAttemptRunner,
   createContextEngineBootstrapAndAssemble,
   expectCalledWithSessionKey,
   getHoisted,
@@ -367,6 +368,88 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(promptCache).toEqual({ retention: "short" });
   });
 
+  it("derives live loop prompt-cache info from the current attempt assistant", () => {
+    const toolUseAssistant = {
+      role: "assistant",
+      content: "tool use",
+      timestamp: "2026-04-16T16:49:59.536Z",
+      usage: {
+        input: 1,
+        output: 2,
+        cacheRead: 39036,
+        cacheWrite: 59934,
+        total: 98973,
+      },
+    } as unknown as AgentMessage;
+
+    expect(
+      buildLoopPromptCacheInfo({
+        messagesSnapshot: [seedMessage, toolUseAssistant],
+        prePromptMessageCount: 1,
+        retention: "short",
+        fallbackLastCacheTouchAt: 123,
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        retention: "short",
+        lastCallUsage: expect.objectContaining({
+          cacheRead: 39036,
+          cacheWrite: 59934,
+          total: 98973,
+        }),
+        lastCacheTouchAt: Date.parse("2026-04-16T16:49:59.536Z"),
+      }),
+    );
+  });
+
+  it("falls back to the persisted cache touch when loop usage has no cache metrics", () => {
+    const toolUseAssistant = {
+      role: "assistant",
+      content: "tool use",
+      timestamp: "2026-04-16T16:49:59.536Z",
+      usage: {
+        input: 1,
+        output: 2,
+        total: 3,
+      },
+    } as unknown as AgentMessage;
+
+    expect(
+      buildLoopPromptCacheInfo({
+        messagesSnapshot: [seedMessage, toolUseAssistant],
+        prePromptMessageCount: 1,
+        retention: "short",
+        fallbackLastCacheTouchAt: 123,
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        retention: "short",
+        lastCallUsage: expect.objectContaining({
+          total: 3,
+        }),
+        lastCacheTouchAt: 123,
+      }),
+    );
+  });
+
+  it("derives a live cache touch timestamp for final afterTurn usage snapshots", () => {
+    const lastCallUsage = {
+      input: 1,
+      output: 2,
+      cacheRead: 39036,
+      cacheWrite: 0,
+      total: 39039,
+    };
+
+    expect(
+      resolvePromptCacheTouchTimestamp({
+        lastCallUsage,
+        assistantTimestamp: "2026-04-16T17:04:46.974Z",
+        fallbackLastCacheTouchAt: 123,
+      }),
+    ).toBe(Date.parse("2026-04-16T17:04:46.974Z"));
+  });
+
   it("threads prompt-cache break observations into afterTurn", async () => {
     const afterTurn = vi.fn(async (_params: AfterTurnPromptCacheCall) => {});
 
@@ -395,59 +478,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         previousCacheRead: 5000,
         cacheRead: 2000,
         changes: expect.arrayContaining([expect.objectContaining({ code: "systemPrompt" })]),
-      }),
-    );
-  });
-
-  it("derives deferred maintenance currentTokenCount from prompt-only usage", async () => {
-    const afterTurn = vi.fn(
-      async (_params: {
-        runtimeContext?: {
-          currentTokenCount?: number;
-          promptCache?: { lastCallUsage?: { total?: number } };
-        };
-      }) => {},
-    );
-
-    await createContextEngineAttemptRunner({
-      sessionKey,
-      tempPaths,
-      contextEngine: {
-        assemble: async ({ messages }) => ({
-          messages,
-          estimatedTokens: 1,
-        }),
-        afterTurn,
-      },
-      sessionPrompt: async (session) => {
-        session.messages = [
-          ...session.messages,
-          {
-            role: "assistant",
-            content: "done",
-            timestamp: 2,
-            usage: {
-              input: 10,
-              output: 5,
-              cacheRead: 40,
-              cacheWrite: 2,
-              total: 57,
-            },
-          } as unknown as AgentMessage,
-        ];
-      },
-    });
-
-    expect(afterTurn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runtimeContext: expect.objectContaining({
-          currentTokenCount: 52,
-          promptCache: expect.objectContaining({
-            lastCallUsage: expect.objectContaining({
-              total: 57,
-            }),
-          }),
-        }),
       }),
     );
   });

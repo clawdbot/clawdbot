@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { isValidEnvSecretRefId } from "../../../config/types.secrets.js";
+import { isValidEnvSecretRefId, resolveSecretInputRef } from "../../../config/types.secrets.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
@@ -18,7 +18,6 @@ export function applyNonInteractiveGatewayConfig(params: {
   authMode: string;
   tailscaleMode: string;
   tailscaleResetOnExit: boolean;
-  gatewayToken?: string;
 } | null {
   const { opts, runtime } = params;
 
@@ -54,7 +53,17 @@ export function applyNonInteractiveGatewayConfig(params: {
   let nextConfig = params.nextConfig;
   const explicitGatewayToken = normalizeGatewayTokenInput(opts.gatewayToken);
   const envGatewayToken = normalizeGatewayTokenInput(process.env.OPENCLAW_GATEWAY_TOKEN);
-  let gatewayToken = explicitGatewayToken || envGatewayToken || undefined;
+  const existingTokenInput = nextConfig.gateway?.auth?.token;
+  const existingTokenRef = resolveSecretInputRef({
+    value: existingTokenInput,
+    defaults: nextConfig.secrets?.defaults,
+  }).ref;
+  const existingPlaintextToken = normalizeGatewayTokenInput(existingTokenInput);
+  // Resolution order on re-onboard: explicit --gateway-token > persisted
+  // plaintext > ambient OPENCLAW_GATEWAY_TOKEN > randomToken(). Ambient env
+  // must not rotate a token already written to disk — a stale shell or
+  // launchd env var otherwise breaks already-paired clients.
+  let gatewayToken = explicitGatewayToken || existingPlaintextToken || envGatewayToken || undefined;
   const gatewayTokenRefEnv = normalizeOptionalString(opts.gatewayTokenRefEnv ?? "") ?? "";
 
   if (authMode === "token") {
@@ -92,6 +101,22 @@ export function applyNonInteractiveGatewayConfig(params: {
               }),
               id: gatewayTokenRefEnv,
             },
+          },
+        },
+      };
+    } else if (!explicitGatewayToken && existingTokenRef) {
+      // Preserve an already-configured SecretRef on re-onboard. Without this
+      // branch, an ambient OPENCLAW_GATEWAY_TOKEN (or randomToken() fallback)
+      // would silently overwrite {source, provider, id} with a plaintext
+      // literal, de-secretref-ing the gateway.
+      nextConfig = {
+        ...nextConfig,
+        gateway: {
+          ...nextConfig.gateway,
+          auth: {
+            ...nextConfig.gateway?.auth,
+            mode: "token",
+            // token field intentionally preserved as the existing SecretRef.
           },
         },
       };
@@ -154,6 +179,5 @@ export function applyNonInteractiveGatewayConfig(params: {
     authMode,
     tailscaleMode,
     tailscaleResetOnExit,
-    gatewayToken,
   };
 }

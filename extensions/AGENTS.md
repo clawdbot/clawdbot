@@ -60,6 +60,10 @@ third-party plugins see.
 - Do not rely on eager global registry seeding or import-time side effects to
   make a plugin “available”. Plugin availability should come from manifest
   ownership plus targeted activation.
+- When core needs plugin-owned static data on a hot path, expose a lightweight
+  top-level artifact such as `gateway-auth-api.ts`, `message-tool-api.ts`, or a
+  similarly narrow `*-api.ts`. Reuse the same local helper from the artifact and
+  the full plugin so fast paths do not drift from runtime behavior.
 
 ## Expanding The Boundary
 

@@ -292,6 +292,7 @@ export async function createMatrixThreadBindingManager(params: {
     accountId: params.accountId,
     getIdleTimeoutMs: () => defaults.idleTimeoutMs,
     getMaxAgeMs: () => defaults.maxAgeMs,
+    persist,
     getByConversation: ({ conversationId, parentConversationId }) =>
       listBindingsForAccount(params.accountId).find((entry) => {
         if (entry.conversationId !== conversationId.trim()) {

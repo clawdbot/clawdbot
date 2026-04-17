@@ -29,6 +29,9 @@ import from this tree directly.
   those files unless startup truly needs them.
 - Prefer a small local seam such as `channel-api.ts`, `*.runtime.ts`, or
   `*.runtime-api.ts` to keep heavy runtime code off the hot path.
+- For core discovery paths used by Gateway or agent tools, prefer lightweight
+  bundled-plugin artifacts first and full channel plugin loading only as a
+  fallback.
 - Do not mix static and dynamic imports for the same heavy module family across
   a channel boundary change. If the path should stay lazy, keep it lazy end to
   end.

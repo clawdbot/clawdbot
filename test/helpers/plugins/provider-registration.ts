@@ -18,7 +18,7 @@ type RegisteredProviderCollections = {
 };
 
 type ProviderPluginModule = {
-  register(api: ReturnType<typeof createTestPluginApi>): void | Promise<void>;
+  register(api: ReturnType<typeof createTestPluginApi>): void;
 };
 
 export async function registerProviderPlugin(params: {
@@ -33,7 +33,7 @@ export async function registerProviderPlugin(params: {
   const musicProviders: MusicGenerationProviderPlugin[] = [];
   const videoProviders: VideoGenerationProviderPlugin[] = [];
 
-  await params.plugin.register(
+  params.plugin.register(
     createTestPluginApi({
       id: params.id,
       name: params.name,

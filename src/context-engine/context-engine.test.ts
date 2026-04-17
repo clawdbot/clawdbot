@@ -532,19 +532,6 @@ describe("Registry tests", () => {
       existingOwner: "core",
     });
   });
-
-  it("shares registered engines across duplicate module copies", async () => {
-    const registryUrl = new URL("./registry.ts", import.meta.url).href;
-    const suffix = Date.now().toString(36);
-    const first = await import(/* @vite-ignore */ `${registryUrl}?copy=${suffix}-a`);
-    const second = await import(/* @vite-ignore */ `${registryUrl}?copy=${suffix}-b`);
-
-    const engineId = `dup-copy-${suffix}`;
-    const factory = () => new MockContextEngine();
-    first.registerContextEngine(engineId, factory);
-
-    expect(second.getContextEngineFactory(engineId)).toBe(factory);
-  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1019,34 +1006,18 @@ describe("Initialization guard", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("Bundle chunk isolation (#40096)", () => {
-  it("Symbol.for key is stable across independently loaded modules", async () => {
-    // Simulate two distinct bundle chunks by loading the registry module
-    // twice with different query strings (forces separate module instances
-    // in Vite/esbuild but shares globalThis).
+  it("shares registrations and keeps concurrent chunk registration visible", async () => {
     const ts = Date.now().toString(36);
     const registryUrl = new URL("./registry.ts", import.meta.url).href;
+    const chunks = await Promise.all(
+      Array.from(
+        { length: 3 },
+        (_, i) => import(/* @vite-ignore */ `${registryUrl}?chunk=${ts}-${i}`),
+      ),
+    );
 
-    const chunkA = await import(/* @vite-ignore */ `${registryUrl}?chunk=a-${ts}`);
-    const chunkB = await import(/* @vite-ignore */ `${registryUrl}?chunk=b-${ts}`);
-
-    // Chunk A registers an engine
     const engineId = `cross-chunk-${ts}`;
-    chunkA.registerContextEngine(engineId, () => new MockContextEngine());
-
-    // Chunk B must see it
-    expect(chunkB.getContextEngineFactory(engineId)).toBeDefined();
-    expect(chunkB.listContextEngineIds()).toContain(engineId);
-  });
-
-  it("resolveContextEngine from chunk B finds engine registered in chunk A", async () => {
-    const ts = Date.now().toString(36);
-    const registryUrl = new URL("./registry.ts", import.meta.url).href;
-
-    const chunkA = await import(/* @vite-ignore */ `${registryUrl}?chunk=resolve-a-${ts}`);
-    const chunkB = await import(/* @vite-ignore */ `${registryUrl}?chunk=resolve-b-${ts}`);
-
-    const engineId = `resolve-cross-${ts}`;
-    chunkA.registerContextEngine(engineId, () => ({
+    const factory = () => ({
       info: { id: engineId, name: "Cross-chunk Engine", version: "0.0.1" },
       async ingest() {
         return { ingested: true };
@@ -1057,39 +1028,23 @@ describe("Bundle chunk isolation (#40096)", () => {
       async compact() {
         return { ok: true, compacted: false };
       },
-    }));
-
-    // Resolve from chunk B using a config that points to this engine
-    const engine = await chunkB.resolveContextEngine(configWithSlot(engineId));
-    expect(engine.info.id).toBe(engineId);
-  });
-
-  it("concurrent registration from multiple chunks does not lose entries", async () => {
-    const ts = Date.now().toString(36);
-    const registryUrl = new URL("./registry.ts", import.meta.url).href;
-    let releaseRegistrations: (() => void) | undefined;
-    const registrationStart = new Promise<void>((resolve) => {
-      releaseRegistrations = resolve;
     });
+    chunks[0].registerContextEngine(engineId, factory);
 
-    // Load 5 "chunks" in parallel
-    const chunks = await Promise.all(
-      Array.from(
-        { length: 5 },
-        (_, i) => import(/* @vite-ignore */ `${registryUrl}?concurrent-${ts}-${i}`),
-      ),
-    );
+    expect(chunks[1].getContextEngineFactory(engineId)).toBe(factory);
+    expect(chunks[1].listContextEngineIds()).toContain(engineId);
+    const engine = await chunks[1].resolveContextEngine(configWithSlot(engineId));
+    expect(engine.info.id).toBe(engineId);
 
     const ids = chunks.map((_, i) => `concurrent-${ts}-${i}`);
-    const registrationTasks = chunks.map(async (chunk, i) => {
-      const id = `concurrent-${ts}-${i}`;
-      await registrationStart;
-      chunk.registerContextEngine(id, () => new MockContextEngine());
-    });
-    releaseRegistrations?.();
+    const registrationTasks = chunks.map((chunk, i) =>
+      Promise.resolve().then(() => {
+        const id = `concurrent-${ts}-${i}`;
+        chunk.registerContextEngine(id, () => new MockContextEngine());
+      }),
+    );
     await Promise.all(registrationTasks);
 
-    // All 5 engines must be visible from any chunk
     const allIds = chunks[0].listContextEngineIds();
     for (const id of ids) {
       expect(allIds).toContain(id);

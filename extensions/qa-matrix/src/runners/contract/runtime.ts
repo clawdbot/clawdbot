@@ -609,6 +609,8 @@ export async function runMatrixQaLive(params: {
               baseUrl: harness.baseUrl,
               canary: canaryArtifact,
               driverAccessToken: provisioning.driver.accessToken,
+              driverDeviceId: provisioning.driver.deviceId,
+              driverPassword: provisioning.driver.password,
               driverUserId: provisioning.driver.userId,
               interruptTransport: async () => {
                 writeMatrixQaProgress(`transport interrupt start ${scenario.id}`);
@@ -626,7 +628,10 @@ export async function runMatrixQaLive(params: {
               },
               observedEvents,
               observerAccessToken: provisioning.observer.accessToken,
+              observerDeviceId: provisioning.observer.deviceId,
+              observerPassword: provisioning.observer.password,
               observerUserId: provisioning.observer.userId,
+              outputDir,
               restartGateway: async () => {
                 if (!gatewayHarness) {
                   throw new Error("Matrix restart scenario requires a live gateway");
@@ -644,6 +649,8 @@ export async function runMatrixQaLive(params: {
               },
               roomId: provisioning.roomId,
               sutAccessToken: provisioning.sut.accessToken,
+              sutDeviceId: provisioning.sut.deviceId,
+              sutPassword: provisioning.sut.password,
               syncState,
               syncStreams,
               sutUserId: provisioning.sut.userId,

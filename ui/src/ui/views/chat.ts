@@ -29,6 +29,7 @@ import type { ChatSideResult } from "../chat/side-result.ts";
 import {
   CATEGORY_LABELS,
   SLASH_COMMANDS,
+  getHiddenCommandCount,
   getSlashCommandCompletions,
   type SlashCommandCategory,
   type SlashCommandDef,
@@ -292,6 +293,7 @@ interface ChatEphemeralState {
   slashMenuMode: "command" | "args";
   slashMenuCommand: SlashCommandDef | null;
   slashMenuArgItems: string[];
+  slashMenuExpanded: boolean;
   searchOpen: boolean;
   searchQuery: string;
   pinnedExpanded: boolean;
@@ -307,6 +309,7 @@ function createChatEphemeralState(): ChatEphemeralState {
     slashMenuMode: "command",
     slashMenuCommand: null,
     slashMenuArgItems: [],
+    slashMenuExpanded: false,
     searchOpen: false,
     searchQuery: "",
     pinnedExpanded: false,
@@ -725,6 +728,7 @@ function resetSlashMenuState(): void {
   vs.slashMenuCommand = null;
   vs.slashMenuArgItems = [];
   vs.slashMenuItems = [];
+  vs.slashMenuExpanded = false;
 }
 
 function updateSlashMenu(value: string, requestUpdate: () => void): void {
@@ -758,7 +762,7 @@ function updateSlashMenu(value: string, requestUpdate: () => void): void {
   // Command mode: /partial-command
   const match = value.match(/^\/(\S*)$/);
   if (match) {
-    const items = getSlashCommandCompletions(match[1]);
+    const items = getSlashCommandCompletions(match[1], { showAll: vs.slashMenuExpanded });
     vs.slashMenuItems = items;
     vs.slashMenuOpen = items.length > 0;
     vs.slashMenuIndex = 0;
@@ -1107,9 +1111,24 @@ function renderSlashMenu(
     `);
   }
 
+  const hiddenCount = vs.slashMenuExpanded ? 0 : getHiddenCommandCount();
+
   return html`
     <div class="slash-menu" role="listbox" aria-label="Slash commands">
       ${sections}
+      ${hiddenCount > 0
+        ? html`<button
+            class="slash-menu-show-more"
+            @click=${(e: Event) => {
+              e.preventDefault();
+              e.stopPropagation();
+              vs.slashMenuExpanded = true;
+              updateSlashMenu(props.draft, requestUpdate);
+            }}
+          >
+            Show ${hiddenCount} more command${hiddenCount !== 1 ? "s" : ""}
+          </button>`
+        : nothing}
       <div class="slash-menu-footer">
         <kbd>↑↓</kbd> navigate <kbd>Tab</kbd> fill <kbd>Enter</kbd> select <kbd>Esc</kbd> close
       </div>

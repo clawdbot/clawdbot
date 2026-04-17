@@ -29,5 +29,9 @@ export default defineBundledChannelEntry({
     specifier: "./runtime-api.js",
     exportName: "setSlackRuntime",
   },
+  accountInspect: {
+    specifier: "./account-inspect-api.js",
+    exportName: "inspectSlackReadOnlyAccount",
+  },
   registerFull: registerSlackPluginHttpRoutes,
 });

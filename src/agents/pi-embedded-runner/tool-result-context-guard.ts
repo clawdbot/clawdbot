@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { ContextEngine } from "../../context-engine/types.js";
+import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import {
   CHARS_PER_TOKEN_ESTIMATE,
   TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
@@ -198,6 +198,10 @@ export function installContextEngineLoopHook(params: {
   tokenBudget?: number;
   modelId: string;
   getPrePromptMessageCount?: () => number;
+  getRuntimeContext?: (params: {
+    messages: AgentMessage[];
+    prePromptMessageCount: number;
+  }) => ContextEngineRuntimeContext | undefined;
 }): () => void {
   const { contextEngine, sessionId, sessionKey, sessionFile, tokenBudget, modelId } = params;
   const mutableAgent = params.agent as GuardableAgentRecord;
@@ -237,6 +241,10 @@ export function installContextEngineLoopHook(params: {
           messages: sourceMessages,
           prePromptMessageCount,
           tokenBudget,
+          runtimeContext: params.getRuntimeContext?.({
+            messages: sourceMessages,
+            prePromptMessageCount,
+          }),
         });
       } else {
         const newMessages = sourceMessages.slice(prePromptMessageCount);

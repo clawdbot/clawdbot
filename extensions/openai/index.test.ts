@@ -54,7 +54,7 @@ const _registerOpenAIPlugin = async () =>
 async function registerOpenAIPluginWithHook(params?: { pluginConfig?: Record<string, unknown> }) {
   const on = vi.fn();
   const providers: ProviderPlugin[] = [];
-  await plugin.register(
+  plugin.register(
     createTestPluginApi({
       id: "openai",
       name: "OpenAI Provider",

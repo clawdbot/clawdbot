@@ -6,6 +6,8 @@ import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 
 export type SlashCommandCategory = "session" | "model" | "agents" | "tools";
 
+export type SlashCommandTier = "essential" | "standard" | "power";
+
 export type SlashCommandDef = {
   key: string;
   name: string;
@@ -20,6 +22,8 @@ export type SlashCommandDef = {
   argOptions?: string[];
   /** Keyboard shortcut hint shown in the menu (display only). */
   shortcut?: string;
+  /** Progressive disclosure tier. Defaults to "standard" when omitted. */
+  tier?: SlashCommandTier;
 };
 
 type LocalArgChoice = string | { value: string; label: string };
@@ -35,6 +39,7 @@ type CommandLike = {
     choices?: LocalArgChoice[];
   }>;
   category?: string;
+  tier?: string;
 };
 
 const REMOTE_SLASH_IDENTIFIER_PATTERN = /^[a-z0-9][a-z0-9_-]*$/u;
@@ -101,6 +106,7 @@ const UI_ONLY_COMMANDS: SlashCommandDef[] = [
     icon: "trash",
     category: "session",
     executeLocal: true,
+    tier: "standard",
   },
   {
     key: "redirect",
@@ -110,6 +116,7 @@ const UI_ONLY_COMMANDS: SlashCommandDef[] = [
     icon: "refresh",
     category: "agents",
     executeLocal: true,
+    tier: "power",
   },
 ];
 
@@ -213,6 +220,14 @@ function mapIcon(command: CommandLike): IconName | undefined {
   return COMMAND_ICON_OVERRIDES[normalizeUiKey(command)] ?? "terminal";
 }
 
+function mapTier(command: CommandLike): SlashCommandTier {
+  const raw = command.tier;
+  if (raw === "essential" || raw === "standard" || raw === "power") {
+    return raw;
+  }
+  return "standard";
+}
+
 function toSlashCommand(
   command: CommandLike,
   source: "local" | "remote" = "local",
@@ -231,6 +246,7 @@ function toSlashCommand(
     category: mapCategory(command),
     executeLocal: source === "local" && LOCAL_COMMANDS.has(command.key),
     argOptions: getArgOptions(command),
+    tier: source === "local" ? mapTier(command) : "standard",
   };
 }
 
@@ -309,6 +325,7 @@ function buildLocalSlashCommands(): SlashCommandDef[] {
         choices: Array.isArray(arg.choices) ? arg.choices : undefined,
       })),
       category: command.category,
+      tier: command.tier,
     }))
     .map((command) => toSlashCommand(command, "local"))
     .filter((command): command is SlashCommandDef => command !== null);
@@ -454,9 +471,19 @@ export const CATEGORY_LABELS: Record<SlashCommandCategory, string> = {
   tools: "Tools",
 };
 
-export function getSlashCommandCompletions(filter: string): SlashCommandDef[] {
+const TIER_ORDER: Record<SlashCommandTier, number> = {
+  essential: 0,
+  standard: 1,
+  power: 2,
+};
+
+export function getSlashCommandCompletions(
+  filter: string,
+  options?: { showAll?: boolean },
+): SlashCommandDef[] {
   const lower = normalizeLowercaseStringOrEmpty(filter);
-  const commands = lower
+  const showAll = options?.showAll ?? false;
+  let commands = lower
     ? SLASH_COMMANDS.filter(
         (cmd) =>
           cmd.name.startsWith(lower) ||
@@ -464,7 +491,19 @@ export function getSlashCommandCompletions(filter: string): SlashCommandDef[] {
           normalizeLowercaseStringOrEmpty(cmd.description).includes(lower),
       )
     : SLASH_COMMANDS;
+
+  // When no filter text and not explicitly showing all, hide "power" tier commands
+  if (!lower && !showAll) {
+    commands = commands.filter((cmd) => (cmd.tier ?? "standard") !== "power");
+  }
+
   return commands.toSorted((a, b) => {
+    // Sort by tier first (essential → standard → power)
+    const aTier = TIER_ORDER[a.tier ?? "standard"] ?? 1;
+    const bTier = TIER_ORDER[b.tier ?? "standard"] ?? 1;
+    if (aTier !== bTier) {
+      return aTier - bTier;
+    }
     const ai = CATEGORY_ORDER.indexOf(a.category ?? "session");
     const bi = CATEGORY_ORDER.indexOf(b.category ?? "session");
     if (ai !== bi) {
@@ -479,6 +518,11 @@ export function getSlashCommandCompletions(filter: string): SlashCommandDef[] {
     }
     return 0;
   });
+}
+
+/** Count of commands hidden by tier filtering (for "Show N more" UI). */
+export function getHiddenCommandCount(): number {
+  return SLASH_COMMANDS.filter((cmd) => (cmd.tier ?? "standard") === "power").length;
 }
 
 export type ParsedSlashCommand = {

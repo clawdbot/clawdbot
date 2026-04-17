@@ -95,6 +95,8 @@ describe("configureGatewayForSetup", () => {
 
     expect(result.settings.gatewayToken).toBe("generated-token");
     expect(result.nextConfig.gateway?.nodes?.denyCommands).toEqual(DEFAULT_DANGEROUS_NODE_COMMANDS);
+    expect(result.nextConfig.gateway?.nodes?.denyCommands).not.toContain("screen.snapshot");
+    expect(result.nextConfig.gateway?.nodes?.denyCommands).toContain("screen.record");
   });
 
   it("prefers OPENCLAW_GATEWAY_TOKEN during quickstart token setup", async () => {

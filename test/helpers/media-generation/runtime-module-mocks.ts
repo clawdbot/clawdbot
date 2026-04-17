@@ -53,6 +53,9 @@ const mediaRuntimeMocks = vi.hoisted(() => {
       vi.fn<(raw?: string) => ModelRef | undefined>(parseGenerationModelRef),
     parseVideoGenerationModelRef:
       vi.fn<(raw?: string) => ModelRef | undefined>(parseGenerationModelRef),
+    ensureAuthProfileStore: vi.fn(() => ({ version: 1, profiles: {} })),
+    listProfilesForProvider: vi.fn(() => []),
+    resolveEnvApiKey: vi.fn(() => undefined),
     resolveAgentModelFallbackValues: vi.fn<(value: unknown) => string[]>(() => []),
     resolveAgentModelPrimaryValue: vi.fn<(value: unknown) => string | undefined>(() => undefined),
     resolveProviderAuthEnvVarCandidates: vi.fn(() => ({})),
@@ -61,9 +64,19 @@ const mediaRuntimeMocks = vi.hoisted(() => {
   };
 });
 
+vi.mock("../../../src/agents/auth-profiles.js", () => ({
+  ensureAuthProfileStore: mediaRuntimeMocks.ensureAuthProfileStore,
+  listProfilesForProvider: mediaRuntimeMocks.listProfilesForProvider,
+}));
+vi.mock("../../../src/agents/defaults.js", () => ({
+  DEFAULT_PROVIDER: "openai",
+}));
 vi.mock("../../../src/agents/failover-error.js", () => ({
   describeFailoverError: mediaRuntimeMocks.describeFailoverError,
   isFailoverError: mediaRuntimeMocks.isFailoverError,
+}));
+vi.mock("../../../src/agents/model-auth-env.js", () => ({
+  resolveEnvApiKey: mediaRuntimeMocks.resolveEnvApiKey,
 }));
 vi.mock("../../../src/config/model-input.js", () => ({
   resolveAgentModelFallbackValues: mediaRuntimeMocks.resolveAgentModelFallbackValues,
@@ -72,14 +85,10 @@ vi.mock("../../../src/config/model-input.js", () => ({
 vi.mock("../../../src/logging/subsystem.js", () => ({
   createSubsystemLogger: mediaRuntimeMocks.createSubsystemLogger,
 }));
-vi.mock("../../../src/secrets/provider-env-vars.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/secrets/provider-env-vars.js")>();
-  return {
-    ...actual,
-    getProviderEnvVars: mediaRuntimeMocks.getProviderEnvVars,
-    resolveProviderAuthEnvVarCandidates: mediaRuntimeMocks.resolveProviderAuthEnvVarCandidates,
-  };
-});
+vi.mock("../../../src/secrets/provider-env-vars.js", () => ({
+  getProviderEnvVars: mediaRuntimeMocks.getProviderEnvVars,
+  resolveProviderAuthEnvVarCandidates: mediaRuntimeMocks.resolveProviderAuthEnvVarCandidates,
+}));
 
 vi.mock("../../../src/image-generation/model-ref.js", () => ({
   parseImageGenerationModelRef: mediaRuntimeMocks.parseImageGenerationModelRef,
@@ -108,6 +117,7 @@ export function getMediaGenerationRuntimeMocks() {
 }
 
 export function resetImageGenerationRuntimeMocks(): void {
+  resetSharedRuntimeImportMocks();
   resetGenerationRuntimeMocks({
     ...mediaRuntimeMocks,
     getProvider: mediaRuntimeMocks.getImageGenerationProvider,
@@ -117,6 +127,7 @@ export function resetImageGenerationRuntimeMocks(): void {
 }
 
 export function resetMusicGenerationRuntimeMocks(): void {
+  resetSharedRuntimeImportMocks();
   resetGenerationRuntimeMocks({
     ...mediaRuntimeMocks,
     getProvider: mediaRuntimeMocks.getMusicGenerationProvider,
@@ -126,10 +137,20 @@ export function resetMusicGenerationRuntimeMocks(): void {
 }
 
 export function resetVideoGenerationRuntimeMocks(): void {
+  resetSharedRuntimeImportMocks();
   resetGenerationRuntimeMocks({
     ...mediaRuntimeMocks,
     getProvider: mediaRuntimeMocks.getVideoGenerationProvider,
     listProviders: mediaRuntimeMocks.listVideoGenerationProviders,
     parseModelRef: mediaRuntimeMocks.parseVideoGenerationModelRef,
   });
+}
+
+function resetSharedRuntimeImportMocks(): void {
+  mediaRuntimeMocks.ensureAuthProfileStore.mockReset();
+  mediaRuntimeMocks.ensureAuthProfileStore.mockReturnValue({ version: 1, profiles: {} });
+  mediaRuntimeMocks.listProfilesForProvider.mockReset();
+  mediaRuntimeMocks.listProfilesForProvider.mockReturnValue([]);
+  mediaRuntimeMocks.resolveEnvApiKey.mockReset();
+  mediaRuntimeMocks.resolveEnvApiKey.mockReturnValue(undefined);
 }

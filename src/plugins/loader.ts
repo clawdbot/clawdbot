@@ -98,7 +98,12 @@ import {
   shouldPreferNativeJiti,
 } from "./sdk-alias.js";
 import { hasKind, kindsEqual } from "./slots.js";
-import type { OpenClawPluginDefinition, OpenClawPluginModule, PluginLogger } from "./types.js";
+import type {
+  OpenClawPluginApi,
+  OpenClawPluginDefinition,
+  OpenClawPluginModule,
+  PluginLogger,
+} from "./types.js";
 
 export type PluginLoadResult = PluginRegistry;
 
@@ -247,6 +252,162 @@ function profilePluginLoaderSync<T>(params: {
     console.error(
       `[plugin-load-profile] phase=${params.phase} plugin=${params.pluginId ?? "(core)"} elapsedMs=${elapsedMs.toFixed(1)} source=${params.source}`,
     );
+  }
+}
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return (
+    (typeof value === "object" || typeof value === "function") &&
+    value !== null &&
+    typeof (value as { then?: unknown }).then === "function"
+  );
+}
+
+type PluginRegistrySnapshot = {
+  arrays: {
+    tools: PluginRegistry["tools"];
+    hooks: PluginRegistry["hooks"];
+    typedHooks: PluginRegistry["typedHooks"];
+    channels: PluginRegistry["channels"];
+    channelSetups: PluginRegistry["channelSetups"];
+    providers: PluginRegistry["providers"];
+    cliBackends: NonNullable<PluginRegistry["cliBackends"]>;
+    textTransforms: PluginRegistry["textTransforms"];
+    speechProviders: PluginRegistry["speechProviders"];
+    realtimeTranscriptionProviders: PluginRegistry["realtimeTranscriptionProviders"];
+    realtimeVoiceProviders: PluginRegistry["realtimeVoiceProviders"];
+    mediaUnderstandingProviders: PluginRegistry["mediaUnderstandingProviders"];
+    imageGenerationProviders: PluginRegistry["imageGenerationProviders"];
+    videoGenerationProviders: PluginRegistry["videoGenerationProviders"];
+    musicGenerationProviders: PluginRegistry["musicGenerationProviders"];
+    webFetchProviders: PluginRegistry["webFetchProviders"];
+    webSearchProviders: PluginRegistry["webSearchProviders"];
+    memoryEmbeddingProviders: PluginRegistry["memoryEmbeddingProviders"];
+    agentHarnesses: PluginRegistry["agentHarnesses"];
+    httpRoutes: PluginRegistry["httpRoutes"];
+    cliRegistrars: PluginRegistry["cliRegistrars"];
+    reloads: NonNullable<PluginRegistry["reloads"]>;
+    nodeHostCommands: NonNullable<PluginRegistry["nodeHostCommands"]>;
+    securityAuditCollectors: NonNullable<PluginRegistry["securityAuditCollectors"]>;
+    services: PluginRegistry["services"];
+    commands: PluginRegistry["commands"];
+    conversationBindingResolvedHandlers: PluginRegistry["conversationBindingResolvedHandlers"];
+    diagnostics: PluginRegistry["diagnostics"];
+  };
+  gatewayHandlers: PluginRegistry["gatewayHandlers"];
+  gatewayMethodScopes: NonNullable<PluginRegistry["gatewayMethodScopes"]>;
+};
+
+function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapshot {
+  return {
+    arrays: {
+      tools: [...registry.tools],
+      hooks: [...registry.hooks],
+      typedHooks: [...registry.typedHooks],
+      channels: [...registry.channels],
+      channelSetups: [...registry.channelSetups],
+      providers: [...registry.providers],
+      cliBackends: [...(registry.cliBackends ?? [])],
+      textTransforms: [...registry.textTransforms],
+      speechProviders: [...registry.speechProviders],
+      realtimeTranscriptionProviders: [...registry.realtimeTranscriptionProviders],
+      realtimeVoiceProviders: [...registry.realtimeVoiceProviders],
+      mediaUnderstandingProviders: [...registry.mediaUnderstandingProviders],
+      imageGenerationProviders: [...registry.imageGenerationProviders],
+      videoGenerationProviders: [...registry.videoGenerationProviders],
+      musicGenerationProviders: [...registry.musicGenerationProviders],
+      webFetchProviders: [...registry.webFetchProviders],
+      webSearchProviders: [...registry.webSearchProviders],
+      memoryEmbeddingProviders: [...registry.memoryEmbeddingProviders],
+      agentHarnesses: [...registry.agentHarnesses],
+      httpRoutes: [...registry.httpRoutes],
+      cliRegistrars: [...registry.cliRegistrars],
+      reloads: [...(registry.reloads ?? [])],
+      nodeHostCommands: [...(registry.nodeHostCommands ?? [])],
+      securityAuditCollectors: [...(registry.securityAuditCollectors ?? [])],
+      services: [...registry.services],
+      commands: [...registry.commands],
+      conversationBindingResolvedHandlers: [...registry.conversationBindingResolvedHandlers],
+      diagnostics: [...registry.diagnostics],
+    },
+    gatewayHandlers: { ...registry.gatewayHandlers },
+    gatewayMethodScopes: { ...registry.gatewayMethodScopes },
+  };
+}
+
+function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistrySnapshot): void {
+  registry.tools = snapshot.arrays.tools;
+  registry.hooks = snapshot.arrays.hooks;
+  registry.typedHooks = snapshot.arrays.typedHooks;
+  registry.channels = snapshot.arrays.channels;
+  registry.channelSetups = snapshot.arrays.channelSetups;
+  registry.providers = snapshot.arrays.providers;
+  registry.cliBackends = snapshot.arrays.cliBackends;
+  registry.textTransforms = snapshot.arrays.textTransforms;
+  registry.speechProviders = snapshot.arrays.speechProviders;
+  registry.realtimeTranscriptionProviders = snapshot.arrays.realtimeTranscriptionProviders;
+  registry.realtimeVoiceProviders = snapshot.arrays.realtimeVoiceProviders;
+  registry.mediaUnderstandingProviders = snapshot.arrays.mediaUnderstandingProviders;
+  registry.imageGenerationProviders = snapshot.arrays.imageGenerationProviders;
+  registry.videoGenerationProviders = snapshot.arrays.videoGenerationProviders;
+  registry.musicGenerationProviders = snapshot.arrays.musicGenerationProviders;
+  registry.webFetchProviders = snapshot.arrays.webFetchProviders;
+  registry.webSearchProviders = snapshot.arrays.webSearchProviders;
+  registry.memoryEmbeddingProviders = snapshot.arrays.memoryEmbeddingProviders;
+  registry.agentHarnesses = snapshot.arrays.agentHarnesses;
+  registry.httpRoutes = snapshot.arrays.httpRoutes;
+  registry.cliRegistrars = snapshot.arrays.cliRegistrars;
+  registry.reloads = snapshot.arrays.reloads;
+  registry.nodeHostCommands = snapshot.arrays.nodeHostCommands;
+  registry.securityAuditCollectors = snapshot.arrays.securityAuditCollectors;
+  registry.services = snapshot.arrays.services;
+  registry.commands = snapshot.arrays.commands;
+  registry.conversationBindingResolvedHandlers =
+    snapshot.arrays.conversationBindingResolvedHandlers;
+  registry.diagnostics = snapshot.arrays.diagnostics;
+  registry.gatewayHandlers = snapshot.gatewayHandlers;
+  registry.gatewayMethodScopes = snapshot.gatewayMethodScopes;
+}
+
+function createGuardedPluginRegistrationApi(api: OpenClawPluginApi): {
+  api: OpenClawPluginApi;
+  close: () => void;
+} {
+  let closed = false;
+  return {
+    api: new Proxy(api, {
+      get(target, prop, receiver) {
+        const value = Reflect.get(target, prop, receiver);
+        if (typeof value !== "function") {
+          return value;
+        }
+        return (...args: unknown[]) => {
+          if (closed) {
+            return undefined;
+          }
+          return Reflect.apply(value, target, args);
+        };
+      },
+    }),
+    close: () => {
+      closed = true;
+    },
+  };
+}
+
+function runPluginRegisterSync(
+  register: NonNullable<OpenClawPluginDefinition["register"]>,
+  api: Parameters<NonNullable<OpenClawPluginDefinition["register"]>>[0],
+): void {
+  const guarded = createGuardedPluginRegistrationApi(api);
+  try {
+    const result = register(guarded.api);
+    if (isPromiseLike(result)) {
+      void Promise.resolve(result).catch(() => {});
+      throw new Error("plugin register must be synchronous");
+    }
+  } finally {
+    guarded.close();
   }
 }
 
@@ -1401,6 +1562,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     const {
       registry,
       createApi,
+      rollbackPluginGlobalSideEffects,
       registerReload,
       registerNodeHostCommand,
       registerSecurityAuditCollector,
@@ -2047,6 +2209,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         hookPolicy: entry?.hooks,
         registrationMode,
       });
+      const registrySnapshot = snapshotPluginRegistry(registry);
       const previousAgentHarnesses = listRegisteredAgentHarnesses();
       const previousCompactionProviders = listRegisteredCompactionProviders();
       const previousMemoryEmbeddingProviders = listRegisteredMemoryEmbeddingProviders();
@@ -2057,15 +2220,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       const previousMemoryRuntime = getMemoryRuntime();
 
       try {
-        const result = register(api);
-        if (result && typeof result.then === "function") {
-          registry.diagnostics.push({
-            level: "warn",
-            pluginId: record.id,
-            source: record.source,
-            message: "plugin register returned a promise; async registration is ignored",
-          });
-        }
+        runPluginRegisterSync(register, api);
         // Snapshot loads should not replace process-global runtime prompt state.
         if (!shouldActivate) {
           restoreRegisteredAgentHarnesses(previousAgentHarnesses);
@@ -2082,6 +2237,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         registry.plugins.push(record);
         seenIds.set(pluginId, candidate.origin);
       } catch (err) {
+        rollbackPluginGlobalSideEffects(record.id);
+        restorePluginRegistry(registry, registrySnapshot);
         restoreRegisteredAgentHarnesses(previousAgentHarnesses);
         restoreRegisteredCompactionProviders(previousCompactionProviders);
         restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
@@ -2477,11 +2634,13 @@ export async function loadOpenClawPluginCliRegistry(
       },
     });
 
+    const registrySnapshot = snapshotPluginRegistry(registry);
     try {
-      await register(api);
+      runPluginRegisterSync(register, api);
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
     } catch (err) {
+      restorePluginRegistry(registry, registrySnapshot);
       recordPluginError({
         logger,
         registry,

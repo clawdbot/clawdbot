@@ -421,7 +421,18 @@ export function registerControlUiAndPairingSuite(): void {
           },
         });
         expect(res.ok).toBe(true);
-        expect((res.payload as { auth?: unknown } | undefined)?.auth).toBeUndefined();
+        const helloOk = res.payload as
+          | {
+              auth?: {
+                role?: unknown;
+                scopes?: unknown;
+                deviceToken?: unknown;
+              };
+            }
+          | undefined;
+        expect(helloOk?.auth?.role).toBe("operator");
+        expect(helloOk?.auth?.scopes).toEqual(["operator.read"]);
+        expect(helloOk?.auth?.deviceToken).toBeUndefined();
         const health = await rpcReq(staleDeviceWs, "health");
         expect(health.ok).toBe(true);
         staleDeviceWs.close();
@@ -435,6 +446,18 @@ export function registerControlUiAndPairingSuite(): void {
           },
         });
         expect(scopedRes.ok, "requested scope bypass").toBe(true);
+        const scopedHelloOk = scopedRes.payload as
+          | {
+              auth?: {
+                role?: unknown;
+                scopes?: unknown;
+                deviceToken?: unknown;
+              };
+            }
+          | undefined;
+        expect(scopedHelloOk?.auth?.role).toBe("operator");
+        expect(scopedHelloOk?.auth?.scopes).toEqual(["operator.read"]);
+        expect(scopedHelloOk?.auth?.deviceToken).toBeUndefined();
 
         const scopedHealth = await rpcReq(scopedWs, "health");
         expect(scopedHealth.ok).toBe(true);

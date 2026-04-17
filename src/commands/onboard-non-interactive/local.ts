@@ -2,6 +2,7 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import { replaceConfigFile, resolveGatewayPort } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveGatewayAuthToken } from "../../gateway/auth-token-resolution.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME } from "../daemon-runtime.js";
 import { applyLocalSetupWorkspaceConfig } from "../onboard-config.js";
@@ -89,6 +90,33 @@ async function collectGatewayHealthFailureDiagnostics(): Promise<
   return diagnostics.service || diagnostics.lastGatewayError || diagnostics.inspectError
     ? diagnostics
     : undefined;
+}
+
+export async function resolveGatewayHealthProbeToken(
+  nextConfig: OpenClawConfig,
+): Promise<{ token?: string; unresolvedRefReason?: string }> {
+  const resolved = await resolveGatewayAuthToken({
+    cfg: nextConfig,
+    env: process.env,
+    envFallback: "no-secret-ref",
+    unresolvedReasonStyle: "detailed",
+  });
+  const probeAuth: { token?: string; unresolvedRefReason?: string } = {};
+  if (resolved.token) {
+    probeAuth.token = resolved.token;
+  }
+  if (resolved.unresolvedRefReason) {
+    probeAuth.unresolvedRefReason = resolved.unresolvedRefReason;
+  }
+  return probeAuth;
+}
+
+function formatGatewayHealthFailureDetail(params: {
+  probeDetail?: string;
+  unresolvedRefReason?: string;
+}): string | undefined {
+  const detail = [params.probeDetail, params.unresolvedRefReason].filter(Boolean).join("\n");
+  return detail || undefined;
 }
 
 export async function runNonInteractiveLocalSetup(params: {
@@ -230,9 +258,10 @@ export async function runNonInteractiveLocalSetup(params: {
       basePath: undefined,
     });
     const installDaemonGatewayHealthTiming = resolveInstallDaemonGatewayHealthTiming();
+    const probeAuth = await resolveGatewayHealthProbeToken(nextConfig);
     const probe = await waitForGatewayReachable({
       url: links.wsUrl,
-      token: gatewayResult.gatewayToken,
+      token: probeAuth.token,
       deadlineMs: opts.installDaemon
         ? installDaemonGatewayHealthTiming.deadlineMs
         : ATTACH_EXISTING_GATEWAY_HEALTH_DEADLINE_MS,
@@ -241,6 +270,10 @@ export async function runNonInteractiveLocalSetup(params: {
         : undefined,
     });
     if (!probe.ok) {
+      const detail = formatGatewayHealthFailureDetail({
+        probeDetail: probe.detail,
+        unresolvedRefReason: probeAuth.unresolvedRefReason,
+      });
       const diagnostics = opts.installDaemon
         ? await collectGatewayHealthFailureDiagnostics()
         : undefined;
@@ -250,7 +283,7 @@ export async function runNonInteractiveLocalSetup(params: {
         mode,
         phase: "gateway-health",
         message: `Gateway did not become reachable at ${links.wsUrl}.`,
-        detail: probe.detail,
+        detail,
         gateway: {
           wsUrl: links.wsUrl,
           httpUrl: links.httpUrl,

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import {
@@ -273,6 +273,54 @@ export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(param
     location,
     trackedPluginId: params.trackedPluginId ?? params.dirName,
   });
+}
+
+export async function loadBundledPluginPublicSurfaceModule<T extends object>(params: {
+  dirName: string;
+  artifactBasename: string;
+  trackedPluginId?: string | (() => string);
+  env?: NodeJS.ProcessEnv;
+}): Promise<T> {
+  const location = resolveFacadeModuleLocation(params);
+  if (!location) {
+    throw new Error(
+      `Unable to resolve bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
+    );
+  }
+  const cached = loadedFacadeModules.get(location.modulePath);
+  if (cached) {
+    return cached as T;
+  }
+
+  const opened = openBoundaryFileSync({
+    absolutePath: location.modulePath,
+    rootPath: location.boundaryRoot,
+    boundaryLabel:
+      location.boundaryRoot === getOpenClawPackageRoot() ? "OpenClaw package root" : "plugin root",
+    rejectHardlinks: false,
+  });
+  if (!opened.ok) {
+    throw new Error(`Unable to open bundled plugin public surface ${location.modulePath}`, {
+      cause: opened.error,
+    });
+  }
+  fs.closeSync(opened.fd);
+
+  try {
+    const loaded = (await import(pathToFileURL(location.modulePath).href)) as T;
+    loadedFacadeModules.set(location.modulePath, loaded);
+    loadedFacadePluginIds.add(
+      typeof params.trackedPluginId === "function"
+        ? params.trackedPluginId()
+        : (params.trackedPluginId ?? params.dirName),
+    );
+    return loaded;
+  } catch {
+    return loadFacadeModuleAtLocationSync({
+      location,
+      trackedPluginId: params.trackedPluginId ?? params.dirName,
+    });
+  }
 }
 
 export function listImportedBundledPluginFacadeIds(): string[] {

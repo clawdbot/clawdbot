@@ -2,7 +2,7 @@
  * Test: subagent_spawning, subagent_delivery_target, subagent_spawned & subagent_ended hook wiring
  */
 import { describe, expect, it, vi } from "vitest";
-import { createHookRunnerWithRegistry } from "./hooks.test-helpers.js";
+import { addStaticTestHooks, createHookRunnerWithRegistry } from "./hooks.test-helpers.js";
 
 describe("subagent hook runner methods", () => {
   const baseRequester = {
@@ -161,5 +161,67 @@ describe("subagent hook runner methods", () => {
     expect(runner.hasHooks("subagent_delivery_target")).toBe(true);
     expect(runner.hasHooks("subagent_spawned")).toBe(false);
     expect(runner.hasHooks("subagent_ended")).toBe(false);
+  });
+
+  it("runSubagentSpawning preserves higher-priority delivery origins", async () => {
+    const { registry, runner } = createHookRunnerWithRegistry([]);
+    addStaticTestHooks(registry, {
+      hookName: "subagent_spawning",
+      hooks: [
+        {
+          pluginId: "high",
+          priority: 100,
+          result: {
+            status: "ok",
+            threadBindingReady: true,
+            deliveryOrigin: {
+              channel: "matrix",
+              accountId: "ops",
+              to: "room:!high:example",
+              threadId: "$high",
+            },
+          },
+        },
+        {
+          pluginId: "low",
+          priority: 10,
+          result: {
+            status: "ok",
+            threadBindingReady: true,
+            deliveryOrigin: {
+              channel: "matrix",
+              accountId: "ops",
+              to: "room:!low:example",
+              threadId: "$low",
+            },
+          },
+        },
+      ],
+    });
+
+    const result = await runner.runSubagentSpawning(
+      {
+        childSessionKey: "agent:main:subagent:child",
+        agentId: "main",
+        mode: "session",
+        requester: baseRequester,
+        threadRequested: true,
+      },
+      {
+        childSessionKey: "agent:main:subagent:child",
+        requesterSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result).toEqual({
+      status: "ok",
+      threadBindingReady: true,
+      deliveryOrigin: {
+        channel: "matrix",
+        accountId: "ops",
+        to: "room:!high:example",
+        threadId: "$high",
+      },
+    });
   });
 });

@@ -6,6 +6,8 @@ describe("compaction identifier policy", () => {
     const built = buildCompactionSummarizationInstructions();
     expect(built).toContain("Preserve all opaque identifiers exactly as written");
     expect(built).toContain("UUIDs");
+    expect(built).not.toContain("tokens");
+    expect(built).not.toContain("API keys");
   });
 
   it("can disable identifier preservation with off policy", () => {

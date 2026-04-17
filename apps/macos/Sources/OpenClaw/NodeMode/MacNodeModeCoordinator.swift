@@ -146,6 +146,7 @@ final class MacNodeModeCoordinator {
             OpenClawCanvasA2UICommand.push.rawValue,
             OpenClawCanvasA2UICommand.pushJSONL.rawValue,
             OpenClawCanvasA2UICommand.reset.rawValue,
+            MacNodeScreenCommand.snapshot.rawValue,
             MacNodeScreenCommand.record.rawValue,
             OpenClawSystemCommand.notify.rawValue,
             OpenClawSystemCommand.which.rawValue,

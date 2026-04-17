@@ -18,9 +18,13 @@ type BundledChannelEntryRuntimeContract = {
   id: string;
   name: string;
   description: string;
+  features?: {
+    accountInspect?: boolean;
+  };
   register: (api: unknown) => void;
   loadChannelPlugin: () => ChannelPlugin;
   loadChannelSecrets?: () => ChannelPlugin["secrets"] | undefined;
+  loadChannelAccountInspector?: () => NonNullable<ChannelPlugin["config"]["inspectAccount"]>;
   setChannelRuntime?: (runtime: PluginRuntime) => void;
 };
 
@@ -49,6 +53,10 @@ type BundledChannelCacheContext = {
   lazySetupPluginsById: Map<ChannelId, ChannelPlugin>;
   lazySecretsById: Map<ChannelId, ChannelPlugin["secrets"] | null>;
   lazySetupSecretsById: Map<ChannelId, ChannelPlugin["secrets"] | null>;
+  lazyAccountInspectorsById: Map<
+    ChannelId,
+    NonNullable<ChannelPlugin["config"]["inspectAccount"]> | null
+  >;
 };
 
 const log = createSubsystemLogger("channels");
@@ -96,6 +104,13 @@ function resolveChannelSetupModuleEntry(
 function hasSetupEntryFeature(
   entry: BundledChannelSetupEntryRuntimeContract | undefined,
   feature: keyof NonNullable<BundledChannelSetupEntryRuntimeContract["features"]>,
+): boolean {
+  return entry?.features?.[feature] === true;
+}
+
+function hasChannelEntryFeature(
+  entry: BundledChannelEntryRuntimeContract | undefined,
+  feature: keyof NonNullable<BundledChannelEntryRuntimeContract["features"]>,
 ): boolean {
   return entry?.features?.[feature] === true;
 }
@@ -222,6 +237,7 @@ function createBundledChannelCacheContext(): BundledChannelCacheContext {
     lazySetupPluginsById: new Map(),
     lazySecretsById: new Map(),
     lazySetupSecretsById: new Map(),
+    lazyAccountInspectorsById: new Map(),
   };
 }
 
@@ -368,6 +384,24 @@ function getBundledChannelSecretsForRoot(
   return secrets;
 }
 
+function getBundledChannelAccountInspectorForRoot(
+  id: ChannelId,
+  rootScope: BundledChannelRootScope,
+  cacheContext: BundledChannelCacheContext,
+): NonNullable<ChannelPlugin["config"]["inspectAccount"]> | undefined {
+  if (cacheContext.lazyAccountInspectorsById.has(id)) {
+    return cacheContext.lazyAccountInspectorsById.get(id) ?? undefined;
+  }
+  const entry = getLazyGeneratedBundledChannelEntryForRoot(id, rootScope, cacheContext)?.entry;
+  if (!entry?.loadChannelAccountInspector) {
+    cacheContext.lazyAccountInspectorsById.set(id, null);
+    return undefined;
+  }
+  const inspector = entry.loadChannelAccountInspector();
+  cacheContext.lazyAccountInspectorsById.set(id, inspector);
+  return inspector;
+}
+
 function getBundledChannelSetupPluginForRoot(
   id: ChannelId,
   rootScope: BundledChannelRootScope,
@@ -447,6 +481,22 @@ export function listBundledChannelSetupPluginsByFeature(
     const plugin = getBundledChannelSetupPluginForRoot(id, rootScope, cacheContext);
     return plugin ? [plugin] : [];
   });
+}
+
+export function hasBundledChannelEntryFeature(
+  id: ChannelId,
+  feature: keyof NonNullable<BundledChannelEntryRuntimeContract["features"]>,
+): boolean {
+  const { rootScope, cacheContext } = resolveActiveBundledChannelCacheScope();
+  const entry = getLazyGeneratedBundledChannelEntryForRoot(id, rootScope, cacheContext)?.entry;
+  return hasChannelEntryFeature(entry, feature);
+}
+
+export function getBundledChannelAccountInspector(
+  id: ChannelId,
+): NonNullable<ChannelPlugin["config"]["inspectAccount"]> | undefined {
+  const { rootScope, cacheContext } = resolveActiveBundledChannelCacheScope();
+  return getBundledChannelAccountInspectorForRoot(id, rootScope, cacheContext);
 }
 
 export function getBundledChannelPlugin(id: ChannelId): ChannelPlugin | undefined {

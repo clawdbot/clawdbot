@@ -1,4 +1,4 @@
-import { isPlainObject } from "../utils.js";
+import { isPlainObject } from "../infra/plain-object.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
 
 type PlainObject = Record<string, unknown>;

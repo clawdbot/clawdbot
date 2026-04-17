@@ -1,13 +1,16 @@
 import path from "node:path";
+import { defaultQaRuntimeModelForMode } from "./model-selection.runtime.js";
 import {
+  DEFAULT_QA_LIVE_PROVIDER_MODE,
+  getQaProvider,
+  isQaProviderModeInput,
   normalizeQaProviderMode as normalizeQaProviderModeInput,
   type QaProviderMode,
-} from "./model-selection.js";
-import { defaultQaRuntimeModelForMode } from "./model-selection.runtime.js";
+} from "./providers/index.js";
 import type { QaSeedScenario } from "./scenario-catalog.js";
 
 export type { QaProviderMode } from "./model-selection.js";
-export type QaProviderModeInput = QaProviderMode | "live-openai";
+export type { QaProviderModeInput } from "./providers/index.js";
 
 export type QaLabRunSelection = {
   providerMode: QaProviderMode;
@@ -38,7 +41,7 @@ export function defaultQaModelForMode(mode: QaProviderMode, alternate = false) {
 }
 
 export function createDefaultQaRunSelection(scenarios: QaSeedScenario[]): QaLabRunSelection {
-  const providerMode: QaProviderMode = "live-frontier";
+  const providerMode: QaProviderMode = DEFAULT_QA_LIVE_PROVIDER_MODE;
   return {
     providerMode,
     primaryModel: defaultQaModelForMode(providerMode),
@@ -49,11 +52,14 @@ export function createDefaultQaRunSelection(scenarios: QaSeedScenario[]): QaLabR
 }
 
 export function normalizeQaProviderMode(input: unknown): QaProviderMode {
-  return normalizeQaProviderModeInput(
-    input === "mock-openai" || input === "live-frontier" || input === "live-openai"
-      ? input
-      : "live-frontier",
-  );
+  if (input === undefined || input === null || input === "") {
+    return DEFAULT_QA_LIVE_PROVIDER_MODE;
+  }
+  if (isQaProviderModeInput(input)) {
+    return normalizeQaProviderModeInput(input);
+  }
+  const details = typeof input === "string" ? `: ${input}` : "";
+  throw new Error(`unknown QA provider mode${details}`);
 }
 
 function normalizeModel(input: unknown, fallback: string) {
@@ -87,7 +93,7 @@ export function normalizeQaRunSelection(
       payload.alternateModel,
       defaultQaModelForMode(providerMode, true),
     ),
-    fastMode: providerMode === "live-frontier" || payload.fastMode === true,
+    fastMode: getQaProvider(providerMode).kind === "live" || payload.fastMode === true,
     scenarioIds: normalizeScenarioIds(payload.scenarioIds, scenarios),
   };
 }

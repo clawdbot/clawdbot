@@ -90,6 +90,14 @@ async function flushMicrotasks(rounds = 3): Promise<void> {
   }
 }
 
+function createDeferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
+}
+
 function createRuntime(): {
   runtime: AcpRuntime;
   ensureSession: ReturnType<typeof vi.fn>;
@@ -391,11 +399,14 @@ describe("AcpSessionManager", () => {
 
     let inFlight = 0;
     let maxInFlight = 0;
+    const releaseFirstTurn = createDeferred();
     runtimeState.runTurn.mockImplementation(async function* (_input: { requestId: string }) {
       inFlight += 1;
       maxInFlight = Math.max(maxInFlight, inFlight);
       try {
-        await sleep(10);
+        if (_input.requestId === "r1") {
+          await releaseFirstTurn.promise;
+        }
         yield { type: "done" };
       } finally {
         inFlight -= 1;
@@ -410,6 +421,12 @@ describe("AcpSessionManager", () => {
       mode: "prompt",
       requestId: "r1",
     });
+    await vi.waitFor(
+      () => {
+        expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
+      },
+      { interval: 1 },
+    );
     const second = manager.runTurn({
       cfg: baseCfg,
       sessionKey: "agent:codex:acp:session-1",
@@ -417,6 +434,9 @@ describe("AcpSessionManager", () => {
       mode: "prompt",
       requestId: "r2",
     });
+    await flushMicrotasks();
+    expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
+    releaseFirstTurn.resolve();
     await Promise.all([first, second]);
 
     expect(maxInFlight).toBe(1);
@@ -455,9 +475,12 @@ describe("AcpSessionManager", () => {
       mode: "prompt",
       requestId: "r1",
     });
-    await vi.waitFor(() => {
-      expect(firstTurnStarted).toBe(true);
-    });
+    await vi.waitFor(
+      () => {
+        expect(firstTurnStarted).toBe(true);
+      },
+      { interval: 1 },
+    );
 
     const abortController = new AbortController();
     const second = manager.runTurn({
@@ -482,9 +505,12 @@ describe("AcpSessionManager", () => {
 
     releaseFirstTurn?.();
     await first;
-    await vi.waitFor(() => {
-      expect(manager.getObservabilitySnapshot(baseCfg).turns.queueDepth).toBe(0);
-    });
+    await vi.waitFor(
+      () => {
+        expect(manager.getObservabilitySnapshot(baseCfg).turns.queueDepth).toBe(0);
+      },
+      { interval: 1 },
+    );
 
     expect(secondOutcome.status).toBe("rejected");
     if (secondOutcome.status !== "rejected") {
@@ -539,9 +565,12 @@ describe("AcpSessionManager", () => {
         requestId: "r1",
       });
       void first.catch(() => undefined);
-      await vi.waitFor(() => {
-        expect(firstTurnStarted).toBe(true);
-      });
+      await vi.waitFor(
+        () => {
+          expect(firstTurnStarted).toBe(true);
+        },
+        { interval: 1 },
+      );
 
       const second = manager.runTurn({
         cfg,
@@ -639,9 +668,12 @@ describe("AcpSessionManager", () => {
         requestId: "r1",
       });
       void first.catch(() => undefined);
-      await vi.waitFor(() => {
-        expect(firstTurnStarted).toBe(true);
-      });
+      await vi.waitFor(
+        () => {
+          expect(firstTurnStarted).toBe(true);
+        },
+        { interval: 1 },
+      );
 
       await vi.advanceTimersByTimeAsync(4_500);
 
@@ -689,11 +721,15 @@ describe("AcpSessionManager", () => {
 
     let inFlight = 0;
     let maxInFlight = 0;
+    const bothTurnsEntered = createDeferred();
     runtimeState.runTurn.mockImplementation(async function* () {
       inFlight += 1;
       maxInFlight = Math.max(maxInFlight, inFlight);
+      if (inFlight === 2) {
+        bothTurnsEntered.resolve();
+      }
       try {
-        await sleep(15);
+        await bothTurnsEntered.promise;
         yield { type: "done" as const };
       } finally {
         inFlight -= 1;
@@ -701,20 +737,25 @@ describe("AcpSessionManager", () => {
     });
 
     const manager = new AcpSessionManager();
-    await Promise.all([
-      manager.runTurn({
-        cfg: baseCfg,
-        sessionKey: "agent:codex:acp:session-a",
-        text: "first",
-        mode: "prompt",
-        requestId: "r1",
-      }),
-      manager.runTurn({
-        cfg: baseCfg,
-        sessionKey: "agent:codex:acp:session-b",
-        text: "second",
-        mode: "prompt",
-        requestId: "r2",
+    await Promise.race([
+      Promise.all([
+        manager.runTurn({
+          cfg: baseCfg,
+          sessionKey: "agent:codex:acp:session-a",
+          text: "first",
+          mode: "prompt",
+          requestId: "r1",
+        }),
+        manager.runTurn({
+          cfg: baseCfg,
+          sessionKey: "agent:codex:acp:session-b",
+          text: "second",
+          mode: "prompt",
+          requestId: "r2",
+        }),
+      ]),
+      sleep(100).then(() => {
+        throw new Error("ACP sessions did not run in parallel");
       }),
     ]);
 
@@ -1784,9 +1825,12 @@ describe("AcpSessionManager", () => {
       mode: "prompt",
       requestId: "run-1",
     });
-    await vi.waitFor(() => {
-      expect(enteredRun).toBe(true);
-    });
+    await vi.waitFor(
+      () => {
+        expect(enteredRun).toBe(true);
+      },
+      { interval: 1 },
+    );
 
     await manager.cancelSession({
       cfg: baseCfg,

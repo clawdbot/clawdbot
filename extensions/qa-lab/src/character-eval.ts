@@ -3,38 +3,28 @@ import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runQaManualLane } from "./manual-lane.runtime.js";
 import { isQaFastModeModelRef, type QaProviderMode } from "./model-selection.js";
+import {
+  QA_FRONTIER_CHARACTER_EVAL_MODELS,
+  QA_FRONTIER_CHARACTER_JUDGE_MODEL_OPTIONS,
+  QA_FRONTIER_CHARACTER_JUDGE_MODELS,
+  QA_FRONTIER_CHARACTER_THINKING_BY_MODEL,
+} from "./providers/live-frontier/character-eval.js";
 import { type QaThinkingLevel } from "./qa-gateway-config.js";
 import { extractQaVisibleReplyLeakText } from "./reply-failure.js";
 import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
 import type { QaSuiteResult } from "./suite.js";
 
 const DEFAULT_CHARACTER_SCENARIO_ID = "character-vibes-gollum";
-const DEFAULT_CHARACTER_EVAL_MODELS = Object.freeze([
-  "openai/gpt-5.4",
-  "openai/gpt-5.2",
-  "openai/gpt-5",
-  "anthropic/claude-opus-4-6",
-  "anthropic/claude-sonnet-4-6",
-  "zai/glm-5.1",
-  "moonshot/kimi-k2.5",
-  "google/gemini-3.1-pro-preview",
-]);
+const DEFAULT_CHARACTER_EVAL_MODELS = QA_FRONTIER_CHARACTER_EVAL_MODELS;
 const DEFAULT_CHARACTER_THINKING: QaThinkingLevel = "high";
 const DEFAULT_CHARACTER_EVAL_CONCURRENCY = 16;
 const DEFAULT_CHARACTER_THINKING_BY_MODEL: Readonly<Record<string, QaThinkingLevel>> =
-  Object.freeze({
-    "openai/gpt-5.4": "xhigh",
-    "openai/gpt-5.2": "xhigh",
-    "openai/gpt-5": "xhigh",
-  });
-const DEFAULT_JUDGE_MODELS = Object.freeze(["openai/gpt-5.4", "anthropic/claude-opus-4-6"]);
+  QA_FRONTIER_CHARACTER_THINKING_BY_MODEL;
+const DEFAULT_JUDGE_MODELS = QA_FRONTIER_CHARACTER_JUDGE_MODELS;
 const DEFAULT_JUDGE_THINKING: QaThinkingLevel = "xhigh";
 const DEFAULT_JUDGE_TIMEOUT_MS = 300_000;
 const DEFAULT_JUDGE_MODEL_OPTIONS: Readonly<Record<string, QaCharacterModelOptions>> =
-  Object.freeze({
-    "openai/gpt-5.4": { thinkingDefault: "xhigh" },
-    "anthropic/claude-opus-4-6": { thinkingDefault: "high" },
-  });
+  QA_FRONTIER_CHARACTER_JUDGE_MODEL_OPTIONS;
 
 type QaCharacterRunStatus = "pass" | "fail";
 

@@ -28,7 +28,14 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   },
   { pluginId: "irc", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "line", minHostVersionBaseline: "2026.3.22" },
-  { pluginId: "amazon-bedrock", mirroredRootRuntimeDeps: ["@aws-sdk/client-bedrock"] },
+  {
+    pluginId: "amazon-bedrock",
+    mirroredRootRuntimeDeps: [
+      "@aws-sdk/client-bedrock",
+      "@aws-sdk/client-bedrock-runtime",
+      "@aws-sdk/credential-provider-node",
+    ],
+  },
   {
     pluginId: "amazon-bedrock-mantle",
     mirroredRootRuntimeDeps: ["@aws/bedrock-token-generator"],

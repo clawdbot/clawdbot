@@ -15,7 +15,7 @@ describe("memory-wiki plugin", () => {
       registerTool,
     } = createPluginApi();
 
-    await plugin.register(api);
+    plugin.register(api);
 
     expect(registerMemoryCorpusSupplement).toHaveBeenCalledTimes(1);
     expect(registerMemoryPromptSupplement).toHaveBeenCalledTimes(1);

@@ -1,9 +1,11 @@
 import { EventEmitter } from "node:events";
 import {
   ClientEvent,
+  Filter,
   MatrixEventEvent,
   Preset,
   createClient as createMatrixJsClient,
+  type IFilterDefinition,
   type MatrixClient as MatrixJsClient,
   type MatrixEvent,
 } from "matrix-js-sdk/lib/matrix.js";
@@ -81,6 +83,16 @@ export type MatrixOwnDeviceVerificationStatus = {
   recoveryKeyId: string | null;
   backupVersion: string | null;
   backup: MatrixRoomKeyBackupStatus;
+};
+
+export type MatrixDeviceVerificationStatus = {
+  encryptionEnabled: boolean;
+  userId: string | null;
+  deviceId: string | null;
+  verified: boolean;
+  localVerified: boolean;
+  crossSigningVerified: boolean;
+  signedByOwner: boolean;
 };
 
 export type MatrixRoomKeyBackupStatus = {
@@ -206,6 +218,7 @@ export class MatrixClient {
   private readonly httpClient: MatrixAuthedHttpClient;
   private readonly localTimeoutMs: number;
   private readonly initialSyncLimit?: number;
+  private readonly syncFilter?: IFilterDefinition;
   private readonly encryptionEnabled: boolean;
   private readonly password?: string;
   private readonly syncStore?: FileBackedMatrixSyncStore;
@@ -248,6 +261,7 @@ export class MatrixClient {
       localTimeoutMs?: number;
       encryption?: boolean;
       initialSyncLimit?: number;
+      syncFilter?: IFilterDefinition;
       storagePath?: string;
       recoveryKeyPath?: string;
       idbSnapshotPath?: string;
@@ -265,6 +279,7 @@ export class MatrixClient {
     });
     this.localTimeoutMs = Math.max(1, opts.localTimeoutMs ?? 60_000);
     this.initialSyncLimit = opts.initialSyncLimit;
+    this.syncFilter = opts.syncFilter;
     this.encryptionEnabled = opts.encryption === true;
     this.password = opts.password;
     this.syncStore = opts.storagePath ? new FileBackedMatrixSyncStore(opts.storagePath) : undefined;
@@ -332,7 +347,7 @@ export class MatrixClient {
     const runtime = await loadMatrixCryptoRuntime();
     this.decryptBridge ??= new runtime.MatrixDecryptBridge<MatrixRawEvent>({
       client: this.client,
-      toRaw: (event) => matrixEventToRaw(event),
+      toRaw: (event) => matrixEventToRaw(event, { contentMode: "original" }),
       emitDecryptedEvent: (roomId, event) => {
         this.emitter.emit("room.decrypted_event", roomId, event);
       },
@@ -486,6 +501,7 @@ export class MatrixClient {
 
     await this.client.startClient({
       initialSyncLimit: this.initialSyncLimit,
+      ...(this.syncFilter ? { filter: Filter.fromJson(this.selfUserId, "", this.syncFilter) } : {}),
     });
     await this.waitForInitialSyncReady({
       abortSignal: opts.abortSignal,
@@ -669,6 +685,7 @@ export class MatrixClient {
           databasePrefix: this.cryptoDatabasePrefix,
         }).catch(noop);
       }, MATRIX_IDB_PERSIST_INTERVAL_MS);
+      this.idbPersistTimer.unref?.();
     } catch (err) {
       LogService.warn("MatrixClientLite", "Failed to initialize rust crypto:", err);
     }
@@ -1044,44 +1061,61 @@ export class MatrixClient {
     };
   }
 
-  async getOwnDeviceVerificationStatus(): Promise<MatrixOwnDeviceVerificationStatus> {
-    const recoveryKey = this.recoveryKeyStore.getRecoveryKeySummary();
-    const userId = this.client.getUserId() ?? this.selfUserId ?? null;
-    const deviceId = this.client.getDeviceId()?.trim() || null;
-    const backup = await this.getRoomKeyBackupStatus();
-
+  async getDeviceVerificationStatus(
+    userId: string | null | undefined,
+    deviceId: string | null | undefined,
+  ): Promise<MatrixDeviceVerificationStatus> {
+    const normalizedUserId = userId?.trim() || null;
+    const normalizedDeviceId = deviceId?.trim() || null;
     if (!this.encryptionEnabled) {
       return {
         encryptionEnabled: false,
-        userId,
-        deviceId,
+        userId: normalizedUserId,
+        deviceId: normalizedDeviceId,
         verified: false,
         localVerified: false,
         crossSigningVerified: false,
         signedByOwner: false,
-        recoveryKeyStored: Boolean(recoveryKey),
-        recoveryKeyCreatedAt: recoveryKey?.createdAt ?? null,
-        recoveryKeyId: recoveryKey?.keyId ?? null,
-        backupVersion: backup.serverVersion,
-        backup,
       };
     }
 
     const crypto = this.client.getCrypto() as MatrixCryptoBootstrapApi | undefined;
     let deviceStatus: MatrixDeviceVerificationStatusLike | null = null;
-    if (crypto && userId && deviceId && typeof crypto.getDeviceVerificationStatus === "function") {
-      deviceStatus = await crypto.getDeviceVerificationStatus(userId, deviceId).catch(() => null);
+    if (
+      crypto &&
+      normalizedUserId &&
+      normalizedDeviceId &&
+      typeof crypto.getDeviceVerificationStatus === "function"
+    ) {
+      deviceStatus = await crypto
+        .getDeviceVerificationStatus(normalizedUserId, normalizedDeviceId)
+        .catch(() => null);
     }
-    const { isMatrixDeviceOwnerVerified } = await loadMatrixCryptoRuntime();
+    const { isMatrixDeviceVerifiedInCurrentClient } = await loadMatrixCryptoRuntime();
 
     return {
       encryptionEnabled: true,
-      userId,
-      deviceId,
-      verified: isMatrixDeviceOwnerVerified(deviceStatus),
+      userId: normalizedUserId,
+      deviceId: normalizedDeviceId,
+      verified: isMatrixDeviceVerifiedInCurrentClient(deviceStatus),
       localVerified: deviceStatus?.localVerified === true,
       crossSigningVerified: deviceStatus?.crossSigningVerified === true,
       signedByOwner: deviceStatus?.signedByOwner === true,
+    };
+  }
+
+  async getOwnDeviceVerificationStatus(): Promise<MatrixOwnDeviceVerificationStatus> {
+    const recoveryKey = this.recoveryKeyStore.getRecoveryKeySummary();
+    const userId = this.client.getUserId() ?? this.selfUserId ?? null;
+    const deviceId = this.client.getDeviceId()?.trim() || null;
+    const backup = await this.getRoomKeyBackupStatus();
+    const deviceVerification = await this.getDeviceVerificationStatus(userId, deviceId);
+    const ownerVerified =
+      deviceVerification.crossSigningVerified || deviceVerification.signedByOwner;
+
+    return {
+      ...deviceVerification,
+      verified: ownerVerified,
       recoveryKeyStored: Boolean(recoveryKey),
       recoveryKeyCreatedAt: recoveryKey?.createdAt ?? null,
       recoveryKeyId: recoveryKey?.keyId ?? null,
@@ -1211,6 +1245,7 @@ export class MatrixClient {
       const backup = await this.getRoomKeyBackupStatus();
       loadedFromSecretStorage = backup.keyLoadAttempted && !backup.keyLoadError;
       const backupError = resolveMatrixRoomKeyBackupReadinessError(backup, {
+        allowUntrustedMatchingKey: true,
         requireServerBackup: true,
       });
       if (backupError) {
@@ -1645,6 +1680,12 @@ export class MatrixClient {
       "MatrixClientLite",
       "No room key backup version found on server, creating one via secret storage bootstrap",
     );
+    // matrix-js-sdk 41.3.0 can log a transient PerSessionKeyBackupDownloader
+    // "current backup version ... undefined" warning while setupNewKeyBackup creates
+    // the backup: resetKeyBackup emits key-backup cache events before its async
+    // checkKeyBackupAndEnable pass has populated active backup state. Keep the
+    // explicit server re-check below and do not hide the SDK logs; if this needs
+    // fixing in code, upstream a minimal Matrix SDK repro instead of patching here.
     await this.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey(crypto, {
       setupNewKeyBackup: true,
     });
@@ -1668,7 +1709,7 @@ export class MatrixClient {
         return;
       }
 
-      const raw = matrixEventToRaw(event);
+      const raw = matrixEventToRaw(event, { contentMode: "original" });
       const isEncryptedEvent = raw.type === "m.room.encrypted";
       this.emitter.emit("room.event", roomId, raw);
       if (isEncryptedEvent) {

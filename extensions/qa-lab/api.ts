@@ -6,7 +6,6 @@ export * from "./src/cli.js";
 export * from "./src/harness-runtime.js";
 export * from "./src/lab-server.js";
 export * from "./src/docker-harness.js";
-export * from "./src/mock-openai-server.js";
 export * from "./src/qa-agent-bootstrap.js";
 export * from "./src/qa-agent-workspace.js";
 export * from "./src/qa-gateway-config.js";

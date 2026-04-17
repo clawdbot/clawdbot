@@ -1,6 +1,8 @@
+import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -45,6 +47,70 @@ let waitForGatewayReachableMock:
       detail?: string;
     }>)
   | undefined;
+
+function resolveTestConfigPath() {
+  const override = process.env.OPENCLAW_CONFIG_PATH?.trim();
+  if (override) {
+    return override;
+  }
+  const stateDir = process.env.OPENCLAW_STATE_DIR?.trim();
+  if (!stateDir) {
+    throw new Error("OPENCLAW_STATE_DIR must be set before config IO in this test");
+  }
+  return path.join(stateDir, "openclaw.json");
+}
+
+vi.mock("../config/io.js", () => ({
+  createConfigIO: () => ({
+    configPath: resolveTestConfigPath(),
+  }),
+  loadConfig: () => {
+    try {
+      return JSON.parse(nodeFs.readFileSync(resolveTestConfigPath(), "utf-8"));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return {};
+      }
+      throw err;
+    }
+  },
+  readConfigFileSnapshot: async () => {
+    const configPath = resolveTestConfigPath();
+    try {
+      const raw = await fs.readFile(configPath, "utf-8");
+      const config = JSON.parse(raw);
+      return {
+        exists: true,
+        valid: true,
+        config,
+        sourceConfig: config,
+        raw,
+        hash: "test-config-hash",
+      };
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw err;
+      }
+      return {
+        exists: false,
+        valid: true,
+        config: {},
+        sourceConfig: {},
+        raw: null,
+        hash: undefined,
+      };
+    }
+  },
+}));
+
+vi.mock("../config/config.js", () => ({
+  replaceConfigFile: async ({ nextConfig }: { nextConfig: OpenClawConfig }) => {
+    const configPath = resolveTestConfigPath();
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(configPath, `${JSON.stringify(nextConfig, null, 2)}\n`, "utf-8");
+  },
+  resolveGatewayPort: (cfg: OpenClawConfig) => cfg.gateway?.port ?? 18789,
+}));
 
 vi.mock("../gateway/client.js", () => ({
   GatewayClient: class {

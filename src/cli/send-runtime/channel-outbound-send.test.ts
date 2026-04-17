@@ -86,6 +86,35 @@ describe("createChannelOutboundRuntimeSend", () => {
     );
   });
 
+  it("accepts plugin outbound thread and reply aliases", async () => {
+    const sendText = vi.fn(async () => ({ channel: "matrix", messageId: "$reply" }));
+    mocks.loadChannelOutboundAdapter.mockResolvedValue({
+      sendText,
+    });
+
+    const { createChannelOutboundRuntimeSend } = await import("./channel-outbound-send.js");
+    const runtimeSend = createChannelOutboundRuntimeSend({
+      channelId: "matrix" as never,
+      unavailableMessage: "unavailable",
+    });
+
+    await runtimeSend.sendMessage("room:!ops:example.org", "hello thread", {
+      cfg: {},
+      accountId: "sut",
+      replyToId: "$parent",
+      threadId: "$thread-root",
+    });
+
+    expect(sendText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "sut",
+        replyToId: "$parent",
+        threadId: "$thread-root",
+        to: "room:!ops:example.org",
+      }),
+    );
+  });
+
   it("falls back to sendText when media is present but sendMedia is unavailable", async () => {
     const sendText = vi.fn(async () => ({ channel: "whatsapp", messageId: "wa-3" }));
     mocks.loadChannelOutboundAdapter.mockResolvedValue({

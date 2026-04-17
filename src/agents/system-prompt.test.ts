@@ -409,6 +409,19 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Reminder: commit your changes in this workspace after edits.");
   });
 
+  it("includes BOOTSTRAP override guidance in workspace notes when provided", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      workspaceNotes: [
+        "If BOOTSTRAP.md is present in Project Context, it overrides the normal first greeting. Read it and follow its instructions first, then update or delete it when complete.",
+      ],
+    });
+
+    expect(prompt).toContain("BOOTSTRAP.md is present in Project Context");
+    expect(prompt).toContain("it overrides the normal first greeting");
+    expect(prompt).toContain("Read it and follow its instructions first");
+  });
+
   it("shows timezone section for 12h, 24h, and timezone-only modes", () => {
     const cases = [
       {

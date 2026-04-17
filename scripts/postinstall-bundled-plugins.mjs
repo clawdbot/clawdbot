@@ -36,10 +36,16 @@ const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
 const DIST_INVENTORY_PATH = "dist/postinstall-inventory.json";
 const LEGACY_UPDATE_COMPAT_SIDECARS = [
   {
+    path: "dist/extensions/qa-channel/runtime-api.js",
+    removedPrefix: "dist/extensions/qa-channel/",
+    content:
+      "// Compatibility stub for older OpenClaw updaters. The QA channel implementation is not packaged.\nexport {};\n",
+  },
+  {
     path: "dist/extensions/qa-lab/runtime-api.js",
     removedPrefix: "dist/extensions/qa-lab/",
     content:
-      "// Compatibility stub for older OpenClaw updaters. QA Lab is not packaged.\nexport {};\n",
+      "// Compatibility stub for older OpenClaw updaters. The QA lab implementation is not packaged.\nexport {};\n",
   },
 ];
 const BAILEYS_MEDIA_FILE = join(
@@ -313,10 +319,9 @@ export function restoreLegacyUpdaterCompatSidecars(params = {}) {
   const restored = [];
 
   for (const sidecar of LEGACY_UPDATE_COMPAT_SIDECARS) {
-    // Older npm updater builds verify this exact sidecar after npm has already
-    // replaced the package. npm may remove stale QA Lab files before this
-    // postinstall hook runs, so this must be generated independently of prune
-    // results. The tarball and dist inventory still omit QA Lab.
+    // Older npm updater builds verify these exact sidecars after npm has
+    // already replaced the package, so generate them independently of prune
+    // results.
     const sidecarPath = join(packageRoot, sidecar.path);
     makeDirectory(dirname(sidecarPath), { recursive: true });
     writeFile(sidecarPath, sidecar.content, "utf8");
@@ -655,8 +660,8 @@ function shouldRunBundledPluginPostinstall(params) {
 
 export function runBundledPluginPostinstall(params = {}) {
   const env = params.env ?? process.env;
-  const extensionsDir = params.extensionsDir ?? DEFAULT_EXTENSIONS_DIR;
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
+  const extensionsDir = params.extensionsDir ?? join(packageRoot, "dist", "extensions");
   const spawn = params.spawnSync ?? spawnSync;
   const pathExists = params.existsSync ?? existsSync;
   const log = params.log ?? console;

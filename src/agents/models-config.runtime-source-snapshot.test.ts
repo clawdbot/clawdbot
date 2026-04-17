@@ -279,6 +279,9 @@ describe("models-config runtime source snapshot", () => {
               openai: {
                 ...runtimeConfig.models!.providers!.openai,
                 baseUrl: "https://api.openai.com/v1",
+                headers: {
+                  "X-OpenClaw-Test": "one",
+                },
               },
             },
           },
@@ -290,6 +293,9 @@ describe("models-config runtime source snapshot", () => {
               openai: {
                 ...runtimeConfig.models!.providers!.openai,
                 baseUrl: "https://mirror.example/v1",
+                headers: {
+                  "X-OpenClaw-Test": "two",
+                },
               },
             },
           },
@@ -299,17 +305,26 @@ describe("models-config runtime source snapshot", () => {
           setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
           await ensureOpenClawModelsJson(firstCandidate);
           let parsed = await readGeneratedModelsJson<{
-            providers: Record<string, { baseUrl?: string; apiKey?: string }>;
+            providers: Record<
+              string,
+              { baseUrl?: string; apiKey?: string; headers?: Record<string, string> }
+            >;
           }>();
           expect(parsed.providers.openai?.baseUrl).toBe("https://api.openai.com/v1");
           expect(parsed.providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
+          expect(parsed.providers.openai?.headers?.["X-OpenClaw-Test"]).toBe("one");
 
+          // Header changes still rewrite models.json, but merge mode preserves the existing baseUrl.
           await ensureOpenClawModelsJson(secondCandidate);
           parsed = await readGeneratedModelsJson<{
-            providers: Record<string, { baseUrl?: string; apiKey?: string }>;
+            providers: Record<
+              string,
+              { baseUrl?: string; apiKey?: string; headers?: Record<string, string> }
+            >;
           }>();
-          expect(parsed.providers.openai?.baseUrl).toBe("https://mirror.example/v1");
+          expect(parsed.providers.openai?.baseUrl).toBe("https://api.openai.com/v1");
           expect(parsed.providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
+          expect(parsed.providers.openai?.headers?.["X-OpenClaw-Test"]).toBe("two");
         } finally {
           clearRuntimeConfigSnapshot();
           clearConfigCache();

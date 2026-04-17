@@ -6,7 +6,7 @@ import {
   resolveRepoRootPath,
   sharedVitestConfig,
 } from "./vitest.shared.config.ts";
-import { unitFastTestFiles } from "./vitest.unit-fast-paths.mjs";
+import { getUnitFastTestFiles } from "./vitest.unit-fast-paths.mjs";
 import {
   isBundledPluginDependentUnitTestFile,
   unitTestAdditionalExcludePatterns,
@@ -38,6 +38,7 @@ export function createUnitVitestConfigWithOptions(
   } = {},
 ) {
   const isolate = resolveVitestIsolation(env);
+  const unitFastTestFiles = getUnitFastTestFiles();
   const defaultIncludePatterns = options.includePatterns ?? unitTestIncludePatterns;
   const cliIncludePatterns = narrowIncludePatternsForCli(defaultIncludePatterns, options.argv);
   const protectedIncludeFiles = new Set(

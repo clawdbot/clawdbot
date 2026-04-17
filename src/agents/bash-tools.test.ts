@@ -755,7 +755,7 @@ describe("exec backgrounded onUpdate suppression", () => {
       await execTool.execute(nextCallId(), { command }, undefined, onUpdateSpy);
       const callsAtExit = onUpdateSpy.mock.calls.length;
       // Allow a tick for any straggling stdout data events.
-      await new Promise((r) => setTimeout(r, 50));
+      await new Promise((r) => setTimeout(r, 5));
       expect(onUpdateSpy.mock.calls.length).toBe(callsAtExit);
     },
     isWin ? 10_000 : 5_000,
@@ -782,8 +782,8 @@ describe("exec backgrounded onUpdate suppression", () => {
         onUpdateSpy,
       );
       const callsAtAbort = onUpdateSpy.mock.calls.length;
-      // Allow extra time for any straggling stdout data events.
-      await new Promise((r) => setTimeout(r, 100));
+      // Allow a tick for any straggling stdout data events.
+      await new Promise((r) => setTimeout(r, 5));
       // After abort, no new onUpdate calls should have been made.
       expect(onUpdateSpy.mock.calls.length).toBe(callsAtAbort);
       expect(result).toBeDefined();

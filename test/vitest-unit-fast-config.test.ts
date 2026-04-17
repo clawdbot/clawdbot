@@ -6,8 +6,8 @@ import {
   collectBroadUnitFastTestCandidates,
   collectUnitFastTestCandidates,
   collectUnitFastTestFileAnalysis,
+  getUnitFastTestFiles,
   isUnitFastTestFile,
-  unitFastTestFiles,
   resolveUnitFastTestIncludePattern,
 } from "./vitest/vitest.unit-fast-paths.mjs";
 import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts";
@@ -63,6 +63,7 @@ describe("unit-fast vitest lane", () => {
     const currentCandidates = collectUnitFastTestCandidates();
     const broadCandidates = collectBroadUnitFastTestCandidates();
     const broadAnalysis = collectUnitFastTestFileAnalysis(process.cwd(), { scope: "broad" });
+    const unitFastTestFiles = getUnitFastTestFiles();
 
     expect(currentCandidates.length).toBeGreaterThanOrEqual(unitFastTestFiles.length);
     expect(broadCandidates.length).toBeGreaterThan(currentCandidates.length);
@@ -74,6 +75,7 @@ describe("unit-fast vitest lane", () => {
   it("excludes unit-fast files from the older light lanes so full runs do not duplicate them", () => {
     const pluginSdkLight = createPluginSdkLightVitestConfig({});
     const commandsLight = createCommandsLightVitestConfig({});
+    const unitFastTestFiles = getUnitFastTestFiles();
 
     expect(unitFastTestFiles).toContain("src/plugin-sdk/provider-entry.test.ts");
     expect(pluginSdkLight.test?.exclude).toContain("plugin-sdk/provider-entry.test.ts");

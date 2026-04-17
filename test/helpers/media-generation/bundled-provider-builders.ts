@@ -3,7 +3,7 @@ import { loadBundledPluginPublicSurfaceSync } from "../../../src/test-utils/bund
 
 type BundledPluginEntryModule = {
   default: {
-    register(api: OpenClawPluginApi): void | Promise<void>;
+    register(api: OpenClawPluginApi): void;
   };
 };
 

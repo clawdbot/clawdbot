@@ -4,7 +4,7 @@ import type { EmbeddingProviderOptions } from "./embeddings.js";
 import { buildRemoteBaseUrlPolicy } from "./remote-http.js";
 import { resolveMemorySecretInputString } from "./secret-input.js";
 
-export type RemoteEmbeddingProviderId = "openai" | "voyage" | "mistral";
+export type RemoteEmbeddingProviderId = string;
 
 export async function resolveRemoteEmbeddingBearerClient(params: {
   provider: RemoteEmbeddingProviderId;

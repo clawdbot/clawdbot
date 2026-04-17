@@ -24,14 +24,8 @@ const {
   writeQaDockerHarnessFiles: vi.fn(),
   buildQaDockerHarnessImage: vi.fn(),
   runQaDockerUp: vi.fn(),
-  defaultQaRuntimeModelForMode: vi.fn<(mode: string, options?: { alternate?: boolean }) => string>(
-    (mode, options) =>
-      mode === "live-frontier"
-        ? "openai/gpt-5.4"
-        : options?.alternate
-          ? "mock-openai/gpt-5.4-alt"
-          : "mock-openai/gpt-5.4",
-  ),
+  defaultQaRuntimeModelForMode:
+    vi.fn<(mode: string, options?: { alternate?: boolean }) => string>(),
 }));
 
 vi.mock("./manual-lane.runtime.js", () => ({
@@ -83,6 +77,8 @@ import {
   runQaSuiteCommand,
 } from "./cli.runtime.js";
 import { runQaTelegramCommand } from "./live-transports/telegram/cli.runtime.js";
+import { defaultQaModelForMode as defaultQaProviderModelForMode } from "./model-selection.js";
+import type { QaProviderModeInput } from "./run-config.js";
 
 describe("qa cli runtime", () => {
   let stdoutWrite: ReturnType<typeof vi.spyOn>;
@@ -100,11 +96,7 @@ describe("qa cli runtime", () => {
     runQaDockerUp.mockReset();
     defaultQaRuntimeModelForMode.mockImplementation(
       (mode: string, options?: { alternate?: boolean }) =>
-        mode === "live-frontier"
-          ? "openai/gpt-5.4"
-          : options?.alternate
-            ? "mock-openai/gpt-5.4-alt"
-            : "mock-openai/gpt-5.4",
+        defaultQaProviderModelForMode(mode as QaProviderModeInput, options),
     );
     runQaSuiteFromRuntime.mockResolvedValue({
       watchUrl: "http://127.0.0.1:43124",
@@ -229,22 +221,6 @@ describe("qa cli runtime", () => {
     expect(runTelegramQaLive).toHaveBeenCalledWith(
       expect.objectContaining({
         repoRoot: path.resolve("/tmp/openclaw-repo"),
-        providerMode: "live-frontier",
-      }),
-    );
-  });
-
-  it("normalizes legacy live-openai suite runs onto the frontier provider mode", async () => {
-    await runQaSuiteCommand({
-      repoRoot: "/tmp/openclaw-repo",
-      providerMode: "live-openai",
-      scenarioIds: ["approval-turn-tool-followthrough"],
-    });
-
-    expect(runQaSuiteFromRuntime).toHaveBeenCalledWith(
-      expect.objectContaining({
-        repoRoot: path.resolve("/tmp/openclaw-repo"),
-        transportId: "qa-channel",
         providerMode: "live-frontier",
       }),
     );
@@ -602,6 +578,25 @@ describe("qa cli runtime", () => {
     });
   });
 
+  it("defaults manual aimock runs onto the aimock model lane", async () => {
+    await runQaManualLaneCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      providerMode: "aimock",
+      message: "read qa kickoff and reply short",
+    });
+
+    expect(runQaManualLane).toHaveBeenCalledWith({
+      repoRoot: path.resolve("/tmp/openclaw-repo"),
+      transportId: "qa-channel",
+      providerMode: "aimock",
+      primaryModel: "aimock/gpt-5.4",
+      alternateModel: "aimock/gpt-5.4-alt",
+      fastMode: undefined,
+      message: "read qa kickoff and reply short",
+      timeoutMs: undefined,
+    });
+  });
+
   it("defaults manual frontier runs onto the frontier model lane", async () => {
     await runQaManualLaneCommand({
       repoRoot: "/tmp/openclaw-repo",
@@ -640,31 +635,11 @@ describe("qa cli runtime", () => {
     });
   });
 
-  it("normalizes legacy live-openai manual runs onto the frontier provider mode", async () => {
-    await runQaManualLaneCommand({
-      repoRoot: "/tmp/openclaw-repo",
-      providerMode: "live-openai",
-      message: "read qa kickoff and reply short",
-    });
-
-    expect(runQaManualLane).toHaveBeenCalledWith(
-      expect.objectContaining({
-        repoRoot: path.resolve("/tmp/openclaw-repo"),
-        transportId: "qa-channel",
-        providerMode: "live-frontier",
-        primaryModel: "openai/gpt-5.4",
-        alternateModel: "openai/gpt-5.4",
-      }),
-    );
-  });
-
   it("defaults manual frontier runs onto Codex OAuth when the runtime resolver prefers it", async () => {
     defaultQaRuntimeModelForMode.mockImplementation((mode, options) =>
       mode === "live-frontier"
         ? "openai-codex/gpt-5.4"
-        : options?.alternate
-          ? "mock-openai/gpt-5.4-alt"
-          : "mock-openai/gpt-5.4",
+        : defaultQaProviderModelForMode(mode as QaProviderModeInput, options),
     );
 
     await runQaManualLaneCommand({

@@ -1,14 +1,18 @@
-export type QaProviderMode = "mock-openai" | "live-frontier";
-export type QaProviderModeInput = QaProviderMode | "live-openai";
+import {
+  DEFAULT_QA_LIVE_PROVIDER_MODE,
+  getQaProvider,
+  type QaProviderMode,
+  type QaProviderModeInput,
+} from "./providers/index.js";
+
+export type { QaProviderMode, QaProviderModeInput } from "./providers/index.js";
 
 export type QaModelSelection = {
   primaryModel: string;
   alternateModel: string;
 };
 
-export function normalizeQaProviderMode(mode: QaProviderModeInput): QaProviderMode {
-  return mode === "live-openai" ? "live-frontier" : mode;
-}
+export { normalizeQaProviderMode } from "./providers/index.js";
 
 export function defaultQaModelForMode(
   mode: QaProviderModeInput,
@@ -17,10 +21,7 @@ export function defaultQaModelForMode(
     preferredLiveModel?: string;
   },
 ) {
-  if (normalizeQaProviderMode(mode) === "live-frontier") {
-    return options?.preferredLiveModel ?? "openai/gpt-5.4";
-  }
-  return options?.alternate ? "mock-openai/gpt-5.4-alt" : "mock-openai/gpt-5.4";
+  return getQaProvider(mode).defaultModel(options);
 }
 
 export function splitQaModelRef(ref: string) {
@@ -35,7 +36,7 @@ export function splitQaModelRef(ref: string) {
 }
 
 export function isQaFastModeModelRef(ref: string) {
-  return splitQaModelRef(ref)?.provider === "openai";
+  return getQaProvider(DEFAULT_QA_LIVE_PROVIDER_MODE).usesFastModeByDefault(ref);
 }
 
 export function isQaFastModeEnabled(selection: QaModelSelection) {

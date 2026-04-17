@@ -185,6 +185,23 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
+  it("does not misdiagnose standalone Cloudflare challenge HTML as DNS", () => {
+    const msg = makeAssistantError(`<!DOCTYPE html>
+<html>
+  <head>
+    <title>Just a moment...</title>
+    <link rel="dns-prefetch" href="//chatgpt.com">
+  </head>
+  <body>
+    <span id="challenge-error-text">Enable JavaScript and cookies to continue</span>
+    <script src="/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page/v1"></script>
+  </body>
+</html>`);
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The provider returned an HTML error page instead of an API response. This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. Retry in a moment or check provider status.",
+    );
+  });
+
   it("returns a friendly message for empty stream chunk errors", () => {
     const msg = makeAssistantError("request ended without sending any chunks");
     expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");
@@ -337,6 +354,21 @@ describe("formatRawAssistantErrorForUi", () => {
 
     expect(formatRawAssistantErrorForUi(htmlError)).toBe(
       "The AI service is temporarily unavailable (HTTP 521). Please try again in a moment.",
+    );
+  });
+
+  it("formats standalone Cloudflare challenge HTML into a clean provider error", () => {
+    const htmlError = `<!DOCTYPE html>
+<html lang="en-US">
+  <head><title>Just a moment...</title></head>
+  <body>
+    <span id="challenge-error-text">Enable JavaScript and cookies to continue</span>
+    <script src="/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page/v1"></script>
+  </body>
+</html>`;
+
+    expect(formatRawAssistantErrorForUi(htmlError)).toBe(
+      "The provider returned an HTML error page instead of an API response. This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. Retry in a moment or check provider status.",
     );
   });
 });

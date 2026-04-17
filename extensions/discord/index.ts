@@ -22,6 +22,10 @@ export default defineBundledChannelEntry({
     specifier: "./runtime-api.js",
     exportName: "setDiscordRuntime",
   },
+  accountInspect: {
+    specifier: "./account-inspect-api.js",
+    exportName: "inspectDiscordReadOnlyAccount",
+  },
   registerFull(api) {
     api.on("subagent_spawning", async (event) => {
       const { handleDiscordSubagentSpawning } = await loadDiscordSubagentHooksModule();

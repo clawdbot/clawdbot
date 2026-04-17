@@ -36,6 +36,8 @@ type DefineBundledChannelEntryOptions<TPlugin = ChannelPlugin> = {
   secrets?: BundledEntryModuleRef;
   configSchema?: ChannelEntryConfigSchema<TPlugin> | (() => ChannelEntryConfigSchema<TPlugin>);
   runtime?: BundledEntryModuleRef;
+  accountInspect?: BundledEntryModuleRef;
+  features?: BundledChannelEntryFeatures;
   registerCliMetadata?: (api: OpenClawPluginApi) => void;
   registerFull?: (api: OpenClawPluginApi) => void;
 };
@@ -53,15 +55,21 @@ export type BundledChannelSetupEntryFeatures = {
   legacySessionSurfaces?: boolean;
 };
 
+export type BundledChannelEntryFeatures = {
+  accountInspect?: boolean;
+};
+
 export type BundledChannelEntryContract<TPlugin = ChannelPlugin> = {
   kind: "bundled-channel-entry";
   id: string;
   name: string;
   description: string;
   configSchema: ChannelEntryConfigSchema<TPlugin>;
+  features?: BundledChannelEntryFeatures;
   register: (api: OpenClawPluginApi) => void;
   loadChannelPlugin: () => TPlugin;
   loadChannelSecrets?: () => ChannelPlugin["secrets"] | undefined;
+  loadChannelAccountInspector?: () => NonNullable<ChannelPlugin["config"]["inspectAccount"]>;
   setChannelRuntime?: (runtime: PluginRuntime) => void;
 };
 
@@ -332,6 +340,8 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
   secrets,
   configSchema,
   runtime,
+  accountInspect,
+  features,
   registerCliMetadata,
   registerFull,
 }: DefineBundledChannelEntryOptions<TPlugin>): BundledChannelEntryContract<TPlugin> {
@@ -342,6 +352,13 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
   const loadChannelPlugin = () => loadBundledEntryExportSync<TPlugin>(importMetaUrl, plugin);
   const loadChannelSecrets = secrets
     ? () => loadBundledEntryExportSync<ChannelPlugin["secrets"] | undefined>(importMetaUrl, secrets)
+    : undefined;
+  const loadChannelAccountInspector = accountInspect
+    ? () =>
+        loadBundledEntryExportSync<NonNullable<ChannelPlugin["config"]["inspectAccount"]>>(
+          importMetaUrl,
+          accountInspect,
+        )
     : undefined;
   const setChannelRuntime = runtime
     ? (pluginRuntime: PluginRuntime) => {
@@ -359,6 +376,9 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
     name,
     description,
     configSchema: resolvedConfigSchema,
+    ...(features || accountInspect
+      ? { features: { ...features, ...(accountInspect ? { accountInspect: true } : {}) } }
+      : {}),
     register(api: OpenClawPluginApi) {
       if (api.registrationMode === "cli-metadata") {
         registerCliMetadata?.(api);
@@ -374,6 +394,7 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
     },
     loadChannelPlugin,
     ...(loadChannelSecrets ? { loadChannelSecrets } : {}),
+    ...(loadChannelAccountInspector ? { loadChannelAccountInspector } : {}),
     ...(setChannelRuntime ? { setChannelRuntime } : {}),
   };
 }

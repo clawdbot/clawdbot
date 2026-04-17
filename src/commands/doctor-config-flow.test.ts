@@ -111,6 +111,133 @@ vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
   }),
 }));
 
+vi.mock("../channels/plugins/doctor-contract-api.js", () => ({
+  loadBundledChannelDoctorContractApi: vi.fn(() => undefined),
+}));
+
+vi.mock("../channels/plugins/setup-promotion-helpers.js", () => {
+  const commonSingleAccountKeys = new Set([
+    "name",
+    "token",
+    "tokenFile",
+    "botToken",
+    "appToken",
+    "account",
+    "signalNumber",
+    "authDir",
+    "cliPath",
+    "dbPath",
+    "httpUrl",
+    "httpHost",
+    "httpPort",
+    "webhookPath",
+    "webhookUrl",
+    "webhookSecret",
+    "service",
+    "region",
+    "homeserver",
+    "userId",
+    "accessToken",
+    "password",
+    "deviceName",
+    "url",
+    "code",
+    "dmPolicy",
+    "allowFrom",
+    "groupPolicy",
+    "groupAllowFrom",
+    "defaultTo",
+  ]);
+  const fallbackSingleAccountKeys: Record<string, readonly string[]> = {
+    telegram: ["streaming"],
+  };
+  const namedAccountPromotionKeys: Record<string, readonly string[]> = {
+    telegram: ["botToken", "tokenFile"],
+  };
+
+  return {
+    resolveSingleAccountKeysToMove: ({
+      channelKey,
+      channel,
+    }: {
+      channelKey: string;
+      channel: Record<string, unknown>;
+    }) => {
+      const accounts =
+        channel.accounts && typeof channel.accounts === "object" && !Array.isArray(channel.accounts)
+          ? (channel.accounts as Record<string, unknown>)
+          : {};
+      const hasNamedAccounts = Object.keys(accounts).filter(Boolean).length > 0;
+      const allowedNamedKeys = namedAccountPromotionKeys[channelKey];
+      return Object.entries(channel)
+        .filter(([key, value]) => {
+          if (key === "accounts" || key === "enabled" || value === undefined) {
+            return false;
+          }
+          const isKnownKey =
+            commonSingleAccountKeys.has(key) ||
+            (fallbackSingleAccountKeys[channelKey]?.includes(key) ?? false);
+          if (!isKnownKey) {
+            return false;
+          }
+          if (hasNamedAccounts && allowedNamedKeys && !allowedNamedKeys.includes(key)) {
+            return false;
+          }
+          return true;
+        })
+        .map(([key]) => key);
+    },
+  };
+});
+
+vi.mock("./doctor/shared/channel-legacy-config-migrate.js", () => ({
+  applyChannelDoctorCompatibilityMigrations: (cfg: Record<string, unknown>) => ({
+    next: cfg,
+    changes: [],
+  }),
+}));
+
+vi.mock("./doctor/channel-capabilities.js", () => {
+  const byChannel = {
+    googlechat: {
+      dmAllowFromMode: "nestedOnly",
+      groupModel: "route",
+      groupAllowFromFallbackToAllowFrom: false,
+      warnOnEmptyGroupSenderAllowlist: false,
+    },
+    matrix: {
+      dmAllowFromMode: "nestedOnly",
+      groupModel: "sender",
+      groupAllowFromFallbackToAllowFrom: false,
+      warnOnEmptyGroupSenderAllowlist: true,
+    },
+    msteams: {
+      dmAllowFromMode: "topOnly",
+      groupModel: "hybrid",
+      groupAllowFromFallbackToAllowFrom: false,
+      warnOnEmptyGroupSenderAllowlist: true,
+    },
+    zalouser: {
+      dmAllowFromMode: "topOnly",
+      groupModel: "hybrid",
+      groupAllowFromFallbackToAllowFrom: false,
+      warnOnEmptyGroupSenderAllowlist: false,
+    },
+  } as const;
+  const fallback = {
+    dmAllowFromMode: "topOnly",
+    groupModel: "sender",
+    groupAllowFromFallbackToAllowFrom: true,
+    warnOnEmptyGroupSenderAllowlist: true,
+  };
+  return {
+    getDoctorChannelCapabilities: (channelName?: string) =>
+      channelName && channelName in byChannel
+        ? byChannel[channelName as keyof typeof byChannel]
+        : fallback,
+  };
+});
+
 vi.mock("../plugins/doctor-contract-registry.js", () => {
   function asRecord(value: unknown): Record<string, unknown> | null {
     return value && typeof value === "object" && !Array.isArray(value)

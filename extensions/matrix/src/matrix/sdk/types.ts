@@ -12,6 +12,7 @@ export type MatrixRawEvent = {
   content: Record<string, unknown>;
   unsigned?: {
     age?: number;
+    "m.relations"?: Record<string, unknown>;
     redacted_because?: unknown;
   };
   state_key?: string;

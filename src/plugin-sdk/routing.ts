@@ -13,6 +13,7 @@ export {
   DEFAULT_MAIN_KEY,
   buildGroupHistoryKey,
   isCronSessionKey,
+  isAcpSessionKey,
   isSubagentSessionKey,
   normalizeAccountId,
   normalizeAgentId,

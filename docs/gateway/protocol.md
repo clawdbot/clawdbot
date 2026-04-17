@@ -89,7 +89,21 @@ Gateway → Client:
 ```
 
 `server`, `features`, `snapshot`, and `policy` are all required by the schema
-(`src/gateway/protocol/schema/frames.ts`). `auth` and `canvasHostUrl` are optional.
+(`src/gateway/protocol/schema/frames.ts`). `canvasHostUrl` is optional. `auth`
+reports the negotiated role/scopes when available, and includes `deviceToken`
+when the gateway issues one.
+
+When no device token is issued, `hello-ok.auth` can still report the negotiated
+permissions:
+
+```json
+{
+  "auth": {
+    "role": "operator",
+    "scopes": ["operator.read", "operator.write"]
+  }
+}
+```
 
 When a device token is issued, `hello-ok` also includes:
 

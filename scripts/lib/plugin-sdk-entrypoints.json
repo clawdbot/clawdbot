@@ -206,6 +206,7 @@
   "msteams",
   "models-provider-runtime",
   "skill-commands-runtime",
+  "native-command-config-runtime",
   "native-command-registry",
   "nextcloud-talk",
   "nostr",

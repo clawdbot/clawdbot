@@ -910,9 +910,8 @@ describe("applyAuthChoice", () => {
         token: "hf-test-token",
       },
     ];
+    await setupTempState();
     for (const scenario of scenarios) {
-      await setupTempState();
-
       const text = vi.fn().mockResolvedValue(scenario.token);
       const { prompter, runtime } = createApiKeyPromptHarness({ text });
 
@@ -980,8 +979,8 @@ describe("applyAuthChoice", () => {
         expectedDetectCall: { apiKey: "zai-detected-key" },
       },
     ];
+    await setupTempState();
     for (const scenario of scenarios) {
-      await setupTempState();
       detectZaiEndpoint.mockReset();
       detectZaiEndpoint.mockResolvedValue(null);
       if (scenario.detectResult) {
@@ -1073,8 +1072,8 @@ describe("applyAuthChoice", () => {
         expectedModelPrefix: "litellm/",
       },
     ];
+    await setupTempState();
     for (const scenario of scenarios) {
-      await setupTempState();
       delete process.env.HF_TOKEN;
       delete process.env.HUGGINGFACE_HUB_TOKEN;
 
@@ -1116,84 +1115,97 @@ describe("applyAuthChoice", () => {
     }
   });
 
-  it.each([
-    {
-      authChoice: "moonshot-api-key",
-      tokenProvider: "moonshot",
-      profileId: "moonshot:default",
-      provider: "moonshot",
-      modelPrefix: "moonshot/",
-    },
-    {
-      authChoice: "mistral-api-key",
-      tokenProvider: "mistral",
-      profileId: "mistral:default",
-      provider: "mistral",
-      modelPrefix: "mistral/",
-    },
-    {
-      authChoice: "kimi-code-api-key",
-      tokenProvider: "kimi-code",
-      profileId: "kimi:default",
-      provider: "kimi",
-      modelPrefix: "kimi/",
-    },
-    {
-      authChoice: "xiaomi-api-key",
-      tokenProvider: "xiaomi",
-      profileId: "xiaomi:default",
-      provider: "xiaomi",
-      modelPrefix: "xiaomi/",
-    },
-    {
-      authChoice: "venice-api-key",
-      tokenProvider: "venice",
-      profileId: "venice:default",
-      provider: "venice",
-      modelPrefix: "venice/",
-    },
-    {
-      authChoice: "opencode-zen",
-      tokenProvider: "opencode",
-      profileId: "opencode:default",
-      provider: "opencode",
-      modelPrefix: "opencode/",
-      extraProfiles: ["opencode-go:default"],
-    },
-    {
-      authChoice: "opencode-go",
-      tokenProvider: "opencode-go",
-      profileId: "opencode-go:default",
-      provider: "opencode-go",
-      modelPrefix: "opencode-go/",
-      extraProfiles: ["opencode:default"],
-    },
-    {
-      authChoice: "together-api-key",
-      tokenProvider: "together",
-      profileId: "together:default",
-      provider: "together",
-      modelPrefix: "together/",
-    },
-    {
-      authChoice: "qianfan-api-key",
-      tokenProvider: "qianfan",
-      profileId: "qianfan:default",
-      provider: "qianfan",
-      modelPrefix: "qianfan/",
-    },
-    {
-      authChoice: "synthetic-api-key",
-      tokenProvider: "synthetic",
-      profileId: "synthetic:default",
-      provider: "synthetic",
-      modelPrefix: "synthetic/",
-    },
-  ] as const)(
-    "uses opts token for $authChoice without prompting",
-    async ({ authChoice, tokenProvider, profileId, provider, modelPrefix, extraProfiles }) => {
-      await setupTempState();
-
+  it("uses opts token for direct provider choices without prompting", async () => {
+    await setupTempState();
+    const scenarios: Array<{
+      authChoice: AuthChoice;
+      tokenProvider: string;
+      profileId: string;
+      provider: string;
+      modelPrefix: string;
+      extraProfiles?: string[];
+    }> = [
+      {
+        authChoice: "moonshot-api-key",
+        tokenProvider: "moonshot",
+        profileId: "moonshot:default",
+        provider: "moonshot",
+        modelPrefix: "moonshot/",
+      },
+      {
+        authChoice: "mistral-api-key",
+        tokenProvider: "mistral",
+        profileId: "mistral:default",
+        provider: "mistral",
+        modelPrefix: "mistral/",
+      },
+      {
+        authChoice: "kimi-code-api-key",
+        tokenProvider: "kimi-code",
+        profileId: "kimi:default",
+        provider: "kimi",
+        modelPrefix: "kimi/",
+      },
+      {
+        authChoice: "xiaomi-api-key",
+        tokenProvider: "xiaomi",
+        profileId: "xiaomi:default",
+        provider: "xiaomi",
+        modelPrefix: "xiaomi/",
+      },
+      {
+        authChoice: "venice-api-key",
+        tokenProvider: "venice",
+        profileId: "venice:default",
+        provider: "venice",
+        modelPrefix: "venice/",
+      },
+      {
+        authChoice: "opencode-zen",
+        tokenProvider: "opencode",
+        profileId: "opencode:default",
+        provider: "opencode",
+        modelPrefix: "opencode/",
+        extraProfiles: ["opencode-go:default"],
+      },
+      {
+        authChoice: "opencode-go",
+        tokenProvider: "opencode-go",
+        profileId: "opencode-go:default",
+        provider: "opencode-go",
+        modelPrefix: "opencode-go/",
+        extraProfiles: ["opencode:default"],
+      },
+      {
+        authChoice: "together-api-key",
+        tokenProvider: "together",
+        profileId: "together:default",
+        provider: "together",
+        modelPrefix: "together/",
+      },
+      {
+        authChoice: "qianfan-api-key",
+        tokenProvider: "qianfan",
+        profileId: "qianfan:default",
+        provider: "qianfan",
+        modelPrefix: "qianfan/",
+      },
+      {
+        authChoice: "synthetic-api-key",
+        tokenProvider: "synthetic",
+        profileId: "synthetic:default",
+        provider: "synthetic",
+        modelPrefix: "synthetic/",
+      },
+    ];
+    for (const {
+      authChoice,
+      tokenProvider,
+      profileId,
+      provider,
+      modelPrefix,
+      extraProfiles,
+    } of scenarios) {
       const text = vi.fn();
       const confirm = vi.fn(async () => false);
       const { prompter, runtime } = createApiKeyPromptHarness({ text, confirm });
@@ -1226,8 +1238,8 @@ describe("applyAuthChoice", () => {
       for (const extraProfile of extraProfiles ?? []) {
         expect((await readAuthProfile(extraProfile))?.key).toBe(token);
       }
-    },
-  );
+    }
+  });
 
   it("uses opts token for Gemini and keeps global default model when setDefaultModel=false", async () => {
     await setupTempState();
@@ -1355,8 +1367,8 @@ describe("applyAuthChoice", () => {
         expectedModel: "vercel-ai-gateway/anthropic/claude-opus-4.6",
       },
     ];
+    await setupTempState();
     for (const scenario of scenarios) {
-      await setupTempState();
       delete process.env.SYNTHETIC_API_KEY;
       delete process.env.OPENROUTER_API_KEY;
       delete process.env.AI_GATEWAY_API_KEY;
@@ -1557,9 +1569,8 @@ describe("applyAuthChoice", () => {
         expectProviderConfigUndefined: "opencode-go",
       },
     ];
+    await setupTempState();
     for (const scenario of scenarios) {
-      await setupTempState();
-
       const text = vi.fn().mockResolvedValue(scenario.token);
       const { prompter, runtime } = createApiKeyPromptHarness({ text });
 
@@ -1673,40 +1684,29 @@ describe("applyAuthChoice", () => {
   });
 
   it("does not persist literal 'undefined' when API key prompts return undefined", async () => {
-    const scenarios = [
-      {
-        authChoice: "synthetic-api-key" as const,
-        envKey: "SYNTHETIC_API_KEY",
-        profileId: "synthetic:default",
-        provider: "synthetic",
-      },
-    ];
+    await setupTempState();
+    delete process.env.SYNTHETIC_API_KEY;
 
-    for (const scenario of scenarios) {
-      await setupTempState();
-      delete process.env[scenario.envKey];
+    const text = vi.fn(async () => undefined as unknown as string);
+    const prompter = createPrompter({ text });
+    const runtime = createExitThrowingRuntime();
 
-      const text = vi.fn(async () => undefined as unknown as string);
-      const prompter = createPrompter({ text });
-      const runtime = createExitThrowingRuntime();
+    const result = await applyAuthChoice({
+      authChoice: "synthetic-api-key",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: false,
+    });
 
-      const result = await applyAuthChoice({
-        authChoice: scenario.authChoice,
-        config: {},
-        prompter,
-        runtime,
-        setDefaultModel: false,
-      });
+    expect(result.config.auth?.profiles?.["synthetic:default"]).toMatchObject({
+      provider: "synthetic",
+      mode: "api_key",
+    });
 
-      expect(result.config.auth?.profiles?.[scenario.profileId]).toMatchObject({
-        provider: scenario.provider,
-        mode: "api_key",
-      });
-
-      const profile = await readAuthProfile(scenario.profileId);
-      expect(profile?.key).toBe("");
-      expect(profile?.key).not.toBe("undefined");
-    }
+    const profile = await readAuthProfile("synthetic:default");
+    expect(profile?.key).toBe("");
+    expect(profile?.key).not.toBe("undefined");
   });
 
   it("ignores legacy LiteLLM oauth profiles when selecting litellm-api-key", async () => {
@@ -1832,8 +1832,8 @@ describe("applyAuthChoice", () => {
         },
       },
     ];
+    await setupTempState();
     for (const scenario of scenarios) {
-      await setupTempState();
       delete process.env.CLOUDFLARE_AI_GATEWAY_API_KEY;
       if (scenario.envGatewayKey) {
         process.env.CLOUDFLARE_AI_GATEWAY_API_KEY = scenario.envGatewayKey;
@@ -1981,9 +1981,8 @@ describe("applyAuthChoice", () => {
         apiKey: "minimax-oauth", // pragma: allowlist secret
       },
     ];
+    await setupTempState();
     for (const scenario of scenarios) {
-      await setupTempState();
-
       resolvePluginProviders.mockReturnValue([
         {
           id: scenario.providerId,

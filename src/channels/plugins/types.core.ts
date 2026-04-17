@@ -454,6 +454,10 @@ export type ChannelMessagingAdapter = {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => string[];
+  /**
+   * Bundled plugins that need inbound conversation resolution before runtime
+   * bootstrap can mirror it through a top-level `thread-binding-api.ts` surface.
+   */
   resolveInboundConversation?: (params: {
     from?: string;
     to?: string;

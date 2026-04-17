@@ -144,26 +144,19 @@ describe("createWebhookHandler", () => {
   });
 
   it("returns 408 when request body times out", async () => {
-    vi.useFakeTimers();
-    try {
-      const handler = createWebhookHandler({
-        account: makeAccount(),
-        deliver: vi.fn(),
-        log,
-      });
+    const handler = createWebhookHandler({
+      account: makeAccount(),
+      deliver: vi.fn(),
+      log,
+      bodyTimeoutMs: 1,
+    });
 
-      const req = makeStalledReq("POST");
-      const res = makeRes();
-      const run = handler(req, res);
+    const req = makeStalledReq("POST");
+    const res = makeRes();
+    await handler(req, res);
 
-      await vi.advanceTimersByTimeAsync(30_000);
-      await run;
-
-      expect(res._status).toBe(408);
-      expect(res._body).toContain("timeout");
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(res._status).toBe(408);
+    expect(res._body).toContain("timeout");
   });
 
   it("rejects excess concurrent pre-auth body reads from the same remote IP", async () => {

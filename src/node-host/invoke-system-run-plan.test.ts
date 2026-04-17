@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { formatExecCommand } from "../infra/system-run-command.js";
 import {
   buildSystemRunApprovalPlan,
@@ -78,6 +78,29 @@ function createScriptOperandFixture(tmp: string, fixture?: RuntimeFixture): Scri
   };
 }
 
+let sharedFixtureRoot = "";
+let sharedRuntimeBinDir = "";
+let sharedFixtureId = 0;
+const sharedRuntimeBins = new Set<string>();
+
+beforeAll(() => {
+  sharedFixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-run-plan-fixtures-"));
+  sharedRuntimeBinDir = path.join(sharedFixtureRoot, "bin");
+  fs.mkdirSync(sharedRuntimeBinDir, { recursive: true });
+});
+
+afterAll(() => {
+  if (sharedFixtureRoot) {
+    fs.rmSync(sharedFixtureRoot, { recursive: true, force: true });
+  }
+});
+
+function createFixtureDir(prefix: string): string {
+  const dir = path.join(sharedFixtureRoot, `${prefix}${sharedFixtureId++}`);
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
 function writeFakeRuntimeBin(binDir: string, binName: string) {
   const runtimePath =
     process.platform === "win32" ? path.join(binDir, `${binName}.cmd`) : path.join(binDir, binName);
@@ -102,14 +125,16 @@ function withFakeRuntimeBins<T>(params: {
   tmpPrefix?: string;
   run: () => T;
 }): T {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), params.tmpPrefix ?? "openclaw-runtime-bins-"));
-  const binDir = path.join(tmp, "bin");
-  fs.mkdirSync(binDir, { recursive: true });
+  void params.tmpPrefix;
   for (const binName of params.binNames) {
-    writeFakeRuntimeBin(binDir, binName);
+    if (sharedRuntimeBins.has(binName)) {
+      continue;
+    }
+    writeFakeRuntimeBin(sharedRuntimeBinDir, binName);
+    sharedRuntimeBins.add(binName);
   }
   const oldPath = process.env.PATH;
-  process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
+  process.env.PATH = `${sharedRuntimeBinDir}${path.delimiter}${oldPath ?? ""}`;
   try {
     return params.run();
   } finally {
@@ -118,7 +143,6 @@ function withFakeRuntimeBins<T>(params: {
     } else {
       process.env.PATH = oldPath;
     }
-    fs.rmSync(tmp, { recursive: true, force: true });
   }
 }
 
@@ -190,15 +214,11 @@ function withScriptOperandPlanFixture<T>(
   },
   run: (fixture: ScriptOperandFixture, tmp: string) => T,
 ) {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), params.tmpPrefix));
+  const tmp = createFixtureDir(params.tmpPrefix);
   const fixture = createScriptOperandFixture(tmp, params.fixture);
   writeScriptOperandFixture(fixture);
   params.afterWrite?.(fixture, tmp);
-  try {
-    return run(fixture, tmp);
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
-  }
+  return run(fixture, tmp);
 }
 
 const DENIED_RUNTIME_APPROVAL = {

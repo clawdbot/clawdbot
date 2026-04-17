@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { PassThrough } from "node:stream";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig, RuntimeEnv } from "../../runtime-api.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import { createSlashCommandHttpHandler } from "./slash-http.js";
@@ -133,25 +133,19 @@ describe("slash-http", () => {
   });
 
   it("returns 408 when the request body stalls", async () => {
-    vi.useFakeTimers();
-    try {
-      const handler = createSlashCommandHttpHandler({
-        account: accountFixture,
-        cfg: {} as OpenClawConfig,
-        runtime: {} as RuntimeEnv,
-        commandTokens: new Set(["valid-token"]),
-      });
-      const req = createRequest({ autoEnd: false });
-      const response = createResponse();
-      const pending = handler(req, response.res);
+    const handler = createSlashCommandHttpHandler({
+      account: accountFixture,
+      cfg: {} as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+      commandTokens: new Set(["valid-token"]),
+      bodyTimeoutMs: 1,
+    });
+    const req = createRequest({ autoEnd: false });
+    const response = createResponse();
 
-      await vi.advanceTimersByTimeAsync(5_000);
-      await pending;
+    await handler(req, response.res);
 
-      expect(response.res.statusCode).toBe(408);
-      expect(response.getBody()).toBe("Request body timeout");
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(response.res.statusCode).toBe(408);
+    expect(response.getBody()).toBe("Request body timeout");
   });
 });

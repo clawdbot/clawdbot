@@ -94,6 +94,9 @@ export function listThinkingLevelLabels(provider?: string | null, model?: string
   if (isBinaryThinkingProvider(provider, model)) {
     return ["off", "on"];
   }
+  if (supportsXHighThinking(provider, model)) {
+    return listThinkingLevels(provider, model);
+  }
   return listThinkingLevelLabelsFallback(provider, model);
 }
 

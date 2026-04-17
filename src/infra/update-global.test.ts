@@ -32,6 +32,7 @@ import {
 
 const MATRIX_HELPER_API = bundledDistPluginFile("matrix", "helper-api.js");
 const QA_CHANNEL_RUNTIME_API = bundledDistPluginFile("qa-channel", "runtime-api.js");
+const QA_LAB_RUNTIME_API = bundledDistPluginFile("qa-lab", "runtime-api.js");
 
 describe("update global helpers", () => {
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
@@ -426,6 +427,12 @@ describe("update global helpers", () => {
       await fs.rm(path.join(packageRoot, QA_CHANNEL_RUNTIME_API));
       await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toContain(
         `missing bundled runtime sidecar ${QA_CHANNEL_RUNTIME_API}`,
+      );
+      await fs.writeFile(path.join(packageRoot, QA_CHANNEL_RUNTIME_API), "export {};\n", "utf-8");
+
+      await fs.rm(path.join(packageRoot, QA_LAB_RUNTIME_API));
+      await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toContain(
+        `missing bundled runtime sidecar ${QA_LAB_RUNTIME_API}`,
       );
     });
   });

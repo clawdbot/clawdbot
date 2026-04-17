@@ -615,10 +615,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     const setDb = (value: DatabaseSync) => {
       this.db = value;
     };
-    const getVectorReady = () => this.vectorReady;
-    const setVectorReady = (value: Promise<boolean> | null) => {
-      this.vectorReady = value;
-    };
     const getReadonlyRecoveryAttempts = () => this.readonlyRecoveryAttempts;
     const setReadonlyRecoveryAttempts = (value: number) => {
       this.readonlyRecoveryAttempts = value;
@@ -644,12 +640,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       },
       set db(value) {
         setDb(value);
-      },
-      get vectorReady() {
-        return getVectorReady();
-      },
-      set vectorReady(value) {
-        setVectorReady(value);
       },
       vector: this.vector,
       get readonlyRecoveryAttempts() {
@@ -678,6 +668,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       },
       runSync: (nextParams) => this.runSync(nextParams),
       openDatabase: () => this.openDatabase(),
+      resetVectorState: () => this.resetVectorState(),
       ensureSchema: () => this.ensureSchema(),
       readMeta: () => this.readMeta() ?? undefined,
     };

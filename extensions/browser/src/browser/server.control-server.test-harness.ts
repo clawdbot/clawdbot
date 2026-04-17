@@ -348,7 +348,6 @@ async function loadBrowserServerModule(): Promise<BrowserServerModule> {
   if (browserServerModule) {
     return browserServerModule;
   }
-  vi.resetModules();
   browserServerModule = await import("../server.js");
   return browserServerModule;
 }
@@ -484,7 +483,6 @@ export async function startBrowserControlServerFromConfig() {
 
 export async function stopBrowserControlServer(): Promise<void> {
   const server = browserServerModule;
-  browserServerModule = null;
   if (!server) {
     return;
   }

@@ -16,34 +16,27 @@ const WS_CONNECT_TIMEOUT_MS = 5_000;
 const HTTP_REQUEST_TIMEOUT_MS = 5_000;
 const SERVER_CLOSE_TIMEOUT_MS = 5_000;
 
-function isConnectionReset(value: unknown): boolean {
-  let current: unknown = value;
-  for (let depth = 0; depth < 4; depth += 1) {
-    if (!current || typeof current !== "object") {
-      return false;
-    }
-    const record = current as { code?: unknown; cause?: unknown };
-    if (record.code === "ECONNRESET") {
-      return true;
-    }
-    current = record.cause;
-  }
-  return false;
-}
-
 async function fetchCanvas(input: string, init?: RequestInit): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), HTTP_REQUEST_TIMEOUT_MS);
-  try {
-    return await fetch(input, { ...init, signal: controller.signal });
-  } catch (err) {
-    if (isConnectionReset(err)) {
-      return await fetch(input, { ...init, signal: controller.signal });
+  const headers = new Headers(init?.headers);
+  headers.set("connection", "close");
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), HTTP_REQUEST_TIMEOUT_MS);
+    try {
+      return await fetch(input, {
+        ...init,
+        headers,
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (attempt === 1) {
+        throw error;
+      }
+    } finally {
+      clearTimeout(timer);
     }
-    throw err;
-  } finally {
-    clearTimeout(timer);
   }
+  throw new Error("unreachable");
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {

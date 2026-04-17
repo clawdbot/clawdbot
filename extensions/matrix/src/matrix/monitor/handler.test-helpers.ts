@@ -256,11 +256,13 @@ export function createMatrixTextMessageEvent(params: {
   originServerTs?: number;
   relatesTo?: RoomMessageEventContent["m.relates_to"];
   mentions?: RoomMessageEventContent["m.mentions"];
+  unsigned?: MatrixRawEvent["unsigned"];
 }): MatrixRawEvent {
   return createMatrixRoomMessageEvent({
     eventId: params.eventId,
     sender: params.sender,
     originServerTs: params.originServerTs,
+    unsigned: params.unsigned,
     content: {
       msgtype: "m.text",
       body: params.body,
@@ -274,6 +276,7 @@ export function createMatrixRoomMessageEvent(params: {
   eventId: string;
   sender?: string;
   originServerTs?: number;
+  unsigned?: MatrixRawEvent["unsigned"];
   content: RoomMessageEventContent;
 }): MatrixRawEvent {
   return {
@@ -282,6 +285,7 @@ export function createMatrixRoomMessageEvent(params: {
     event_id: params.eventId,
     origin_server_ts: params.originServerTs ?? Date.now(),
     content: params.content,
+    ...(params.unsigned ? { unsigned: params.unsigned } : {}),
   } as MatrixRawEvent;
 }
 

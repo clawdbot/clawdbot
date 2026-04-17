@@ -5,6 +5,41 @@ import type { PluginManifestRecord } from "../../../plugins/manifest-registry.js
 import * as manifestRegistry from "../../../plugins/manifest-registry.js";
 import { collectDoctorPreviewWarnings } from "./preview-warnings.js";
 
+vi.mock("../channel-capabilities.js", () => {
+  const fallback = {
+    dmAllowFromMode: "topOnly",
+    groupModel: "sender",
+    groupAllowFromFallbackToAllowFrom: true,
+    warnOnEmptyGroupSenderAllowlist: true,
+  };
+  return {
+    getDoctorChannelCapabilities: () => fallback,
+  };
+});
+
+vi.mock("./channel-doctor.js", () => ({
+  collectChannelDoctorEmptyAllowlistExtraWarnings: vi.fn(() => []),
+  collectChannelDoctorPreviewWarnings: vi.fn(
+    async ({ cfg }: { cfg: { channels?: Record<string, unknown> } }) => {
+      const telegram = cfg.channels?.telegram as { allowFrom?: unknown } | undefined;
+      const usernames = Array.isArray(telegram?.allowFrom)
+        ? telegram.allowFrom.filter(
+            (entry): entry is string => typeof entry === "string" && entry.startsWith("@"),
+          )
+        : [];
+      if (usernames.length === 0) {
+        return [];
+      }
+      return [
+        `- Telegram allowFrom contains ${usernames.length} username entr${
+          usernames.length === 1 ? "y" : "ies"
+        } (e.g. ${usernames[0]}).`,
+      ];
+    },
+  ),
+  shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning: vi.fn(() => false),
+}));
+
 function manifest(id: string): PluginManifestRecord {
   return {
     id,

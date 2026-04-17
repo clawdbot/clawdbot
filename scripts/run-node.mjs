@@ -283,11 +283,60 @@ const isSignalKey = (signal) => Object.hasOwn(SIGNAL_EXIT_CODES, signal);
 
 const getSignalExitCode = (signal) => (isSignalKey(signal) ? SIGNAL_EXIT_CODES[signal] : 1);
 
+const RUN_NODE_OUTPUT_LOG_ENV = "OPENCLAW_RUN_NODE_OUTPUT_LOG";
+
+const resolveRunNodeOutputLogPath = (deps) => {
+  const outputLog = deps.env[RUN_NODE_OUTPUT_LOG_ENV]?.trim();
+  if (!outputLog) {
+    return null;
+  }
+  return path.resolve(deps.cwd, outputLog);
+};
+
+const createRunNodeOutputTee = (deps) => {
+  const outputLogPath = resolveRunNodeOutputLogPath(deps);
+  if (!outputLogPath) {
+    return null;
+  }
+  deps.fs.mkdirSync(path.dirname(outputLogPath), { recursive: true });
+  const stream = deps.fs.createWriteStream(outputLogPath, {
+    flags: "a",
+    mode: 0o600,
+  });
+  let streamError = null;
+  stream.on("error", (error) => {
+    streamError = error;
+  });
+  deps.env[RUN_NODE_OUTPUT_LOG_ENV] = outputLogPath;
+  return {
+    outputLogPath,
+    write(chunk) {
+      if (!streamError) {
+        stream.write(chunk);
+      }
+    },
+    async close() {
+      if (streamError) {
+        throw streamError;
+      }
+      await new Promise((resolve, reject) => {
+        stream.once("error", reject);
+        stream.end(resolve);
+      });
+      if (streamError) {
+        throw streamError;
+      }
+    },
+  };
+};
+
 const logRunner = (message, deps) => {
   if (deps.env.OPENCLAW_RUNNER_LOG === "0") {
     return;
   }
-  deps.stderr.write(`[openclaw] ${message}\n`);
+  const line = `[openclaw] ${message}\n`;
+  deps.stderr.write(line);
+  deps.outputTee?.write(line);
 };
 
 const waitForSpawnedProcess = async (childProcess, deps) => {
@@ -337,20 +386,58 @@ const waitForSpawnedProcess = async (childProcess, deps) => {
   }
 };
 
-const runOpenClaw = async (deps) => {
-  const nodeProcess = deps.spawn(deps.execPath, ["openclaw.mjs", ...deps.args], {
-    cwd: deps.cwd,
-    env: deps.env,
-    stdio: "inherit",
-  });
-  const res = await waitForSpawnedProcess(nodeProcess, deps);
+const getInterruptedSpawnExitCode = (res) => {
   if (res.exitSignal) {
     return getSignalExitCode(res.exitSignal);
   }
   if (res.forwardedSignal) {
     return getSignalExitCode(res.forwardedSignal);
   }
+  return null;
+};
+
+const runOpenClaw = async (deps) => {
+  const nodeProcess = deps.spawn(deps.execPath, ["openclaw.mjs", ...deps.args], {
+    cwd: deps.cwd,
+    env: deps.env,
+    stdio: deps.outputTee ? ["inherit", "pipe", "pipe"] : "inherit",
+  });
+  pipeSpawnedOutput(nodeProcess, deps);
+  const res = await waitForSpawnedProcess(nodeProcess, deps);
+  const interruptedExitCode = getInterruptedSpawnExitCode(res);
+  if (interruptedExitCode !== null) {
+    return interruptedExitCode;
+  }
   return res.exitCode ?? 1;
+};
+
+const pipeSpawnedOutput = (childProcess, deps) => {
+  if (!deps.outputTee) {
+    return;
+  }
+  childProcess.stdout?.on("data", (chunk) => {
+    deps.stdout.write(chunk);
+    deps.outputTee.write(chunk);
+  });
+  childProcess.stderr?.on("data", (chunk) => {
+    deps.stderr.write(chunk);
+    deps.outputTee.write(chunk);
+  });
+};
+
+const closeRunNodeOutputTee = async (deps, exitCode) => {
+  if (!deps.outputTee) {
+    return exitCode;
+  }
+  try {
+    await deps.outputTee.close();
+  } catch (error) {
+    deps.stderr.write(
+      `[openclaw] Failed to write output log: ${error?.message ?? "unknown error"}\n`,
+    );
+    return exitCode === 0 ? 1 : exitCode;
+  }
+  return exitCode;
 };
 
 const syncRuntimeArtifacts = (deps) => {
@@ -387,6 +474,7 @@ export async function runNodeMain(params = {}) {
     spawnSync: params.spawnSync ?? spawnSync,
     fs: params.fs ?? fs,
     stderr: params.stderr ?? process.stderr,
+    stdout: params.stdout ?? process.stdout,
     process: params.process ?? process,
     execPath: params.execPath ?? process.execPath,
     cwd: params.cwd ?? process.cwd(),
@@ -408,42 +496,50 @@ export async function runNodeMain(params = {}) {
     deps.env.OPENCLAW_BUILD_PRIVATE_QA = "1";
     deps.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
   }
+  deps.outputTee = createRunNodeOutputTee(deps);
 
-  const buildRequirement = resolveBuildRequirement(deps);
-  if (!buildRequirement.shouldBuild) {
-    if (!shouldSkipCleanWatchRuntimeSync(deps) && !syncRuntimeArtifacts(deps)) {
-      return 1;
+  try {
+    let exitCode = 1;
+    const buildRequirement = resolveBuildRequirement(deps);
+    if (!buildRequirement.shouldBuild) {
+      if (!shouldSkipCleanWatchRuntimeSync(deps) && !syncRuntimeArtifacts(deps)) {
+        return await closeRunNodeOutputTee(deps, 1);
+      }
+      exitCode = await runOpenClaw(deps);
+      return await closeRunNodeOutputTee(deps, exitCode);
     }
-    return await runOpenClaw(deps);
-  }
 
-  logRunner(
-    `Building TypeScript (dist is stale: ${buildRequirement.reason} - ${formatBuildReason(buildRequirement.reason)}).`,
-    deps,
-  );
-  const buildCmd = deps.execPath;
-  const buildArgs = compilerArgs;
-  const build = deps.spawn(buildCmd, buildArgs, {
-    cwd: deps.cwd,
-    env: deps.env,
-    stdio: "inherit",
-  });
+    logRunner(
+      `Building TypeScript (dist is stale: ${buildRequirement.reason} - ${formatBuildReason(buildRequirement.reason)}).`,
+      deps,
+    );
+    const buildCmd = deps.execPath;
+    const buildArgs = compilerArgs;
+    const build = deps.spawn(buildCmd, buildArgs, {
+      cwd: deps.cwd,
+      env: deps.env,
+      stdio: deps.outputTee ? ["inherit", "pipe", "pipe"] : "inherit",
+    });
+    pipeSpawnedOutput(build, deps);
 
-  const buildRes = await waitForSpawnedProcess(build, deps);
-  if (buildRes.exitSignal) {
-    return getSignalExitCode(buildRes.exitSignal);
+    const buildRes = await waitForSpawnedProcess(build, deps);
+    const interruptedExitCode = getInterruptedSpawnExitCode(buildRes);
+    if (interruptedExitCode !== null) {
+      return await closeRunNodeOutputTee(deps, interruptedExitCode);
+    }
+    if (buildRes.exitCode !== 0 && buildRes.exitCode !== null) {
+      return await closeRunNodeOutputTee(deps, buildRes.exitCode);
+    }
+    if (!syncRuntimeArtifacts(deps)) {
+      return await closeRunNodeOutputTee(deps, 1);
+    }
+    writeBuildStamp(deps);
+    exitCode = await runOpenClaw(deps);
+    return await closeRunNodeOutputTee(deps, exitCode);
+  } catch (error) {
+    await closeRunNodeOutputTee(deps, 1);
+    throw error;
   }
-  if (buildRes.forwardedSignal) {
-    return getSignalExitCode(buildRes.forwardedSignal);
-  }
-  if (buildRes.exitCode !== 0 && buildRes.exitCode !== null) {
-    return buildRes.exitCode;
-  }
-  if (!syncRuntimeArtifacts(deps)) {
-    return 1;
-  }
-  writeBuildStamp(deps);
-  return await runOpenClaw(deps);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

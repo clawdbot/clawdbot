@@ -125,6 +125,22 @@ export async function loadSubagentSpawnModuleForTest(params: {
     cfg?: Record<string, unknown>;
     sessionKey?: string;
   }) => { sandboxed: boolean };
+  getSessionBindingService?: () => {
+    listBySession: (targetSessionKey: string) => Array<{
+      status?: string;
+      conversation: {
+        channel: string;
+        accountId?: string;
+        conversationId: string;
+        parentConversationId?: string;
+      };
+    }>;
+  };
+  resolveConversationDeliveryTarget?: (params: {
+    channel?: string;
+    conversationId?: string | number;
+    parentConversationId?: string | number;
+  }) => { to?: string; threadId?: string };
   workspaceDir?: string;
   sessionStorePath?: string;
   resetModules?: boolean;
@@ -165,6 +181,22 @@ export async function loadSubagentSpawnModuleForTest(params: {
     isAdminOnlyMethod: (method: string) =>
       method === "sessions.patch" || method === "sessions.delete",
     pruneLegacyStoreKeys: (...args: unknown[]) => params.pruneLegacyStoreKeysMock?.(...args),
+    getSessionBindingService:
+      params.getSessionBindingService ?? (() => ({ listBySession: () => [] })),
+    resolveConversationDeliveryTarget:
+      params.resolveConversationDeliveryTarget ??
+      ((targetParams: { channel?: string; conversationId?: string | number }) => ({
+        to: targetParams.conversationId
+          ? `channel:${String(targetParams.conversationId)}`
+          : undefined,
+      })),
+    mergeDeliveryContext: (
+      primary?: Record<string, unknown>,
+      fallback?: Record<string, unknown>,
+    ) => ({
+      ...fallback,
+      ...primary,
+    }),
     resolveGatewaySessionStoreTarget: (targetParams: { key: string }) => ({
       agentId: "main",
       storePath: params.sessionStorePath ?? "/tmp/subagent-spawn-model-session.json",

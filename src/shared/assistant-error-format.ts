@@ -10,7 +10,10 @@ const HTTP_STATUS_CODE_PREFIX_RE = new RegExp(
   "i",
 );
 const HTML_ERROR_PREFIX_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
+const HTML_CLOSE_RE = /<\/html>/i;
 const CLOUDFLARE_HTML_ERROR_CODES = new Set([521, 522, 523, 524, 525, 526, 530]);
+const STANDALONE_HTML_ERROR_HINT_RE =
+  /\bcloudflare\b|cdn-cgi\/challenge-platform|challenge-error-text|enable javascript and cookies to continue|access denied|forbidden|service unavailable|bad gateway|web server is down|captcha|attention required/i;
 
 type ErrorPayload = Record<string, unknown>;
 
@@ -94,6 +97,14 @@ export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
     return false;
   }
 
+  if (
+    HTML_ERROR_PREFIX_RE.test(trimmed) &&
+    HTML_CLOSE_RE.test(trimmed) &&
+    STANDALONE_HTML_ERROR_HINT_RE.test(trimmed)
+  ) {
+    return true;
+  }
+
   const status = extractLeadingHttpStatus(trimmed);
   if (!status || status.code < 500) {
     return false;
@@ -104,7 +115,7 @@ export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
   }
 
   return (
-    status.code < 600 && HTML_ERROR_PREFIX_RE.test(status.rest) && /<\/html>/i.test(status.rest)
+    status.code < 600 && HTML_ERROR_PREFIX_RE.test(status.rest) && HTML_CLOSE_RE.test(status.rest)
   );
 }
 
@@ -171,8 +182,17 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
   }
 
   const leadingStatus = extractLeadingHttpStatus(trimmed);
-  if (leadingStatus && isCloudflareOrHtmlErrorPage(trimmed)) {
+  const isHtmlChallenge = isCloudflareOrHtmlErrorPage(trimmed);
+  if (leadingStatus && isHtmlChallenge) {
     return `The AI service is temporarily unavailable (HTTP ${leadingStatus.code}). Please try again in a moment.`;
+  }
+
+  if (isHtmlChallenge) {
+    return (
+      "The provider returned an HTML error page instead of an API response. " +
+      "This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. " +
+      "Retry in a moment or check provider status."
+    );
   }
 
   const httpMatch = trimmed.match(HTTP_STATUS_PREFIX_RE);

@@ -111,7 +111,7 @@ function renderMatrixQaCompose(params: {
       - "127.0.0.1:${params.homeserverPort}:${MATRIX_QA_INTERNAL_PORT}"
     environment:
       TUWUNEL_ADDRESS: "0.0.0.0"
-      TUWUNEL_ALLOW_ENCRYPTION: "false"
+      TUWUNEL_ALLOW_ENCRYPTION: "true"
       TUWUNEL_ALLOW_FEDERATION: "false"
       TUWUNEL_ALLOW_REGISTRATION: "true"
       TUWUNEL_DATABASE_PATH: "/var/lib/tuwunel"

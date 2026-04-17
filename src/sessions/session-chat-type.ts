@@ -10,6 +10,11 @@ export {
 } from "./session-chat-type-shared.js";
 
 export function deriveSessionChatType(sessionKey: string | undefined | null): SessionKeyChatType {
+  const builtInType = deriveSessionChatTypeFromKey(sessionKey);
+  if (builtInType !== "unknown") {
+    return builtInType;
+  }
+
   return deriveSessionChatTypeFromKey(
     sessionKey,
     Array.from(iterateBootstrapChannelPlugins())

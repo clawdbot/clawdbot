@@ -1,17 +1,29 @@
 import type { MatrixEvent } from "matrix-js-sdk";
 import type { MatrixRawEvent } from "./types.js";
 
-export function matrixEventToRaw(event: MatrixEvent): MatrixRawEvent {
+export type MatrixEventContentMode = "current" | "original";
+
+export function matrixEventToRaw(
+  event: MatrixEvent,
+  opts: { contentMode?: MatrixEventContentMode } = {},
+): MatrixRawEvent {
   const unsigned = (event.getUnsigned?.() ?? {}) as {
     age?: number;
     redacted_because?: unknown;
   };
+  const eventWithOriginalContent = event as {
+    getOriginalContent?: () => Record<string, unknown>;
+  };
+  const content =
+    opts.contentMode === "original"
+      ? (eventWithOriginalContent.getOriginalContent?.() ?? event.getContent?.() ?? {})
+      : (event.getContent?.() ?? eventWithOriginalContent.getOriginalContent?.() ?? {});
   const raw: MatrixRawEvent = {
     event_id: event.getId() ?? "",
     sender: event.getSender() ?? "",
     type: event.getType() ?? "",
     origin_server_ts: event.getTs() ?? 0,
-    content: (event.getContent?.() ?? {}) || {},
+    content: content || {},
     unsigned,
   };
   const stateKey = resolveMatrixStateKey(event);

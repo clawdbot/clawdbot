@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { ChannelPlugin } from "../../../src/channels/plugins/types.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -10,93 +9,7 @@ import {
   type SessionBindingRecord,
 } from "../../../src/infra/outbound/session-binding-service.js";
 import { resetPluginRuntimeStateForTest } from "../../../src/plugins/runtime.js";
-import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
-import type { PluginRuntime } from "../../../src/plugins/runtime/index.js";
-import {
-  loadBundledPluginApiSync,
-  loadBundledPluginTestApiSync,
-} from "../../../src/test-utils/bundled-plugin-public-surface.js";
-import { createTestRegistry } from "../../../src/test-utils/channel-plugins.js";
 import { getSessionBindingContractRegistry } from "./registry-session-binding.js";
-
-type BluebubblesApiSurface = typeof import("@openclaw/bluebubbles/api.js");
-type DiscordTestApiSurface = typeof import("@openclaw/discord/test-api.js");
-type FeishuApiSurface = typeof import("@openclaw/feishu/api.js");
-type IMessageApiSurface = typeof import("@openclaw/imessage/api.js");
-type MatrixApiSurface = typeof import("@openclaw/matrix/api.js");
-type MatrixTestApiSurface = typeof import("@openclaw/matrix/test-api.js");
-type TelegramApiSurface = typeof import("@openclaw/telegram/api.js");
-type TelegramTestApiSurface = typeof import("@openclaw/telegram/test-api.js");
-
-let bluebubblesApi: BluebubblesApiSurface | undefined;
-let discordTestApi: DiscordTestApiSurface | undefined;
-let feishuApi: FeishuApiSurface | undefined;
-let imessageApi: IMessageApiSurface | undefined;
-let matrixApi: MatrixApiSurface | undefined;
-let matrixTestApi: MatrixTestApiSurface | undefined;
-let telegramApi: TelegramApiSurface | undefined;
-let telegramTestApi: TelegramTestApiSurface | undefined;
-
-type DiscordThreadBindingTesting = {
-  resetThreadBindingsForTests: () => void;
-};
-
-type ResetTelegramThreadBindingsForTests = () => Promise<void>;
-
-function getBluebubblesPlugin(): ChannelPlugin {
-  bluebubblesApi ??= loadBundledPluginApiSync<BluebubblesApiSurface>("bluebubbles");
-  return bluebubblesApi.bluebubblesPlugin as unknown as ChannelPlugin;
-}
-
-function getDiscordPlugin(): ChannelPlugin {
-  discordTestApi ??= loadBundledPluginTestApiSync<DiscordTestApiSurface>("discord");
-  return discordTestApi.discordPlugin as unknown as ChannelPlugin;
-}
-
-function getFeishuPlugin(): ChannelPlugin {
-  feishuApi ??= loadBundledPluginApiSync<FeishuApiSurface>("feishu");
-  return feishuApi.feishuPlugin as unknown as ChannelPlugin;
-}
-
-function getIMessagePlugin(): ChannelPlugin {
-  imessageApi ??= loadBundledPluginApiSync<IMessageApiSurface>("imessage");
-  return imessageApi.imessagePlugin as unknown as ChannelPlugin;
-}
-
-function getMatrixPlugin(): ChannelPlugin {
-  matrixTestApi ??= loadBundledPluginTestApiSync<MatrixTestApiSurface>("matrix");
-  return matrixTestApi.matrixPlugin as unknown as ChannelPlugin;
-}
-
-function getSetMatrixRuntime(): (runtime: PluginRuntime) => void {
-  matrixTestApi ??= loadBundledPluginTestApiSync<MatrixTestApiSurface>("matrix");
-  return matrixTestApi.setMatrixRuntime;
-}
-
-function getTelegramPlugin(): ChannelPlugin {
-  telegramApi ??= loadBundledPluginApiSync<TelegramApiSurface>("telegram");
-  return telegramApi.telegramPlugin as unknown as ChannelPlugin;
-}
-
-function getDiscordThreadBindingTesting(): DiscordThreadBindingTesting {
-  discordTestApi ??= loadBundledPluginTestApiSync<DiscordTestApiSurface>("discord");
-  return discordTestApi.discordThreadBindingTesting;
-}
-
-function getResetTelegramThreadBindingsForTests(): ResetTelegramThreadBindingsForTests {
-  telegramTestApi ??= loadBundledPluginTestApiSync<TelegramTestApiSurface>("telegram");
-  return telegramTestApi.resetTelegramThreadBindingsForTests;
-}
-
-async function getFeishuThreadBindingTesting() {
-  feishuApi ??= loadBundledPluginApiSync<FeishuApiSurface>("feishu");
-  return feishuApi.feishuThreadBindingTesting;
-}
-
-async function getResetMatrixThreadBindingsForTests() {
-  matrixApi ??= loadBundledPluginApiSync<MatrixApiSurface>("matrix");
-  return matrixApi.resetMatrixThreadBindingsForTests;
-}
 
 function resolveSessionBindingContractRuntimeConfig(id: string) {
   if (id !== "discord" && id !== "matrix") {
@@ -111,59 +24,6 @@ function resolveSessionBindingContractRuntimeConfig(id: string) {
       },
     },
   };
-}
-
-function getSessionBindingPlugin(id: string): ChannelPlugin {
-  switch (id) {
-    case "bluebubbles":
-      return getBluebubblesPlugin();
-    case "discord":
-      return getDiscordPlugin();
-    case "feishu":
-      return getFeishuPlugin();
-    case "imessage":
-      return getIMessagePlugin();
-    case "matrix":
-      getSetMatrixRuntime()({
-        state: {
-          resolveStateDir: (_env, homeDir) => (homeDir ?? (() => "/tmp"))(),
-        },
-      } as PluginRuntime);
-      return getMatrixPlugin();
-    case "telegram":
-      return getTelegramPlugin();
-    default:
-      throw new Error(`missing session binding plugin fixture for ${id}`);
-  }
-}
-
-async function resetSessionBindingPluginFixtureForTests(id: string): Promise<void> {
-  switch (id) {
-    case "discord":
-      getDiscordThreadBindingTesting().resetThreadBindingsForTests();
-      return;
-    case "feishu":
-      (await getFeishuThreadBindingTesting()).resetFeishuThreadBindingsForTests();
-      return;
-    case "matrix":
-      (await getResetMatrixThreadBindingsForTests())();
-      return;
-    case "telegram":
-      await getResetTelegramThreadBindingsForTests()();
-      return;
-    default:
-      return;
-  }
-}
-
-function setSessionBindingPluginRegistryForTests(id: string): void {
-  const channels = [getSessionBindingPlugin(id)].map((plugin) => ({
-    pluginId: plugin.id,
-    plugin,
-    source: "test" as const,
-  })) as Parameters<typeof createTestRegistry>[0];
-
-  setActivePluginRegistry(createTestRegistry(channels));
 }
 
 function installSessionBindingContractSuite(params: {
@@ -217,11 +77,8 @@ export function describeSessionBindingRegistryBackedContract(id: string) {
       // These registry-backed contract suites intentionally exercise bundled runtime facades.
       // Opt the bundled-runtime cases in so the activation boundary behaves like real runtime usage.
       setRuntimeConfigSnapshot(runtimeConfig);
-      // These suites only exercise the session-binding channels, so avoid the broader
-      // default registry helper and seed only the six plugins this contract lane needs.
-      setSessionBindingPluginRegistryForTests(entry.id);
       sessionBindingTesting.resetSessionBindingAdaptersForTests();
-      await resetSessionBindingPluginFixtureForTests(entry.id);
+      await entry.beforeEach?.();
     });
     afterEach(() => {
       clearRuntimeConfigSnapshot();

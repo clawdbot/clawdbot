@@ -1,35 +1,22 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import os from "node:os";
-import {
-  resolveLoggerBackedRuntime,
-  safeParseJsonWithSchema,
-} from "openclaw/plugin-sdk/extension-shared";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
-import { z } from "zod";
+import { safeParseJsonWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
-  createAuthRateLimiter,
-  type RuntimeEnv,
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
   requestBodyErrorToText,
-} from "../runtime-api.js";
-import { resolveNextcloudTalkAccount } from "./accounts.js";
-import { handleNextcloudTalkInbound } from "./inbound.js";
-import { createNextcloudTalkReplayGuard, type NextcloudTalkReplayGuard } from "./replay-guard.js";
-import { getNextcloudTalkRuntime } from "./runtime.js";
+} from "openclaw/plugin-sdk/webhook-ingress";
+import { z } from "zod";
+import { createAuthRateLimiter } from "./api.js";
+import type { NextcloudTalkReplayGuard } from "./replay-guard.js";
 import { extractNextcloudTalkHeaders, verifyNextcloudTalkSignature } from "./signature.js";
 import type {
-  CoreConfig,
   NextcloudTalkInboundMessage,
   NextcloudTalkWebhookHeaders,
   NextcloudTalkWebhookPayload,
   NextcloudTalkWebhookServerOptions,
 } from "./types.js";
 
-const DEFAULT_WEBHOOK_PORT = 8788;
-const DEFAULT_WEBHOOK_HOST = "0.0.0.0";
-const DEFAULT_WEBHOOK_PATH = "/nextcloud-talk-webhook";
 const DEFAULT_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const PREAUTH_WEBHOOK_MAX_BODY_BYTES = 64 * 1024;
 const PREAUTH_WEBHOOK_BODY_TIMEOUT_MS = 5_000;
@@ -120,14 +107,6 @@ function formatError(err: unknown): string {
     return err.message;
   }
   return typeof err === "string" ? err : JSON.stringify(err);
-}
-
-function normalizeOrigin(value: string): string | null {
-  try {
-    return normalizeLowercaseStringOrEmpty(new URL(value).origin);
-  } catch {
-    return null;
-  }
 }
 
 function parseWebhookPayload(body: string): NextcloudTalkWebhookPayload | null {
@@ -262,12 +241,20 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
   const isBackendAllowed = opts.isBackendAllowed;
   const shouldProcessMessage = opts.shouldProcessMessage;
   const processMessage = opts.processMessage;
+  const authRateLimitMaxRequests =
+    typeof opts.authRateLimit?.maxRequests === "number"
+      ? opts.authRateLimit.maxRequests
+      : WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests;
+  const authRateLimitWindowMs =
+    typeof opts.authRateLimit?.windowMs === "number"
+      ? opts.authRateLimit.windowMs
+      : WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs;
   const webhookAuthRateLimiter = createAuthRateLimiter({
-    maxAttempts: WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests,
-    windowMs: WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
-    lockoutMs: WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
+    maxAttempts: authRateLimitMaxRequests,
+    windowMs: authRateLimitWindowMs,
+    lockoutMs: authRateLimitWindowMs,
     exemptLoopback: false,
-    pruneIntervalMs: WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
+    pruneIntervalMs: authRateLimitWindowMs,
   });
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
@@ -395,117 +382,4 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
   }
 
   return { server, start, stop };
-}
-
-export type NextcloudTalkMonitorOptions = {
-  accountId?: string;
-  config?: CoreConfig;
-  runtime?: RuntimeEnv;
-  abortSignal?: AbortSignal;
-  onMessage?: (message: NextcloudTalkInboundMessage) => void | Promise<void>;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
-};
-
-export async function monitorNextcloudTalkProvider(
-  opts: NextcloudTalkMonitorOptions,
-): Promise<{ stop: () => void }> {
-  const core = getNextcloudTalkRuntime();
-  const cfg = opts.config ?? (core.config.loadConfig() as CoreConfig);
-  const account = resolveNextcloudTalkAccount({
-    cfg,
-    accountId: opts.accountId,
-  });
-  const runtime: RuntimeEnv = resolveLoggerBackedRuntime(
-    opts.runtime,
-    core.logging.getChildLogger(),
-  );
-
-  if (!account.secret) {
-    throw new Error(`Nextcloud Talk bot secret not configured for account "${account.accountId}"`);
-  }
-
-  const port = account.config.webhookPort ?? DEFAULT_WEBHOOK_PORT;
-  const host = account.config.webhookHost ?? DEFAULT_WEBHOOK_HOST;
-  const path = account.config.webhookPath ?? DEFAULT_WEBHOOK_PATH;
-
-  const logger = core.logging.getChildLogger({
-    channel: "nextcloud-talk",
-    accountId: account.accountId,
-  });
-  const expectedBackendOrigin = normalizeOrigin(account.baseUrl);
-  const replayGuard = createNextcloudTalkReplayGuard({
-    stateDir: core.state.resolveStateDir(process.env, os.homedir),
-    onDiskError: (error) => {
-      logger.warn(
-        `[nextcloud-talk:${account.accountId}] replay guard disk error: ${String(error)}`,
-      );
-    },
-  });
-
-  const { start, stop } = createNextcloudTalkWebhookServer({
-    port,
-    host,
-    path,
-    secret: account.secret,
-    isBackendAllowed: (backend) => {
-      if (!expectedBackendOrigin) {
-        return true;
-      }
-      const backendOrigin = normalizeOrigin(backend);
-      return backendOrigin === expectedBackendOrigin;
-    },
-    processMessage: async (message) => {
-      const result = await processNextcloudTalkReplayGuardedMessage({
-        replayGuard,
-        accountId: account.accountId,
-        message,
-        handleMessage: async () => {
-          core.channel.activity.record({
-            channel: "nextcloud-talk",
-            accountId: account.accountId,
-            direction: "inbound",
-            at: message.timestamp,
-          });
-          if (opts.onMessage) {
-            await opts.onMessage(message);
-          } else {
-            await handleNextcloudTalkInbound({
-              message,
-              account,
-              config: cfg,
-              runtime,
-              statusSink: opts.statusSink,
-            });
-          }
-        },
-      });
-      if (result === "duplicate") {
-        logger.warn(
-          `[nextcloud-talk:${account.accountId}] replayed webhook ignored room=${message.roomToken} messageId=${message.messageId}`,
-        );
-        return;
-      }
-    },
-    onMessage: async () => {},
-    onError: (error) => {
-      logger.error(`[nextcloud-talk:${account.accountId}] webhook error: ${error.message}`);
-    },
-    abortSignal: opts.abortSignal,
-  });
-
-  if (opts.abortSignal?.aborted) {
-    return { stop };
-  }
-  await start();
-  if (opts.abortSignal?.aborted) {
-    stop();
-    return { stop };
-  }
-
-  const publicUrl =
-    account.config.webhookPublicUrl ??
-    `http://${host === "0.0.0.0" ? "localhost" : host}:${port}${path}`;
-  logger.info(`[nextcloud-talk:${account.accountId}] webhook listening on ${publicUrl}`);
-
-  return { stop };
 }
