@@ -3236,7 +3236,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 maximum: 9007199254740991,
                 title: "Bootstrap Max Chars",
                 description:
-                  "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
+                  "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 12000).",
               },
               bootstrapTotalMaxChars: {
                 type: "integer",
@@ -3244,7 +3244,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 maximum: 9007199254740991,
                 title: "Bootstrap Total Max Chars",
                 description:
-                  "Max total characters across all injected workspace bootstrap files (default: 150000).",
+                  "Max total characters across all injected workspace bootstrap files (default: 60000).",
               },
               experimental: {
                 type: "object",
@@ -24682,12 +24682,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.defaults.bootstrapMaxChars": {
       label: "Bootstrap Max Chars",
-      help: "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
+      help: "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 12000).",
       tags: ["performance"],
     },
     "agents.defaults.bootstrapTotalMaxChars": {
       label: "Bootstrap Total Max Chars",
-      help: "Max total characters across all injected workspace bootstrap files (default: 150000).",
+      help: "Max total characters across all injected workspace bootstrap files (default: 60000).",
       tags: ["performance"],
     },
     "agents.defaults.experimental": {
