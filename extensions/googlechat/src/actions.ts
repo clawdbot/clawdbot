@@ -1,17 +1,17 @@
-import type {
-  ChannelMessageActionAdapter,
-  ChannelMessageActionName,
-  OpenClawConfig,
-} from "../runtime-api.js";
 import {
   createActionGate,
-  extractToolSend,
   jsonResult,
-  loadOutboundMediaFromUrl,
   readNumberParam,
   readReactionParams,
   readStringParam,
-} from "../runtime-api.js";
+} from "openclaw/plugin-sdk/channel-actions";
+import type {
+  ChannelMessageActionAdapter,
+  ChannelMessageActionName,
+} from "openclaw/plugin-sdk/channel-contract";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
+import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { listEnabledGoogleChatAccounts, resolveGoogleChatAccount } from "./accounts.js";
 import {
   createGoogleChatReaction,

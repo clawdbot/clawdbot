@@ -1,13 +1,23 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+
+const { resolveChannelMessageToolMediaSourceParamKeysMock } = vi.hoisted(() => ({
+  resolveChannelMessageToolMediaSourceParamKeysMock: vi.fn(() => ["avatarPath", "avatarUrl"]),
+}));
+
+vi.mock("../../channels/plugins/message-action-discovery.js", () => ({
+  resolveChannelMessageToolMediaSourceParamKeys: resolveChannelMessageToolMediaSourceParamKeysMock,
+}));
+
 import {
   collectActionMediaSourceHints,
   hydrateAttachmentParamsForAction,
   normalizeSandboxMediaList,
   normalizeSandboxMediaParams,
+  resolveExtraActionMediaSourceParamKeys,
   resolveAttachmentMediaPolicy,
 } from "./message-action-params.js";
 
@@ -16,6 +26,52 @@ const maybeIt = process.platform === "win32" ? it.skip : it;
 const matrixMediaSourceParamKeys = ["avatarPath", "avatarUrl"] as const;
 
 describe("message action media helpers", () => {
+  beforeEach(() => {
+    resolveChannelMessageToolMediaSourceParamKeysMock.mockClear();
+  });
+
+  it("skips plugin media discovery when args only use standard action params", () => {
+    expect(
+      resolveExtraActionMediaSourceParamKeys({
+        cfg,
+        action: "send",
+        channel: "slack",
+        args: {
+          channel: "slack",
+          target: "#C12345678",
+          message: "hi",
+          media: "https://example.com/photo.png",
+        },
+      }),
+    ).toEqual([]);
+    expect(resolveChannelMessageToolMediaSourceParamKeysMock).not.toHaveBeenCalled();
+  });
+
+  it("discovers plugin media params when args include an extension-owned field", () => {
+    expect(
+      resolveExtraActionMediaSourceParamKeys({
+        cfg,
+        action: "set-profile",
+        channel: "matrix",
+        args: {
+          channel: "matrix",
+          avatarPath: "/workspace/avatars/profile.png",
+        },
+      }),
+    ).toEqual(["avatarPath", "avatarUrl"]);
+    expect(resolveChannelMessageToolMediaSourceParamKeysMock).toHaveBeenCalledWith({
+      cfg,
+      action: "set-profile",
+      channel: "matrix",
+      accountId: undefined,
+      sessionKey: undefined,
+      sessionId: undefined,
+      agentId: undefined,
+      requesterSenderId: undefined,
+      senderIsOwner: undefined,
+    });
+  });
+
   it("prefers sandbox media policy when sandbox roots are non-blank", () => {
     expect(
       resolveAttachmentMediaPolicy({

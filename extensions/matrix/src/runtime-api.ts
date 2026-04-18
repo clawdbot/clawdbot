@@ -29,11 +29,11 @@ export type {
 } from "openclaw/plugin-sdk/channel-contract";
 export {
   formatLocationText,
-  logInboundDrop,
   toLocationContext,
   type NormalizedLocation,
-} from "openclaw/plugin-sdk/channel-inbound";
-export { resolveAckReaction, logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
+} from "openclaw/plugin-sdk/channel-location";
+export { logInboundDrop, logTypingFailure } from "openclaw/plugin-sdk/channel-logging";
+export { resolveAckReaction } from "openclaw/plugin-sdk/channel-feedback";
 export type { ChannelSetupInput } from "openclaw/plugin-sdk/setup";
 export type {
   OpenClawConfig,
@@ -92,7 +92,7 @@ export { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 export { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
-export { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/media-runtime";
+export { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/poll-runtime";
 export { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 export {
   buildChannelKeyCandidates,

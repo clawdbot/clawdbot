@@ -30,13 +30,12 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
 
 const resolveBundledPluginSources = vi.fn();
 const getChannelPluginCatalogEntry = vi.fn();
-vi.mock("../../channels/plugins/catalog.js", async () => {
-  const actual = await vi.importActual<typeof import("../../channels/plugins/catalog.js")>(
-    "../../channels/plugins/catalog.js",
-  );
+const listChannelPluginCatalogEntries = vi.fn((..._args: unknown[]) => []);
+vi.mock("../../channels/plugins/catalog.js", () => {
   return {
-    ...actual,
     getChannelPluginCatalogEntry: (...args: unknown[]) => getChannelPluginCatalogEntry(...args),
+    listChannelPluginCatalogEntries: (...args: unknown[]) =>
+      listChannelPluginCatalogEntries(...args),
   };
 });
 
@@ -125,6 +124,7 @@ beforeEach(() => {
   }));
   resolveBundledPluginSources.mockReturnValue(new Map());
   getChannelPluginCatalogEntry.mockReturnValue(undefined);
+  listChannelPluginCatalogEntries.mockReturnValue([]);
   loadPluginManifestRegistry.mockReturnValue({ plugins: [], diagnostics: [] });
   setActivePluginRegistry(createEmptyPluginRegistry());
 });

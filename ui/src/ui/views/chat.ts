@@ -1,12 +1,12 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
-import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { CompactionStatus, FallbackStatus } from "../app-tool-stream.ts";
 import {
   CHAT_ATTACHMENT_ACCEPT,
   isSupportedChatAttachmentMimeType,
 } from "../chat/attachment-support.ts";
+import { renderContextNotice } from "../chat/context-notice.ts";
 import { DeletedMessages } from "../chat/deleted-messages.ts";
 import { exportChatMarkdown } from "../chat/export.ts";
 import {
@@ -25,6 +25,7 @@ import { PinnedMessages } from "../chat/pinned-messages.ts";
 import { getPinnedMessageSummary } from "../chat/pinned-summary.ts";
 import { messageMatchesSearchQuery } from "../chat/search-match.ts";
 import { getOrCreateSessionCacheValue } from "../chat/session-cache.ts";
+import { renderSideResult } from "../chat/side-result-render.ts";
 import type { ChatSideResult } from "../chat/side-result.ts";
 import {
   CATEGORY_LABELS,
@@ -38,10 +39,9 @@ import { isSttSupported, startStt, stopStt } from "../chat/speech.ts";
 import { buildSidebarContent, extractToolCards, extractToolPreview } from "../chat/tool-cards.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
-import { toSanitizedMarkdownHtml } from "../markdown.ts";
 import type { SidebarContent } from "../sidebar-content.ts";
 import { detectTextDirection } from "../text-direction.ts";
-import type { GatewaySessionRow, SessionsListResult } from "../types.ts";
+import type { SessionsListResult } from "../types.ts";
 import type { ChatItem, MessageGroup, ToolCard } from "../types/chat-types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { agentLogoUrl, resolveAgentAvatarUrl } from "./agents-utils.ts";
@@ -454,144 +454,6 @@ function renderFallbackIndicator(status: FallbackStatus | null | undefined) {
       ${icon} ${message}
     </div>
   `;
-}
-
-function renderSideResult(
-  sideResult: ChatSideResult | null | undefined,
-  onDismiss?: () => void,
-): TemplateResult | typeof nothing {
-  if (!sideResult) {
-    return nothing;
-  }
-  return html`
-    <section
-      class=${`chat-side-result ${sideResult.isError ? "chat-side-result--error" : ""}`}
-      role="status"
-      aria-live="polite"
-      aria-label="BTW side result"
-    >
-      <div class="chat-side-result__header">
-        <div class="chat-side-result__label-row">
-          <span class="chat-side-result__label">BTW</span>
-          <span class="chat-side-result__meta">Not saved to chat history</span>
-        </div>
-        <button
-          class="btn chat-side-result__dismiss"
-          type="button"
-          aria-label="Dismiss BTW result"
-          title="Dismiss"
-          @click=${() => onDismiss?.()}
-        >
-          ${icons.x}
-        </button>
-      </div>
-      <div class="chat-side-result__question">${sideResult.question}</div>
-      <div class="chat-side-result__body" dir=${detectTextDirection(sideResult.text)}>
-        ${unsafeHTML(toSanitizedMarkdownHtml(sideResult.text))}
-      </div>
-    </section>
-  `;
-}
-
-/**
- * Compact notice when context usage reaches 85%+.
- * Progressively shifts from amber (85%) to red (90%+).
- */
-/** Parse a 6-digit CSS hex color string to [r, g, b] integer components. */
-function parseHexRgb(hex: string): [number, number, number] | null {
-  const h = hex.trim().replace(/^#/, "");
-  if (!/^[0-9a-fA-F]{6}$/.test(h)) {
-    return null;
-  }
-  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
-}
-
-let cachedThemeNoticeColors: {
-  warnHex: string;
-  dangerHex: string;
-  warnRgb: [number, number, number];
-  dangerRgb: [number, number, number];
-} | null = null;
-
-function getThemeNoticeColors() {
-  if (cachedThemeNoticeColors) {
-    return cachedThemeNoticeColors;
-  }
-  const rootStyle = getComputedStyle(document.documentElement);
-  const warnHex = rootStyle.getPropertyValue("--warn").trim() || "#f59e0b";
-  const dangerHex = rootStyle.getPropertyValue("--danger").trim() || "#ef4444";
-  cachedThemeNoticeColors = {
-    warnHex,
-    dangerHex,
-    warnRgb: parseHexRgb(warnHex) ?? [245, 158, 11],
-    dangerRgb: parseHexRgb(dangerHex) ?? [239, 68, 68],
-  };
-  return cachedThemeNoticeColors;
-}
-
-function renderContextNotice(
-  session: GatewaySessionRow | undefined,
-  defaultContextTokens: number | null,
-) {
-  if (session?.totalTokensFresh === false) {
-    return nothing;
-  }
-  const used = session?.totalTokens ?? 0;
-  const limit = session?.contextTokens ?? defaultContextTokens ?? 0;
-  if (!used || !limit) {
-    return nothing;
-  }
-  const ratio = used / limit;
-  if (ratio < 0.85) {
-    return nothing;
-  }
-  const pct = Math.min(Math.round(ratio * 100), 100);
-  // Read theme semantic tokens so color tracks the active theme (Dash, dark, light …)
-  const { warnRgb, dangerRgb } = getThemeNoticeColors();
-  const [wr, wg, wb] = warnRgb;
-  const [dr, dg, db] = dangerRgb;
-  // Blend from --warn at 85% usage to --danger at 95%+ usage
-  const t = Math.min(Math.max((ratio - 0.85) / 0.1, 0), 1);
-  const r = Math.round(wr + (dr - wr) * t);
-  const g = Math.round(wg + (dg - wg) * t);
-  const b = Math.round(wb + (db - wb) * t);
-  const color = `rgb(${r}, ${g}, ${b})`;
-  const bgOpacity = 0.08 + 0.08 * t;
-  const bg = `rgba(${r}, ${g}, ${b}, ${bgOpacity})`;
-  return html`
-    <div class="context-notice" role="status" style="--ctx-color:${color};--ctx-bg:${bg}">
-      <svg
-        class="context-notice__icon"
-        width="16"
-        height="16"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-      >
-        <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
-        <line x1="12" y1="9" x2="12" y2="13" />
-        <line x1="12" y1="17" x2="12.01" y2="17" />
-      </svg>
-      <span>${pct}% context used</span>
-      <span class="context-notice__detail"
-        >${formatTokensCompact(used)} / ${formatTokensCompact(limit)}</span
-      >
-    </div>
-  `;
-}
-
-/** Format token count compactly (e.g. 128000 → "128k"). */
-function formatTokensCompact(n: number): string {
-  if (n >= 1_000_000) {
-    return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
-  }
-  if (n >= 1_000) {
-    return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
-  }
-  return String(n);
 }
 
 function generateAttachmentId(): string {

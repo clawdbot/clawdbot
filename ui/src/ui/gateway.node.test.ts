@@ -96,8 +96,11 @@ function stubWindowGlobals(storage?: ReturnType<typeof createStorageMock>) {
   vi.stubGlobal("window", {
     location: { href: "http://127.0.0.1:18789/" },
     localStorage: storage,
-    setTimeout: (handler: (...args: unknown[]) => void, timeout?: number, ...args: unknown[]) =>
-      globalThis.setTimeout(() => handler(...args), timeout),
+    setTimeout: (handler: (...args: unknown[]) => void, timeout?: number, ...args: unknown[]) => {
+      // Keep connect debounce behavior testable without paying real 750ms waits per handshake.
+      const effectiveTimeout = timeout === 750 ? 0 : timeout;
+      return globalThis.setTimeout(() => handler(...args), effectiveTimeout);
+    },
     clearTimeout: (timeoutId: number | undefined) => globalThis.clearTimeout(timeoutId),
   });
 }
@@ -127,8 +130,17 @@ async function continueConnect(ws: MockWebSocket, nonce = "nonce-1") {
     event: "connect.challenge",
     payload: { nonce },
   });
-  await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThan(0));
+  if (vi.isFakeTimers()) {
+    await vi.advanceTimersByTimeAsync(0);
+  } else {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  expect(ws.sent.length).toBeGreaterThan(0);
   return { ws, connectFrame: parseLatestConnectFrame(ws) };
+}
+
+async function expectSocketClosed(ws: MockWebSocket) {
+  await vi.waitFor(() => expect(ws.readyState).toBe(3), { interval: 1, timeout: 50 });
 }
 
 async function startConnect(client: InstanceType<typeof GatewayBrowserClient>, nonce = "nonce-1") {
@@ -163,7 +175,7 @@ async function startRetriedDeviceTokenConnect(params: {
   expect(firstConnect.params?.auth?.deviceToken).toBeUndefined();
 
   emitRetryableTokenMismatch(firstWs, firstConnect.id);
-  await vi.waitFor(() => expect(firstWs.readyState).toBe(3));
+  await expectSocketClosed(firstWs);
   firstWs.emitClose(4008, "connect failed");
 
   await vi.advanceTimersByTimeAsync(800);
@@ -331,7 +343,7 @@ describe("GatewayBrowserClient", () => {
         details: { code: "AUTH_TOKEN_MISMATCH" },
       },
     });
-    await vi.waitFor(() => expect(secondWs.readyState).toBe(3));
+    await expectSocketClosed(secondWs);
     secondWs.emitClose(4008, "connect failed");
     expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator" })?.token).toBe(
       "stored-device-token",
@@ -374,7 +386,7 @@ describe("GatewayBrowserClient", () => {
         details: { code: "AUTH_TOKEN_MISMATCH" },
       },
     });
-    await vi.waitFor(() => expect(ws1.readyState).toBe(3));
+    await expectSocketClosed(ws1);
     ws1.emitClose(4008, "connect failed");
 
     await vi.advanceTimersByTimeAsync(800);
@@ -444,7 +456,7 @@ describe("GatewayBrowserClient", () => {
         details: { code: "AUTH_TOKEN_MISSING" },
       },
     });
-    await vi.waitFor(() => expect(ws1.readyState).toBe(3));
+    await expectSocketClosed(ws1);
     ws1.emitClose(4008, "connect failed");
 
     await vi.advanceTimersByTimeAsync(30_000);

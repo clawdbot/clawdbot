@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path, { basename, dirname, join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MEDIA_MAX_BYTES } from "../media/store.js";
+import { stageSandboxMedia } from "./reply/stage-sandbox-media.js";
 import {
   createSandboxMediaContexts,
   createSandboxMediaStageConfig,
@@ -10,93 +11,111 @@ import {
 
 const sandboxMocks = vi.hoisted(() => ({
   ensureSandboxWorkspaceForSession: vi.fn(),
+  assertSandboxPath: vi.fn(),
 }));
 const childProcessMocks = vi.hoisted(() => ({
   spawn: vi.fn(),
 }));
-const sandboxModuleId = new URL("../agents/sandbox.js", import.meta.url).pathname;
-const fsSafeModuleId = new URL("../infra/fs-safe.js", import.meta.url).pathname;
+const fsSafeMocks = vi.hoisted(() => {
+  class MockSafeOpenError extends Error {
+    readonly code: string;
 
-let stageSandboxMedia: typeof import("./reply/stage-sandbox-media.js").stageSandboxMedia;
+    constructor(code: string, message: string) {
+      super(message);
+      this.name = "SafeOpenError";
+      this.code = code;
+    }
+  }
 
-async function loadFreshStageSandboxMediaModuleForTest() {
-  vi.resetModules();
-  vi.doMock(sandboxModuleId, () => sandboxMocks);
-  vi.doMock("node:child_process", async () => {
-    const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-    return {
-      ...actual,
-      spawn: childProcessMocks.spawn,
-    };
-  });
-  vi.doMock(fsSafeModuleId, async () => {
-    const actual = await vi.importActual<typeof import("../infra/fs-safe.js")>(fsSafeModuleId);
-    return {
-      ...actual,
-      copyFileWithinRoot: vi.fn(async ({ sourcePath, rootDir, relativePath, maxBytes }) => {
-        const sourceStat = await fs.stat(sourcePath);
-        if (typeof maxBytes === "number" && sourceStat.size > maxBytes) {
-          throw new actual.SafeOpenError(
-            "too-large",
-            `file exceeds limit of ${maxBytes} bytes (got ${sourceStat.size})`,
-          );
-        }
-
-        await fs.mkdir(rootDir, { recursive: true });
-        const rootReal = await fs.realpath(rootDir);
-        const destPath = path.resolve(rootReal, relativePath);
-        const rootPrefix = `${rootReal}${path.sep}`;
-        if (destPath !== rootReal && !destPath.startsWith(rootPrefix)) {
-          throw new actual.SafeOpenError("outside-workspace", "file is outside workspace root");
-        }
-
-        const parentDir = dirname(destPath);
-        const relativeParent = path.relative(rootReal, parentDir);
-        if (relativeParent && !relativeParent.startsWith("..")) {
-          let cursor = rootReal;
-          for (const segment of relativeParent.split(path.sep)) {
-            cursor = path.join(cursor, segment);
-            try {
-              const stat = await fs.lstat(cursor);
-              if (stat.isSymbolicLink()) {
-                throw new actual.SafeOpenError("symlink", "symlink not allowed");
-              }
-            } catch (error) {
-              if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-                await fs.mkdir(cursor, { recursive: true });
-                continue;
-              }
-              throw error;
-            }
-          }
-        }
-
-        try {
-          const destStat = await fs.lstat(destPath);
-          if (destStat.isSymbolicLink()) {
-            throw new actual.SafeOpenError("symlink", "symlink not allowed");
-          }
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-            throw error;
-          }
-        }
-
-        await fs.copyFile(sourcePath, destPath);
-      }),
-    };
-  });
-  const replyModule = await import("./reply/stage-sandbox-media.js");
   return {
-    stageSandboxMedia: replyModule.stageSandboxMedia,
+    SafeOpenError: MockSafeOpenError,
+    copyFileWithinRoot: vi.fn(),
+    readLocalFileSafely: vi.fn(),
   };
+});
+const mediaRootMocks = vi.hoisted(() => ({
+  resolveChannelRemoteInboundAttachmentRoots: vi.fn(),
+}));
+
+vi.mock("../agents/sandbox.js", () => sandboxMocks);
+vi.mock("../agents/sandbox-paths.js", () => ({
+  assertSandboxPath: sandboxMocks.assertSandboxPath,
+}));
+vi.mock("node:child_process", () => childProcessMocks);
+vi.mock("../infra/fs-safe.js", () => fsSafeMocks);
+vi.mock("../media/channel-inbound-roots.js", () => mediaRootMocks);
+
+async function copyFileWithinRootForTest({
+  sourcePath,
+  rootDir,
+  relativePath,
+  maxBytes,
+}: {
+  sourcePath: string;
+  rootDir: string;
+  relativePath: string;
+  maxBytes?: number;
+}) {
+  const sourceStat = await fs.stat(sourcePath);
+  if (typeof maxBytes === "number" && sourceStat.size > maxBytes) {
+    throw new fsSafeMocks.SafeOpenError(
+      "too-large",
+      `file exceeds limit of ${maxBytes} bytes (got ${sourceStat.size})`,
+    );
+  }
+
+  await fs.mkdir(rootDir, { recursive: true });
+  const rootReal = await fs.realpath(rootDir);
+  const destPath = path.resolve(rootReal, relativePath);
+  const rootPrefix = `${rootReal}${path.sep}`;
+  if (destPath !== rootReal && !destPath.startsWith(rootPrefix)) {
+    throw new fsSafeMocks.SafeOpenError("outside-workspace", "file is outside workspace root");
+  }
+
+  const parentDir = dirname(destPath);
+  const relativeParent = path.relative(rootReal, parentDir);
+  if (relativeParent && !relativeParent.startsWith("..")) {
+    let cursor = rootReal;
+    for (const segment of relativeParent.split(path.sep)) {
+      cursor = path.join(cursor, segment);
+      try {
+        const stat = await fs.lstat(cursor);
+        if (stat.isSymbolicLink()) {
+          throw new fsSafeMocks.SafeOpenError("symlink", "symlink not allowed");
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          await fs.mkdir(cursor, { recursive: true });
+          continue;
+        }
+        throw error;
+      }
+    }
+  }
+
+  try {
+    const destStat = await fs.lstat(destPath);
+    if (destStat.isSymbolicLink()) {
+      throw new fsSafeMocks.SafeOpenError("symlink", "symlink not allowed");
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  await fs.copyFile(sourcePath, destPath);
 }
 
-async function loadStageSandboxMediaInTempHome() {
+beforeEach(() => {
   sandboxMocks.ensureSandboxWorkspaceForSession.mockReset();
+  sandboxMocks.assertSandboxPath.mockReset().mockResolvedValue({ resolved: "", relative: "" });
   childProcessMocks.spawn.mockClear();
-  ({ stageSandboxMedia } = await loadFreshStageSandboxMediaModuleForTest());
-}
+  fsSafeMocks.copyFileWithinRoot.mockReset().mockImplementation(copyFileWithinRootForTest);
+  mediaRootMocks.resolveChannelRemoteInboundAttachmentRoots
+    .mockReset()
+    .mockReturnValue(["/Users/demo/Library/Messages/Attachments"]);
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -134,7 +153,6 @@ async function writeInboundMedia(
 describe("stageSandboxMedia", () => {
   it("stages allowed media and blocks unsafe paths", async () => {
     await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
-      await loadStageSandboxMediaInTempHome();
       const { cfg, workspaceDir, sandboxDir } = await setupSandboxWorkspace(home);
 
       {
@@ -179,6 +197,7 @@ describe("stageSandboxMedia", () => {
       }
 
       {
+        expect(mediaRootMocks.resolveChannelRemoteInboundAttachmentRoots).not.toHaveBeenCalled();
         childProcessMocks.spawn.mockClear();
         const { ctx, sessionCtx } = createSandboxMediaContexts("/etc/passwd");
         ctx.Provider = "imessage";
@@ -202,7 +221,6 @@ describe("stageSandboxMedia", () => {
 
   it("blocks destination symlink escapes when staging into sandbox workspace", async () => {
     await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
-      await loadStageSandboxMediaInTempHome();
       const { cfg, workspaceDir, sandboxDir } = await setupSandboxWorkspace(home);
 
       const mediaPath = await writeInboundMedia(home, "payload.txt", "PAYLOAD");
@@ -234,7 +252,6 @@ describe("stageSandboxMedia", () => {
 
   it("skips oversized media staging and keeps original media paths", async () => {
     await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
-      await loadStageSandboxMediaInTempHome();
       const { cfg, workspaceDir, sandboxDir } = await setupSandboxWorkspace(home);
 
       const mediaPath = await writeInboundMedia(

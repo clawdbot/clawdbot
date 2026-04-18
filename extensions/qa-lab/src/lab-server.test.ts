@@ -3,8 +3,10 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { startQaLabServer } from "./lab-server.js";
+
+vi.mock("openclaw/plugin-sdk/qa-channel", async () => await import("../../qa-channel/api.js"));
 
 const cleanups: Array<() => Promise<void>> = [];
 
@@ -79,6 +81,43 @@ async function waitForFile(filePath: string, timeoutMs = 5_000) {
   throw new Error(`file did not appear: ${filePath}`);
 }
 
+async function createQaLabRepoRootFixture(params?: {
+  uiHtml?: string;
+  models?: Array<{
+    key: string;
+    name: string;
+    input?: string;
+    available?: boolean;
+    missing?: boolean;
+  }>;
+}) {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-lab-repo-root-"));
+  cleanups.push(async () => {
+    await rm(repoRoot, { recursive: true, force: true });
+  });
+  await mkdir(path.join(repoRoot, "dist"), { recursive: true });
+  await mkdir(path.join(repoRoot, "extensions/qa-lab/web/dist"), { recursive: true });
+  const models =
+    params?.models?.map((model) => ({
+      key: model.key,
+      name: model.name,
+      input: model.input ?? model.key,
+      available: model.available ?? true,
+      missing: model.missing ?? false,
+    })) ?? [];
+  await writeFile(
+    path.join(repoRoot, "dist/index.js"),
+    `process.stdout.write(${JSON.stringify(JSON.stringify({ models }))});\n`,
+    "utf8",
+  );
+  await writeFile(
+    path.join(repoRoot, "extensions/qa-lab/web/dist/index.html"),
+    params?.uiHtml ?? "<!doctype html><html><body>qa lab fixture</body></html>",
+    "utf8",
+  );
+  return repoRoot;
+}
+
 describe("qa-lab server", () => {
   it("serves bootstrap state and writes a self-check report", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "qa-lab-test-"));
@@ -86,11 +125,13 @@ describe("qa-lab server", () => {
       await rm(tempDir, { recursive: true, force: true });
     });
     const outputPath = path.join(tempDir, "self-check.md");
+    const repoRoot = await createQaLabRepoRootFixture();
 
     const lab = await startQaLabServer({
       host: "127.0.0.1",
       port: 0,
       outputPath,
+      repoRoot,
       controlUiUrl: "http://127.0.0.1:18789/",
       controlUiToken: "qa-token",
     });
@@ -299,32 +340,16 @@ describe("qa-lab server", () => {
   });
 
   it("uses the explicit repo root for ui assets and runner model discovery", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-lab-repo-root-"));
-    cleanups.push(async () => {
-      await rm(repoRoot, { recursive: true, force: true });
+    const repoRoot = await createQaLabRepoRootFixture({
+      models: [
+        {
+          key: "anthropic/qa-temp-model",
+          name: "QA Temp Model",
+        },
+      ],
+      uiHtml:
+        "<!doctype html><html><head><title>Temp QA Lab UI</title></head><body>repo-root-ui</body></html>",
     });
-    await mkdir(path.join(repoRoot, "dist"), { recursive: true });
-    await mkdir(path.join(repoRoot, "extensions/qa-lab/web/dist"), { recursive: true });
-    await writeFile(
-      path.join(repoRoot, "dist/index.js"),
-      [
-        "process.stdout.write(JSON.stringify({",
-        "  models: [{",
-        '    key: "anthropic/qa-temp-model",',
-        '    name: "QA Temp Model",',
-        '    input: "anthropic/qa-temp-model",',
-        "    available: true,",
-        "    missing: false,",
-        "  }],",
-        "}));",
-      ].join("\n"),
-      "utf8",
-    );
-    await writeFile(
-      path.join(repoRoot, "extensions/qa-lab/web/dist/index.html"),
-      "<!doctype html><html><head><title>Temp QA Lab UI</title></head><body>repo-root-ui</body></html>",
-      "utf8",
-    );
 
     const lab = await startQaLabServer({
       host: "127.0.0.1",

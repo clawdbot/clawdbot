@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createMetrics, type MetricName } from "./metrics.js";
-import { validatePrivateKey, isValidPubkey, normalizePubkey } from "./nostr-bus.js";
+import { validatePrivateKey, isValidPubkey, normalizePubkey } from "./nostr-key-utils.js";
 import { createSeenTracker } from "./seen-tracker.js";
 import { TEST_HEX_PRIVATE_KEY } from "./test-fixtures.js";
 
@@ -26,90 +26,31 @@ function createCollectingMetrics() {
 
 describe("validatePrivateKey fuzz", () => {
   describe("type confusion", () => {
-    it("rejects null input", () => {
-      expect(() => validatePrivateKey(null as unknown as string)).toThrow();
-    });
-
-    it("rejects undefined input", () => {
-      expect(() => validatePrivateKey(undefined as unknown as string)).toThrow();
-    });
-
-    it("rejects number input", () => {
-      expect(() => validatePrivateKey(123 as unknown as string)).toThrow();
-    });
-
-    it("rejects boolean input", () => {
-      expect(() => validatePrivateKey(true as unknown as string)).toThrow();
-    });
-
-    it("rejects object input", () => {
-      expect(() => validatePrivateKey({} as unknown as string)).toThrow();
-    });
-
-    it("rejects array input", () => {
-      expect(() => validatePrivateKey([] as unknown as string)).toThrow();
-    });
-
-    it("rejects function input", () => {
-      expect(() => validatePrivateKey((() => {}) as unknown as string)).toThrow();
+    it("rejects non-string input", () => {
+      for (const value of [null, undefined, 123, true, {}, [], () => {}]) {
+        expect(() => validatePrivateKey(value as unknown as string)).toThrow();
+      }
     });
   });
 
   describe("unicode attacks", () => {
-    it("rejects unicode lookalike characters", () => {
-      // Using zero-width characters
-      const withZeroWidth =
-        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\u200Bf";
-      expect(() => validatePrivateKey(withZeroWidth)).toThrow();
-    });
+    it("rejects unicode and control-character attacks", () => {
+      const invalidKeys = [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\u200Bf",
+        `\u202E${TEST_HEX_PRIVATE_KEY}`,
+        "0123456789\u0430bcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789ab😀",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\u0301",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\x00f",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\nf",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\rf",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\tf",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\ff",
+      ];
 
-    it("rejects RTL override", () => {
-      const withRtl = `\u202E${TEST_HEX_PRIVATE_KEY}`;
-      expect(() => validatePrivateKey(withRtl)).toThrow();
-    });
-
-    it("rejects homoglyph 'a' (Cyrillic а)", () => {
-      // Using Cyrillic 'а' (U+0430) instead of Latin 'a'
-      const withCyrillicA = "0123456789\u0430bcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-      expect(() => validatePrivateKey(withCyrillicA)).toThrow();
-    });
-
-    it("rejects emoji", () => {
-      const withEmoji = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789ab😀";
-      expect(() => validatePrivateKey(withEmoji)).toThrow();
-    });
-
-    it("rejects combining characters", () => {
-      // 'a' followed by combining acute accent
-      const withCombining = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\u0301";
-      expect(() => validatePrivateKey(withCombining)).toThrow();
-    });
-  });
-
-  describe("injection attempts", () => {
-    it("rejects null byte injection", () => {
-      const withNullByte = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\x00f";
-      expect(() => validatePrivateKey(withNullByte)).toThrow();
-    });
-
-    it("rejects newline injection", () => {
-      const withNewline = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\nf";
-      expect(() => validatePrivateKey(withNewline)).toThrow();
-    });
-
-    it("rejects carriage return injection", () => {
-      const withCR = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\rf";
-      expect(() => validatePrivateKey(withCR)).toThrow();
-    });
-
-    it("rejects tab injection", () => {
-      const withTab = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\tf";
-      expect(() => validatePrivateKey(withTab)).toThrow();
-    });
-
-    it("rejects form feed injection", () => {
-      const withFormFeed = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\ff";
-      expect(() => validatePrivateKey(withFormFeed)).toThrow();
+      for (const key of invalidKeys) {
+        expect(() => validatePrivateKey(key)).toThrow();
+      }
     });
   });
 
@@ -154,34 +95,18 @@ describe("validatePrivateKey fuzz", () => {
 
 describe("isValidPubkey fuzz", () => {
   describe("type confusion", () => {
-    it("handles null gracefully", () => {
-      expect(isValidPubkey(null as unknown as string)).toBe(false);
-    });
-
-    it("handles undefined gracefully", () => {
-      expect(isValidPubkey(undefined as unknown as string)).toBe(false);
-    });
-
-    it("handles number gracefully", () => {
-      expect(isValidPubkey(123 as unknown as string)).toBe(false);
-    });
-
-    it("handles object gracefully", () => {
-      expect(isValidPubkey({} as unknown as string)).toBe(false);
+    it("handles non-string input gracefully", () => {
+      for (const value of [null, undefined, 123, {}]) {
+        expect(isValidPubkey(value as unknown as string)).toBe(false);
+      }
     });
   });
 
   describe("malicious inputs", () => {
-    it("rejects __proto__ key", () => {
-      expect(isValidPubkey("__proto__")).toBe(false);
-    });
-
-    it("rejects constructor key", () => {
-      expect(isValidPubkey("constructor")).toBe(false);
-    });
-
-    it("rejects toString key", () => {
-      expect(isValidPubkey("toString")).toBe(false);
+    it("rejects prototype property names", () => {
+      for (const value of ["__proto__", "constructor", "toString"]) {
+        expect(isValidPubkey(value)).toBe(false);
+      }
     });
   });
 });
@@ -192,16 +117,10 @@ describe("isValidPubkey fuzz", () => {
 
 describe("normalizePubkey fuzz", () => {
   describe("prototype pollution attempts", () => {
-    it("throws for __proto__", () => {
-      expect(() => normalizePubkey("__proto__")).toThrow();
-    });
-
-    it("throws for constructor", () => {
-      expect(() => normalizePubkey("constructor")).toThrow();
-    });
-
-    it("throws for prototype", () => {
-      expect(() => normalizePubkey("prototype")).toThrow();
+    it("throws for prototype property names", () => {
+      for (const value of ["__proto__", "constructor", "prototype"]) {
+        expect(() => normalizePubkey(value)).toThrow();
+      }
     });
   });
 
@@ -438,110 +357,4 @@ describe("Metrics fuzz", () => {
       expect(snapshot.eventsReceived).toBe(1);
     });
   });
-});
-
-// ============================================================================
-// Event Shape Validation (simulating malformed events)
-// ============================================================================
-
-describe("Event shape validation", () => {
-  describe("malformed event structures", () => {
-    // These test what happens if malformed data somehow gets through
-
-    it("identifies missing required fields", () => {
-      const malformedEvents = [
-        {}, // empty
-        { id: "abc" }, // missing pubkey, created_at, etc.
-        { id: null, pubkey: null }, // null values
-        { id: 123, pubkey: 456 }, // wrong types
-        { tags: "not-an-array" }, // wrong type for tags
-        { tags: [[1, 2, 3]] }, // wrong type for tag elements
-      ];
-
-      for (const event of malformedEvents) {
-        // These should be caught by shape validation before processing
-        const hasId = typeof event?.id === "string";
-        const hasPubkey = typeof (event as { pubkey?: unknown })?.pubkey === "string";
-        const hasTags = Array.isArray((event as { tags?: unknown })?.tags);
-
-        // At least one should be invalid
-        expect(hasId && hasPubkey && hasTags).toBe(false);
-      }
-    });
-  });
-
-  describe("timestamp edge cases", () => {
-    const testTimestamps = [
-      { value: NaN, desc: "NaN" },
-      { value: Infinity, desc: "Infinity" },
-      { value: -Infinity, desc: "-Infinity" },
-      { value: -1, desc: "negative" },
-      { value: 0, desc: "zero" },
-      { value: 253402300800, desc: "year 10000" }, // Far future
-      { value: -62135596800, desc: "year 0001" }, // Far past
-      { value: 1.5, desc: "float" },
-    ];
-
-    for (const { value, desc } of testTimestamps) {
-      it(`handles ${desc} timestamp`, () => {
-        const isValidTimestamp =
-          typeof value === "number" &&
-          !isNaN(value) &&
-          isFinite(value) &&
-          value >= 0 &&
-          Number.isInteger(value);
-
-        // Timestamps should be validated as positive integers
-        if (["NaN", "Infinity", "-Infinity", "negative", "float"].includes(desc)) {
-          expect(isValidTimestamp).toBe(false);
-        }
-      });
-    }
-  });
-});
-
-// ============================================================================
-// JSON parsing edge cases (simulating relay responses)
-// ============================================================================
-
-describe("JSON parsing edge cases", () => {
-  const malformedJsonCases = [
-    { input: "", desc: "empty string" },
-    { input: "null", desc: "null literal" },
-    { input: "undefined", desc: "undefined literal" },
-    { input: "{", desc: "incomplete object" },
-    { input: "[", desc: "incomplete array" },
-    { input: '{"key": undefined}', desc: "undefined value" },
-    { input: "{'key': 'value'}", desc: "single quotes" },
-    { input: '{"key": NaN}', desc: "NaN value" },
-    { input: '{"key": Infinity}', desc: "Infinity value" },
-    { input: "\x00", desc: "null byte" },
-    { input: "abc", desc: "plain string" },
-    { input: "123", desc: "plain number" },
-  ];
-
-  for (const { input, desc } of malformedJsonCases) {
-    it(`handles malformed JSON: ${desc}`, () => {
-      let parsed: unknown;
-      let parseError = false;
-
-      try {
-        parsed = JSON.parse(input);
-      } catch {
-        parseError = true;
-      }
-
-      // Either it throws or produces something that needs validation
-      if (!parseError) {
-        // If it parsed, we need to validate the structure
-        const isValidRelayMessage =
-          Array.isArray(parsed) && parsed.length >= 2 && typeof parsed[0] === "string";
-
-        // Most malformed cases won't produce valid relay messages
-        if (["null literal", "plain number", "plain string"].includes(desc)) {
-          expect(isValidRelayMessage).toBe(false);
-        }
-      }
-    });
-  }
 });

@@ -245,7 +245,6 @@ export function applyLegacyAuthStore(store: AuthProfileStore, legacy: LegacyAuth
       ...(cred.projectId ? { projectId: cred.projectId } : {}),
       ...(cred.accountId ? { accountId: cred.accountId } : {}),
       ...(cred.email ? { email: cred.email } : {}),
-      ...(cred.managedBy ? { managedBy: cred.managedBy } : {}),
     };
   }
 }

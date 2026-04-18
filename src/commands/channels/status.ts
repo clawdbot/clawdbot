@@ -1,18 +1,10 @@
-import {
-  hasConfiguredUnavailableCredentialStatus,
-  hasResolvedCredentialValue,
-} from "../../channels/account-snapshot-fields.js";
+import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
-import {
-  buildChannelAccountSnapshot,
-  buildReadOnlySourceChannelAccountSnapshot,
-} from "../../channels/plugins/status.js";
-import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
 import { withProgress } from "../../cli/progress.js";
-import { type OpenClawConfig, readConfigFileSnapshot } from "../../config/config.js";
+import { readConfigFileSnapshot } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { collectChannelStatusIssues } from "../../infra/channels-status-issues.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
@@ -25,6 +17,9 @@ import {
   formatChannelAccountLabel,
   requireValidConfigSnapshot,
 } from "./shared.js";
+import { formatConfigChannelsStatusLines } from "./status-config-format.js";
+
+export { formatConfigChannelsStatusLines } from "./status-config-format.js";
 
 export type ChannelsStatusOptions = {
   json?: boolean;
@@ -204,73 +199,6 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
     lines.push(`- Run: ${formatCliCommand("openclaw doctor")}`);
     lines.push("");
   }
-  lines.push(
-    `Tip: ${formatDocsLink("/cli#status", "status --deep")} adds gateway health probes to status output (requires a reachable gateway).`,
-  );
-  return lines;
-}
-
-export async function formatConfigChannelsStatusLines(
-  cfg: OpenClawConfig,
-  meta: { path?: string; mode?: "local" | "remote" },
-  opts?: { sourceConfig?: OpenClawConfig },
-): Promise<string[]> {
-  const lines: string[] = [];
-  lines.push(theme.warn("Gateway not reachable; showing config-only status."));
-  if (meta.path) {
-    lines.push(`Config: ${meta.path}`);
-  }
-  if (meta.mode) {
-    lines.push(`Mode: ${meta.mode}`);
-  }
-  if (meta.path || meta.mode) {
-    lines.push("");
-  }
-
-  const accountLines = (provider: ChatChannel, accounts: Array<Record<string, unknown>>) =>
-    accounts.map((account) => {
-      const bits: string[] = [];
-      appendEnabledConfiguredLinkedBits(bits, account);
-      appendModeBit(bits, account);
-      appendTokenSourceBits(bits, account);
-      appendBaseUrlBit(bits, account);
-      return buildChannelAccountLine(provider, account, bits);
-    });
-
-  const plugins = listChannelPlugins();
-  const sourceConfig = opts?.sourceConfig ?? cfg;
-  for (const plugin of plugins) {
-    const accountIds = plugin.config.listAccountIds(cfg);
-    if (!accountIds.length) {
-      continue;
-    }
-    const snapshots: ChannelAccountSnapshot[] = [];
-    for (const accountId of accountIds) {
-      const sourceSnapshot = await buildReadOnlySourceChannelAccountSnapshot({
-        plugin,
-        cfg: sourceConfig,
-        accountId,
-      });
-      const resolvedSnapshot = await buildChannelAccountSnapshot({
-        plugin,
-        cfg,
-        accountId,
-      });
-      snapshots.push(
-        sourceSnapshot &&
-          hasConfiguredUnavailableCredentialStatus(sourceSnapshot) &&
-          (!hasResolvedCredentialValue(resolvedSnapshot) ||
-            (sourceSnapshot.configured === true && resolvedSnapshot.configured === false))
-          ? sourceSnapshot
-          : resolvedSnapshot,
-      );
-    }
-    if (snapshots.length > 0) {
-      lines.push(...accountLines(plugin.id, snapshots));
-    }
-  }
-
-  lines.push("");
   lines.push(
     `Tip: ${formatDocsLink("/cli#status", "status --deep")} adds gateway health probes to status output (requires a reachable gateway).`,
   );

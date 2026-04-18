@@ -3,14 +3,6 @@ import path from "node:path";
 import { pluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mjs";
 
 const RUNTIME_SHIMS: Partial<Record<string, string>> = {
-  "secret-input-runtime": [
-    "export {",
-    "  hasConfiguredSecretInput,",
-    "  normalizeResolvedSecretInputString,",
-    "  normalizeSecretInputString,",
-    '} from "./config-runtime.js";',
-    "",
-  ].join("\n"),
   "webhook-path": [
     "/** Normalize webhook paths into the canonical registry form used by route lookup. */",
     "export function normalizeWebhookPath(raw) {",
@@ -45,17 +37,6 @@ const RUNTIME_SHIMS: Partial<Record<string, string>> = {
   ].join("\n"),
 };
 
-const TYPE_SHIMS: Partial<Record<string, string>> = {
-  "secret-input-runtime": [
-    "export {",
-    "  hasConfiguredSecretInput,",
-    "  normalizeResolvedSecretInputString,",
-    "  normalizeSecretInputString,",
-    '} from "./config-runtime.js";',
-    "",
-  ].join("\n"),
-};
-
 // `tsc` emits declarations under `dist/plugin-sdk/src/plugin-sdk/*` because the source lives
 // at `src/plugin-sdk/*` and `rootDir` is `.` (repo root, to support cross-src/extensions refs).
 //
@@ -64,11 +45,7 @@ const TYPE_SHIMS: Partial<Record<string, string>> = {
 for (const entry of pluginSdkEntrypoints) {
   const typeOut = path.join(process.cwd(), `dist/plugin-sdk/${entry}.d.ts`);
   fs.mkdirSync(path.dirname(typeOut), { recursive: true });
-  fs.writeFileSync(
-    typeOut,
-    TYPE_SHIMS[entry] ?? `export * from "./src/plugin-sdk/${entry}.js";\n`,
-    "utf8",
-  );
+  fs.writeFileSync(typeOut, `export * from "./src/plugin-sdk/${entry}.js";\n`, "utf8");
 
   const packageTypeOut = path.join(
     process.cwd(),

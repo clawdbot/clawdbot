@@ -14,7 +14,7 @@ import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalStringifiedId,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMatrixApprovalAuthApprovers, matrixApprovalAuth } from "./approval-auth.js";
 import { normalizeMatrixApproverId } from "./approval-ids.js";
 import {

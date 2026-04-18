@@ -5,6 +5,13 @@ import {
 } from "./scenario-catalog.js";
 import {
   buildMatrixReplyDetails,
+  buildMatrixQaToken,
+  buildMentionPrompt,
+  buildMatrixReplyArtifact,
+  isMatrixQaExactMarkerReply,
+  assertTopLevelReplyArtifact,
+  advanceMatrixQaActorCursor,
+  primeMatrixQaDriverScenarioClient,
   runAssertedDriverTopLevelScenario,
   type MatrixQaScenarioContext,
 } from "./scenario-runtime-shared.js";
@@ -104,6 +111,76 @@ export async function runPostRestartRoomContinueScenario(context: MatrixQaScenar
       ...buildMatrixReplyDetails("first reply", first.reply),
       `second post-restart driver event: ${second.driverEventId}`,
       ...buildMatrixReplyDetails("second reply", second.reply),
+    ].join("\n"),
+  } satisfies MatrixQaScenarioExecution;
+}
+
+export async function runInitialCatchupThenIncrementalScenario(context: MatrixQaScenarioContext) {
+  if (!context.restartGatewayWithQueuedMessage) {
+    throw new Error(
+      "Matrix initial catchup scenario requires a queued-message gateway restart callback",
+    );
+  }
+  const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_RESTART_ROOM_KEY);
+  const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
+  const catchupToken = buildMatrixQaToken("MATRIX_QA_CATCHUP");
+  const catchupBody = buildMentionPrompt(context.sutUserId, catchupToken);
+  let catchupDriverEventId = "";
+
+  await context.restartGatewayWithQueuedMessage(async () => {
+    catchupDriverEventId = await client.sendTextMessage({
+      body: catchupBody,
+      mentionUserIds: [context.sutUserId],
+      roomId,
+    });
+  });
+
+  const catchupMatched = await client.waitForRoomEvent({
+    observedEvents: context.observedEvents,
+    predicate: (event) =>
+      isMatrixQaExactMarkerReply(event, {
+        roomId,
+        sutUserId: context.sutUserId,
+        token: catchupToken,
+      }) && event.relatesTo === undefined,
+    roomId,
+    since: startSince,
+    timeoutMs: context.timeoutMs,
+  });
+  advanceMatrixQaActorCursor({
+    actorId: "driver",
+    syncState: context.syncState,
+    nextSince: catchupMatched.since,
+    startSince,
+  });
+  const catchupReply = buildMatrixReplyArtifact(catchupMatched.event, catchupToken);
+  assertTopLevelReplyArtifact("catchup reply", catchupReply);
+
+  const incremental = await runAssertedDriverTopLevelScenario({
+    context,
+    label: "incremental reply after catchup",
+    roomId,
+    tokenPrefix: "MATRIX_QA_INCREMENTAL",
+  });
+
+  return {
+    artifacts: {
+      catchupDriverEventId,
+      catchupReply,
+      catchupToken,
+      incrementalDriverEventId: incremental.driverEventId,
+      incrementalReply: incremental.reply,
+      incrementalToken: incremental.token,
+      restartSignal: "SIGUSR1",
+      roomId,
+    },
+    details: [
+      `room id: ${roomId}`,
+      "restart signal: SIGUSR1",
+      `catchup driver event: ${catchupDriverEventId}`,
+      ...buildMatrixReplyDetails("catchup reply", catchupReply),
+      `incremental driver event: ${incremental.driverEventId}`,
+      ...buildMatrixReplyDetails("incremental reply", incremental.reply),
     ].join("\n"),
   } satisfies MatrixQaScenarioExecution;
 }

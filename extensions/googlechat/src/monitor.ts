@@ -1,4 +1,3 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   deliverTextOrMediaReply,
   resolveSendableOutboundReplyParts,
@@ -7,8 +6,6 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runti
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
   createChannelReplyPipeline,
-  createWebhookInFlightLimiter,
-  registerWebhookTargetWithPluginRoute,
   resolveInboundRouteEnvelopeBuilderWithRuntime,
   resolveWebhookPath,
 } from "../runtime-api.js";
@@ -21,55 +18,32 @@ import {
 } from "./api.js";
 import { type GoogleChatAudienceType } from "./auth.js";
 import { applyGoogleChatInboundAccessPolicy, isSenderAllowed } from "./monitor-access.js";
+import {
+  handleGoogleChatWebhookRequest,
+  registerGoogleChatWebhookTarget,
+  setGoogleChatWebhookEventProcessor,
+} from "./monitor-routing.js";
 import type {
   GoogleChatCoreRuntime,
   GoogleChatMonitorOptions,
   GoogleChatRuntimeEnv,
   WebhookTarget,
 } from "./monitor-types.js";
-import { createGoogleChatWebhookRequestHandler } from "./monitor-webhook.js";
 import { getGoogleChatRuntime } from "./runtime.js";
 import type { GoogleChatAttachment, GoogleChatEvent } from "./types.js";
 export type { GoogleChatMonitorOptions, GoogleChatRuntimeEnv } from "./monitor-types.js";
+export {
+  handleGoogleChatWebhookRequest,
+  registerGoogleChatWebhookTarget,
+} from "./monitor-routing.js";
 export { isSenderAllowed };
 
-const webhookTargets = new Map<string, WebhookTarget[]>();
-const webhookInFlightLimiter = createWebhookInFlightLimiter();
-const googleChatWebhookRequestHandler = createGoogleChatWebhookRequestHandler({
-  webhookTargets,
-  webhookInFlightLimiter,
-  processEvent: async (event, target) => {
-    await processGoogleChatEvent(event, target);
-  },
-});
+setGoogleChatWebhookEventProcessor(processGoogleChatEvent);
 
 function logVerbose(core: GoogleChatCoreRuntime, runtime: GoogleChatRuntimeEnv, message: string) {
   if (core.logging.shouldLogVerbose()) {
     runtime.log?.(`[googlechat] ${message}`);
   }
-}
-
-export function registerGoogleChatWebhookTarget(target: WebhookTarget): () => void {
-  return registerWebhookTargetWithPluginRoute({
-    targetsByPath: webhookTargets,
-    target,
-    route: {
-      auth: "plugin",
-      match: "exact",
-      pluginId: "googlechat",
-      source: "googlechat-webhook",
-      accountId: target.account.accountId,
-      log: target.runtime.log,
-      handler: async (req, res) => {
-        const handled = await handleGoogleChatWebhookRequest(req, res);
-        if (!handled && !res.headersSent) {
-          res.statusCode = 404;
-          res.setHeader("Content-Type", "text/plain; charset=utf-8");
-          res.end("Not Found");
-        }
-      },
-    },
-  }).unregister;
 }
 
 function normalizeAudienceType(value?: string | null): GoogleChatAudienceType | undefined {
@@ -85,13 +59,6 @@ function normalizeAudienceType(value?: string | null): GoogleChatAudienceType | 
     return "project-number";
   }
   return undefined;
-}
-
-export async function handleGoogleChatWebhookRequest(
-  req: IncomingMessage,
-  res: ServerResponse,
-): Promise<boolean> {
-  return await googleChatWebhookRequestHandler(req, res);
 }
 
 async function processGoogleChatEvent(event: GoogleChatEvent, target: WebhookTarget) {

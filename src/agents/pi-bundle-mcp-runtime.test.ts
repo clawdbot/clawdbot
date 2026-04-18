@@ -266,7 +266,7 @@ describe("session MCP runtime", () => {
     const serverScriptPath = path.join(pluginRoot, "servers", "bundle-probe.mjs");
     await writeBundleProbeMcpServer(serverScriptPath, {
       startupCounterPath,
-      startupDelayMs: 100,
+      startupDelayMs: 10,
       pidPath,
       exitMarkerPath,
     });

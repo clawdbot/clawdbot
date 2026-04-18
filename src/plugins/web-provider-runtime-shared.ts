@@ -67,6 +67,13 @@ type ResolveWebProviderRuntimeDeps<TEntry> = {
     registry: PluginRegistry;
     onlyPluginIds?: readonly string[];
   }) => TEntry[];
+  resolveBundledPublicArtifactProviders?: (params: {
+    config?: PluginLoadOptions["config"];
+    workspaceDir?: string;
+    env?: PluginLoadOptions["env"];
+    bundledAllowlistCompat?: boolean;
+    onlyPluginIds?: readonly string[];
+  }) => TEntry[] | null;
 };
 
 export function createWebProviderSnapshotCache<TEntry>(): WebProviderSnapshotCache<TEntry> {
@@ -131,6 +138,18 @@ export function resolvePluginWebProviders<TEntry>(
       }) ?? [];
     if (pluginIds.length === 0) {
       return [];
+    }
+    if (params.activate !== true) {
+      const bundledArtifactProviders = deps.resolveBundledPublicArtifactProviders?.({
+        config: params.config,
+        workspaceDir,
+        env,
+        bundledAllowlistCompat: params.bundledAllowlistCompat,
+        onlyPluginIds: pluginIds,
+      });
+      if (bundledArtifactProviders) {
+        return bundledArtifactProviders;
+      }
     }
     const registry = loadOpenClawPlugins(
       buildPluginRuntimeLoadOptionsFromValues(

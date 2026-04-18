@@ -3,6 +3,10 @@ import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveDefaultChannelAccountContext } from "./channel-account-context.js";
 
+vi.mock("../channels/read-only-account-inspect.js", () => ({
+  inspectReadOnlyChannelAccount: vi.fn(async () => null),
+}));
+
 describe("resolveDefaultChannelAccountContext", () => {
   it("uses enabled/configured defaults when hooks are missing", async () => {
     const account = { token: "x" };
@@ -49,7 +53,7 @@ describe("resolveDefaultChannelAccountContext", () => {
     expect(result.degraded).toBe(false);
   });
 
-  it("keeps strict mode fail-closed when resolveAccount throws", async () => {
+  it("keeps strict mode fail-closed and degrades read_only mode when resolveAccount throws", async () => {
     const plugin = {
       id: "demo",
       config: {
@@ -63,18 +67,6 @@ describe("resolveDefaultChannelAccountContext", () => {
     await expect(resolveDefaultChannelAccountContext(plugin, {} as OpenClawConfig)).rejects.toThrow(
       /missing secret/i,
     );
-  });
-
-  it("degrades safely in read_only mode when resolveAccount throws", async () => {
-    const plugin = {
-      id: "demo",
-      config: {
-        listAccountIds: () => ["acc-err"],
-        resolveAccount: () => {
-          throw new Error("missing secret");
-        },
-      },
-    } as unknown as ChannelPlugin;
 
     const result = await resolveDefaultChannelAccountContext(plugin, {} as OpenClawConfig, {
       mode: "read_only",

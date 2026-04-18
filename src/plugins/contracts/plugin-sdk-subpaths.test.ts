@@ -49,6 +49,7 @@ const SRC_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const REPO_ROOT = resolve(SRC_ROOT, "..");
 const PLUGIN_SDK_DIR = resolve(SRC_ROOT, "plugin-sdk");
 const sourceCache = new Map<string, string>();
+const repoTsFilesCache = new Map<string, string[]>();
 const representativeRuntimeSmokeSubpaths = ["channel-runtime", "conversation-runtime"] as const;
 
 const importResolvedPluginSdkSubpath = async (specifier: string) => import(specifier);
@@ -226,8 +227,12 @@ function expectNamedExportParity(params: BrowserHelperExportParityContract) {
 }
 
 function listRepoTsFiles(dir: string): string[] {
+  const cached = repoTsFilesCache.get(dir);
+  if (cached) {
+    return cached;
+  }
   const entries = readdirSync(dir, { withFileTypes: true });
-  return entries.flatMap((entry) => {
+  const files = entries.flatMap((entry) => {
     const absolute = resolve(dir, entry.name);
     if (entry.isDirectory()) {
       if (entry.name === "dist" || entry.name === "node_modules") {
@@ -240,6 +245,8 @@ function listRepoTsFiles(dir: string): string[] {
     }
     return absolute.endsWith(".ts") ? [absolute] : [];
   });
+  repoTsFilesCache.set(dir, files);
+  return files;
 }
 
 function findRepoFilesContaining(params: {
@@ -253,7 +260,7 @@ function findRepoFilesContaining(params: {
     .flatMap((root) => listRepoTsFiles(root))
     .filter((file) => !excluded.has(file))
     .filter((file) => !(params.excludeFilesMatching ?? []).some((pattern) => pattern.test(file)))
-    .filter((file) => params.pattern.test(readFileSync(file, "utf8")))
+    .filter((file) => params.pattern.test(readCachedSource(file)))
     .map((file) => file.slice(REPO_ROOT.length + 1))
     .toSorted();
 }
@@ -346,7 +353,6 @@ describe("plugin-sdk subpath exports", () => {
       "pairing-access",
       "provider-model-definitions",
       "reply-prefix",
-      "secret-input-runtime",
       "secret-input-schema",
       "signal-core",
       "synology-chat",

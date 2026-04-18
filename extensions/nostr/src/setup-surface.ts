@@ -16,7 +16,7 @@ import {
   splitSetupEntries,
 } from "openclaw/plugin-sdk/setup";
 import { DEFAULT_RELAYS } from "./default-relays.js";
-import { getPublicKeyFromPrivate, normalizePubkey } from "./nostr-bus.js";
+import { getPublicKeyFromPrivate, normalizePubkey } from "./nostr-key-utils.js";
 import { resolveDefaultNostrAccountId, resolveNostrAccount } from "./types.js";
 
 const channel = "nostr" as const;

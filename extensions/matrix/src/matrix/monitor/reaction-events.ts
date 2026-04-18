@@ -1,5 +1,5 @@
-import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
-import { matrixApprovalCapability } from "../../approval-native.js";
+import { getSessionBindingService } from "openclaw/plugin-sdk/session-binding-runtime";
+import { isMatrixApprovalReactionAuthorizedSender } from "../../approval-reaction-auth.js";
 import {
   resolveMatrixApprovalReactionTarget,
   unregisterMatrixApprovalReactionTarget,
@@ -40,15 +40,8 @@ async function maybeResolveMatrixApprovalReaction(params: {
   if (!params.target) {
     return false;
   }
-  if (
-    !matrixApprovalCapability.authorizeActorAction?.({
-      cfg: params.cfg,
-      accountId: params.accountId,
-      senderId: params.senderId,
-      action: "approve",
-      approvalKind: params.target.approvalId.startsWith("plugin:") ? "plugin" : "exec",
-    })?.authorized
-  ) {
+  const approvalKind = params.target.approvalId.startsWith("plugin:") ? "plugin" : "exec";
+  if (!isMatrixApprovalReactionAuthorizedSender({ ...params, approvalKind })) {
     return false;
   }
   try {

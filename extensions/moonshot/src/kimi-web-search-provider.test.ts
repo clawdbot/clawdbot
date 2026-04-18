@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { withEnv } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
-import { __testing } from "./kimi-web-search-provider.js";
+import { __testing } from "../test-api.js";
 
 const kimiApiKeyEnv = ["KIMI_API", "KEY"].join("_");
 

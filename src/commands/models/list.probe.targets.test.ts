@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
-import { OLLAMA_LOCAL_AUTH_MARKER } from "../../agents/model-auth-markers.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
 
@@ -18,29 +17,62 @@ const resolveSecretRefStringMock = vi.fn(async () => "resolved-secret");
 vi.mock("../../agents/model-catalog.js", () => ({
   loadModelCatalog: loadModelCatalogMock,
 }));
+vi.mock("../../agents/model-auth.js", () => ({
+  hasUsableCustomProviderApiKey: (cfg: OpenClawConfig, provider: string) => {
+    const raw = cfg.models?.providers?.[provider]?.apiKey;
+    return typeof raw === "string" && raw.trim().length > 0 && raw !== "ollama-local";
+  },
+  resolveEnvApiKey: (provider: string) => {
+    const keys =
+      provider === "anthropic"
+        ? ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"]
+        : provider === "zai"
+          ? ["ZAI_API_KEY", "Z_AI_API_KEY"]
+          : [];
+    const source = keys.find((key) => process.env[key]?.trim());
+    return source ? { source, value: process.env[source] } : null;
+  },
+}));
+vi.mock("../../agents/model-selection.js", () => {
+  const normalizeProviderId = (value: string) =>
+    value.trim().toLowerCase() === "z.ai" || value.trim().toLowerCase() === "z-ai"
+      ? "zai"
+      : value.trim().toLowerCase();
+  return {
+    normalizeProviderId,
+    findNormalizedProviderValue: (record: Record<string, unknown> | undefined, provider: string) =>
+      Object.entries(record ?? {}).find(([key]) => normalizeProviderId(key) === provider)?.[1],
+    parseModelRef: (raw: string, defaultProvider: string) => {
+      const [provider, ...modelParts] = raw.includes("/") ? raw.split("/") : [defaultProvider, raw];
+      const model = modelParts.join("/");
+      return provider && model ? { provider: normalizeProviderId(provider), model } : null;
+    },
+  };
+});
 vi.mock("../../secrets/resolve.js", () => ({
   resolveSecretRefString: resolveSecretRefStringMock,
 }));
+vi.mock("../status-all/format.js", () => ({
+  redactSecrets: (value: string) => value,
+}));
+vi.mock("./shared.js", () => ({
+  DEFAULT_PROVIDER: "openai",
+  formatMs: (ms: number) => `${ms}ms`,
+}));
 
-vi.mock("../../agents/auth-profiles.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/auth-profiles.js")>(
-    "../../agents/auth-profiles.js",
-  );
-  return {
-    ...actual,
-    ensureAuthProfileStore: () => mockStore,
-    listProfilesForProvider: (_store: AuthProfileStore, provider: string) =>
-      Object.entries(mockStore.profiles)
-        .filter(
-          ([, profile]) =>
-            typeof profile.provider === "string" && profile.provider.toLowerCase() === provider,
-        )
-        .map(([profileId]) => profileId),
-    resolveAuthProfileDisplayLabel: ({ profileId }: { profileId: string }) => profileId,
-    resolveAuthProfileOrder: resolveAuthProfileOrderMock,
-    resolveAuthProfileEligibility: resolveAuthProfileEligibilityMock,
-  };
-});
+vi.mock("../../agents/auth-profiles.js", () => ({
+  ensureAuthProfileStore: () => mockStore,
+  listProfilesForProvider: (_store: AuthProfileStore, provider: string) =>
+    Object.entries(mockStore.profiles)
+      .filter(
+        ([, profile]) =>
+          typeof profile.provider === "string" && profile.provider.toLowerCase() === provider,
+      )
+      .map(([profileId]) => profileId),
+  resolveAuthProfileDisplayLabel: ({ profileId }: { profileId: string }) => profileId,
+  resolveAuthProfileOrder: resolveAuthProfileOrderMock,
+  resolveAuthProfileEligibility: resolveAuthProfileEligibilityMock,
+}));
 
 const { buildProbeTargets } = await import("./list.probe.js");
 
@@ -219,7 +251,7 @@ describe("buildProbeTargets reason codes", () => {
       order: {},
     };
     await withClearedAnthropicEnv(async () => {
-      const plan = await buildAnthropicPlanFromModelsJsonApiKey(OLLAMA_LOCAL_AUTH_MARKER);
+      const plan = await buildAnthropicPlanFromModelsJsonApiKey("ollama-local");
       expect(plan.targets).toEqual([]);
       expect(plan.results).toEqual([]);
     });

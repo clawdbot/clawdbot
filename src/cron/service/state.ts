@@ -62,7 +62,7 @@ export type CronServiceDeps = {
   maxMissedJobsPerRestart?: number;
   enqueueSystemEvent: (
     text: string,
-    opts?: { agentId?: string; sessionKey?: string; contextKey?: string },
+    opts?: { agentId?: string; sessionKey?: string; contextKey?: string; trusted?: boolean },
   ) => void;
   requestHeartbeatNow: (opts?: { reason?: string; agentId?: string; sessionKey?: string }) => void;
   runHeartbeatOnce?: (opts?: {

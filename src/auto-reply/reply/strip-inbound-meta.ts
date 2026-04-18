@@ -12,9 +12,6 @@
  * do not show AI-facing envelope metadata as user text.
  */
 
-import { z } from "zod";
-import { safeParseJsonWithSchema } from "../../utils/zod-parse.js";
-
 const LEADING_TIMESTAMP_PREFIX_RE = /^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\] */;
 
 /**
@@ -35,7 +32,6 @@ const UNTRUSTED_CONTEXT_HEADER =
 const ACTIVE_MEMORY_OPEN_TAG = "<active_memory_plugin>";
 const ACTIVE_MEMORY_CLOSE_TAG = "</active_memory_plugin>";
 const [CONVERSATION_INFO_SENTINEL, SENDER_INFO_SENTINEL] = INBOUND_META_SENTINELS;
-const InboundMetaBlockSchema = z.record(z.string(), z.unknown());
 
 // Pre-compiled fast-path regex — avoids line-by-line parse when no blocks present.
 const SENTINEL_FAST_RE = new RegExp(
@@ -64,6 +60,18 @@ function restoreNeutralizedMarkdownFences(value: unknown): unknown {
   );
 }
 
+function parseJsonObjectRecord(jsonText: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(jsonText);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
 function parseInboundMetaBlock(lines: string[], sentinel: string): Record<string, unknown> | null {
   for (let i = 0; i < lines.length; i++) {
     if (lines[i]?.trim() !== sentinel) {
@@ -86,7 +94,7 @@ function parseInboundMetaBlock(lines: string[], sentinel: string): Record<string
     if (!jsonText) {
       return null;
     }
-    const parsed = safeParseJsonWithSchema(InboundMetaBlockSchema, jsonText);
+    const parsed = parseJsonObjectRecord(jsonText);
     return parsed ? (restoreNeutralizedMarkdownFences(parsed) as Record<string, unknown>) : null;
   }
   return null;

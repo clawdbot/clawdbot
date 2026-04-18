@@ -647,6 +647,23 @@ export async function runMatrixQaLive(params: {
                   `gateway restart done ${scenario.id} ${formatMatrixQaDurationMs(measuredRestart.durationMs)}`,
                 );
               },
+              restartGatewayWithQueuedMessage: async (queueMessage) => {
+                if (!gatewayHarness) {
+                  throw new Error("Matrix restart catchup scenario requires a live gateway");
+                }
+                writeMatrixQaProgress(`gateway restart+queue start ${scenario.id}`);
+                const measuredRestart = await measureMatrixQaStep(async () => {
+                  await scenarioGateway.harness.gateway.restart();
+                  await sleep(250);
+                  await queueMessage();
+                  await waitForMatrixChannelReady(scenarioGateway.harness.gateway, sutAccountId);
+                });
+                gatewayRestartMs += measuredRestart.durationMs;
+                scenarioRestartGatewayMs += measuredRestart.durationMs;
+                writeMatrixQaProgress(
+                  `gateway restart+queue done ${scenario.id} ${formatMatrixQaDurationMs(measuredRestart.durationMs)}`,
+                );
+              },
               roomId: provisioning.roomId,
               sutAccessToken: provisioning.sut.accessToken,
               sutDeviceId: provisioning.sut.deviceId,

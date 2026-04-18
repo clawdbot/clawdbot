@@ -67,6 +67,16 @@ export function isTruthyEnvValue(value?: string): boolean {
   }
 }
 
+export function isVitestRuntimeEnv(env: NodeJS.ProcessEnv = process.env): boolean {
+  return (
+    env.VITEST === "true" ||
+    env.VITEST === "1" ||
+    env.VITEST_POOL_ID !== undefined ||
+    env.VITEST_WORKER_ID !== undefined ||
+    env.NODE_ENV === "test"
+  );
+}
+
 export function normalizeEnv(): void {
   normalizeZaiEnv();
 }

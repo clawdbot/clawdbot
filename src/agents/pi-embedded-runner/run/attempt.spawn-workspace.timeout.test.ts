@@ -1,41 +1,28 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  cleanupTempPaths,
-  createContextEngineAttemptRunner,
-  getHoisted,
-  resetEmbeddedAttemptHarness,
-} from "./attempt.spawn-workspace.test-support.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const hoisted = getHoisted();
+const mocks = vi.hoisted(() => ({
+  ensureGlobalUndiciEnvProxyDispatcher: vi.fn(),
+  ensureGlobalUndiciStreamTimeouts: vi.fn(),
+}));
+
+vi.mock("../../../infra/net/undici-global-dispatcher.js", () => ({
+  ensureGlobalUndiciEnvProxyDispatcher: mocks.ensureGlobalUndiciEnvProxyDispatcher,
+  ensureGlobalUndiciStreamTimeouts: mocks.ensureGlobalUndiciStreamTimeouts,
+}));
+
+import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
 
 describe("runEmbeddedAttempt undici timeout wiring", () => {
-  const tempPaths: string[] = [];
-
   beforeEach(() => {
-    resetEmbeddedAttemptHarness();
+    mocks.ensureGlobalUndiciEnvProxyDispatcher.mockReset();
+    mocks.ensureGlobalUndiciStreamTimeouts.mockReset();
   });
 
-  afterEach(async () => {
-    await cleanupTempPaths(tempPaths);
-  });
+  it("forwards the configured run timeout into global undici stream tuning", () => {
+    configureEmbeddedAttemptHttpRuntime({ timeoutMs: 123_456 });
 
-  it("forwards the configured run timeout into global undici stream tuning", async () => {
-    await createContextEngineAttemptRunner({
-      sessionKey: "agent:main:ollama-timeout-test",
-      tempPaths,
-      contextEngine: {
-        assemble: async ({ messages }) => ({
-          messages,
-          estimatedTokens: 1,
-        }),
-      },
-      attemptOverrides: {
-        timeoutMs: 123_456,
-      },
-    });
-
-    expect(hoisted.ensureGlobalUndiciEnvProxyDispatcherMock).toHaveBeenCalledOnce();
-    expect(hoisted.ensureGlobalUndiciStreamTimeoutsMock).toHaveBeenCalledWith({
+    expect(mocks.ensureGlobalUndiciEnvProxyDispatcher).toHaveBeenCalledOnce();
+    expect(mocks.ensureGlobalUndiciStreamTimeouts).toHaveBeenCalledWith({
       timeoutMs: 123_456,
     });
   });

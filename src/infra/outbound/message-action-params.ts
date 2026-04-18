@@ -17,6 +17,7 @@ import { loadWebMedia } from "../../media/web-media.js";
 import { resolveSnakeCaseParamKey } from "../../param-key.js";
 import { readBooleanParam as readBooleanParamShared } from "../../plugin-sdk/boolean-param.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
 
 export const readBooleanParam = readBooleanParamShared;
 
@@ -60,6 +61,7 @@ function buildActionMediaSourceParamKeys(extraParamKeys?: readonly string[]): st
 export function resolveExtraActionMediaSourceParamKeys(params: {
   cfg: OpenClawConfig;
   action?: ChannelMessageActionName;
+  args: Record<string, unknown>;
   channel?: string;
   accountId?: string | null;
   sessionKey?: string | null;
@@ -68,6 +70,9 @@ export function resolveExtraActionMediaSourceParamKeys(params: {
   requesterSenderId?: string | null;
   senderIsOwner?: boolean;
 }): string[] {
+  if (!hasPotentialPluginActionParam(params.args)) {
+    return [];
+  }
   return resolveChannelMessageToolMediaSourceParamKeys({
     cfg: params.cfg,
     action: params.action,

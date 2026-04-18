@@ -213,7 +213,7 @@ The minimum adoption bar for a new channel is:
 4. Mount the runner as `openclaw qa <runner>` instead of registering a competing root command.
    Runner plugins should declare `qaRunners` in `openclaw.plugin.json` and export a matching `qaRunnerCliRegistrations` array from `runtime-api.ts`.
    Keep `runtime-api.ts` light; lazy CLI and runner execution should stay behind separate entrypoints.
-5. Author or adapt markdown scenarios under `qa/scenarios/`.
+5. Author or adapt markdown scenarios under the themed `qa/scenarios/` directories.
 6. Use the generic scenario helpers for new scenarios.
 7. Keep existing compatibility aliases working unless the repo is doing an intentional migration.
 

@@ -36,6 +36,11 @@ describe("getChannelMessageAdapter", () => {
     setActivePluginRegistry(
       createTestRegistry([
         { pluginId: "discord", plugin: discordCrossContextPlugin, source: "test" },
+        {
+          pluginId: "telegram",
+          plugin: createChannelTestPluginBase({ id: "telegram" }),
+          source: "test",
+        },
       ]),
     );
   });

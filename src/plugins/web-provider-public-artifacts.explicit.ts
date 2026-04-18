@@ -14,6 +14,7 @@ const WEB_SEARCH_ARTIFACT_CANDIDATES = [
   "web-search-provider.js",
   "web-search.js",
 ] as const;
+const WEB_SEARCH_RUNTIME_ARTIFACT_CANDIDATES = ["web-search-provider.js", "web-search.js"] as const;
 const WEB_FETCH_ARTIFACT_CANDIDATES = [
   "web-fetch-contract-api.js",
   "web-fetch-provider.js",
@@ -128,6 +129,28 @@ export function loadBundledWebSearchProviderEntriesFromDir(params: {
   return providers.map((provider) => ({ ...provider, pluginId: params.pluginId }));
 }
 
+export function loadBundledRuntimeWebSearchProviderEntriesFromDir(params: {
+  dirName: string;
+  pluginId: string;
+}): PluginWebSearchProviderEntry[] | null {
+  const mod = tryLoadBundledPublicArtifactModule({
+    dirName: params.dirName,
+    artifactCandidates: WEB_SEARCH_RUNTIME_ARTIFACT_CANDIDATES,
+  });
+  if (!mod) {
+    return null;
+  }
+  const providers = collectProviderFactories({
+    mod,
+    suffix: "WebSearchProvider",
+    isProvider: isWebSearchProviderPlugin,
+  });
+  if (providers.length === 0) {
+    return null;
+  }
+  return providers.map((provider) => ({ ...provider, pluginId: params.pluginId }));
+}
+
 export function loadBundledWebFetchProviderEntriesFromDir(params: {
   dirName: string;
   pluginId: string;
@@ -156,6 +179,23 @@ export function resolveBundledExplicitWebSearchProvidersFromPublicArtifacts(para
   const providers: PluginWebSearchProviderEntry[] = [];
   for (const pluginId of normalizeExplicitBundledPluginIds(params.onlyPluginIds)) {
     const loadedProviders = loadBundledWebSearchProviderEntriesFromDir({
+      dirName: pluginId,
+      pluginId,
+    });
+    if (!loadedProviders) {
+      return null;
+    }
+    providers.push(...loadedProviders);
+  }
+  return providers;
+}
+
+export function resolveBundledExplicitRuntimeWebSearchProvidersFromPublicArtifacts(params: {
+  onlyPluginIds: readonly string[];
+}): PluginWebSearchProviderEntry[] | null {
+  const providers: PluginWebSearchProviderEntry[] = [];
+  for (const pluginId of normalizeExplicitBundledPluginIds(params.onlyPluginIds)) {
+    const loadedProviders = loadBundledRuntimeWebSearchProviderEntriesFromDir({
       dirName: pluginId,
       pluginId,
     });

@@ -1,12 +1,49 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, ToolResultMessage } from "@mariozechner/pi-ai";
-import { describe, expect, it } from "vitest";
-import {
-  estimateMessagesTokens,
-  pruneHistoryForContextShare,
-  splitMessagesByTokenShare,
-} from "./compaction.js";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
+
+const piCodingAgentMocks = vi.hoisted(() => ({
+  estimateTokens: vi.fn((message: unknown) => estimateTokenish(message)),
+}));
+
+function readText(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(readText).join("");
+  }
+  if (value && typeof value === "object") {
+    const record = value as { text?: unknown; content?: unknown; arguments?: unknown };
+    return `${readText(record.text)}${readText(record.content)}${readText(record.arguments)}`;
+  }
+  return "";
+}
+
+function estimateTokenish(message: unknown): number {
+  return Math.max(1, Math.ceil(readText(message).length / 4));
+}
+
+vi.mock("@mariozechner/pi-coding-agent", async () => {
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-coding-agent")>(
+    "@mariozechner/pi-coding-agent",
+  );
+  return {
+    ...actual,
+    estimateTokens: piCodingAgentMocks.estimateTokens,
+  };
+});
+
+let estimateMessagesTokens: typeof import("./compaction.js").estimateMessagesTokens;
+let pruneHistoryForContextShare: typeof import("./compaction.js").pruneHistoryForContextShare;
+let splitMessagesByTokenShare: typeof import("./compaction.js").splitMessagesByTokenShare;
+
+beforeAll(async () => {
+  vi.resetModules();
+  ({ estimateMessagesTokens, pruneHistoryForContextShare, splitMessagesByTokenShare } =
+    await import("./compaction.js"));
+});
 
 function makeMessage(id: number, size: number): AgentMessage {
   return {

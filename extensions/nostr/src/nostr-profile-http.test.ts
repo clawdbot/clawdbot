@@ -5,7 +5,6 @@
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import * as runtimeApi from "../runtime-api.js";
 import {
   clearNostrProfileRateLimitStateForTest,
   createNostrProfileHttpHandler,
@@ -13,6 +12,19 @@ import {
   isNostrProfileRateLimitedForTest,
   type NostrProfileHttpContext,
 } from "./nostr-profile-http.js";
+
+const runtimeScopeMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./nostr-profile-http-runtime.js", async () => {
+  const webhookIngress = await import("openclaw/plugin-sdk/webhook-ingress");
+  const requestGuards = await import("openclaw/plugin-sdk/webhook-request-guards");
+  return {
+    createFixedWindowRateLimiter: webhookIngress.createFixedWindowRateLimiter,
+    readJsonBodyWithLimit: requestGuards.readJsonBodyWithLimit,
+    requestBodyErrorToText: requestGuards.requestBodyErrorToText,
+    getPluginRuntimeGatewayRequestScope: runtimeScopeMock,
+  };
+});
 
 // Mock the channel exports
 vi.mock("./channel.js", () => ({
@@ -35,24 +47,23 @@ import { TEST_HEX_PUBLIC_KEY, TEST_SETUP_RELAY_URLS } from "./test-fixtures.js";
 // ============================================================================
 
 const TEST_PROFILE_RELAY_URL = TEST_SETUP_RELAY_URLS[0];
-const runtimeScopeSpy = vi.spyOn(runtimeApi, "getPluginRuntimeGatewayRequestScope");
 
 afterAll(() => {
-  runtimeScopeSpy.mockRestore();
+  runtimeScopeMock.mockReset();
 });
 
 function setGatewayRuntimeScopes(scopes: readonly string[] | undefined): void {
   if (!scopes) {
-    runtimeScopeSpy.mockReturnValue(undefined);
+    runtimeScopeMock.mockReturnValue(undefined);
     return;
   }
-  runtimeScopeSpy.mockReturnValue({
+  runtimeScopeMock.mockReturnValue({
     client: {
       connect: {
         scopes: [...scopes],
       },
     },
-  } as unknown as ReturnType<typeof runtimeApi.getPluginRuntimeGatewayRequestScope>);
+  });
 }
 
 function responseChunkText(chunk: unknown): string {

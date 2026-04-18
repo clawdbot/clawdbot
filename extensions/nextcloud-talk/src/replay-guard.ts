@@ -23,7 +23,7 @@ function buildReplayKey(params: { roomToken: string; messageId: string }): strin
 }
 
 export type NextcloudTalkReplayGuardOptions = {
-  stateDir: string;
+  stateDir?: string;
   ttlMs?: number;
   memoryMaxSize?: number;
   fileMaxEntries?: number;
@@ -57,15 +57,27 @@ export type NextcloudTalkReplayGuard = {
 export function createNextcloudTalkReplayGuard(
   options: NextcloudTalkReplayGuardOptions,
 ): NextcloudTalkReplayGuard {
-  const stateDir = options.stateDir.trim();
-  const dedupe = createClaimableDedupe({
+  const stateDir = options.stateDir?.trim();
+  const baseOptions = {
     ttlMs: options.ttlMs ?? DEFAULT_REPLAY_TTL_MS,
     memoryMaxSize: options.memoryMaxSize ?? DEFAULT_MEMORY_MAX_SIZE,
-    fileMaxEntries: options.fileMaxEntries ?? DEFAULT_FILE_MAX_ENTRIES,
-    resolveFilePath: (namespace) =>
-      path.join(stateDir, "nextcloud-talk", "replay-dedupe", `${sanitizeSegment(namespace)}.json`),
-    onDiskError: options.onDiskError,
-  });
+  };
+  const dedupe = createClaimableDedupe(
+    stateDir
+      ? {
+          ...baseOptions,
+          fileMaxEntries: options.fileMaxEntries ?? DEFAULT_FILE_MAX_ENTRIES,
+          resolveFilePath: (namespace) =>
+            path.join(
+              stateDir,
+              "nextcloud-talk",
+              "replay-dedupe",
+              `${sanitizeSegment(namespace)}.json`,
+            ),
+          onDiskError: options.onDiskError,
+        }
+      : baseOptions,
+  );
 
   return {
     claimMessage: async ({ accountId, roomToken, messageId }) => {

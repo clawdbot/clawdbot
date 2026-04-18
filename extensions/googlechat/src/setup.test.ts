@@ -11,14 +11,14 @@ import {
   expectLifecyclePatch,
   expectPendingUntilAbort,
   startAccountAndTrackLifecycle,
-  waitForStartedMocks,
 } from "../../../test/helpers/plugins/start-account-lifecycle.js";
 import type { OpenClawConfig } from "../runtime-api.js";
-import { resolveGoogleChatAccount, type ResolvedGoogleChatAccount } from "./accounts.js";
 import {
   listGoogleChatAccountIds,
+  resolveGoogleChatAccount,
   resolveDefaultGoogleChatAccountId,
-} from "./channel.deps.runtime.js";
+  type ResolvedGoogleChatAccount,
+} from "./accounts.js";
 import { startGoogleChatGatewayAccount } from "./gateway.js";
 import { googlechatSetupAdapter } from "./setup-core.js";
 import { googlechatSetupWizard } from "./setup-surface.js";
@@ -27,13 +27,16 @@ const hoisted = vi.hoisted(() => ({
   startGoogleChatMonitor: vi.fn(),
 }));
 
-vi.mock("./monitor.js", async () => {
-  const actual = await vi.importActual<typeof import("./monitor.js")>("./monitor.js");
-  return {
-    ...actual,
+vi.mock("./channel.runtime.js", () => ({
+  googleChatChannelRuntime: {
+    resolveGoogleChatWebhookPath: ({
+      account,
+    }: {
+      account: { config: { webhookPath?: string } };
+    }) => account.config.webhookPath ?? "/googlechat",
     startGoogleChatMonitor: hoisted.startGoogleChatMonitor,
-  };
-});
+  },
+}));
 
 const googlechatSetupPlugin = {
   id: "googlechat",
@@ -63,6 +66,16 @@ function buildAccount(): ResolvedGoogleChatAccount {
       audience: "https://example.com/googlechat",
     },
   };
+}
+
+async function waitForGoogleChatMonitorStarted() {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    if (hoisted.startGoogleChatMonitor.mock.calls.length === 1) {
+      return;
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  expect(hoisted.startGoogleChatMonitor).toHaveBeenCalledOnce();
 }
 
 describe("googlechat setup", () => {
@@ -356,7 +369,7 @@ describe("googlechat setup", () => {
       account: buildAccount(),
     });
     await expectPendingUntilAbort({
-      waitForStarted: waitForStartedMocks(hoisted.startGoogleChatMonitor),
+      waitForStarted: waitForGoogleChatMonitorStarted,
       isSettled,
       abort,
       task,

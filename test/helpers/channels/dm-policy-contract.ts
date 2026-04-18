@@ -1,19 +1,21 @@
 import type { SignalSender } from "@openclaw/signal/contract-api.js";
-import { loadBundledPluginContractApiSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
+import { resolveRelativeBundledPluginPublicModuleId } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 
 type SignalContractApiSurface = Pick<
   typeof import("@openclaw/signal/contract-api.js"),
   "isSignalSenderAllowed"
 >;
 
-let signalContractSurface: SignalContractApiSurface | undefined;
+let signalContractSurface: Promise<SignalContractApiSurface> | undefined;
 
-function getSignalContractSurface(): SignalContractApiSurface {
-  signalContractSurface ??= loadBundledPluginContractApiSync<SignalContractApiSurface>("signal");
+export function getSignalContractSurface(): Promise<SignalContractApiSurface> {
+  signalContractSurface ??= import(
+    resolveRelativeBundledPluginPublicModuleId({
+      fromModuleUrl: import.meta.url,
+      pluginId: "signal",
+      artifactBasename: "contract-api.js",
+    })
+  ) as Promise<SignalContractApiSurface>;
   return signalContractSurface;
 }
-
-export const isSignalSenderAllowed = (
-  ...args: Parameters<SignalContractApiSurface["isSignalSenderAllowed"]>
-) => getSignalContractSurface().isSignalSenderAllowed(...args);
 export type { SignalSender };

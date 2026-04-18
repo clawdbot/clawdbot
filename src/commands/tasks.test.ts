@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
-import { createRunningTaskRun } from "../tasks/task-executor.js";
 import {
   createManagedTaskFlow,
   resetTaskFlowRegistryForTests,
 } from "../tasks/task-flow-registry.js";
 import {
+  createTaskRecord,
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
 } from "../tasks/task-registry.js";
@@ -55,16 +55,17 @@ describe("tasks commands", () => {
     resetTaskFlowRegistryForTests({ persist: false });
   });
 
-  it("keeps tasks audit JSON stable while adding TaskFlow summary fields", async () => {
+  it("keeps audit JSON stable and sorts combined findings before limiting", async () => {
     await withTaskCommandStateDir(async () => {
       const now = Date.now();
       vi.useFakeTimers();
       vi.setSystemTime(now - 40 * 60_000);
-      createRunningTaskRun({
+      createTaskRecord({
         runtime: "cli",
         ownerKey: "agent:main:main",
         scopeKind: "session",
         runId: "task-stale-queued",
+        status: "running",
         task: "Inspect issue backlog",
       });
       vi.setSystemTime(now);
@@ -95,22 +96,7 @@ describe("tasks commands", () => {
       expect(payload.summary.taskFlows.byCode.stale_waiting).toBe(1);
       expect(payload.summary.taskFlows.byCode.missing_linked_tasks).toBe(1);
       expect(payload.summary.combined.total).toBe(3);
-    });
-  });
 
-  it("sorts combined audit findings before applying the limit", async () => {
-    await withTaskCommandStateDir(async () => {
-      const now = Date.now();
-      vi.useFakeTimers();
-      vi.setSystemTime(now - 40 * 60_000);
-      createRunningTaskRun({
-        runtime: "cli",
-        ownerKey: "agent:main:main",
-        scopeKind: "session",
-        runId: "task-stale-queued",
-        task: "Queue audit",
-      });
-      vi.setSystemTime(now);
       const runningFlow = createManagedTaskFlow({
         ownerKey: "agent:main:main",
         controllerId: "tests/tasks-command",
@@ -120,15 +106,17 @@ describe("tasks commands", () => {
         updatedAt: now - 45 * 60_000,
       });
 
-      const runtime = createRuntime();
-      await tasksAuditCommand({ json: true, limit: 1 }, runtime);
+      const limitedRuntime = createRuntime();
+      await tasksAuditCommand({ json: true, limit: 1 }, limitedRuntime);
 
-      const payload = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0])) as {
+      const limitedPayload = JSON.parse(
+        String(vi.mocked(limitedRuntime.log).mock.calls[0]?.[0]),
+      ) as {
         findings: Array<{ kind: string; code: string; token?: string }>;
       };
 
-      expect(payload.findings).toHaveLength(1);
-      expect(payload.findings[0]).toMatchObject({
+      expect(limitedPayload.findings).toHaveLength(1);
+      expect(limitedPayload.findings[0]).toMatchObject({
         kind: "task_flow",
         code: "stale_running",
         token: runningFlow.flowId,

@@ -1,5 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { setSlackChannelAllowlist } from "./shared.js";
+import { createSlackPluginBase, setSlackChannelAllowlist } from "./shared.js";
+
+describe("createSlackPluginBase", () => {
+  it("owns Slack native command name overrides", () => {
+    const plugin = createSlackPluginBase({
+      setup: {} as never,
+      setupWizard: {} as never,
+    });
+
+    expect(
+      plugin.commands?.resolveNativeCommandName?.({
+        commandKey: "status",
+        defaultName: "status",
+      }),
+    ).toBe("agentstatus");
+    expect(
+      plugin.commands?.resolveNativeCommandName?.({
+        commandKey: "tts",
+        defaultName: "tts",
+      }),
+    ).toBe("tts");
+  });
+});
 
 describe("setSlackChannelAllowlist", () => {
   it("writes canonical enabled entries for setup-generated channel allowlists", () => {

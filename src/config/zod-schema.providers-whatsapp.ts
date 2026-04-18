@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
 import {
@@ -36,35 +37,43 @@ const WhatsAppAckReactionSchema = z
   .strict()
   .optional();
 
-const WhatsAppSharedSchema = z.object({
-  enabled: z.boolean().optional(),
-  capabilities: z.array(z.string()).optional(),
-  markdown: MarkdownConfigSchema,
-  configWrites: z.boolean().optional(),
-  sendReadReceipts: z.boolean().optional(),
-  messagePrefix: z.string().optional(),
-  responsePrefix: z.string().optional(),
-  dmPolicy: DmPolicySchema.optional().default("pairing"),
-  selfChatMode: z.boolean().optional(),
-  allowFrom: z.array(z.string()).optional(),
-  defaultTo: z.string().optional(),
-  groupAllowFrom: z.array(z.string()).optional(),
-  groupPolicy: GroupPolicySchema.optional().default("allowlist"),
-  contextVisibility: ContextVisibilityModeSchema.optional(),
-  historyLimit: z.number().int().min(0).optional(),
-  dmHistoryLimit: z.number().int().min(0).optional(),
-  dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
-  textChunkLimit: z.number().int().positive().optional(),
-  chunkMode: z.enum(["length", "newline"]).optional(),
-  blockStreaming: z.boolean().optional(),
-  blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
-  groups: WhatsAppGroupsSchema,
-  ackReaction: WhatsAppAckReactionSchema,
-  reactionLevel: z.enum(["off", "ack", "minimal", "extensive"]).optional(),
-  debounceMs: z.number().int().nonnegative().optional().default(0),
-  heartbeat: ChannelHeartbeatVisibilitySchema,
-  healthMonitor: ChannelHealthMonitorSchema,
-});
+function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
+  return {
+    enabled: z.boolean().optional(),
+    capabilities: z.array(z.string()).optional(),
+    markdown: MarkdownConfigSchema,
+    configWrites: z.boolean().optional(),
+    sendReadReceipts: z.boolean().optional(),
+    messagePrefix: z.string().optional(),
+    responsePrefix: z.string().optional(),
+    dmPolicy: params.useDefaults
+      ? DmPolicySchema.optional().default("pairing")
+      : DmPolicySchema.optional(),
+    selfChatMode: z.boolean().optional(),
+    allowFrom: z.array(z.string()).optional(),
+    defaultTo: z.string().optional(),
+    groupAllowFrom: z.array(z.string()).optional(),
+    groupPolicy: params.useDefaults
+      ? GroupPolicySchema.optional().default("allowlist")
+      : GroupPolicySchema.optional(),
+    contextVisibility: ContextVisibilityModeSchema.optional(),
+    historyLimit: z.number().int().min(0).optional(),
+    dmHistoryLimit: z.number().int().min(0).optional(),
+    dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
+    textChunkLimit: z.number().int().positive().optional(),
+    chunkMode: z.enum(["length", "newline"]).optional(),
+    blockStreaming: z.boolean().optional(),
+    blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    groups: WhatsAppGroupsSchema,
+    ackReaction: WhatsAppAckReactionSchema,
+    reactionLevel: z.enum(["off", "ack", "minimal", "extensive"]).optional(),
+    debounceMs: params.useDefaults
+      ? z.number().int().nonnegative().optional().default(0)
+      : z.number().int().nonnegative().optional(),
+    heartbeat: ChannelHeartbeatVisibilitySchema,
+    healthMonitor: ChannelHealthMonitorSchema,
+  };
+}
 
 function enforceOpenDmPolicyAllowFromStar(params: {
   dmPolicy: unknown;
@@ -108,29 +117,35 @@ function enforceAllowlistDmPolicyAllowFrom(params: {
   });
 }
 
-export const WhatsAppAccountSchema = WhatsAppSharedSchema.extend({
-  name: z.string().optional(),
-  enabled: z.boolean().optional(),
-  /** Override auth directory for this WhatsApp account (Baileys multi-file auth state). */
-  authDir: z.string().optional(),
-  mediaMaxMb: z.number().int().positive().optional(),
-}).strict();
+export const WhatsAppAccountSchema = z
+  .object({
+    ...buildWhatsAppCommonShape({ useDefaults: false }),
+    name: z.string().optional(),
+    enabled: z.boolean().optional(),
+    /** Override auth directory for this WhatsApp account (Baileys multi-file auth state). */
+    authDir: z.string().optional(),
+    mediaMaxMb: z.number().int().positive().optional(),
+  })
+  .strict();
 
-export const WhatsAppConfigSchema = WhatsAppSharedSchema.extend({
-  accounts: z.record(z.string(), WhatsAppAccountSchema.optional()).optional(),
-  defaultAccount: z.string().optional(),
-  mediaMaxMb: z.number().int().positive().optional().default(50),
-  actions: z
-    .object({
-      reactions: z.boolean().optional(),
-      sendMessage: z.boolean().optional(),
-      polls: z.boolean().optional(),
-    })
-    .strict()
-    .optional(),
-})
+export const WhatsAppConfigSchema = z
+  .object({
+    ...buildWhatsAppCommonShape({ useDefaults: true }),
+    accounts: z.record(z.string(), WhatsAppAccountSchema.optional()).optional(),
+    defaultAccount: z.string().optional(),
+    mediaMaxMb: z.number().int().positive().optional().default(50),
+    actions: z
+      .object({
+        reactions: z.boolean().optional(),
+        sendMessage: z.boolean().optional(),
+        polls: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+  })
   .strict()
   .superRefine((value, ctx) => {
+    const defaultAccount = resolveAccountEntry(value.accounts, "default");
     enforceOpenDmPolicyAllowFromStar({
       dmPolicy: value.dmPolicy,
       allowFrom: value.allowFrom,
@@ -152,8 +167,14 @@ export const WhatsAppConfigSchema = WhatsAppSharedSchema.extend({
       if (!account) {
         continue;
       }
-      const effectivePolicy = account.dmPolicy ?? value.dmPolicy;
-      const effectiveAllowFrom = account.allowFrom ?? value.allowFrom;
+      const effectivePolicy =
+        account.dmPolicy ??
+        (accountId === "default" ? undefined : defaultAccount?.dmPolicy) ??
+        value.dmPolicy;
+      const effectiveAllowFrom =
+        account.allowFrom ??
+        (accountId === "default" ? undefined : defaultAccount?.allowFrom) ??
+        value.allowFrom;
       enforceOpenDmPolicyAllowFromStar({
         dmPolicy: effectivePolicy,
         allowFrom: effectiveAllowFrom,

@@ -44,10 +44,7 @@ async function loadQrTerminal() {
   return mod.default ?? mod;
 }
 
-export async function writeCredsJsonAtomically(
-  authDir: string,
-  creds: unknown,
-): Promise<void> {
+export async function writeCredsJsonAtomically(authDir: string, creds: unknown): Promise<void> {
   const credsPath = resolveWebCredsPath(authDir);
   const tempPath = path.join(authDir, `.creds.${process.pid}.${Date.now()}.tmp`);
   try {

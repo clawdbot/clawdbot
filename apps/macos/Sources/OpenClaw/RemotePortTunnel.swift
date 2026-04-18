@@ -73,14 +73,12 @@ final class RemotePortTunnel {
         let options: [String] = [
             "-o", "BatchMode=yes",
             "-o", "ExitOnForwardFailure=yes",
-            "-o", "StrictHostKeyChecking=accept-new",
-            "-o", "UpdateHostKeys=yes",
             "-o", "ServerAliveInterval=15",
             "-o", "ServerAliveCountMax=3",
             "-o", "TCPKeepAlive=yes",
             "-N",
             "-L", "\(localPort):127.0.0.1:\(resolvedRemotePort)",
-        ]
+        ] + CommandResolver.strictHostKeyCheckingSSHOptions + CommandResolver.updateHostKeysSSHOptions
         let identity = settings.identity.trimmingCharacters(in: .whitespacesAndNewlines)
         let args = CommandResolver.sshArguments(
             target: parsed,

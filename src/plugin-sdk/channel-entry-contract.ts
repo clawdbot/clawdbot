@@ -4,7 +4,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { emptyChannelConfigSchema } from "../channels/plugins/config-schema.js";
 import type { ChannelConfigSchema } from "../channels/plugins/types.config.js";
+import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.core.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import {
   getCachedPluginJitiLoader,
@@ -47,6 +49,8 @@ type DefineBundledChannelSetupEntryOptions = {
   plugin: BundledEntryModuleRef;
   secrets?: BundledEntryModuleRef;
   runtime?: BundledEntryModuleRef;
+  legacyStateMigrations?: BundledEntryModuleRef;
+  legacySessionSurface?: BundledEntryModuleRef;
   features?: BundledChannelSetupEntryFeatures;
 };
 
@@ -58,6 +62,25 @@ export type BundledChannelSetupEntryFeatures = {
 export type BundledChannelEntryFeatures = {
   accountInspect?: boolean;
 };
+
+export type BundledChannelLegacySessionSurface = {
+  isLegacyGroupSessionKey?: (key: string) => boolean;
+  canonicalizeLegacySessionKey?: (params: {
+    key: string;
+    agentId: string;
+  }) => string | null | undefined;
+};
+
+export type BundledChannelLegacyStateMigrationDetector = (params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  stateDir: string;
+  oauthDir: string;
+}) =>
+  | ChannelLegacyStateMigrationPlan[]
+  | Promise<ChannelLegacyStateMigrationPlan[] | null | undefined>
+  | null
+  | undefined;
 
 export type BundledChannelEntryContract<TPlugin = ChannelPlugin> = {
   kind: "bundled-channel-entry";
@@ -77,6 +100,8 @@ export type BundledChannelSetupEntryContract<TPlugin = ChannelPlugin> = {
   kind: "bundled-channel-setup-entry";
   loadSetupPlugin: () => TPlugin;
   loadSetupSecrets?: () => ChannelPlugin["secrets"] | undefined;
+  loadLegacyStateMigrationDetector?: () => BundledChannelLegacyStateMigrationDetector;
+  loadLegacySessionSurface?: () => BundledChannelLegacySessionSurface;
   setChannelRuntime?: (runtime: PluginRuntime) => void;
   features?: BundledChannelSetupEntryFeatures;
 };
@@ -404,6 +429,8 @@ export function defineBundledChannelSetupEntry<TPlugin = ChannelPlugin>({
   plugin,
   secrets,
   runtime,
+  legacyStateMigrations,
+  legacySessionSurface,
   features,
 }: DefineBundledChannelSetupEntryOptions): BundledChannelSetupEntryContract<TPlugin> {
   // Bundled setup entries stay on a light path during setup-only/setup-runtime loads.
@@ -418,6 +445,20 @@ export function defineBundledChannelSetupEntry<TPlugin = ChannelPlugin>({
         setter(pluginRuntime);
       }
     : undefined;
+  const loadLegacyStateMigrationDetector = legacyStateMigrations
+    ? () =>
+        loadBundledEntryExportSync<BundledChannelLegacyStateMigrationDetector>(
+          importMetaUrl,
+          legacyStateMigrations,
+        )
+    : undefined;
+  const loadLegacySessionSurface = legacySessionSurface
+    ? () =>
+        loadBundledEntryExportSync<BundledChannelLegacySessionSurface>(
+          importMetaUrl,
+          legacySessionSurface,
+        )
+    : undefined;
   return {
     kind: "bundled-channel-setup-entry",
     loadSetupPlugin: () => loadBundledEntryExportSync<TPlugin>(importMetaUrl, plugin),
@@ -430,6 +471,8 @@ export function defineBundledChannelSetupEntry<TPlugin = ChannelPlugin>({
             ),
         }
       : {}),
+    ...(loadLegacyStateMigrationDetector ? { loadLegacyStateMigrationDetector } : {}),
+    ...(loadLegacySessionSurface ? { loadLegacySessionSurface } : {}),
     ...(setChannelRuntime ? { setChannelRuntime } : {}),
     ...(features ? { features } : {}),
   };

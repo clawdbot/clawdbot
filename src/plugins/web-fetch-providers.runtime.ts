@@ -6,6 +6,7 @@ import {
   resolveBundledWebFetchResolutionConfig,
   sortWebFetchProviders,
 } from "./web-fetch-providers.shared.js";
+import { resolveBundledWebFetchProvidersFromPublicArtifacts } from "./web-provider-public-artifacts.js";
 import {
   mapRegistryProviders,
   resolveManifestDeclaredWebProviderCandidatePluginIds,
@@ -71,6 +72,7 @@ export function resolvePluginWebFetchProviders(params: {
     resolveBundledResolutionConfig: resolveBundledWebFetchResolutionConfig,
     resolveCandidatePluginIds: resolveWebFetchCandidatePluginIds,
     mapRegistryProviders: mapRegistryWebFetchProviders,
+    resolveBundledPublicArtifactProviders: resolveBundledWebFetchProvidersFromPublicArtifacts,
   });
 }
 

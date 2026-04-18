@@ -13,9 +13,12 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./nostr-bus.js", () => ({
   DEFAULT_RELAYS: ["wss://relay.example.com"],
+  startNostrBus: mocks.startNostrBus,
+}));
+
+vi.mock("./nostr-key-utils.js", () => ({
   getPublicKeyFromPrivate: vi.fn(() => "pubkey"),
   normalizePubkey: mocks.normalizePubkey,
-  startNostrBus: mocks.startNostrBus,
 }));
 
 function createCfg() {

@@ -10,6 +10,12 @@ const QA_ALWAYS_STAGE_RUNTIME_PLUGIN_IDS = Object.freeze([
 ]);
 const QA_OPENAI_PLUGIN_ID = "openai";
 const QA_BUNDLED_PLUGIN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const QA_CLI_METADATA_ENTRY_BASENAMES = Object.freeze([
+  "cli-metadata.ts",
+  "cli-metadata.js",
+  "cli-metadata.mjs",
+  "cli-metadata.cjs",
+]);
 
 function assertSafeQaBundledPluginId(pluginId: string) {
   if (!QA_BUNDLED_PLUGIN_ID_PATTERN.test(pluginId)) {
@@ -69,12 +75,17 @@ export function resolveQaBundledPluginSourceDir(params: { repoRoot: string; plug
     path.join(params.repoRoot, "dist-runtime", "extensions", params.pluginId),
     path.join(params.repoRoot, "extensions", params.pluginId),
   ];
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) {
-      return candidate;
-    }
+  const existingCandidates = candidates.filter((candidate) => existsSync(candidate));
+  if (existingCandidates.length === 0) {
+    return null;
   }
-  return null;
+  const cliMetadataCandidate = existingCandidates.find((candidate) =>
+    QA_CLI_METADATA_ENTRY_BASENAMES.some((basename) => existsSync(path.join(candidate, basename))),
+  );
+  if (cliMetadataCandidate) {
+    return cliMetadataCandidate;
+  }
+  return existingCandidates[0] ?? null;
 }
 
 function resolveQaBundledPluginScanRoots(repoRoot: string) {

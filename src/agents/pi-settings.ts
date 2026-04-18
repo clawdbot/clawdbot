@@ -1,9 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngineInfo } from "../context-engine/types.js";
-import {
-  MIN_PROMPT_BUDGET_RATIO,
-  MIN_PROMPT_BUDGET_TOKENS,
-} from "./pi-compaction-constants.js";
+import { MIN_PROMPT_BUDGET_RATIO, MIN_PROMPT_BUDGET_TOKENS } from "./pi-compaction-constants.js";
 
 export const DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR = 20_000;
 

@@ -263,6 +263,22 @@ export async function isWorkspaceSetupCompleted(dir: string): Promise<boolean> {
   return typeof state.setupCompletedAt === "string" && state.setupCompletedAt.trim().length > 0;
 }
 
+export async function resolveWorkspaceBootstrapStatus(
+  dir: string,
+): Promise<"pending" | "complete"> {
+  const resolvedDir = resolveUserPath(dir);
+  const state = await readWorkspaceSetupStateForDir(resolvedDir);
+  if (typeof state.setupCompletedAt === "string" && state.setupCompletedAt.trim().length > 0) {
+    return "complete";
+  }
+  const bootstrapExists = await fileExists(path.join(resolvedDir, DEFAULT_BOOTSTRAP_FILENAME));
+  return bootstrapExists ? "pending" : "complete";
+}
+
+export async function isWorkspaceBootstrapPending(dir: string): Promise<boolean> {
+  return (await resolveWorkspaceBootstrapStatus(dir)) === "pending";
+}
+
 async function writeWorkspaceSetupState(
   statePath: string,
   state: WorkspaceSetupState,

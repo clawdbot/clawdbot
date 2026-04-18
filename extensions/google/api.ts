@@ -2,11 +2,8 @@ import {
   resolveProviderHttpRequestConfig,
   type ProviderRequestTransportOverrides,
 } from "openclaw/plugin-sdk/provider-http";
-import {
-  applyAgentDefaultModelPrimary,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/provider-onboard";
 import { parseGoogleOauthApiKey } from "./oauth-token-shared.js";
+export { applyGoogleGeminiModelDefault, GOOGLE_GEMINI_DEFAULT_MODEL } from "./onboard.js";
 import {
   DEFAULT_GOOGLE_API_BASE_URL,
   normalizeGoogleApiBaseUrl,
@@ -24,6 +21,8 @@ export {
   shouldNormalizeGoogleGenerativeAiProviderConfig,
   shouldNormalizeGoogleProviderConfig,
 } from "./provider-policy.js";
+export { buildGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
+export { buildGoogleProvider } from "./provider-registration.js";
 
 export function parseGeminiAuth(apiKey: string): { headers: Record<string, string> } {
   const parsed = apiKey.startsWith("{") ? parseGoogleOauthApiKey(apiKey) : null;
@@ -87,28 +86,4 @@ export function resolveGoogleGenerativeAiHttpRequestConfig(params: {
     capability: params.capability,
     transport: params.transport,
   });
-}
-
-export const GOOGLE_GEMINI_DEFAULT_MODEL = "google/gemini-3.1-pro-preview";
-
-export function applyGoogleGeminiModelDefault(cfg: OpenClawConfig): {
-  next: OpenClawConfig;
-  changed: boolean;
-} {
-  const current = cfg.agents?.defaults?.model as unknown;
-  const currentPrimary =
-    typeof current === "string"
-      ? current.trim() || undefined
-      : current &&
-          typeof current === "object" &&
-          typeof (current as { primary?: unknown }).primary === "string"
-        ? ((current as { primary: string }).primary || "").trim() || undefined
-        : undefined;
-  if (currentPrimary === GOOGLE_GEMINI_DEFAULT_MODEL) {
-    return { next: cfg, changed: false };
-  }
-  return {
-    next: applyAgentDefaultModelPrimary(cfg, GOOGLE_GEMINI_DEFAULT_MODEL),
-    changed: true,
-  };
 }

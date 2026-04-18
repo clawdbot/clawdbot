@@ -689,6 +689,7 @@ export function resolvePluginSetupAutoEnableReasons(params: {
   config: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  pluginIds?: readonly string[];
 }): SetupAutoEnableReason[] {
   const env = params.env ?? process.env;
   const reasons: SetupAutoEnableReason[] = [];
@@ -697,6 +698,7 @@ export function resolvePluginSetupAutoEnableReasons(params: {
   for (const entry of resolvePluginSetupRegistry({
     workspaceDir: params.workspaceDir,
     env,
+    pluginIds: params.pluginIds,
   }).autoEnableProbes) {
     const raw = entry.probe({
       config: params.config,

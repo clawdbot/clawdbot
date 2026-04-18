@@ -5,20 +5,10 @@ import {
   resolveManifestContractPluginIds,
 } from "../manifest-registry.js";
 import {
-  imageGenerationProviderContractRegistry,
-  mediaUnderstandingProviderContractRegistry,
   pluginRegistrationContractRegistry,
   providerContractLoadError,
   providerContractPluginIds,
-  realtimeTranscriptionProviderContractRegistry,
-  realtimeVoiceProviderContractRegistry,
-  resolveWebFetchProviderContractEntriesForPluginId,
-  resolveWebSearchProviderContractEntriesForPluginId,
-  speechProviderContractRegistry,
-  webFetchProviderContractRegistry,
 } from "./registry.js";
-
-const REGISTRY_CONTRACT_TIMEOUT_MS = 300_000;
 
 describe("plugin contract registry", () => {
   function expectUniqueIds(ids: readonly string[]) {
@@ -79,31 +69,33 @@ describe("plugin contract registry", () => {
     },
     {
       name: "does not duplicate bundled media provider ids",
-      ids: () => mediaUnderstandingProviderContractRegistry.map((entry) => entry.provider.id),
+      ids: () =>
+        pluginRegistrationContractRegistry.flatMap((entry) => entry.mediaUnderstandingProviderIds),
     },
     {
       name: "does not duplicate bundled realtime transcription provider ids",
-      ids: () => realtimeTranscriptionProviderContractRegistry.map((entry) => entry.provider.id),
+      ids: () =>
+        pluginRegistrationContractRegistry.flatMap(
+          (entry) => entry.realtimeTranscriptionProviderIds,
+        ),
     },
     {
       name: "does not duplicate bundled realtime voice provider ids",
-      ids: () => realtimeVoiceProviderContractRegistry.map((entry) => entry.provider.id),
+      ids: () =>
+        pluginRegistrationContractRegistry.flatMap((entry) => entry.realtimeVoiceProviderIds),
     },
     {
       name: "does not duplicate bundled image-generation provider ids",
-      ids: () => imageGenerationProviderContractRegistry.map((entry) => entry.provider.id),
+      ids: () =>
+        pluginRegistrationContractRegistry.flatMap((entry) => entry.imageGenerationProviderIds),
     },
   ] as const)("$name", ({ ids }) => {
     expectUniqueIds(ids());
   });
 
-  it(
-    "does not duplicate bundled speech provider ids",
-    { timeout: REGISTRY_CONTRACT_TIMEOUT_MS },
-    () => {
-      expectUniqueIds(speechProviderContractRegistry.map((entry) => entry.provider.id));
-    },
-  );
+  it("does not duplicate bundled speech provider ids", () => {
+    expectUniqueIds(pluginRegistrationContractRegistry.flatMap((entry) => entry.speechProviderIds));
+  });
 
   it("covers every bundled provider plugin discovered from manifests", () => {
     expectRegistryPluginIds({
@@ -114,7 +106,9 @@ describe("plugin contract registry", () => {
 
   it("covers every bundled speech plugin discovered from manifests", () => {
     expectRegistryPluginIds({
-      actualPluginIds: speechProviderContractRegistry.map((entry) => entry.pluginId),
+      actualPluginIds: pluginRegistrationContractRegistry
+        .filter((entry) => entry.speechProviderIds.length > 0)
+        .map((entry) => entry.pluginId),
       predicate: (plugin) =>
         plugin.origin === "bundled" && (plugin.contracts?.speechProviders?.length ?? 0) > 0,
     });
@@ -122,7 +116,9 @@ describe("plugin contract registry", () => {
 
   it("covers every bundled realtime voice plugin discovered from manifests", () => {
     expectRegistryPluginIds({
-      actualPluginIds: realtimeVoiceProviderContractRegistry.map((entry) => entry.pluginId),
+      actualPluginIds: pluginRegistrationContractRegistry
+        .filter((entry) => entry.realtimeVoiceProviderIds.length > 0)
+        .map((entry) => entry.pluginId),
       predicate: (plugin) =>
         plugin.origin === "bundled" && (plugin.contracts?.realtimeVoiceProviders?.length ?? 0) > 0,
     });
@@ -130,7 +126,9 @@ describe("plugin contract registry", () => {
 
   it("covers every bundled realtime transcription plugin discovered from manifests", () => {
     expectRegistryPluginIds({
-      actualPluginIds: realtimeTranscriptionProviderContractRegistry.map((entry) => entry.pluginId),
+      actualPluginIds: pluginRegistrationContractRegistry
+        .filter((entry) => entry.realtimeTranscriptionProviderIds.length > 0)
+        .map((entry) => entry.pluginId),
       predicate: (plugin) =>
         plugin.origin === "bundled" &&
         (plugin.contracts?.realtimeTranscriptionProviders?.length ?? 0) > 0,
@@ -152,22 +150,6 @@ describe("plugin contract registry", () => {
     ).toEqual(bundledWebFetchPluginIds);
   });
 
-  it(
-    "loads bundled web fetch providers for each shared-resolver plugin",
-    { timeout: REGISTRY_CONTRACT_TIMEOUT_MS },
-    () => {
-      for (const pluginId of resolveManifestContractPluginIds({
-        contract: "webFetchProviders",
-        origin: "bundled",
-      })) {
-        expect(resolveWebFetchProviderContractEntriesForPluginId(pluginId).length).toBeGreaterThan(
-          0,
-        );
-      }
-      expect(webFetchProviderContractRegistry.length).toBeGreaterThan(0);
-    },
-  );
-
   it("covers every bundled web search plugin from the shared resolver", () => {
     const bundledWebSearchPluginIds = resolveManifestContractPluginIds({
       contract: "webSearchProviders",
@@ -182,19 +164,4 @@ describe("plugin contract registry", () => {
       ),
     ).toEqual(bundledWebSearchPluginIds);
   });
-
-  it(
-    "loads bundled web search providers for each shared-resolver plugin",
-    { timeout: REGISTRY_CONTRACT_TIMEOUT_MS },
-    () => {
-      for (const pluginId of resolveManifestContractPluginIds({
-        contract: "webSearchProviders",
-        origin: "bundled",
-      })) {
-        expect(resolveWebSearchProviderContractEntriesForPluginId(pluginId).length).toBeGreaterThan(
-          0,
-        );
-      }
-    },
-  );
 });

@@ -1,13 +1,10 @@
+import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { md, toSanitizedMarkdownHtml } from "./markdown.ts";
+import { renderMarkdownSidebar } from "./views/markdown-sidebar.ts";
 
 describe("toSanitizedMarkdownHtml", () => {
   // ── Original tests from before markdown-it migration ──
-  it("renders basic markdown", () => {
-    const html = toSanitizedMarkdownHtml("Hello **world**");
-    expect(html).toContain("<strong>world</strong>");
-  });
-
   it("strips scripts and unsafe links", () => {
     const html = toSanitizedMarkdownHtml(
       [
@@ -21,146 +18,6 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(html).not.toContain("<script");
     expect(html).not.toContain("javascript:");
     expect(html).toContain("https://example.com");
-  });
-
-  it("renders fenced code blocks", () => {
-    const html = toSanitizedMarkdownHtml(["```ts", "console.log(1)", "```"].join("\n"));
-    expect(html).toContain("<pre>");
-    expect(html).toContain("<code");
-    expect(html).toContain("console.log(1)");
-  });
-
-  it("flattens remote markdown images into alt text", () => {
-    const html = toSanitizedMarkdownHtml("![Alt text](https://example.com/image.png)");
-    expect(html).not.toContain("<img");
-    expect(html).toContain("Alt text");
-  });
-
-  it("preserves base64 data URI images (#15437)", () => {
-    const html = toSanitizedMarkdownHtml("![Chart](data:image/png;base64,iVBORw0KGgo=)");
-    expect(html).toContain("<img");
-    expect(html).toContain('class="markdown-inline-image"');
-    expect(html).toContain("data:image/png;base64,");
-  });
-
-  it("flattens non-data markdown image urls", () => {
-    const html = toSanitizedMarkdownHtml("![X](javascript:alert(1))");
-    expect(html).not.toContain("<img");
-    expect(html).not.toContain("javascript:");
-    expect(html).toContain("X");
-  });
-
-  it("uses a plain fallback label for unlabeled markdown images", () => {
-    const html = toSanitizedMarkdownHtml("![](https://example.com/image.png)");
-    expect(html).not.toContain("<img");
-    expect(html).toContain("image");
-  });
-
-  it("renders GFM markdown tables (#20410)", () => {
-    const md = [
-      "| Feature | Status |",
-      "|---------|--------|",
-      "| Tables  | ✅     |",
-      "| Borders | ✅     |",
-    ].join("\n");
-    const html = toSanitizedMarkdownHtml(md);
-    expect(html).toContain("<table");
-    expect(html).toContain("<thead");
-    expect(html).toContain("<th>");
-    expect(html).toContain("Feature");
-    expect(html).toContain("Tables");
-    expect(html).not.toContain("|---------|");
-  });
-
-  it("renders GFM tables surrounded by text (#20410)", () => {
-    const md = [
-      "Text before.",
-      "",
-      "| Col1 | Col2 |",
-      "|------|------|",
-      "| A    | B    |",
-      "",
-      "Text after.",
-    ].join("\n");
-    const html = toSanitizedMarkdownHtml(md);
-    expect(html).toContain("<table");
-    expect(html).toContain("Col1");
-    expect(html).toContain("Col2");
-    // Pipes from table delimiters must not appear as raw text
-    expect(html).not.toContain("|------|");
-  });
-
-  it("does not throw on deeply nested emphasis markers (#36213)", () => {
-    // Pathological patterns that can trigger catastrophic backtracking / recursion
-    const nested = "*".repeat(500) + "text" + "*".repeat(500);
-    expect(() => toSanitizedMarkdownHtml(nested)).not.toThrow();
-    const html = toSanitizedMarkdownHtml(nested);
-    expect(html).toContain("text");
-  });
-
-  it("does not throw on deeply nested brackets (#36213)", () => {
-    const nested = "[".repeat(200) + "link" + "]".repeat(200) + "(" + "x".repeat(200) + ")";
-    expect(() => toSanitizedMarkdownHtml(nested)).not.toThrow();
-    const html = toSanitizedMarkdownHtml(nested);
-    expect(html).toContain("link");
-  });
-
-  it("keeps oversized plain-text replies readable instead of forcing code-block chrome", () => {
-    const input =
-      Array.from(
-        { length: 320 },
-        (_, i) => `Paragraph ${i + 1}: ${"Long plain-text reply. ".repeat(8)}`,
-      ).join("\n\n") + "\n";
-
-    const html = toSanitizedMarkdownHtml(input);
-
-    expect(html).not.toContain('<pre class="code-block">');
-    expect(html).toContain('class="markdown-plain-text-fallback"');
-    expect(html).toContain("Paragraph 1:");
-    expect(html).toContain("Paragraph 320:");
-  });
-
-  it("preserves indentation in oversized plain-text replies", () => {
-    const input = `${"Header line\n".repeat(5000)}\n    indented log line\n        deeper indent`;
-    const html = toSanitizedMarkdownHtml(input);
-
-    expect(html).toContain('class="markdown-plain-text-fallback"');
-    expect(html).toContain("    indented log line");
-    expect(html).toContain("        deeper indent");
-  });
-
-  it("exercises the cached oversized fallback branch", () => {
-    const input =
-      Array.from(
-        { length: 240 },
-        (_, i) => `Paragraph ${i + 1}: ${"Cacheable long reply. ".repeat(8)}`,
-      ).join("\n\n") + "\n";
-
-    expect(input.length).toBeGreaterThan(40_000);
-    expect(input.length).toBeLessThan(50_000);
-
-    const first = toSanitizedMarkdownHtml(input);
-    const second = toSanitizedMarkdownHtml(input);
-
-    expect(first).toContain('class="markdown-plain-text-fallback"');
-    expect(second).toBe(first);
-  });
-
-  it("falls back to escaped plain text if md.render throws (#36213)", () => {
-    const renderSpy = vi.spyOn(md, "render").mockImplementation(() => {
-      throw new Error("forced render failure");
-    });
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const input = `Fallback **probe** ${Date.now()}`;
-    try {
-      const html = toSanitizedMarkdownHtml(input);
-      expect(html).toContain('<pre class="code-block">');
-      expect(html).toContain("Fallback **probe**");
-      expect(warnSpy).toHaveBeenCalledOnce();
-    } finally {
-      renderSpy.mockRestore();
-      warnSpy.mockRestore();
-    }
   });
 
   // ── Additional tests for markdown-it migration ──
@@ -474,11 +331,22 @@ describe("toSanitizedMarkdownHtml", () => {
       expect(html).toContain("<s>deleted</s>");
     });
 
-    it("renders tables", () => {
-      const md = "| A | B |\n|---|---|\n| 1 | 2 |";
+    it("renders tables surrounded by text", () => {
+      const md = [
+        "Text before.",
+        "",
+        "| A | B |",
+        "|---|---|",
+        "| 1 | 2 |",
+        "",
+        "Text after.",
+      ].join("\n");
       const html = toSanitizedMarkdownHtml(md);
       expect(html).toContain("<table");
       expect(html).toContain("<th>");
+      expect(html).toContain("Text before.");
+      expect(html).toContain("Text after.");
+      expect(html).not.toContain("|---|");
     });
 
     it("renders basic markdown", () => {
@@ -558,8 +426,10 @@ describe("toSanitizedMarkdownHtml", () => {
   describe("ReDoS protection", () => {
     it("does not throw on deeply nested emphasis markers (#36213)", () => {
       const nested = "*".repeat(500) + "text" + "*".repeat(500);
-      expect(() => toSanitizedMarkdownHtml(nested)).not.toThrow();
-      const html = toSanitizedMarkdownHtml(nested);
+      let html = "";
+      expect(() => {
+        html = toSanitizedMarkdownHtml(nested);
+      }).not.toThrow();
       expect(html).toContain("text");
     });
 
@@ -601,7 +471,7 @@ describe("toSanitizedMarkdownHtml", () => {
     it("uses plain text fallback for oversized content", () => {
       // MARKDOWN_PARSE_LIMIT is 40_000 chars
       const input = Array.from(
-        { length: 320 },
+        { length: 220 },
         (_, i) => `Paragraph ${i + 1}: ${"Long plain-text reply. ".repeat(8)}`,
       ).join("\n\n");
       const html = toSanitizedMarkdownHtml(input);
@@ -609,7 +479,7 @@ describe("toSanitizedMarkdownHtml", () => {
     });
 
     it("preserves indentation in plain text fallback", () => {
-      const input = `${"Header line\n".repeat(5000)}\n    indented log line\n        deeper indent`;
+      const input = `${"Header line\n".repeat(3400)}\n    indented log line\n        deeper indent`;
       const html = toSanitizedMarkdownHtml(input);
       expect(html).toContain('class="markdown-plain-text-fallback"');
       expect(html).toContain("    indented log line");
@@ -617,9 +487,12 @@ describe("toSanitizedMarkdownHtml", () => {
     });
 
     it("caches oversized fallback results", () => {
-      const input = Array.from({ length: 240 }, (_, i) => `P${i}`).join("\n\n") + "x".repeat(35000);
+      const input =
+        Array.from({ length: 240 }, (_, i) => `P${i}`).join("\n\n") + "x".repeat(45_000);
       const first = toSanitizedMarkdownHtml(input);
       const second = toSanitizedMarkdownHtml(input);
+      expect(input.length).toBeGreaterThan(40_000);
+      expect(first).toContain('class="markdown-plain-text-fallback"');
       expect(second).toBe(first);
     });
 
@@ -637,5 +510,23 @@ describe("toSanitizedMarkdownHtml", () => {
         warnSpy.mockRestore();
       }
     });
+  });
+});
+
+describe("renderMarkdownSidebar", () => {
+  it("renders sanitized markdown content", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderMarkdownSidebar({
+        content: { kind: "markdown", content: "Hello **world**" },
+        error: null,
+        onClose: () => undefined,
+        onViewRawText: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".sidebar-markdown strong")?.textContent).toBe("world");
   });
 });

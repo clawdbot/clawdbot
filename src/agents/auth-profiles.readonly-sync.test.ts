@@ -5,37 +5,34 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 
-const mocks = vi.hoisted(() => ({
-  syncExternalCliCredentials: vi.fn((store: AuthProfileStore) => {
-    store.profiles["minimax-portal:default"] = {
-      type: "oauth",
+const resolveExternalAuthProfilesWithPluginsMock = vi.fn(() => [
+  {
+    profileId: "minimax-portal:default",
+    credential: {
+      type: "oauth" as const,
       provider: "minimax-portal",
       access: "access-token",
       refresh: "refresh-token",
       expires: Date.now() + 60_000,
-    };
-    return true;
-  }),
-}));
-
-vi.mock("./auth-profiles/external-cli-sync.js", () => ({
-  syncExternalCliCredentials: mocks.syncExternalCliCredentials,
-}));
+    },
+    persistence: "runtime-only" as const,
+  },
+]);
 
 vi.mock("../plugins/provider-runtime.js", () => ({
-  resolveExternalAuthProfilesWithPlugins: () => [],
+  resolveExternalAuthProfilesWithPlugins: resolveExternalAuthProfilesWithPluginsMock,
 }));
 
 let clearRuntimeAuthProfileStoreSnapshots: typeof import("./auth-profiles.js").clearRuntimeAuthProfileStoreSnapshots;
 let loadAuthProfileStoreForRuntime: typeof import("./auth-profiles.js").loadAuthProfileStoreForRuntime;
 
-describe("auth profiles read-only external CLI sync", () => {
+describe("auth profiles read-only external auth overlay", () => {
   beforeEach(async () => {
     vi.resetModules();
     ({ clearRuntimeAuthProfileStoreSnapshots, loadAuthProfileStoreForRuntime } =
       await import("./auth-profiles.js"));
     clearRuntimeAuthProfileStoreSnapshots();
-    mocks.syncExternalCliCredentials.mockClear();
+    resolveExternalAuthProfilesWithPluginsMock.mockClear();
   });
 
   afterEach(() => {
@@ -43,7 +40,7 @@ describe("auth profiles read-only external CLI sync", () => {
     vi.clearAllMocks();
   });
 
-  it("syncs external CLI credentials in-memory without writing auth-profiles.json in read-only mode", () => {
+  it("overlays runtime-only external auth without writing auth-profiles.json in read-only mode", () => {
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-readonly-sync-"));
     try {
       const authPath = path.join(agentDir, "auth-profiles.json");
@@ -61,10 +58,7 @@ describe("auth profiles read-only external CLI sync", () => {
 
       const loaded = loadAuthProfileStoreForRuntime(agentDir, { readOnly: true });
 
-      expect(mocks.syncExternalCliCredentials).toHaveBeenCalledWith(
-        expect.any(Object),
-        expect.objectContaining({ log: false }),
-      );
+      expect(resolveExternalAuthProfilesWithPluginsMock).toHaveBeenCalled();
       expect(loaded.profiles["minimax-portal:default"]).toMatchObject({
         type: "oauth",
         provider: "minimax-portal",

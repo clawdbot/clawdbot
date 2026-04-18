@@ -48,7 +48,9 @@ describe("buildWorkspaceSkillsPrompt — .agents/skills/ directories", () => {
       await Promise.all(
         tempDirs
           .splice(0, tempDirs.length)
-          .map((dir) => fs.rm(dir, { recursive: true, force: true })),
+          .map((dir) =>
+            fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }),
+          ),
       );
     });
   });

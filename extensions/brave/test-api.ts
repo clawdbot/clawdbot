@@ -1,1 +1,13 @@
-export { __testing } from "./src/brave-web-search-provider.js";
+import {
+  mapBraveLlmContextResults,
+  normalizeBraveCountry,
+  normalizeBraveLanguageParams,
+  resolveBraveMode,
+} from "./src/brave-web-search-provider.shared.js";
+
+export const __testing = {
+  normalizeBraveCountry,
+  normalizeBraveLanguageParams,
+  resolveBraveMode,
+  mapBraveLlmContextResults,
+} as const;

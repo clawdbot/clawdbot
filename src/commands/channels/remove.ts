@@ -9,7 +9,6 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-ke
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
-import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
 import {
   type ChatChannel,
   channelLabel,
@@ -101,15 +100,20 @@ export async function channelsRemoveCommand(
     }
   }
 
-  const resolvedPluginState =
-    !useWizard && rawChannel
-      ? await resolveInstallableChannelPlugin({
+  const shouldResolveInstallablePlugin =
+    !useWizard && rawChannel && (!channel || !getChannelPlugin(channel));
+  const resolvedPluginState = shouldResolveInstallablePlugin
+    ? await (async () => {
+        const { resolveInstallableChannelPlugin } =
+          await import("../channel-setup/channel-plugin-resolution.js");
+        return await resolveInstallableChannelPlugin({
           cfg,
           runtime,
           rawChannel,
           allowInstall: true,
-        })
-      : null;
+        });
+      })()
+    : null;
   if (resolvedPluginState?.configChanged) {
     cfg = resolvedPluginState.cfg;
   }

@@ -10,8 +10,10 @@ import {
   buildAfterTurnRuntimeContextFromUsage,
   composeSystemPromptWithHookContext,
   decodeHtmlEntitiesInObject,
+  isPrimaryBootstrapRun,
   mergeOrphanedTrailingUserPrompt,
   prependSystemPromptAddition,
+  remapInjectedContextFilesToWorkspace,
   resetEmbeddedAgentBaseStreamFnCacheForTest,
   resolveEmbeddedAgentBaseStreamFn,
   resolveAttemptFsWorkspaceOnly,
@@ -19,6 +21,7 @@ import {
   resolveUnknownToolGuardThreshold,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
+  shouldStripBootstrapFromEmbeddedContext,
   shouldWarnOnOrphanedUserRepair,
   wrapStreamFnRepairMalformedToolCallArguments,
   wrapStreamFnSanitizeMalformedToolCalls,
@@ -217,6 +220,63 @@ describe("resolvePromptModeForSession", () => {
     expect(resolvePromptModeForSession(undefined)).toBe("full");
     expect(resolvePromptModeForSession("agent:main")).toBe("full");
     expect(resolvePromptModeForSession("agent:main:thread:abc")).toBe("full");
+  });
+});
+
+describe("shouldStripBootstrapFromEmbeddedContext", () => {
+  it("never injects raw BOOTSTRAP.md into embedded system context", () => {
+    expect(shouldStripBootstrapFromEmbeddedContext({ bootstrapMode: "full" })).toBe(true);
+    expect(shouldStripBootstrapFromEmbeddedContext({ bootstrapMode: "limited" })).toBe(true);
+    expect(shouldStripBootstrapFromEmbeddedContext({ bootstrapMode: "none" })).toBe(true);
+  });
+});
+
+describe("isPrimaryBootstrapRun", () => {
+  it("treats regular sessions as primary bootstrap runs", () => {
+    expect(isPrimaryBootstrapRun("agent:main:main")).toBe(true);
+  });
+
+  it("suppresses bootstrap ownership for subagent and ACP/helper sessions", () => {
+    expect(isPrimaryBootstrapRun("agent:main:subagent:worker")).toBe(false);
+    expect(isPrimaryBootstrapRun("agent:main:acp:worker")).toBe(false);
+  });
+});
+
+describe("remapInjectedContextFilesToWorkspace", () => {
+  it("rewrites injected file paths onto the effective workspace when the tool root changes", () => {
+    expect(
+      remapInjectedContextFilesToWorkspace({
+        files: [
+          {
+            path: "/real/workspace/AGENTS.md",
+            content: "agents",
+          },
+          {
+            path: "/real/workspace/nested/TOOLS.md",
+            content: "tools",
+          },
+          {
+            path: "/outside/README.md",
+            content: "outside",
+          },
+        ],
+        sourceWorkspaceDir: "/real/workspace",
+        targetWorkspaceDir: "/sandbox/workspace",
+      }),
+    ).toEqual([
+      {
+        path: "/sandbox/workspace/AGENTS.md",
+        content: "agents",
+      },
+      {
+        path: "/sandbox/workspace/nested/TOOLS.md",
+        content: "tools",
+      },
+      {
+        path: "/outside/README.md",
+        content: "outside",
+      },
+    ]);
   });
 });
 

@@ -60,16 +60,16 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const compactionsThisRun = Math.max(0, result.meta.agentMeta?.compactionCount ?? 0);
   const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
   const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider;
-  const { resolveContextTokensForModel } = await getContextModule();
   const contextTokens =
-    resolveContextTokensForModel({
-      cfg,
-      provider: providerUsed,
-      model: modelUsed,
-      contextTokensOverride: params.contextTokensOverride,
-      fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
-      allowAsyncLoad: false,
-    }) ?? DEFAULT_CONTEXT_TOKENS;
+    typeof params.contextTokensOverride === "number" && params.contextTokensOverride > 0
+      ? params.contextTokensOverride
+      : ((await getContextModule()).resolveContextTokensForModel({
+          cfg,
+          provider: providerUsed,
+          model: modelUsed,
+          fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+          allowAsyncLoad: false,
+        }) ?? DEFAULT_CONTEXT_TOKENS);
 
   const entry = sessionStore[sessionKey] ?? {
     sessionId,

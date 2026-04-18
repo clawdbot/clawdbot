@@ -485,6 +485,16 @@ describe("runWithModelFallback", () => {
     });
   });
 
+  it("falls back on bare leading 402 quota-refresh errors", async () => {
+    await expectFallsBackToHaiku({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      firstError: new Error(
+        "402 You have reached your subscription quota limit. Please wait for automatic quota refresh in the rolling time window, upgrade to a higher plan, or use a Pay-As-You-Go API Key for unlimited access.",
+      ),
+    });
+  });
+
   it("records 400 insufficient_quota payloads as billing during fallback", async () => {
     const cfg = makeCfg();
     const run = vi

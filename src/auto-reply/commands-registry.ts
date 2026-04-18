@@ -1,7 +1,7 @@
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import type { SkillCommandSpec } from "../agents/skills.js";
-import { getChannelPlugin } from "../channels/plugins/index.js";
+import { getChannelPlugin, getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/types.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -55,15 +55,27 @@ export type {
   ShouldHandleTextCommandsParams,
 } from "./commands-registry.types.js";
 
-function resolveNativeName(command: ChatCommandDefinition, provider?: string): string | undefined {
+type NativeCommandProviderLookupOptions = {
+  includeBundledChannelFallback?: boolean;
+};
+
+function resolveNativeName(
+  command: ChatCommandDefinition,
+  provider?: string,
+  options?: NativeCommandProviderLookupOptions,
+): string | undefined {
   if (!command.nativeName) {
     return undefined;
   }
   if (!provider) {
     return command.nativeName;
   }
+  const channelPlugin =
+    options?.includeBundledChannelFallback === false
+      ? getLoadedChannelPlugin(provider)
+      : getChannelPlugin(provider);
   return (
-    getChannelPlugin(provider)?.commands?.resolveNativeCommandName?.({
+    channelPlugin?.commands?.resolveNativeCommandName?.({
       commandKey: command.key,
       defaultName: command.nativeName,
     }) ?? command.nativeName
@@ -108,6 +120,7 @@ export function listNativeCommandSpecsForConfig(
 export function findCommandByNativeName(
   name: string,
   provider?: string,
+  options?: NativeCommandProviderLookupOptions,
 ): ChatCommandDefinition | undefined {
   const normalized = normalizeOptionalLowercaseString(name);
   if (!normalized) {
@@ -116,7 +129,8 @@ export function findCommandByNativeName(
   return getChatCommands().find(
     (command) =>
       command.scope !== "text" &&
-      normalizeOptionalLowercaseString(resolveNativeName(command, provider)) === normalized,
+      normalizeOptionalLowercaseString(resolveNativeName(command, provider, options)) ===
+        normalized,
   );
 }
 

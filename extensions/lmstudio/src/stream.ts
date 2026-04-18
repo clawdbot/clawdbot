@@ -241,10 +241,7 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
           };
           const cause = annotated.cause ?? error;
           const failures = annotated.consecutiveFailures ?? 1;
-          const cooldownSec = Math.max(
-            0,
-            Math.round((annotated.cooldownMs ?? 0) / 1000),
-          );
+          const cooldownSec = Math.max(0, Math.round((annotated.cooldownMs ?? 0) / 1000));
           log.warn(
             `LM Studio inference preload failed for "${modelKey}" (${failures} consecutive failure${
               failures === 1 ? "" : "s"

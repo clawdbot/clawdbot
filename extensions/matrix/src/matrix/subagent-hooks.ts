@@ -4,7 +4,7 @@ import {
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { findMatrixAccountConfig, resolveMatrixBaseConfig } from "./account-config.js";
 import { resolveMatrixTargetIdentity } from "./target-ids.js";
 import {

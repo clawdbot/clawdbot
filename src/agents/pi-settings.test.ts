@@ -1,8 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  MIN_PROMPT_BUDGET_RATIO,
-  MIN_PROMPT_BUDGET_TOKENS,
-} from "./pi-compaction-constants.js";
+import { MIN_PROMPT_BUDGET_RATIO, MIN_PROMPT_BUDGET_TOKENS } from "./pi-compaction-constants.js";
 import {
   applyPiCompactionSettingsFromConfig,
   DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR,

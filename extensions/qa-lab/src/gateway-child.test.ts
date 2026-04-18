@@ -268,38 +268,41 @@ describe("buildQaRuntimeEnv", () => {
     expect(env.CODEX_HOME).toBe("/custom/codex-home");
   });
 
-  it("scrubs direct and live provider keys in mock mode", () => {
-    const env = buildQaRuntimeEnv({
-      ...createParams({
-        ANTHROPIC_API_KEY: "anthropic-live",
-        ANTHROPIC_OAUTH_TOKEN: "anthropic-oauth",
-        GEMINI_API_KEY: "gemini-live",
-        GEMINI_API_KEYS: "gemini-a gemini-b",
-        GOOGLE_API_KEY: "google-live",
-        OPENAI_API_KEY: "openai-live",
-        OPENAI_API_KEYS: "openai-a,openai-b",
-        CODEX_HOME: "/host/.codex",
-        OPENCLAW_LIVE_ANTHROPIC_KEY: "anthropic-live",
-        OPENCLAW_LIVE_ANTHROPIC_KEYS: "anthropic-a,anthropic-b",
-        OPENCLAW_LIVE_GEMINI_KEY: "gemini-live",
-        OPENCLAW_LIVE_OPENAI_KEY: "openai-live",
-      }),
-      providerMode: "mock-openai",
-    });
+  it.each(["mock-openai", "aimock"] as const)(
+    "scrubs direct and live provider keys in %s mode",
+    (providerMode) => {
+      const env = buildQaRuntimeEnv({
+        ...createParams({
+          ANTHROPIC_API_KEY: "anthropic-live",
+          ANTHROPIC_OAUTH_TOKEN: "anthropic-oauth",
+          GEMINI_API_KEY: "gemini-live",
+          GEMINI_API_KEYS: "gemini-a gemini-b",
+          GOOGLE_API_KEY: "google-live",
+          OPENAI_API_KEY: "openai-live",
+          OPENAI_API_KEYS: "openai-a,openai-b",
+          CODEX_HOME: "/host/.codex",
+          OPENCLAW_LIVE_ANTHROPIC_KEY: "anthropic-live",
+          OPENCLAW_LIVE_ANTHROPIC_KEYS: "anthropic-a,anthropic-b",
+          OPENCLAW_LIVE_GEMINI_KEY: "gemini-live",
+          OPENCLAW_LIVE_OPENAI_KEY: "openai-live",
+        }),
+        providerMode,
+      });
 
-    expect(env.OPENAI_API_KEY).toBeUndefined();
-    expect(env.OPENAI_API_KEYS).toBeUndefined();
-    expect(env.CODEX_HOME).toBeUndefined();
-    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
-    expect(env.ANTHROPIC_OAUTH_TOKEN).toBeUndefined();
-    expect(env.GEMINI_API_KEY).toBeUndefined();
-    expect(env.GEMINI_API_KEYS).toBeUndefined();
-    expect(env.GOOGLE_API_KEY).toBeUndefined();
-    expect(env.OPENCLAW_LIVE_OPENAI_KEY).toBeUndefined();
-    expect(env.OPENCLAW_LIVE_ANTHROPIC_KEY).toBeUndefined();
-    expect(env.OPENCLAW_LIVE_ANTHROPIC_KEYS).toBeUndefined();
-    expect(env.OPENCLAW_LIVE_GEMINI_KEY).toBeUndefined();
-  });
+      expect(env.OPENAI_API_KEY).toBeUndefined();
+      expect(env.OPENAI_API_KEYS).toBeUndefined();
+      expect(env.CODEX_HOME).toBeUndefined();
+      expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+      expect(env.ANTHROPIC_OAUTH_TOKEN).toBeUndefined();
+      expect(env.GEMINI_API_KEY).toBeUndefined();
+      expect(env.GEMINI_API_KEYS).toBeUndefined();
+      expect(env.GOOGLE_API_KEY).toBeUndefined();
+      expect(env.OPENCLAW_LIVE_OPENAI_KEY).toBeUndefined();
+      expect(env.OPENCLAW_LIVE_ANTHROPIC_KEY).toBeUndefined();
+      expect(env.OPENCLAW_LIVE_ANTHROPIC_KEYS).toBeUndefined();
+      expect(env.OPENCLAW_LIVE_GEMINI_KEY).toBeUndefined();
+    },
+  );
 
   it("treats restart socket closures as retryable gateway call errors", () => {
     expect(__testing.isRetryableGatewayCallError("gateway closed (1006 abnormal closure)")).toBe(
@@ -712,6 +715,43 @@ describe("qa bundled plugin dir", () => {
         pluginId: "qa-channel",
       }),
     ).toBe(path.join(repoRoot, "extensions", "qa-channel"));
+  });
+
+  it("uses a source bundled plugin when the built copy is missing CLI metadata", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-cli-metadata-root-"));
+    cleanups.push(async () => {
+      await rm(repoRoot, { recursive: true, force: true });
+    });
+    await mkdir(path.join(repoRoot, "dist", "extensions", "memory-core"), { recursive: true });
+    await writeFile(
+      path.join(repoRoot, "dist", "extensions", "memory-core", "package.json"),
+      "{}",
+      "utf8",
+    );
+    await writeFile(
+      path.join(repoRoot, "dist", "extensions", "memory-core", "openclaw.plugin.json"),
+      JSON.stringify({ id: "memory-core", kind: "memory" }),
+      "utf8",
+    );
+    await mkdir(path.join(repoRoot, "extensions", "memory-core"), { recursive: true });
+    await writeFile(path.join(repoRoot, "extensions", "memory-core", "package.json"), "{}", "utf8");
+    await writeFile(
+      path.join(repoRoot, "extensions", "memory-core", "openclaw.plugin.json"),
+      JSON.stringify({ id: "memory-core", kind: "memory" }),
+      "utf8",
+    );
+    await writeFile(
+      path.join(repoRoot, "extensions", "memory-core", "cli-metadata.ts"),
+      "export default { id: 'memory-core' };\n",
+      "utf8",
+    );
+
+    expect(
+      __testing.resolveQaBundledPluginSourceDir({
+        repoRoot,
+        pluginId: "memory-core",
+      }),
+    ).toBe(path.join(repoRoot, "extensions", "memory-core"));
   });
 
   it("creates a scoped bundled plugin tree for allowed plugins plus always-allowed runtime facades", async () => {

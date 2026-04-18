@@ -40,7 +40,7 @@ describe("bundled channel entry shape guards", () => {
     expect(bundled.listBundledChannelSetupPlugins()).toEqual([]);
   });
 
-  it("loads real bundled channel entries from the source tree", async () => {
+  it("loads real bundled channel entry contracts from the source tree", async () => {
     vi.doMock("../../plugins/bundled-channel-runtime.js", async (importOriginal) => {
       const actual =
         await importOriginal<typeof import("../../plugins/bundled-channel-runtime.js")>();
@@ -52,9 +52,7 @@ describe("bundled channel entry shape guards", () => {
         }) =>
           actual
             .listBundledChannelPluginMetadata(params)
-            .filter(
-              (metadata) => metadata.manifest.id === "slack" || metadata.manifest.id === "line",
-            ),
+            .filter((metadata) => metadata.manifest.id === "slack"),
       };
     });
 
@@ -63,18 +61,8 @@ describe("bundled channel entry shape guards", () => {
       "./bundled.js?scope=real-bundled-source-tree",
     );
 
-    expect(bundled.requireBundledChannelPlugin("slack").id).toBe("slack");
-    expect(() =>
-      bundled.setBundledChannelRuntime("line", {
-        channel: {
-          line: {
-            listLineAccountIds: () => [],
-            resolveDefaultLineAccountId: () => undefined,
-            resolveLineAccount: () => null,
-          },
-        },
-      } as never),
-    ).not.toThrow();
+    expect(bundled.listBundledChannelPluginIds()).toEqual(["slack"]);
+    expect(bundled.hasBundledChannelEntryFeature("slack", "accountInspect")).toBe(true);
   });
 
   it("uses the active bundled plugin root override for channel entry loading", async () => {
@@ -397,6 +385,121 @@ describe("bundled channel entry shape guards", () => {
     }
   });
 
+  it("loads setup-entry feature plugins without loading the main channel entry", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-setup-only-"));
+    const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    const pluginDir = path.join(root, "dist", "extensions", "alpha");
+    const testGlobal = globalThis as typeof globalThis & {
+      __bundledSetupOnlyMainLoaded?: boolean;
+      __bundledSetupOnlySetupLoaded?: number;
+      __bundledSetupOnlyPluginLoaded?: boolean;
+    };
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "index.js"),
+      [
+        "globalThis.__bundledSetupOnlyMainLoaded = true;",
+        "throw new Error('main entry loaded');",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "setup-entry.js"),
+      [
+        "globalThis.__bundledSetupOnlySetupLoaded = (globalThis.__bundledSetupOnlySetupLoaded ?? 0) + 1;",
+        "export default {",
+        "  kind: 'bundled-channel-setup-entry',",
+        "  features: { legacyStateMigrations: true },",
+        "  loadSetupPlugin() {",
+        "    globalThis.__bundledSetupOnlyPluginLoaded = true;",
+        "    throw new Error('setup plugin loaded');",
+        "  },",
+        "  loadLegacyStateMigrationDetector() {",
+        "    return ({ oauthDir }) => [{",
+        "      kind: 'copy',",
+        "      label: 'Alpha state',",
+        "      sourcePath: oauthDir + '/legacy.json',",
+        "      targetPath: oauthDir + '/alpha/legacy.json',",
+        "    }];",
+        "  },",
+        "};",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    vi.doMock("../../plugins/bundled-channel-runtime.js", () => ({
+      listBundledChannelPluginMetadata: () => [
+        {
+          dirName: "alpha",
+          manifest: {
+            id: "alpha",
+            channels: ["alpha"],
+          },
+          source: {
+            source: "./index.js",
+            built: "./index.js",
+          },
+          setupSource: {
+            source: "./setup-entry.js",
+            built: "./setup-entry.js",
+          },
+        },
+      ],
+      resolveBundledChannelGeneratedPath: (
+        rootDir: string,
+        entry: { built?: string; source?: string },
+        pluginDirName?: string,
+      ) =>
+        path.join(
+          rootDir,
+          "dist",
+          "extensions",
+          pluginDirName ?? "alpha",
+          (entry.built ?? entry.source ?? "./index.js").replace(/^\.\//u, ""),
+        ),
+    }));
+
+    try {
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(root, "dist", "extensions");
+
+      const bundled = await importFreshModule<typeof import("./bundled.js")>(
+        import.meta.url,
+        "./bundled.js?scope=bundled-setup-only-feature",
+      );
+
+      const detectors = bundled.listBundledChannelLegacyStateMigrationDetectors();
+      expect(
+        detectors.map((detector) =>
+          detector({ cfg: {}, env: {}, stateDir: "/state", oauthDir: "/oauth" } as never),
+        ),
+      ).toEqual([
+        [
+          {
+            kind: "copy",
+            label: "Alpha state",
+            sourcePath: "/oauth/legacy.json",
+            targetPath: "/oauth/alpha/legacy.json",
+          },
+        ],
+      ]);
+      expect(testGlobal.__bundledSetupOnlySetupLoaded).toBe(1);
+      expect(testGlobal.__bundledSetupOnlyMainLoaded).toBeUndefined();
+      expect(testGlobal.__bundledSetupOnlyPluginLoaded).toBeUndefined();
+    } finally {
+      if (previousBundledPluginsDir === undefined) {
+        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+      } else {
+        process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+      delete testGlobal.__bundledSetupOnlyMainLoaded;
+      delete testGlobal.__bundledSetupOnlySetupLoaded;
+      delete testGlobal.__bundledSetupOnlyPluginLoaded;
+    }
+  });
+
   it("keeps channel entrypoints on the dedicated entry-contract SDK surface", () => {
     const offenders: string[] = [];
 
@@ -419,6 +522,33 @@ describe("bundled channel entry shape guards", () => {
           source.includes('from "openclaw/plugin-sdk/channel-core"')
         ) {
           offenders.push(path.relative(process.cwd(), filePath));
+        }
+      }
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
+  it("keeps setup-entry legacy feature hints mirrored in package metadata", () => {
+    const offenders: string[] = [];
+
+    for (const extensionDir of bundledPluginRoots) {
+      const setupEntryPath = path.join(extensionDir, "setup-entry.ts");
+      const packageJsonPath = path.join(extensionDir, "package.json");
+      if (!fs.existsSync(setupEntryPath) || !fs.existsSync(packageJsonPath)) {
+        continue;
+      }
+      const setupEntrySource = fs.readFileSync(setupEntryPath, "utf8");
+      const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
+        openclaw?: {
+          setupFeatures?: Record<string, boolean>;
+        };
+      };
+      for (const feature of ["legacyStateMigrations", "legacySessionSurfaces"]) {
+        const usesFeature = setupEntrySource.includes(`${feature}: true`);
+        const hasHint = packageJson.openclaw?.setupFeatures?.[feature] === true;
+        if (usesFeature !== hasHint) {
+          offenders.push(`${path.relative(process.cwd(), extensionDir)}:${feature}`);
         }
       }
     }

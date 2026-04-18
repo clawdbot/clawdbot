@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { downloadGoogleChatMedia, sendGoogleChatMessage } from "./api.js";
 import { resolveGoogleChatGroupRequireMention } from "./group-policy.js";
-import { isSenderAllowed } from "./monitor.js";
+import { isSenderAllowed } from "./sender-allow.js";
 import {
   isGoogleChatSpaceTarget,
   isGoogleChatUserTarget,
@@ -14,14 +14,13 @@ const mocks = vi.hoisted(() => ({
     response: await fetch(params.url, params.init),
     release: async () => {},
   })),
+  verifySignedJwtWithCertsAsync: vi.fn(),
   verifyIdToken: vi.fn(),
   getGoogleChatAccessToken: vi.fn().mockResolvedValue("token"),
 }));
 
-vi.mock("../runtime-api.js", async () => {
-  const actual = await vi.importActual<typeof import("../runtime-api.js")>("../runtime-api.js");
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => {
   return {
-    ...actual,
     fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
   };
 });
@@ -30,6 +29,7 @@ vi.mock("google-auth-library", () => ({
   GoogleAuth: function GoogleAuth() {},
   OAuth2Client: class {
     verifyIdToken = mocks.verifyIdToken;
+    verifySignedJwtWithCertsAsync = mocks.verifySignedJwtWithCertsAsync;
   },
 }));
 
@@ -294,5 +294,35 @@ describe("verifyGoogleChatRequest", () => {
       ok: false,
       reason: "unexpected add-on principal: principal-2",
     });
+  });
+
+  it("fetches Chat certs through the guarded fetch for project-number tokens", async () => {
+    const release = vi.fn();
+    mocks.fetchWithSsrFGuard.mockClear();
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: new Response(JSON.stringify({ "kid-1": "cert-body" }), { status: 200 }),
+      release,
+    });
+    mocks.verifySignedJwtWithCertsAsync.mockReset().mockResolvedValue(undefined);
+
+    await expect(
+      verifyGoogleChatRequest({
+        bearer: "token",
+        audienceType: "project-number",
+        audience: "123456789",
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledWith({
+      url: "https://www.googleapis.com/service_accounts/v1/metadata/x509/chat@system.gserviceaccount.com",
+      auditContext: "googlechat.auth.certs",
+    });
+    expect(mocks.verifySignedJwtWithCertsAsync).toHaveBeenCalledWith(
+      "token",
+      { "kid-1": "cert-body" },
+      "123456789",
+      ["chat@system.gserviceaccount.com"],
+    );
+    expect(release).toHaveBeenCalledOnce();
   });
 });

@@ -11,6 +11,11 @@ import {
   withBundledPluginEnablementCompat,
 } from "./bundled-compat.js";
 import { normalizePluginsConfig } from "./config-state.js";
+import {
+  buildPluginShapeSummary,
+  type PluginCapabilityEntry,
+  type PluginInspectShape,
+} from "./inspect-shape.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import { resolveBundledProviderCompatPluginIds } from "./providers.js";
@@ -21,31 +26,13 @@ import {
   resolvePluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
 import { loadPluginMetadataRegistrySnapshot } from "./runtime/metadata-registry-loader.js";
-import { hasKind } from "./slots.js";
 import type { PluginHookName } from "./types.js";
 
 export type PluginStatusReport = PluginRegistry & {
   workspaceDir?: string;
 };
 
-export type PluginCapabilityKind =
-  | "cli-backend"
-  | "text-inference"
-  | "speech"
-  | "realtime-transcription"
-  | "realtime-voice"
-  | "media-understanding"
-  | "image-generation"
-  | "web-search"
-  | "agent-harness"
-  | "context-engine"
-  | "channel";
-
-export type PluginInspectShape =
-  | "hook-only"
-  | "plain-capability"
-  | "hybrid-capability"
-  | "non-capability";
+export type { PluginCapabilityKind, PluginInspectShape } from "./inspect-shape.js";
 
 export type PluginCompatibilityNotice = {
   pluginId: string;
@@ -65,10 +52,7 @@ export type PluginInspectReport = {
   shape: PluginInspectShape;
   capabilityMode: "none" | "plain" | "hybrid";
   capabilityCount: number;
-  capabilities: Array<{
-    kind: PluginCapabilityKind;
-    ids: string[];
-  }>;
+  capabilities: PluginCapabilityEntry[];
   typedHooks: Array<{
     name: PluginHookName;
     priority?: number;
@@ -240,59 +224,6 @@ export function buildPluginDiagnosticsReport(params?: PluginReportParams): Plugi
   return buildPluginReport(params, true);
 }
 
-function buildCapabilityEntries(plugin: PluginRegistry["plugins"][number]) {
-  return [
-    { kind: "cli-backend" as const, ids: plugin.cliBackendIds ?? [] },
-    { kind: "text-inference" as const, ids: plugin.providerIds },
-    { kind: "speech" as const, ids: plugin.speechProviderIds },
-    { kind: "realtime-transcription" as const, ids: plugin.realtimeTranscriptionProviderIds },
-    { kind: "realtime-voice" as const, ids: plugin.realtimeVoiceProviderIds },
-    { kind: "media-understanding" as const, ids: plugin.mediaUnderstandingProviderIds },
-    { kind: "image-generation" as const, ids: plugin.imageGenerationProviderIds },
-    { kind: "web-search" as const, ids: plugin.webSearchProviderIds },
-    { kind: "agent-harness" as const, ids: plugin.agentHarnessIds },
-    {
-      kind: "context-engine" as const,
-      ids:
-        plugin.status === "loaded" && hasKind(plugin.kind, "context-engine")
-          ? (plugin.contextEngineIds ?? [])
-          : [],
-    },
-    { kind: "channel" as const, ids: plugin.channelIds },
-  ].filter((entry) => entry.ids.length > 0);
-}
-
-function deriveInspectShape(params: {
-  capabilityCount: number;
-  typedHookCount: number;
-  customHookCount: number;
-  toolCount: number;
-  commandCount: number;
-  cliCount: number;
-  serviceCount: number;
-  gatewayMethodCount: number;
-  httpRouteCount: number;
-}): PluginInspectShape {
-  if (params.capabilityCount > 1) {
-    return "hybrid-capability";
-  }
-  if (params.capabilityCount === 1) {
-    return "plain-capability";
-  }
-  const hasOnlyHooks =
-    params.typedHookCount + params.customHookCount > 0 &&
-    params.toolCount === 0 &&
-    params.commandCount === 0 &&
-    params.cliCount === 0 &&
-    params.serviceCount === 0 &&
-    params.gatewayMethodCount === 0 &&
-    params.httpRouteCount === 0;
-  if (hasOnlyHooks) {
-    return "hook-only";
-  }
-  return "non-capability";
-}
-
 export function buildPluginInspectReport(params: {
   id: string;
   config?: OpenClawConfig;
@@ -318,7 +249,6 @@ export function buildPluginInspectReport(params: {
     return null;
   }
 
-  const capabilities = buildCapabilityEntries(plugin);
   const typedHooks = report.typedHooks
     .filter((entry) => entry.pluginId === plugin.id)
     .map((entry) => ({
@@ -341,18 +271,8 @@ export function buildPluginInspectReport(params: {
     }));
   const diagnostics = report.diagnostics.filter((entry) => entry.pluginId === plugin.id);
   const policyEntry = normalizePluginsConfig(config.plugins).entries[plugin.id];
-  const capabilityCount = capabilities.length;
-  const shape = deriveInspectShape({
-    capabilityCount,
-    typedHookCount: typedHooks.length,
-    customHookCount: customHooks.length,
-    toolCount: tools.length,
-    commandCount: plugin.commands.length,
-    cliCount: plugin.cliCommands.length,
-    serviceCount: plugin.services.length,
-    gatewayMethodCount: plugin.gatewayMethods.length,
-    httpRouteCount: plugin.httpRoutes,
-  });
+  const shapeSummary = buildPluginShapeSummary({ plugin, report });
+  const shape = shapeSummary.shape;
 
   // Populate MCP server info for bundle-format plugins with a known rootDir.
   let mcpServers: PluginInspectReport["mcpServers"] = [];
@@ -394,9 +314,7 @@ export function buildPluginInspectReport(params: {
     ];
   }
 
-  const usesLegacyBeforeAgentStart = typedHooks.some(
-    (entry) => entry.name === "before_agent_start",
-  );
+  const usesLegacyBeforeAgentStart = shapeSummary.usesLegacyBeforeAgentStart;
   const compatibility = buildCompatibilityNoticesForInspect({
     plugin,
     shape,
@@ -406,9 +324,9 @@ export function buildPluginInspectReport(params: {
     workspaceDir: report.workspaceDir,
     plugin,
     shape,
-    capabilityMode: capabilityCount === 0 ? "none" : capabilityCount === 1 ? "plain" : "hybrid",
-    capabilityCount,
-    capabilities,
+    capabilityMode: shapeSummary.capabilityMode,
+    capabilityCount: shapeSummary.capabilityCount,
+    capabilities: shapeSummary.capabilities,
     typedHooks,
     customHooks,
     tools,

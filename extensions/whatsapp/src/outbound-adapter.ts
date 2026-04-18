@@ -11,8 +11,7 @@ import {
 import { chunkText } from "openclaw/plugin-sdk/reply-runtime";
 import { shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { WHATSAPP_LEGACY_OUTBOUND_SEND_DEP_KEYS } from "./outbound-send-deps.js";
-import { resolveWhatsAppOutboundTarget } from "./runtime-api.js";
-import { sendPollWhatsApp } from "./send.js";
+import { resolveWhatsAppOutboundTarget } from "./resolve-outbound-target.js";
 
 function trimLeadingWhitespace(text: string | undefined): string {
   return text?.trimStart() ?? "";
@@ -90,7 +89,9 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
       });
     },
     sendPoll: async ({ cfg, to, poll, accountId }) =>
-      await sendPollWhatsApp(to, poll, {
+      await (
+        await import("./send.js")
+      ).sendPollWhatsApp(to, poll, {
         verbose: shouldLogVerbose(),
         accountId: accountId ?? undefined,
         cfg,

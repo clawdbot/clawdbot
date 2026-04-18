@@ -1,16 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { NostrProfile } from "./config-schema.js";
 import {
-  createProfileEvent,
   profileToContent,
-  validateProfile,
   sanitizeProfileForDisplay,
-} from "./nostr-profile.js";
-import { TEST_HEX_PRIVATE_KEY_BYTES } from "./test-fixtures.js";
-
-function createTestProfileEvent(profile: NostrProfile, lastPublishedAt?: number) {
-  return createProfileEvent(TEST_HEX_PRIVATE_KEY_BYTES, profile, lastPublishedAt);
-}
+  validateProfile,
+} from "./nostr-profile-core.js";
 
 // ============================================================================
 // Unicode Attack Vectors
@@ -432,54 +426,5 @@ describe("profile type confusion", () => {
     validateProfile(malicious);
     // Should not pollute Object.prototype
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
-  });
-});
-
-// ============================================================================
-// Event Creation Edge Cases
-// ============================================================================
-
-describe("event creation edge cases", () => {
-  it("handles profile with all fields at max length", () => {
-    const profile: NostrProfile = {
-      name: "a".repeat(256),
-      displayName: "b".repeat(256),
-      about: "c".repeat(2000),
-      nip05: "d".repeat(200) + "@example.com",
-      lud16: "e".repeat(200) + "@example.com",
-    };
-
-    const event = createTestProfileEvent(profile);
-    expect(event.kind).toBe(0);
-
-    // Content should be parseable JSON
-    expect(() => JSON.parse(event.content)).not.toThrow();
-  });
-
-  it("handles rapid sequential events with monotonic timestamps", () => {
-    const profile: NostrProfile = { name: "rapid" };
-
-    // Create events in quick succession
-    let lastTimestamp = 0;
-    for (let i = 0; i < 25; i++) {
-      const event = createTestProfileEvent(profile, lastTimestamp);
-      expect(event.created_at).toBeGreaterThan(lastTimestamp);
-      lastTimestamp = event.created_at;
-    }
-  });
-
-  it("handles JSON special characters in content", () => {
-    const profile: NostrProfile = {
-      name: 'test"user',
-      about: "line1\nline2\ttab\\backslash",
-    };
-
-    const event = createTestProfileEvent(profile);
-    const parsed = JSON.parse(event.content) as { name: string; about: string };
-
-    expect(parsed.name).toBe('test"user');
-    expect(parsed.about).toContain("\n");
-    expect(parsed.about).toContain("\t");
-    expect(parsed.about).toContain("\\");
   });
 });

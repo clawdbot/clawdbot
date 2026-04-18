@@ -25,7 +25,7 @@ import {
   nostrPairingTextAdapter,
   startNostrGatewayAccount,
 } from "./gateway.js";
-import { normalizePubkey } from "./nostr-bus.js";
+import { normalizePubkey } from "./nostr-key-utils.js";
 import type { ProfilePublishResult } from "./nostr-profile.js";
 import { resolveNostrOutboundSessionRoute } from "./session-route.js";
 import { nostrSetupAdapter, nostrSetupWizard } from "./setup-surface.js";

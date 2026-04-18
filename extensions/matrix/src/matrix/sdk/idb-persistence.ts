@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { indexedDB as fakeIndexedDB } from "fake-indexeddb";
-import { withFileLock } from "openclaw/plugin-sdk/infra-runtime";
+import { withFileLock } from "openclaw/plugin-sdk/file-lock";
 import { MATRIX_IDB_SNAPSHOT_LOCK_OPTIONS } from "./idb-persistence-lock.js";
 import { LogService } from "./logger.js";
 
@@ -217,6 +217,9 @@ function resolveDefaultIdbSnapshotPath(): string {
 export async function restoreIdbFromDisk(snapshotPath?: string): Promise<boolean> {
   const candidatePaths = snapshotPath ? [snapshotPath] : [resolveDefaultIdbSnapshotPath()];
   for (const resolvedPath of candidatePaths) {
+    if (!fs.existsSync(resolvedPath)) {
+      continue;
+    }
     try {
       const restored = await withFileLock(
         resolvedPath,

@@ -304,6 +304,37 @@ function hasBrowserToolReference(cfg: OpenClawConfig): boolean {
     : false;
 }
 
+function collectConfiguredPluginEntryIds(cfg: OpenClawConfig): string[] {
+  const entries = cfg.plugins?.entries;
+  if (!entries || typeof entries !== "object") {
+    return [];
+  }
+  return Object.keys(entries)
+    .map((pluginId) => pluginId.trim())
+    .filter(Boolean);
+}
+
+function resolveRelevantSetupAutoEnablePluginIds(cfg: OpenClawConfig): string[] {
+  const pluginIds = new Set<string>(collectConfiguredPluginEntryIds(cfg));
+  if (
+    isRecord(cfg.browser) ||
+    isRecord(cfg.plugins?.entries?.browser) ||
+    hasBrowserToolReference(cfg)
+  ) {
+    pluginIds.add("browser");
+  }
+  if (isRecord(cfg.acp) || isRecord(cfg.plugins?.entries?.acpx)) {
+    pluginIds.add("acpx");
+  }
+  if (
+    isRecord(cfg.plugins?.entries?.xai) ||
+    (isRecord(cfg.tools?.web) && isRecord((cfg.tools.web as Record<string, unknown>).x_search))
+  ) {
+    pluginIds.add("xai");
+  }
+  return [...pluginIds].toSorted((left, right) => left.localeCompare(right));
+}
+
 function hasSetupAutoEnableRelevantConfig(cfg: OpenClawConfig): boolean {
   const entries = cfg.plugins?.entries;
   if (isRecord(cfg.browser) || isRecord(cfg.acp) || hasBrowserToolReference(cfg)) {
@@ -396,6 +427,7 @@ export function configMayNeedPluginAutoEnable(
     resolvePluginSetupAutoEnableReasons({
       config: cfg,
       env,
+      pluginIds: resolveRelevantSetupAutoEnablePluginIds(cfg),
     }).length > 0
   );
 }
@@ -516,6 +548,7 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
     for (const entry of resolvePluginSetupAutoEnableReasons({
       config: params.config,
       env: params.env,
+      pluginIds: resolveRelevantSetupAutoEnablePluginIds(params.config),
     })) {
       changes.push({
         pluginId: entry.pluginId,

@@ -10,11 +10,9 @@ import {
   DEFAULT_OAUTH_WARN_MS,
   formatRemainingShort,
 } from "../../agents/auth-health.js";
-import {
-  ensureAuthProfileStore,
-  resolveAuthStorePathForDisplay,
-  resolveProfileUnusableUntilForDisplay,
-} from "../../agents/auth-profiles.js";
+import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths.js";
+import { ensureAuthProfileStore } from "../../agents/auth-profiles/store.js";
+import { resolveProfileUnusableUntilForDisplay } from "../../agents/auth-profiles/usage.js";
 import { resolveProviderEnvApiKeyCandidates } from "../../agents/model-auth-env-vars.js";
 import { resolveEnvApiKey } from "../../agents/model-auth.js";
 import {
@@ -26,34 +24,19 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
-import { withProgressTotals } from "../../cli/progress.js";
 import { createConfigIO } from "../../config/config.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
-import {
-  formatUsageWindowSummary,
-  loadProviderUsageSummary,
-  resolveUsageProviderId,
-  type UsageProviderId,
-} from "../../infra/provider-usage.js";
 import { getShellEnvAppliedKeys, shouldEnableShellEnvFallback } from "../../infra/shell-env.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { getTerminalTableWidth, renderTable } from "../../terminal/table.js";
 import { colorize, theme } from "../../terminal/theme.js";
 import { shortenHomePath } from "../../utils.js";
-import { buildProviderAuthRecoveryHint } from "../provider-auth-guidance.js";
 import { resolveProviderAuthOverview } from "./list.auth-overview.js";
 import { isRich } from "./list.format.js";
-import {
-  describeProbeSummary,
-  formatProbeLatency,
-  runAuthProbes,
-  sortProbeResults,
-  type AuthProbeSummary,
-} from "./list.probe.js";
+import { type AuthProbeSummary } from "./list.probe.js";
 import { loadModelsConfig } from "./load-config.js";
 import {
   DEFAULT_MODEL,
@@ -61,6 +44,15 @@ import {
   ensureFlagCompatibility,
   resolveKnownAgentId,
 } from "./shared.js";
+
+type ProviderUsageRuntime = typeof import("../../infra/provider-usage.js");
+
+let providerUsageRuntimePromise: Promise<ProviderUsageRuntime> | undefined;
+
+function loadProviderUsageRuntime(): Promise<ProviderUsageRuntime> {
+  providerUsageRuntimePromise ??= import("../../infra/provider-usage.js");
+  return providerUsageRuntimePromise;
+}
 
 export async function modelsStatusCommand(
   opts: {
@@ -227,6 +219,10 @@ export async function modelsStatusCommand(
 
   let probeSummary: AuthProbeSummary | undefined;
   if (opts.probe) {
+    const [{ withProgressTotals }, { runAuthProbes }] = await Promise.all([
+      import("../../cli/progress.js"),
+      import("./list.probe.js"),
+    ]);
     probeSummary = await withProgressTotals(
       { label: "Probing auth profiles…", total: 1 },
       async (update) => {
@@ -517,6 +513,7 @@ export async function modelsStatusCommand(
   }
 
   if (missingProvidersInUse.length > 0) {
+    const { buildProviderAuthRecoveryHint } = await import("../provider-auth-guidance.js");
     runtime.log("");
     runtime.log(colorize(rich, theme.heading, "Missing auth"));
     for (const provider of missingProvidersInUse) {
@@ -534,12 +531,14 @@ export async function modelsStatusCommand(
   if (oauthProfiles.length === 0) {
     runtime.log(colorize(rich, theme.muted, "- none"));
   } else {
+    const { formatUsageWindowSummary, loadProviderUsageSummary, resolveUsageProviderId } =
+      await loadProviderUsageRuntime();
     const usageByProvider = new Map<string, string>();
     const usageProviders = Array.from(
       new Set(
         oauthProfiles
           .map((profile) => resolveUsageProviderId(profile.provider))
-          .filter((provider): provider is UsageProviderId => Boolean(provider)),
+          .filter((provider): provider is NonNullable<typeof provider> => Boolean(provider)),
       ),
     );
     if (usageProviders.length > 0) {
@@ -611,6 +610,10 @@ export async function modelsStatusCommand(
   }
 
   if (probeSummary) {
+    const [
+      { getTerminalTableWidth, renderTable },
+      { describeProbeSummary, formatProbeLatency, sortProbeResults },
+    ] = await Promise.all([import("../../terminal/table.js"), import("./list.probe.js")]);
     runtime.log("");
     runtime.log(colorize(rich, theme.heading, "Auth probes"));
     if (probeSummary.results.length === 0) {

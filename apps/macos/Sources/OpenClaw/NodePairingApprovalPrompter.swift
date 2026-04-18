@@ -483,8 +483,7 @@ final class NodePairingApprovalPrompter {
                 "-o", "ConnectTimeout=5",
                 "-o", "NumberOfPasswordPrompts=0",
                 "-o", "PreferredAuthentications=publickey",
-                "-o", "StrictHostKeyChecking=accept-new",
-            ]
+            ] + CommandResolver.strictHostKeyCheckingSSHOptions
             guard let target = CommandResolver.makeSSHTarget(user: user, host: host, port: port) else {
                 return false
             }

@@ -10,6 +10,14 @@ import type { AuthProfileStore, OAuthCredential } from "./types.js";
 const resolveExternalAuthProfilesWithPluginsMock = vi.fn<
   (params: unknown) => ProviderExternalAuthProfile[]
 >(() => []);
+const readCodexCliCredentialsCachedMock = vi.hoisted(() =>
+  vi.fn<() => OAuthCredential | null>(() => null),
+);
+
+vi.mock("../cli-credentials.js", () => ({
+  readCodexCliCredentialsCached: readCodexCliCredentialsCachedMock,
+  readMiniMaxCliCredentialsCached: () => null,
+}));
 
 function createStore(profiles: AuthProfileStore["profiles"] = {}): AuthProfileStore {
   return { version: 1, profiles };
@@ -26,10 +34,17 @@ function createCredential(overrides: Partial<OAuthCredential> = {}): OAuthCreden
   };
 }
 
+function createUsableOAuthExpiry(): number {
+  // Keep fixtures comfortably outside the shared near-expiry refresh margin.
+  return Date.now() + 30 * 60 * 1000;
+}
+
 describe("auth external oauth helpers", () => {
   beforeEach(() => {
     resolveExternalAuthProfilesWithPluginsMock.mockReset();
     resolveExternalAuthProfilesWithPluginsMock.mockReturnValue([]);
+    readCodexCliCredentialsCachedMock.mockReset();
+    readCodexCliCredentialsCachedMock.mockReturnValue(null);
     __testing.setResolveExternalAuthProfilesForTest(resolveExternalAuthProfilesWithPluginsMock);
   });
 
@@ -107,5 +122,110 @@ describe("auth external oauth helpers", () => {
     });
 
     expect(shouldPersist).toBe(true);
+  });
+
+  it("overlays external CLI OAuth only when the stored credential is no longer usable", () => {
+    readCodexCliCredentialsCachedMock.mockReturnValue(
+      createCredential({
+        access: "fresh-cli-access-token",
+        refresh: "fresh-cli-refresh-token",
+        expires: createUsableOAuthExpiry(),
+      }),
+    );
+
+    const overlaid = overlayExternalOAuthProfiles(
+      createStore({
+        "openai-codex:default": createCredential({
+          access: "stale-store-access-token",
+          refresh: "stale-store-refresh-token",
+          expires: Date.now() - 60_000,
+        }),
+      }),
+    );
+
+    expect(overlaid.profiles["openai-codex:default"]).toMatchObject({
+      access: "fresh-cli-access-token",
+      refresh: "fresh-cli-refresh-token",
+      expires: expect.any(Number),
+    });
+  });
+
+  it("keeps healthy local oauth even when external cli has a fresher token", () => {
+    readCodexCliCredentialsCachedMock.mockReturnValue(
+      createCredential({
+        access: "fresh-cli-access-token",
+        refresh: "fresh-cli-refresh-token",
+        expires: Date.now() + 5 * 24 * 60 * 60_000,
+      }),
+    );
+
+    const overlaid = overlayExternalOAuthProfiles(
+      createStore({
+        "openai-codex:default": createCredential({
+          access: "healthy-local-access-token",
+          refresh: "healthy-local-refresh-token",
+          expires: createUsableOAuthExpiry(),
+        }),
+      }),
+    );
+
+    expect(overlaid.profiles["openai-codex:default"]).toMatchObject({
+      access: "healthy-local-access-token",
+      refresh: "healthy-local-refresh-token",
+    });
+  });
+
+  it("keeps explicit local non-oauth auth over external cli oauth overlays", () => {
+    readCodexCliCredentialsCachedMock.mockReturnValue(
+      createCredential({
+        access: "fresh-cli-access-token",
+        refresh: "fresh-cli-refresh-token",
+        expires: Date.now() + 5 * 24 * 60 * 60_000,
+      }),
+    );
+
+    const overlaid = overlayExternalOAuthProfiles(
+      createStore({
+        "openai-codex:default": {
+          type: "api_key",
+          provider: "openai-codex",
+          key: "sk-local",
+        },
+      }),
+    );
+
+    expect(overlaid.profiles["openai-codex:default"]).toMatchObject({
+      type: "api_key",
+      provider: "openai-codex",
+      key: "sk-local",
+    });
+  });
+
+  it("keeps expired local oauth when external cli belongs to a different account", () => {
+    readCodexCliCredentialsCachedMock.mockReturnValue(
+      createCredential({
+        access: "fresh-cli-access-token",
+        refresh: "fresh-cli-refresh-token",
+        expires: createUsableOAuthExpiry(),
+        accountId: "acct-external",
+      }),
+    );
+
+    const overlaid = overlayExternalOAuthProfiles(
+      createStore({
+        "openai-codex:default": createCredential({
+          access: "expired-local-access-token",
+          refresh: "expired-local-refresh-token",
+          expires: Date.now() - 60_000,
+          accountId: "acct-local",
+        }),
+      }),
+    );
+
+    expect(overlaid.profiles["openai-codex:default"]).toMatchObject({
+      access: "expired-local-access-token",
+      refresh: "expired-local-refresh-token",
+      accountId: "acct-local",
+    });
   });
 });

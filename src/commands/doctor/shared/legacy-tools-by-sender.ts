@@ -81,12 +81,12 @@ export function maybeRepairLegacyToolsBySenderKeys(cfg: OpenClawConfig): {
   config: OpenClawConfig;
   changes: string[];
 } {
-  const next = structuredClone(cfg);
-  const hits = scanLegacyToolsBySenderKeys(next);
+  const hits = scanLegacyToolsBySenderKeys(cfg);
   if (hits.length === 0) {
     return { config: cfg, changes: [] };
   }
 
+  const next = structuredClone(cfg);
   const summary = new Map<string, { migrated: number; dropped: number; examples: string[] }>();
   let changed = false;
 

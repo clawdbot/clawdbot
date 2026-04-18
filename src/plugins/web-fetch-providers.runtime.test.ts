@@ -133,6 +133,18 @@ describe("resolvePluginWebFetchProviders", () => {
     expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(1);
   });
 
+  it("loads manifest-declared web-fetch providers in setup mode without the plugin loader", () => {
+    const providers = resolvePluginWebFetchProviders({
+      config: createFirecrawlAllowConfig(),
+      mode: "setup",
+    });
+
+    expect(providers.map((provider) => `${provider.pluginId}:${provider.id}`)).toEqual([
+      "firecrawl:firecrawl",
+    ]);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
+
   it("does not force a fresh snapshot load when the same web-provider load is already in flight", () => {
     const inFlightSpy = vi
       .spyOn(loaderModule, "isPluginRegistryLoadInFlight")

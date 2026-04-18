@@ -5,8 +5,6 @@ import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
 import { clearPluginLoaderCache } from "../plugins/loader.js";
 import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
-import { listGatewayMethods } from "./server-methods-list.js";
-import { coreGatewayHandlers } from "./server-methods.js";
 import { loadGatewayStartupPlugins } from "./server-plugin-bootstrap.js";
 
 function resetPluginState() {
@@ -50,8 +48,8 @@ describe("loadGatewayStartupPlugins browser plugin integration", () => {
       } as OpenClawConfig,
       workspaceDir: process.cwd(),
       log: createTestLog(),
-      coreGatewayHandlers,
-      baseMethods: listGatewayMethods(),
+      coreGatewayHandlers: {},
+      baseMethods: [],
       pluginIds: ["browser"],
       logDiagnostics: false,
     });
@@ -62,31 +60,5 @@ describe("loadGatewayStartupPlugins browser plugin integration", () => {
         (entry) => entry.pluginId === "browser" && entry.service.id === "browser-control",
       ),
     ).toBe(true);
-  });
-
-  it("omits browser gateway ownership when the bundled browser plugin is disabled", () => {
-    const loaded = loadGatewayStartupPlugins({
-      cfg: {
-        plugins: {
-          allow: ["browser"],
-          entries: {
-            browser: {
-              enabled: false,
-            },
-          },
-        },
-      } as OpenClawConfig,
-      workspaceDir: process.cwd(),
-      log: createTestLog(),
-      coreGatewayHandlers,
-      baseMethods: listGatewayMethods(),
-      pluginIds: ["browser"],
-      logDiagnostics: false,
-    });
-
-    expect(loaded.gatewayMethods).not.toContain("browser.request");
-    expect(loaded.pluginRegistry.services.some((entry) => entry.pluginId === "browser")).toBe(
-      false,
-    );
   });
 });

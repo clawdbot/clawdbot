@@ -3,6 +3,7 @@ import { listChatChannels } from "../channels/chat-meta.js";
 import { listChannelPluginCatalogEntries } from "../channels/plugins/catalog.js";
 import { listChannelSetupPlugins } from "../channels/plugins/setup-registry.js";
 import type { ChannelSetupPlugin } from "../channels/plugins/setup-wizard-types.js";
+import type { ChannelMeta } from "../channels/plugins/types.core.js";
 import { formatChannelPrimerLine, formatChannelSelectionLine } from "../channels/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveChannelSetupEntries } from "../commands/channel-setup/discovery.js";
@@ -17,6 +18,7 @@ import type { ChannelChoice } from "../commands/onboard-types.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatDocsLink } from "../terminal/links.js";
+import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { FlowContribution } from "./types.js";
 
@@ -33,6 +35,18 @@ export type ChannelSetupSelectionContribution = FlowContribution & {
   surface: "setup";
   channel: ChannelChoice;
   source: "catalog" | "core" | "plugin";
+};
+
+type ChannelSetupSelectionEntry = {
+  id: ChannelChoice;
+  meta: {
+    id: string;
+    label: string;
+    selectionLabel?: string;
+    exposure?: { setup?: boolean };
+    showConfigured?: boolean;
+    showInSetup?: boolean;
+  };
 };
 
 function buildChannelSetupSelectionContribution(params: {
@@ -52,6 +66,64 @@ function buildChannelSetupSelectionContribution(params: {
       ...(params.hint ? { hint: params.hint } : {}),
     },
     source: params.source,
+  };
+}
+
+function formatSetupSelectionLabel(label: string, fallback: string): string {
+  return (
+    sanitizeTerminalText(label).trim() ||
+    sanitizeTerminalText(fallback).trim() ||
+    "<invalid channel>"
+  );
+}
+
+function formatSetupSelectionHint(hint: string | undefined): string | undefined {
+  if (!hint) {
+    return undefined;
+  }
+  return sanitizeTerminalText(hint) || undefined;
+}
+
+function formatSetupDisplayText(value: string | undefined, fallback = ""): string {
+  return (
+    sanitizeTerminalText(value ?? "").trim() ||
+    sanitizeTerminalText(fallback).trim() ||
+    "<invalid channel>"
+  );
+}
+
+function formatSetupFreeText(value: string | undefined): string {
+  return sanitizeTerminalText(value ?? "").trim();
+}
+
+function formatSetupOptionalDisplayText(value: string | undefined): string | undefined {
+  const safe = sanitizeTerminalText(value ?? "").trim();
+  return safe || undefined;
+}
+
+function formatSetupDisplayList(values: readonly string[] | undefined): string[] | undefined {
+  const safe = (values ?? []).flatMap((value) => {
+    const sanitized = formatSetupOptionalDisplayText(value);
+    return sanitized ? [sanitized] : [];
+  });
+  return safe.length > 0 ? safe : undefined;
+}
+
+function formatSetupDisplayMeta(meta: ChannelMeta): ChannelMeta {
+  const safeId = formatSetupDisplayText(meta.id, "<invalid channel>");
+  const safeLabel = formatSetupDisplayText(meta.label, safeId);
+  const safeSelectionDocsPrefix = formatSetupOptionalDisplayText(meta.selectionDocsPrefix);
+  const safeSelectionExtras = formatSetupDisplayList(meta.selectionExtras);
+  return {
+    ...meta,
+    id: safeId,
+    label: safeLabel,
+    selectionLabel: formatSetupDisplayText(meta.selectionLabel, safeLabel),
+    docsPath: formatSetupDisplayText(meta.docsPath, "/"),
+    ...(meta.docsLabel ? { docsLabel: formatSetupDisplayText(meta.docsLabel, safeId) } : {}),
+    blurb: formatSetupFreeText(meta.blurb),
+    ...(safeSelectionDocsPrefix ? { selectionDocsPrefix: safeSelectionDocsPrefix } : {}),
+    ...(safeSelectionExtras ? { selectionExtras: safeSelectionExtras } : {}),
   };
 }
 
@@ -101,7 +173,7 @@ export async function collectChannelStatus(params: {
       return {
         channel: meta.id,
         configured,
-        statusLines: [`${meta.label}: ${statusLabel}`],
+        statusLines: [`${formatSetupSelectionLabel(meta.label, meta.id)}: ${statusLabel}`],
         selectionHint: configured ? "configured · plugin disabled" : "not configured",
         quickstartScore: 0,
       };
@@ -122,7 +194,7 @@ export async function collectChannelStatus(params: {
       return {
         channel: entry.id as ChannelChoice,
         configured,
-        statusLines: [`${entry.meta.label}: ${statusLabel}`],
+        statusLines: [`${formatSetupSelectionLabel(entry.meta.label, entry.id)}: ${statusLabel}`],
         selectionHint: statusLabel,
         quickstartScore: 0,
       };
@@ -130,7 +202,9 @@ export async function collectChannelStatus(params: {
   const catalogStatuses = installableCatalogEntries.map((entry) => ({
     channel: entry.id,
     configured: false,
-    statusLines: [`${entry.meta.label}: install plugin to enable`],
+    statusLines: [
+      `${formatSetupSelectionLabel(entry.meta.label, entry.id)}: install plugin to enable`,
+    ],
     selectionHint: "plugin · install",
     quickstartScore: 0,
   }));
@@ -176,13 +250,15 @@ export async function noteChannelPrimer(
   channels: Array<{ id: ChannelChoice; blurb: string; label: string }>,
 ): Promise<void> {
   const channelLines = channels.map((channel) =>
-    formatChannelPrimerLine({
-      id: channel.id,
-      label: channel.label,
-      selectionLabel: channel.label,
-      docsPath: "/",
-      blurb: channel.blurb,
-    }),
+    formatChannelPrimerLine(
+      formatSetupDisplayMeta({
+        id: channel.id,
+        label: channel.label,
+        selectionLabel: channel.label,
+        docsPath: "/",
+        blurb: channel.blurb,
+      }),
+    ),
   );
   await prompter.note(
     [
@@ -227,7 +303,10 @@ export function resolveChannelSelectionNoteLines(params: {
   });
   const selectionNotes = new Map<string, string>();
   for (const entry of entries) {
-    selectionNotes.set(entry.id, formatChannelSelectionLine(entry.meta, formatDocsLink));
+    selectionNotes.set(
+      entry.id,
+      formatChannelSelectionLine(formatSetupDisplayMeta(entry.meta), formatDocsLink),
+    );
   }
   return params.selection
     .map((channel) => selectionNotes.get(channel))
@@ -235,33 +314,35 @@ export function resolveChannelSelectionNoteLines(params: {
 }
 
 export function resolveChannelSetupSelectionContributions(params: {
-  entries: Array<{
-    id: ChannelChoice;
-    meta: {
-      id: string;
-      label: string;
-      selectionLabel?: string;
-      exposure?: { setup?: boolean };
-      showConfigured?: boolean;
-      showInSetup?: boolean;
-    };
-  }>;
+  entries: ChannelSetupSelectionEntry[];
   statusByChannel: Map<ChannelChoice, { selectionHint?: string }>;
   resolveDisabledHint: (channel: ChannelChoice) => string | undefined;
 }): ChannelSetupSelectionContribution[] {
+  const bundledChannelIds = new Set(listChatChannels().map((channel) => channel.id));
   return params.entries
     .filter((entry) => shouldShowChannelInSetup(entry.meta))
+    .toSorted((left, right) => compareChannelSetupSelectionEntries(left, right))
     .map((entry) => {
       const disabledHint = params.resolveDisabledHint(entry.id);
-      const hint =
-        [params.statusByChannel.get(entry.id)?.selectionHint, disabledHint]
-          .filter(Boolean)
-          .join(" · ") || undefined;
+      const statusHint = params.statusByChannel.get(entry.id)?.selectionHint;
+      const hint = [statusHint, disabledHint].filter(Boolean).join(" · ") || undefined;
       return buildChannelSetupSelectionContribution({
         channel: entry.id,
-        label: entry.meta.selectionLabel ?? entry.meta.label,
-        hint,
-        source: listChatChannels().some((channel) => channel.id === entry.id) ? "core" : "plugin",
+        label: formatSetupSelectionLabel(entry.meta.selectionLabel ?? entry.meta.label, entry.id),
+        hint: formatSetupSelectionHint(hint),
+        source: bundledChannelIds.has(entry.id) ? "core" : "plugin",
       });
     });
+}
+
+function compareChannelSetupSelectionEntries(
+  left: ChannelSetupSelectionEntry,
+  right: ChannelSetupSelectionEntry,
+): number {
+  const leftLabel = left.meta.selectionLabel ?? left.meta.label;
+  const rightLabel = right.meta.selectionLabel ?? right.meta.label;
+  return (
+    leftLabel.localeCompare(rightLabel, undefined, { numeric: true, sensitivity: "base" }) ||
+    left.id.localeCompare(right.id, undefined, { numeric: true, sensitivity: "base" })
+  );
 }

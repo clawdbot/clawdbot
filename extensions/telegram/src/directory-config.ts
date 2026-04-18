@@ -1,12 +1,30 @@
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-core";
 import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
-import { createInspectedDirectoryEntriesLister } from "openclaw/plugin-sdk/directory-runtime";
-import { inspectTelegramAccount, type InspectedTelegramAccount } from "./account-inspect.js";
+import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-runtime";
+import { createResolvedDirectoryEntriesLister } from "openclaw/plugin-sdk/directory-config-runtime";
+import { mergeTelegramAccountConfig } from "./account-config.js";
+import { resolveDefaultTelegramAccountSelection } from "./account-selection.js";
+
+type TelegramDirectoryAccount = {
+  config: TelegramAccountConfig;
+};
+
+function resolveTelegramDirectoryAccount(
+  cfg: OpenClawConfig,
+  accountId?: string | null,
+): TelegramDirectoryAccount {
+  const resolvedAccountId = accountId?.trim()
+    ? normalizeAccountId(accountId)
+    : resolveDefaultTelegramAccountSelection(cfg).accountId;
+  return {
+    config: mergeTelegramAccountConfig(cfg, resolvedAccountId),
+  };
+}
 
 export const listTelegramDirectoryPeersFromConfig =
-  createInspectedDirectoryEntriesLister<InspectedTelegramAccount>({
+  createResolvedDirectoryEntriesLister<TelegramDirectoryAccount>({
     kind: "user",
-    inspectAccount: (cfg, accountId) =>
-      inspectTelegramAccount({ cfg, accountId }) as InspectedTelegramAccount | null,
+    resolveAccount: (cfg, accountId) => resolveTelegramDirectoryAccount(cfg, accountId),
     resolveSources: (account) => [
       mapAllowFromEntries(account.config.allowFrom),
       Object.keys(account.config.dms ?? {}),
@@ -24,10 +42,9 @@ export const listTelegramDirectoryPeersFromConfig =
   });
 
 export const listTelegramDirectoryGroupsFromConfig =
-  createInspectedDirectoryEntriesLister<InspectedTelegramAccount>({
+  createResolvedDirectoryEntriesLister<TelegramDirectoryAccount>({
     kind: "group",
-    inspectAccount: (cfg, accountId) =>
-      inspectTelegramAccount({ cfg, accountId }) as InspectedTelegramAccount | null,
+    resolveAccount: (cfg, accountId) => resolveTelegramDirectoryAccount(cfg, accountId),
     resolveSources: (account) => [Object.keys(account.config.groups ?? {})],
     normalizeId: (entry) => entry.trim() || null,
   });

@@ -16,6 +16,7 @@ export {
 } from "../channels/plugins/setup-helpers.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export {
+  clearAccountEntryFields,
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "../channels/plugins/config-helpers.js";

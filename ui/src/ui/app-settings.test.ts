@@ -299,7 +299,7 @@ describe("applySettingsFromUrl", () => {
   });
 
   it("hydrates query token params and strips them from the URL", () => {
-    setTestWindowUrl("https://control.example/ui/overview?token=abc123");
+    setTestWindowUrl("https://control.example/ui/overview?token=abc123&password=sekret");
     const host = createHost("overview");
     host.settings.gatewayUrl = "wss://control.example/openclaw";
 
@@ -307,6 +307,9 @@ describe("applySettingsFromUrl", () => {
 
     expect(host.settings.token).toBe("abc123");
     expect(window.location.search).toBe("");
+    expect(JSON.parse(localStorage.getItem("openclaw.control.settings.v1") ?? "{}").token).toBe(
+      undefined,
+    );
   });
 
   it("prefers fragment tokens over legacy query tokens when both are present", () => {

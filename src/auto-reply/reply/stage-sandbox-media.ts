@@ -48,7 +48,9 @@ export async function stageSandboxMedia(params: {
   }
 
   await fs.mkdir(effectiveWorkspaceDir, { recursive: true });
-  const remoteAttachmentRoots = resolveChannelRemoteInboundAttachmentRoots({ cfg, ctx }) ?? [];
+  const remoteAttachmentRoots = ctx.MediaRemoteHost
+    ? (resolveChannelRemoteInboundAttachmentRoots({ cfg, ctx }) ?? [])
+    : [];
 
   const usedNames = new Set<string>();
   const staged = new Map<string, string>(); // absolute source -> relative sandbox path

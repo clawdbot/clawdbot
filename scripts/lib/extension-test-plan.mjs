@@ -21,6 +21,13 @@ import { listAvailableExtensionIds } from "./changed-extensions.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
 export const DEFAULT_EXTENSION_TEST_SHARD_COUNT = 6;
+const EXTENSION_TEST_COST_MULTIPLIERS = {
+  "test/vitest/vitest.extension-feishu.config.ts": 1.6,
+  "test/vitest/vitest.extension-msteams.config.ts": 1.6,
+  // This shared config is comparatively cheap per file, so raw file count
+  // overstates its real wall-clock cost during CI shard planning.
+  "test/vitest/vitest.extensions.config.ts": 0.45,
+};
 
 function normalizeRelative(inputPath) {
   return inputPath.split(path.sep).join("/");
@@ -51,6 +58,11 @@ function countTestFiles(rootPath) {
   }
 
   return total;
+}
+
+function estimatePlanCost(config, testFileCount) {
+  const multiplier = EXTENSION_TEST_COST_MULTIPLIERS[config] ?? 1;
+  return Math.max(1, Math.ceil(testFileCount * multiplier));
 }
 
 function resolveExtensionDirectory(targetArg, cwd = process.cwd()) {
@@ -152,9 +164,11 @@ export function resolveExtensionTestPlan(params = {}) {
     (sum, root) => sum + countTestFiles(path.join(repoRoot, root)),
     0,
   );
+  const estimatedCost = estimatePlanCost(config, testFileCount);
 
   return {
     config,
+    estimatedCost,
     extensionDir: relativeExtensionDir,
     extensionId,
     hasTests: testFileCount > 0,
@@ -171,11 +185,13 @@ function mergeTestPlans(plans) {
       config: plan.config,
       extensionIds: [],
       roots: [],
+      estimatedCost: 0,
       testFileCount: 0,
     };
 
     current.extensionIds.push(plan.extensionId);
     current.roots.push(...plan.roots);
+    current.estimatedCost += plan.estimatedCost;
     current.testFileCount += plan.testFileCount;
     groupsByConfig.set(plan.config, current);
   }
@@ -193,6 +209,7 @@ function mergeTestPlans(plans) {
     extensionIds: plans
       .map((plan) => plan.extensionId)
       .toSorted((left, right) => left.localeCompare(right)),
+    estimatedCost: plans.reduce((sum, plan) => sum + plan.estimatedCost, 0),
     hasTests: plans.length > 0,
     planGroups,
     testFileCount: plans.reduce((sum, plan) => sum + plan.testFileCount, 0),
@@ -215,6 +232,9 @@ function pickLeastLoadedShard(shards) {
       return index;
     }
     const best = shards[bestIndex];
+    if (shard.estimatedCost !== best.estimatedCost) {
+      return shard.estimatedCost < best.estimatedCost ? index : bestIndex;
+    }
     if (shard.testFileCount !== best.testFileCount) {
       return shard.testFileCount < best.testFileCount ? index : bestIndex;
     }
@@ -233,6 +253,9 @@ export function createExtensionTestShards(params = {}) {
     .map((extensionId) => resolveExtensionTestPlan({ cwd, targetArg: extensionId }))
     .filter((plan) => plan.hasTests)
     .toSorted((left, right) => {
+      if (left.estimatedCost !== right.estimatedCost) {
+        return right.estimatedCost - left.estimatedCost;
+      }
       if (left.testFileCount !== right.testFileCount) {
         return right.testFileCount - left.testFileCount;
       }
@@ -241,6 +264,7 @@ export function createExtensionTestShards(params = {}) {
 
   const effectiveShardCount = Math.min(shardCount, Math.max(1, plans.length));
   const shards = Array.from({ length: effectiveShardCount }, () => ({
+    estimatedCost: 0,
     plans: [],
     testFileCount: 0,
   }));
@@ -248,6 +272,7 @@ export function createExtensionTestShards(params = {}) {
   for (const plan of plans) {
     const targetIndex = pickLeastLoadedShard(shards);
     shards[targetIndex].plans.push(plan);
+    shards[targetIndex].estimatedCost += plan.estimatedCost;
     shards[targetIndex].testFileCount += plan.testFileCount;
   }
 

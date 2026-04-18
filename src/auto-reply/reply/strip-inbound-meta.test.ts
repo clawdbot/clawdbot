@@ -121,7 +121,9 @@ This is plain user text`;
 
   it("strips an active-memory prompt prefix block even when earlier text precedes it", () => {
     const input = `Queued earlier user turn\n\n${ACTIVE_MEMORY_PREFIX_BLOCK}\n\nWhat should I grab on the way?`;
-    expect(stripInboundMetadata(input)).toBe("Queued earlier user turn\n\nWhat should I grab on the way?");
+    expect(stripInboundMetadata(input)).toBe(
+      "Queued earlier user turn\n\nWhat should I grab on the way?",
+    );
   });
 
   it("does not strip active-memory lookalike user text without exact tag lines", () => {

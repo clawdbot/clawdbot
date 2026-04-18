@@ -36,8 +36,8 @@ function makeParams(
         source: "run",
         generatedAt: Date.now(),
         workspaceDir: "/tmp/workspace",
-        bootstrapMaxChars: options?.omitBootstrapLimits ? undefined : 20_000,
-        bootstrapTotalMaxChars: options?.omitBootstrapLimits ? undefined : 150_000,
+        bootstrapMaxChars: options?.omitBootstrapLimits ? undefined : 12_000,
+        bootstrapTotalMaxChars: options?.omitBootstrapLimits ? undefined : 60_000,
         sandbox: { mode: "off", sandboxed: false },
         systemPrompt: {
           chars: 1_000,
@@ -50,7 +50,7 @@ function makeParams(
             path: "/tmp/workspace/AGENTS.md",
             missing: false,
             rawChars: truncated ? 200_000 : 10_000,
-            injectedChars: truncated ? 20_000 : 10_000,
+            injectedChars: truncated ? 12_000 : 10_000,
             truncated,
           },
         ],
@@ -76,7 +76,7 @@ function makeParams(
 describe("buildContextReply", () => {
   it("shows bootstrap truncation warning in list output when context exceeds configured limits", async () => {
     const result = await buildContextReply(makeParams("/context list", true));
-    expect(result.text).toContain("Bootstrap max/total: 150,000 chars");
+    expect(result.text).toContain("Bootstrap max/total: 60,000 chars");
     expect(result.text).toContain("⚠ Bootstrap context is over configured limits");
     expect(result.text).toContain("Causes: 1 file(s) exceeded max/file.");
   });

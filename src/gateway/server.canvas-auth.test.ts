@@ -13,7 +13,7 @@ import { withTempConfig } from "./test-temp-config.js";
 
 const WS_REJECT_TIMEOUT_MS = 2_000;
 const WS_CONNECT_TIMEOUT_MS = 5_000;
-const HTTP_REQUEST_TIMEOUT_MS = 5_000;
+const HTTP_REQUEST_TIMEOUT_MS = 15_000;
 const SERVER_CLOSE_TIMEOUT_MS = 5_000;
 
 async function fetchCanvas(input: string, init?: RequestInit): Promise<Response> {

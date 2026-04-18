@@ -396,7 +396,7 @@
 /* Section Hero */
 .config-section-hero {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 14px;
   padding: 16px 22px;
   border-bottom: 1px solid var(--border);
@@ -431,15 +431,14 @@
   display: grid;
   gap: 2px;
   min-width: 0;
+  flex: 1;
 }
 
 .config-section-hero__title {
   font-size: 15px;
   font-weight: 650;
   letter-spacing: -0.02em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  line-height: 1.3;
 }
 
 .config-section-hero__desc {
@@ -768,7 +767,7 @@
 
 .config-section-card__header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 14px;
   padding: 18px 20px;
   background: var(--bg-accent);
@@ -800,6 +799,8 @@
 .config-section-card__titles {
   flex: 1;
   min-width: 0;
+  display: grid;
+  gap: 4px;
 }
 
 .config-section-card__title {
@@ -807,9 +808,7 @@
   font-size: 14px;
   font-weight: 650;
   letter-spacing: -0.015em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  line-height: 1.35;
 }
 
 .config-section-card__desc {
@@ -1318,8 +1317,9 @@
 
 .cfg-object__header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
+  gap: 12px;
   padding: 10px 12px;
   cursor: pointer;
   list-style: none;
@@ -1339,6 +1339,7 @@
   font-size: 13px;
   font-weight: 600;
   color: var(--text);
+  line-height: 1.35;
 }
 
 .cfg-object__title-wrap {
@@ -1351,6 +1352,8 @@
   width: 18px;
   height: 18px;
   color: var(--muted);
+  flex-shrink: 0;
+  margin-top: 1px;
   transition: transform var(--duration-normal) var(--ease-out);
 }
 
@@ -1385,11 +1388,12 @@
 
 .cfg-array__header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 14px;
   padding: 10px 12px;
   background: var(--bg-accent);
   border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
 }
 
 :root[data-theme-mode="light"] .cfg-array__header {
@@ -1415,6 +1419,7 @@
   padding: 4px 10px;
   background: var(--bg-elevated);
   border-radius: var(--radius-full);
+  margin-left: auto;
 }
 
 :root[data-theme-mode="light"] .cfg-array__count {

@@ -1,5 +1,6 @@
 export {
   evaluateSessionFreshness,
+  getRuntimeConfigSourceSnapshot,
   loadConfig,
   loadSessionStore,
   recordSessionMetaFromInbound,

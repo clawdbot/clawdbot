@@ -4,6 +4,7 @@ import type {
   ProviderFetchUsageSnapshotContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth-result";
+import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import { fetchGeminiUsage } from "openclaw/plugin-sdk/provider-usage";
 import { formatGoogleOauthApiKey, parseGoogleUsageToken } from "./oauth-token-shared.js";
@@ -29,8 +30,8 @@ async function fetchGeminiCliUsage(ctx: ProviderFetchUsageSnapshotContext) {
   return await fetchGeminiUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn, PROVIDER_ID);
 }
 
-export function registerGoogleGeminiCliProvider(api: OpenClawPluginApi) {
-  api.registerProvider({
+export function buildGoogleGeminiCliProvider(): ProviderPlugin {
+  return {
     id: PROVIDER_ID,
     label: PROVIDER_LABEL,
     docsPath: "/providers/models",
@@ -128,5 +129,9 @@ export function registerGoogleGeminiCliProvider(api: OpenClawPluginApi) {
       };
     },
     fetchUsageSnapshot: async (ctx) => await fetchGeminiCliUsage(ctx),
-  });
+  };
+}
+
+export function registerGoogleGeminiCliProvider(api: OpenClawPluginApi) {
+  api.registerProvider(buildGoogleGeminiCliProvider());
 }

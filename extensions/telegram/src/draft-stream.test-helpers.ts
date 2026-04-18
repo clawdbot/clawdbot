@@ -11,6 +11,7 @@ export type TestDraftStream = {
   lastDeliveredText: ReturnType<typeof vi.fn<() => string>>;
   clear: ReturnType<typeof vi.fn<() => Promise<void>>>;
   stop: ReturnType<typeof vi.fn<() => Promise<void>>>;
+  discard: ReturnType<typeof vi.fn<() => Promise<void>>>;
   materialize: ReturnType<typeof vi.fn<() => Promise<number | undefined>>>;
   forceNewMessage: ReturnType<typeof vi.fn<() => void>>;
   sendMayHaveLanded: ReturnType<typeof vi.fn<() => boolean>>;
@@ -22,6 +23,7 @@ export function createTestDraftStream(params?: {
   previewMode?: DraftPreviewMode;
   onUpdate?: (text: string) => void;
   onStop?: () => void | Promise<void>;
+  onDiscard?: () => void | Promise<void>;
   clearMessageIdOnForceNew?: boolean;
 }): TestDraftStream {
   let messageId = params?.messageId;
@@ -41,6 +43,9 @@ export function createTestDraftStream(params?: {
     clear: vi.fn().mockResolvedValue(undefined),
     stop: vi.fn().mockImplementation(async () => {
       await params?.onStop?.();
+    }),
+    discard: vi.fn().mockImplementation(async () => {
+      await params?.onDiscard?.();
     }),
     materialize: vi.fn().mockImplementation(async () => messageId),
     forceNewMessage: vi.fn().mockImplementation(() => {
@@ -75,6 +80,7 @@ export function createSequencedTestDraftStream(startMessageId = 1001): TestDraft
     lastDeliveredText: vi.fn().mockImplementation(() => lastDeliveredText),
     clear: vi.fn().mockResolvedValue(undefined),
     stop: vi.fn().mockResolvedValue(undefined),
+    discard: vi.fn().mockResolvedValue(undefined),
     materialize: vi.fn().mockImplementation(async () => activeMessageId),
     forceNewMessage: vi.fn().mockImplementation(() => {
       activeMessageId = undefined;

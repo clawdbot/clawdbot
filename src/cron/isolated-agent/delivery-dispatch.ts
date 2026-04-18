@@ -351,6 +351,7 @@ async function queueCronAwarenessSystemEvent(params: {
         agentId: params.agentId,
       }),
       contextKey: params.deliveryIdempotencyKey,
+      trusted: false,
     });
   } catch (err) {
     await logCronDeliveryWarn(
@@ -394,7 +395,7 @@ function isTransientDirectCronDeliveryError(error: unknown): boolean {
 
 function resolveDirectCronRetryDelaysMs(): readonly number[] {
   return process.env.NODE_ENV === "test" && process.env.OPENCLAW_TEST_FAST === "1"
-    ? [8, 16, 32]
+    ? [0, 0, 0]
     : [5_000, 10_000, 20_000];
 }
 

@@ -1,4 +1,4 @@
-import { normalizeStringifiedOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeStringifiedOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { MatrixConfig } from "../../types.js";
 import type { MatrixClient } from "../sdk.js";

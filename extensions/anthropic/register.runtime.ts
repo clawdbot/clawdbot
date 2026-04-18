@@ -18,7 +18,10 @@ import {
   upsertAuthProfile,
   validateAnthropicSetupToken,
 } from "openclaw/plugin-sdk/provider-auth";
-import { cloneFirstTemplateModel } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  cloneFirstTemplateModel,
+  type ProviderPlugin,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import * as claudeCliAuth from "./cli-auth-seam.js";
@@ -395,11 +398,10 @@ async function runAnthropicCliMigrationNonInteractive(ctx: {
   };
 }
 
-export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
+export function buildAnthropicProvider(): ProviderPlugin {
   const providerId = "anthropic";
   const defaultAnthropicModel = DEFAULT_ANTHROPIC_MODEL;
-  api.registerCliBackend(buildAnthropicCliBackend());
-  api.registerProvider({
+  return {
     id: providerId,
     label: "Anthropic",
     docsPath: "/providers/models",
@@ -505,6 +507,11 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
         store: ctx.store,
         profileId: ctx.profileId,
       }),
-  });
+  };
+}
+
+export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
+  api.registerCliBackend(buildAnthropicCliBackend());
+  api.registerProvider(buildAnthropicProvider());
   api.registerMediaUnderstandingProvider(anthropicMediaUnderstandingProvider);
 }

@@ -227,4 +227,22 @@ describe("applyNonInteractiveGatewayConfig token resolution chain", () => {
       delete process.env[newRefId];
     }
   });
+
+  it("fails when --gateway-token-ref-env points to a missing env var", () => {
+    const runtime = createRuntime();
+
+    const result = applyNonInteractiveGatewayConfig({
+      nextConfig: {} as OpenClawConfig,
+      opts: { gatewayTokenRefEnv: "MISSING_GATEWAY_TOKEN_ENV" } as OnboardOptions,
+      runtime: runtime as never,
+      defaultPort: 18789,
+    });
+
+    expect(result).toBeNull();
+    expect(runtime.error).toHaveBeenCalledWith(
+      'Environment variable "MISSING_GATEWAY_TOKEN_ENV" is missing or empty.',
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(randomToken).not.toHaveBeenCalled();
+  });
 });

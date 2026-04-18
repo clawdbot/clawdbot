@@ -14,6 +14,7 @@ vi.mock("./manifest-registry.js", async (importOriginal) => {
   };
 });
 
+import { resolveBundledExplicitRuntimeWebSearchProvidersFromPublicArtifacts as resolveExplicitRuntimeWebSearchProviders } from "./web-provider-public-artifacts.explicit.js";
 import {
   resolveBundledWebFetchProvidersFromPublicArtifacts,
   resolveBundledWebSearchProvidersFromPublicArtifacts,
@@ -32,6 +33,16 @@ describe("web provider public artifacts explicit fast path", () => {
 
     expect(provider?.pluginId).toBe("brave");
     expect(provider?.createTool({ config: {} as never })).toBeNull();
+    expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
+  });
+
+  it("resolves bundled runtime web search providers by explicit plugin id", () => {
+    const provider = resolveExplicitRuntimeWebSearchProviders({
+      onlyPluginIds: ["google"],
+    })?.[0];
+
+    expect(provider?.pluginId).toBe("google");
+    expect(provider?.createTool({ config: {} as never })).not.toBeNull();
     expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
   });
 

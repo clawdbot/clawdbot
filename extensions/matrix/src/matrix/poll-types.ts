@@ -7,8 +7,8 @@
  * - m.poll.end - Closes a poll
  */
 
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import { normalizePollInput, type PollInput } from "../runtime-api.js";
+import { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/poll-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const M_POLL_START = "m.poll.start" as const;
 export const M_POLL_RESPONSE = "m.poll.response" as const;

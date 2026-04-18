@@ -8,6 +8,8 @@ vi.mock("./facade-loader.js", () => ({
 
 describe("plugin-sdk browser facades", () => {
   beforeEach(() => {
+    // Facade wrappers cache successful loads; each case needs a clean wrapper module.
+    vi.resetModules();
     loadBundledPluginPublicSurfaceModuleSync.mockReset();
   });
 

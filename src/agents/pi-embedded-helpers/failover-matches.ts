@@ -42,6 +42,9 @@ const COMMON_AUTH_ERROR_PATTERNS = [
 
 const ZAI_BILLING_CODE_1311_RE = /"code"\s*:\s*1311\b/;
 const ZAI_AUTH_CODE_1113_RE = /"code"\s*:\s*1113\b/;
+const STATUS_INTERNAL_SERVER_ERROR_RE = /\bstatus:\s*internal server error\b/i;
+const STATUS_INTERNAL_SERVER_ERROR_WITH_500_RE =
+  /^(?=[\s\S]*\bstatus:\s*internal server error\b)(?=[\s\S]*\bcode["']?\s*[:=]\s*500\b)/i;
 
 const ZAI_AUTH_ERROR_PATTERNS = [
   // Z.ai: error 1113 = wrong endpoint or invalid credentials (#48988)
@@ -95,6 +98,8 @@ const ERROR_PATTERNS = {
     "service unavailable",
     "deadline exceeded",
     "context deadline exceeded",
+    /^(?=[\s\S]*\bgot status:\s*internal\b)(?=[\s\S]*\bcode["']?\s*[:=]\s*500\b)/i,
+    /^(?=[\s\S]*["']status["']\s*:\s*["']internal["'])(?=[\s\S]*["']code["']\s*:\s*500\b)/i,
     "connection error",
     "network error",
     "network request failed",
@@ -233,5 +238,13 @@ export function isOverloadedErrorMessage(raw: string): boolean {
 }
 
 export function isServerErrorMessage(raw: string): boolean {
-  return matchesErrorPatterns(raw, ERROR_PATTERNS.serverError);
+  const value = normalizeLowercaseStringOrEmpty(raw);
+  if (!value) {
+    return false;
+  }
+  if (STATUS_INTERNAL_SERVER_ERROR_WITH_500_RE.test(value)) {
+    return true;
+  }
+  const scrubbed = value.replace(STATUS_INTERNAL_SERVER_ERROR_RE, "").trim();
+  return scrubbed.length > 0 && matchesErrorPatterns(scrubbed, ERROR_PATTERNS.serverError);
 }

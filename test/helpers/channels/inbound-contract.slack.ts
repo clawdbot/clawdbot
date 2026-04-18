@@ -34,7 +34,7 @@ type SlackTestApi = {
 const slackPrepareTestApiModuleId = resolveRelativeBundledPluginPublicModuleId({
   fromModuleUrl: import.meta.url,
   pluginId: "slack",
-  artifactBasename: "test-api.js",
+  artifactBasename: "inbound-contract-test-api.js",
 });
 
 let slackTestApiPromise: Promise<SlackTestApi> | undefined;

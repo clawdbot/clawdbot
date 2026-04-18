@@ -1,20 +1,13 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { uniqueSortedStrings } from "../../../test/helpers/plugins/contracts-testkit.js";
 import { withBundledPluginAllowlistCompat } from "../bundled-compat.js";
-import {
-  loadPluginManifestRegistry,
-  resolveManifestContractPluginIds,
-} from "../manifest-registry.js";
+import { resolveManifestContractPluginIds } from "../manifest-registry.js";
 import { __testing as providerTesting } from "../providers.js";
-import { resolvePluginWebSearchProviders } from "../web-search-providers.runtime.js";
+import { resolveBundledContractSnapshotPluginIds } from "./inventory/bundled-capability-metadata.js";
 import { providerContractCompatPluginIds } from "./registry.js";
 
 function resolveBundledManifestProviderPluginIds() {
-  return uniqueSortedStrings(
-    loadPluginManifestRegistry({})
-      .plugins.filter((plugin) => plugin.origin === "bundled" && plugin.providers.length > 0)
-      .map((plugin) => plugin.id),
-  );
+  return uniqueSortedStrings(resolveBundledContractSnapshotPluginIds("providerIds"));
 }
 
 function expectPluginAllowlistContains(
@@ -68,7 +61,7 @@ describe("plugin loader contract", () => {
       env: { VITEST: "1" } as NodeJS.ProcessEnv,
     });
     webSearchPluginIds = uniqueSortedStrings(
-      resolvePluginWebSearchProviders({ origin: "bundled" }).map((entry) => entry.pluginId),
+      resolveBundledContractSnapshotPluginIds("webSearchProviderIds"),
     );
     bundledWebSearchPluginIds = uniqueSortedStrings(
       resolveManifestContractPluginIds({

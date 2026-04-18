@@ -666,6 +666,7 @@ describe("gateway server cron", () => {
   test("returns from cron.run immediately while isolated work continues in background", async () => {
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-run-detached-",
+      cronEnabled: false,
     });
 
     const { server, ws } = await startServerWithClient();
@@ -733,6 +734,7 @@ describe("gateway server cron", () => {
 
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-run-busy-",
+      cronEnabled: false,
       jobs: [
         {
           id: "busy-job",
@@ -786,6 +788,7 @@ describe("gateway server cron", () => {
     const now = Date.now();
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-run-not-due-",
+      cronEnabled: false,
       jobs: [
         {
           id: "future-job",

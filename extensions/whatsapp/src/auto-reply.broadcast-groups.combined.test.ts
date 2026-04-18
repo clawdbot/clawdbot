@@ -138,6 +138,57 @@ describe("broadcast groups", () => {
     resetLoadConfigMock();
   });
 
+  it("keeps named-account group broadcast routes on the scoped session key", async () => {
+    setLoadConfigMock({
+      channels: {
+        whatsapp: {
+          allowFrom: ["*"],
+          accounts: {
+            work: {
+              allowFrom: ["*"],
+            },
+          },
+        },
+      },
+      agents: {
+        defaults: { maxConcurrent: 10 },
+        list: [{ id: "alfred" }, { id: "baerbel" }],
+      },
+      broadcast: {
+        strategy: "sequential",
+        "123@g.us": ["alfred", "baerbel"],
+      },
+    } satisfies OpenClawConfig);
+
+    const seen: string[] = [];
+    const resolver = vi.fn(async (ctx: { SessionKey?: unknown }) => {
+      seen.push(String(ctx.SessionKey));
+      return { text: "ok" };
+    });
+
+    const { spies, onMessage } = await monitorWebChannelWithCapture(resolver);
+
+    await sendWebGroupInboundMessage({
+      onMessage,
+      spies,
+      body: "@bot ping",
+      id: "g-work-1",
+      senderE164: "+111",
+      senderName: "Alice",
+      mentionedJids: ["999@s.whatsapp.net"],
+      selfE164: "+999",
+      selfJid: "999@s.whatsapp.net",
+      accountId: "work",
+    });
+
+    expect(resolver).toHaveBeenCalledTimes(2);
+    expect(seen).toEqual([
+      "agent:alfred:whatsapp:group:123@g.us:thread:whatsapp-account-work",
+      "agent:baerbel:whatsapp:group:123@g.us:thread:whatsapp-account-work",
+    ]);
+    resetLoadConfigMock();
+  });
+
   it("broadcasts in parallel by default", async () => {
     setLoadConfigMock({
       channels: { whatsapp: { allowFrom: ["*"] } },

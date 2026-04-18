@@ -140,6 +140,50 @@ describe("buildGatewayCronService", () => {
     }
   });
 
+  it("preserves trust downgrades when cron enqueues system events", () => {
+    const cfg = createCronConfig("server-cron-untrusted");
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const cronDeps = (
+        state.cron as unknown as {
+          state?: {
+            deps?: {
+              enqueueSystemEvent?: (
+                optsText: string,
+                opts?: {
+                  agentId?: string;
+                  sessionKey?: string;
+                  contextKey?: string;
+                  trusted?: boolean;
+                },
+              ) => void;
+            };
+          };
+        }
+      ).state?.deps;
+
+      cronDeps?.enqueueSystemEvent?.("hello", {
+        sessionKey: "discord:channel:ops",
+        contextKey: "cron:test",
+        trusted: false,
+      });
+
+      expect(enqueueSystemEventMock).toHaveBeenCalledWith("hello", {
+        sessionKey: "agent:main:discord:channel:ops",
+        contextKey: "cron:test",
+        trusted: false,
+      });
+    } finally {
+      state.cron.stop();
+    }
+  });
+
   it("blocks private webhook URLs via SSRF-guarded fetch", async () => {
     const cfg = createCronConfig("server-cron-ssrf");
     loadConfigMock.mockReturnValue(cfg);

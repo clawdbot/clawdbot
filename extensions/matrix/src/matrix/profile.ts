@@ -1,7 +1,7 @@
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MatrixClient } from "./sdk.js";
 
 export const MATRIX_PROFILE_AVATAR_MAX_BYTES = 10 * 1024 * 1024;

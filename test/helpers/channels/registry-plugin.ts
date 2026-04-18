@@ -1,4 +1,5 @@
 import { listBundledChannelPlugins } from "../../../src/channels/plugins/bundled.js";
+import { normalizeChannelMeta } from "../../../src/channels/plugins/meta-normalization.js";
 import type { ChannelPlugin } from "../../../src/channels/plugins/types.js";
 
 type PluginContractEntry = {
@@ -11,10 +12,7 @@ export function getPluginContractRegistry(): PluginContractEntry[] {
     id: plugin.id,
     plugin: {
       ...plugin,
-      meta: {
-        ...plugin.meta,
-        id: plugin.id,
-      },
+      meta: normalizeChannelMeta({ id: plugin.id, meta: plugin.meta }),
     },
   }));
 }

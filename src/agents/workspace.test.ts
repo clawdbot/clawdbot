@@ -14,7 +14,9 @@ import {
   DEFAULT_USER_FILENAME,
   ensureAgentWorkspace,
   filterBootstrapFilesForSession,
+  isWorkspaceBootstrapPending,
   loadWorkspaceBootstrapFiles,
+  resolveWorkspaceBootstrapStatus,
   resolveDefaultAgentWorkspaceDir,
   type WorkspaceBootstrapFile,
 } from "./workspace.js";
@@ -172,6 +174,26 @@ describe("ensureAgentWorkspace", () => {
       "utf-8",
     );
     expect(persisted).toContain('"setupCompletedAt": "2026-03-15T02:30:00.000Z"');
+  });
+
+  it("reports bootstrap pending while BOOTSTRAP.md exists and setup is incomplete", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toBe("pending");
+    await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(true);
+  });
+
+  it("reports bootstrap complete once BOOTSTRAP.md is deleted and completion is recorded", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+    await fs.unlink(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toBe("complete");
+    await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(false);
   });
 
   it("writes the current fenced HEARTBEAT template body into new workspaces", async () => {

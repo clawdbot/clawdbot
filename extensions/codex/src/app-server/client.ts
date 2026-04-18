@@ -74,6 +74,13 @@ export class CodexAppServerClient {
         ),
       );
     });
+    // Guard against unhandled EPIPE / write-after-close errors on the stdin
+    // stream. When the child process terminates abruptly the pipe can break
+    // before the "exit" event fires, so a pending writeMessage() produces an
+    // asynchronous error on stdin that would otherwise crash the gateway.
+    child.stdin.on?.("error", (error) =>
+      this.closeWithError(error instanceof Error ? error : new Error(String(error))),
+    );
   }
 
   static start(options?: Partial<CodexAppServerStartOptions>): CodexAppServerClient {
@@ -212,6 +219,9 @@ export class CodexAppServerClient {
   }
 
   private writeMessage(message: RpcRequest | RpcResponse): void {
+    if (this.closed) {
+      return;
+    }
     this.child.stdin.write(`${JSON.stringify(message)}\n`);
   }
 
@@ -300,7 +310,9 @@ export class CodexAppServerClient {
       return;
     }
     this.closed = true;
+    this.lines.close();
     this.rejectPendingRequests(error);
+    closeCodexAppServerTransport(this.child);
   }
 
   private rejectPendingRequests(error: Error): void {

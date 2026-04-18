@@ -67,7 +67,7 @@ describe("healthCommand (coverage)", () => {
     });
   });
 
-  it("prints the rich text summary when linked and configured", async () => {
+  it("prints the rich text summary and verbose gateway details", async () => {
     const recent = createRecentSessionRows();
     callGatewayMock.mockResolvedValueOnce({
       ok: true,
@@ -128,40 +128,17 @@ describe("healthCommand (coverage)", () => {
       },
     } satisfies HealthSummary);
 
-    await healthCommand({ json: false, timeoutMs: 1000 }, runtime as never);
-
-    expect(runtime.exit).not.toHaveBeenCalled();
-    expect(stripAnsi(runtime.log.mock.calls.map((c) => String(c[0])).join("\n"))).toMatch(
-      /WhatsApp: linked/i,
-    );
-    expect(logWebSelfIdMock).toHaveBeenCalled();
-  });
-
-  it("prints gateway connection details in verbose mode", async () => {
-    callGatewayMock.mockResolvedValueOnce({
-      ok: true,
-      ts: Date.now(),
-      durationMs: 5,
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-      heartbeatSeconds: 60,
-      defaultAgentId: "main",
-      agents: [],
-      sessions: {
-        path: "/tmp/sessions.json",
-        count: 0,
-        recent: [],
-      },
-    } satisfies HealthSummary);
-
     await healthCommand({ json: false, verbose: true, timeoutMs: 1000 }, runtime as never);
 
+    expect(runtime.exit).not.toHaveBeenCalled();
+    const output = stripAnsi(runtime.log.mock.calls.map((c) => String(c[0])).join("\n"));
+    expect(output).toMatch(/WhatsApp: linked/i);
     expect(runtime.log.mock.calls.slice(0, 3)).toEqual([
       ["Gateway connection:"],
       ["  Gateway mode: local"],
       ["  Gateway target: ws://127.0.0.1:18789"],
     ]);
     expect(buildGatewayConnectionDetailsMock).toHaveBeenCalled();
+    expect(logWebSelfIdMock).toHaveBeenCalled();
   });
 });

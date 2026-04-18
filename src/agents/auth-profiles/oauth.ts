@@ -8,7 +8,11 @@ import { loadConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { withFileLock } from "../../infra/file-lock.js";
+import {
+  FILE_LOCK_TIMEOUT_ERROR_CODE,
+  type FileLockTimeoutError,
+  withFileLock,
+} from "../../infra/file-lock.js";
 import {
   formatProviderAuthProfileApiKeyWithPlugin,
   refreshProviderOAuthCredentialWithPlugin,
@@ -16,7 +20,6 @@ import {
 import { resolveSecretRefString, type SecretRefResolveCache } from "../../secrets/resolve.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
-import { writeCodexCliCredentials } from "../cli-credentials.js";
 import {
   AUTH_STORE_LOCK_OPTIONS,
   OAUTH_REFRESH_CALL_TIMEOUT_MS,
@@ -25,9 +28,13 @@ import {
 } from "./constants.js";
 import { resolveTokenExpiryState } from "./credential-state.js";
 import { formatAuthDoctorHint } from "./doctor.js";
+import { resolveEffectiveOAuthCredential } from "./effective-oauth.js";
 import {
   areOAuthCredentialsEquivalent,
-  readManagedExternalCliCredential,
+  hasUsableOAuthCredential,
+  isSafeToUseExternalCliCredential,
+  readExternalCliBootstrapCredential,
+  shouldReplaceStoredOAuthCredential,
 } from "./external-cli-sync.js";
 import { ensureAuthStoreFile, resolveAuthStorePath, resolveOAuthRefreshLockPath } from "./paths.js";
 import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
@@ -160,10 +167,11 @@ async function loadFreshStoredOAuthCredential(params: {
 }): Promise<OAuthCredential | null> {
   const reloadedStore = loadAuthProfileStoreForSecretsRuntime(params.agentDir);
   const reloaded = reloadedStore.profiles[params.profileId];
-  if (reloaded?.type !== "oauth" || reloaded.provider !== params.provider) {
-    return null;
-  }
-  if (!Number.isFinite(reloaded.expires) || Date.now() >= reloaded.expires) {
+  if (
+    reloaded?.type !== "oauth" ||
+    reloaded.provider !== params.provider ||
+    !hasUsableOAuthCredential(reloaded)
+  ) {
     return null;
   }
   if (
@@ -281,6 +289,28 @@ async function withRefreshCallTimeout<T>(
       clearTimeout(timeoutHandle);
     }
   }
+}
+
+function createOAuthRefreshContentionError(params: {
+  profileId: string;
+  provider: string;
+  cause?: unknown;
+}): Error & { code: "refresh_contention" } {
+  const error = new Error(
+    `OAuth refresh failed (refresh_contention): another process is already refreshing ${params.provider} for ${params.profileId}`,
+    { cause: params.cause },
+  );
+  return Object.assign(error, { code: "refresh_contention" as const });
+}
+
+function isGlobalOAuthRefreshLockTimeoutError(
+  error: unknown,
+  refreshLockPath: string,
+): error is FileLockTimeoutError {
+  return (
+    (error as { code?: string } | undefined)?.code === FILE_LOCK_TIMEOUT_ERROR_CODE &&
+    (error as { lockPath?: string } | undefined)?.lockPath === `${refreshLockPath}.lock`
+  );
 }
 
 /**
@@ -546,220 +576,207 @@ async function doRefreshOAuthTokenWithLock(params: {
   // paths only take the per-store lock, so no cycle is possible.
   const globalRefreshLockPath = resolveOAuthRefreshLockPath(params.provider, params.profileId);
 
-  return await withFileLock(globalRefreshLockPath, OAUTH_REFRESH_LOCK_OPTIONS, async () =>
-    withFileLock(authPath, AUTH_STORE_LOCK_OPTIONS, async () => {
-      // Locked refresh must bypass runtime snapshots so we can adopt fresher
-      // on-disk credentials written by another refresh attempt.
-      const store = loadAuthProfileStoreForSecretsRuntime(params.agentDir);
-      const cred = store.profiles[params.profileId];
-      if (!cred || cred.type !== "oauth") {
-        return null;
-      }
-
-      if (Date.now() < cred.expires) {
-        return {
-          apiKey: await buildOAuthApiKey(cred.provider, cred),
-          newCredentials: cred,
-        };
-      }
-
-      // Inside-the-lock recheck: a prior agent that already held this lock may
-      // have completed a refresh and mirrored its fresh credential into the
-      // main store. If so, adopt into the local store and return without
-      // issuing another HTTP refresh. This is what turns N serialized
-      // refreshes into 1 refresh + (N-1) adoptions, preventing the
-      // `refresh_token_reused` storm reported in #26322.
-      if (params.agentDir) {
-        try {
-          const mainStore = loadAuthProfileStoreForSecretsRuntime(undefined);
-          const mainCred = mainStore.profiles[params.profileId];
-          if (
-            mainCred?.type === "oauth" &&
-            mainCred.provider === cred.provider &&
-            Number.isFinite(mainCred.expires) &&
-            Date.now() < mainCred.expires &&
-            // Defense-in-depth identity gate. Tolerates the pure upgrade
-            // case (sub predates identity capture) but refuses positive
-            // mismatch, identity regression, and non-overlapping fields.
-            isSafeToCopyOAuthIdentity(cred, mainCred)
-          ) {
-            store.profiles[params.profileId] = { ...mainCred };
-            saveAuthProfileStore(store, params.agentDir);
-            log.info("adopted fresh OAuth credential from main store (under refresh lock)", {
-              profileId: params.profileId,
-              agentDir: params.agentDir,
-              expires: new Date(mainCred.expires).toISOString(),
-            });
-            return {
-              apiKey: await buildOAuthApiKey(mainCred.provider, mainCred),
-              newCredentials: mainCred,
-            };
-          } else if (
-            mainCred?.type === "oauth" &&
-            mainCred.provider === cred.provider &&
-            Number.isFinite(mainCred.expires) &&
-            Date.now() < mainCred.expires &&
-            !isSafeToCopyOAuthIdentity(cred, mainCred)
-          ) {
-            // Main has fresh creds but they belong to a DIFFERENT account —
-            // record the refusal so operators can diagnose, then proceed to
-            // our own refresh rather than leaking credentials.
-            log.warn("refused to adopt fresh main-store OAuth credential: identity mismatch", {
-              profileId: params.profileId,
-              agentDir: params.agentDir,
-            });
-          }
-        } catch (err) {
-          log.debug("inside-lock main-store adoption failed; proceeding to refresh", {
-            profileId: params.profileId,
-            error: formatErrorMessage(err),
-          });
+  try {
+    return await withFileLock(globalRefreshLockPath, OAUTH_REFRESH_LOCK_OPTIONS, async () =>
+      withFileLock(authPath, AUTH_STORE_LOCK_OPTIONS, async () => {
+        // Locked refresh must bypass runtime snapshots so we can adopt fresher
+        // on-disk credentials written by another refresh attempt.
+        const store = loadAuthProfileStoreForSecretsRuntime(params.agentDir);
+        const cred = store.profiles[params.profileId];
+        if (!cred || cred.type !== "oauth") {
+          return null;
         }
-      }
 
-      const externallyManaged = readManagedExternalCliCredential({
-        profileId: params.profileId,
-        credential: cred,
-      });
-      if (externallyManaged) {
-        if (!areOAuthCredentialsEquivalent(cred, externallyManaged)) {
-          store.profiles[params.profileId] = externallyManaged;
-          saveAuthProfileStore(store, params.agentDir);
-        }
-        if (Date.now() < externallyManaged.expires) {
+        if (hasUsableOAuthCredential(cred)) {
           return {
-            apiKey: await buildOAuthApiKey(externallyManaged.provider, externallyManaged),
-            newCredentials: externallyManaged,
+            apiKey: await buildOAuthApiKey(cred.provider, cred),
+            newCredentials: cred,
           };
         }
-        if (externallyManaged.managedBy === "codex-cli") {
-          const pluginRefreshed = await withRefreshCallTimeout(
-            `refreshProviderOAuthCredentialWithPlugin(${externallyManaged.provider}, codex-cli)`,
-            OAUTH_REFRESH_CALL_TIMEOUT_MS,
-            () =>
-              refreshProviderOAuthCredentialWithPlugin({
-                provider: externallyManaged.provider,
-                context: externallyManaged,
-              }),
-          );
-          if (pluginRefreshed) {
-            const refreshedCredentials: OAuthCredential = {
-              ...externallyManaged,
-              ...pluginRefreshed,
-              type: "oauth",
-              managedBy: "codex-cli",
-            };
-            if (!writeCodexCliCredentials(refreshedCredentials)) {
-              log.warn("failed to persist refreshed codex credentials back to Codex storage", {
+
+        // Inside-the-lock recheck: a prior agent that already held this lock may
+        // have completed a refresh and mirrored its fresh credential into the
+        // main store. If so, adopt into the local store and return without
+        // issuing another HTTP refresh. This is what turns N serialized
+        // refreshes into 1 refresh + (N-1) adoptions, preventing the
+        // `refresh_token_reused` storm reported in #26322.
+        if (params.agentDir) {
+          try {
+            const mainStore = loadAuthProfileStoreForSecretsRuntime(undefined);
+            const mainCred = mainStore.profiles[params.profileId];
+            if (
+              mainCred?.type === "oauth" &&
+              mainCred.provider === cred.provider &&
+              hasUsableOAuthCredential(mainCred) &&
+              // Defense-in-depth identity gate. Tolerates the pure upgrade
+              // case (sub predates identity capture) but refuses positive
+              // mismatch, identity regression, and non-overlapping fields.
+              isSafeToCopyOAuthIdentity(cred, mainCred)
+            ) {
+              store.profiles[params.profileId] = { ...mainCred };
+              saveAuthProfileStore(store, params.agentDir);
+              log.info("adopted fresh OAuth credential from main store (under refresh lock)", {
                 profileId: params.profileId,
+                agentDir: params.agentDir,
+                expires: new Date(mainCred.expires).toISOString(),
+              });
+              return {
+                apiKey: await buildOAuthApiKey(mainCred.provider, mainCred),
+                newCredentials: mainCred,
+              };
+            } else if (
+              mainCred?.type === "oauth" &&
+              mainCred.provider === cred.provider &&
+              hasUsableOAuthCredential(mainCred) &&
+              !isSafeToCopyOAuthIdentity(cred, mainCred)
+            ) {
+              // Main has fresh creds but they belong to a DIFFERENT account —
+              // record the refusal so operators can diagnose, then proceed to
+              // our own refresh rather than leaking credentials.
+              log.warn("refused to adopt fresh main-store OAuth credential: identity mismatch", {
+                profileId: params.profileId,
+                agentDir: params.agentDir,
               });
             }
-            store.profiles[params.profileId] = refreshedCredentials;
-            saveAuthProfileStore(store, params.agentDir);
-            return {
-              apiKey: await buildOAuthApiKey(refreshedCredentials.provider, refreshedCredentials),
-              newCredentials: refreshedCredentials,
-            };
+          } catch (err) {
+            log.debug("inside-lock main-store adoption failed; proceeding to refresh", {
+              profileId: params.profileId,
+              error: formatErrorMessage(err),
+            });
           }
         }
-        throw new Error(
-          `${externallyManaged.managedBy} credential is expired; refresh it in the external CLI and retry.`,
-        );
-      }
-      if (cred.managedBy) {
-        throw new Error(
-          `${cred.managedBy} credential is unavailable; re-authenticate in the external CLI and retry.`,
-        );
-      }
 
-      const pluginRefreshed = await withRefreshCallTimeout(
-        `refreshProviderOAuthCredentialWithPlugin(${cred.provider})`,
-        OAUTH_REFRESH_CALL_TIMEOUT_MS,
-        () =>
-          refreshProviderOAuthCredentialWithPlugin({
-            provider: cred.provider,
-            context: cred,
-          }),
-      );
-      if (pluginRefreshed) {
-        const refreshedCredentials: OAuthCredential = {
-          ...cred,
-          ...pluginRefreshed,
+        const externallyManaged = readExternalCliBootstrapCredential({
+          profileId: params.profileId,
+          credential: cred,
+        });
+        let refreshCred = cred;
+        if (externallyManaged) {
+          if (isSafeToUseExternalCliCredential(cred, externallyManaged)) {
+            const hasUsableExternalCredential = hasUsableOAuthCredential(externallyManaged);
+            const shouldAdoptExternalCredential =
+              shouldReplaceStoredOAuthCredential(cred, externallyManaged) &&
+              !areOAuthCredentialsEquivalent(cred, externallyManaged);
+            if (shouldAdoptExternalCredential) {
+              store.profiles[params.profileId] = externallyManaged;
+              saveAuthProfileStore(store, params.agentDir);
+              refreshCred = externallyManaged;
+            }
+            if (hasUsableExternalCredential) {
+              return {
+                apiKey: await buildOAuthApiKey(externallyManaged.provider, externallyManaged),
+                newCredentials: externallyManaged,
+              };
+            }
+          } else {
+            log.warn("refused to adopt external cli OAuth credential: identity mismatch", {
+              profileId: params.profileId,
+              provider: params.provider,
+              agentDir: params.agentDir,
+            });
+          }
+        }
+
+        const pluginRefreshed = await withRefreshCallTimeout(
+          `refreshProviderOAuthCredentialWithPlugin(${refreshCred.provider})`,
+          OAUTH_REFRESH_CALL_TIMEOUT_MS,
+          () =>
+            refreshProviderOAuthCredentialWithPlugin({
+              provider: refreshCred.provider,
+              context: refreshCred,
+            }),
+        );
+        if (pluginRefreshed) {
+          const refreshedCredentials: OAuthCredential = {
+            ...refreshCred,
+            ...pluginRefreshed,
+            type: "oauth",
+          };
+          store.profiles[params.profileId] = refreshedCredentials;
+          saveAuthProfileStore(store, params.agentDir);
+          if (params.agentDir) {
+            const mainPath = resolveAuthStorePath(undefined);
+            if (mainPath !== authPath) {
+              await mirrorRefreshedCredentialIntoMainStore({
+                profileId: params.profileId,
+                refreshed: refreshedCredentials,
+              });
+            }
+          }
+          return {
+            apiKey: await buildOAuthApiKey(cred.provider, refreshedCredentials),
+            newCredentials: refreshedCredentials,
+          };
+        }
+
+        const oauthCreds: Record<string, OAuthCredentials> = {
+          [refreshCred.provider]: refreshCred,
+        };
+        const result =
+          refreshCred.provider === "chutes"
+            ? await (async () => {
+                const newCredentials = await withRefreshCallTimeout(
+                  `refreshChutesTokens(${refreshCred.provider})`,
+                  OAUTH_REFRESH_CALL_TIMEOUT_MS,
+                  () => refreshChutesTokens({ credential: refreshCred }),
+                );
+                return { apiKey: newCredentials.access, newCredentials };
+              })()
+            : await (async () => {
+                const oauthProvider = resolveOAuthProvider(refreshCred.provider);
+                if (!oauthProvider) {
+                  return null;
+                }
+                if (typeof getOAuthApiKey !== "function") {
+                  return null;
+                }
+                return await withRefreshCallTimeout(
+                  `getOAuthApiKey(${oauthProvider})`,
+                  OAUTH_REFRESH_CALL_TIMEOUT_MS,
+                  () => getOAuthApiKey(oauthProvider, oauthCreds),
+                );
+              })();
+        if (!result) {
+          return null;
+        }
+        const mergedCred: OAuthCredential = {
+          ...refreshCred,
+          ...result.newCredentials,
           type: "oauth",
         };
-        store.profiles[params.profileId] = refreshedCredentials;
+        store.profiles[params.profileId] = mergedCred;
         saveAuthProfileStore(store, params.agentDir);
+
+        // Mirror the refreshed credential back into the main-agent store while
+        // both locks are still held (refresh lock + this agent's store lock)
+        // plus we'll take main-store lock inside the mirror. Doing this inside
+        // the refresh lock closes the cross-process race window where a second
+        // agent could acquire the refresh lock between our lock release and
+        // our main-store write, see only stale main creds, and redundantly
+        // refresh (reproducing refresh_token_reused).
         if (params.agentDir) {
           const mainPath = resolveAuthStorePath(undefined);
           if (mainPath !== authPath) {
             await mirrorRefreshedCredentialIntoMainStore({
               profileId: params.profileId,
-              refreshed: refreshedCredentials,
+              refreshed: mergedCred,
             });
           }
         }
-        return {
-          apiKey: await buildOAuthApiKey(cred.provider, refreshedCredentials),
-          newCredentials: refreshedCredentials,
-        };
-      }
 
-      const oauthCreds: Record<string, OAuthCredentials> = { [cred.provider]: cred };
-      const result =
-        cred.provider === "chutes"
-          ? await (async () => {
-              const newCredentials = await withRefreshCallTimeout(
-                `refreshChutesTokens(${cred.provider})`,
-                OAUTH_REFRESH_CALL_TIMEOUT_MS,
-                () => refreshChutesTokens({ credential: cred }),
-              );
-              return { apiKey: newCredentials.access, newCredentials };
-            })()
-          : await (async () => {
-              const oauthProvider = resolveOAuthProvider(cred.provider);
-              if (!oauthProvider) {
-                return null;
-              }
-              if (typeof getOAuthApiKey !== "function") {
-                return null;
-              }
-              return await withRefreshCallTimeout(
-                `getOAuthApiKey(${oauthProvider})`,
-                OAUTH_REFRESH_CALL_TIMEOUT_MS,
-                () => getOAuthApiKey(oauthProvider, oauthCreds),
-              );
-            })();
-      if (!result) {
-        return null;
-      }
-      const mergedCred: OAuthCredential = {
-        ...cred,
-        ...result.newCredentials,
-        type: "oauth",
-      };
-      store.profiles[params.profileId] = mergedCred;
-      saveAuthProfileStore(store, params.agentDir);
-
-      // Mirror the refreshed credential back into the main-agent store while
-      // both locks are still held (refresh lock + this agent's store lock)
-      // plus we'll take main-store lock inside the mirror. Doing this inside
-      // the refresh lock closes the cross-process race window where a second
-      // agent could acquire the refresh lock between our lock release and
-      // our main-store write, see only stale main creds, and redundantly
-      // refresh (reproducing refresh_token_reused).
-      if (params.agentDir) {
-        const mainPath = resolveAuthStorePath(undefined);
-        if (mainPath !== authPath) {
-          await mirrorRefreshedCredentialIntoMainStore({
-            profileId: params.profileId,
-            refreshed: mergedCred,
-          });
-        }
-      }
-
-      return result;
-    }),
-  );
+        return result;
+      }),
+    );
+  } catch (error) {
+    if (isGlobalOAuthRefreshLockTimeoutError(error, globalRefreshLockPath)) {
+      throw createOAuthRefreshContentionError({
+        profileId: params.profileId,
+        provider: params.provider,
+        cause: error,
+      });
+    }
+    throw error;
+  }
 }
 
 async function tryResolveOAuthProfile(
@@ -781,11 +798,16 @@ async function tryResolveOAuthProfile(
     return null;
   }
 
-  if (Date.now() < cred.expires) {
+  const effectiveCred = resolveEffectiveOAuthCredential({
+    profileId,
+    credential: cred,
+  });
+
+  if (hasUsableOAuthCredential(effectiveCred)) {
     return await buildOAuthProfileResult({
-      provider: cred.provider,
-      credentials: cred,
-      email: cred.email,
+      provider: effectiveCred.provider,
+      credentials: effectiveCred,
+      email: effectiveCred.email ?? cred.email,
     });
   }
 
@@ -932,12 +954,16 @@ export async function resolveApiKeyForProfile(
       agentDir: params.agentDir,
       cred,
     }) ?? cred;
+  const effectiveOAuthCred = resolveEffectiveOAuthCredential({
+    profileId,
+    credential: oauthCred,
+  });
 
-  if (Date.now() < oauthCred.expires) {
+  if (hasUsableOAuthCredential(effectiveOAuthCred)) {
     return await buildOAuthProfileResult({
-      provider: oauthCred.provider,
-      credentials: oauthCred,
-      email: oauthCred.email,
+      provider: effectiveOAuthCred.provider,
+      credentials: effectiveOAuthCred,
+      email: effectiveOAuthCred.email,
     });
   }
 
@@ -958,7 +984,7 @@ export async function resolveApiKeyForProfile(
   } catch (error) {
     const refreshedStore = loadAuthProfileStoreForSecretsRuntime(params.agentDir);
     const refreshed = refreshedStore.profiles[profileId];
-    if (refreshed?.type === "oauth" && Date.now() < refreshed.expires) {
+    if (refreshed?.type === "oauth" && hasUsableOAuthCredential(refreshed)) {
       return await buildOAuthProfileResult({
         provider: refreshed.provider,
         credentials: refreshed,
@@ -1028,7 +1054,7 @@ export async function resolveApiKeyForProfile(
         if (
           mainCred?.type === "oauth" &&
           mainCred.provider === cred.provider &&
-          Date.now() < mainCred.expires &&
+          hasUsableOAuthCredential(mainCred) &&
           // Defense-in-depth identity gate — refuse to inherit credentials
           // from a different account even under refresh failure. Tolerates
           // pre-capture credentials but refuses regression/non-overlap.
@@ -1054,6 +1080,7 @@ export async function resolveApiKeyForProfile(
     }
 
     const message = extractErrorMessage(error);
+    const errorCode = (error as { code?: string } | undefined)?.code;
     const hint = await formatAuthDoctorHint({
       cfg,
       store: refreshedStore,
@@ -1062,7 +1089,9 @@ export async function resolveApiKeyForProfile(
     });
     throw new Error(
       `OAuth token refresh failed for ${cred.provider}: ${message}. ` +
-        "Please try again or re-authenticate." +
+        (errorCode === "refresh_contention"
+          ? "Please wait for the in-flight refresh to finish and retry."
+          : "Please try again or re-authenticate.") +
         (hint ? `\n\n${hint}` : ""),
       { cause: error },
     );

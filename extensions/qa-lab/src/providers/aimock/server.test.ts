@@ -79,4 +79,32 @@ describe("qa aimock server", () => {
       await server.stop();
     }
   });
+
+  it("treats OpenAI Codex model refs as OpenAI-compatible snapshots", async () => {
+    const server = await startQaAimockServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    try {
+      const response = await fetch(`${server.baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "openai-codex/gpt-5.4",
+          stream: false,
+          input: [makeResponsesInput("hello codex-compatible aimock")],
+        }),
+      });
+      expect(response.status).toBe(200);
+
+      const debug = await fetch(`${server.baseUrl}/debug/last-request`);
+      expect(debug.status).toBe(200);
+      expect(await debug.json()).toMatchObject({
+        model: "openai-codex/gpt-5.4",
+        providerVariant: "openai",
+      });
+    } finally {
+      await server.stop();
+    }
+  });
 });

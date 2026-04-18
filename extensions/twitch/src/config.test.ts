@@ -54,6 +54,30 @@ describe("getAccountConfig", () => {
     expect(result?.username).toBe("secondbot");
   });
 
+  it("normalizes account ids without reading inherited account properties", () => {
+    const accounts = Object.create({
+      inherited: {
+        username: "inherited-bot",
+        accessToken: "oauth:inherited",
+      },
+    }) as Record<string, unknown>;
+    accounts.Secondary = {
+      username: "secondbot",
+      accessToken: "oauth:secondary",
+    };
+
+    const cfg = {
+      channels: {
+        twitch: {
+          accounts,
+        },
+      },
+    };
+
+    expect(getAccountConfig(cfg, "SECONDARY\r\n")).toMatchObject({ username: "secondbot" });
+    expect(getAccountConfig(cfg, "inherited")).toBeNull();
+  });
+
   it("returns null for non-existent account ID", () => {
     const result = getAccountConfig(mockMultiAccountConfig, "nonexistent");
 
@@ -120,6 +144,21 @@ describe("listAccountIds", () => {
       } as Parameters<typeof listAccountIds>[0]),
     ).toEqual(["default", "secondary"]);
   });
+
+  it("normalizes configured account ids", () => {
+    expect(
+      listAccountIds({
+        channels: {
+          twitch: {
+            accounts: {
+              Secondary: { username: "secondbot" },
+              "Alerts\r\n\u001b[31m": { username: "alerts" },
+            },
+          },
+        },
+      } as Parameters<typeof listAccountIds>[0]),
+    ).toEqual(["alerts-31m", "secondary"]);
+  });
 });
 
 describe("resolveDefaultTwitchAccountId", () => {
@@ -162,5 +201,33 @@ describe("resolveTwitchAccountContext", () => {
 
     expect(context.accountId).toBe("secondary");
     expect(context.account?.username).toBe("second-bot");
+  });
+
+  it("keeps account and token lookup aligned after account id normalization", () => {
+    const context = resolveTwitchAccountContext(
+      {
+        channels: {
+          twitch: {
+            accounts: {
+              Secondary: {
+                username: "second-bot",
+                accessToken: "oauth:second-token",
+                clientId: "second-client",
+                channel: "#second",
+              },
+            },
+          },
+        },
+      } as Parameters<typeof resolveTwitchAccountContext>[0],
+      "secondary",
+    );
+
+    expect(context.accountId).toBe("secondary");
+    expect(context.account?.username).toBe("second-bot");
+    expect(context.tokenResolution).toEqual({
+      token: "oauth:second-token",
+      source: "config",
+    });
+    expect(context.configured).toBe(true);
   });
 });

@@ -40,6 +40,7 @@ export type MatrixQaScenarioId =
   | "matrix-reaction-redaction-observed"
   | "matrix-restart-resume"
   | "matrix-post-restart-room-continue"
+  | "matrix-initial-catchup-then-incremental"
   | "matrix-room-membership-loss"
   | "matrix-homeserver-restart-resume"
   | "matrix-mention-gating"
@@ -422,6 +423,12 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     id: "matrix-post-restart-room-continue",
     timeoutMs: 75_000,
     title: "Matrix restarted room continues after the first recovered reply",
+    topology: MATRIX_QA_RESTART_ROOM_TOPOLOGY,
+  },
+  {
+    id: "matrix-initial-catchup-then-incremental",
+    timeoutMs: 90_000,
+    title: "Matrix initial catchup is followed by incremental replies",
     topology: MATRIX_QA_RESTART_ROOM_TOPOLOGY,
   },
   {

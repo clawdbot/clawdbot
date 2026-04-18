@@ -1,7 +1,7 @@
 import { render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ThemeMode, ThemeName } from "../theme.ts";
-import { renderConfig, type ConfigProps } from "./config.ts";
+import { renderConfig, resetConfigViewStateForTests, type ConfigProps } from "./config.ts";
 
 describe("config view", () => {
   const baseProps = () => ({
@@ -84,104 +84,63 @@ describe("config view", () => {
     return container.textContent?.replace(/\s+/g, " ").trim() ?? "";
   }
 
-  function resetRawRevealState() {
-    const { container } = renderConfigView({
-      formMode: "raw",
-      raw: '{\n  "openai": { "apiKey": "supersecret" }\n}\n',
-      originalRaw: '{\n  "openai": { "apiKey": "supersecret" }\n}\n',
-      formValue: {
-        openai: {
-          apiKey: "supersecret",
-        },
-      },
-    });
-    container.querySelector<HTMLButtonElement>(".config-raw-toggle.active")?.click();
-  }
-
   beforeEach(() => {
-    resetRawRevealState();
+    resetConfigViewStateForTests();
   });
 
-  it("allows save when form is unsafe", () => {
+  it("updates save/apply disabled state from form safety and raw dirtiness", () => {
     const container = document.createElement("div");
-    render(
-      renderConfig({
-        ...baseProps(),
-        schema: {
-          type: "object",
-          properties: {
-            mixed: {
-              anyOf: [{ type: "string" }, { type: "object", properties: {} }],
-            },
+
+    const renderCase = (overrides: Partial<ConfigProps>) =>
+      render(renderConfig({ ...baseProps(), ...overrides }), container);
+
+    renderCase({
+      schema: {
+        type: "object",
+        properties: {
+          mixed: {
+            anyOf: [{ type: "string" }, { type: "object", properties: {} }],
           },
         },
-        schemaLoading: false,
-        uiHints: {},
-        formMode: "form",
-        formValue: { mixed: "x" },
-      }),
-      container,
-    );
-
-    const saveButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "Save",
-    );
+      },
+      schemaLoading: false,
+      uiHints: {},
+      formMode: "form",
+      formValue: { mixed: "x" },
+    });
+    let { saveButton, applyButton } = findActionButtons(container);
     expect(saveButton).not.toBeUndefined();
     expect(saveButton?.disabled).toBe(false);
-  });
+    expect(applyButton?.disabled).toBe(false);
 
-  it("disables save when schema is missing", () => {
-    const container = document.createElement("div");
-    render(
-      renderConfig({
-        ...baseProps(),
-        schema: null,
-        formMode: "form",
-        formValue: { gateway: { mode: "local" } },
-        originalValue: {},
-      }),
-      container,
-    );
-
-    const saveButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "Save",
-    );
+    renderCase({
+      schema: null,
+      formMode: "form",
+      formValue: { gateway: { mode: "local" } },
+      originalValue: {},
+    });
+    ({ saveButton, applyButton } = findActionButtons(container));
     expect(saveButton).not.toBeUndefined();
     expect(saveButton?.disabled).toBe(true);
-  });
+    expect(applyButton?.disabled).toBe(true);
 
-  it("disables save and apply when raw is unchanged", () => {
-    const container = document.createElement("div");
-    render(
-      renderConfig({
-        ...baseProps(),
-        formMode: "raw",
-        raw: "{\n}\n",
-        originalRaw: "{\n}\n",
-      }),
-      container,
-    );
-
-    const { saveButton, applyButton } = findActionButtons(container);
+    renderCase({
+      formMode: "raw",
+      raw: "{\n}\n",
+      originalRaw: "{\n}\n",
+    });
+    ({ saveButton, applyButton } = findActionButtons(container));
     expect(saveButton).not.toBeUndefined();
     expect(applyButton).not.toBeUndefined();
     expect(saveButton?.disabled).toBe(true);
     expect(applyButton?.disabled).toBe(true);
-  });
 
-  it("enables save and apply when raw changes", () => {
-    const container = document.createElement("div");
-    render(
-      renderConfig({
-        ...baseProps(),
-        formMode: "raw",
-        raw: '{\n  gateway: { mode: "local" }\n}\n',
-        originalRaw: "{\n}\n",
-      }),
-      container,
-    );
-
-    const { saveButton, applyButton } = findActionButtons(container);
+    renderCase({
+      formMode: "raw",
+      raw: '{\n  gateway: { mode: "local" }\n}\n',
+      originalRaw: "{\n}\n",
+    });
+    ({ saveButton, applyButton } = findActionButtons(container));
     expect(saveButton).not.toBeUndefined();
     expect(applyButton).not.toBeUndefined();
     expect(saveButton?.disabled).toBe(false);
@@ -245,7 +204,7 @@ describe("config view", () => {
     expect(onFormModeChange).not.toHaveBeenCalled();
   });
 
-  it("switches sections from the sidebar", () => {
+  it("renders section tabs and switches sections from the sidebar", () => {
     const container = document.createElement("div");
     const onSectionChange = vi.fn();
     render(
@@ -263,6 +222,13 @@ describe("config view", () => {
       container,
     );
 
+    const tabs = Array.from(container.querySelectorAll(".config-top-tabs__tab")).map((tab) =>
+      tab.textContent?.trim(),
+    );
+    expect(tabs).toContain("Settings");
+    expect(tabs).toContain("Agents");
+    expect(tabs).toContain("Gateway");
+
     const btn = Array.from(container.querySelectorAll("button")).find(
       (b) => b.textContent?.trim() === "Gateway",
     );
@@ -271,61 +237,65 @@ describe("config view", () => {
     expect(onSectionChange).toHaveBeenCalledWith("gateway");
   });
 
-  it("wires search input to onSearchChange", () => {
-    const container = document.createElement("div");
-    const onSearchChange = vi.fn();
-    render(
-      renderConfig({
-        ...baseProps(),
-        onSearchChange,
-      }),
-      container,
-    );
-
-    const input = container.querySelector(".config-search__input");
-    expect(input).not.toBeNull();
-    if (!input) {
-      return;
-    }
-    (input as HTMLInputElement).value = "gateway";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onSearchChange).toHaveBeenCalledWith("gateway");
-  });
-
-  it("renders the top search icon inside the search input row", () => {
-    const container = document.createElement("div");
-    render(renderConfig(baseProps()), container);
-
-    const icon = container.querySelector<SVGElement>(".config-search__icon");
-    expect(icon).not.toBeNull();
-    expect(icon?.closest(".config-search__input-row")).not.toBeNull();
-  });
-
-  it("renders top tabs for root and available sections", () => {
-    const container = document.createElement("div");
-    render(
-      renderConfig({
-        ...baseProps(),
-        schema: {
-          type: "object",
-          properties: {
-            gateway: { type: "object", properties: {} },
-            agents: { type: "object", properties: {} },
+  it("resets config content scroll when switching top-tab sections", async () => {
+    const { container } = renderConfigView({
+      activeSection: "channels",
+      navRootLabel: "Communication",
+      includeSections: ["channels", "messages"],
+      schema: {
+        type: "object",
+        properties: {
+          channels: {
+            type: "object",
+            properties: {
+              telegram: { type: "string" },
+            },
+          },
+          messages: {
+            type: "object",
+            properties: {
+              inbox: { type: "string" },
+            },
           },
         },
-      }),
-      container,
-    );
+      },
+      formValue: {
+        channels: { telegram: "on" },
+        messages: { inbox: "smart" },
+      },
+      originalValue: {
+        channels: { telegram: "on" },
+        messages: { inbox: "smart" },
+      },
+    });
 
-    const tabs = Array.from(container.querySelectorAll(".config-top-tabs__tab")).map((tab) =>
-      tab.textContent?.trim(),
+    const content = container.querySelector<HTMLElement>(".config-content");
+    expect(content).toBeTruthy();
+    if (!content) {
+      return;
+    }
+    content.scrollTop = 280;
+    content.scrollLeft = 24;
+    content.scrollTo = vi.fn(({ top, left }: { top?: number; left?: number }) => {
+      content.scrollTop = top ?? content.scrollTop;
+      content.scrollLeft = left ?? content.scrollLeft;
+    }) as typeof content.scrollTo;
+
+    const messagesButton = Array.from(container.querySelectorAll("button")).find(
+      (btn) => btn.textContent?.trim() === "Messages",
     );
-    expect(tabs).toContain("Settings");
-    expect(tabs).toContain("Agents");
-    expect(tabs).toContain("Gateway");
+    expect(messagesButton).toBeTruthy();
+
+    messagesButton?.click();
+    await Promise.resolve();
+
+    expect(content.scrollTo).toHaveBeenCalledOnce();
+    expect(content.scrollTo).toHaveBeenCalledWith({ top: 0, left: 0, behavior: "auto" });
+    expect(content.scrollTop).toBe(0);
+    expect(content.scrollLeft).toBe(0);
   });
 
-  it("clears the active search query", () => {
+  it("renders and wires the search field controls", () => {
     const container = document.createElement("div");
     const onSearchChange = vi.fn();
     render(
@@ -337,32 +307,26 @@ describe("config view", () => {
       container,
     );
 
+    const icon = container.querySelector<SVGElement>(".config-search__icon");
+    expect(icon).not.toBeNull();
+    expect(icon?.closest(".config-search__input-row")).not.toBeNull();
+
+    const input = container.querySelector(".config-search__input");
+    expect(input).not.toBeNull();
+    if (!input) {
+      return;
+    }
+    (input as HTMLInputElement).value = "gateway";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onSearchChange).toHaveBeenCalledWith("gateway");
+
     const clearButton = container.querySelector<HTMLButtonElement>(".config-search__clear");
     expect(clearButton).toBeTruthy();
     clearButton?.click();
     expect(onSearchChange).toHaveBeenCalledWith("");
   });
 
-  it("keeps sensitive raw config hidden until reveal", () => {
-    const { container } = renderConfigView({
-      formMode: "raw",
-      raw: '{\n  "openai": { "apiKey": "supersecret" }\n}\n',
-      originalRaw: '{\n  "openai": { "apiKey": "supersecret" }\n}\n',
-      formValue: {
-        openai: {
-          apiKey: "supersecret",
-        },
-      },
-    });
-
-    const text = normalizedText(container);
-    expect(text).toContain("1 secret redacted");
-    expect(text).toContain("Use the reveal button above to edit the raw config.");
-    expect(text).not.toContain("supersecret");
-    expect(container.querySelector("textarea")).toBeNull();
-  });
-
-  it("reveals sensitive raw config before editing", () => {
+  it("keeps sensitive raw config hidden until reveal before editing", () => {
     const onRawChange = vi.fn();
     const { container } = renderConfigView({
       formMode: "raw",
@@ -375,6 +339,12 @@ describe("config view", () => {
       },
       onRawChange,
     });
+
+    const text = normalizedText(container);
+    expect(text).toContain("1 secret redacted");
+    expect(text).toContain("Use the reveal button above to edit the raw config.");
+    expect(text).not.toContain("supersecret");
+    expect(container.querySelector("textarea")).toBeNull();
 
     const revealButton = container.querySelector<HTMLButtonElement>(".config-raw-toggle");
     expect(revealButton).toBeTruthy();
@@ -391,43 +361,46 @@ describe("config view", () => {
     expect(onRawChange).toHaveBeenCalledWith(textarea.value);
   });
 
-  it("renders structured SecretRef values as read-only text inputs without stringifying", () => {
+  it("renders structured SecretRef values without stringifying", () => {
     const onFormPatch = vi.fn();
-    const { container } = renderConfigView({
-      schema: {
-        type: "object",
-        properties: {
-          channels: {
-            type: "object",
-            properties: {
-              discord: {
-                type: "object",
-                properties: {
-                  token: { type: "string" },
-                },
+    const secretRefSchema = {
+      type: "object" as const,
+      properties: {
+        channels: {
+          type: "object" as const,
+          properties: {
+            discord: {
+              type: "object" as const,
+              properties: {
+                token: { type: "string" as const },
               },
             },
           },
         },
       },
+    };
+    const secretRefValue = {
+      channels: {
+        discord: {
+          token: { source: "env", provider: "default", id: "__OPENCLAW_REDACTED__" },
+        },
+      },
+    };
+    const secretRefOriginalValue = {
+      channels: {
+        discord: {
+          token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+        },
+      },
+    };
+    const { container } = renderConfigView({
+      schema: secretRefSchema,
       uiHints: {
         "channels.discord.token": { sensitive: true },
       },
       formMode: "form",
-      formValue: {
-        channels: {
-          discord: {
-            token: { source: "env", provider: "default", id: "__OPENCLAW_REDACTED__" },
-          },
-        },
-      },
-      originalValue: {
-        channels: {
-          discord: {
-            token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
-          },
-        },
-      },
+      formValue: secretRefValue,
+      originalValue: secretRefOriginalValue,
       onFormPatch,
     });
 
@@ -445,50 +418,27 @@ describe("config view", () => {
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.dispatchEvent(new Event("change", { bubbles: true }));
     expect(onFormPatch).not.toHaveBeenCalled();
-  });
 
-  it("uses a file-edit placeholder for structured SecretRefs when raw mode is unavailable", () => {
-    const { container } = renderConfigView({
-      rawAvailable: false,
-      formMode: "raw",
-      schema: {
-        type: "object",
-        properties: {
-          channels: {
-            type: "object",
-            properties: {
-              discord: {
-                type: "object",
-                properties: {
-                  token: { type: "string" },
-                },
-              },
-            },
-          },
+    render(
+      renderConfig({
+        ...baseProps(),
+        rawAvailable: false,
+        formMode: "raw",
+        schema: secretRefSchema,
+        uiHints: {
+          "channels.discord.token": { sensitive: true },
         },
-      },
-      uiHints: {
-        "channels.discord.token": { sensitive: true },
-      },
-      formValue: {
-        channels: {
-          discord: {
-            token: { source: "env", provider: "default", id: "__OPENCLAW_REDACTED__" },
-          },
-        },
-      },
-      originalValue: {
-        channels: {
-          discord: {
-            token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
-          },
-        },
-      },
-    });
+        formValue: secretRefValue,
+        originalValue: secretRefOriginalValue,
+      }),
+      container,
+    );
 
-    const input = container.querySelector<HTMLInputElement>(".cfg-input");
-    expect(input).not.toBeNull();
-    expect(input?.placeholder).toBe("Structured value (SecretRef) - edit the config file directly");
+    const rawUnavailableInput = container.querySelector<HTMLInputElement>(".cfg-input");
+    expect(rawUnavailableInput).not.toBeNull();
+    expect(rawUnavailableInput?.placeholder).toBe(
+      "Structured value (SecretRef) - edit the config file directly",
+    );
   });
 
   it("keeps malformed non-SecretRef object values editable when raw mode is unavailable", () => {

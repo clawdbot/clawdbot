@@ -11,7 +11,7 @@
  * Run manually with a valid OPENAI_API_KEY:
  *   OPENCLAW_LIVE_TEST=1 pnpm test:e2e -- src/agents/openai-ws-stream.e2e.test.ts
  *
- * Skipped in CI — no API key available and we avoid billable external calls.
+ * This now runs only in the keyed live/release lanes.
  */
 
 import type {
@@ -292,7 +292,9 @@ describe("OpenAI WebSocket e2e", () => {
 
       expect(assistantText(secondDone)).toMatch(/TOOL_OK/);
     },
-    60_000,
+    // Live CI can spend more than a minute waiting for a stable follow-up turn
+    // when websocket reuse and tool callbacks contend with other provider lanes.
+    120_000,
   );
 
   testFn(
@@ -376,10 +378,12 @@ describe("OpenAI WebSocket e2e", () => {
       const sid = freshSession("warmup");
       const streamFn = openAIWsStreamModule.createOpenAIWebSocketStreamFn(API_KEY!, sid);
       const events = await collectEvents(
-        streamFn(model, makeContext("Reply with the word warmed."), {
+        streamFn(model, makeContext("Reply with exactly the single word warmed."), {
           transport: "websocket",
           openaiWsWarmup: true,
-          maxTokens: 32,
+          maxTokens: 8,
+          reasoningEffort: "none",
+          textVerbosity: "low",
         } as unknown as StreamFnParams[2]),
       );
 
@@ -391,7 +395,10 @@ describe("OpenAI WebSocket e2e", () => {
         expect(assistantText(done).toLowerCase()).toContain("warmed");
       }
     },
-    45_000,
+    // This transport check does not need expensive reasoning. Keep the timeout
+    // generous for CI jitter, but force a minimal response shape so the first
+    // websocket request stays bounded.
+    720_000,
   );
 
   testFn(

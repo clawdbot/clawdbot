@@ -1,40 +1,32 @@
-import { Type } from "@sinclair/typebox";
+import { readNumberParam, readStringParam } from "openclaw/plugin-sdk/param-readers";
 import {
-  enablePluginInConfig,
-  getScopedCredentialValue,
-  readNumberParam,
-  readStringParam,
-  resolveProviderWebSearchPluginConfig,
-  setScopedCredentialValue,
-  setProviderWebSearchPluginConfigValue,
+  createWebSearchProviderContractFields,
   type WebSearchProviderPlugin,
-} from "openclaw/plugin-sdk/provider-web-search";
-import { runSearxngSearch } from "./searxng-client.js";
+} from "openclaw/plugin-sdk/provider-web-search-contract";
 
-const SearxngSearchSchema = Type.Object(
-  {
-    query: Type.String({ description: "Search query string." }),
-    count: Type.Optional(
-      Type.Number({
-        description: "Number of results to return (1-10).",
-        minimum: 1,
-        maximum: 10,
-      }),
-    ),
-    categories: Type.Optional(
-      Type.String({
-        description:
-          "Optional comma-separated search categories such as general, news, or science.",
-      }),
-    ),
-    language: Type.Optional(
-      Type.String({
-        description: "Optional language code for results such as en, de, or fr.",
-      }),
-    ),
+const SEARXNG_CREDENTIAL_PATH = "plugins.entries.searxng.config.webSearch.baseUrl";
+
+const SearxngSearchSchema = {
+  type: "object",
+  properties: {
+    query: { type: "string", description: "Search query string." },
+    count: {
+      type: "number",
+      description: "Number of results to return (1-10).",
+      minimum: 1,
+      maximum: 10,
+    },
+    categories: {
+      type: "string",
+      description: "Optional comma-separated search categories such as general, news, or science.",
+    },
+    language: {
+      type: "string",
+      description: "Optional language code for results such as en, de, or fr.",
+    },
   },
-  { additionalProperties: false },
-);
+  additionalProperties: false,
+} satisfies Record<string, unknown>;
 
 export function createSearxngWebSearchProvider(): WebSearchProviderPlugin {
   return {
@@ -48,29 +40,27 @@ export function createSearxngWebSearchProvider(): WebSearchProviderPlugin {
     placeholder: "http://localhost:8080",
     signupUrl: "https://docs.searxng.org/",
     autoDetectOrder: 200,
-    credentialPath: "plugins.entries.searxng.config.webSearch.baseUrl",
-    inactiveSecretPaths: ["plugins.entries.searxng.config.webSearch.baseUrl"],
-    getCredentialValue: (searchConfig) => getScopedCredentialValue(searchConfig, "searxng"),
-    setCredentialValue: (searchConfigTarget, value) =>
-      setScopedCredentialValue(searchConfigTarget, "searxng", value),
-    getConfiguredCredentialValue: (config) =>
-      resolveProviderWebSearchPluginConfig(config, "searxng")?.baseUrl,
-    setConfiguredCredentialValue: (configTarget, value) => {
-      setProviderWebSearchPluginConfigValue(configTarget, "searxng", "baseUrl", value);
-    },
-    applySelectionConfig: (config) => enablePluginInConfig(config, "searxng").config,
+    credentialPath: SEARXNG_CREDENTIAL_PATH,
+    ...createWebSearchProviderContractFields({
+      credentialPath: SEARXNG_CREDENTIAL_PATH,
+      searchCredential: { type: "scoped", scopeId: "searxng" },
+      configuredCredential: { pluginId: "searxng", field: "baseUrl" },
+      selectionPluginId: "searxng",
+    }),
     createTool: (ctx) => ({
       description:
         "Search the web using a self-hosted SearXNG instance. Returns titles, URLs, and snippets.",
       parameters: SearxngSearchSchema,
-      execute: async (args) =>
-        await runSearxngSearch({
+      execute: async (args) => {
+        const { runSearxngSearch } = await import("./searxng-client.js");
+        return await runSearxngSearch({
           config: ctx.config,
           query: readStringParam(args, "query", { required: true }),
           count: readNumberParam(args, "count", { integer: true }),
           categories: readStringParam(args, "categories"),
           language: readStringParam(args, "language"),
-        }),
+        });
+      },
     }),
   };
 }

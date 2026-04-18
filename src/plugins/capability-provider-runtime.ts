@@ -45,6 +45,7 @@ const CAPABILITY_CONTRACT_KEY: Record<CapabilityProviderRegistryKey, CapabilityC
 function resolveBundledCapabilityCompatPluginIds(params: {
   key: CapabilityProviderRegistryKey;
   cfg?: OpenClawConfig;
+  providerId?: string;
 }): string[] {
   const contractKey = CAPABILITY_CONTRACT_KEY[params.key];
   return loadPluginManifestRegistry({
@@ -52,7 +53,10 @@ function resolveBundledCapabilityCompatPluginIds(params: {
     env: process.env,
   })
     .plugins.filter(
-      (plugin) => plugin.origin === "bundled" && (plugin.contracts?.[contractKey]?.length ?? 0) > 0,
+      (plugin) =>
+        plugin.origin === "bundled" &&
+        (plugin.contracts?.[contractKey]?.length ?? 0) > 0 &&
+        (!params.providerId || (plugin.contracts?.[contractKey] ?? []).includes(params.providerId)),
     )
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
@@ -61,8 +65,9 @@ function resolveBundledCapabilityCompatPluginIds(params: {
 function resolveCapabilityProviderConfig(params: {
   key: CapabilityProviderRegistryKey;
   cfg?: OpenClawConfig;
+  pluginIds?: string[];
 }) {
-  const pluginIds = resolveBundledCapabilityCompatPluginIds(params);
+  const pluginIds = params.pluginIds ?? resolveBundledCapabilityCompatPluginIds(params);
   const allowlistCompat = withBundledPluginAllowlistCompat({
     config: params.cfg,
     pluginIds,
@@ -76,6 +81,51 @@ function resolveCapabilityProviderConfig(params: {
     pluginIds,
     env: process.env,
   });
+}
+
+function findProviderById<K extends CapabilityProviderRegistryKey>(
+  entries: PluginRegistry[K],
+  providerId: string,
+): CapabilityProviderForKey<K> | undefined {
+  const providerEntries = entries as unknown as Array<{
+    provider: CapabilityProviderForKey<K> & { id?: unknown };
+  }>;
+  for (const entry of providerEntries) {
+    if (entry.provider.id === providerId) {
+      return entry.provider;
+    }
+  }
+  return undefined;
+}
+
+export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegistryKey>(params: {
+  key: K;
+  providerId: string;
+  cfg?: OpenClawConfig;
+}): CapabilityProviderForKey<K> | undefined {
+  const activeRegistry = resolveRuntimePluginRegistry();
+  const activeProvider = findProviderById(activeRegistry?.[params.key] ?? [], params.providerId);
+  if (activeProvider) {
+    return activeProvider;
+  }
+
+  const pluginIds = resolveBundledCapabilityCompatPluginIds({
+    key: params.key,
+    cfg: params.cfg,
+    providerId: params.providerId,
+  });
+  if (pluginIds.length === 0) {
+    return undefined;
+  }
+
+  const compatConfig = resolveCapabilityProviderConfig({
+    key: params.key,
+    cfg: params.cfg,
+    pluginIds,
+  });
+  const loadOptions = compatConfig === undefined ? undefined : { config: compatConfig };
+  const registry = resolveRuntimePluginRegistry(loadOptions);
+  return findProviderById(registry?.[params.key] ?? [], params.providerId);
 }
 
 export function resolvePluginCapabilityProviders<K extends CapabilityProviderRegistryKey>(params: {

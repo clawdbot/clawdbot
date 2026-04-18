@@ -167,20 +167,16 @@ function expectShellPayloadApprovalDenied(params: {
   if (process.platform === "win32") {
     return;
   }
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), params.tmpPrefix));
-  try {
-    const scriptPath = path.join(tmp, params.fileName);
-    fs.writeFileSync(scriptPath, params.body);
-    fs.chmodSync(scriptPath, 0o755);
-    const prepared = buildSystemRunApprovalPlan({
-      command: ["/bin/sh", "-lc", scriptPath],
-      rawCommand: scriptPath,
-      cwd: tmp,
-    });
-    expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
-  }
+  const tmp = createFixtureDir(params.tmpPrefix);
+  const scriptPath = path.join(tmp, params.fileName);
+  fs.writeFileSync(scriptPath, params.body);
+  fs.chmodSync(scriptPath, 0o755);
+  const prepared = buildSystemRunApprovalPlan({
+    command: ["/bin/sh", "-lc", scriptPath],
+    rawCommand: scriptPath,
+    cwd: tmp,
+  });
+  expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
 }
 
 function expectMutableFileOperandApprovalPlan(fixture: ScriptOperandFixture, cwd: string) {
@@ -478,7 +474,7 @@ describe("hardenApprovedExecutionPaths", () => {
   ];
 
   it.runIf(process.platform !== "win32").each(cases)("$name", (testCase) => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-hardening-"));
+    const tmp = createFixtureDir("openclaw-approval-hardening-");
     const oldPath = process.env.PATH;
     let pathToken: PathTokenSetup | null = null;
     if (testCase.withPathToken) {
@@ -534,7 +530,6 @@ describe("hardenApprovedExecutionPaths", () => {
           process.env.PATH = oldPath;
         }
       }
-      fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
 
@@ -847,49 +842,41 @@ describe("hardenApprovedExecutionPaths", () => {
     if (process.platform === "win32") {
       return;
     }
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-relative-binary-binding-"));
-    try {
-      const binaryPath = resolveNativeBinaryFixturePath();
-      const relativeBinaryPath = path.join(tmp, "tool");
-      fs.copyFileSync(binaryPath, relativeBinaryPath);
-      fs.chmodSync(relativeBinaryPath, 0o755);
-      const prepared = buildSystemRunApprovalPlan({
-        command: ["/bin/sh", "-lc", "./tool"],
-        rawCommand: "./tool",
-        cwd: tmp,
-      });
-      expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
+    const tmp = createFixtureDir("openclaw-shell-relative-binary-binding-");
+    const binaryPath = resolveNativeBinaryFixturePath();
+    const relativeBinaryPath = path.join(tmp, "tool");
+    fs.copyFileSync(binaryPath, relativeBinaryPath);
+    fs.chmodSync(relativeBinaryPath, 0o755);
+    const prepared = buildSystemRunApprovalPlan({
+      command: ["/bin/sh", "-lc", "./tool"],
+      rawCommand: "./tool",
+      cwd: tmp,
+    });
+    expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
   });
 
   it("keeps fail-closed behavior for writable absolute native-binary shell payloads", () => {
     if (process.platform === "win32") {
       return;
     }
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-absolute-binary-binding-"));
-    try {
-      const binaryPath = resolveNativeBinaryFixturePath();
-      const copiedBinaryPath = path.join(tmp, "tool");
-      fs.copyFileSync(binaryPath, copiedBinaryPath);
-      fs.chmodSync(copiedBinaryPath, 0o755);
-      const prepared = buildSystemRunApprovalPlan({
-        command: ["/bin/sh", "-lc", copiedBinaryPath],
-        rawCommand: copiedBinaryPath,
-        cwd: tmp,
-      });
-      expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
+    const tmp = createFixtureDir("openclaw-shell-absolute-binary-binding-");
+    const binaryPath = resolveNativeBinaryFixturePath();
+    const copiedBinaryPath = path.join(tmp, "tool");
+    fs.copyFileSync(binaryPath, copiedBinaryPath);
+    fs.chmodSync(copiedBinaryPath, 0o755);
+    const prepared = buildSystemRunApprovalPlan({
+      command: ["/bin/sh", "-lc", copiedBinaryPath],
+      rawCommand: copiedBinaryPath,
+      cwd: tmp,
+    });
+    expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
   });
 
   it("keeps fail-closed behavior for owner-controlled read-only absolute binaries", () => {
     if (process.platform === "win32") {
       return;
     }
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-owned-readonly-binding-"));
+    const tmp = createFixtureDir("openclaw-shell-owned-readonly-binding-");
     const binaryPath = path.join(tmp, "tool");
     try {
       fs.copyFileSync(resolveNativeBinaryFixturePath(), binaryPath);
@@ -903,7 +890,6 @@ describe("hardenApprovedExecutionPaths", () => {
       expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
     } finally {
       fs.chmodSync(tmp, 0o755);
-      fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
 
@@ -911,7 +897,7 @@ describe("hardenApprovedExecutionPaths", () => {
     if (process.platform === "win32") {
       return;
     }
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-symlink-binary-binding-"));
+    const tmp = createFixtureDir("openclaw-shell-symlink-binary-binding-");
     const stableDir = path.join(tmp, "stable");
     const mutableDir = path.join(tmp, "mutable");
     try {
@@ -932,75 +918,65 @@ describe("hardenApprovedExecutionPaths", () => {
       expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
     } finally {
       fs.chmodSync(stableDir, 0o755);
-      fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
 
-  it("keeps fail-closed behavior for shell payloads that invoke mutable script files", () => {
-    expectShellPayloadApprovalDenied({
-      tmpPrefix: "openclaw-shell-script-binding-",
-      fileName: "run.sh",
-      body: "#!/bin/sh\necho SAFE\n",
-    });
-  });
-
-  it("keeps fail-closed behavior for empty shell payload files", () => {
-    expectShellPayloadApprovalDenied({
-      tmpPrefix: "openclaw-shell-empty-binding-",
-      fileName: "empty",
-      body: "",
-    });
-  });
-
-  it("does not treat weak MZ text headers as native binaries", () => {
-    expectShellPayloadApprovalDenied({
-      tmpPrefix: "openclaw-shell-mz-text-binding-",
-      fileName: "mz-script",
-      body: "MZ not really a PE file\n",
-    });
-  });
-
-  it("keeps fail-closed behavior for unknown NUL-bearing headers", () => {
-    expectShellPayloadApprovalDenied({
-      tmpPrefix: "openclaw-shell-nul-header-binding-",
-      fileName: "nul-script",
-      body: "SAFE\u0000maybe-binary\n",
-    });
+  it("keeps fail-closed behavior for mutable or ambiguous shell payload files", () => {
+    for (const testCase of [
+      {
+        tmpPrefix: "openclaw-shell-script-binding-",
+        fileName: "run.sh",
+        body: "#!/bin/sh\necho SAFE\n",
+      },
+      {
+        tmpPrefix: "openclaw-shell-empty-binding-",
+        fileName: "empty",
+        body: "",
+      },
+      {
+        tmpPrefix: "openclaw-shell-mz-text-binding-",
+        fileName: "mz-script",
+        body: "MZ not really a PE file\n",
+      },
+      {
+        tmpPrefix: "openclaw-shell-nul-header-binding-",
+        fileName: "nul-script",
+        body: "SAFE\u0000maybe-binary\n",
+      },
+    ]) {
+      expectShellPayloadApprovalDenied(testCase);
+    }
   });
 
   it("keeps fail-closed behavior when the shell payload probe stops seeing a file", () => {
     if (process.platform === "win32") {
       return;
     }
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-race-binding-"));
-    try {
-      const scriptPath = path.join(tmp, "run.sh");
-      fs.writeFileSync(scriptPath, "#!/bin/sh\necho SAFE\n");
-      fs.chmodSync(scriptPath, 0o755);
-      const realStatSync = fs.statSync;
-      let targetStatCalls = 0;
-      const statSyncSpy = vi.spyOn(fs, "statSync").mockImplementation((pathLike, options) => {
-        const targetPath = typeof pathLike === "string" ? pathLike : pathLike.toString();
-        if (targetPath === scriptPath) {
-          targetStatCalls += 1;
-          if (targetStatCalls === 2) {
-            return realStatSync(tmp, options);
-          }
+    const tmp = createFixtureDir("openclaw-shell-race-binding-");
+    const scriptPath = path.join(tmp, "run.sh");
+    fs.writeFileSync(scriptPath, "#!/bin/sh\necho SAFE\n");
+    fs.chmodSync(scriptPath, 0o755);
+    const realStatSync = fs.statSync;
+    let targetStatCalls = 0;
+    const statSyncSpy = vi.spyOn(fs, "statSync").mockImplementation((pathLike, options) => {
+      const targetPath = typeof pathLike === "string" ? pathLike : pathLike.toString();
+      if (targetPath === scriptPath) {
+        targetStatCalls += 1;
+        if (targetStatCalls === 2) {
+          return realStatSync(tmp, options);
         }
-        return realStatSync(pathLike, options);
-      });
-      try {
-        const prepared = buildSystemRunApprovalPlan({
-          command: ["/bin/sh", "-lc", scriptPath],
-          rawCommand: scriptPath,
-          cwd: tmp,
-        });
-        expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
-      } finally {
-        statSyncSpy.mockRestore();
       }
+      return realStatSync(pathLike, options);
+    });
+    try {
+      const prepared = buildSystemRunApprovalPlan({
+        command: ["/bin/sh", "-lc", scriptPath],
+        rawCommand: scriptPath,
+        cwd: tmp,
+      });
+      expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
     } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
+      statSyncSpy.mockRestore();
     }
   });
 
@@ -1008,13 +984,9 @@ describe("hardenApprovedExecutionPaths", () => {
     withFakeRuntimeBin({
       binName: testCase.binName,
       run: () => {
-        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), testCase.tmpPrefix));
-        try {
-          testCase.setup?.(tmp);
-          expectRuntimeApprovalDenied(testCase.command, tmp);
-        } finally {
-          fs.rmSync(tmp, { recursive: true, force: true });
-        }
+        const tmp = createFixtureDir(testCase.tmpPrefix);
+        testCase.setup?.(tmp);
+        expectRuntimeApprovalDenied(testCase.command, tmp);
       },
     });
   });
@@ -1062,98 +1034,56 @@ describe("hardenApprovedExecutionPaths", () => {
     withFakeRuntimeBins({
       binNames: ["pnpm", "tsx"],
       run: () => {
-        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pnpm-dlx-shell-mode-"));
-        try {
-          fs.writeFileSync(path.join(tmp, "run.ts"), 'console.log("SAFE");\n');
-          expect(
-            resolveMutableFileOperandSnapshotSync({
-              argv: ["pnpm", "dlx", "--shell-mode", "tsx ./run.ts"],
-              cwd: tmp,
-              shellCommand: null,
-            }),
-          ).toEqual({ ok: true, snapshot: null });
-        } finally {
-          fs.rmSync(tmp, { recursive: true, force: true });
-        }
+        const tmp = createFixtureDir("openclaw-pnpm-dlx-shell-mode-");
+        fs.writeFileSync(path.join(tmp, "run.ts"), 'console.log("SAFE");\n');
+        expect(
+          resolveMutableFileOperandSnapshotSync({
+            argv: ["pnpm", "dlx", "--shell-mode", "tsx ./run.ts"],
+            cwd: tmp,
+            shellCommand: null,
+          }),
+        ).toEqual({ ok: true, snapshot: null });
       },
     });
   });
 
-  it("allows pnpm dlx package binaries that do not bind a mutable local file", () => {
-    withFakeRuntimeBin({
-      binName: "pnpm",
-      run: () => {
-        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pnpm-dlx-package-bin-"));
-        try {
-          expectApprovalPlanWithoutMutableOperand(["pnpm", "dlx", "cowsay", "hello"], tmp);
-        } finally {
-          fs.rmSync(tmp, { recursive: true, force: true });
-        }
-      },
-    });
-  });
-
-  it("allows pnpm dlx package binaries with data-like runtime names", () => {
-    withFakeRuntimeBin({
-      binName: "pnpm",
-      run: () => {
-        const tmp = fs.mkdtempSync(
-          path.join(os.tmpdir(), "openclaw-pnpm-dlx-package-runtime-token-"),
-        );
-        try {
-          expectApprovalPlanWithoutMutableOperand(["pnpm", "dlx", "cowsay", "node"], tmp);
-        } finally {
-          fs.rmSync(tmp, { recursive: true, force: true });
-        }
-      },
-    });
-  });
-
-  it("allows pnpm dlx package binaries with multi-token data-like runtime names", () => {
-    withFakeRuntimeBin({
-      binName: "pnpm",
-      run: () => {
-        const tmp = fs.mkdtempSync(
-          path.join(os.tmpdir(), "openclaw-pnpm-dlx-package-runtime-token-multi-"),
-        );
-        try {
-          expectApprovalPlanWithoutMutableOperand(["pnpm", "dlx", "cowsay", "node", "hello"], tmp);
-        } finally {
-          fs.rmSync(tmp, { recursive: true, force: true });
-        }
-      },
-    });
-  });
-
-  it("allows pnpm dlx package binaries with local file arguments", () => {
+  it("allows pnpm dlx package binaries that do not bind mutable local files", () => {
     withFakeRuntimeBins({
       binNames: ["pnpm", "eslint"],
       run: () => {
-        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pnpm-dlx-package-file-"));
-        try {
-          fs.mkdirSync(path.join(tmp, "src"), { recursive: true });
-          fs.writeFileSync(path.join(tmp, "src", "index.ts"), 'console.log("SAFE");\n');
-          expectApprovalPlanWithoutMutableOperand(["pnpm", "dlx", "eslint", "src/index.ts"], tmp);
-        } finally {
-          fs.rmSync(tmp, { recursive: true, force: true });
-        }
-      },
-    });
-  });
-
-  it("allows pnpm dlx package binaries with interpreter-like data tails", () => {
-    withFakeRuntimeBin({
-      binName: "pnpm",
-      run: () => {
-        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pnpm-dlx-package-data-tail-"));
-        try {
-          fs.writeFileSync(path.join(tmp, "run.ts"), 'console.log("SAFE");\n');
-          expectApprovalPlanWithoutMutableOperand(
-            ["pnpm", "dlx", "cowsay", "tsx", "./run.ts"],
-            tmp,
-          );
-        } finally {
-          fs.rmSync(tmp, { recursive: true, force: true });
+        const cases = [
+          {
+            prefix: "openclaw-pnpm-dlx-package-bin-",
+            command: ["pnpm", "dlx", "cowsay", "hello"],
+          },
+          {
+            prefix: "openclaw-pnpm-dlx-package-runtime-token-",
+            command: ["pnpm", "dlx", "cowsay", "node"],
+          },
+          {
+            prefix: "openclaw-pnpm-dlx-package-runtime-token-multi-",
+            command: ["pnpm", "dlx", "cowsay", "node", "hello"],
+          },
+          {
+            prefix: "openclaw-pnpm-dlx-package-file-",
+            command: ["pnpm", "dlx", "eslint", "src/index.ts"],
+            setup: (tmp: string) => {
+              fs.mkdirSync(path.join(tmp, "src"), { recursive: true });
+              fs.writeFileSync(path.join(tmp, "src", "index.ts"), 'console.log("SAFE");\n');
+            },
+          },
+          {
+            prefix: "openclaw-pnpm-dlx-package-data-tail-",
+            command: ["pnpm", "dlx", "cowsay", "tsx", "./run.ts"],
+            setup: (tmp: string) => {
+              fs.writeFileSync(path.join(tmp, "run.ts"), 'console.log("SAFE");\n');
+            },
+          },
+        ];
+        for (const testCase of cases) {
+          const tmp = createFixtureDir(testCase.prefix);
+          testCase.setup?.(tmp);
+          expectApprovalPlanWithoutMutableOperand(testCase.command, tmp);
         }
       },
     });
@@ -1183,26 +1113,22 @@ describe("hardenApprovedExecutionPaths", () => {
   });
 
   it("captures the real shell script operand after value-taking shell flags", () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-option-value-"));
-    try {
-      const scriptPath = path.join(tmp, "run.sh");
-      fs.writeFileSync(scriptPath, "#!/bin/sh\necho SAFE\n");
-      fs.writeFileSync(path.join(tmp, "errexit"), "decoy\n");
-      const snapshot = resolveMutableFileOperandSnapshotSync({
-        argv: ["/bin/bash", "-o", "errexit", "./run.sh"],
-        cwd: tmp,
-        shellCommand: null,
-      });
-      expect(snapshot).toEqual({
-        ok: true,
-        snapshot: {
-          argvIndex: 3,
-          path: fs.realpathSync(scriptPath),
-          sha256: expect.any(String),
-        },
-      });
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
+    const tmp = createFixtureDir("openclaw-shell-option-value-");
+    const scriptPath = path.join(tmp, "run.sh");
+    fs.writeFileSync(scriptPath, "#!/bin/sh\necho SAFE\n");
+    fs.writeFileSync(path.join(tmp, "errexit"), "decoy\n");
+    const snapshot = resolveMutableFileOperandSnapshotSync({
+      argv: ["/bin/bash", "-o", "errexit", "./run.sh"],
+      cwd: tmp,
+      shellCommand: null,
+    });
+    expect(snapshot).toEqual({
+      ok: true,
+      snapshot: {
+        argvIndex: 3,
+        path: fs.realpathSync(scriptPath),
+        sha256: expect.any(String),
+      },
+    });
   });
 });

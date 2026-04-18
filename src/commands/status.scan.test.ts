@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyStatusScanDefaults,
   createStatusMemorySearchConfig,
@@ -20,11 +20,15 @@ let originalForceStderr: boolean;
 let loggingStateRef: typeof import("../logging/state.js").loggingState;
 let scanStatus: typeof import("./status.scan.js").scanStatus;
 
-beforeEach(async () => {
-  vi.clearAllMocks();
+beforeAll(async () => {
   configureScanStatus();
   ({ scanStatus } = await loadStatusScanModuleForTest(mocks));
   ({ loggingState: loggingStateRef } = await import("../logging/state.js"));
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  configureScanStatus();
   originalForceStderr = loggingStateRef.forceConsoleToStderr;
   loggingStateRef.forceConsoleToStderr = false;
 });

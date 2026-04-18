@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyStatusScanDefaults,
   createStatusMemorySearchConfig,
@@ -19,8 +19,7 @@ let originalForceStderr: boolean;
 let loggingStateRef: typeof import("../logging/state.js").loggingState;
 let scanStatusJsonFast: typeof import("./status.scan.fast-json.js").scanStatusJsonFast;
 
-beforeEach(async () => {
-  vi.clearAllMocks();
+function configureFastJsonStatus() {
   applyStatusScanDefaults(mocks, {
     sourceConfig: createStatusMemorySearchConfig(),
     resolvedConfig: createStatusMemorySearchConfig(),
@@ -31,8 +30,17 @@ beforeEach(async () => {
   mocks.resolveMemorySearchConfig.mockReturnValue({
     store: { path: "/tmp/main.sqlite" },
   });
+}
+
+beforeAll(async () => {
+  configureFastJsonStatus();
   ({ scanStatusJsonFast } = await loadStatusScanModuleForTest(mocks, { fastJson: true }));
   ({ loggingState: loggingStateRef } = await import("../logging/state.js"));
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  configureFastJsonStatus();
   originalForceStderr = loggingStateRef.forceConsoleToStderr;
   loggingStateRef.forceConsoleToStderr = false;
 });

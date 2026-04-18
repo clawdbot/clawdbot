@@ -7,10 +7,6 @@
  */
 
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
-import {
   sendC2CMessage,
   sendDmMessage,
   sendGroupMessage,
@@ -35,6 +31,18 @@ import { normalizePath, isLocalPath as isLocalFilePath } from "./utils/platform.
 import { filterInternalMarkers } from "./utils/text-parsing.js";
 
 // Type definitions.
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return normalizeOptionalString(value)?.toLowerCase() ?? "";
+}
 
 export interface DeliverEventContext {
   type: "c2c" | "guild" | "dm" | "group";

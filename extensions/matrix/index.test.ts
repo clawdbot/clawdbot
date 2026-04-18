@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
 import { registerMatrixCliMetadata } from "./cli-metadata.js";
-import entry from "./index.js";
+import entry, { registerMatrixFullRuntime } from "./index.js";
 
 const cliMocks = vi.hoisted(() => ({
   registerMatrixCli: vi.fn(),
@@ -68,9 +68,8 @@ describe("matrix plugin", () => {
     expect(entry.name).toBe("Matrix");
   });
 
-  it("registers subagent lifecycle hooks during full registration", () => {
+  it("registers subagent lifecycle hooks during full runtime registration", () => {
     const on = vi.fn();
-    const registerChannel = vi.fn();
     const registerGatewayMethod = vi.fn();
     const api = createTestPluginApi({
       id: "matrix",
@@ -80,15 +79,11 @@ describe("matrix plugin", () => {
       runtime: {} as never,
       registrationMode: "full",
       on,
-      registerChannel,
       registerGatewayMethod,
     });
 
-    entry.register(api);
+    registerMatrixFullRuntime(api);
 
-    expect(registerChannel).toHaveBeenCalledWith({
-      plugin: expect.objectContaining({ id: "matrix" }),
-    });
     expect(on.mock.calls.map(([hookName]) => hookName)).toEqual([
       "subagent_spawning",
       "subagent_ended",

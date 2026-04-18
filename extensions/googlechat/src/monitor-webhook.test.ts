@@ -8,8 +8,11 @@ const resolveWebhookTargetWithAuthOrReject = vi.hoisted(() => vi.fn());
 const withResolvedWebhookRequestPipeline = vi.hoisted(() => vi.fn());
 const verifyGoogleChatRequest = vi.hoisted(() => vi.fn());
 
-vi.mock("../runtime-api.js", () => ({
+vi.mock("openclaw/plugin-sdk/webhook-request-guards", () => ({
   readJsonWebhookBodyOrReject,
+}));
+
+vi.mock("openclaw/plugin-sdk/webhook-targets", () => ({
   resolveWebhookTargetWithAuthOrReject,
   withResolvedWebhookRequestPipeline,
 }));

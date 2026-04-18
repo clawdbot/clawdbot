@@ -809,9 +809,15 @@ export type OpenClawPackageStartup = {
   deferConfiguredChannelFullLoadUntilAfterListen?: boolean;
 };
 
+export type OpenClawPackageSetupFeatures = {
+  legacyStateMigrations?: boolean;
+  legacySessionSurfaces?: boolean;
+};
+
 export type OpenClawPackageManifest = {
   extensions?: string[];
   setupEntry?: string;
+  setupFeatures?: OpenClawPackageSetupFeatures;
   channel?: PluginPackageChannel;
   install?: PluginPackageInstall;
   startup?: OpenClawPackageStartup;

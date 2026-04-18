@@ -7,7 +7,8 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import type { AuthProfileStore } from "../agents/auth-profiles.js";
+import { ensureAuthProfileStore, saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
   collectAnthropicApiKeys,
   isAnthropicBillingError,
@@ -20,6 +21,7 @@ import {
   isHighSignalLiveModelRef,
   resolveHighSignalLiveModelLimit,
   selectHighSignalLiveItems,
+  shouldExcludeProviderFromDefaultHighSignalLiveSweep,
 } from "../agents/live-model-filter.js";
 import { createLiveTargetMatcher } from "../agents/live-target-matcher.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../agents/live-test-helpers.js";
@@ -29,7 +31,8 @@ import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { isRateLimitErrorMessage } from "../agents/pi-embedded-helpers/errors.js";
 import { discoverAuthStorage, discoverModels } from "../agents/pi-model-discovery.js";
-import type { ModelsConfig, OpenClawConfig, ModelProviderConfig } from "../config/types.js";
+import { clearRuntimeConfigSnapshot, loadConfig } from "../config/io.js";
+import type { ModelsConfig, ModelProviderConfig, OpenClawConfig } from "../config/types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { normalizeGoogleModelId } from "../plugin-sdk/google-model-id.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
@@ -43,7 +46,7 @@ import {
   shouldRetryExecReadProbe,
   shouldRetryToolReadProbe,
 } from "./live-tool-probe-utils.js";
-import { startGatewayServer } from "./server.js";
+import { startGatewayServer } from "./server.impl.js";
 import { loadSessionEntry, readSessionMessages } from "./session-utils.js";
 
 const ZAI_FALLBACK = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_ZAI_FALLBACK);
@@ -231,19 +234,6 @@ async function withGatewayLiveModelTimeout<T>(operation: Promise<T>, context: st
     timeoutLabel: "model",
     context,
   });
-}
-
-let gatewayConfigModulePromise: Promise<typeof import("../config/config.js")> | undefined;
-let authProfilesModulePromise: Promise<typeof import("../agents/auth-profiles.js")> | undefined;
-
-async function getGatewayConfigModule() {
-  gatewayConfigModulePromise ??= import("../config/config.js");
-  return await gatewayConfigModulePromise;
-}
-
-async function getAuthProfilesModule() {
-  authProfilesModulePromise ??= import("../agents/auth-profiles.js");
-  return await authProfilesModulePromise;
 }
 
 function logProgress(message: string): void {
@@ -1250,7 +1240,6 @@ async function sanitizeAuthConfig(params: {
   if (!auth) {
     return auth;
   }
-  const { ensureAuthProfileStore } = await getAuthProfilesModule();
   const store = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
   });
@@ -1311,7 +1300,7 @@ function buildMinimaxProviderOverride(params: {
 }
 
 async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
-  (await getGatewayConfigModule()).clearRuntimeConfigSnapshot();
+  clearRuntimeConfigSnapshot();
   const runtimeEnv = enterProductionEnvForLiveRun();
   const previous = {
     configPath: process.env.OPENCLAW_CONFIG_PATH,
@@ -1343,7 +1332,6 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
   const agentId = "dev";
 
   const hostAgentDir = resolveOpenClawAgentDir();
-  const { ensureAuthProfileStore, saveAuthProfileStore } = await getAuthProfilesModule();
   const hostStore = ensureAuthProfileStore(hostAgentDir, {
     allowKeychainPrompt: false,
   });
@@ -1396,6 +1384,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     await fs.writeFile(modelsPath, `${JSON.stringify({ providers: liveProviders }, null, 2)}\n`);
   }
 
+  // Keep the broad live Docker suite on the impl entrypoint. The lazy public
+  // boundary (`./server.js`) is covered elsewhere, but under Vitest's live Docker
+  // worker this path can trip a Node module-status loader bug during startup.
   let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
   let client: GatewayClient | undefined;
   try {
@@ -2006,7 +1997,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
       logProgress(`[${params.label}] skipped all models (missing profiles)`);
     }
   } finally {
-    (await getGatewayConfigModule()).clearRuntimeConfigSnapshot();
+    clearRuntimeConfigSnapshot();
     restoreProductionEnvForLiveRun(runtimeEnv);
     client.stop();
     await server.close({ reason: "live test complete" });
@@ -2040,8 +2031,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     "runs meaningful prompts across models with available keys",
     async () =>
       await withSuppressedGatewayLiveWarnings(async () => {
-        const { loadConfig } = await getGatewayConfigModule();
-        (await getGatewayConfigModule()).clearRuntimeConfigSnapshot();
+        clearRuntimeConfigSnapshot();
         const cfg = loadConfig();
         await ensureOpenClawModelsJson(cfg);
 
@@ -2063,7 +2053,16 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         });
         const wanted = filter
           ? all.filter((m) => targetMatcher.matchesModel(m.provider, m.id))
-          : all.filter((m) => isHighSignalLiveModelRef({ provider: m.provider, id: m.id }));
+          : all.filter(
+              (m) =>
+                !shouldExcludeProviderFromDefaultHighSignalLiveSweep({
+                  provider: m.provider,
+                  useExplicitModels: useExplicit,
+                  providerFilter: PROVIDERS,
+                  config: cfg,
+                  env: process.env,
+                }) && isHighSignalLiveModelRef({ provider: m.provider, id: m.id }),
+            );
 
         const candidates: Array<Model<Api>> = [];
         const skipped: Array<{ model: string; error: string }> = [];
@@ -2164,8 +2163,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     if (!ZAI_FALLBACK) {
       return;
     }
-    const { loadConfig } = await getGatewayConfigModule();
-    (await getGatewayConfigModule()).clearRuntimeConfigSnapshot();
+    clearRuntimeConfigSnapshot();
     const runtimeEnv = enterProductionEnvForLiveRun();
     const previous = {
       configPath: process.env.OPENCLAW_CONFIG_PATH,
@@ -2323,10 +2321,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         throw new Error(`zai followup missing nonce: ${followupText}`);
       }
     } finally {
-      {
-        const { clearRuntimeConfigSnapshot } = await getGatewayConfigModule();
-        clearRuntimeConfigSnapshot();
-      }
+      clearRuntimeConfigSnapshot();
       restoreProductionEnvForLiveRun(runtimeEnv);
       client.stop();
       await server.close({ reason: "live test complete" });

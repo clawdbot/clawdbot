@@ -10,14 +10,11 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
-import {
-  clearAuthProfileCooldown,
-  listProfilesForProvider,
-  loadAuthProfileStoreForRuntime,
-  upsertAuthProfile,
-} from "../../agents/auth-profiles.js";
+import { listProfilesForProvider, upsertAuthProfile } from "../../agents/auth-profiles/profiles.js";
+import { loadAuthProfileStoreForRuntime } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
-import { normalizeProviderId } from "../../agents/model-selection.js";
+import { clearAuthProfileCooldown } from "../../agents/auth-profiles/usage.js";
+import { normalizeProviderId } from "../../agents/model-selection-normalize.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
@@ -40,7 +37,6 @@ import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { validateAnthropicSetupToken } from "../auth-token.js";
 import { isRemoteEnvironment } from "../oauth-env.js";
 import { createVpsAwareOAuthHandlers } from "../oauth-flow.js";
-import { openUrl } from "../onboard-helpers.js";
 import {
   applyProviderAuthConfigPatch,
   applyDefaultModel,
@@ -129,6 +125,11 @@ async function resolveModelsAuthContext(params?: {
     workspaceDir,
     providers,
   };
+}
+
+async function resolveModelsAuthAgentDir(): Promise<string> {
+  const config = await loadValidConfigOrThrow();
+  return resolveAgentDir(config, resolveDefaultAgentId(config));
 }
 
 function resolveRequestedProviderOrThrow(
@@ -300,6 +301,7 @@ async function runProviderAuthMethod(params: {
     allowSecretRefPrompt: false,
     isRemote: isRemoteEnvironment(),
     openUrl: async (url) => {
+      const { openUrl } = await import("../onboard-helpers.js");
       await openUrl(url);
     },
     oauth: {
@@ -375,7 +377,7 @@ export async function modelsAuthPasteTokenCommand(
   },
   runtime: RuntimeEnv,
 ) {
-  const { agentDir } = await resolveModelsAuthContext();
+  const agentDir = await resolveModelsAuthAgentDir();
   const rawProvider = normalizeOptionalString(opts.provider);
   if (!rawProvider) {
     throw new Error("Missing --provider.");

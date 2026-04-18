@@ -537,11 +537,10 @@ describe("acp translator stop reason mapping", () => {
     await Promise.resolve();
     agent.handleGatewayReconnect();
 
-    await vi.waitFor(() => {
-      expect(settleSpy).toHaveBeenCalledWith({
-        kind: "resolve",
-        value: { stopReason: "end_turn" },
-      });
+    await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+    expect(settleSpy).toHaveBeenCalledWith({
+      kind: "resolve",
+      value: { stopReason: "end_turn" },
     });
   });
 

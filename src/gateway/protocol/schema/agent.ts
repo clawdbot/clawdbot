@@ -70,6 +70,10 @@ export const MessageActionParamsSchema = Type.Object(
     params: Type.Record(Type.String(), Type.Unknown()),
     accountId: Type.Optional(Type.String()),
     requesterSenderId: Type.Optional(Type.String()),
+    // Honored only when the RPC caller has the full operator scope set
+    // (shared-secret bearer or `operator.admin`). For narrowly-scoped
+    // callers (e.g. `operator.write`-only) the gateway forces this to
+    // `false` regardless of the value sent here.
     senderIsOwner: Type.Optional(Type.Boolean()),
     sessionKey: Type.Optional(Type.String()),
     sessionId: Type.Optional(Type.String()),
@@ -192,5 +196,5 @@ export const WakeParamsSchema = Type.Object(
     mode: Type.Union([Type.Literal("now"), Type.Literal("next-heartbeat")]),
     text: NonEmptyString,
   },
-  { additionalProperties: false },
+  { additionalProperties: true }, // external wake senders may attach opaque metadata
 );

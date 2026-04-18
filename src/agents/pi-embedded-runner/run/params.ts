@@ -42,6 +42,8 @@ export type RunEmbeddedPiAgentParams = {
   groupSpace?: string | null;
   /** Parent session key for subagent policy inheritance. */
   spawnedBy?: string | null;
+  /** Whether workspaceDir points at the canonical agent workspace for bootstrap purposes. */
+  isCanonicalWorkspace?: boolean;
   senderId?: string | null;
   senderName?: string | null;
   senderUsername?: string | null;

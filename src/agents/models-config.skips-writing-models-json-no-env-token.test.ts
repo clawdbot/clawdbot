@@ -13,6 +13,7 @@ import {
 import type { ProviderConfig as ModelsProviderConfig } from "./models-config.providers.secrets.js";
 
 vi.mock("./auth-profiles/external-cli-sync.js", () => ({
+  resolveExternalCliAuthProfiles: () => [],
   syncExternalCliCredentials: () => false,
 }));
 

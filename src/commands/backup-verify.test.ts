@@ -196,38 +196,33 @@ describe("backupVerifyCommand", () => {
     }
   });
 
-  it("fails when archive paths contain traversal segments", async () => {
-    const traversalPath = `${TEST_ARCHIVE_ROOT}/payload/../escaped.txt`;
-    await withBrokenArchiveFixture(
+  it("rejects unsafe archive paths", async () => {
+    for (const { tempPrefix, archivePath, error } of [
       {
         tempPrefix: "openclaw-backup-traversal-",
-        manifestAssetArchivePath: traversalPath,
-        payloads: [{ fileName: "payload.txt", contents: "payload\n", archivePath: traversalPath }],
+        archivePath: `${TEST_ARCHIVE_ROOT}/payload/../escaped.txt`,
+        error: /path traversal segments/i,
       },
-      async (archivePath) => {
-        const runtime = createBackupVerifyRuntime();
-        await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
-          /path traversal segments/i,
-        );
-      },
-    );
-  });
-
-  it("fails when archive paths contain backslashes", async () => {
-    const invalidPath = `${TEST_ARCHIVE_ROOT}/payload\\..\\escaped.txt`;
-    await withBrokenArchiveFixture(
       {
         tempPrefix: "openclaw-backup-backslash-",
-        manifestAssetArchivePath: invalidPath,
-        payloads: [{ fileName: "payload.txt", contents: "payload\n", archivePath: invalidPath }],
+        archivePath: `${TEST_ARCHIVE_ROOT}/payload\\..\\escaped.txt`,
+        error: /forward slashes/i,
       },
-      async (archivePath) => {
-        const runtime = createBackupVerifyRuntime();
-        await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
-          /forward slashes/i,
-        );
-      },
-    );
+    ]) {
+      await withBrokenArchiveFixture(
+        {
+          tempPrefix,
+          manifestAssetArchivePath: archivePath,
+          payloads: [{ fileName: "payload.txt", contents: "payload\n", archivePath }],
+        },
+        async (brokenArchivePath) => {
+          const runtime = createBackupVerifyRuntime();
+          await expect(
+            backupVerifyCommand(runtime, { archive: brokenArchivePath }),
+          ).rejects.toThrow(error);
+        },
+      );
+    }
   });
 
   it("ignores payload manifest.json files when locating the backup manifest", async () => {
@@ -302,45 +297,44 @@ describe("backupVerifyCommand", () => {
     }
   });
 
-  it("fails when the archive contains duplicate root manifest entries", async () => {
+  it("rejects duplicate manifest and payload entries", async () => {
     const payloadArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw/payload.txt`;
-    await withBrokenArchiveFixture(
+    for (const options of [
       {
         tempPrefix: "openclaw-backup-duplicate-manifest-",
-        manifestAssetArchivePath: payloadArchivePath,
         payloads: [{ fileName: "payload.txt", contents: "payload\n" }],
-        buildTarEntries: ({ manifestPath, payloadPaths }) => [
+        buildTarEntries: ({
           manifestPath,
-          manifestPath,
-          ...payloadPaths,
-        ],
+          payloadPaths,
+        }: {
+          manifestPath: string;
+          payloadPaths: string[];
+        }) => [manifestPath, manifestPath, ...payloadPaths],
+        error: /expected exactly one backup manifest entry, found 2/i,
       },
-      async (archivePath) => {
-        const runtime = createBackupVerifyRuntime();
-        await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
-          /expected exactly one backup manifest entry, found 2/i,
-        );
-      },
-    );
-  });
-
-  it("fails when the archive contains duplicate payload entries", async () => {
-    const payloadArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw/payload.txt`;
-    await withBrokenArchiveFixture(
       {
         tempPrefix: "openclaw-backup-duplicate-payload-",
-        manifestAssetArchivePath: payloadArchivePath,
         payloads: [
           { fileName: "payload-a.txt", contents: "payload-a\n", archivePath: payloadArchivePath },
           { fileName: "payload-b.txt", contents: "payload-b\n", archivePath: payloadArchivePath },
         ],
+        error: /duplicate entry path/i,
       },
-      async (archivePath) => {
-        const runtime = createBackupVerifyRuntime();
-        await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
-          /duplicate entry path/i,
-        );
-      },
-    );
+    ]) {
+      await withBrokenArchiveFixture(
+        {
+          tempPrefix: options.tempPrefix,
+          manifestAssetArchivePath: payloadArchivePath,
+          payloads: options.payloads,
+          buildTarEntries: options.buildTarEntries,
+        },
+        async (archivePath) => {
+          const runtime = createBackupVerifyRuntime();
+          await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+            options.error,
+          );
+        },
+      );
+    }
   });
 });

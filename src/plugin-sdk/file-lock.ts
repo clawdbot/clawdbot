@@ -123,6 +123,24 @@ export type FileLockHandle = {
   release: () => Promise<void>;
 };
 
+export const FILE_LOCK_TIMEOUT_ERROR_CODE = "file_lock_timeout";
+
+export type FileLockTimeoutError = Error & {
+  code: typeof FILE_LOCK_TIMEOUT_ERROR_CODE;
+  lockPath: string;
+};
+
+function createFileLockTimeoutError(
+  normalizedFile: string,
+  lockPath: string,
+): FileLockTimeoutError {
+  const error = new Error(`file lock timeout for ${normalizedFile}`);
+  return Object.assign(error, {
+    code: FILE_LOCK_TIMEOUT_ERROR_CODE,
+    lockPath,
+  }) as FileLockTimeoutError;
+}
+
 async function releaseHeldLock(normalizedFile: string): Promise<void> {
   const current = HELD_LOCKS.get(normalizedFile);
   if (!current) {
@@ -162,8 +180,7 @@ export async function acquireFileLock(
     };
   }
 
-  const attempts = Math.max(1, options.retries.retries + 1);
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
+  for (let attempt = 0; attempt <= options.retries.retries; attempt += 1) {
     try {
       const handle = await fs.open(lockPath, "wx");
       await handle.writeFile(
@@ -184,14 +201,14 @@ export async function acquireFileLock(
         await fs.rm(lockPath, { force: true }).catch(() => undefined);
         continue;
       }
-      if (attempt >= attempts - 1) {
+      if (attempt >= options.retries.retries) {
         break;
       }
       await new Promise((resolve) => setTimeout(resolve, computeDelayMs(options.retries, attempt)));
     }
   }
 
-  throw new Error(`file lock timeout for ${normalizedFile}`);
+  throw createFileLockTimeoutError(normalizedFile, lockPath);
 }
 
 /** Run an async callback while holding a file lock, always releasing the lock afterward. */

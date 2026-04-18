@@ -1,9 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 /**
  * Twitch-specific utility functions
  */
+
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
 
 /**
  * Normalize Twitch channel names.

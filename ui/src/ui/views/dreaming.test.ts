@@ -198,111 +198,64 @@ function renderInto(props: DreamingProps): HTMLDivElement {
 }
 
 describe("dreaming view", () => {
-  it("renders the sleeping lobster SVG", () => {
-    const container = renderInto(buildProps());
+  it("renders the active dream scene chrome and status", () => {
+    const container = renderInto(buildProps({ dreamingOf: "reindexing old chats\u2026" }));
+
     const svg = container.querySelector(".dreams__lobster svg");
     expect(svg).not.toBeNull();
-  });
 
-  it("shows three floating Z elements", () => {
-    const container = renderInto(buildProps());
     const zs = container.querySelectorAll(".dreams__z");
     expect(zs.length).toBe(3);
-  });
 
-  it("renders stars", () => {
-    const container = renderInto(buildProps());
     const stars = container.querySelectorAll(".dreams__star");
     expect(stars.length).toBe(12);
-  });
 
-  it("renders moon", () => {
-    const container = renderInto(buildProps());
     expect(container.querySelector(".dreams__moon")).not.toBeNull();
-  });
 
-  it("displays sleep phase cards", () => {
-    const container = renderInto(buildProps());
     const phases = [...container.querySelectorAll(".dreams__phase-name")].map((node) =>
       node.textContent?.trim(),
     );
     expect(phases).toEqual(["Light", "Deep", "Rem"]);
     expect(container.querySelectorAll(".dreams__phase").length).toBe(3);
     expect(container.querySelector(".dreams__phase--off")?.textContent).toContain("off");
-  });
 
-  it("shows unknown phase status when phase data is unavailable", () => {
-    const container = renderInto(buildProps({ phases: undefined }));
-    const statuses = [...container.querySelectorAll(".dreams__phase-next")].map((node) =>
-      node.textContent?.trim(),
-    );
-    expect(statuses).toEqual(["—", "—", "—"]);
-    expect(container.querySelectorAll(".dreams__phase--off").length).toBe(0);
-  });
-
-  it("keeps maintenance controls out of the scene tab", () => {
-    const container = renderInto(buildProps());
     const buttons = [...container.querySelectorAll("button")].map((node) =>
       node.textContent?.trim(),
     );
     expect(buttons).not.toContain("Backfill");
     expect(buttons).not.toContain("Reset");
     expect(buttons).not.toContain("Clear Replayed");
-  });
-
-  it("shows dream bubble when active", () => {
-    const container = renderInto(buildProps({ active: true }));
     expect(container.querySelector(".dreams__bubble")).not.toBeNull();
-  });
-
-  it("hides dream bubble when idle", () => {
-    const container = renderInto(buildProps({ active: false }));
-    expect(container.querySelector(".dreams__bubble")).toBeNull();
-  });
-
-  it("shows custom dreamingOf text when provided", () => {
-    const container = renderInto(buildProps({ dreamingOf: "reindexing old chats\u2026" }));
     const text = container.querySelector(".dreams__bubble-text");
     expect(text?.textContent).toBe("reindexing old chats\u2026");
-  });
-
-  it("shows active status label when active", () => {
-    const container = renderInto(buildProps({ active: true }));
     const label = container.querySelector(".dreams__status-label");
     expect(label?.textContent).toBe("Dreaming Active");
-  });
-
-  it("shows idle status label when inactive", () => {
-    const container = renderInto(buildProps({ active: false }));
-    const label = container.querySelector(".dreams__status-label");
-    expect(label?.textContent).toBe("Dreaming Idle");
-  });
-
-  it("applies idle class when not active", () => {
-    const container = renderInto(buildProps({ active: false }));
-    expect(container.querySelector(".dreams--idle")).not.toBeNull();
-  });
-
-  it("shows next cycle info when provided", () => {
-    const container = renderInto(buildProps({ nextCycle: "4:00 AM" }));
     const detail = container.querySelector(".dreams__status-detail span");
     expect(detail?.textContent).toContain("4:00 AM");
-  });
-
-  it("renders control error when present", () => {
-    const container = renderInto(buildProps({ statusError: "patch failed" }));
-    expect(container.querySelector(".dreams__controls-error")?.textContent).toContain(
-      "patch failed",
-    );
-  });
-
-  it("renders sub-tab navigation", () => {
-    const container = renderInto(buildProps());
     const tabs = container.querySelectorAll(".dreams__tab");
     expect(tabs.length).toBe(3);
     expect(tabs[0]?.textContent).toContain("Scene");
     expect(tabs[1]?.textContent).toContain("Diary");
     expect(tabs[2]?.textContent).toContain("Advanced");
+  });
+
+  it("renders idle and unavailable scene states", () => {
+    const idleContainer = renderInto(buildProps({ active: false }));
+    expect(idleContainer.querySelector(".dreams__bubble")).toBeNull();
+    expect(idleContainer.querySelector(".dreams__status-label")?.textContent).toBe("Dreaming Idle");
+    expect(idleContainer.querySelector(".dreams--idle")).not.toBeNull();
+
+    const unknownPhaseContainer = renderInto(buildProps({ phases: undefined }));
+    const statuses = [...unknownPhaseContainer.querySelectorAll(".dreams__phase-next")].map(
+      (node) => node.textContent?.trim(),
+    );
+    expect(statuses).toEqual(["—", "—", "—"]);
+    expect(unknownPhaseContainer.querySelectorAll(".dreams__phase--off").length).toBe(0);
+
+    const errorContainer = renderInto(buildProps({ statusError: "patch failed" }));
+    expect(errorContainer.querySelector(".dreams__controls-error")?.textContent).toContain(
+      "patch failed",
+    );
   });
 
   it("renders imported memory topics inside the diary tab", () => {
@@ -515,28 +468,20 @@ describe("dreaming view", () => {
     setDreamSubTab("scene");
   });
 
-  it("shows empty diary state when no diary content exists", () => {
+  it("renders diary empty, error, and removed-navigation states", () => {
     setDreamSubTab("diary");
     setDreamDiarySubTab("dreams");
-    const container = renderInto(buildProps({ dreamDiaryContent: null }));
-    expect(container.querySelector(".dreams-diary__empty")).not.toBeNull();
-    expect(container.querySelector(".dreams-diary__empty-text")?.textContent).toContain(
+    const emptyContainer = renderInto(buildProps({ dreamDiaryContent: null }));
+    expect(emptyContainer.querySelector(".dreams-diary__empty")).not.toBeNull();
+    expect(emptyContainer.querySelector(".dreams-diary__empty-text")?.textContent).toContain(
       "No dreams yet",
     );
-    setDreamSubTab("scene");
-  });
 
-  it("shows diary error message when diary load fails", () => {
-    setDreamSubTab("diary");
-    setDreamDiarySubTab("dreams");
-    const container = renderInto(buildProps({ dreamDiaryError: "read failed" }));
-    expect(container.querySelector(".dreams-diary__error")?.textContent).toContain("read failed");
-    setDreamSubTab("scene");
-  });
+    const errorContainer = renderInto(buildProps({ dreamDiaryError: "read failed" }));
+    expect(errorContainer.querySelector(".dreams-diary__error")?.textContent).toContain(
+      "read failed",
+    );
 
-  it("does not render the old page navigation chrome", () => {
-    setDreamSubTab("diary");
-    setDreamDiarySubTab("dreams");
     const container = renderInto(buildProps());
     expect(container.querySelector(".dreams-diary__page")).toBeNull();
     expect(container.querySelector(".dreams-diary__nav-btn")).toBeNull();

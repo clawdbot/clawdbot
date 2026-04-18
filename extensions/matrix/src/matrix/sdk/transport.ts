@@ -1,16 +1,14 @@
-import {
-  fetchWithRuntimeDispatcher,
-  type PinnedDispatcherPolicy,
-} from "openclaw/plugin-sdk/infra-runtime";
+import { MatrixMediaSizeLimitError } from "../media-errors.js";
+import { readResponseWithLimit } from "./read-response-with-limit.js";
 import {
   buildTimeoutAbortSignal,
   closeDispatcher,
   createPinnedDispatcher,
+  fetchWithRuntimeDispatcherOrMockedGlobal,
   resolvePinnedHostnameWithPolicy,
   type SsrFPolicy,
-} from "../../runtime-api.js";
-import { MatrixMediaSizeLimitError } from "../media-errors.js";
-import { readResponseWithLimit } from "./read-response-with-limit.js";
+  type PinnedDispatcherPolicy,
+} from "./transport-runtime-api.js";
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
 
@@ -91,13 +89,6 @@ function buildBufferedResponse(params: {
   return response;
 }
 
-function isMockedFetch(fetchImpl: typeof fetch | undefined): boolean {
-  if (typeof fetchImpl !== "function") {
-    return false;
-  }
-  return typeof (fetchImpl as typeof fetch & { mock?: unknown }).mock === "object";
-}
-
 async function fetchWithMatrixDispatcher(params: {
   url: string;
   init: MatrixDispatcherRequestInit;
@@ -106,10 +97,7 @@ async function fetchWithMatrixDispatcher(params: {
   // fetches must stay fail-closed unless a retry path can preserve the
   // validated pinned-address binding. Route dispatcher-attached requests
   // through undici runtime fetch so the pinned dispatcher is preserved.
-  if (params.init.dispatcher && !isMockedFetch(globalThis.fetch)) {
-    return await fetchWithRuntimeDispatcher(params.url, params.init);
-  }
-  return await fetch(params.url, params.init);
+  return await fetchWithRuntimeDispatcherOrMockedGlobal(params.url, params.init);
 }
 
 async function fetchWithMatrixGuardedRedirects(params: {

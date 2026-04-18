@@ -122,4 +122,106 @@ describe("gateway cli backend live helpers", () => {
 
     expect(shouldRunCliModelSwitchProbe("claude-cli", "claude-cli/claude-sonnet-4-6")).toBe(false);
   });
+
+  it("allows live env overrides for fresh and resume CLI args", async () => {
+    const { resolveCliBackendLiveArgs } = await import("./gateway-cli-backend.live-helpers.js");
+
+    process.env.OPENCLAW_LIVE_CLI_BACKEND_ARGS = JSON.stringify([
+      "exec",
+      "--sandbox",
+      "danger-full-access",
+    ]);
+    process.env.OPENCLAW_LIVE_CLI_BACKEND_RESUME_ARGS = JSON.stringify([
+      "exec",
+      "resume",
+      "{sessionId}",
+      "-c",
+      'sandbox_mode="danger-full-access"',
+    ]);
+
+    expect(
+      resolveCliBackendLiveArgs({
+        providerId: "codex-cli",
+        defaultArgs: ["exec", "--sandbox", "workspace-write"],
+        defaultResumeArgs: [
+          "exec",
+          "resume",
+          "{sessionId}",
+          "-c",
+          'sandbox_mode="workspace-write"',
+        ],
+      }),
+    ).toEqual({
+      args: ["exec", "--sandbox", "danger-full-access"],
+      resumeArgs: ["exec", "resume", "{sessionId}", "-c", 'sandbox_mode="danger-full-access"'],
+    });
+  });
+
+  it("retries cancelled cron MCP replies", async () => {
+    const { shouldRetryCliCronMcpProbeReply } =
+      await import("./gateway-cli-backend.live-helpers.js");
+
+    expect(
+      shouldRetryCliCronMcpProbeReply(
+        "The `cron` MCP tool call was cancelled again, so the job was not created.",
+      ),
+    ).toBe(true);
+    expect(
+      shouldRetryCliCronMcpProbeReply(
+        "The cron tool call was cancelled again, so the job still was not created.",
+      ),
+    ).toBe(true);
+    expect(
+      shouldRetryCliCronMcpProbeReply(
+        "The `cron` MCP call was cancelled again, so the job was not created.",
+      ),
+    ).toBe(true);
+    expect(
+      shouldRetryCliCronMcpProbeReply(
+        "The cron tool call was cancelled again, so nothing was created.",
+      ),
+    ).toBe(true);
+    expect(
+      shouldRetryCliCronMcpProbeReply(
+        "The `cron` MCP tool call was cancelled (`user cancelled MCP tool call`).",
+      ),
+    ).toBe(true);
+    expect(
+      shouldRetryCliCronMcpProbeReply(
+        "The tool call was cancelled before completion, so I can’t verify the cron job was created.",
+      ),
+    ).toBe(true);
+    expect(
+      shouldRetryCliCronMcpProbeReply(
+        "The cron tool call was cancelled twice, so I could not create the job.",
+      ),
+    ).toBe(true);
+    expect(
+      shouldRetryCliCronMcpProbeReply(
+        "The cron tool call was cancelled twice, so I couldn’t create `live-mcp-67f4e9`. Please retry and I’ll do it again.",
+      ),
+    ).toBe(true);
+    expect(
+      shouldRetryCliCronMcpProbeReply(
+        "The cron tool call was canceled twice on the host side, so I couldn’t create `live-mcp-2d1afb`. If you want, send the same request again and I’ll retry.",
+      ),
+    ).toBe(true);
+    expect(
+      shouldRetryCliCronMcpProbeReply(
+        "I tried the `cron` tool call twice, but both attempts were canceled by the environment (`user cancelled MCP tool call`), so I can’t honestly reply with the success token.",
+      ),
+    ).toBe(true);
+    expect(shouldRetryCliCronMcpProbeReply("   ")).toBe(true);
+    expect(
+      shouldRetryCliCronMcpProbeReply(
+        "The cron tool call was cancelled twice, so I couldn’t create `live-mcp-932c6b`. If you want, I can try again.",
+      ),
+    ).toBe(true);
+    expect(
+      shouldRetryCliCronMcpProbeReply(
+        "The cron job was not created because the schedule payload was invalid.",
+      ),
+    ).toBe(false);
+    expect(shouldRetryCliCronMcpProbeReply("live-mcp-abc123")).toBe(false);
+  });
 });

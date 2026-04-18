@@ -6,10 +6,10 @@ import { canExecRequestNode } from "../../agents/exec-defaults.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
 import { matchesSkillFilter } from "../../agents/skills/filter.js";
 import {
-  ensureSkillsWatcher,
   getSkillsSnapshotVersion,
   shouldRefreshSnapshotForVersion,
-} from "../../agents/skills/refresh.js";
+} from "../../agents/skills/refresh-state.js";
+import { ensureSkillsWatcher } from "../../agents/skills/refresh.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,

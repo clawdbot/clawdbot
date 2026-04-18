@@ -3,7 +3,6 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import * as tar from "tar";
 import {
   buildBackupArchiveBasename,
   buildBackupArchivePath,
@@ -14,6 +13,15 @@ import {
 import { isPathWithin } from "../commands/cleanup-utils.js";
 import { resolveHomeDir, resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
+
+type TarRuntime = typeof import("tar");
+
+let tarRuntimePromise: Promise<TarRuntime> | undefined;
+
+function loadTarRuntime(): Promise<TarRuntime> {
+  tarRuntimePromise ??= import("tar");
+  return tarRuntimePromise;
+}
 
 export type BackupCreateOptions = {
   output?: string;
@@ -342,6 +350,7 @@ export async function createBackupArchive(
     });
     await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 
+    const tar = await loadTarRuntime();
     await tar.c(
       {
         file: tempArchivePath,

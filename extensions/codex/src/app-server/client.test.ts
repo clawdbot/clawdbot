@@ -199,6 +199,39 @@ describe("CodexAppServerClient", () => {
     expect(process.kill).toHaveBeenCalledWith("SIGKILL");
     expect(process.unref).toHaveBeenCalledTimes(1);
   });
+  it("handles stdin write errors without crashing the process", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+
+    // Start a pending request so we can verify it gets properly rejected.
+    const pending = harness.client.request("test/method");
+
+    // Simulate the child process closing its pipe — a write to the now-dead
+    // stdin emits an asynchronous EPIPE error on the stream.
+    harness.process.stdin.destroy(Object.assign(new Error("write EPIPE"), { code: "EPIPE" }));
+
+    // The pending request must be rejected with the pipe error rather than
+    // an unhandled exception tearing down the gateway.
+    await expect(pending).rejects.toThrow("write EPIPE");
+
+    // Subsequent requests are rejected immediately (client is closed).
+    await expect(harness.client.request("another/method")).rejects.toThrow(
+      "codex app-server client is closed",
+    );
+  });
+
+  it("does not write to stdin after the child process exits", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+
+    // Simulate the child process exiting.
+    harness.process.emit("exit", 1, null);
+
+    // A notification after exit must not attempt a write.
+    harness.client.notify("late/event", { data: "ignored" });
+    expect(harness.writes).toHaveLength(0);
+  });
+
   it("reads the Codex version from the app-server user agent", () => {
     expect(readCodexVersionFromUserAgent("Codex Desktop/0.118.0")).toBe("0.118.0");
     expect(readCodexVersionFromUserAgent("openclaw/0.118.0 (macOS; test)")).toBe("0.118.0");

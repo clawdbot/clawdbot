@@ -68,6 +68,57 @@ function symlinkPath(sourcePath, targetPath, type) {
   ensureSymlink(relativeSymlinkTarget(sourcePath, targetPath), targetPath, type, sourcePath);
 }
 
+function writeJsonFile(targetPath, value) {
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+  fs.writeFileSync(targetPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+function removeStaleOpenClawSelfReference(sourcePluginNodeModulesDir, repoRoot) {
+  if (!fs.existsSync(sourcePluginNodeModulesDir)) {
+    return;
+  }
+
+  const selfReferencePath = path.join(sourcePluginNodeModulesDir, "openclaw");
+  try {
+    const existing = fs.lstatSync(selfReferencePath);
+    if (!existing.isSymbolicLink()) {
+      return;
+    }
+    if (fs.realpathSync(selfReferencePath) === fs.realpathSync(repoRoot)) {
+      removePathIfExists(selfReferencePath);
+    }
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      throw error;
+    }
+  }
+}
+
+function ensureOpenClawExtensionAlias(params) {
+  const pluginSdkDir = path.join(params.repoRoot, "dist", "plugin-sdk");
+  if (!fs.existsSync(pluginSdkDir)) {
+    return;
+  }
+
+  const aliasDir = path.join(params.distExtensionsRoot, "node_modules", "openclaw");
+  const pluginSdkAliasPath = path.join(aliasDir, "plugin-sdk");
+  fs.mkdirSync(aliasDir, { recursive: true });
+  writeJsonFile(path.join(aliasDir, "package.json"), {
+    name: "openclaw",
+    type: "module",
+    exports: {
+      "./plugin-sdk": "./plugin-sdk/index.js",
+      "./plugin-sdk/*": "./plugin-sdk/*.js",
+    },
+  });
+  ensureSymlink(
+    relativeSymlinkTarget(pluginSdkDir, pluginSdkAliasPath),
+    pluginSdkAliasPath,
+    symlinkType(),
+    pluginSdkDir,
+  );
+}
+
 function shouldWrapRuntimeJsFile(sourcePath) {
   return path.extname(sourcePath) === ".js";
 }
@@ -144,6 +195,7 @@ function linkPluginNodeModules(params) {
   if (!fs.existsSync(params.sourcePluginNodeModulesDir)) {
     return;
   }
+  removeStaleOpenClawSelfReference(params.sourcePluginNodeModulesDir, params.repoRoot);
   ensureSymlink(
     params.sourcePluginNodeModulesDir,
     runtimeNodeModulesDir,
@@ -166,9 +218,10 @@ export function stageBundledPluginRuntime(params = {}) {
 
   removePathIfExists(runtimeRoot);
   fs.mkdirSync(runtimeExtensionsRoot, { recursive: true });
+  ensureOpenClawExtensionAlias({ repoRoot, distExtensionsRoot });
 
   for (const dirent of fs.readdirSync(distExtensionsRoot, { withFileTypes: true })) {
-    if (!dirent.isDirectory()) {
+    if (!dirent.isDirectory() || dirent.name === "node_modules") {
       continue;
     }
     const distPluginDir = path.join(distExtensionsRoot, dirent.name);
@@ -177,6 +230,7 @@ export function stageBundledPluginRuntime(params = {}) {
 
     stagePluginRuntimeOverlay(distPluginDir, runtimePluginDir);
     linkPluginNodeModules({
+      repoRoot,
       runtimePluginDir,
       sourcePluginNodeModulesDir: distPluginNodeModulesDir,
     });

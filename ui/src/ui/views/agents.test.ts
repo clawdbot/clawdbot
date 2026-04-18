@@ -144,15 +144,12 @@ describe("renderAgents", () => {
     );
     await Promise.resolve();
 
-    const skillsTab = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-tab")).find(
+    let skillsTab = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-tab")).find(
       (button) => button.textContent?.includes("Skills"),
     );
 
     expect(skillsTab?.textContent?.trim()).toBe("Skills");
-  });
 
-  it("shows the selected agent's skills count when the report matches", async () => {
-    const container = document.createElement("div");
     render(
       renderAgents(
         createProps({
@@ -173,7 +170,7 @@ describe("renderAgents", () => {
     );
     await Promise.resolve();
 
-    const skillsTab = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-tab")).find(
+    skillsTab = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-tab")).find(
       (button) => button.textContent?.includes("Skills"),
     );
 

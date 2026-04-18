@@ -1,12 +1,10 @@
 export {
-  resolveIMessageAttachmentRoots as resolveInboundAttachmentRoots,
-  resolveIMessageRemoteAttachmentRoots as resolveRemoteInboundAttachmentRoots,
-} from "./src/media-contract.js";
-export {
   DEFAULT_IMESSAGE_ATTACHMENT_ROOTS,
+  resolveIMessageAttachmentRoots as resolveInboundAttachmentRoots,
   resolveIMessageAttachmentRoots,
+  resolveIMessageRemoteAttachmentRoots as resolveRemoteInboundAttachmentRoots,
   resolveIMessageRemoteAttachmentRoots,
-} from "./src/media-contract.js";
+} from "./media-contract-api.js";
 export {
   __testing as imessageConversationBindingTesting,
   createIMessageConversationBindingManager,

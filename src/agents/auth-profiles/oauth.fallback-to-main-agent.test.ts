@@ -55,6 +55,10 @@ async function loadFreshOAuthModuleForTest() {
   ({ resolveApiKeyForProfile } = await import("./oauth.js"));
 }
 
+function createUsableOAuthExpiry(): number {
+  return Date.now() + 30 * 60 * 1000;
+}
+
 describe("resolveApiKeyForProfile fallback to main agent", () => {
   const envSnapshot = captureEnv([
     "OPENCLAW_STATE_DIR",
@@ -139,7 +143,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
           provider: "anthropic",
           access: "oauth-token",
           refresh: "refresh-token",
-          expires: Date.now() + 60_000,
+          expires: createUsableOAuthExpiry(),
         },
       },
     };

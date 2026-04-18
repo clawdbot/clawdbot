@@ -33,31 +33,24 @@ function installSessionBindingContractSuite(params: {
   cleanup: () => Promise<void> | void;
   expectedCapabilities: SessionBindingCapabilities;
 }) {
-  it("registers the expected session binding capabilities", async () => {
+  it("registers, binds, unbinds, and cleans up session bindings", async () => {
     expect(await Promise.resolve(params.getCapabilities())).toEqual(params.expectedCapabilities);
-  });
-
-  it("binds and resolves a session binding through the shared service", async () => {
     const binding = await params.bindAndResolve();
-    expect(typeof binding.bindingId).toBe("string");
-    expect(binding.bindingId.trim()).not.toBe("");
-    expect(typeof binding.targetSessionKey).toBe("string");
-    expect(binding.targetSessionKey.trim()).not.toBe("");
-    expect(["session", "subagent"]).toContain(binding.targetKind);
-    expect(typeof binding.conversation.channel).toBe("string");
-    expect(typeof binding.conversation.accountId).toBe("string");
-    expect(typeof binding.conversation.conversationId).toBe("string");
-    expect(["active", "ending", "ended"]).toContain(binding.status);
-    expect(typeof binding.boundAt).toBe("number");
-  });
-
-  it("unbinds a registered binding through the shared service", async () => {
-    const binding = await params.bindAndResolve();
-    await params.unbindAndVerify(binding);
-  });
-
-  it("cleans up registered bindings", async () => {
-    await params.cleanup();
+    try {
+      expect(typeof binding.bindingId).toBe("string");
+      expect(binding.bindingId.trim()).not.toBe("");
+      expect(typeof binding.targetSessionKey).toBe("string");
+      expect(binding.targetSessionKey.trim()).not.toBe("");
+      expect(["session", "subagent"]).toContain(binding.targetKind);
+      expect(typeof binding.conversation.channel).toBe("string");
+      expect(typeof binding.conversation.accountId).toBe("string");
+      expect(typeof binding.conversation.conversationId).toBe("string");
+      expect(["active", "ending", "ended"]).toContain(binding.status);
+      expect(typeof binding.boundAt).toBe("number");
+      await params.unbindAndVerify(binding);
+    } finally {
+      await params.cleanup();
+    }
   });
 }
 

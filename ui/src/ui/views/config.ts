@@ -767,6 +767,24 @@ export function renderConfig(props: ConfigProps) {
   const settingsLayout = props.settingsLayout ?? "tabs";
   const allCategories = [...visibleCategories, ...(otherCategory ? [otherCategory] : [])];
 
+  const resetContentScroll = (target: EventTarget | null) => {
+    queueMicrotask(() => {
+      const origin = target instanceof Element ? target : null;
+      const content = origin
+        ?.closest(".config-main")
+        ?.querySelector<HTMLElement>(".config-content");
+      if (!content) {
+        return;
+      }
+      if (typeof content.scrollTo === "function") {
+        content.scrollTo({ top: 0, left: 0, behavior: "auto" });
+        return;
+      }
+      content.scrollTop = 0;
+      content.scrollLeft = 0;
+    });
+  };
+
   function renderAccordionNav() {
     return html`
       <div class="config-accordion-nav">
@@ -795,12 +813,13 @@ export function renderConfig(props: ConfigProps) {
                 cat.sections.some((s) => s.key === props.activeSection)
                   ? "config-accordion-group__header--active"
                   : ""}"
-                @click=${() => {
+                @click=${(e: Event) => {
                   const firstKey = cat.sections[0]?.key ?? null;
                   const isCurrentlyInGroup = cat.sections.some(
                     (s) => s.key === props.activeSection,
                   );
                   props.onSectionChange(isCurrentlyInGroup ? null : firstKey);
+                  resetContentScroll(e.currentTarget);
                 }}
               >
                 <span class="config-accordion-group__icon">
@@ -832,7 +851,10 @@ export function renderConfig(props: ConfigProps) {
                             class="config-accordion-group__item ${props.activeSection === s.key
                               ? "config-accordion-group__item--active"
                               : ""}"
-                            @click=${() => props.onSectionChange(s.key)}
+                            @click=${(e: Event) => {
+                              props.onSectionChange(s.key);
+                              resetContentScroll(e.currentTarget);
+                            }}
                           >
                             <span class="config-accordion-group__item-icon">
                               ${getSectionIcon(s.key)}
@@ -1004,7 +1026,10 @@ export function renderConfig(props: ConfigProps) {
                           : ""}"
                         role="tab"
                         aria-selected=${props.activeSection === tab.key}
-                        @click=${() => props.onSectionChange(tab.key)}
+                        @click=${(e: Event) => {
+                          props.onSectionChange(tab.key);
+                          resetContentScroll(e.currentTarget);
+                        }}
                         title=${tab.label}
                       >
                         ${tab.label}

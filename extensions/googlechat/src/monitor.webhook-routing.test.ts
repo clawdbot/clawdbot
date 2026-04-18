@@ -7,7 +7,10 @@ import { createMockServerResponse } from "../../../test/helpers/plugins/mock-htt
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { verifyGoogleChatRequest } from "./auth.js";
-import { handleGoogleChatWebhookRequest, registerGoogleChatWebhookTarget } from "./monitor.js";
+import {
+  handleGoogleChatWebhookRequest,
+  registerGoogleChatWebhookTarget,
+} from "./monitor-routing.js";
 
 vi.mock("./auth.js", () => ({
   verifyGoogleChatRequest: vi.fn(),

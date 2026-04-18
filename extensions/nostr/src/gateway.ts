@@ -4,13 +4,13 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   createPreCryptoDirectDmAuthorizer,
   DEFAULT_ACCOUNT_ID,
-  dispatchInboundDirectDmWithRuntime,
   type ChannelOutboundAdapter,
   resolveInboundDirectDmAccessWithRuntime,
   type ChannelPlugin,
 } from "./channel-api.js";
 import type { MetricEvent, MetricsSnapshot } from "./metrics.js";
-import { normalizePubkey, startNostrBus, type NostrBusHandle } from "./nostr-bus.js";
+import { startNostrBus, type NostrBusHandle } from "./nostr-bus.js";
+import { normalizePubkey } from "./nostr-key-utils.js";
 import { getNostrRuntime } from "./runtime.js";
 import { resolveDefaultNostrAccountId, type ResolvedNostrAccount } from "./types.js";
 
@@ -148,6 +148,7 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
         return;
       }
 
+      const { dispatchInboundDirectDmWithRuntime } = await import("./inbound-direct-dm-runtime.js");
       await dispatchInboundDirectDmWithRuntime({
         cfg: ctx.cfg,
         runtime,

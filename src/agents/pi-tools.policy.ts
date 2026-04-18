@@ -174,7 +174,7 @@ function buildScopedGroupIdCandidates(groupId?: string | null): string[] {
   return [raw];
 }
 
-function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
+export function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
   channel?: string;
   groupIds?: string[];
 } {

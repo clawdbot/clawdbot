@@ -2,6 +2,10 @@ import type { ChannelSetupAdapter, ChannelSetupInput } from "openclaw/plugin-sdk
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
+  applyAccountNameToChannelSection,
+  patchScopedAccountConfig,
+} from "openclaw/plugin-sdk/setup";
+import {
   createSetupInputPresenceValidator,
   mergeAllowFromEntries,
   promptParsedAllowFromForAccount,
@@ -10,8 +14,6 @@ import {
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
-import { applyAccountNameToChannelSection, patchScopedAccountConfig } from "../runtime-api.js";
 import { resolveDefaultNextcloudTalkAccountId, resolveNextcloudTalkAccount } from "./accounts.js";
 import type { CoreConfig } from "./types.js";
 
@@ -23,6 +25,10 @@ type NextcloudSetupInput = ChannelSetupInput & {
   secretFile?: string;
 };
 type NextcloudTalkSection = NonNullable<CoreConfig["channels"]>["nextcloud-talk"];
+
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
 
 function addWildcardAllowFrom(allowFrom?: Array<string | number> | null): string[] {
   return mergeAllowFromEntries(allowFrom, ["*"]);

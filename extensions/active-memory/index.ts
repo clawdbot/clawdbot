@@ -1527,7 +1527,9 @@ function extractRecentTurns(messages: unknown[]): ActiveRecallRecentTurn[] {
     }
     const rawText = extractTextContent(typed.content);
     const text =
-      role === "assistant" ? stripRecalledContextNoise(rawText) : stripInjectedActiveMemoryPrefixOnly(rawText);
+      role === "assistant"
+        ? stripRecalledContextNoise(rawText)
+        : stripInjectedActiveMemoryPrefixOnly(rawText);
     if (!text) {
       continue;
     }

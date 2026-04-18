@@ -164,6 +164,9 @@ import Testing
         } else {
             #expect(Bool(false))
         }
+        #expect(cmd.contains("StrictHostKeyChecking=yes"))
+        #expect(!cmd.contains("StrictHostKeyChecking=accept-new"))
+        #expect(cmd.contains("UpdateHostKeys=yes"))
         #expect(cmd.contains("-i"))
         #expect(cmd.contains("/tmp/id_ed25519"))
         if let script = cmd.last {

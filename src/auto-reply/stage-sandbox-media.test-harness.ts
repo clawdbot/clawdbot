@@ -7,7 +7,7 @@ export async function withSandboxMediaTempHome<T>(
   prefix: string,
   fn: (home: string) => Promise<T>,
 ): Promise<T> {
-  return withTempHomeBase(async (home) => await fn(home), { prefix });
+  return withTempHomeBase(async (home) => await fn(home), { prefix, skipSessionCleanup: true });
 }
 
 export function createSandboxMediaContexts(mediaPath: string): {

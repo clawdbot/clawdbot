@@ -52,7 +52,11 @@ function ghGraphQL(query, options = {}) {
 
 function failOnGraphQLFailure(result, message) {
   if (result?.gh_failed) {
-    const details = (result.stderr || result.stdout || `gh exited with status ${result.status}`).trim();
+    const details = (
+      result.stderr ||
+      result.stdout ||
+      `gh exited with status ${result.status}`
+    ).trim();
     fail(`${message}: ${details}`);
   }
   if (Array.isArray(result?.errors) && result.errors.length > 0) {
@@ -73,9 +77,7 @@ function formatGraphQLAfterClause(cursor) {
 }
 
 function findDiscussionCommentNode(nodes, discussionCommentDbId) {
-  return (
-    nodes.find((node) => String(node.databaseId) === String(discussionCommentDbId)) || null
-  );
+  return nodes.find((node) => String(node.databaseId) === String(discussionCommentDbId)) || null;
 }
 
 function fetchDiscussionReplyPage(commentNodeId, cursor) {
@@ -169,9 +171,13 @@ function fetchDiscussionComment(discussionNumber, discussionCommentDbId) {
 
       while (!reply && hasMoreReplies) {
         const replyPage = fetchDiscussionReplyPage(topLevelComment.id, replyCursor);
-        failOnGraphQLFailure(replyPage, `Failed to fetch replies for discussion comment ${topLevelComment.id}`);
+        failOnGraphQLFailure(
+          replyPage,
+          `Failed to fetch replies for discussion comment ${topLevelComment.id}`,
+        );
         const replies = replyPage?.data?.node?.replies;
-        if (!replies) fail(`Failed to paginate replies for discussion comment ${topLevelComment.id}`);
+        if (!replies)
+          fail(`Failed to paginate replies for discussion comment ${topLevelComment.id}`);
 
         reply = findDiscussionCommentNode(replies.nodes, discussionCommentDbId);
         hasMoreReplies = replies.pageInfo.hasNextPage;
@@ -189,9 +195,7 @@ function fetchDiscussionComment(discussionNumber, discussionCommentDbId) {
 }
 
 function createDiscussionComment(discussionNodeId, body, replyToNodeId) {
-  const replyToClause = replyToNodeId
-    ? `, replyToId: "${escapeGraphQLString(replyToNodeId)}"`
-    : "";
+  const replyToClause = replyToNodeId ? `, replyToId: "${escapeGraphQLString(replyToNodeId)}"` : "";
   const result = ghGraphQL(
     `mutation { addDiscussionComment(input: { discussionId: "${escapeGraphQLString(discussionNodeId)}"${replyToClause}, body: "${escapeGraphQLString(body)}" }) { comment { id url } } }`,
   );
@@ -261,7 +265,10 @@ function cmdFetchContent(locationJson) {
     const discussionNumber = urlMatch[1];
     const discussionCommentDbId = urlMatch[2];
 
-    const { discussionId, comment } = fetchDiscussionComment(discussionNumber, discussionCommentDbId);
+    const { discussionId, comment } = fetchDiscussionComment(
+      discussionNumber,
+      discussionCommentDbId,
+    );
     if (!comment)
       fail(
         `Discussion comment #${discussionCommentDbId} not found in discussion #${discussionNumber}`,

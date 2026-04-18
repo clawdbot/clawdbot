@@ -1,5 +1,3 @@
-import { loadConfig } from "../config/config.js";
-import { info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
@@ -44,6 +42,13 @@ const STATUS_PAD = 10;
 const DELIVERY_PAD = 14;
 const ID_PAD = 10;
 const RUN_PAD = 10;
+
+const info = theme.info;
+
+async function loadTaskCancelConfig() {
+  const { loadConfig } = await import("../config/config.js");
+  return loadConfig();
+}
 
 function truncate(value: string, maxChars: number) {
   if (value.length <= maxChars) {
@@ -387,7 +392,7 @@ export async function tasksCancelCommand(opts: { lookup: string }, runtime: Runt
     return;
   }
   const result = await cancelTaskById({
-    cfg: loadConfig(),
+    cfg: await loadTaskCancelConfig(),
     taskId: task.taskId,
   });
   if (!result.found) {

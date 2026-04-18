@@ -29,6 +29,7 @@
     "dist/",
     "!dist/**/*.map",
     "!dist/plugin-sdk/.tsbuildinfo",
+    "!dist/extensions/node_modules/**",
     "!dist/extensions/*/node_modules/**",
     "!dist/extensions/qa-channel/**",
     "dist/extensions/qa-channel/runtime-api.js",
@@ -212,6 +213,10 @@
       "types": "./dist/plugin-sdk/channel-reply-pipeline.d.ts",
       "default": "./dist/plugin-sdk/channel-reply-pipeline.js"
     },
+    "./plugin-sdk/channel-reply-options-runtime": {
+      "types": "./dist/plugin-sdk/channel-reply-options-runtime.d.ts",
+      "default": "./dist/plugin-sdk/channel-reply-options-runtime.js"
+    },
     "./plugin-sdk/channel-runtime": {
       "types": "./dist/plugin-sdk/channel-runtime.d.ts",
       "default": "./dist/plugin-sdk/channel-runtime.js"
@@ -227,6 +232,10 @@
     "./plugin-sdk/outbound-runtime": {
       "types": "./dist/plugin-sdk/outbound-runtime.d.ts",
       "default": "./dist/plugin-sdk/outbound-runtime.js"
+    },
+    "./plugin-sdk/poll-runtime": {
+      "types": "./dist/plugin-sdk/poll-runtime.d.ts",
+      "default": "./dist/plugin-sdk/poll-runtime.js"
     },
     "./plugin-sdk/infra-runtime": {
       "types": "./dist/plugin-sdk/infra-runtime.d.ts",
@@ -280,6 +289,10 @@
       "types": "./dist/plugin-sdk/thread-bindings-runtime.d.ts",
       "default": "./dist/plugin-sdk/thread-bindings-runtime.js"
     },
+    "./plugin-sdk/thread-bindings-session-runtime": {
+      "types": "./dist/plugin-sdk/thread-bindings-session-runtime.d.ts",
+      "default": "./dist/plugin-sdk/thread-bindings-session-runtime.js"
+    },
     "./plugin-sdk/text-runtime": {
       "types": "./dist/plugin-sdk/text-runtime.d.ts",
       "default": "./dist/plugin-sdk/text-runtime.js"
@@ -319,6 +332,10 @@
     "./plugin-sdk/secret-ref-runtime": {
       "types": "./dist/plugin-sdk/secret-ref-runtime.d.ts",
       "default": "./dist/plugin-sdk/secret-ref-runtime.js"
+    },
+    "./plugin-sdk/secret-file-runtime": {
+      "types": "./dist/plugin-sdk/secret-file-runtime.d.ts",
+      "default": "./dist/plugin-sdk/secret-file-runtime.js"
     },
     "./plugin-sdk/security-runtime": {
       "types": "./dist/plugin-sdk/security-runtime.d.ts",
@@ -372,6 +389,10 @@
       "types": "./dist/plugin-sdk/acp-binding-runtime.d.ts",
       "default": "./dist/plugin-sdk/acp-binding-runtime.js"
     },
+    "./plugin-sdk/acp-binding-resolve-runtime": {
+      "types": "./dist/plugin-sdk/acp-binding-resolve-runtime.d.ts",
+      "default": "./dist/plugin-sdk/acp-binding-resolve-runtime.js"
+    },
     "./plugin-sdk/lazy-runtime": {
       "types": "./dist/plugin-sdk/lazy-runtime.d.ts",
       "default": "./dist/plugin-sdk/lazy-runtime.js"
@@ -407,6 +428,10 @@
     "./plugin-sdk/account-resolution": {
       "types": "./dist/plugin-sdk/account-resolution.d.ts",
       "default": "./dist/plugin-sdk/account-resolution.js"
+    },
+    "./plugin-sdk/account-resolution-runtime": {
+      "types": "./dist/plugin-sdk/account-resolution-runtime.d.ts",
+      "default": "./dist/plugin-sdk/account-resolution-runtime.js"
     },
     "./plugin-sdk/agent-config-primitives": {
       "types": "./dist/plugin-sdk/agent-config-primitives.d.ts",
@@ -484,6 +509,10 @@
       "types": "./dist/plugin-sdk/command-auth-native.d.ts",
       "default": "./dist/plugin-sdk/command-auth-native.js"
     },
+    "./plugin-sdk/command-gating": {
+      "types": "./dist/plugin-sdk/command-gating.d.ts",
+      "default": "./dist/plugin-sdk/command-gating.js"
+    },
     "./plugin-sdk/command-status": {
       "types": "./dist/plugin-sdk/command-status.d.ts",
       "default": "./dist/plugin-sdk/command-status.js"
@@ -511,6 +540,14 @@
     "./plugin-sdk/direct-dm": {
       "types": "./dist/plugin-sdk/direct-dm.d.ts",
       "default": "./dist/plugin-sdk/direct-dm.js"
+    },
+    "./plugin-sdk/direct-dm-access": {
+      "types": "./dist/plugin-sdk/direct-dm-access.d.ts",
+      "default": "./dist/plugin-sdk/direct-dm-access.js"
+    },
+    "./plugin-sdk/direct-dm-guard-policy": {
+      "types": "./dist/plugin-sdk/direct-dm-guard-policy.d.ts",
+      "default": "./dist/plugin-sdk/direct-dm-guard-policy.js"
     },
     "./plugin-sdk/device-bootstrap": {
       "types": "./dist/plugin-sdk/device-bootstrap.d.ts",
@@ -584,6 +621,18 @@
       "types": "./dist/plugin-sdk/channel-inbound-roots.d.ts",
       "default": "./dist/plugin-sdk/channel-inbound-roots.js"
     },
+    "./plugin-sdk/channel-logging": {
+      "types": "./dist/plugin-sdk/channel-logging.d.ts",
+      "default": "./dist/plugin-sdk/channel-logging.js"
+    },
+    "./plugin-sdk/channel-location": {
+      "types": "./dist/plugin-sdk/channel-location.d.ts",
+      "default": "./dist/plugin-sdk/channel-location.js"
+    },
+    "./plugin-sdk/channel-mention-gating": {
+      "types": "./dist/plugin-sdk/channel-mention-gating.d.ts",
+      "default": "./dist/plugin-sdk/channel-mention-gating.js"
+    },
     "./plugin-sdk/channel-lifecycle": {
       "types": "./dist/plugin-sdk/channel-lifecycle.d.ts",
       "default": "./dist/plugin-sdk/channel-lifecycle.js"
@@ -591,6 +640,10 @@
     "./plugin-sdk/channel-pairing": {
       "types": "./dist/plugin-sdk/channel-pairing.d.ts",
       "default": "./dist/plugin-sdk/channel-pairing.js"
+    },
+    "./plugin-sdk/channel-pairing-paths": {
+      "types": "./dist/plugin-sdk/channel-pairing-paths.d.ts",
+      "default": "./dist/plugin-sdk/channel-pairing-paths.js"
     },
     "./plugin-sdk/channel-policy": {
       "types": "./dist/plugin-sdk/channel-policy.d.ts",
@@ -603,6 +656,10 @@
     "./plugin-sdk/channel-targets": {
       "types": "./dist/plugin-sdk/channel-targets.d.ts",
       "default": "./dist/plugin-sdk/channel-targets.js"
+    },
+    "./plugin-sdk/context-visibility-runtime": {
+      "types": "./dist/plugin-sdk/context-visibility-runtime.d.ts",
+      "default": "./dist/plugin-sdk/context-visibility-runtime.js"
     },
     "./plugin-sdk/feishu": {
       "types": "./dist/plugin-sdk/feishu.d.ts",
@@ -624,6 +681,34 @@
       "types": "./dist/plugin-sdk/fetch-runtime.d.ts",
       "default": "./dist/plugin-sdk/fetch-runtime.js"
     },
+    "./plugin-sdk/runtime-fetch": {
+      "types": "./dist/plugin-sdk/runtime-fetch.d.ts",
+      "default": "./dist/plugin-sdk/runtime-fetch.js"
+    },
+    "./plugin-sdk/response-limit-runtime": {
+      "types": "./dist/plugin-sdk/response-limit-runtime.d.ts",
+      "default": "./dist/plugin-sdk/response-limit-runtime.js"
+    },
+    "./plugin-sdk/session-binding-runtime": {
+      "types": "./dist/plugin-sdk/session-binding-runtime.d.ts",
+      "default": "./dist/plugin-sdk/session-binding-runtime.js"
+    },
+    "./plugin-sdk/session-key-runtime": {
+      "types": "./dist/plugin-sdk/session-key-runtime.d.ts",
+      "default": "./dist/plugin-sdk/session-key-runtime.js"
+    },
+    "./plugin-sdk/session-store-runtime": {
+      "types": "./dist/plugin-sdk/session-store-runtime.d.ts",
+      "default": "./dist/plugin-sdk/session-store-runtime.js"
+    },
+    "./plugin-sdk/ssrf-dispatcher": {
+      "types": "./dist/plugin-sdk/ssrf-dispatcher.d.ts",
+      "default": "./dist/plugin-sdk/ssrf-dispatcher.js"
+    },
+    "./plugin-sdk/string-coerce-runtime": {
+      "types": "./dist/plugin-sdk/string-coerce-runtime.d.ts",
+      "default": "./dist/plugin-sdk/string-coerce-runtime.js"
+    },
     "./plugin-sdk/group-access": {
       "types": "./dist/plugin-sdk/group-access.d.ts",
       "default": "./dist/plugin-sdk/group-access.js"
@@ -631,6 +716,10 @@
     "./plugin-sdk/global-singleton": {
       "types": "./dist/plugin-sdk/global-singleton.d.ts",
       "default": "./dist/plugin-sdk/global-singleton.js"
+    },
+    "./plugin-sdk/directory-config-runtime": {
+      "types": "./dist/plugin-sdk/directory-config-runtime.d.ts",
+      "default": "./dist/plugin-sdk/directory-config-runtime.js"
     },
     "./plugin-sdk/directory-runtime": {
       "types": "./dist/plugin-sdk/directory-runtime.d.ts",
@@ -1020,6 +1109,10 @@
       "types": "./dist/plugin-sdk/secret-input.d.ts",
       "default": "./dist/plugin-sdk/secret-input.js"
     },
+    "./plugin-sdk/secret-input-runtime": {
+      "types": "./dist/plugin-sdk/secret-input-runtime.d.ts",
+      "default": "./dist/plugin-sdk/secret-input-runtime.js"
+    },
     "./plugin-sdk/channel-status": {
       "types": "./dist/plugin-sdk/channel-status.d.ts",
       "default": "./dist/plugin-sdk/channel-status.js"
@@ -1031,10 +1124,6 @@
     "./plugin-sdk/speech": {
       "types": "./dist/plugin-sdk/speech.d.ts",
       "default": "./dist/plugin-sdk/speech.js"
-    },
-    "./plugin-sdk/session-store-runtime": {
-      "types": "./dist/plugin-sdk/session-store-runtime.d.ts",
-      "default": "./dist/plugin-sdk/session-store-runtime.js"
     },
     "./plugin-sdk/string-normalization-runtime": {
       "types": "./dist/plugin-sdk/string-normalization-runtime.d.ts",
@@ -1051,6 +1140,10 @@
     "./plugin-sdk/telegram-command-config": {
       "types": "./dist/plugin-sdk/telegram-command-config.d.ts",
       "default": "./dist/plugin-sdk/telegram-command-config.js"
+    },
+    "./plugin-sdk/text-autolink-runtime": {
+      "types": "./dist/plugin-sdk/text-autolink-runtime.d.ts",
+      "default": "./dist/plugin-sdk/text-autolink-runtime.js"
     },
     "./plugin-sdk/thread-ownership": {
       "types": "./dist/plugin-sdk/thread-ownership.d.ts",

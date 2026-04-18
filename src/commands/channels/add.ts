@@ -1,5 +1,4 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { listChannelPluginCatalogEntries } from "../../channels/plugins/catalog.js";
 import { parseOptionalDelimitedEntries } from "../../channels/plugins/helpers.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { moveSingleAccountChannelSectionToDefaultAccount } from "../../channels/plugins/setup-helpers.js";
@@ -12,11 +11,6 @@ import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { applyAgentBindings, describeBinding } from "../agents.bindings.js";
-import { isCatalogChannelInstalled } from "../channel-setup/discovery.js";
-import {
-  createChannelOnboardingPostWriteHookCollector,
-  runCollectedChannelOnboardingPostWriteHooks,
-} from "../onboard-channels.js";
 import type { ChannelChoice } from "../onboard-types.js";
 import { applyAccountName, applyChannelAccountConfig } from "./add-mutators.js";
 import { channelLabel, requireValidConfigFileSnapshot, shouldUseWizard } from "./shared.js";
@@ -29,11 +23,12 @@ export type ChannelsAddOptions = {
   dmAllowlist?: string;
 } & Omit<ChannelSetupInput, "groupChannels" | "dmAllowlist" | "initialSyncLimit">;
 
-function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
+async function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
   const trimmed = normalizeOptionalLowercaseString(raw);
   if (!trimmed) {
     return undefined;
   }
+  const { listChannelPluginCatalogEntries } = await import("../../channels/plugins/catalog.js");
   const workspaceDir = cfg ? resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) : undefined;
   return listChannelPluginCatalogEntries({ workspaceDir }).find((entry) => {
     if (normalizeOptionalLowercaseString(entry.id) === trimmed) {
@@ -60,17 +55,17 @@ export async function channelsAddCommand(
 
   const useWizard = shouldUseWizard(params);
   if (useWizard) {
-    const [{ buildAgentSummaries }, { setupChannels }] = await Promise.all([
+    const [{ buildAgentSummaries }, onboardChannels] = await Promise.all([
       import("../agents.config.js"),
       import("../onboard-channels.js"),
     ]);
     const prompter = createClackPrompter();
-    const postWriteHooks = createChannelOnboardingPostWriteHookCollector();
+    const postWriteHooks = onboardChannels.createChannelOnboardingPostWriteHookCollector();
     let selection: ChannelChoice[] = [];
     const accountIds: Partial<Record<ChannelChoice, string>> = {};
     const resolvedPlugins = new Map<ChannelChoice, ChannelSetupPlugin>();
     await prompter.intro("Channel setup");
-    let nextConfig = await setupChannels(cfg, runtime, prompter, {
+    let nextConfig = await onboardChannels.setupChannels(cfg, runtime, prompter, {
       allowDisable: false,
       allowSignalInstall: true,
       onPostWriteHook: (hook) => {
@@ -187,7 +182,7 @@ export async function channelsAddCommand(
       nextConfig,
       ...(baseHash !== undefined ? { baseHash } : {}),
     });
-    await runCollectedChannelOnboardingPostWriteHooks({
+    await onboardChannels.runCollectedChannelOnboardingPostWriteHooks({
       hooks: postWriteHooks.drain(),
       cfg: nextConfig,
       runtime,
@@ -198,7 +193,7 @@ export async function channelsAddCommand(
 
   const rawChannel = opts.channel ?? "";
   let channel = normalizeChannelId(rawChannel);
-  let catalogEntry = channel ? undefined : resolveCatalogChannelEntry(rawChannel, nextConfig);
+  let catalogEntry = channel ? undefined : await resolveCatalogChannelEntry(rawChannel, nextConfig);
   const resolveWorkspaceDir = () =>
     resolveAgentWorkspaceDir(nextConfig, resolveDefaultAgentId(nextConfig));
   // May trigger loadOpenClawPlugins on cache miss (disk scan + jiti import)
@@ -227,6 +222,7 @@ export async function channelsAddCommand(
 
   if (!channel && catalogEntry) {
     const workspaceDir = resolveWorkspaceDir();
+    const { isCatalogChannelInstalled } = await import("../channel-setup/discovery.js");
     if (
       !isCatalogChannelInstalled({
         cfg: nextConfig,
@@ -364,6 +360,7 @@ export async function channelsAddCommand(
   runtime.log(`Added ${channelLabel(channel)} account "${accountId}".`);
   const afterAccountConfigWritten = plugin.setup?.afterAccountConfigWritten;
   if (afterAccountConfigWritten) {
+    const { runCollectedChannelOnboardingPostWriteHooks } = await import("../onboard-channels.js");
     await runCollectedChannelOnboardingPostWriteHooks({
       hooks: [
         {

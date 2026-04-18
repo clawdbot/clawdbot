@@ -204,4 +204,17 @@ describe("createAcpVisibleTextAccumulator", () => {
 
     expect(acc.finalize()).toBe("NO_REPLY: explanation");
   });
+
+  it("buffers chunked NO_REPLY prefixes before emitting visible text", () => {
+    const acc = createAcpVisibleTextAccumulator();
+
+    expect(acc.consume("NO")).toBeNull();
+    expect(acc.consume("NO_")).toBeNull();
+    expect(acc.consume("NO_RE")).toBeNull();
+    expect(acc.consume("NO_REPLY")).toBeNull();
+    expect(acc.consume("Actual answer")).toEqual({
+      text: "Actual answer",
+      delta: "Actual answer",
+    });
+  });
 });

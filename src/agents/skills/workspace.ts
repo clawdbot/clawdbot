@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveOsHomeDir } from "../../infra/home-dir.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -40,6 +41,10 @@ const skillsLogger = createSubsystemLogger("skills");
  * Saves ~5–6 tokens per skill path × N skills ≈ 400–600 tokens total.
  */
 function resolveUserHomeDir(): string | undefined {
+  return resolveOsHomeDir(process.env, os.homedir);
+}
+
+function resolveNativeUserHomeDir(): string | undefined {
   try {
     return path.resolve(os.homedir());
   } catch {
@@ -48,7 +53,9 @@ function resolveUserHomeDir(): string | undefined {
 }
 
 function resolveCompactHomePrefixes(): string[] {
-  const homes = [resolveHomeDir(), resolveUserHomeDir()].filter((home): home is string => !!home);
+  const homes = [resolveHomeDir(), resolveUserHomeDir(), resolveNativeUserHomeDir()].filter(
+    (home): home is string => !!home,
+  );
   const resolvedHomes = homes.map((home) => path.resolve(home));
   const realHomes = resolvedHomes
     .map((home) => tryRealpath(home))

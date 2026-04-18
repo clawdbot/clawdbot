@@ -25,8 +25,13 @@ vi.mock("./bot.js", () => ({
   handleFeishuMessage: vi.fn(),
 }));
 
+const createFeishuClientMock = vi.hoisted(() => vi.fn());
 const sendCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./client.js", () => ({
+  createFeishuClient: createFeishuClientMock,
+}));
 
 vi.mock("./send.js", () => ({
   sendCardFeishu: sendCardFeishuMock,
@@ -89,6 +94,13 @@ describe("Feishu Card Action Handler", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    createFeishuClientMock.mockReset().mockReturnValue({
+      im: {
+        chat: {
+          get: vi.fn().mockResolvedValue({ code: 0, data: { chat_type: "group" } }),
+        },
+      },
+    });
     vi.mocked(handleFeishuMessage)
       .mockReset()
       .mockResolvedValue(undefined as never);
@@ -347,6 +359,142 @@ describe("Feishu Card Action Handler", () => {
         event: expect.objectContaining({
           message: expect.objectContaining({
             chat_id: "p2p-chat-1",
+            chat_type: "p2p",
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("resolves DM chat type from the Feishu chat API when card context omits it", async () => {
+    createFeishuClientMock.mockReturnValueOnce({
+      im: {
+        chat: {
+          get: vi.fn().mockResolvedValue({ code: 0, data: { chat_type: "p2p" } }),
+        },
+      },
+    });
+    const event = createCardActionEvent({
+      token: "tok9b",
+      chatId: "oc_dm_chat_123",
+      actionValue: { text: "/help" },
+    });
+
+    await handleFeishuCardAction({ cfg, event, runtime });
+
+    expect(handleFeishuMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: expect.objectContaining({
+          message: expect.objectContaining({
+            chat_id: "oc_dm_chat_123",
+            chat_type: "p2p",
+          }),
+        }),
+      }),
+    );
+    expect(createFeishuClientMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses resolved DM chat type when building approval cards without stored context", async () => {
+    createFeishuClientMock.mockReturnValueOnce({
+      im: {
+        chat: {
+          get: vi.fn().mockResolvedValue({ code: 0, data: { chat_mode: "p2p" } }),
+        },
+      },
+    });
+    const event = createCardActionEvent({
+      token: "tok9c",
+      chatId: "oc_dm_chat_234",
+      actionValue: createFeishuCardInteractionEnvelope({
+        k: "meta",
+        a: FEISHU_APPROVAL_REQUEST_ACTION,
+        m: {
+          command: "/new",
+          prompt: "Start a fresh session?",
+        },
+        c: {
+          u: "u123",
+          h: "oc_dm_chat_234",
+          e: Date.now() + 60_000,
+        },
+      }),
+    });
+
+    await handleFeishuCardAction({ cfg, event, runtime, accountId: "main" });
+
+    expect(sendCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        card: expect.objectContaining({
+          body: expect.objectContaining({
+            elements: expect.arrayContaining([
+              expect.objectContaining({
+                tag: "action",
+                actions: expect.arrayContaining([
+                  expect.objectContaining({
+                    value: expect.objectContaining({
+                      c: expect.objectContaining({
+                        t: "p2p",
+                      }),
+                    }),
+                  }),
+                ]),
+              }),
+            ]),
+          }),
+        }),
+      }),
+    );
+    expect(createFeishuClientMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to p2p when Feishu chat API returns an error", async () => {
+    createFeishuClientMock.mockReturnValueOnce({
+      im: {
+        chat: {
+          get: vi.fn().mockResolvedValue({ code: 99, msg: "not found" }),
+        },
+      },
+    });
+    const event = createCardActionEvent({
+      token: "tok9d",
+      chatId: "oc_unknown_chat_456",
+      actionValue: { text: "/help" },
+    });
+
+    await handleFeishuCardAction({ cfg, event, runtime });
+
+    expect(handleFeishuMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: expect.objectContaining({
+          message: expect.objectContaining({
+            chat_type: "p2p",
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("falls back to p2p when Feishu chat API throws", async () => {
+    createFeishuClientMock.mockReturnValueOnce({
+      im: {
+        chat: {
+          get: vi.fn().mockRejectedValue(new Error("network failure")),
+        },
+      },
+    });
+    const event = createCardActionEvent({
+      token: "tok9e",
+      chatId: "oc_broken_chat_789",
+      actionValue: { text: "/help" },
+    });
+
+    await handleFeishuCardAction({ cfg, event, runtime });
+
+    expect(handleFeishuMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: expect.objectContaining({
+          message: expect.objectContaining({
             chat_type: "p2p",
           }),
         }),

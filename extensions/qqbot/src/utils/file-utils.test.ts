@@ -7,7 +7,7 @@ const mediaRuntimeMocks = vi.hoisted(() => ({
   fetchRemoteMedia: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
+vi.mock("./file-utils-runtime.js", () => ({
   fetchRemoteMedia: (...args: unknown[]) => mediaRuntimeMocks.fetchRemoteMedia(...args),
 }));
 

@@ -44,12 +44,14 @@ const {
   runQaCredentialsAddCommand,
   runQaCredentialsListCommand,
   runQaCredentialsRemoveCommand,
+  runQaCoverageReportCommand,
   runQaProviderServerCommand,
   runQaTelegramCommand,
 } = vi.hoisted(() => ({
   runQaCredentialsAddCommand: vi.fn(),
   runQaCredentialsListCommand: vi.fn(),
   runQaCredentialsRemoveCommand: vi.fn(),
+  runQaCoverageReportCommand: vi.fn(),
   runQaProviderServerCommand: vi.fn(),
   runQaTelegramCommand: vi.fn(),
 }));
@@ -72,6 +74,7 @@ vi.mock("./cli.runtime.js", () => ({
   runQaCredentialsAddCommand,
   runQaCredentialsListCommand,
   runQaCredentialsRemoveCommand,
+  runQaCoverageReportCommand,
   runQaProviderServerCommand,
 }));
 
@@ -85,6 +88,7 @@ describe("qa cli registration", () => {
     runQaCredentialsAddCommand.mockReset();
     runQaCredentialsListCommand.mockReset();
     runQaCredentialsRemoveCommand.mockReset();
+    runQaCoverageReportCommand.mockReset();
     runQaProviderServerCommand.mockReset();
     runQaTelegramCommand.mockReset();
     listQaRunnerCliContributions
@@ -101,8 +105,28 @@ describe("qa cli registration", () => {
     const qa = program.commands.find((command) => command.name() === "qa");
     expect(qa).toBeDefined();
     expect(qa?.commands.map((command) => command.name())).toEqual(
-      expect.arrayContaining([TEST_QA_RUNNER.commandName, "telegram", "credentials"]),
+      expect.arrayContaining([TEST_QA_RUNNER.commandName, "telegram", "credentials", "coverage"]),
     );
+  });
+
+  it("routes coverage report flags into the qa runtime command", async () => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "coverage",
+      "--repo-root",
+      "/tmp/openclaw-repo",
+      "--output",
+      ".artifacts/qa-coverage.md",
+      "--json",
+    ]);
+
+    expect(runQaCoverageReportCommand).toHaveBeenCalledWith({
+      repoRoot: "/tmp/openclaw-repo",
+      output: ".artifacts/qa-coverage.md",
+      json: true,
+    });
   });
 
   it("delegates discovered qa runner registration through the generic host seam", () => {

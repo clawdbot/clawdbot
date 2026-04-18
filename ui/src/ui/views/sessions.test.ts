@@ -65,55 +65,7 @@ function buildProps(result: SessionsListResult): SessionsProps {
 }
 
 describe("sessions view", () => {
-  it("renders verbose=full without falling back to inherit", async () => {
-    const container = document.createElement("div");
-    render(
-      renderSessions(
-        buildProps(
-          buildResult({
-            key: "agent:main:main",
-            kind: "direct",
-            updatedAt: Date.now(),
-            verboseLevel: "full",
-          }),
-        ),
-      ),
-      container,
-    );
-    await Promise.resolve();
-
-    const selects = container.querySelectorAll("select");
-    const verbose = selects[2] as HTMLSelectElement | undefined;
-    expect(verbose?.value).toBe("full");
-    expect(Array.from(verbose?.options ?? []).some((option) => option.value === "full")).toBe(true);
-  });
-
-  it("keeps unknown stored values selectable instead of forcing inherit", async () => {
-    const container = document.createElement("div");
-    render(
-      renderSessions(
-        buildProps(
-          buildResult({
-            key: "agent:main:main",
-            kind: "direct",
-            updatedAt: Date.now(),
-            reasoningLevel: "custom-mode",
-          }),
-        ),
-      ),
-      container,
-    );
-    await Promise.resolve();
-
-    const selects = container.querySelectorAll("select");
-    const reasoning = selects[3] as HTMLSelectElement | undefined;
-    expect(reasoning?.value).toBe("custom-mode");
-    expect(
-      Array.from(reasoning?.options ?? []).some((option) => option.value === "custom-mode"),
-    ).toBe(true);
-  });
-
-  it("renders explicit fast mode without falling back to inherit", async () => {
+  it("keeps session selects stable and deselects only the current page", async () => {
     const container = document.createElement("div");
     render(
       renderSessions(
@@ -123,6 +75,8 @@ describe("sessions view", () => {
             kind: "direct",
             updatedAt: Date.now(),
             fastMode: true,
+            verboseLevel: "full",
+            reasoningLevel: "custom-mode",
           }),
         ),
       ),
@@ -132,14 +86,19 @@ describe("sessions view", () => {
 
     const selects = container.querySelectorAll("select");
     const fast = selects[1] as HTMLSelectElement | undefined;
+    const verbose = selects[2] as HTMLSelectElement | undefined;
+    const reasoning = selects[3] as HTMLSelectElement | undefined;
     expect(fast?.value).toBe("on");
-  });
+    expect(verbose?.value).toBe("full");
+    expect(Array.from(verbose?.options ?? []).some((option) => option.value === "full")).toBe(true);
+    expect(reasoning?.value).toBe("custom-mode");
+    expect(
+      Array.from(reasoning?.options ?? []).some((option) => option.value === "custom-mode"),
+    ).toBe(true);
 
-  it("deselects only the current page from the header checkbox", async () => {
     const onSelectPage = vi.fn();
     const onDeselectPage = vi.fn();
     const onDeselectAll = vi.fn();
-    const container = document.createElement("div");
     render(
       renderSessions({
         ...buildProps(

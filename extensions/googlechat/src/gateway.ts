@@ -1,11 +1,11 @@
-import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
-import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/status-helpers";
 import {
   createAccountStatusSink,
   runPassiveAccountLifecycle,
-  type OpenClawConfig,
-  type ResolvedGoogleChatAccount,
-} from "./channel.deps.runtime.js";
+} from "openclaw/plugin-sdk/channel-lifecycle";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/status-helpers";
+import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import type { GoogleChatRuntimeEnv } from "./monitor-types.js";
 
 const loadGoogleChatChannelRuntime = createLazyRuntimeNamedExport(

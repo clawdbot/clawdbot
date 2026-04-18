@@ -8,6 +8,7 @@ import {
   MODEL_AVAILABILITY_UNAVAILABLE_CODE,
   shouldFallbackToAuthHeuristics,
 } from "./list.errors.js";
+import { toModelRow as toModelRowBase } from "./list.model-row.js";
 import {
   discoverAuthStorage,
   discoverModels,
@@ -18,7 +19,7 @@ import {
   resolveOpenClawAgentDir,
 } from "./list.runtime.js";
 import type { ModelRow } from "./list.types.js";
-import { isLocalBaseUrl, modelKey } from "./shared.js";
+import { modelKey } from "./shared.js";
 
 const hasAuthForProvider = (
   provider: string,
@@ -140,71 +141,10 @@ export async function loadModelRegistry(
   return { registry, models, availableKeys, availabilityErrorMessage };
 }
 
-export function toModelRow(params: {
-  model?: Model<Api>;
-  key: string;
-  tags: string[];
-  aliases?: string[];
-  availableKeys?: Set<string>;
-  cfg?: OpenClawConfig;
-  authStore?: AuthProfileStore;
-  allowProviderAvailabilityFallback?: boolean;
-}): ModelRow {
-  const {
-    model,
-    key,
-    tags,
-    aliases = [],
-    availableKeys,
-    cfg,
-    authStore,
-    allowProviderAvailabilityFallback = false,
-  } = params;
-  if (!model) {
-    return {
-      key,
-      name: key,
-      input: "-",
-      contextWindow: null,
-      local: null,
-      available: null,
-      tags: [...tags, "missing"],
-      missing: true,
-    };
-  }
-
-  const input = model.input.join("+") || "text";
-  const local = isLocalBaseUrl(model.baseUrl);
-  const modelIsAvailable = availableKeys?.has(modelKey(model.provider, model.id)) ?? false;
-  // Prefer model-level registry availability when present.
-  // Fall back to provider-level auth heuristics only if registry availability isn't available,
-  // or if the caller marks this as a synthetic/forward-compat model that won't appear in getAvailable().
-  const available =
-    availableKeys !== undefined && !allowProviderAvailabilityFallback
-      ? modelIsAvailable
-      : modelIsAvailable ||
-        (cfg && authStore ? hasAuthForProvider(model.provider, cfg, authStore) : false);
-  const aliasTags = aliases.length > 0 ? [`alias:${aliases.join(",")}`] : [];
-  const mergedTags = new Set(tags);
-  if (aliasTags.length > 0) {
-    for (const tag of mergedTags) {
-      if (tag === "alias" || tag.startsWith("alias:")) {
-        mergedTags.delete(tag);
-      }
-    }
-    for (const tag of aliasTags) {
-      mergedTags.add(tag);
-    }
-  }
-
-  return {
-    key,
-    name: model.name || model.id,
-    input,
-    contextWindow: model.contextWindow ?? null,
-    local,
-    available,
-    tags: Array.from(mergedTags),
-    missing: false,
-  };
+export function toModelRow(params: Parameters<typeof toModelRowBase>[0]): ModelRow {
+  return toModelRowBase({
+    ...params,
+    hasAuthForProvider: ({ provider, cfg, authStore }) =>
+      hasAuthForProvider(provider, cfg, authStore),
+  });
 }

@@ -15,7 +15,16 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { buildMessageCliJson, formatMessageCliText } from "./message-format.js";
+
+function buildMessageCliJson(result: Awaited<ReturnType<typeof runMessageAction>>) {
+  return {
+    action: result.action,
+    channel: result.channel,
+    dryRun: result.dryRun,
+    handledBy: result.handledBy,
+    payload: result.payload,
+  };
+}
 
 export async function messageCommand(
   opts: Record<string, unknown>,
@@ -90,6 +99,7 @@ export async function messageCommand(
     return;
   }
 
+  const { formatMessageCliText } = await import("./message-format.js");
   for (const line of formatMessageCliText(result)) {
     runtime.log(line);
   }

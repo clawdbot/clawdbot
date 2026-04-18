@@ -397,9 +397,10 @@ jobs:
         env:
           OPENCLAW_PREPACK_PREPARED: "1"
           OPENCLAW_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag }}
+          PUBLISH_TARBALL_PATH: ${{ steps.publish_tarball.outputs.path }}
         run: |
           set -euo pipefail
-          publish_target="${{ steps.publish_tarball.outputs.path }}"
+          publish_target="${PUBLISH_TARBALL_PATH}"
           if [[ -n "${publish_target}" ]]; then
             publish_target="./${publish_target}"
           fi

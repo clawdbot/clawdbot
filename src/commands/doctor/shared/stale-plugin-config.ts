@@ -50,7 +50,14 @@ export function scanStalePluginConfig(
     return [];
   }
 
-  const { knownIds } = collectPluginRegistryState(cfg, env);
+  return scanStalePluginConfigWithState(plugins, collectPluginRegistryState(cfg, env));
+}
+
+function scanStalePluginConfigWithState(
+  plugins: Record<string, unknown>,
+  registryState: StalePluginRegistryState,
+): StalePluginConfigHit[] {
+  const { knownIds } = registryState;
   const hits: StalePluginConfigHit[] = [];
 
   const allow = Array.isArray(plugins.allow) ? plugins.allow : [];
@@ -117,11 +124,17 @@ export function maybeRepairStalePluginConfig(
   config: OpenClawConfig;
   changes: string[];
 } {
-  if (isStalePluginAutoRepairBlocked(cfg, env)) {
+  const plugins = asObjectRecord(cfg.plugins);
+  if (!plugins) {
     return { config: cfg, changes: [] };
   }
 
-  const hits = scanStalePluginConfig(cfg, env);
+  const registryState = collectPluginRegistryState(cfg, env);
+  if (registryState.hasDiscoveryErrors) {
+    return { config: cfg, changes: [] };
+  }
+
+  const hits = scanStalePluginConfigWithState(plugins, registryState);
   if (hits.length === 0) {
     return { config: cfg, changes: [] };
   }

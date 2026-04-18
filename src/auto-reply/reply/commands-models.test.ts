@@ -54,6 +54,12 @@ const telegramModelsTestPlugin: ChannelPlugin = {
   },
 };
 
+const textSurfaceModelsTestPlugins = (["discord", "whatsapp"] as const).map((id) => ({
+  pluginId: id,
+  plugin: createChannelTestPluginBase({ id }),
+  source: "test",
+}));
+
 beforeEach(() => {
   modelCatalogMocks.loadModelCatalog.mockReset();
   modelCatalogMocks.loadModelCatalog.mockResolvedValue([
@@ -67,6 +73,7 @@ beforeEach(() => {
   modelAuthLabelMocks.resolveModelAuthLabel.mockReturnValue(undefined);
   setActivePluginRegistry(
     createTestRegistry([
+      ...textSurfaceModelsTestPlugins,
       {
         pluginId: "telegram",
         plugin: telegramModelsTestPlugin,

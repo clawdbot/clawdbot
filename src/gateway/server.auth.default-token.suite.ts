@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import {
   connectReq,
@@ -28,20 +28,13 @@ export function registerDefaultAuthTokenSuite(): void {
   describe("default auth (token)", () => {
     let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
     let port: number;
-    const testsWithoutDefaultServer = new Set([
-      "closes silent handshakes after timeout",
-      "prefers OPENCLAW_HANDSHAKE_TIMEOUT_MS and falls back on empty string",
-    ]);
 
-    beforeEach(async (context) => {
-      if (testsWithoutDefaultServer.has(context.task.name)) {
-        return;
-      }
+    beforeAll(async () => {
       port = await getFreePort();
       server = await startGatewayServer(port);
     });
 
-    afterEach(async () => {
+    afterAll(async () => {
       await server?.close();
       server = undefined;
     });

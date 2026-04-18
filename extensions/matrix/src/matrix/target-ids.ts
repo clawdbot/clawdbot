@@ -1,4 +1,4 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type MatrixTarget = { kind: "room"; id: string } | { kind: "user"; id: string };
 const MATRIX_PREFIX = "matrix:";

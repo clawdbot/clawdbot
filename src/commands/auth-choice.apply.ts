@@ -1,41 +1,66 @@
 import { applyAuthChoiceLoadedPluginProvider } from "../plugins/provider-auth-choice.js";
-import { normalizeLegacyOnboardAuthChoice } from "./auth-choice-legacy.js";
-import { applyAuthChoiceApiProviders } from "./auth-choice.apply.api-providers.js";
-import { normalizeApiKeyTokenProviderAuthChoice } from "./auth-choice.apply.api-providers.js";
-import { applyAuthChoiceOAuth } from "./auth-choice.apply.oauth.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.types.js";
+import type { AuthChoice } from "./onboard-types.js";
 
 export type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.types.js";
+
+async function normalizeLegacyChoice(
+  authChoice: AuthChoice | undefined,
+  params: Pick<ApplyAuthChoiceParams, "config" | "env">,
+): Promise<AuthChoice | undefined> {
+  if (authChoice === "oauth") {
+    return "setup-token";
+  }
+  if (typeof authChoice !== "string" || !authChoice.endsWith("-cli")) {
+    return authChoice;
+  }
+  const { normalizeLegacyOnboardAuthChoice } = await import("./auth-choice-legacy.js");
+  return normalizeLegacyOnboardAuthChoice(authChoice, params);
+}
+
+async function normalizeTokenProviderChoice(params: {
+  authChoice: AuthChoice;
+  source: ApplyAuthChoiceParams;
+}): Promise<AuthChoice> {
+  if (!params.source.opts?.tokenProvider) {
+    return params.authChoice;
+  }
+  if (
+    params.authChoice !== "apiKey" &&
+    params.authChoice !== "token" &&
+    params.authChoice !== "setup-token"
+  ) {
+    return params.authChoice;
+  }
+  const { normalizeApiKeyTokenProviderAuthChoice } =
+    await import("./auth-choice.apply.api-providers.js");
+  return normalizeApiKeyTokenProviderAuthChoice({
+    authChoice: params.authChoice,
+    tokenProvider: params.source.opts.tokenProvider,
+    config: params.source.config,
+    env: params.source.env,
+  });
+}
 
 export async function applyAuthChoice(
   params: ApplyAuthChoiceParams,
 ): Promise<ApplyAuthChoiceResult> {
   const normalizedAuthChoice =
-    normalizeLegacyOnboardAuthChoice(params.authChoice, {
+    (await normalizeLegacyChoice(params.authChoice, {
       config: params.config,
       env: params.env,
-    }) ?? params.authChoice;
-  const normalizedProviderAuthChoice = normalizeApiKeyTokenProviderAuthChoice({
+    })) ?? params.authChoice;
+  const normalizedProviderAuthChoice = await normalizeTokenProviderChoice({
     authChoice: normalizedAuthChoice,
-    tokenProvider: params.opts?.tokenProvider,
-    config: params.config,
-    env: params.env,
+    source: params,
   });
   const normalizedParams =
     normalizedProviderAuthChoice === params.authChoice
       ? params
       : { ...params, authChoice: normalizedProviderAuthChoice };
-  const handlers: Array<(p: ApplyAuthChoiceParams) => Promise<ApplyAuthChoiceResult | null>> = [
-    applyAuthChoiceLoadedPluginProvider,
-    applyAuthChoiceOAuth,
-    applyAuthChoiceApiProviders,
-  ];
-
-  for (const handler of handlers) {
-    const result = await handler(normalizedParams);
-    if (result) {
-      return result;
-    }
+  const result = await applyAuthChoiceLoadedPluginProvider(normalizedParams);
+  if (result) {
+    return result;
   }
 
   if (normalizedParams.authChoice === "token" || normalizedParams.authChoice === "setup-token") {

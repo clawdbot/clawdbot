@@ -142,28 +142,51 @@ vi.mock("../config/config.js", () => ({
   resolveGatewayPort: mocks.resolveGatewayPort,
 }));
 
-vi.mock("../infra/bonjour-discovery.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/bonjour-discovery.js")>(
-    "../infra/bonjour-discovery.js",
-  );
-  return {
-    ...actual,
-    discoverGatewayBeacons: mocks.discoverGatewayBeacons,
-  };
-});
+vi.mock("../infra/bonjour-discovery.js", () => ({
+  discoverGatewayBeacons: mocks.discoverGatewayBeacons,
+  resolveGatewayDiscoveryEndpoint: (beacon: GatewayBonjourBeacon) => {
+    const host = beacon.host?.trim();
+    const port = beacon.port;
+    if (!host || typeof port !== "number" || !Number.isFinite(port) || port <= 0) {
+      return null;
+    }
+    const scheme = beacon.gatewayTls === true ? "wss" : "ws";
+    return {
+      host,
+      port,
+      gatewayTls: beacon.gatewayTls === true,
+      gatewayTlsFingerprintSha256: beacon.gatewayTlsFingerprintSha256,
+      scheme,
+      wsUrl: `${scheme}://${host}:${port}`,
+    };
+  },
+}));
 
 vi.mock("../infra/tailnet.js", () => ({
   pickPrimaryTailnetIPv4: mocks.pickPrimaryTailnetIPv4,
 }));
 
-vi.mock("../infra/ssh-tunnel.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../infra/ssh-tunnel.js")>("../infra/ssh-tunnel.js");
-  return {
-    ...actual,
-    startSshPortForward: mocks.startSshPortForward,
-  };
-});
+vi.mock("../infra/ssh-tunnel.js", () => ({
+  parseSshTarget: (rawTarget: string) => {
+    const trimmed = rawTarget.trim();
+    if (!trimmed || trimmed.startsWith("-")) {
+      return null;
+    }
+    const [userHost, rawPort] = trimmed.split(":");
+    const [maybeUser, maybeHost] = userHost.includes("@")
+      ? userHost.split("@", 2)
+      : [undefined, userHost];
+    if (!maybeHost) {
+      return null;
+    }
+    return {
+      user: maybeUser,
+      host: maybeHost,
+      port: rawPort ? Number(rawPort) : 22,
+    };
+  },
+  startSshPortForward: mocks.startSshPortForward,
+}));
 
 vi.mock("../infra/ssh-config.js", () => ({
   resolveSshConfig: mocks.resolveSshConfig,

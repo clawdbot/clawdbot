@@ -15,6 +15,10 @@ vi.mock("../channels/plugins/index.js", () => ({
   listChannelPlugins: () => pluginRegistry.list,
 }));
 
+vi.mock("../channels/read-only-account-inspect.js", () => ({
+  inspectReadOnlyChannelAccount: vi.fn(async () => null),
+}));
+
 import { noteSecurityWarnings } from "./doctor-security.js";
 
 describe("noteSecurityWarnings gateway exposure", () => {
@@ -172,10 +176,11 @@ describe("noteSecurityWarnings gateway exposure", () => {
   it("shows explicit dmScope config command for multi-user DMs", async () => {
     pluginRegistry.list = [
       {
-        id: "whatsapp",
-        meta: { label: "WhatsApp" },
+        id: "test-channel",
+        meta: { label: "Test Channel" },
         config: {
           listAccountIds: () => ["default"],
+          inspectAccount: () => ({ enabled: true, configured: true }),
           resolveAccount: () => ({}),
           isEnabled: () => true,
           isConfigured: () => true,

@@ -24,11 +24,15 @@ type BrowserControlAuthSurface = {
   ) => Promise<EnsureBrowserControlAuthResult>;
 };
 
+let cachedBrowserControlAuthSurface: BrowserControlAuthSurface | undefined;
+
 function loadBrowserControlAuthSurface(): BrowserControlAuthSurface {
-  return loadBundledPluginPublicSurfaceModuleSync<BrowserControlAuthSurface>({
-    dirName: "browser",
-    artifactBasename: "browser-control-auth.js",
-  });
+  cachedBrowserControlAuthSurface ??=
+    loadBundledPluginPublicSurfaceModuleSync<BrowserControlAuthSurface>({
+      dirName: "browser",
+      artifactBasename: "browser-control-auth.js",
+    });
+  return cachedBrowserControlAuthSurface;
 }
 
 export function resolveBrowserControlAuth(

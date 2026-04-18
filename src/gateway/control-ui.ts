@@ -38,7 +38,12 @@ import {
   resolveAssistantAvatarUrl,
 } from "./control-ui-shared.js";
 import { sendGatewayAuthFailure } from "./http-common.js";
-import { getBearerToken, resolveHttpBrowserOriginPolicy } from "./http-utils.js";
+import {
+  getBearerToken,
+  resolveHttpBrowserOriginPolicy,
+  resolveTrustedHttpOperatorScopes,
+} from "./http-utils.js";
+import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 
 const ROOT_PREFIX = "/";
 const CONTROL_UI_ASSISTANT_MEDIA_PREFIX = "/__openclaw__/assistant-media";
@@ -306,6 +311,26 @@ export async function handleControlUiAssistantMediaRequest(
     if (!authResult.ok) {
       sendGatewayAuthFailure(res, authResult);
       return true;
+    }
+    const trustDeclaredOperatorScopes =
+      authResult.method !== "token" &&
+      authResult.method !== "password" &&
+      authResult.method !== "none";
+    if (trustDeclaredOperatorScopes) {
+      const requestedScopes = resolveTrustedHttpOperatorScopes(req, {
+        trustDeclaredOperatorScopes,
+      });
+      const scopeAuth = authorizeOperatorScopesForMethod("assistant.media.get", requestedScopes);
+      if (!scopeAuth.allowed) {
+        sendJson(res, 403, {
+          ok: false,
+          error: {
+            type: "forbidden",
+            message: `missing scope: ${scopeAuth.missingScope}`,
+          },
+        });
+        return true;
+      }
     }
   }
   const source = normalizeAssistantMediaSource(url.searchParams.get("source") ?? "");

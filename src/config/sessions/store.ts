@@ -7,7 +7,6 @@ import {
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { writeTextAtomic } from "../../infra/json-files.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import {
   deliveryContextFromSession,
   mergeDeliveryContext,
@@ -25,6 +24,7 @@ import {
   setSerializedSessionStore,
   writeSessionStoreCache,
 } from "./store-cache.js";
+import { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
 import { loadSessionStore, normalizeSessionStore } from "./store-load.js";
 import {
   clearSessionStoreCacheForTest,
@@ -55,6 +55,7 @@ export {
   getSessionStoreLockQueueSizeForTest,
 } from "./store-lock-state.js";
 export { loadSessionStore } from "./store-load.js";
+export { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
 
 const log = createSubsystemLogger("sessions/store");
 let sessionArchiveRuntimePromise: Promise<
@@ -74,51 +75,6 @@ function removeThreadFromDeliveryContext(context?: DeliveryContext): DeliveryCon
   const next: DeliveryContext = { ...context };
   delete next.threadId;
   return next;
-}
-
-export function normalizeStoreSessionKey(sessionKey: string): string {
-  return normalizeLowercaseStringOrEmpty(sessionKey);
-}
-
-export function resolveSessionStoreEntry(params: {
-  store: Record<string, SessionEntry>;
-  sessionKey: string;
-}): {
-  normalizedKey: string;
-  existing: SessionEntry | undefined;
-  legacyKeys: string[];
-} {
-  const trimmedKey = params.sessionKey.trim();
-  const normalizedKey = normalizeStoreSessionKey(trimmedKey);
-  const legacyKeySet = new Set<string>();
-  if (
-    trimmedKey !== normalizedKey &&
-    Object.prototype.hasOwnProperty.call(params.store, trimmedKey)
-  ) {
-    legacyKeySet.add(trimmedKey);
-  }
-  let existing =
-    params.store[normalizedKey] ?? (legacyKeySet.size > 0 ? params.store[trimmedKey] : undefined);
-  let existingUpdatedAt = existing?.updatedAt ?? 0;
-  for (const [candidateKey, candidateEntry] of Object.entries(params.store)) {
-    if (candidateKey === normalizedKey) {
-      continue;
-    }
-    if (normalizeStoreSessionKey(candidateKey) !== normalizedKey) {
-      continue;
-    }
-    legacyKeySet.add(candidateKey);
-    const candidateUpdatedAt = candidateEntry?.updatedAt ?? 0;
-    if (!existing || candidateUpdatedAt > existingUpdatedAt) {
-      existing = candidateEntry;
-      existingUpdatedAt = candidateUpdatedAt;
-    }
-  }
-  return {
-    normalizedKey,
-    existing,
-    legacyKeys: [...legacyKeySet],
-  };
 }
 
 export function setSessionWriteLockAcquirerForTests(

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { __testing } from "./minimax-web-search-provider.js";
+import { minimaxWebSearchTesting } from "../test-api.js";
 
 const {
   MINIMAX_SEARCH_ENDPOINT_GLOBAL,
@@ -7,7 +7,7 @@ const {
   resolveMiniMaxApiKey,
   resolveMiniMaxEndpoint,
   resolveMiniMaxRegion,
-} = __testing;
+} = minimaxWebSearchTesting;
 
 describe("minimax web search provider", () => {
   const originalApiHost = process.env.MINIMAX_API_HOST;

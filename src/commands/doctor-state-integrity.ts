@@ -9,13 +9,15 @@ import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import {
   formatSessionArchiveTimestamp,
   isPrimarySessionTranscriptFileName,
-  loadSessionStore,
-  resolveMainSessionKey,
+} from "../config/sessions/artifacts.js";
+import { resolveMainSessionKey } from "../config/sessions/main-session.js";
+import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionTranscriptsDirForAgent,
   resolveStorePath,
-} from "../config/sessions.js";
+} from "../config/sessions/paths.js";
+import { loadSessionStore } from "../config/sessions/store-load.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveMemoryBackendConfig } from "../memory-host-sdk/engine-storage.js";

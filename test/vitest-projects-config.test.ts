@@ -41,6 +41,19 @@ describe("projects vitest config", () => {
     expect(normalizeConfigPath(config.test.runner)).toBe("test/non-isolated-runner.ts");
   });
 
+  it("narrows the contracts lane to targeted contract files", () => {
+    const config = createContractsVitestConfig({}, [
+      "node",
+      "vitest",
+      "run",
+      "src/plugins/contracts/bundled-web-search.google.contract.test.ts",
+    ]);
+
+    expect(config.test.include).toEqual([
+      "src/plugins/contracts/bundled-web-search.google.contract.test.ts",
+    ]);
+  });
+
   it("keeps the root ui lane aligned with the isolated jsdom setup", () => {
     const config = createUiVitestConfig();
     expect(config.test.environment).toBe("jsdom");

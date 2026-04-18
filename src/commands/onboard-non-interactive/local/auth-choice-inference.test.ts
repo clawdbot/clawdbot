@@ -46,4 +46,23 @@ describe("inferAuthChoiceFromFlags", () => {
       ],
     });
   });
+
+  it("infers the built-in custom provider from custom flags", () => {
+    const opts: OnboardOptions = {
+      customBaseUrl: "https://models.custom.local/v1",
+      customModelId: "local-large",
+      customApiKey: "custom-test-key", // pragma: allowlist secret
+    };
+
+    expect(inferAuthChoiceFromFlags(opts)).toEqual({
+      choice: "custom-api-key",
+      matches: [
+        {
+          optionKey: "customBaseUrl",
+          authChoice: "custom-api-key",
+          label: "--custom-base-url/--custom-model-id/--custom-api-key",
+        },
+      ],
+    });
+  });
 });

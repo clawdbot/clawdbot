@@ -144,6 +144,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -151,7 +152,63 @@ env:
   PNPM_VERSION: "10.32.1"
 
 jobs:
+  validate_selected_ref:
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    outputs:
+      selected_sha: ${{ steps.validate.outputs.selected_sha }}
+      trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: Validate selected ref
+        id: validate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_REF: ${{ inputs.ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          selected_sha="$(git rev-parse HEAD)"
+          trusted_reason=""
+
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+
+          if git merge-base --is-ancestor "$selected_sha" refs/remotes/origin/main; then
+            trusted_reason="main-ancestor"
+          elif git tag --points-at "$selected_sha" | grep -Eq '^v'; then
+            trusted_reason="release-tag"
+          else
+            pr_head_count="$(
+              gh api \
+                -H "Accept: application/vnd.github+json" \
+                "repos/${GITHUB_REPOSITORY}/commits/${selected_sha}/pulls" \
+                --jq '[.[] | select(.state == "open" and .head.repo.full_name == "'"${GITHUB_REPOSITORY}"'" and .head.sha == "'"${selected_sha}"'")] | length'
+            )"
+            if [[ "$pr_head_count" != "0" ]]; then
+              trusted_reason="open-pr-head"
+            fi
+          fi
+
+          if [[ -z "$trusted_reason" ]]; then
+            echo "Ref '${INPUT_REF}' resolved to $selected_sha, which is not trusted for secret-bearing live/E2E checks." >&2
+            echo "Allowed refs must be on main, point to a release tag, or match an open PR head in ${GITHUB_REPOSITORY}." >&2
+            exit 1
+          fi
+
+          echo "selected_sha=$selected_sha" >> "$GITHUB_OUTPUT"
+          echo "trusted_reason=$trusted_reason" >> "$GITHUB_OUTPUT"
+          {
+            echo "Validated ref: \`${INPUT_REF}\`"
+            echo "Resolved SHA: \`$selected_sha\`"
+            echo "Trust reason: \`$trusted_reason\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   validate_release_live_cache:
+    needs: validate_selected_ref
     if: inputs.include_live_suites
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 60
@@ -164,7 +221,7 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 0
 
       - name: Setup Node environment
@@ -191,6 +248,7 @@ jobs:
         run: pnpm test:live:cache
 
   validate_repo_e2e:
+    needs: validate_selected_ref
     if: inputs.include_repo_e2e
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 90
@@ -200,7 +258,7 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 0
 
       - name: Setup Node environment
@@ -218,6 +276,7 @@ jobs:
         run: pnpm test:e2e
 
   validate_special_e2e:
+    needs: validate_selected_ref
     if: inputs.include_repo_e2e || inputs.include_live_suites
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: ${{ matrix.timeout_minutes }}
@@ -245,7 +304,7 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 0
 
       - name: Setup Node environment
@@ -293,6 +352,7 @@ jobs:
         run: ${{ matrix.command }}
 
   validate_docker_e2e:
+    needs: validate_selected_ref
     if: inputs.include_release_path_suites || inputs.include_openwebui
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: ${{ matrix.timeout_minutes }}
@@ -396,7 +456,7 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 0
 
       - name: Setup Node environment
@@ -450,6 +510,7 @@ jobs:
         run: ${{ matrix.command }}
 
   validate_live_provider_suites:
+    needs: validate_selected_ref
     if: inputs.include_live_suites
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: ${{ matrix.timeout_minutes }}
@@ -538,7 +599,7 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 0
 
       - name: Setup Node environment
@@ -562,9 +623,39 @@ jobs:
           case "${{ matrix.suite_id }}" in
             live-cli-backend-docker)
               echo "OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.4" >> "$GITHUB_ENV"
+              # The CLI backend Docker lane should exercise the same staged
+              # Codex auth path Peter uses locally so MCP cron creation and
+              # multimodal probes stay covered in CI. Replace the staged
+              # config.toml with a minimal CI-safe config so the repo stays
+              # trusted for MCP/tool use without inheriting maintainer-local
+              # provider/profile overrides that do not exist inside CI.
+              # Codex's workspace-write sandbox relies on user namespaces that
+              # this Docker lane does not provide, so run Codex unsandboxed
+              # inside the already-isolated container to keep MCP cron/tool
+              # execution representative instead of failing on nested sandbox
+              # setup.
+              echo 'OPENCLAW_LIVE_CLI_BACKEND_CLEAR_ENV=["OPENAI_API_KEY","OPENAI_BASE_URL"]' >> "$GITHUB_ENV"
+              echo 'OPENCLAW_LIVE_CLI_BACKEND_ARGS=["exec","--json","--color","never","--sandbox","danger-full-access","--skip-git-repo-check"]' >> "$GITHUB_ENV"
+              echo 'OPENCLAW_LIVE_CLI_BACKEND_RESUME_ARGS=["exec","resume","{sessionId}","-c","sandbox_mode=\"danger-full-access\"","--skip-git-repo-check"]' >> "$GITHUB_ENV"
+              echo "OPENCLAW_LIVE_CLI_BACKEND_DEBUG=1" >> "$GITHUB_ENV"
+              echo "OPENCLAW_CLI_BACKEND_LOG_OUTPUT=1" >> "$GITHUB_ENV"
+              echo "OPENCLAW_LIVE_CLI_BACKEND_USE_CI_SAFE_CODEX_CONFIG=1" >> "$GITHUB_ENV"
+              ;;
+            live-codex-harness-docker)
+              # Keep CI on the API-key path for now. The staged Codex auth secret
+              # is currently stale, but the wrapper still supports codex-auth for
+              # local maintainer reruns without changing Peter's flow.
+              echo "OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key" >> "$GITHUB_ENV"
               ;;
             live-acp-bind-docker)
-              echo "OPENCLAW_LIVE_ACP_BIND_AGENTS=claude,codex,gemini" >> "$GITHUB_ENV"
+              if [[ -n "${GEMINI_API_KEY:-}" || -n "${GOOGLE_API_KEY:-}" ]]; then
+                echo "OPENCLAW_LIVE_ACP_BIND_AGENTS=claude,codex,gemini" >> "$GITHUB_ENV"
+              else
+                # The hydrated Gemini settings file only selects Gemini CLI auth
+                # mode. CI still needs a usable Gemini or Google API key before
+                # ACP bind can initialize a Gemini session.
+                echo "OPENCLAW_LIVE_ACP_BIND_AGENTS=claude,codex" >> "$GITHUB_ENV"
+              fi
               ;;
           esac
 

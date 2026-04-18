@@ -82,7 +82,10 @@ html.dark .nav-tabs-underline {
   border-radius: 8px;
   background: color-mix(in oklab, rgb(var(--primary)) 4%, transparent);
   text-decoration: none;
-  transition: transform 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+  transition:
+    transform 0.16s ease,
+    border-color 0.16s ease,
+    background 0.16s ease;
 }
 
 .showcase-actions a:first-child {

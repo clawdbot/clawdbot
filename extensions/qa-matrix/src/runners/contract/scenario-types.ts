@@ -32,6 +32,9 @@ export type MatrixQaScenarioArtifacts = {
   attachmentMsgtype?: string;
   actorUserId?: string;
   blocked?: MatrixQaScenarioArtifacts;
+  catchupDriverEventId?: string;
+  catchupReply?: MatrixQaReplyArtifact;
+  catchupToken?: string;
   driverEventId?: string;
   editEventId?: string;
   editedToken?: string;
@@ -39,6 +42,9 @@ export type MatrixQaScenarioArtifacts = {
   firstDriverEventId?: string;
   firstReply?: MatrixQaReplyArtifact;
   firstToken?: string;
+  incrementalDriverEventId?: string;
+  incrementalReply?: MatrixQaReplyArtifact;
+  incrementalToken?: string;
   originalDriverEventId?: string;
   originalReply?: MatrixQaReplyArtifact;
   originalToken?: string;

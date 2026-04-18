@@ -1,10 +1,13 @@
 import { createHmac, randomBytes } from "node:crypto";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { NextcloudTalkWebhookHeaders } from "./types.js";
 
 const SIGNATURE_HEADER = "x-nextcloud-talk-signature";
 const RANDOM_HEADER = "x-nextcloud-talk-random";
 const BACKEND_HEADER = "x-nextcloud-talk-backend";
+
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
 
 /**
  * Verify the HMAC-SHA256 signature of an incoming webhook request.

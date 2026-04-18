@@ -712,11 +712,7 @@ export async function createGatewaySuiteHarness(opts?: {
   };
 }
 
-export async function startServerWithClient(
-  token?: string,
-  opts?: GatewayServerOptions & { wsHeaders?: Record<string, string> },
-) {
-  const { wsHeaders, ...gatewayOpts } = opts ?? {};
+export async function startServer(token?: string, opts?: GatewayServerOptions) {
   let port = await getFreePort();
   const envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN"]);
   const prev = process.env.OPENCLAW_GATEWAY_TOKEN;
@@ -735,19 +731,29 @@ export async function startServerWithClient(
   }
 
   const resolvedGatewayOpts: GatewayServerOptions =
-    fallbackToken && !gatewayOpts.auth
+    fallbackToken && !opts?.auth
       ? {
-          ...gatewayOpts,
+          ...opts,
           auth: { mode: "token", token: fallbackToken },
         }
-      : gatewayOpts;
+      : (opts ?? {});
 
   const started = await startGatewayServerWithRetries({ port, opts: resolvedGatewayOpts });
   port = started.port;
   const server = started.server;
 
+  return { server, port, prevToken: prev, envSnapshot };
+}
+
+export async function startServerWithClient(
+  token?: string,
+  opts?: GatewayServerOptions & { wsHeaders?: Record<string, string> },
+) {
+  const { wsHeaders, ...gatewayOpts } = opts ?? {};
+  const started = await startServer(token, gatewayOpts);
+  const { server, port, prevToken, envSnapshot } = started;
   const ws = await openTrackedWebSocket({ port, headers: wsHeaders });
-  return { server, ws, port, prevToken: prev, envSnapshot };
+  return { server, ws, port, prevToken, envSnapshot };
 }
 
 export async function startConnectedServerWithClient(

@@ -47,6 +47,7 @@ vi.mock("./bundled-compat.js", () => ({
 }));
 
 let resolvePluginCapabilityProviders: typeof import("./capability-provider-runtime.js").resolvePluginCapabilityProviders;
+let resolvePluginCapabilityProvider: typeof import("./capability-provider-runtime.js").resolvePluginCapabilityProvider;
 
 function expectResolvedCapabilityProviderIds(providers: Array<{ id: string }>, expected: string[]) {
   expect(providers.map((provider) => provider.id)).toEqual(expected);
@@ -149,7 +150,8 @@ function expectCompatChainApplied(params: {
 
 describe("resolvePluginCapabilityProviders", () => {
   beforeAll(async () => {
-    ({ resolvePluginCapabilityProviders } = await import("./capability-provider-runtime.js"));
+    ({ resolvePluginCapabilityProvider, resolvePluginCapabilityProviders } =
+      await import("./capability-provider-runtime.js"));
   });
 
   beforeEach(() => {
@@ -309,5 +311,69 @@ describe("resolvePluginCapabilityProviders", () => {
       env: process.env,
     });
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({ config: compatConfig });
+  });
+
+  it("loads only the bundled owner plugin for a targeted provider lookup", () => {
+    const cfg = { plugins: { allow: ["custom-plugin"] } } as OpenClawConfig;
+    const allowlistCompat = {
+      plugins: {
+        allow: ["custom-plugin", "google"],
+      },
+    } as OpenClawConfig;
+    const enablementCompat = {
+      plugins: {
+        allow: ["custom-plugin", "google"],
+        entries: { google: { enabled: true } },
+      },
+    };
+    const loaded = createEmptyPluginRegistry();
+    loaded.memoryEmbeddingProviders.push({
+      pluginId: "google",
+      pluginName: "google",
+      source: "test",
+      provider: {
+        id: "gemini",
+        create: async () => ({ provider: null }),
+      },
+    } as never);
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "google",
+          origin: "bundled",
+          contracts: { memoryEmbeddingProviders: ["gemini"] },
+        },
+        {
+          id: "openai",
+          origin: "bundled",
+          contracts: { memoryEmbeddingProviders: ["openai"] },
+        },
+      ] as never,
+      diagnostics: [],
+    });
+    mocks.withBundledPluginEnablementCompat.mockReturnValue(enablementCompat);
+    mocks.withBundledPluginVitestCompat.mockReturnValue(enablementCompat);
+    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
+      params === undefined ? undefined : loaded,
+    );
+
+    const provider = resolvePluginCapabilityProvider({
+      key: "memoryEmbeddingProviders",
+      providerId: "gemini",
+      cfg,
+    });
+
+    expect(provider?.id).toBe("gemini");
+    expect(mocks.withBundledPluginAllowlistCompat).toHaveBeenCalledWith({
+      config: cfg,
+      pluginIds: ["google"],
+    });
+    expect(mocks.withBundledPluginEnablementCompat).toHaveBeenCalledWith({
+      config: allowlistCompat,
+      pluginIds: ["google"],
+    });
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
+      config: enablementCompat,
+    });
   });
 });

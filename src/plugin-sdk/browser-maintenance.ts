@@ -10,15 +10,19 @@ type BrowserMaintenanceSurface = {
   closeTrackedBrowserTabsForSessions: (params: CloseTrackedBrowserTabsParams) => Promise<number>;
 };
 
+let cachedBrowserMaintenanceSurface: BrowserMaintenanceSurface | undefined;
+
 function hasRequestedSessionKeys(sessionKeys: Array<string | undefined>): boolean {
   return sessionKeys.some((key) => Boolean(key?.trim()));
 }
 
 function loadBrowserMaintenanceSurface(): BrowserMaintenanceSurface {
-  return loadBundledPluginPublicSurfaceModuleSync<BrowserMaintenanceSurface>({
-    dirName: "browser",
-    artifactBasename: "browser-maintenance.js",
-  });
+  cachedBrowserMaintenanceSurface ??=
+    loadBundledPluginPublicSurfaceModuleSync<BrowserMaintenanceSurface>({
+      dirName: "browser",
+      artifactBasename: "browser-maintenance.js",
+    });
+  return cachedBrowserMaintenanceSurface;
 }
 
 export async function closeTrackedBrowserTabsForSessions(

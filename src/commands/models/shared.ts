@@ -18,7 +18,8 @@ import { toAgentModelListLike } from "../../config/model-input.js";
 import type { AgentModelEntryConfig } from "../../config/types.agent-defaults.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+export { normalizeAlias } from "./alias-name.js";
+export { isLocalBaseUrl } from "./list.local-url.js";
 
 export const ensureFlagCompatibility = (opts: { json?: boolean; plain?: boolean }) => {
   if (opts.json && opts.plain) {
@@ -47,22 +48,6 @@ export const formatMs = (value?: number | null) => {
     return `${Math.round(value)}ms`;
   }
   return `${Math.round(value / 100) / 10}s`;
-};
-
-export const isLocalBaseUrl = (baseUrl: string) => {
-  try {
-    const url = new URL(baseUrl);
-    const host = normalizeLowercaseStringOrEmpty(url.hostname);
-    return (
-      host === "localhost" ||
-      host === "127.0.0.1" ||
-      host === "0.0.0.0" ||
-      host === "::1" ||
-      host.endsWith(".local")
-    );
-  } catch {
-    return false;
-  }
 };
 
 export async function loadValidConfigOrThrow(): Promise<OpenClawConfig> {
@@ -140,17 +125,6 @@ export function buildAllowlistSet(cfg: OpenClawConfig): Set<string> {
     allowed.add(modelKey(parsed.provider, parsed.model));
   }
   return allowed;
-}
-
-export function normalizeAlias(alias: string): string {
-  const trimmed = alias.trim();
-  if (!trimmed) {
-    throw new Error("Alias cannot be empty.");
-  }
-  if (!/^[A-Za-z0-9_.:-]+$/.test(trimmed)) {
-    throw new Error("Alias must use letters, numbers, dots, underscores, colons, or dashes.");
-  }
-  return trimmed;
 }
 
 export function resolveKnownAgentId(params: {

@@ -724,9 +724,7 @@ export function createTaskFlowWebhookRequestHandler(params: {
               return false;
             }
             const resolvedSecret = await resolveTargetSecret(candidate);
-            return Boolean(
-              resolvedSecret && timingSafeEquals(resolvedSecret, presentedSecret),
-            );
+            return Boolean(resolvedSecret && timingSafeEquals(resolvedSecret, presentedSecret));
           },
         });
         if (!target) {

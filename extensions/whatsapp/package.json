@@ -25,6 +25,10 @@
       "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts",
+    "setupFeatures": {
+      "legacyStateMigrations": true,
+      "legacySessionSurfaces": true
+    },
     "channel": {
       "id": "whatsapp",
       "label": "WhatsApp",

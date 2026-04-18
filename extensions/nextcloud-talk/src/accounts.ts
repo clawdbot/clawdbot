@@ -1,17 +1,25 @@
-import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
-import { tryReadSecretFileSync } from "openclaw/plugin-sdk/channel-core";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
 import {
   createAccountListHelpers,
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   resolveAccountWithDefaultFallback,
-} from "../runtime-api.js";
+  resolveMergedAccountConfig,
+} from "openclaw/plugin-sdk/account-core";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import { normalizeResolvedSecretInputString } from "./secret-input.js";
 import type { CoreConfig, NextcloudTalkAccountConfig } from "./types.js";
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return normalizeOptionalString(value)?.toLowerCase() ?? "";
+}
 
 function isTruthyEnvValue(value?: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(value);

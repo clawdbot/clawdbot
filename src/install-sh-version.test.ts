@@ -28,11 +28,17 @@ function resolveInstallerVersionCases(params: {
 }): string[] {
   const installerPath = path.join(process.cwd(), "scripts", "install.sh");
   const installerSource = fs.readFileSync(installerPath, "utf-8");
+  const versionHelperStart = installerSource.indexOf("load_install_version_helpers() {");
+  const versionHelperEnd = installerSource.indexOf("\nis_gateway_daemon_loaded() {");
+  if (versionHelperStart < 0 || versionHelperEnd < 0) {
+    throw new Error("install.sh version helper block not found");
+  }
+  const versionHelperSource = installerSource.slice(versionHelperStart, versionHelperEnd);
   const output = execFileSync(
     "bash",
     [
-      "-lc",
-      `source "${installerPath}" >/dev/null 2>&1
+      "-c",
+      `${versionHelperSource}
 for openclaw_bin in "\${@:3}"; do
   OPENCLAW_BIN="$openclaw_bin"
   resolve_openclaw_version
@@ -40,7 +46,7 @@ done
 (
   cd "$2"
   FAKE_OPENCLAW_BIN="\${@:1:1}" bash -s <<'OPENCLAW_STDIN_INSTALLER'
-${installerSource}
+${versionHelperSource}
 OPENCLAW_BIN="$FAKE_OPENCLAW_BIN"
 resolve_openclaw_version
 OPENCLAW_STDIN_INSTALLER

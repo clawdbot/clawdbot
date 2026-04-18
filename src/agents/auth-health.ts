@@ -1,14 +1,13 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  DEFAULT_OAUTH_REFRESH_MARGIN_MS,
   type AuthCredentialReasonCode,
-  type AuthProfileCredential,
-  type AuthProfileStore,
-  resolveAuthProfileDisplayLabel,
-} from "./auth-profiles.js";
-import {
   evaluateStoredCredentialEligibility,
   resolveTokenExpiryState,
 } from "./auth-profiles/credential-state.js";
+import { resolveAuthProfileDisplayLabel } from "./auth-profiles/display.js";
+import { resolveEffectiveOAuthCredential } from "./auth-profiles/effective-oauth.js";
+import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 export type AuthProfileSource = "store";
@@ -81,16 +80,22 @@ export function formatRemainingShort(
 function resolveOAuthStatus(
   expiresAt: number | undefined,
   now: number,
-  warnAfterMs: number,
+  expiringWithinMs: number,
 ): { status: AuthProfileHealthStatus; remainingMs?: number } {
   if (!expiresAt || !Number.isFinite(expiresAt) || expiresAt <= 0) {
     return { status: "missing" };
   }
   const remainingMs = expiresAt - now;
-  if (remainingMs <= 0) {
+  const expiryState = resolveTokenExpiryState(expiresAt, now, {
+    expiringWithinMs,
+  });
+  if (expiryState === "invalid_expires" || expiryState === "missing") {
+    return { status: "missing" };
+  }
+  if (expiryState === "expired") {
     return { status: "expired", remainingMs };
   }
-  if (remainingMs <= warnAfterMs) {
+  if (expiryState === "expiring") {
     return { status: "expiring", remainingMs };
   }
   return { status: "ok", remainingMs };
@@ -164,22 +169,22 @@ function buildProfileHealth(params: {
     };
   }
 
-  const hasRefreshToken = typeof credential.refresh === "string" && credential.refresh.length > 0;
+  const effectiveCredential = resolveEffectiveOAuthCredential({
+    profileId,
+    credential,
+  });
+  const oauthWarnAfterMs = Math.max(warnAfterMs, DEFAULT_OAUTH_REFRESH_MARGIN_MS);
   const { status: rawStatus, remainingMs } = resolveOAuthStatus(
-    credential.expires,
+    effectiveCredential.expires,
     now,
-    warnAfterMs,
+    oauthWarnAfterMs,
   );
-  // OAuth credentials with a valid refresh token auto-renew on first API call,
-  // so don't warn about access token expiration.
-  const status =
-    hasRefreshToken && (rawStatus === "expired" || rawStatus === "expiring") ? "ok" : rawStatus;
   return {
     profileId,
     provider,
     type: "oauth",
-    status,
-    expiresAt: credential.expires,
+    status: rawStatus,
+    expiresAt: effectiveCredential.expires,
     remainingMs,
     source,
     label,

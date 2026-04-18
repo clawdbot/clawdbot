@@ -294,6 +294,82 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("rejects trusted-proxy assistant media file reads without operator.read scope", async () => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-scope-file-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, "photo.png");
+        await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+        const { res, handled, end } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}`,
+          method: "GET",
+          auth: {
+            mode: "trusted-proxy",
+            allowTailscale: false,
+            trustedProxy: {
+              userHeader: "x-forwarded-user",
+            },
+          },
+          trustedProxies: ["10.0.0.1"],
+          remoteAddress: "10.0.0.1",
+          headers: {
+            host: "gateway.example.com",
+            "x-forwarded-user": "nick@example.com",
+            "x-forwarded-proto": "https",
+            "x-openclaw-scopes": "operator.approvals",
+          },
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(403);
+        expect(JSON.parse(String(end.mock.calls[0]?.[0] ?? ""))).toMatchObject({
+          ok: false,
+          error: {
+            type: "forbidden",
+            message: "missing scope: operator.read",
+          },
+        });
+      },
+    });
+  });
+
+  it("rejects trusted-proxy assistant media metadata requests with an empty scope set", async () => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-scope-meta-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, "photo.png");
+        await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+        const { res, handled, end } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent(filePath)}`,
+          method: "GET",
+          auth: {
+            mode: "trusted-proxy",
+            allowTailscale: false,
+            trustedProxy: {
+              userHeader: "x-forwarded-user",
+            },
+          },
+          trustedProxies: ["10.0.0.1"],
+          remoteAddress: "10.0.0.1",
+          headers: {
+            host: "gateway.example.com",
+            "x-forwarded-user": "nick@example.com",
+            "x-forwarded-proto": "https",
+            "x-openclaw-scopes": "",
+          },
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(403);
+        expect(JSON.parse(String(end.mock.calls[0]?.[0] ?? ""))).toMatchObject({
+          ok: false,
+          error: {
+            type: "forbidden",
+            message: "missing scope: operator.read",
+          },
+        });
+      },
+    });
+  });
+
   it("includes CSP hash for inline scripts in index.html", async () => {
     const scriptContent = "(function(){ var x = 1; })();";
     const html = `<html><head><script>${scriptContent}</script></head><body></body></html>\n`;

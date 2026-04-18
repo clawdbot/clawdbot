@@ -1,11 +1,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import type { WebhookInFlightLimiter } from "openclaw/plugin-sdk/webhook-request-guards";
+import { readJsonWebhookBodyOrReject } from "openclaw/plugin-sdk/webhook-request-guards";
 import {
-  readJsonWebhookBodyOrReject,
   resolveWebhookTargetWithAuthOrReject,
   withResolvedWebhookRequestPipeline,
-  type WebhookInFlightLimiter,
-} from "../runtime-api.js";
+} from "openclaw/plugin-sdk/webhook-targets";
 import { verifyGoogleChatRequest } from "./auth.js";
 import type { WebhookTarget } from "./monitor-types.js";
 import type {
@@ -14,6 +13,10 @@ import type {
   GoogleChatSpace,
   GoogleChatUser,
 } from "./types.js";
+
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
 
 function extractBearerToken(header: unknown): string {
   const authHeader = Array.isArray(header)

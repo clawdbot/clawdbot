@@ -29,16 +29,10 @@ vi.mock("../runtime/session-meta.js", () => ({
   upsertAcpSessionMeta: (params: unknown) => hoisted.upsertAcpSessionMetaMock(params),
 }));
 
-vi.mock("../runtime/registry.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../runtime/registry.js")>("../runtime/registry.js");
-  return {
-    ...actual,
-    getAcpRuntimeBackend: (backendId?: string) => hoisted.getAcpRuntimeBackendMock(backendId),
-    requireAcpRuntimeBackend: (backendId?: string) =>
-      hoisted.requireAcpRuntimeBackendMock(backendId),
-  };
-});
+vi.mock("../runtime/registry.js", () => ({
+  getAcpRuntimeBackend: (backendId?: string) => hoisted.getAcpRuntimeBackendMock(backendId),
+  requireAcpRuntimeBackend: (backendId?: string) => hoisted.requireAcpRuntimeBackendMock(backendId),
+}));
 
 let AcpSessionManager: typeof import("./manager.js").AcpSessionManager;
 let AcpRuntimeError: typeof import("../runtime/errors.js").AcpRuntimeError;

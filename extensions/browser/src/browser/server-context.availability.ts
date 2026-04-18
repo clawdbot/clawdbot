@@ -7,6 +7,7 @@ import {
   PROFILE_POST_RESTART_WS_TIMEOUT_MS,
   resolveCdpReachabilityTimeouts,
 } from "./cdp-timeouts.js";
+import { redactCdpUrl } from "./cdp.helpers.js";
 import {
   closeChromeMcpSession,
   ensureChromeMcpAvailable,
@@ -59,6 +60,7 @@ export function createProfileAvailability({
   getProfileState,
   setProfileRunning,
 }: AvailabilityDeps): AvailabilityOps {
+  const redactedProfileCdpUrl = redactCdpUrl(profile.cdpUrl) ?? profile.cdpUrl;
   const capabilities = getBrowserProfileCapabilities(profile);
   const resolveTimeouts = (timeoutMs: number | undefined) =>
     resolveCdpReachabilityTimeouts({
@@ -210,7 +212,7 @@ export function createProfileAvailability({
       if (attachOnly || remoteCdp) {
         throw new BrowserProfileUnavailableError(
           remoteCdp
-            ? `Remote CDP for profile "${profile.name}" is not reachable at ${profile.cdpUrl}.`
+            ? `Remote CDP for profile "${profile.name}" is not reachable at ${redactedProfileCdpUrl}.`
             : `Browser attachOnly is enabled and profile "${profile.name}" is not running.`,
         );
       }

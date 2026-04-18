@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolvePluginCapabilityProviders } from "./capability-provider-runtime.js";
+import {
+  resolvePluginCapabilityProvider,
+  resolvePluginCapabilityProviders,
+} from "./capability-provider-runtime.js";
 import {
   getRegisteredMemoryEmbeddingProvider,
   listRegisteredMemoryEmbeddingProviders,
@@ -35,5 +38,9 @@ export function getMemoryEmbeddingProvider(
   if (registered) {
     return registered.adapter;
   }
-  return listMemoryEmbeddingProviders(cfg).find((adapter) => adapter.id === id);
+  return resolvePluginCapabilityProvider({
+    key: "memoryEmbeddingProviders",
+    providerId: id,
+    cfg,
+  });
 }

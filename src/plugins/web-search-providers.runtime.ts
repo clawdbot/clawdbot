@@ -2,6 +2,7 @@ import { loadOpenClawPlugins } from "./loader.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { type PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginWebSearchProviderEntry } from "./types.js";
+import { resolveBundledWebSearchProvidersFromPublicArtifacts } from "./web-provider-public-artifacts.js";
 import {
   mapRegistryProviders,
   resolveManifestDeclaredWebProviderCandidatePluginIds,
@@ -71,6 +72,7 @@ export function resolvePluginWebSearchProviders(params: {
     resolveBundledResolutionConfig: resolveBundledWebSearchResolutionConfig,
     resolveCandidatePluginIds: resolveWebSearchCandidatePluginIds,
     mapRegistryProviders: mapRegistryWebSearchProviders,
+    resolveBundledPublicArtifactProviders: resolveBundledWebSearchProvidersFromPublicArtifacts,
   });
 }
 

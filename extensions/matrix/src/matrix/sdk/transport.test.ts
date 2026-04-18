@@ -8,6 +8,15 @@ function clearTestUndiciRuntimeDepsOverride(): void {
   Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
 }
 
+function stubRuntimeFetch(fetchImpl: typeof fetch): void {
+  (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+    Agent: function MockAgent() {},
+    EnvHttpProxyAgent: function MockEnvHttpProxyAgent() {},
+    ProxyAgent: function MockProxyAgent() {},
+    fetch: fetchImpl,
+  };
+}
+
 describe("performMatrixRequest", () => {
   beforeEach(() => {
     vi.unstubAllGlobals();
@@ -19,8 +28,7 @@ describe("performMatrixRequest", () => {
   });
 
   it("rejects oversized raw responses before buffering the whole body", async () => {
-    vi.stubGlobal(
-      "fetch",
+    stubRuntimeFetch(
       vi.fn(
         async () =>
           new Response("too-big", {
@@ -55,8 +63,7 @@ describe("performMatrixRequest", () => {
         controller.close();
       },
     });
-    vi.stubGlobal(
-      "fetch",
+    stubRuntimeFetch(
       vi.fn(
         async () =>
           new Response(stream, {
@@ -87,8 +94,7 @@ describe("performMatrixRequest", () => {
           controller.enqueue(new Uint8Array([1, 2, 3]));
         },
       });
-      vi.stubGlobal(
-        "fetch",
+      stubRuntimeFetch(
         vi.fn(
           async () =>
             new Response(stream, {
@@ -135,12 +141,7 @@ describe("performMatrixRequest", () => {
         },
       });
     });
-    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
-      Agent: function MockAgent() {},
-      EnvHttpProxyAgent: function MockEnvHttpProxyAgent() {},
-      ProxyAgent: function MockProxyAgent() {},
-      fetch: runtimeFetch,
-    };
+    stubRuntimeFetch(runtimeFetch);
 
     const result = await performMatrixRequest({
       homeserver: "http://127.0.0.1:8008",

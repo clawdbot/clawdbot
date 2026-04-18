@@ -83,12 +83,22 @@ export async function probeTwitch(
       });
     });
 
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error(`timeout after ${timeoutMs}ms`)), timeoutMs);
+      timeoutHandle = setTimeout(
+        () => reject(new Error(`timeout after ${timeoutMs}ms`)),
+        timeoutMs,
+      );
     });
 
     client.connect();
-    await Promise.race([connectionPromise, timeout]);
+    try {
+      await Promise.race([connectionPromise, timeout]);
+    } finally {
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
+    }
 
     client.quit();
     client = undefined;

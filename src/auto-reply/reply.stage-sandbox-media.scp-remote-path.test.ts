@@ -13,8 +13,12 @@ const sandboxMocks = vi.hoisted(() => ({
 const childProcessMocks = vi.hoisted(() => ({
   spawn: vi.fn(),
 }));
+const mediaRootMocks = vi.hoisted(() => ({
+  resolveChannelRemoteInboundAttachmentRoots: vi.fn(),
+}));
 
 vi.mock("../agents/sandbox.js", () => sandboxMocks);
+vi.mock("../media/channel-inbound-roots.js", () => mediaRootMocks);
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
@@ -28,6 +32,7 @@ import { stageSandboxMedia } from "./reply/stage-sandbox-media.js";
 afterEach(() => {
   vi.restoreAllMocks();
   childProcessMocks.spawn.mockClear();
+  mediaRootMocks.resolveChannelRemoteInboundAttachmentRoots.mockReset();
 });
 
 function createRemoteStageParams(home: string): {
@@ -38,6 +43,9 @@ function createRemoteStageParams(home: string): {
 } {
   const sessionKey = "agent:main:main";
   vi.mocked(sandboxMocks.ensureSandboxWorkspaceForSession).mockResolvedValue(null);
+  mediaRootMocks.resolveChannelRemoteInboundAttachmentRoots.mockReturnValue([
+    "/Users/demo/Library/Messages/Attachments",
+  ]);
   return {
     cfg: createSandboxMediaStageConfig(home),
     workspaceDir: join(home, "openclaw"),

@@ -38,7 +38,7 @@ export async function waitForFileText(filePath: string, timeoutMs = 5_000): Prom
     if (content != null) {
       return content;
     }
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await new Promise((resolve) => setTimeout(resolve, 5));
   }
   throw new Error(`Timed out waiting for ${filePath}`);
 }

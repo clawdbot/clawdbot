@@ -26,6 +26,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "../../shared/string-coerce.js";
+import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
   ErrorCodes,
   errorShape,
@@ -185,7 +186,7 @@ function cacheGatewayDedupeFailure(params: {
 }
 
 export const sendHandlers: GatewayRequestHandlers = {
-  "message.action": async ({ params, respond, context }) => {
+  "message.action": async ({ params, respond, context, client }) => {
     const p = params;
     if (!validateMessageActionParams(p)) {
       respond(
@@ -216,6 +217,22 @@ export const sendHandlers: GatewayRequestHandlers = {
       };
       idempotencyKey: string;
     };
+    // Owner status is an authorization signal used to unlock owner-only
+    // channel actions and owner-only tool policy. The legitimate propagation
+    // path is the trusted runtime forwarding a real channel-sender ownership
+    // bit through the gateway RPC — but that wire value must not be honored
+    // for callers who are not already full operators. Per SECURITY.md,
+    // shared-secret bearer and admin-scoped callers get the full default
+    // operator scope set (including `operator.admin`); those callers are
+    // trusted to forward `senderIsOwner`. Narrowly-scoped callers
+    // (e.g. `operator.write`-only, including the gateway-forwarding
+    // least-privilege path) are not trusted to assert ownership, so their
+    // wire value is forced to `false` to prevent a non-admin scoped caller
+    // from unlocking owner-only channel actions by setting
+    // `senderIsOwner: true` on the request.
+    const callerScopes = client?.connect?.scopes ?? [];
+    const callerIsFullOperator = Array.isArray(callerScopes) && callerScopes.includes(ADMIN_SCOPE);
+    const senderIsOwner = callerIsFullOperator && request.senderIsOwner === true;
     const idem = request.idempotencyKey;
     const dedupeKey = `message.action:${idem}`;
     const cached = context.dedupe.get(dedupeKey);
@@ -265,7 +282,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           params: request.params,
           accountId: normalizeOptionalString(request.accountId) ?? undefined,
           requesterSenderId: normalizeOptionalString(request.requesterSenderId) ?? undefined,
-          senderIsOwner: request.senderIsOwner,
+          senderIsOwner,
           sessionKey: normalizeOptionalString(request.sessionKey) ?? undefined,
           sessionId: normalizeOptionalString(request.sessionId) ?? undefined,
           agentId: normalizeOptionalString(request.agentId) ?? undefined,

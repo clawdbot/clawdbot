@@ -12,7 +12,7 @@ import { normalizeSecretInputString, type SecretInput } from "openclaw/plugin-sd
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { NostrProfile } from "./config-schema.js";
 import { DEFAULT_RELAYS } from "./default-relays.js";
-import { getPublicKeyFromPrivate } from "./nostr-bus.js";
+import { getPublicKeyFromPrivate } from "./nostr-key-utils.js";
 
 export interface NostrAccountConfig {
   enabled?: boolean;

@@ -1,7 +1,10 @@
 import {
   createWebSearchProviderContractFields,
+  mergeScopedSearchConfig,
+  resolveProviderWebSearchPluginConfig,
   type WebSearchProviderPlugin,
 } from "openclaw/plugin-sdk/provider-web-search-config-contract";
+import { resolvePerplexityRuntimeTransport } from "./src/perplexity-web-search-provider.shared.js";
 
 export function createPerplexityWebSearchProvider(): WebSearchProviderPlugin {
   const credentialPath = "plugins.entries.perplexity.config.webSearch.apiKey";
@@ -22,6 +25,18 @@ export function createPerplexityWebSearchProvider(): WebSearchProviderPlugin {
       credentialPath,
       searchCredential: { type: "scoped", scopeId: "perplexity" },
       configuredCredential: { pluginId: "perplexity" },
+    }),
+    resolveRuntimeMetadata: (ctx) => ({
+      perplexityTransport: resolvePerplexityRuntimeTransport({
+        searchConfig: mergeScopedSearchConfig(
+          ctx.searchConfig,
+          "perplexity",
+          resolveProviderWebSearchPluginConfig(ctx.config, "perplexity"),
+        ),
+        resolvedKey: ctx.resolvedCredential?.value,
+        keySource: ctx.resolvedCredential?.source ?? "missing",
+        fallbackEnvVar: ctx.resolvedCredential?.fallbackEnvVar,
+      }),
     }),
     createTool: () => null,
   };

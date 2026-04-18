@@ -182,13 +182,17 @@ describe("matrix credentials storage", () => {
     );
 
     let releaseFirstWrite: (() => void) | undefined;
-    let firstWriteStarted = false;
+    let resolveFirstWriteStarted: (() => void) | undefined;
+    const firstWriteStarted = new Promise<void>((resolve) => {
+      resolveFirstWriteStarted = resolve;
+    });
     const originalRename = fsPromises.rename.bind(fsPromises);
     const renameSpy = vi
       .spyOn(fsPromises, "rename")
       .mockImplementation(async (...args: Parameters<typeof fsPromises.rename>) => {
-        if (!firstWriteStarted) {
-          firstWriteStarted = true;
+        if (resolveFirstWriteStarted) {
+          resolveFirstWriteStarted();
+          resolveFirstWriteStarted = undefined;
           await new Promise<void>((resolve) => {
             releaseFirstWrite = resolve;
           });
@@ -208,9 +212,7 @@ describe("matrix credentials storage", () => {
         "default",
       );
 
-      await vi.waitFor(() => {
-        expect(firstWriteStarted).toBe(true);
-      });
+      await firstWriteStarted;
 
       const newerSavePromise = saveMatrixCredentials(
         {

@@ -1,4 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { expandTilde } from "./platform.js";
 
 // Canonical media tags. `qqmedia` is the generic auto-routing tag.
@@ -93,7 +92,7 @@ export const FUZZY_MEDIA_TAG_REGEX = new RegExp(
 
 /** Normalize a raw tag name into the canonical tag set. */
 function resolveTagName(raw: string): (typeof VALID_TAGS)[number] {
-  const lower = normalizeLowercaseStringOrEmpty(raw);
+  const lower = raw.trim().toLowerCase();
   if ((VALID_TAGS as readonly string[]).includes(lower)) {
     return lower as (typeof VALID_TAGS)[number];
   }

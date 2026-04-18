@@ -90,3 +90,13 @@ export async function fetchWithRuntimeDispatcher(
     normalizeRuntimeRequestInit(init, runtimeDeps.FormData),
   )) as Response;
 }
+
+export async function fetchWithRuntimeDispatcherOrMockedGlobal(
+  input: RequestInfo | URL,
+  init?: DispatcherAwareRequestInit,
+): Promise<Response> {
+  if (isMockedFetch(globalThis.fetch)) {
+    return await globalThis.fetch(input, init);
+  }
+  return await fetchWithRuntimeDispatcher(input, init);
+}

@@ -45,6 +45,61 @@ describe("config schema regressions", () => {
     expect(res.success).toBe(true);
   });
 
+  it("keeps inherited WhatsApp account defaults unset at account scope", () => {
+    const res = WhatsAppConfigSchema.safeParse({
+      dmPolicy: "allowlist",
+      groupPolicy: "open",
+      debounceMs: 250,
+      allowFrom: ["+15550001111"],
+      accounts: {
+        work: {
+          allowFrom: ["+15550002222"],
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (!res.success) {
+      return;
+    }
+    expect(res.data.dmPolicy).toBe("allowlist");
+    expect(res.data.groupPolicy).toBe("open");
+    expect(res.data.debounceMs).toBe(250);
+    expect(res.data.accounts?.work?.dmPolicy).toBeUndefined();
+    expect(res.data.accounts?.work?.groupPolicy).toBeUndefined();
+    expect(res.data.accounts?.work?.debounceMs).toBeUndefined();
+  });
+
+  it("accepts WhatsApp allowlist accounts inheriting allowFrom from accounts.default", () => {
+    const res = WhatsAppConfigSchema.safeParse({
+      accounts: {
+        default: {
+          allowFrom: ["+15550001111"],
+        },
+        work: {
+          dmPolicy: "allowlist",
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+  });
+
+  it("accepts WhatsApp allowlist accounts inheriting allowFrom from mixed-case accounts.Default", () => {
+    const res = WhatsAppConfigSchema.safeParse({
+      accounts: {
+        Default: {
+          allowFrom: ["+15550001111"],
+        },
+        work: {
+          dmPolicy: "allowlist",
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+  });
+
   it("accepts signal accountUuid for loop protection", () => {
     const res = SignalConfigSchema.safeParse({
       accountUuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",

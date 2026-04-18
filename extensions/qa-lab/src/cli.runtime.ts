@@ -9,6 +9,7 @@ import {
 import { resolveQaParityPackScenarioIds } from "./agentic-parity.js";
 import { runQaCharacterEval, type QaCharacterModelOptions } from "./character-eval.js";
 import { resolveRepoRelativeOutputDir } from "./cli-paths.js";
+import { buildQaCoverageInventory, renderQaCoverageMarkdownReport } from "./coverage-report.js";
 import { buildQaDockerHarnessImage, writeQaDockerHarnessFiles } from "./docker-harness.js";
 import { runQaDockerUp } from "./docker-up.runtime.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
@@ -36,6 +37,7 @@ import {
   type QaProviderMode,
   type QaProviderModeInput,
 } from "./run-config.js";
+import { readQaScenarioPack } from "./scenario-catalog.js";
 import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
 
 type InterruptibleServer = {
@@ -442,6 +444,29 @@ export async function runQaParityReportCommand(opts: {
     process.exitCode = 1;
   }
 }
+
+export async function runQaCoverageReportCommand(opts: {
+  repoRoot?: string;
+  output?: string;
+  json?: boolean;
+}) {
+  const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
+  const inventory = buildQaCoverageInventory(readQaScenarioPack().scenarios);
+  const outputPath = opts.output ? path.resolve(repoRoot, opts.output) : undefined;
+  const body = opts.json
+    ? `${JSON.stringify(inventory, null, 2)}\n`
+    : renderQaCoverageMarkdownReport(inventory);
+
+  if (outputPath) {
+    await fs.mkdir(path.dirname(outputPath), { recursive: true });
+    await fs.writeFile(outputPath, body, "utf8");
+    process.stdout.write(`QA coverage report: ${outputPath}\n`);
+    return;
+  }
+
+  process.stdout.write(body);
+}
+
 export async function runQaCharacterEvalCommand(opts: {
   repoRoot?: string;
   outputDir?: string;

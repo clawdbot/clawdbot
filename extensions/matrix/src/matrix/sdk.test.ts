@@ -18,6 +18,21 @@ function requestUrl(input: RequestInfo | URL | undefined): string {
   return input.url;
 }
 
+const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
+
+function clearTestUndiciRuntimeDepsOverride(): void {
+  Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
+}
+
+function stubRuntimeFetch(fetchImpl: typeof fetch): void {
+  (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+    Agent: function MockAgent() {},
+    EnvHttpProxyAgent: function MockEnvHttpProxyAgent() {},
+    ProxyAgent: function MockProxyAgent() {},
+    fetch: fetchImpl,
+  };
+}
+
 class FakeMatrixEvent extends EventEmitter {
   private readonly roomId: string;
   private readonly eventId: string;
@@ -224,11 +239,13 @@ describe("MatrixClient request hardening", () => {
     lastCreateClientOpts = null;
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    clearTestUndiciRuntimeDepsOverride();
   });
 
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    clearTestUndiciRuntimeDepsOverride();
   });
 
   it("blocks absolute endpoints unless explicitly allowed", async () => {
@@ -238,7 +255,7 @@ describe("MatrixClient request hardening", () => {
         headers: { "content-type": "application/json" },
       });
     });
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    stubRuntimeFetch(fetchMock as unknown as typeof fetch);
 
     const client = new MatrixClient("https://matrix.example.org", "token");
     await expect(client.doRequest("GET", "https://matrix.example.org/start")).rejects.toThrow(
@@ -265,7 +282,7 @@ describe("MatrixClient request hardening", () => {
     const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
       async () => new Response(payload, { status: 200 }),
     );
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    stubRuntimeFetch(fetchMock as unknown as typeof fetch);
 
     const client = new MatrixClient("http://127.0.0.1:8008", "token", {
       ssrfPolicy: { allowPrivateNetwork: true },
@@ -296,7 +313,7 @@ describe("MatrixClient request hardening", () => {
       }
       return new Response(payload, { status: 200 });
     });
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    stubRuntimeFetch(fetchMock as unknown as typeof fetch);
 
     const client = new MatrixClient("http://127.0.0.1:8008", "token", {
       ssrfPolicy: { allowPrivateNetwork: true },
@@ -475,7 +492,7 @@ describe("MatrixClient request hardening", () => {
         },
       });
     });
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    stubRuntimeFetch(fetchMock as unknown as typeof fetch);
 
     const client = new MatrixClient("http://127.0.0.1:8008", "token", {
       ssrfPolicy: { allowPrivateNetwork: true },
@@ -506,7 +523,7 @@ describe("MatrixClient request hardening", () => {
         headers: { "content-type": "application/json" },
       });
     });
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    stubRuntimeFetch(fetchMock as unknown as typeof fetch);
 
     const client = new MatrixClient("http://127.0.0.1:8008", "token", {
       ssrfPolicy: { allowPrivateNetwork: true },
@@ -531,7 +548,7 @@ describe("MatrixClient request hardening", () => {
         });
       });
     });
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    stubRuntimeFetch(fetchMock as unknown as typeof fetch);
 
     const client = new MatrixClient("http://127.0.0.1:8008", "token", {
       localTimeoutMs: 25,

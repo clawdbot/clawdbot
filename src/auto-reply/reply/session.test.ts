@@ -1527,6 +1527,48 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
       }
     }
   });
+
+  it("starts a fresh session when a scoped WhatsApp group entry only contains activation state", async () => {
+    const sessionKey =
+      "agent:main:whatsapp:group:120363406150318674@g.us:thread:whatsapp-account-work";
+    const storePath = await createStorePath("openclaw-group-activation-backfill-");
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        groupActivation: "always",
+      },
+    });
+    const cfg = makeCfg({
+      storePath,
+      allowFrom: ["+41796666864"],
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello without mention",
+        RawBody: "hello without mention",
+        CommandBody: "hello without mention",
+        From: "120363406150318674@g.us",
+        To: "+41779241027",
+        ChatType: "group",
+        SessionKey: sessionKey,
+        Provider: "whatsapp",
+        Surface: "whatsapp",
+        SenderName: "Peschiño",
+        SenderE164: "+41796666864",
+        SenderId: "41796666864:0@s.whatsapp.net",
+      },
+      cfg,
+      commandAuthorized: false,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    );
+    expect(result.sessionEntry.groupActivation).toBe("always");
+    expect(result.sessionEntry.sessionId).toBe(result.sessionId);
+    expect(typeof result.sessionEntry.updatedAt).toBe("number");
+  });
 });
 
 describe("initSessionState reset triggers in Slack channels", () => {

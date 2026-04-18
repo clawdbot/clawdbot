@@ -871,6 +871,36 @@ describe("runtime web tools resolution", () => {
     expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
   });
 
+  it("uses single plugin-scoped web search config as a bundled provider hint", async () => {
+    const { metadata } = await runRuntimeWebTools({
+      config: asConfig({
+        plugins: {
+          entries: {
+            google: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: { source: "env", provider: "default", id: "GOOGLE_PROVIDER_REF" },
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        GOOGLE_PROVIDER_REF: "google-provider-key",
+      },
+    });
+
+    expect(metadata.search.selectedProvider).toBe("gemini");
+    expect(resolveBundledExplicitWebSearchProvidersFromPublicArtifactsMock).toHaveBeenCalledWith({
+      onlyPluginIds: ["google"],
+    });
+    expect(resolveManifestContractOwnerPluginIdMock).not.toHaveBeenCalled();
+    expect(resolveBundledWebSearchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
+    expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
+  });
+
   it("limits legacy top-level web search apiKey auto-detect to compatibility owners", async () => {
     const { metadata } = await runRuntimeWebTools({
       config: asConfig({

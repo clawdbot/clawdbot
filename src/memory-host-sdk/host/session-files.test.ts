@@ -1,25 +1,35 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildSessionEntry, listSessionFilesForAgent } from "./session-files.js";
 
+let fixtureRoot: string;
 let tmpDir: string;
 let originalStateDir: string | undefined;
+let fixtureId = 0;
+
+beforeAll(async () => {
+  fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "session-entry-test-"));
+});
+
+afterAll(async () => {
+  await fs.rm(fixtureRoot, { recursive: true, force: true });
+});
 
 beforeEach(async () => {
-  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "session-entry-test-"));
+  tmpDir = path.join(fixtureRoot, `case-${fixtureId++}`);
+  await fs.mkdir(tmpDir, { recursive: true });
   originalStateDir = process.env.OPENCLAW_STATE_DIR;
   process.env.OPENCLAW_STATE_DIR = tmpDir;
 });
 
-afterEach(async () => {
+afterEach(() => {
   if (originalStateDir === undefined) {
     delete process.env.OPENCLAW_STATE_DIR;
   } else {
     process.env.OPENCLAW_STATE_DIR = originalStateDir;
   }
-  await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
 describe("listSessionFilesForAgent", () => {

@@ -200,9 +200,7 @@ enum RemoteGatewayProbe {
         let options = [
             "-o", "BatchMode=yes",
             "-o", "ConnectTimeout=5",
-            "-o", "StrictHostKeyChecking=accept-new",
-            "-o", "UpdateHostKeys=yes",
-        ]
+        ] + CommandResolver.strictHostKeyCheckingSSHOptions + CommandResolver.updateHostKeysSSHOptions
         let args = CommandResolver.sshArguments(
             target: parsed,
             identity: identity,

@@ -98,6 +98,18 @@ describe("qa run config", () => {
     ).toEqual(["dm-chat-baseline", "thread-lifecycle"]);
   });
 
+  it("keeps idle snapshots on static defaults so startup does not inspect auth profiles", () => {
+    defaultQaRuntimeModelForMode.mockReturnValue("openai-codex/gpt-5.4");
+    defaultQaRuntimeModelForMode.mockClear();
+
+    expect(createIdleQaRunnerSnapshot(scenarios).selection).toMatchObject({
+      providerMode: "live-frontier",
+      primaryModel: "openai/gpt-5.4",
+      alternateModel: "openai/gpt-5.4",
+    });
+    expect(defaultQaRuntimeModelForMode).not.toHaveBeenCalled();
+  });
+
   it("normalizes aimock selections", () => {
     expect(
       normalizeQaRunSelection(

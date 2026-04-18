@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { __testing, createExaWebSearchProvider } from "./exa-web-search-provider.js";
+import { __testing } from "../test-api.js";
+import { createExaWebSearchProvider as createContractExaWebSearchProvider } from "../web-search-contract-api.js";
+import { createExaWebSearchProvider } from "./exa-web-search-provider.js";
 
 describe("exa web search provider", () => {
   it("exposes the expected metadata and selection wiring", () => {
@@ -12,6 +14,31 @@ describe("exa web search provider", () => {
     expect(provider.id).toBe("exa");
     expect(provider.onboardingScopes).toEqual(["text-inference"]);
     expect(provider.credentialPath).toBe("plugins.entries.exa.config.webSearch.apiKey");
+    expect(applied.plugins?.entries?.exa?.enabled).toBe(true);
+  });
+
+  it("keeps the lightweight contract surface aligned with provider metadata", () => {
+    const provider = createExaWebSearchProvider();
+    const contractProvider = createContractExaWebSearchProvider();
+    if (!contractProvider.applySelectionConfig) {
+      throw new Error("Expected contract applySelectionConfig to be defined");
+    }
+    const applied = contractProvider.applySelectionConfig({});
+
+    expect(contractProvider).toMatchObject({
+      id: provider.id,
+      label: provider.label,
+      hint: provider.hint,
+      onboardingScopes: provider.onboardingScopes,
+      credentialLabel: provider.credentialLabel,
+      envVars: provider.envVars,
+      placeholder: provider.placeholder,
+      signupUrl: provider.signupUrl,
+      docsUrl: provider.docsUrl,
+      autoDetectOrder: provider.autoDetectOrder,
+      credentialPath: provider.credentialPath,
+    });
+    expect(contractProvider.createTool({ config: {}, searchConfig: {} })).toBeNull();
     expect(applied.plugins?.entries?.exa?.enabled).toBe(true);
   });
 

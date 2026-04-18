@@ -1,4 +1,8 @@
-import { listCombinedAccountIds } from "openclaw/plugin-sdk/account-resolution";
+import {
+  listCombinedAccountIds,
+  normalizeAccountId,
+  resolveNormalizedAccountEntry,
+} from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveTwitchToken, type TwitchTokenResolution } from "./token.js";
 import type { TwitchAccountConfig } from "./types.js";
@@ -36,14 +40,19 @@ export function getAccountConfig(
   }
 
   const cfg = coreConfig as OpenClawConfig;
+  const normalizedAccountId = normalizeAccountId(accountId);
   const twitch = cfg.channels?.twitch;
   // Access accounts via unknown to handle union type (single-account vs multi-account)
   const twitchRaw = twitch as Record<string, unknown> | undefined;
   const accounts = twitchRaw?.accounts as Record<string, TwitchAccountConfig> | undefined;
 
   // For default account, check base-level config first
-  if (accountId === DEFAULT_ACCOUNT_ID) {
-    const accountFromAccounts = accounts?.[DEFAULT_ACCOUNT_ID];
+  if (normalizedAccountId === DEFAULT_ACCOUNT_ID) {
+    const accountFromAccounts = resolveNormalizedAccountEntry(
+      accounts,
+      DEFAULT_ACCOUNT_ID,
+      normalizeAccountId,
+    );
 
     // Base-level properties that can form an implicit default account
     const baseLevel = {
@@ -87,11 +96,12 @@ export function getAccountConfig(
   }
 
   // For non-default accounts, only check accounts object
-  if (!accounts || !accounts[accountId]) {
+  const account = resolveNormalizedAccountEntry(accounts, normalizedAccountId, normalizeAccountId);
+  if (!account) {
     return null;
   }
 
-  return accounts[accountId] as TwitchAccountConfig | null;
+  return account;
 }
 
 /**
@@ -113,16 +123,19 @@ export function listAccountIds(cfg: OpenClawConfig): string[] {
       typeof twitchRaw.channel === "string");
 
   return listCombinedAccountIds({
-    configuredAccountIds: Object.keys(accountMap ?? {}),
+    configuredAccountIds: Object.keys(accountMap ?? {}).map((accountId) =>
+      normalizeAccountId(accountId),
+    ),
     implicitAccountId: hasBaseLevelConfig ? DEFAULT_ACCOUNT_ID : undefined,
   });
 }
 
 export function resolveDefaultTwitchAccountId(cfg: OpenClawConfig): string {
-  const preferred =
+  const preferredRaw =
     typeof cfg.channels?.twitch?.defaultAccount === "string"
       ? cfg.channels.twitch.defaultAccount.trim()
       : "";
+  const preferred = preferredRaw ? normalizeAccountId(preferredRaw) : "";
   const ids = listAccountIds(cfg);
   if (preferred && ids.includes(preferred)) {
     return preferred;
@@ -137,7 +150,9 @@ export function resolveTwitchAccountContext(
   cfg: OpenClawConfig,
   accountId?: string | null,
 ): ResolvedTwitchAccountContext {
-  const resolvedAccountId = accountId?.trim() || resolveDefaultTwitchAccountId(cfg);
+  const resolvedAccountId = accountId?.trim()
+    ? normalizeAccountId(accountId)
+    : resolveDefaultTwitchAccountId(cfg);
   const account = getAccountConfig(cfg, resolvedAccountId);
   const tokenResolution = resolveTwitchToken(cfg, { accountId: resolvedAccountId });
   return {

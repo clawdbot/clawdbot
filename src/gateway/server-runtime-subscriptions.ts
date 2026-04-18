@@ -15,7 +15,6 @@ import {
 } from "./server-session-events.js";
 
 export function startGatewayEventSubscriptions(params: {
-  minimalTestGateway: boolean;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   broadcastToConnIds: (
     event: string,
@@ -33,47 +32,39 @@ export function startGatewayEventSubscriptions(params: {
   sessionMessageSubscribers: SessionMessageSubscriberRegistry;
   chatAbortControllers: Map<string, unknown>;
 }) {
-  const agentUnsub = params.minimalTestGateway
-    ? null
-    : onAgentEvent(
-        createAgentEventHandler({
-          broadcast: params.broadcast,
-          broadcastToConnIds: params.broadcastToConnIds,
-          nodeSendToSession: params.nodeSendToSession,
-          agentRunSeq: params.agentRunSeq,
-          chatRunState: params.chatRunState,
-          resolveSessionKeyForRun: params.resolveSessionKeyForRun,
-          clearAgentRunContext: params.clearAgentRunContext,
-          toolEventRecipients: params.toolEventRecipients,
-          sessionEventSubscribers: params.sessionEventSubscribers,
-          isChatSendRunActive: (runId) => params.chatAbortControllers.has(runId),
-        }),
-      );
+  const agentUnsub = onAgentEvent(
+    createAgentEventHandler({
+      broadcast: params.broadcast,
+      broadcastToConnIds: params.broadcastToConnIds,
+      nodeSendToSession: params.nodeSendToSession,
+      agentRunSeq: params.agentRunSeq,
+      chatRunState: params.chatRunState,
+      resolveSessionKeyForRun: params.resolveSessionKeyForRun,
+      clearAgentRunContext: params.clearAgentRunContext,
+      toolEventRecipients: params.toolEventRecipients,
+      sessionEventSubscribers: params.sessionEventSubscribers,
+      isChatSendRunActive: (runId) => params.chatAbortControllers.has(runId),
+    }),
+  );
 
-  const heartbeatUnsub = params.minimalTestGateway
-    ? null
-    : onHeartbeatEvent((evt) => {
-        params.broadcast("heartbeat", evt, { dropIfSlow: true });
-      });
+  const heartbeatUnsub = onHeartbeatEvent((evt) => {
+    params.broadcast("heartbeat", evt, { dropIfSlow: true });
+  });
 
-  const transcriptUnsub = params.minimalTestGateway
-    ? null
-    : onSessionTranscriptUpdate(
-        createTranscriptUpdateBroadcastHandler({
-          broadcastToConnIds: params.broadcastToConnIds,
-          sessionEventSubscribers: params.sessionEventSubscribers,
-          sessionMessageSubscribers: params.sessionMessageSubscribers,
-        }),
-      );
+  const transcriptUnsub = onSessionTranscriptUpdate(
+    createTranscriptUpdateBroadcastHandler({
+      broadcastToConnIds: params.broadcastToConnIds,
+      sessionEventSubscribers: params.sessionEventSubscribers,
+      sessionMessageSubscribers: params.sessionMessageSubscribers,
+    }),
+  );
 
-  const lifecycleUnsub = params.minimalTestGateway
-    ? null
-    : onSessionLifecycleEvent(
-        createLifecycleEventBroadcastHandler({
-          broadcastToConnIds: params.broadcastToConnIds,
-          sessionEventSubscribers: params.sessionEventSubscribers,
-        }),
-      );
+  const lifecycleUnsub = onSessionLifecycleEvent(
+    createLifecycleEventBroadcastHandler({
+      broadcastToConnIds: params.broadcastToConnIds,
+      sessionEventSubscribers: params.sessionEventSubscribers,
+    }),
+  );
 
   return {
     agentUnsub,

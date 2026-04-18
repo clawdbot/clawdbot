@@ -40,6 +40,8 @@ export type OutboundSendContext = {
   mediaAccess?: OutboundMediaAccess;
   mediaReadFile?: OutboundMediaReadFile;
   accountId?: string | null;
+  senderIsOwner?: boolean;
+  sessionId?: string;
   gateway?: OutboundGatewayContext;
   toolContext?: ChannelThreadingToolContext;
   deps?: OutboundSendDeps;
@@ -100,6 +102,11 @@ async function tryHandleWithPluginAction(params: {
     mediaLocalRoots: mediaAccess.localRoots,
     mediaReadFile: mediaAccess.readFile,
     accountId: params.ctx.accountId ?? undefined,
+    requesterSenderId: params.ctx.requesterSenderId,
+    senderIsOwner: params.ctx.senderIsOwner,
+    sessionKey: params.ctx.sessionKey,
+    sessionId: params.ctx.sessionId,
+    agentId: params.ctx.agentId,
     gateway: params.ctx.gateway,
     toolContext: params.ctx.toolContext,
     dryRun: params.ctx.dryRun,

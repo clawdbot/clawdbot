@@ -5,15 +5,17 @@ import type {
   MusicGenerationProvider,
   MusicGenerationRequest,
 } from "openclaw/plugin-sdk/music-generation";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { normalizeGoogleApiBaseUrl } from "./api.js";
+import {
+  createGoogleMusicGenerationProviderMetadata,
+  DEFAULT_GOOGLE_MUSIC_MODEL,
+  GOOGLE_MAX_INPUT_IMAGES,
+  GOOGLE_PRO_MUSIC_MODEL,
+} from "./generation-provider-metadata.js";
 
-const DEFAULT_GOOGLE_MUSIC_MODEL = "lyria-3-clip-preview";
-const GOOGLE_PRO_MUSIC_MODEL = "lyria-3-pro-preview";
 const DEFAULT_TIMEOUT_MS = 180_000;
-const GOOGLE_MAX_INPUT_IMAGES = 10;
 
 type GoogleInlineDataPart = {
   mimeType?: string;
@@ -99,39 +101,7 @@ function extractTracks(params: { payload: GoogleGenerateMusicResponse; model: st
 
 export function buildGoogleMusicGenerationProvider(): MusicGenerationProvider {
   return {
-    id: "google",
-    label: "Google",
-    defaultModel: DEFAULT_GOOGLE_MUSIC_MODEL,
-    models: [DEFAULT_GOOGLE_MUSIC_MODEL, GOOGLE_PRO_MUSIC_MODEL],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: "google",
-        agentDir,
-      }),
-    capabilities: {
-      generate: {
-        maxTracks: 1,
-        supportsLyrics: true,
-        supportsInstrumental: true,
-        supportsFormat: true,
-        supportedFormatsByModel: {
-          [DEFAULT_GOOGLE_MUSIC_MODEL]: ["mp3"],
-          [GOOGLE_PRO_MUSIC_MODEL]: ["mp3", "wav"],
-        },
-      },
-      edit: {
-        enabled: true,
-        maxTracks: 1,
-        maxInputImages: GOOGLE_MAX_INPUT_IMAGES,
-        supportsLyrics: true,
-        supportsInstrumental: true,
-        supportsFormat: true,
-        supportedFormatsByModel: {
-          [DEFAULT_GOOGLE_MUSIC_MODEL]: ["mp3"],
-          [GOOGLE_PRO_MUSIC_MODEL]: ["mp3", "wav"],
-        },
-      },
-    },
+    ...createGoogleMusicGenerationProviderMetadata(),
     async generateMusic(req) {
       if ((req.inputImages?.length ?? 0) > GOOGLE_MAX_INPUT_IMAGES) {
         throw new Error(

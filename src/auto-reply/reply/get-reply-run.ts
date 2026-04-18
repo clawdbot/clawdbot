@@ -4,6 +4,7 @@ import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/pi-embedded-runner/sandbox-info.js";
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/pi-embedded-runner/types.js";
+import { resolveIngressWorkspaceOverrideForSpawnedRun } from "../../agents/spawned-context.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import {
   resolveSessionFilePath,
@@ -14,7 +15,11 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
-import { normalizeMainKey } from "../../routing/session-key.js";
+import {
+  isAcpSessionKey,
+  isSubagentSessionKey,
+  normalizeMainKey,
+} from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
@@ -43,7 +48,8 @@ import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { buildReplyPromptBodies } from "./prompt-prelude.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
-import { buildBareSessionResetPrompt } from "./session-reset-prompt.js";
+import { resolveBareSessionResetPromptState } from "./session-reset-prompt.js";
+import { resolveBareResetBootstrapFileAccess } from "./session-reset-prompt.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
 import { buildSessionStartupContextPrelude, shouldApplyStartupContext } from "./startup-context.js";
 import { resolveTypingMode } from "./typing-mode.js";
@@ -320,15 +326,38 @@ export async function runPreparedReply(
     isNewSession &&
     ((baseBodyTrimmedRaw.length === 0 && rawBodyTrimmed.length > 0) || isBareNewOrReset);
   const startupAction = /^\/reset(?:\s|$)/.test(normalizedCommandBody) ? "reset" : "new";
+  const spawnedWorkspaceOverride = resolveIngressWorkspaceOverrideForSpawnedRun({
+    spawnedBy: sessionEntry?.spawnedBy,
+    workspaceDir: sessionEntry?.spawnedWorkspaceDir,
+  });
+  const bareResetPromptState =
+    isBareSessionReset && workspaceDir
+      ? await resolveBareSessionResetPromptState({
+          cfg,
+          workspaceDir,
+          isPrimaryRun: !isSubagentSessionKey(sessionKey) && !isAcpSessionKey(sessionKey),
+          isCanonicalWorkspace: !spawnedWorkspaceOverride,
+          hasBootstrapFileAccess: resolveBareResetBootstrapFileAccess({
+            cfg,
+            agentId,
+            sessionKey,
+            workspaceDir,
+            modelProvider: provider,
+            modelId: model,
+          }),
+        })
+      : null;
   const startupContextPrelude =
-    isBareSessionReset && shouldApplyStartupContext({ cfg, action: startupAction })
+    isBareSessionReset &&
+    bareResetPromptState?.shouldPrependStartupContext !== false &&
+    shouldApplyStartupContext({ cfg, action: startupAction })
       ? await buildSessionStartupContextPrelude({
           workspaceDir,
           cfg,
         })
       : null;
   const baseBodyFinal = isBareSessionReset
-    ? buildBareSessionResetPrompt(cfg)
+    ? (bareResetPromptState?.prompt ?? "")
     : stripPromptThinkingDirectives(baseBody);
   const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
   const inboundUserContext = buildInboundUserContextPrefix(

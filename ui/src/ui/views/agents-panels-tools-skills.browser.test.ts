@@ -30,7 +30,7 @@ function createBaseParams(overrides: Partial<Parameters<typeof renderAgentTools>
 }
 
 describe("agents tools panel (browser)", () => {
-  it("renders per-tool provenance badges and optional marker", async () => {
+  it("renders catalog provenance and effective runtime tools", async () => {
     const container = document.createElement("div");
     render(
       renderAgentTools(
@@ -77,39 +77,6 @@ describe("agents tools panel (browser)", () => {
               },
             ],
           },
-        }),
-      ),
-      container,
-    );
-    await Promise.resolve();
-
-    const text = container.textContent ?? "";
-    expect(text).toContain("core");
-    expect(text).toContain("plugin:voice-call");
-    expect(text).toContain("optional");
-  });
-
-  it("shows fallback warning when runtime catalog fails", async () => {
-    const container = document.createElement("div");
-    render(
-      renderAgentTools(
-        createBaseParams({
-          toolsCatalogError: "unavailable",
-          toolsCatalogResult: null,
-        }),
-      ),
-      container,
-    );
-    await Promise.resolve();
-
-    expect(container.textContent ?? "").toContain("Could not load runtime tool catalog");
-  });
-
-  it("renders effective runtime tools separately from the config catalog", async () => {
-    const container = document.createElement("div");
-    render(
-      renderAgentTools(
-        createBaseParams({
           toolsEffectiveResult: {
             agentId: "main",
             profile: "messaging",
@@ -138,8 +105,27 @@ describe("agents tools panel (browser)", () => {
     await Promise.resolve();
 
     const text = container.textContent ?? "";
+    expect(text).toContain("core");
+    expect(text).toContain("plugin:voice-call");
+    expect(text).toContain("optional");
     expect(text).toContain("Available Right Now");
     expect(text).toContain("Message Actions");
     expect(text).toContain("Channel: discord");
+  });
+
+  it("shows fallback warning when runtime catalog fails", async () => {
+    const container = document.createElement("div");
+    render(
+      renderAgentTools(
+        createBaseParams({
+          toolsCatalogError: "unavailable",
+          toolsCatalogResult: null,
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.textContent ?? "").toContain("Could not load runtime tool catalog");
   });
 });

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
 import { applyNonInteractiveAuthChoice } from "./auth-choice.js";
 
 const applyNonInteractivePluginProviderChoice = vi.hoisted(() => vi.fn(async () => undefined));
@@ -71,5 +72,45 @@ describe("applyNonInteractiveAuthChoice", () => {
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(applyNonInteractivePluginProviderChoice).toHaveBeenCalledOnce();
+  });
+
+  it("stores custom provider env refs through the local auth-choice seam", async () => {
+    const runtime = createRuntime();
+    const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+    resolveNonInteractiveApiKey.mockResolvedValueOnce({
+      key: "custom-env-key",
+      source: "env",
+      envVarName: "CUSTOM_API_KEY",
+    });
+
+    const result = await applyNonInteractiveAuthChoice({
+      nextConfig,
+      authChoice: "custom-api-key",
+      opts: {
+        customBaseUrl: "https://models.custom.local/v1",
+        customModelId: "local-large",
+        secretInputMode: "ref",
+      } as never,
+      runtime: runtime as never,
+      baseConfig: nextConfig,
+    });
+
+    expect(result?.models?.providers?.["custom-models-custom-local"]?.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "CUSTOM_API_KEY",
+    });
+    expect(resolveAgentModelPrimaryValue(result?.agents?.defaults?.model)).toBe(
+      "custom-models-custom-local/local-large",
+    );
+    expect(resolveNonInteractiveApiKey).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "custom-models-custom-local",
+        flagName: "--custom-api-key",
+        envVar: "CUSTOM_API_KEY",
+        envVarName: "CUSTOM_API_KEY",
+        secretInputMode: "ref",
+      }),
+    );
   });
 });

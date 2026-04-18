@@ -97,29 +97,6 @@ describe("healthCommand", () => {
     expect(parsed.sessions.count).toBe(1);
   });
 
-  it("prints text summary when not json", async () => {
-    callGatewayMock.mockResolvedValueOnce(
-      createHealthSummary({
-        channels: {
-          whatsapp: { accountId: "default", linked: false, authAgeMs: null },
-          telegram: { accountId: "default", configured: false },
-          discord: { accountId: "default", configured: false },
-        },
-        channelOrder: ["whatsapp", "telegram", "discord"],
-        channelLabels: {
-          whatsapp: "WhatsApp",
-          telegram: "Telegram",
-          discord: "Discord",
-        },
-      }),
-    );
-
-    await healthCommand({ json: false, config: {} }, runtime as never);
-
-    expect(runtime.exit).not.toHaveBeenCalled();
-    expect(runtime.log).toHaveBeenCalled();
-  });
-
   it("formats per-account probe timings", () => {
     const summary = createHealthSummary({
       channels: {

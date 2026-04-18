@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyAuthProfileConfig,
   upsertApiKeyProfile,
@@ -13,6 +13,76 @@ import {
   readAuthProfilesForAgent,
   setupAuthTestEnv,
 } from "./test-wizard-helpers.js";
+
+const providerEnvVarsById = vi.hoisted(
+  (): Record<string, readonly string[]> => ({
+    "cloudflare-ai-gateway": ["CLOUDFLARE_AI_GATEWAY_API_KEY"],
+    byteplus: ["BYTEPLUS_API_KEY"],
+    moonshot: ["MOONSHOT_API_KEY"],
+    openai: ["OPENAI_API_KEY"],
+    opencode: ["OPENCODE_API_KEY"],
+    "opencode-go": ["OPENCODE_API_KEY"],
+    volcengine: ["VOLCANO_ENGINE_API_KEY"],
+  }),
+);
+
+vi.mock("../agents/agent-paths.js", () => ({
+  resolveOpenClawAgentDir: () => process.env.OPENCLAW_AGENT_DIR ?? "/tmp/openclaw-agent",
+}));
+
+vi.mock("../config/paths.js", () => ({
+  resolveStateDir: () => process.env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw-state",
+}));
+
+vi.mock("../agents/auth-profiles/profiles.js", async () => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  return {
+    upsertAuthProfile: (params: { profileId: string; credential: unknown; agentDir?: string }) => {
+      const agentDir = params.agentDir ?? process.env.OPENCLAW_AGENT_DIR ?? "/tmp/openclaw-agent";
+      const file = path.join(agentDir, "auth-profiles.json");
+      fs.mkdirSync(agentDir, { recursive: true });
+      const existing = (() => {
+        try {
+          return JSON.parse(fs.readFileSync(file, "utf8")) as {
+            version?: number;
+            profiles?: Record<string, unknown>;
+          };
+        } catch {
+          return { version: 1, profiles: {} };
+        }
+      })();
+      fs.writeFileSync(
+        file,
+        `${JSON.stringify(
+          {
+            version: existing.version ?? 1,
+            profiles: {
+              ...existing.profiles,
+              [params.profileId]: params.credential,
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+    },
+  };
+});
+
+vi.mock("../agents/provider-auth-aliases.js", () => ({
+  resolveProviderIdForAuth: (provider: string) => {
+    const normalized = provider.trim().toLowerCase();
+    if (normalized === "z.ai" || normalized === "z-ai") {
+      return "zai";
+    }
+    return normalized;
+  },
+}));
+
+vi.mock("../secrets/provider-env-vars.js", () => ({
+  getProviderEnvVars: vi.fn((provider: string) => providerEnvVarsById[provider] ?? []),
+}));
 
 describe("writeOAuthCredentials", () => {
   const lifecycle = createAuthTestLifecycle([
@@ -163,6 +233,152 @@ describe("writeOAuthCredentials", () => {
     // Global state dir should NOT have credentials written
     const globalMain = path.join(tempStateDir, "agents", "main", "agent");
     await expect(fs.readFile(authProfilePathFor(globalMain), "utf8")).rejects.toThrow();
+  });
+});
+
+describe("upsertApiKeyProfile secret refs", () => {
+  const lifecycle = createAuthTestLifecycle([
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_AGENT_DIR",
+    "PI_CODING_AGENT_DIR",
+    "MOONSHOT_API_KEY",
+    "OPENAI_API_KEY",
+    "CLOUDFLARE_AI_GATEWAY_API_KEY",
+    "VOLCANO_ENGINE_API_KEY",
+    "BYTEPLUS_API_KEY",
+    "OPENCODE_API_KEY",
+  ]);
+
+  type AuthProfileEntry = { key?: string; keyRef?: unknown; metadata?: unknown };
+
+  afterEach(async () => {
+    await lifecycle.cleanup();
+  });
+
+  async function readProfile(
+    agentDir: string,
+    profileId: string,
+  ): Promise<AuthProfileEntry | undefined> {
+    const parsed = await readAuthProfilesForAgent<{
+      profiles?: Record<string, AuthProfileEntry>;
+    }>(agentDir);
+    return parsed.profiles?.[profileId];
+  }
+
+  it("handles plaintext, ref mode, and inline env-ref provider keys", async () => {
+    const env = await setupAuthTestEnv("openclaw-onboard-auth-credentials-");
+    lifecycle.setStateDir(env.stateDir);
+    process.env.MOONSHOT_API_KEY = "sk-moonshot-env"; // pragma: allowlist secret
+    process.env.OPENAI_API_KEY = "sk-openai-env"; // pragma: allowlist secret
+
+    upsertApiKeyProfile({
+      provider: "moonshot",
+      input: "sk-moonshot-env",
+      agentDir: env.agentDir,
+    });
+    upsertApiKeyProfile({ provider: "openai", input: "sk-openai-env", agentDir: env.agentDir });
+
+    expect(await readProfile(env.agentDir, "moonshot:default")).toMatchObject({
+      key: "sk-moonshot-env",
+    });
+    expect((await readProfile(env.agentDir, "moonshot:default"))?.keyRef).toBeUndefined();
+    expect(await readProfile(env.agentDir, "openai:default")).toMatchObject({
+      key: "sk-openai-env",
+    });
+    expect((await readProfile(env.agentDir, "openai:default"))?.keyRef).toBeUndefined();
+
+    upsertApiKeyProfile({
+      provider: "moonshot",
+      input: "sk-moonshot-env",
+      agentDir: env.agentDir,
+      options: { secretInputMode: "ref" }, // pragma: allowlist secret
+    });
+    upsertApiKeyProfile({
+      provider: "openai",
+      input: "sk-openai-env",
+      agentDir: env.agentDir,
+      options: { secretInputMode: "ref" }, // pragma: allowlist secret
+    });
+    upsertApiKeyProfile({
+      provider: "moonshot",
+      input: "${MOONSHOT_API_KEY}",
+      agentDir: env.agentDir,
+      profileId: "moonshot:inline",
+    });
+    process.env.MOONSHOT_API_KEY = "sk-moonshot-other"; // pragma: allowlist secret
+    upsertApiKeyProfile({
+      provider: "moonshot",
+      input: "sk-moonshot-plaintext",
+      agentDir: env.agentDir,
+      profileId: "moonshot:plain",
+    });
+
+    expect(await readProfile(env.agentDir, "moonshot:default")).toMatchObject({
+      keyRef: { source: "env", provider: "default", id: "MOONSHOT_API_KEY" },
+    });
+    expect((await readProfile(env.agentDir, "moonshot:default"))?.key).toBeUndefined();
+    expect(await readProfile(env.agentDir, "openai:default")).toMatchObject({
+      keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+    });
+    expect((await readProfile(env.agentDir, "openai:default"))?.key).toBeUndefined();
+    expect(await readProfile(env.agentDir, "moonshot:inline")).toMatchObject({
+      keyRef: { source: "env", provider: "default", id: "MOONSHOT_API_KEY" },
+    });
+    expect(await readProfile(env.agentDir, "moonshot:plain")).toMatchObject({
+      key: "sk-moonshot-plaintext",
+    });
+    expect((await readProfile(env.agentDir, "moonshot:plain"))?.keyRef).toBeUndefined();
+  });
+
+  it("stores provider-specific env refs and metadata in ref mode", async () => {
+    const env = await setupAuthTestEnv("openclaw-onboard-auth-credentials-provider-ref-");
+    lifecycle.setStateDir(env.stateDir);
+    process.env.CLOUDFLARE_AI_GATEWAY_API_KEY = "cf-secret"; // pragma: allowlist secret
+    process.env.VOLCANO_ENGINE_API_KEY = "volcengine-secret"; // pragma: allowlist secret
+    process.env.BYTEPLUS_API_KEY = "byteplus-secret"; // pragma: allowlist secret
+    process.env.OPENCODE_API_KEY = "sk-opencode-env"; // pragma: allowlist secret
+
+    upsertApiKeyProfile({
+      provider: "cloudflare-ai-gateway",
+      input: "cf-secret",
+      agentDir: env.agentDir,
+      options: { secretInputMode: "ref" }, // pragma: allowlist secret
+      metadata: {
+        accountId: "account-1",
+        gatewayId: "gateway-1",
+      },
+    });
+    for (const [provider, input] of [
+      ["volcengine", "volcengine-secret"],
+      ["byteplus", "byteplus-secret"],
+      ["opencode", "sk-opencode-env"],
+      ["opencode-go", "sk-opencode-env"],
+    ] as const) {
+      upsertApiKeyProfile({
+        provider,
+        input,
+        agentDir: env.agentDir,
+        options: { secretInputMode: "ref" }, // pragma: allowlist secret
+      });
+    }
+
+    expect(await readProfile(env.agentDir, "cloudflare-ai-gateway:default")).toMatchObject({
+      keyRef: { source: "env", provider: "default", id: "CLOUDFLARE_AI_GATEWAY_API_KEY" },
+      metadata: { accountId: "account-1", gatewayId: "gateway-1" },
+    });
+    expect((await readProfile(env.agentDir, "cloudflare-ai-gateway:default"))?.key).toBeUndefined();
+    expect(await readProfile(env.agentDir, "volcengine:default")).toMatchObject({
+      keyRef: { source: "env", provider: "default", id: "VOLCANO_ENGINE_API_KEY" },
+    });
+    expect(await readProfile(env.agentDir, "byteplus:default")).toMatchObject({
+      keyRef: { source: "env", provider: "default", id: "BYTEPLUS_API_KEY" },
+    });
+    expect(await readProfile(env.agentDir, "opencode:default")).toMatchObject({
+      keyRef: { source: "env", provider: "default", id: "OPENCODE_API_KEY" },
+    });
+    expect(await readProfile(env.agentDir, "opencode-go:default")).toMatchObject({
+      keyRef: { source: "env", provider: "default", id: "OPENCODE_API_KEY" },
+    });
   });
 });
 

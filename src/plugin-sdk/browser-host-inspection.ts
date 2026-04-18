@@ -11,11 +11,15 @@ type BrowserHostInspectionSurface = {
   parseBrowserMajorVersion: (rawVersion: string | null | undefined) => number | null;
 };
 
+let cachedBrowserHostInspectionSurface: BrowserHostInspectionSurface | undefined;
+
 function loadBrowserHostInspectionSurface(): BrowserHostInspectionSurface {
-  return loadBundledPluginPublicSurfaceModuleSync<BrowserHostInspectionSurface>({
-    dirName: "browser",
-    artifactBasename: "browser-host-inspection.js",
-  });
+  cachedBrowserHostInspectionSurface ??=
+    loadBundledPluginPublicSurfaceModuleSync<BrowserHostInspectionSurface>({
+      dirName: "browser",
+      artifactBasename: "browser-host-inspection.js",
+    });
+  return cachedBrowserHostInspectionSurface;
 }
 
 export function resolveGoogleChromeExecutableForPlatform(

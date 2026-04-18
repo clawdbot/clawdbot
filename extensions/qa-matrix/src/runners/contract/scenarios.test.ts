@@ -102,6 +102,7 @@ describe("matrix live qa scenarios", () => {
       "matrix-reaction-redaction-observed",
       "matrix-restart-resume",
       "matrix-post-restart-room-continue",
+      "matrix-initial-catchup-then-incremental",
       "matrix-room-membership-loss",
       "matrix-homeserver-restart-resume",
       "matrix-mention-gating",
@@ -513,6 +514,107 @@ describe("matrix live qa scenarios", () => {
       mentionUserIds: ["@sut:matrix-qa.test"],
       roomId: "!room:matrix-qa.test",
     });
+  });
+
+  it("queues a Matrix trigger during restart before proving incremental sync continues", async () => {
+    const callOrder: string[] = [];
+    const primeRoom = vi.fn().mockResolvedValue("driver-sync-start");
+    const sendTextMessage = vi.fn().mockImplementation(async (params) => {
+      callOrder.push(`send:${String(params.body).includes("CATCHUP") ? "catchup" : "incremental"}`);
+      return String(params.body).includes("CATCHUP") ? "$catchup-trigger" : "$incremental-trigger";
+    });
+    const waitForRoomEvent = vi.fn().mockImplementation(async () => {
+      const sentBody = String(sendTextMessage.mock.calls.at(-1)?.[0]?.body ?? "");
+      const token = sentBody.replace("@sut:matrix-qa.test reply with only this exact marker: ", "");
+      callOrder.push(`wait:${token.includes("CATCHUP") ? "catchup" : "incremental"}`);
+      return {
+        event: {
+          kind: "message",
+          roomId: "!restart:matrix-qa.test",
+          eventId: token.includes("CATCHUP") ? "$catchup-reply" : "$incremental-reply",
+          sender: "@sut:matrix-qa.test",
+          type: "m.room.message",
+          body: token,
+        },
+        since: token.includes("CATCHUP")
+          ? "driver-sync-after-catchup"
+          : "driver-sync-after-incremental",
+      };
+    });
+
+    createMatrixQaClient.mockReturnValue({
+      primeRoom,
+      sendTextMessage,
+      waitForRoomEvent,
+    });
+
+    const scenario = MATRIX_QA_SCENARIOS.find(
+      (entry) => entry.id === "matrix-initial-catchup-then-incremental",
+    );
+    expect(scenario).toBeDefined();
+
+    await expect(
+      runMatrixQaScenario(scenario!, {
+        baseUrl: "http://127.0.0.1:28008/",
+        canary: undefined,
+        driverAccessToken: "driver-token",
+        driverUserId: "@driver:matrix-qa.test",
+        observedEvents: [],
+        observerAccessToken: "observer-token",
+        observerUserId: "@observer:matrix-qa.test",
+        restartGatewayWithQueuedMessage: async (queueMessage) => {
+          callOrder.push("restart");
+          await queueMessage();
+          callOrder.push("ready");
+        },
+        roomId: "!room:matrix-qa.test",
+        syncState: {},
+        sutAccessToken: "sut-token",
+        sutUserId: "@sut:matrix-qa.test",
+        timeoutMs: 8_000,
+        topology: {
+          defaultRoomId: "!room:matrix-qa.test",
+          defaultRoomKey: "main",
+          rooms: [
+            {
+              key: "restart",
+              kind: "group",
+              memberRoles: ["driver", "observer", "sut"],
+              memberUserIds: [
+                "@driver:matrix-qa.test",
+                "@observer:matrix-qa.test",
+                "@sut:matrix-qa.test",
+              ],
+              name: "Restart room",
+              requireMention: true,
+              roomId: "!restart:matrix-qa.test",
+            },
+          ],
+        },
+      }),
+    ).resolves.toMatchObject({
+      artifacts: {
+        catchupDriverEventId: "$catchup-trigger",
+        catchupReply: {
+          eventId: "$catchup-reply",
+          tokenMatched: true,
+        },
+        incrementalDriverEventId: "$incremental-trigger",
+        incrementalReply: {
+          eventId: "$incremental-reply",
+          tokenMatched: true,
+        },
+      },
+    });
+
+    expect(callOrder).toEqual([
+      "restart",
+      "send:catchup",
+      "ready",
+      "wait:catchup",
+      "send:incremental",
+      "wait:incremental",
+    ]);
   });
 
   it("runs the DM scenario against the provisioned DM room without a mention", async () => {

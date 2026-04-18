@@ -542,18 +542,18 @@ export async function resolveRuntimeWebTools(params: {
   }
   const rawProvider = normalizeLowercaseStringOrEmpty(search?.provider);
   let configuredBundledWebSearchPluginIdHint: string | undefined;
-  if (rawProvider && hasPluginWebSearchConfig) {
-    configuredBundledWebSearchPluginIdHint = inferExactBundledPluginScopedWebToolConfigOwner({
-      config: params.sourceConfig,
-      key: "webSearch",
-      pluginId: rawProvider,
-    });
-    if (!configuredBundledWebSearchPluginIdHint && !(await getHasCustomWebSearchRisk())) {
-      configuredBundledWebSearchPluginIdHint = inferSingleBundledPluginScopedWebToolConfigOwner(
-        params.sourceConfig,
-        "webSearch",
-      );
+  if (hasPluginWebSearchConfig && !(await getHasCustomWebSearchRisk())) {
+    if (rawProvider) {
+      configuredBundledWebSearchPluginIdHint = inferExactBundledPluginScopedWebToolConfigOwner({
+        config: params.sourceConfig,
+        key: "webSearch",
+        pluginId: rawProvider,
+      });
     }
+    configuredBundledWebSearchPluginIdHint ??= inferSingleBundledPluginScopedWebToolConfigOwner(
+      params.sourceConfig,
+      "webSearch",
+    );
   }
   const searchMetadata: RuntimeWebSearchMetadata = {
     providerSource: "none",

@@ -1,44 +1,40 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import type { DmPolicy } from "openclaw/plugin-sdk/config-runtime";
+import type { WizardPrompter } from "openclaw/plugin-sdk/matrix-runtime-shared";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import {
   type ChannelSetupDmPolicy,
   type ChannelSetupWizardAdapter,
+  addWildcardAllowFrom,
+  formatDocsLink,
+  hasConfiguredSecretInput,
+  mergeAllowFromEntries,
+  normalizeAccountId,
+  promptAccountId,
+  promptChannelAccessConfig,
+  splitSetupEntries,
 } from "openclaw/plugin-sdk/setup";
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-policy";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { requiresExplicitMatrixDefaultAccount } from "./account-selection.js";
-import { listMatrixDirectoryGroupsLive } from "./directory-live.js";
 import {
   listMatrixAccountIds,
   resolveDefaultMatrixAccountId,
   resolveMatrixAccount,
   resolveMatrixAccountConfig,
 } from "./matrix/accounts.js";
+import { resolveMatrixEnvAuthReadiness } from "./matrix/client/env-auth.js";
+import { isPrivateOrLoopbackHost } from "./matrix/client/private-network-host.js";
 import {
   resolveValidatedMatrixHomeserverUrl,
   validateMatrixHomeserverUrl,
-} from "./matrix/client.js";
-import { resolveMatrixEnvAuthReadiness } from "./matrix/client/env-auth.js";
+} from "./matrix/client/url-validation.js";
 import { resolveMatrixConfigFieldPath, updateMatrixAccountConfig } from "./matrix/config-update.js";
 import { ensureMatrixSdkInstalled, isMatrixSdkAvailable } from "./matrix/deps.js";
-import { resolveMatrixTargets } from "./resolve-targets.js";
-import type { DmPolicy } from "./runtime-api.js";
-import {
-  addWildcardAllowFrom,
-  formatDocsLink,
-  hasConfiguredSecretInput,
-  isPrivateOrLoopbackHost,
-  mergeAllowFromEntries,
-  normalizeAccountId,
-  promptAccountId,
-  promptChannelAccessConfig,
-  splitSetupEntries,
-  type RuntimeEnv,
-  type WizardPrompter,
-} from "./runtime-api.js";
 import { moveSingleMatrixAccountConfigToNamedAccount } from "./setup-config.js";
 import type { CoreConfig, MatrixConfig } from "./types.js";
 
@@ -161,6 +157,7 @@ async function promptMatrixAllowFrom(params: {
     }
 
     if (pending.length > 0) {
+      const { resolveMatrixTargets } = await import("./resolve-targets.js");
       const results = await resolveMatrixTargets({
         cfg,
         accountId,
@@ -362,6 +359,7 @@ async function configureMatrixAccessPrompts(params: {
               resolvedIds.push(cleaned);
               continue;
             }
+            const { listMatrixDirectoryGroupsLive } = await import("./directory-live.js");
             const matches = await listMatrixDirectoryGroupsLive({
               cfg: next,
               accountId: params.accountId,
@@ -770,4 +768,8 @@ export const matrixOnboardingAdapter: ChannelSetupWizardAdapter = {
       matrix: { ...(cfg as CoreConfig).channels?.["matrix"], enabled: false },
     },
   }),
+};
+
+export const __testing = {
+  promptMatrixAllowFrom,
 };

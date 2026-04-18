@@ -107,6 +107,18 @@ describe("resolveBootstrapContextForRun", () => {
     expect(extra?.content).toBe("extra");
   });
 
+  it("keeps BOOTSTRAP.md available in shared injected context for non-attempt consumers", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "BOOTSTRAP.md"), "ritual", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "rules", "utf8");
+
+    const result = await resolveBootstrapContextForRun({ workspaceDir });
+
+    expect(result.bootstrapFiles.some((file) => file.name === "BOOTSTRAP.md")).toBe(true);
+    expect(result.contextFiles.some((file) => file.path.endsWith("BOOTSTRAP.md"))).toBe(true);
+    expect(result.contextFiles.some((file) => file.path.endsWith("AGENTS.md"))).toBe(true);
+  });
+
   it("uses heartbeat-only bootstrap files in lightweight heartbeat mode", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
     await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "check inbox", "utf8");

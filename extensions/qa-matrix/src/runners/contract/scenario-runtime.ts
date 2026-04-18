@@ -41,6 +41,7 @@ import {
 } from "./scenario-runtime-reaction.js";
 import {
   runHomeserverRestartResumeScenario,
+  runInitialCatchupThenIncrementalScenario,
   runPostRestartRoomContinueScenario,
   runRestartResumeScenario,
 } from "./scenario-runtime-restart.js";
@@ -229,6 +230,8 @@ export async function runMatrixQaScenario(
       return await runRestartResumeScenario(context);
     case "matrix-post-restart-room-continue":
       return await runPostRestartRoomContinueScenario(context);
+    case "matrix-initial-catchup-then-incremental":
+      return await runInitialCatchupThenIncrementalScenario(context);
     case "matrix-room-membership-loss":
       return await runMembershipLossScenario(context);
     case "matrix-homeserver-restart-resume":

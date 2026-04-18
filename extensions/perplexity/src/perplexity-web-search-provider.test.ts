@@ -1,6 +1,6 @@
 import { withEnv } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
-import { __testing } from "./perplexity-web-search-provider.js";
+import { __testing } from "./perplexity-web-search-provider.runtime.js";
 
 const openRouterApiKeyEnv = ["OPENROUTER_API", "KEY"].join("_");
 const perplexityApiKeyEnv = ["PERPLEXITY_API", "KEY"].join("_");

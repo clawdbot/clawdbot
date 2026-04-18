@@ -5,6 +5,7 @@ import {
   PROFILE_HTTP_REACHABILITY_TIMEOUT_MS,
 } from "./cdp-timeouts.js";
 import * as chromeModule from "./chrome.js";
+import { BrowserProfileUnavailableError } from "./errors.js";
 import { createBrowserRouteContext } from "./server-context.js";
 import { makeBrowserServerState, mockLaunchedChrome } from "./server-context.test-harness.js";
 
@@ -172,6 +173,41 @@ describe("browser server-context ensureBrowserAvailable", () => {
       state.resolved.remoteCdpHandshakeTimeoutMs,
       undefined,
     );
+    expect(launchOpenClawChrome).not.toHaveBeenCalled();
+    expect(stopOpenClawChrome).not.toHaveBeenCalled();
+  });
+
+  it("redacts credentials in remote CDP availability errors", async () => {
+    const { launchOpenClawChrome, stopOpenClawChrome } = setupEnsureBrowserAvailableHarness();
+    const isChromeReachable = vi.mocked(chromeModule.isChromeReachable);
+
+    const state = makeBrowserServerState({
+      profile: {
+        name: "remote",
+        cdpUrl: "https://user:pass@browserless.example.com?token=supersecret123",
+        cdpHost: "browserless.example.com",
+        cdpIsLoopback: false,
+        cdpPort: 443,
+        color: "#00AA00",
+        driver: "openclaw",
+        attachOnly: false,
+      },
+      resolvedOverrides: {
+        defaultProfile: "remote",
+        ssrfPolicy: {},
+      },
+    });
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const profile = ctx.forProfile("remote");
+
+    isChromeReachable.mockResolvedValue(false);
+
+    const promise = profile.ensureBrowserAvailable();
+    await expect(promise).rejects.toThrow(BrowserProfileUnavailableError);
+    await expect(promise).rejects.toThrow(
+      'Remote CDP for profile "remote" is not reachable at https://browserless.example.com/?token=***.',
+    );
+
     expect(launchOpenClawChrome).not.toHaveBeenCalled();
     expect(stopOpenClawChrome).not.toHaveBeenCalled();
   });

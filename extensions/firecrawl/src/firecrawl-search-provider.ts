@@ -1,27 +1,22 @@
-import { Type } from "@sinclair/typebox";
 import {
-  enablePluginInConfig,
-  getScopedCredentialValue,
-  resolveProviderWebSearchPluginConfig,
-  setScopedCredentialValue,
-  setProviderWebSearchPluginConfigValue,
+  createWebSearchProviderContractFields,
   type WebSearchProviderPlugin,
-} from "openclaw/plugin-sdk/provider-web-search";
-import { runFirecrawlSearch } from "./firecrawl-client.js";
+} from "openclaw/plugin-sdk/provider-web-search-contract";
 
-const GenericFirecrawlSearchSchema = Type.Object(
-  {
-    query: Type.String({ description: "Search query string." }),
-    count: Type.Optional(
-      Type.Number({
-        description: "Number of results to return (1-10).",
-        minimum: 1,
-        maximum: 10,
-      }),
-    ),
+const FIRECRAWL_CREDENTIAL_PATH = "plugins.entries.firecrawl.config.webSearch.apiKey";
+const GenericFirecrawlSearchSchema = {
+  type: "object",
+  properties: {
+    query: { type: "string", description: "Search query string." },
+    count: {
+      type: "number",
+      description: "Number of results to return (1-10).",
+      minimum: 1,
+      maximum: 10,
+    },
   },
-  { additionalProperties: false },
-);
+  additionalProperties: false,
+} satisfies Record<string, unknown>;
 
 export function createFirecrawlWebSearchProvider(): WebSearchProviderPlugin {
   return {
@@ -35,27 +30,25 @@ export function createFirecrawlWebSearchProvider(): WebSearchProviderPlugin {
     signupUrl: "https://www.firecrawl.dev/",
     docsUrl: "https://docs.openclaw.ai/tools/firecrawl",
     autoDetectOrder: 60,
-    credentialPath: "plugins.entries.firecrawl.config.webSearch.apiKey",
-    inactiveSecretPaths: ["plugins.entries.firecrawl.config.webSearch.apiKey"],
-    getCredentialValue: (searchConfig) => getScopedCredentialValue(searchConfig, "firecrawl"),
-    setCredentialValue: (searchConfigTarget, value) =>
-      setScopedCredentialValue(searchConfigTarget, "firecrawl", value),
-    getConfiguredCredentialValue: (config) =>
-      resolveProviderWebSearchPluginConfig(config, "firecrawl")?.apiKey,
-    setConfiguredCredentialValue: (configTarget, value) => {
-      setProviderWebSearchPluginConfigValue(configTarget, "firecrawl", "apiKey", value);
-    },
-    applySelectionConfig: (config) => enablePluginInConfig(config, "firecrawl").config,
+    credentialPath: FIRECRAWL_CREDENTIAL_PATH,
+    ...createWebSearchProviderContractFields({
+      credentialPath: FIRECRAWL_CREDENTIAL_PATH,
+      searchCredential: { type: "scoped", scopeId: "firecrawl" },
+      configuredCredential: { pluginId: "firecrawl" },
+      selectionPluginId: "firecrawl",
+    }),
     createTool: (ctx) => ({
       description:
         "Search the web using Firecrawl. Returns structured results with snippets from Firecrawl Search. Use firecrawl_search for Firecrawl-specific knobs like sources or categories.",
       parameters: GenericFirecrawlSearchSchema,
-      execute: async (args) =>
-        await runFirecrawlSearch({
+      execute: async (args) => {
+        const { runFirecrawlSearch } = await import("./firecrawl-client.js");
+        return await runFirecrawlSearch({
           cfg: ctx.config,
           query: typeof args.query === "string" ? args.query : "",
           count: typeof args.count === "number" ? args.count : undefined,
-        }),
+        });
+      },
     }),
   };
 }

@@ -10,7 +10,7 @@
 
 import { readFileSync, existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { pluginSdkSubpaths } from "./lib/plugin-sdk-entries.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -42,6 +42,16 @@ const exportedNames = exportMatch[1]
 const exportSet = new Set(exportedNames);
 
 const requiredRuntimeShimEntries = ["compat.js", "root-alias.cjs"];
+const requiredSubpathExports = {
+  "secret-input-runtime": [
+    "coerceSecretRef",
+    "hasConfiguredSecretInput",
+    "isSecretRef",
+    "normalizeResolvedSecretInputString",
+    "normalizeSecretInputString",
+    "resolveSecretInputString",
+  ],
+};
 
 // The root plugin-sdk entry intentionally stays tiny. Keep this list aligned
 // with src/plugin-sdk/index.ts runtime exports.
@@ -78,6 +88,28 @@ for (const entry of requiredRuntimeShimEntries) {
   if (!existsSync(shimPath)) {
     console.error(`MISSING RUNTIME SHIM: dist/plugin-sdk/${entry}`);
     missing += 1;
+  }
+}
+
+for (const [entry, names] of Object.entries(requiredSubpathExports)) {
+  const jsPath = resolve(__dirname, "..", "dist", "plugin-sdk", `${entry}.js`);
+  if (!existsSync(jsPath)) {
+    continue;
+  }
+  let runtime;
+  try {
+    runtime = await import(pathToFileURL(jsPath).href);
+  } catch (err) {
+    console.error(`BROKEN SUBPATH JS: dist/plugin-sdk/${entry}.js`);
+    console.error(err instanceof Error ? err.message : String(err));
+    missing += 1;
+    continue;
+  }
+  for (const name of names) {
+    if (typeof runtime[name] !== "function") {
+      console.error(`MISSING SUBPATH EXPORT: dist/plugin-sdk/${entry}.js#${name}`);
+      missing += 1;
+    }
   }
 }
 

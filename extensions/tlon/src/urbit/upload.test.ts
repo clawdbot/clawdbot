@@ -1,9 +1,9 @@
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { fetchWithSsrFGuard } from "../../runtime-api.js";
 import { uploadFile } from "../tlon-api.js";
 import { uploadImageFromUrl } from "./upload.js";
 
-vi.mock("../../runtime-api.js", () => ({
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: vi.fn(),
 }));
 

@@ -92,10 +92,14 @@ afterEach(() => {
 
 const envVar = (...parts: string[]) => parts.join("_");
 
+function createUsableOAuthExpiry(): number {
+  return Date.now() + 30 * 60 * 1000;
+}
+
 const oauthFixture = {
   access: "access-token",
   refresh: "refresh-token",
-  expires: Date.now() + 60_000,
+  expires: createUsableOAuthExpiry(),
   accountId: "acct_123",
 };
 

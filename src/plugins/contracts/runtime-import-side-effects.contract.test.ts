@@ -64,13 +64,6 @@ describe("runtime import side-effect contracts", () => {
     getActivePluginChannelRegistryVersion.mockClear().mockReturnValue(1);
   });
 
-  it("keeps config/markdown-tables cold on import", async () => {
-    mockChannelRegistry();
-    await import("../../config/markdown-tables.js");
-
-    expectNoChannelRegistryDuringImport("src/config/markdown-tables.ts");
-  });
-
   it("keeps markdown table defaults lazy and memoized after import", async () => {
     mockChannelRegistry();
     const markdownTables = await import("../../config/markdown-tables.js");
@@ -85,52 +78,26 @@ describe("runtime import side-effect contracts", () => {
     expect(listChannelPlugins).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps plugins/runtime/runtime-channel cold on import", async () => {
+  it("keeps hot runtime imports cold", async () => {
     mockChannelRegistry();
-    await import("../runtime/runtime-channel.js");
-
-    expectNoChannelRegistryDuringImport("src/plugins/runtime/runtime-channel.ts");
-  });
-
-  it("keeps plugin-sdk/approval-handler-adapter-runtime cold on import", async () => {
-    mockChannelRegistry();
-    await import("../../plugin-sdk/approval-handler-adapter-runtime.js");
-
-    expectNoChannelRegistryDuringImport("src/plugin-sdk/approval-handler-adapter-runtime.ts");
-  });
-
-  it("keeps plugin-sdk/approval-gateway-runtime cold on import", async () => {
-    mockChannelRegistry();
-    await import("../../plugin-sdk/approval-gateway-runtime.js");
-
-    expectNoChannelRegistryDuringImport("src/plugin-sdk/approval-gateway-runtime.ts");
-  });
-
-  it("keeps plugins/runtime/runtime-system cold on import", async () => {
-    mockChannelRegistry();
-    await import("../runtime/runtime-system.js");
-
-    expectNoChannelRegistryDuringImport("src/plugins/runtime/runtime-system.ts");
-  });
-
-  it("keeps web-search/runtime cold on import", async () => {
-    mockChannelRegistry();
-    await import("../../web-search/runtime.js");
-
-    expectNoChannelRegistryDuringImport("src/web-search/runtime.ts");
-  });
-
-  it("keeps web-fetch/runtime cold on import", async () => {
-    mockChannelRegistry();
-    await import("../../web-fetch/runtime.js");
-
-    expectNoChannelRegistryDuringImport("src/web-fetch/runtime.ts");
-  });
-
-  it("keeps plugins/runtime/index cold on import", async () => {
-    mockChannelRegistry();
-    await import("../runtime/index.js");
-
-    expectNoChannelRegistryDuringImport("src/plugins/runtime/index.ts");
+    for (const [moduleId, importModule] of [
+      ["src/config/markdown-tables.ts", () => import("../../config/markdown-tables.js")],
+      ["src/plugins/runtime/runtime-channel.ts", () => import("../runtime/runtime-channel.js")],
+      [
+        "src/plugin-sdk/approval-handler-adapter-runtime.ts",
+        () => import("../../plugin-sdk/approval-handler-adapter-runtime.js"),
+      ],
+      [
+        "src/plugin-sdk/approval-gateway-runtime.ts",
+        () => import("../../plugin-sdk/approval-gateway-runtime.js"),
+      ],
+      ["src/plugins/runtime/runtime-system.ts", () => import("../runtime/runtime-system.js")],
+      ["src/web-search/runtime.ts", () => import("../../web-search/runtime.js")],
+      ["src/web-fetch/runtime.ts", () => import("../../web-fetch/runtime.js")],
+      ["src/plugins/runtime/index.ts", () => import("../runtime/index.js")],
+    ] as const) {
+      await importModule();
+      expectNoChannelRegistryDuringImport(moduleId);
+    }
   });
 });

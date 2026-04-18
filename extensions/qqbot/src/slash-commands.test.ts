@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getFrameworkCommands,
   matchSlashCommand,
@@ -27,6 +28,18 @@ function buildCtx(overrides: Partial<SlashCommandContext> = {}): SlashCommandCon
     ...overrides,
   };
 }
+
+function stubEmptyLogFilesystem() {
+  vi.spyOn(fs, "existsSync").mockReturnValue(false);
+  vi.spyOn(fs, "readdirSync").mockReturnValue([] as never);
+  vi.spyOn(fs, "statSync").mockImplementation(() => {
+    throw new Error("missing");
+  });
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("slash command authorization", () => {
   // ---- /bot-logs (moved to framework registerCommand) ----
@@ -151,21 +164,17 @@ describe("/bot-logs framework command hardening", () => {
   });
 
   it("allows /bot-logs when allowFrom contains numeric sender ids", async () => {
+    stubEmptyLogFilesystem();
     const handler = getBotLogsHandler();
     const accountConfig = { allowFrom: [12345] } as unknown as SlashCommandContext["accountConfig"];
     const result = await handler(buildCtx({ accountConfig }));
-    expect(result).not.toBeNull();
-    expect(result).not.toBe(
-      "⛔ 权限不足：请先在 channels.qqbot.allowFrom（或对应账号 allowFrom）中配置明确的发送者列表后再使用 /bot-logs。",
-    );
+    expect(result).toContain("未找到日志文件");
   });
 
   it("allows /bot-logs execution when allowFrom is explicit", async () => {
+    stubEmptyLogFilesystem();
     const handler = getBotLogsHandler();
     const result = await handler(buildCtx({ accountConfig: { allowFrom: ["qqbot:user-1"] } }));
-    expect(result).not.toBeNull();
-    expect(result).not.toBe(
-      "⛔ 权限不足：请先在 channels.qqbot.allowFrom（或对应账号 allowFrom）中配置明确的发送者列表后再使用 /bot-logs。",
-    );
+    expect(result).toContain("未找到日志文件");
   });
 });

@@ -27,22 +27,28 @@ export const offsetMocks: {
   deleteTelegramUpdateOffset: vi.fn().mockResolvedValue(undefined) as unknown as MockFn,
 };
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  return {
-    ...actual,
-    readConfigFileSnapshot: configMocks.readConfigFileSnapshot,
-    writeConfigFile: configMocks.writeConfigFile,
-    replaceConfigFile: configMocks.replaceConfigFile,
-  };
-});
+export const secretMocks = {
+  resolveCommandConfigWithSecrets: vi.fn(async ({ config }: { config: unknown }) => ({
+    resolvedConfig: config,
+    effectiveConfig: config,
+    diagnostics: [],
+  })) as unknown as MockFn,
+};
 
-vi.mock(buildBundledPluginModuleId("telegram", "update-offset-runtime-api.js"), async () => {
-  const actual: Record<string, unknown> = await vi.importActual(
-    buildBundledPluginModuleId("telegram", "update-offset-runtime-api.js"),
-  );
-  return {
-    ...actual,
-    deleteTelegramUpdateOffset: offsetMocks.deleteTelegramUpdateOffset,
-  };
-});
+vi.mock("../config/config.js", () => ({
+  readConfigFileSnapshot: configMocks.readConfigFileSnapshot,
+  writeConfigFile: configMocks.writeConfigFile,
+  replaceConfigFile: configMocks.replaceConfigFile,
+}));
+
+vi.mock("../cli/command-config-resolution.js", () => ({
+  resolveCommandConfigWithSecrets: secretMocks.resolveCommandConfigWithSecrets,
+}));
+
+vi.mock("../cli/command-secret-targets.js", () => ({
+  getChannelsCommandSecretTargetIds: () => new Set<string>(),
+}));
+
+vi.mock(buildBundledPluginModuleId("telegram", "update-offset-runtime-api.js"), () => ({
+  deleteTelegramUpdateOffset: offsetMocks.deleteTelegramUpdateOffset,
+}));

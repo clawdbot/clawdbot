@@ -11,6 +11,194 @@ import {
 type TerminalNote = (message: string, title?: string) => void;
 
 const terminalNoteMock = vi.hoisted(() => vi.fn<TerminalNote>());
+const legacyConfigMigrationForTest = vi.hoisted(() => {
+  function asRecord(value: unknown): Record<string, unknown> | null {
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
+  }
+
+  function ensureRecord(parent: Record<string, unknown>, key: string): Record<string, unknown> {
+    const current = asRecord(parent[key]);
+    if (current) {
+      return current;
+    }
+    const next: Record<string, unknown> = {};
+    parent[key] = next;
+    return next;
+  }
+
+  function migrateThreadBinding(value: unknown, changes: string[], pathLabel: string): void {
+    const record = asRecord(value);
+    const bindings = asRecord(record?.threadBindings);
+    if (!bindings || !("ttlHours" in bindings)) {
+      return;
+    }
+    if (!("idleHours" in bindings)) {
+      bindings.idleHours = bindings.ttlHours;
+    }
+    delete bindings.ttlHours;
+    changes.push(`Moved ${pathLabel}.threadBindings.ttlHours to idleHours.`);
+  }
+
+  function migrateStreamingAlias(channel: Record<string, unknown>, channelId: string): boolean {
+    if (
+      !("streamMode" in channel) &&
+      typeof channel.streaming !== "boolean" &&
+      typeof channel.streaming !== "string"
+    ) {
+      return false;
+    }
+    if (channelId === "googlechat") {
+      delete channel.streamMode;
+      return true;
+    }
+    const streaming = asRecord(channel.streaming) ?? {};
+    if (!("mode" in streaming)) {
+      streaming.mode =
+        channel.streamMode === "block"
+          ? "partial"
+          : channel.streaming === false
+            ? "off"
+            : "partial";
+    }
+    delete channel.streamMode;
+    channel.streaming = streaming;
+    return true;
+  }
+
+  function migrateNestedAllowAliases(channel: Record<string, unknown>, channelId: string): boolean {
+    let changed = false;
+    if (channelId === "slack") {
+      for (const room of Object.values(asRecord(channel.channels) ?? {})) {
+        const roomRecord = asRecord(room);
+        if (roomRecord && "allow" in roomRecord) {
+          roomRecord.enabled = roomRecord.allow;
+          delete roomRecord.allow;
+          changed = true;
+        }
+      }
+    }
+    if (channelId === "googlechat") {
+      for (const group of Object.values(asRecord(channel.groups) ?? {})) {
+        const groupRecord = asRecord(group);
+        if (groupRecord && "allow" in groupRecord) {
+          groupRecord.enabled = groupRecord.allow;
+          delete groupRecord.allow;
+          changed = true;
+        }
+      }
+    }
+    if (channelId === "discord") {
+      for (const guild of Object.values(asRecord(channel.guilds) ?? {})) {
+        for (const room of Object.values(asRecord(asRecord(guild)?.channels) ?? {})) {
+          const roomRecord = asRecord(room);
+          if (roomRecord && "allow" in roomRecord) {
+            roomRecord.enabled = roomRecord.allow;
+            delete roomRecord.allow;
+            changed = true;
+          }
+        }
+      }
+    }
+    return changed;
+  }
+
+  function migrate(raw: unknown): { next: Record<string, unknown> | null; changes: string[] } {
+    const root = asRecord(raw);
+    if (!root) {
+      return { next: null, changes: [] };
+    }
+    const next = structuredClone(root);
+    const changes: string[] = [];
+
+    const heartbeat = asRecord(next.heartbeat);
+    if (heartbeat) {
+      const agents = ensureRecord(next, "agents");
+      const agentDefaults = ensureRecord(agents, "defaults");
+      const channels = ensureRecord(next, "channels");
+      const channelDefaults = ensureRecord(channels, "defaults");
+      const agentHeartbeat: Record<string, unknown> = {};
+      const channelHeartbeat: Record<string, unknown> = {};
+      for (const key of ["model", "every"]) {
+        if (key in heartbeat) {
+          agentHeartbeat[key] = heartbeat[key];
+        }
+      }
+      for (const key of ["showOk", "showAlerts", "useIndicator"]) {
+        if (key in heartbeat) {
+          channelHeartbeat[key] = heartbeat[key];
+        }
+      }
+      if (Object.keys(agentHeartbeat).length > 0) {
+        agentDefaults.heartbeat = {
+          ...asRecord(agentDefaults.heartbeat),
+          ...agentHeartbeat,
+        };
+      }
+      if (Object.keys(channelHeartbeat).length > 0) {
+        channelDefaults.heartbeat = {
+          ...asRecord(channelDefaults.heartbeat),
+          ...channelHeartbeat,
+        };
+      }
+      delete next.heartbeat;
+      changes.push("Moved heartbeat to agents.defaults.heartbeat and channels.defaults.heartbeat.");
+    }
+
+    const gateway = asRecord(next.gateway);
+    if (gateway?.bind === "0.0.0.0") {
+      gateway.bind = "lan";
+      changes.push("Normalized gateway.bind host alias.");
+    } else if (gateway?.bind === "localhost" || gateway?.bind === "127.0.0.1") {
+      gateway.bind = "loopback";
+      changes.push("Normalized gateway.bind host alias.");
+    }
+
+    migrateThreadBinding(next.session, changes, "session");
+    const channels = asRecord(next.channels);
+    for (const [channelId, channelRaw] of Object.entries(channels ?? {})) {
+      if (channelId === "defaults") {
+        continue;
+      }
+      const channel = asRecord(channelRaw);
+      if (!channel) {
+        continue;
+      }
+      migrateThreadBinding(channel, changes, `channels.${channelId}`);
+      if (migrateStreamingAlias(channel, channelId)) {
+        changes.push(`Normalized channels.${channelId} streaming aliases.`);
+      }
+      if (migrateNestedAllowAliases(channel, channelId)) {
+        changes.push(`Normalized channels.${channelId} nested allow aliases.`);
+      }
+      for (const [accountId, accountRaw] of Object.entries(asRecord(channel.accounts) ?? {})) {
+        const account = asRecord(accountRaw);
+        migrateThreadBinding(account, changes, `channels.${channelId}.accounts.${accountId}`);
+        if (account && migrateStreamingAlias(account, channelId)) {
+          changes.push(`Normalized channels.${channelId}.accounts.${accountId} streaming aliases.`);
+        }
+      }
+    }
+
+    const sandbox = asRecord(asRecord(asRecord(next.agents)?.defaults)?.sandbox);
+    if (sandbox && "perSession" in sandbox) {
+      sandbox.scope = sandbox.perSession === true ? "session" : "workspace";
+      delete sandbox.perSession;
+      changes.push("Moved agents.defaults.sandbox.perSession to scope.");
+    }
+
+    return changes.length > 0 ? { next, changes } : { next: null, changes: [] };
+  }
+
+  return {
+    migrate,
+    migrateLegacyConfig: (raw: unknown) => {
+      const { next, changes } = migrate(raw);
+      return { config: next, changes };
+    },
+  };
+});
 
 vi.mock("../terminal/note.js", () => ({
   note: terminalNoteMock,
@@ -58,6 +246,202 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
 vi.mock("../config/validation.js", () => ({
   validateConfigObjectWithPlugins: vi.fn((config: unknown) => ({ ok: true, config })),
 }));
+
+vi.mock("../config/legacy.js", () => {
+  type LegacyRule = {
+    path: string[];
+    message: string;
+    match?: (value: unknown, root: Record<string, unknown>) => boolean;
+    requireSourceLiteral?: boolean;
+  };
+
+  function asRecord(value: unknown): Record<string, unknown> | null {
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
+  }
+
+  function getPathValue(root: Record<string, unknown>, pathParts: readonly string[]): unknown {
+    let cursor: unknown = root;
+    for (const part of pathParts) {
+      const record = asRecord(cursor);
+      if (!record) {
+        return undefined;
+      }
+      cursor = record[part];
+    }
+    return cursor;
+  }
+
+  function addIssue(
+    issues: Array<{ path: string; message: string }>,
+    pathParts: readonly string[],
+    message: string,
+  ) {
+    issues.push({ path: pathParts.join("."), message });
+  }
+
+  function hasLegacyStreamingAlias(channel: Record<string, unknown>): boolean {
+    return (
+      "streamMode" in channel ||
+      "chunkMode" in channel ||
+      "blockStreaming" in channel ||
+      "draftChunk" in channel ||
+      "blockStreamingCoalesce" in channel ||
+      "nativeStreaming" in channel ||
+      typeof channel.streaming === "boolean" ||
+      typeof channel.streaming === "string"
+    );
+  }
+
+  return {
+    findLegacyConfigIssues: (raw: unknown, sourceRaw?: unknown, extraRules: LegacyRule[] = []) => {
+      const root = asRecord(raw);
+      if (!root) {
+        return [];
+      }
+      const sourceRoot = asRecord(sourceRaw) ?? root;
+      const issues: Array<{ path: string; message: string }> = [];
+
+      if ("heartbeat" in root) {
+        addIssue(
+          issues,
+          ["heartbeat"],
+          'heartbeat is legacy; use agents.defaults.heartbeat and channels.defaults.heartbeat. Run "openclaw doctor --fix".',
+        );
+      }
+      if ("memorySearch" in root) {
+        addIssue(
+          issues,
+          ["memorySearch"],
+          'memorySearch is legacy; use agents.defaults.memorySearch. Run "openclaw doctor --fix".',
+        );
+      }
+      const gateway = asRecord(root.gateway);
+      if (gateway && "bind" in gateway) {
+        addIssue(
+          issues,
+          ["gateway", "bind"],
+          'gateway.bind host aliases are legacy; use the canonical bind mode. Run "openclaw doctor --fix".',
+        );
+      }
+      const sessionThreadBindings = asRecord(asRecord(root.session)?.threadBindings);
+      if (sessionThreadBindings && "ttlHours" in sessionThreadBindings) {
+        addIssue(
+          issues,
+          ["session", "threadBindings", "ttlHours"],
+          'session.threadBindings.ttlHours is legacy; use session.threadBindings.idleHours. Run "openclaw doctor --fix".',
+        );
+      }
+      const xSearch = asRecord(asRecord(asRecord(root.tools)?.web)?.x_search);
+      if (xSearch && "apiKey" in xSearch) {
+        addIssue(
+          issues,
+          ["tools", "web", "x_search", "apiKey"],
+          'tools.web.x_search.apiKey is legacy; use plugins.entries.xai.config.webSearch.apiKey. Run "openclaw doctor --fix".',
+        );
+      }
+      const sandbox = asRecord(asRecord(asRecord(root.agents)?.defaults)?.sandbox);
+      if (sandbox && "perSession" in sandbox) {
+        addIssue(
+          issues,
+          ["agents", "defaults", "sandbox"],
+          'agents.defaults.sandbox.perSession is legacy; use agents.defaults.sandbox.scope. Run "openclaw doctor --fix".',
+        );
+      }
+
+      const channels = asRecord(root.channels);
+      for (const [channelId, channelRaw] of Object.entries(channels ?? {})) {
+        if (channelId === "defaults") {
+          continue;
+        }
+        const channel = asRecord(channelRaw);
+        if (!channel) {
+          continue;
+        }
+        if (hasLegacyStreamingAlias(channel)) {
+          addIssue(
+            issues,
+            ["channels", channelId],
+            channelId === "googlechat"
+              ? `channels.${channelId}.streamMode is legacy and no longer used. Run "openclaw doctor --fix".`
+              : `channels.${channelId}.streamMode, channels.${channelId}.streaming aliases are legacy. Run "openclaw doctor --fix".`,
+          );
+        }
+        const threadBindings = asRecord(channel.threadBindings);
+        if (threadBindings && "ttlHours" in threadBindings) {
+          addIssue(
+            issues,
+            ["channels", channelId, "threadBindings", "ttlHours"],
+            'channels.<id>.threadBindings.ttlHours is legacy; use channels.<id>.threadBindings.idleHours. Run "openclaw doctor --fix".',
+          );
+        }
+        if (channelId === "slack") {
+          for (const roomRaw of Object.values(asRecord(channel.channels) ?? {})) {
+            if ("allow" in (asRecord(roomRaw) ?? {})) {
+              addIssue(
+                issues,
+                ["channels", "slack"],
+                'channels.slack.channels.<id>.allow is legacy; use enabled. Run "openclaw doctor --fix".',
+              );
+            }
+          }
+        }
+        if (channelId === "googlechat") {
+          for (const spaceRaw of Object.values(asRecord(channel.groups) ?? {})) {
+            if ("allow" in (asRecord(spaceRaw) ?? {})) {
+              addIssue(
+                issues,
+                ["channels", "googlechat"],
+                'channels.googlechat.groups.<id>.allow is legacy; use enabled. Run "openclaw doctor --fix".',
+              );
+            }
+          }
+        }
+        if (channelId === "discord") {
+          for (const guildRaw of Object.values(asRecord(channel.guilds) ?? {})) {
+            const guild = asRecord(guildRaw);
+            for (const roomRaw of Object.values(asRecord(guild?.channels) ?? {})) {
+              if ("allow" in (asRecord(roomRaw) ?? {})) {
+                addIssue(
+                  issues,
+                  ["channels", "discord"],
+                  'channels.discord.guilds.<id>.channels.<id>.allow is legacy; use enabled. Run "openclaw doctor --fix".',
+                );
+              }
+            }
+          }
+        }
+        for (const [accountId, accountRaw] of Object.entries(asRecord(channel.accounts) ?? {})) {
+          const account = asRecord(accountRaw);
+          const accountThreadBindings = asRecord(account?.threadBindings);
+          if (accountThreadBindings && "ttlHours" in accountThreadBindings) {
+            addIssue(
+              issues,
+              ["channels", channelId, "accounts", accountId, "threadBindings", "ttlHours"],
+              'channels.<id>.threadBindings.ttlHours is legacy; use channels.<id>.threadBindings.idleHours. Run "openclaw doctor --fix".',
+            );
+          }
+        }
+      }
+
+      for (const rule of extraRules) {
+        const value = getPathValue(root, rule.path);
+        if (value === undefined || (rule.match && !rule.match(value, root))) {
+          continue;
+        }
+        if (rule.requireSourceLiteral) {
+          const sourceValue = getPathValue(sourceRoot, rule.path);
+          if (sourceValue === undefined || (rule.match && !rule.match(sourceValue, sourceRoot))) {
+            continue;
+          }
+        }
+        addIssue(issues, rule.path, rule.message);
+      }
+      return issues;
+    },
+  };
+});
 
 vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
   getBootstrapChannelPlugin: vi.fn((channelId: string) => {
@@ -195,6 +579,32 @@ vi.mock("./doctor/shared/channel-legacy-config-migrate.js", () => ({
     next: cfg,
     changes: [],
   }),
+}));
+
+vi.mock("./doctor/shared/legacy-config-migrate.js", () => ({
+  migrateLegacyConfig: legacyConfigMigrationForTest.migrateLegacyConfig,
+}));
+
+vi.mock("./doctor/shared/bundled-plugin-load-paths.js", () => ({
+  maybeRepairBundledPluginLoadPaths: vi.fn((cfg: Record<string, unknown>) => ({
+    config: cfg,
+    changes: [],
+  })),
+}));
+
+vi.mock("./doctor/shared/exec-safe-bins.js", () => ({
+  maybeRepairExecSafeBinProfiles: vi.fn((cfg: Record<string, unknown>) => ({
+    config: cfg,
+    changes: [],
+    warnings: [],
+  })),
+}));
+
+vi.mock("./doctor/shared/stale-plugin-config.js", () => ({
+  maybeRepairStalePluginConfig: vi.fn((cfg: Record<string, unknown>) => ({
+    config: cfg,
+    changes: [],
+  })),
 }));
 
 vi.mock("./doctor/channel-capabilities.js", () => {
@@ -698,10 +1108,6 @@ vi.mock("./doctor-config-preflight.js", async () => {
     await import("../plugins/doctor-contract-registry.js");
   const { findLegacyConfigIssues }: typeof import("../config/legacy.js") =
     await import("../config/legacy.js");
-  const {
-    applyRuntimeLegacyConfigMigrations,
-  }: typeof import("./doctor/shared/runtime-compat-api.js") =
-    await import("./doctor/shared/runtime-compat-api.js");
 
   function resolveConfigPath() {
     const stateDir =
@@ -807,7 +1213,7 @@ vi.mock("./doctor-config-preflight.js", async () => {
           pluginIds: collectRelevantDoctorPluginIds(parsed),
         }),
       );
-      const compat = applyRuntimeLegacyConfigMigrations(parsed);
+      const compat = legacyConfigMigrationForTest.migrate(parsed);
       const effectiveConfig = normalizeDiscordStreamingCompat(compat.next ?? parsed);
       return {
         snapshot: {
@@ -894,19 +1300,6 @@ vi.mock("./doctor-state-migrations.js", () => ({
 function resetTerminalNoteMock() {
   terminalNoteMock.mockClear();
   return terminalNoteMock;
-}
-
-function expectGoogleChatDmAllowFromRepaired(cfg: unknown) {
-  const typed = cfg as {
-    channels: {
-      googlechat: {
-        dm: { allowFrom: string[] };
-        allowFrom?: string[];
-      };
-    };
-  };
-  expect(typed.channels.googlechat.dm.allowFrom).toEqual(["*"]);
-  expect(typed.channels.googlechat.allowFrom).toBeUndefined();
 }
 
 async function collectDoctorWarnings(config: Record<string, unknown>): Promise<string[]> {
@@ -1158,29 +1551,13 @@ describe("doctor config flow", () => {
     ).toBe(true);
   });
 
-  it("drops unknown keys on repair", async () => {
+  it("repairs generic legacy config surfaces in one pass", async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,
       config: {
         bridge: { bind: "auto" },
         gateway: { auth: { mode: "token", token: "ok", extra: true } },
         agents: { list: [{ id: "pi" }] },
-      },
-      run: loadAndMaybeMigrateDoctorConfig,
-    });
-
-    const cfg = result.cfg as Record<string, unknown>;
-    expect(cfg.bridge).toBeUndefined();
-    expect((cfg.gateway as Record<string, unknown>)?.auth).toEqual({
-      mode: "token",
-      token: "ok",
-    });
-  });
-
-  it("migrates legacy browser extension profiles to existing-session on repair", async () => {
-    const result = await runDoctorConfigWithInput({
-      repair: true,
-      config: {
         browser: {
           relayBindHost: "0.0.0.0",
           profiles: {
@@ -1190,21 +1567,6 @@ describe("doctor config flow", () => {
             },
           },
         },
-      },
-      run: loadAndMaybeMigrateDoctorConfig,
-    });
-
-    const browser = (result.cfg as { browser?: Record<string, unknown> }).browser ?? {};
-    expect(browser.relayBindHost).toBeUndefined();
-    expect(
-      ((browser.profiles as Record<string, { driver?: string }>)?.chromeLive ?? {}).driver,
-    ).toBe("existing-session");
-  });
-
-  it("repairs restrictive plugins.allow when browser is referenced via tools.alsoAllow", async () => {
-    const result = await runDoctorConfigWithInput({
-      repair: true,
-      config: {
         tools: {
           alsoAllow: ["browser"],
         },
@@ -1215,32 +1577,19 @@ describe("doctor config flow", () => {
       run: loadAndMaybeMigrateDoctorConfig,
     });
 
-    expect(result.cfg.plugins?.allow).toEqual(["telegram", "browser"]);
-    expect(result.cfg.plugins?.entries?.browser?.enabled).toBe(true);
-  });
-
-  it("notes legacy browser extension migration changes", async () => {
-    const result = await runDoctorConfigWithInput({
-      repair: true,
-      config: {
-        browser: {
-          relayBindHost: "127.0.0.1",
-          profiles: {
-            chromeLive: {
-              driver: "extension",
-              color: "#00AA00",
-            },
-          },
-        },
-      },
-      run: loadAndMaybeMigrateDoctorConfig,
+    const cfg = result.cfg as Record<string, unknown>;
+    expect(cfg.bridge).toBeUndefined();
+    expect((cfg.gateway as Record<string, unknown>)?.auth).toEqual({
+      mode: "token",
+      token: "ok",
     });
-
     const browser = (result.cfg as { browser?: Record<string, unknown> }).browser ?? {};
     expect(browser.relayBindHost).toBeUndefined();
     expect(
       ((browser.profiles as Record<string, { driver?: string }>)?.chromeLive ?? {}).driver,
     ).toBe("existing-session");
+    expect(result.cfg.plugins?.allow).toEqual(["telegram", "browser"]);
+    expect(result.cfg.plugins?.entries?.browser?.enabled).toBe(true);
   });
 
   it("preserves discord streaming intent while stripping unsupported keys on repair", async () => {
@@ -1772,7 +2121,7 @@ describe("doctor config flow", () => {
     expect(cfg.channels.discord.accounts.default.allowFrom).toEqual(["123"]);
   });
 
-  it('adds allowFrom ["*"] when dmPolicy="open" and allowFrom is missing on repair', async () => {
+  it('repairs open dmPolicy allowFrom variants with ["*"] in one pass', async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,
       config: {
@@ -1782,104 +2131,12 @@ describe("doctor config flow", () => {
             dmPolicy: "open",
             groupPolicy: "open",
           },
-        },
-      },
-      run: loadAndMaybeMigrateDoctorConfig,
-    });
-
-    const cfg = result.cfg as unknown as {
-      channels: { discord: { allowFrom: string[]; dmPolicy: string } };
-    };
-    expect(cfg.channels.discord.allowFrom).toEqual(["*"]);
-    expect(cfg.channels.discord.dmPolicy).toBe("open");
-  });
-
-  it("adds * to existing allowFrom array when dmPolicy is open on repair", async () => {
-    const result = await runDoctorConfigWithInput({
-      repair: true,
-      config: {
-        channels: {
-          slack: {
-            botToken: "xoxb-test",
-            appToken: "xapp-test",
-            dmPolicy: "open",
-            allowFrom: ["U123"],
-          },
-        },
-      },
-      run: loadAndMaybeMigrateDoctorConfig,
-    });
-
-    const cfg = result.cfg as unknown as {
-      channels: { slack: { allowFrom: string[] } };
-    };
-    expect(cfg.channels.slack.allowFrom).toContain("*");
-    expect(cfg.channels.slack.allowFrom).toContain("U123");
-  });
-
-  it("repairs nested dm.allowFrom when top-level allowFrom is absent on repair", async () => {
-    const result = await runDoctorConfigWithInput({
-      repair: true,
-      config: {
-        channels: {
-          discord: {
-            token: "test-token",
-            dmPolicy: "open",
-            dm: { allowFrom: ["123"] },
-          },
-        },
-      },
-      run: loadAndMaybeMigrateDoctorConfig,
-    });
-
-    const cfg = result.cfg as unknown as {
-      channels: { discord: { dm: { allowFrom: string[] }; allowFrom?: string[] } };
-    };
-    // Top-level allowFrom is canonical for Discord; nested dm.allowFrom is
-    // preserved when it already carried sender ids.
-    if (cfg.channels.discord.allowFrom) {
-      expect(cfg.channels.discord.allowFrom).toContain("*");
-      expect(cfg.channels.discord.dm?.allowFrom).toContain("123");
-    } else if (cfg.channels.discord.dm) {
-      expect(cfg.channels.discord.dm.allowFrom).toContain("*");
-      expect(cfg.channels.discord.dm.allowFrom).toContain("123");
-    } else {
-      expect.unreachable("expected Discord repair to preserve a DM allowFrom location");
-    }
-  });
-
-  it("skips repair when allowFrom already includes *", async () => {
-    const result = await runDoctorConfigWithInput({
-      repair: true,
-      config: {
-        channels: {
-          discord: {
-            token: "test-token",
-            dmPolicy: "open",
-            allowFrom: ["*"],
-          },
-        },
-      },
-      run: loadAndMaybeMigrateDoctorConfig,
-    });
-
-    const cfg = result.cfg as unknown as {
-      channels: { discord: { allowFrom: string[] } };
-    };
-    expect(cfg.channels.discord.allowFrom).toEqual(["*"]);
-  });
-
-  it("repairs per-account dmPolicy open without allowFrom on repair", async () => {
-    const result = await runDoctorConfigWithInput({
-      repair: true,
-      config: {
-        channels: {
-          discord: {
-            token: "test-token",
+          googlechat: {
             accounts: {
               work: {
-                token: "test-token-2",
-                dmPolicy: "open",
+                dm: {
+                  policy: "open",
+                },
               },
             },
           },
@@ -1890,10 +2147,24 @@ describe("doctor config flow", () => {
 
     const cfg = result.cfg as unknown as {
       channels: {
-        discord: { accounts: { work: { allowFrom: string[]; dmPolicy: string } } };
+        discord: { allowFrom: string[]; dmPolicy: string };
+        googlechat: {
+          accounts: {
+            work: {
+              dm: {
+                policy: string;
+                allowFrom: string[];
+              };
+              allowFrom?: string[];
+            };
+          };
+        };
       };
     };
-    expect(cfg.channels.discord.accounts.work.allowFrom).toEqual(["*"]);
+    expect(cfg.channels.discord.allowFrom).toEqual(["*"]);
+    expect(cfg.channels.discord.dmPolicy).toBe("open");
+    expect(cfg.channels.googlechat.accounts.work.dm.allowFrom).toEqual(["*"]);
+    expect(cfg.channels.googlechat.accounts.work.allowFrom).toBeUndefined();
   });
 
   it('repairs dmPolicy="allowlist" by restoring allowFrom from pairing store on repair', async () => {
@@ -1986,14 +2257,35 @@ describe("doctor config flow", () => {
     expect(toolsBySender["*"]).toEqual({ deny: ["exec"] });
   });
 
-  it("repairs googlechat dm.policy open by setting dm.allowFrom on repair", async () => {
+  it("repairs legacy root runtime config surfaces in one pass", async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,
       config: {
+        heartbeat: {
+          model: "anthropic/claude-3-5-haiku-20241022",
+          every: "30m",
+          showOk: true,
+          showAlerts: false,
+        },
+        gateway: {
+          bind: "0.0.0.0",
+        },
+        session: {
+          threadBindings: {
+            ttlHours: 24,
+          },
+        },
         channels: {
-          googlechat: {
-            dm: {
-              policy: "open",
+          discord: {
+            threadBindings: {
+              ttlHours: 12,
+            },
+            accounts: {
+              alpha: {
+                threadBindings: {
+                  ttlHours: 6,
+                },
+              },
             },
           },
         },
@@ -2001,23 +2293,17 @@ describe("doctor config flow", () => {
       run: loadAndMaybeMigrateDoctorConfig,
     });
 
-    expectGoogleChatDmAllowFromRepaired(result.cfg);
-  });
-
-  it("migrates top-level heartbeat into agents.defaults.heartbeat on repair", async () => {
-    const result = await runDoctorConfigWithInput({
-      repair: true,
-      config: {
-        heartbeat: {
-          model: "anthropic/claude-3-5-haiku-20241022",
-          every: "30m",
-        },
-      },
-      run: loadAndMaybeMigrateDoctorConfig,
-    });
-
     const cfg = result.cfg as {
       heartbeat?: unknown;
+      gateway?: {
+        bind?: string;
+      };
+      session?: {
+        threadBindings?: {
+          idleHours?: number;
+          ttlHours?: number;
+        };
+      };
       agents?: {
         defaults?: {
           heartbeat?: {
@@ -2026,11 +2312,52 @@ describe("doctor config flow", () => {
           };
         };
       };
+      channels?: {
+        defaults?: {
+          heartbeat?: {
+            showOk?: boolean;
+            showAlerts?: boolean;
+            useIndicator?: boolean;
+          };
+        };
+        discord?: {
+          threadBindings?: {
+            idleHours?: number;
+            ttlHours?: number;
+          };
+          accounts?: Record<
+            string,
+            {
+              threadBindings?: {
+                idleHours?: number;
+                ttlHours?: number;
+              };
+            }
+          >;
+        };
+      };
     };
     expect(cfg.heartbeat).toBeUndefined();
     expect(cfg.agents?.defaults?.heartbeat).toMatchObject({
       model: "anthropic/claude-3-5-haiku-20241022",
       every: "30m",
+    });
+    expect(cfg.gateway?.bind).toBe("lan");
+    expect(cfg.session?.threadBindings).toMatchObject({
+      idleHours: 24,
+    });
+    expect(cfg.channels?.discord?.threadBindings).toMatchObject({
+      idleHours: 12,
+    });
+    expect(cfg.channels?.discord?.accounts?.alpha?.threadBindings).toMatchObject({
+      idleHours: 6,
+    });
+    expect(cfg.session?.threadBindings?.ttlHours).toBeUndefined();
+    expect(cfg.channels?.discord?.threadBindings?.ttlHours).toBeUndefined();
+    expect(cfg.channels?.discord?.accounts?.alpha?.threadBindings?.ttlHours).toBeUndefined();
+    expect(cfg.channels?.defaults?.heartbeat).toMatchObject({
+      showOk: true,
+      showAlerts: false,
     });
   });
 
@@ -2140,161 +2467,6 @@ describe("doctor config flow", () => {
     } finally {
       noteSpy.mockClear();
     }
-  });
-
-  it("repairs legacy gateway.bind host aliases on repair", async () => {
-    const result = await runDoctorConfigWithInput({
-      repair: true,
-      config: {
-        gateway: {
-          bind: "0.0.0.0",
-        },
-      },
-      run: loadAndMaybeMigrateDoctorConfig,
-    });
-
-    const cfg = result.cfg as {
-      gateway?: {
-        bind?: string;
-      };
-    };
-    expect(cfg.gateway?.bind).toBe("lan");
-  });
-
-  it("repairs legacy thread binding ttlHours config on repair", async () => {
-    const result = await runDoctorConfigWithInput({
-      repair: true,
-      config: {
-        session: {
-          threadBindings: {
-            ttlHours: 24,
-          },
-        },
-        channels: {
-          discord: {
-            threadBindings: {
-              ttlHours: 12,
-            },
-            accounts: {
-              alpha: {
-                threadBindings: {
-                  ttlHours: 6,
-                },
-              },
-            },
-          },
-        },
-      },
-      run: loadAndMaybeMigrateDoctorConfig,
-    });
-
-    const cfg = result.cfg as {
-      session?: {
-        threadBindings?: {
-          idleHours?: number;
-          ttlHours?: number;
-        };
-      };
-      channels?: {
-        discord?: {
-          threadBindings?: {
-            idleHours?: number;
-            ttlHours?: number;
-          };
-          accounts?: Record<
-            string,
-            {
-              threadBindings?: {
-                idleHours?: number;
-                ttlHours?: number;
-              };
-            }
-          >;
-        };
-      };
-    };
-    expect(cfg.session?.threadBindings).toMatchObject({
-      idleHours: 24,
-    });
-    expect(cfg.channels?.discord?.threadBindings).toMatchObject({
-      idleHours: 12,
-    });
-    expect(cfg.channels?.discord?.accounts?.alpha?.threadBindings).toMatchObject({
-      idleHours: 6,
-    });
-    expect(cfg.session?.threadBindings?.ttlHours).toBeUndefined();
-    expect(cfg.channels?.discord?.threadBindings?.ttlHours).toBeUndefined();
-    expect(cfg.channels?.discord?.accounts?.alpha?.threadBindings?.ttlHours).toBeUndefined();
-  });
-
-  it("migrates top-level heartbeat visibility into channels.defaults.heartbeat on repair", async () => {
-    const result = await runDoctorConfigWithInput({
-      repair: true,
-      config: {
-        heartbeat: {
-          showOk: true,
-          showAlerts: false,
-        },
-      },
-      run: loadAndMaybeMigrateDoctorConfig,
-    });
-
-    const cfg = result.cfg as {
-      heartbeat?: unknown;
-      channels?: {
-        defaults?: {
-          heartbeat?: {
-            showOk?: boolean;
-            showAlerts?: boolean;
-            useIndicator?: boolean;
-          };
-        };
-      };
-    };
-    expect(cfg.heartbeat).toBeUndefined();
-    expect(cfg.channels?.defaults?.heartbeat).toMatchObject({
-      showOk: true,
-      showAlerts: false,
-    });
-  });
-
-  it("repairs googlechat account dm.policy open by setting dm.allowFrom on repair", async () => {
-    const result = await runDoctorConfigWithInput({
-      repair: true,
-      config: {
-        channels: {
-          googlechat: {
-            accounts: {
-              work: {
-                dm: {
-                  policy: "open",
-                },
-              },
-            },
-          },
-        },
-      },
-      run: loadAndMaybeMigrateDoctorConfig,
-    });
-
-    const cfg = result.cfg as unknown as {
-      channels: {
-        googlechat: {
-          accounts: {
-            work: {
-              dm: {
-                policy: string;
-                allowFrom: string[];
-              };
-              allowFrom?: string[];
-            };
-          };
-        };
-      };
-    };
-
-    expect(cfg.channels.googlechat.accounts.work.dm.allowFrom).toEqual(["*"]);
-    expect(cfg.channels.googlechat.accounts.work.allowFrom).toBeUndefined();
   });
 
   it("recovers from stale googlechat top-level allowFrom by repairing dm.allowFrom", async () => {

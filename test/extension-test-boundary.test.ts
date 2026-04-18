@@ -175,6 +175,8 @@ describe("non-extension test boundaries", () => {
       "src/auto-reply/reply.triggers.trigger-handling.test-harness.ts",
       "src/agents/models-config.providers.ollama.test.ts",
       "src/commands/channel-test-registry.ts",
+      "src/plugins/contracts/provider-vitest-registry.ts",
+      "src/plugins/contracts/web-provider-vitest-registry.ts",
       "src/plugin-sdk/testing.ts",
     ]);
     const files = walkCode(path.join(repoRoot, "src"));

@@ -1,7 +1,7 @@
 import type { ErrorObject } from "ajv";
 import { describe, expect, it } from "vitest";
 import { TALK_TEST_PROVIDER_ID } from "../../test-utils/talk-test-provider.js";
-import { formatValidationErrors, validateTalkConfigResult } from "./index.js";
+import { formatValidationErrors, validateTalkConfigResult, validateWakeParams } from "./index.js";
 
 const makeError = (overrides: Partial<ErrorObject>): ErrorObject => ({
   keyword: "type",
@@ -111,5 +111,37 @@ describe("validateTalkConfigResult", () => {
         },
       }),
     ).toBe(false);
+  });
+});
+
+describe("validateWakeParams", () => {
+  it("accepts valid wake params", () => {
+    expect(validateWakeParams({ mode: "now", text: "hello" })).toBe(true);
+    expect(validateWakeParams({ mode: "next-heartbeat", text: "remind me" })).toBe(true);
+  });
+
+  it("rejects missing required fields", () => {
+    expect(validateWakeParams({ mode: "now" })).toBe(false);
+    expect(validateWakeParams({ text: "hello" })).toBe(false);
+    expect(validateWakeParams({})).toBe(false);
+  });
+
+  it("accepts unknown properties for forward compatibility", () => {
+    expect(
+      validateWakeParams({
+        mode: "now",
+        text: "hello",
+        paperclip: { version: "2026.416.0", source: "wake" },
+      }),
+    ).toBe(true);
+
+    expect(
+      validateWakeParams({
+        mode: "next-heartbeat",
+        text: "check back",
+        unknownFutureField: 42,
+        anotherExtra: true,
+      }),
+    ).toBe(true);
   });
 });

@@ -1,9 +1,22 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as bundledSources from "../../../plugins/bundled-sources.js";
-import type { PluginManifestRecord } from "../../../plugins/manifest-registry.js";
-import * as manifestRegistry from "../../../plugins/manifest-registry.js";
 import { collectDoctorPreviewWarnings } from "./preview-warnings.js";
+
+type TestManifestRecord = {
+  id: string;
+  channels: string[];
+};
+
+const manifestState = vi.hoisted(
+  () =>
+    ({
+      plugins: [] as TestManifestRecord[],
+      diagnostics: [] as Array<{ level: string; message: string; source: string }>,
+    }) satisfies {
+      plugins: TestManifestRecord[];
+      diagnostics: Array<{ level: string; message: string; source: string }>;
+    },
+);
 
 vi.mock("../channel-capabilities.js", () => {
   const fallback = {
@@ -40,22 +53,98 @@ vi.mock("./channel-doctor.js", () => ({
   shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning: vi.fn(() => false),
 }));
 
-function manifest(id: string): PluginManifestRecord {
+vi.mock("./channel-plugin-blockers.js", () => ({
+  scanConfiguredChannelPluginBlockers: (cfg: {
+    channels?: Record<string, unknown>;
+    plugins?: { enabled?: boolean; entries?: Record<string, { enabled?: boolean }> };
+  }) => {
+    const configuredChannels = new Set(Object.keys(cfg.channels ?? {}));
+    return manifestState.plugins.flatMap((plugin) => {
+      const disabledByEntry = cfg.plugins?.entries?.[plugin.id]?.enabled === false;
+      const pluginsDisabled = cfg.plugins?.enabled === false;
+      if (!disabledByEntry && !pluginsDisabled) {
+        return [];
+      }
+      return plugin.channels
+        .filter((channelId) => configuredChannels.has(channelId))
+        .map((channelId) => ({
+          channelId,
+          pluginId: plugin.id,
+          reason: disabledByEntry ? "disabled in config" : "plugins disabled",
+        }));
+    });
+  },
+  collectConfiguredChannelPluginBlockerWarnings: (
+    hits: Array<{ channelId: string; pluginId: string; reason: string }>,
+  ) =>
+    hits.map((hit) => {
+      const reason =
+        hit.reason === "disabled in config"
+          ? `plugin "${hit.pluginId}" is disabled by plugins.entries.${hit.pluginId}.enabled=false.`
+          : "plugins.enabled=false blocks channel plugins globally.";
+      return `- channels.${hit.channelId}: channel is configured, but ${reason}`;
+    }),
+  isWarningBlockedByChannelPlugin: (warning: string, hits: Array<{ channelId: string }>) =>
+    hits.some(
+      (hit) =>
+        warning.includes(`channels.${hit.channelId}:`) ||
+        warning.includes(`channels.${hit.channelId}.`),
+    ),
+}));
+
+vi.mock("./stale-plugin-config.js", () => ({
+  scanStalePluginConfig: (cfg: {
+    plugins?: { allow?: string[]; entries?: Record<string, unknown> };
+  }) => {
+    const knownIds = new Set(manifestState.plugins.map((plugin) => plugin.id));
+    const ids = [...(cfg.plugins?.allow ?? []), ...Object.keys(cfg.plugins?.entries ?? {})];
+    return [...new Set(ids)].filter((id) => !knownIds.has(id)).map((id) => ({ id }));
+  },
+  isStalePluginAutoRepairBlocked: () =>
+    manifestState.diagnostics.some((diagnostic) => diagnostic.level === "error"),
+  collectStalePluginConfigWarnings: ({
+    autoRepairBlocked,
+    doctorFixCommand,
+    hits,
+  }: {
+    autoRepairBlocked: boolean;
+    doctorFixCommand: string;
+    hits: Array<{ id: string }>;
+  }) =>
+    hits.map(
+      (hit) =>
+        `plugins.allow: stale plugin reference "${hit.id}". plugins.entries.${hit.id} is unused. ${
+          autoRepairBlocked
+            ? `Auto-removal is paused; rerun "${doctorFixCommand}".`
+            : `Run "${doctorFixCommand}".`
+        }`,
+    ),
+}));
+
+vi.mock("./bundled-plugin-load-paths.js", () => ({
+  scanBundledPluginLoadPathMigrations: (cfg: { plugins?: { load?: { paths?: string[] } } }) =>
+    (cfg.plugins?.load?.paths ?? []).map((legacyPath) => ({ legacyPath })),
+  collectBundledPluginLoadPathWarnings: ({
+    doctorFixCommand,
+    hits,
+  }: {
+    doctorFixCommand: string;
+    hits: Array<{ legacyPath: string }>;
+  }) =>
+    hits.map(
+      (hit) =>
+        `plugins.load.paths: legacy bundled plugin path "${hit.legacyPath}". Run "${doctorFixCommand}".`,
+    ),
+}));
+
+function manifest(id: string): TestManifestRecord {
   return {
     id,
     channels: [],
-    providers: [],
-    cliBackends: [],
-    skills: [],
-    hooks: [],
-    origin: "bundled",
-    rootDir: `/plugins/${id}`,
-    source: `/plugins/${id}`,
-    manifestPath: `/plugins/${id}/openclaw.plugin.json`,
   };
 }
 
-function channelManifest(id: string, channelId: string): PluginManifestRecord {
+function channelManifest(id: string, channelId: string): TestManifestRecord {
   return {
     ...manifest(id),
     channels: [channelId],
@@ -64,10 +153,8 @@ function channelManifest(id: string, channelId: string): PluginManifestRecord {
 
 describe("doctor preview warnings", () => {
   beforeEach(() => {
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [manifest("discord")],
-      diagnostics: [],
-    });
+    manifestState.plugins = [manifest("discord")];
+    manifestState.diagnostics = [];
   });
 
   afterEach(() => {
@@ -147,23 +234,7 @@ describe("doctor preview warnings", () => {
   it("includes bundled plugin load path migration warnings", async () => {
     const packageRoot = path.resolve("app-node-modules", "openclaw");
     const legacyPath = path.join(packageRoot, "extensions", "feishu");
-    const bundledPath = path.join(packageRoot, "dist", "extensions", "feishu");
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [manifest("feishu")],
-      diagnostics: [],
-    });
-    vi.spyOn(bundledSources, "resolveBundledPluginSources").mockReturnValue(
-      new Map([
-        [
-          "feishu",
-          {
-            pluginId: "feishu",
-            localPath: bundledPath,
-            npmSpec: "@openclaw/feishu",
-          },
-        ],
-      ]),
-    );
+    manifestState.plugins = [manifest("feishu")];
 
     const warnings = await collectDoctorPreviewWarnings({
       cfg: {
@@ -183,12 +254,10 @@ describe("doctor preview warnings", () => {
   });
 
   it("warns but skips auto-removal when plugin discovery has errors", async () => {
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [],
-      diagnostics: [
-        { level: "error", message: "plugin path not found: /missing", source: "/missing" },
-      ],
-    });
+    manifestState.plugins = [];
+    manifestState.diagnostics = [
+      { level: "error", message: "plugin path not found: /missing", source: "/missing" },
+    ];
 
     const warnings = await collectDoctorPreviewWarnings({
       cfg: {
@@ -210,10 +279,7 @@ describe("doctor preview warnings", () => {
   });
 
   it("warns when a configured channel plugin is disabled explicitly", async () => {
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [channelManifest("telegram", "telegram")],
-      diagnostics: [],
-    });
+    manifestState.plugins = [channelManifest("telegram", "telegram")];
 
     const warnings = await collectDoctorPreviewWarnings({
       cfg: {
@@ -243,10 +309,7 @@ describe("doctor preview warnings", () => {
   });
 
   it("warns when channel plugins are blocked globally", async () => {
-    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
-      plugins: [channelManifest("telegram", "telegram")],
-      diagnostics: [],
-    });
+    manifestState.plugins = [channelManifest("telegram", "telegram")];
 
     const warnings = await collectDoctorPreviewWarnings({
       cfg: {

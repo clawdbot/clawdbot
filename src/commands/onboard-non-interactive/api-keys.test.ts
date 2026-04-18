@@ -60,34 +60,114 @@ describe("resolveNonInteractiveApiKey", () => {
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
-  it("rejects flag input in secret-ref mode without broad env discovery", async () => {
+  it.each([
+    {
+      provider: "xai",
+      flagValue: "xai-flag-key",
+      flagName: "--xai-api-key",
+      envVar: "XAI_API_KEY",
+    },
+    {
+      provider: "custom-models-custom-local",
+      flagValue: "custom-inline-key-should-not-leak",
+      flagName: "--custom-api-key",
+      envVar: "CUSTOM_API_KEY",
+    },
+  ])(
+    "rejects $flagName input in secret-ref mode without broad env discovery",
+    async ({ provider, flagValue, flagName, envVar }) => {
+      const runtime = createRuntime();
+      resolveEnvApiKey.mockReturnValue(null);
+      const previousValue = process.env[envVar];
+      delete process.env[envVar];
+
+      try {
+        const result = await resolveNonInteractiveApiKey({
+          provider,
+          cfg: {},
+          flagValue,
+          flagName,
+          envVar,
+          runtime: runtime as never,
+          secretInputMode: "ref",
+        });
+
+        const errorText = runtime.error.mock.calls.map(([message]) => String(message)).join("\n");
+        expect(result).toBeNull();
+        expect(resolveEnvApiKey).not.toHaveBeenCalled();
+        expect(runtime.exit).toHaveBeenCalledWith(1);
+        expect(errorText).toContain(flagName);
+        expect(errorText).toContain(envVar);
+        expect(errorText).not.toContain(flagValue);
+      } finally {
+        if (previousValue === undefined) {
+          delete process.env[envVar];
+        } else {
+          process.env[envVar] = previousValue;
+        }
+      }
+    },
+  );
+
+  it("returns explicit env fallback keys when provider env discovery misses", async () => {
     const runtime = createRuntime();
     resolveEnvApiKey.mockReturnValue(null);
-    const previousXaiApiKey = process.env.XAI_API_KEY;
-    delete process.env.XAI_API_KEY;
+    const previousCustomApiKey = process.env.CUSTOM_API_KEY;
+    process.env.CUSTOM_API_KEY = "custom-env-key"; // pragma: allowlist secret
 
     try {
       const result = await resolveNonInteractiveApiKey({
-        provider: "xai",
+        provider: "custom-models-custom-local",
         cfg: {},
-        flagValue: "xai-flag-key",
-        flagName: "--xai-api-key",
-        envVar: "XAI_API_KEY",
+        flagName: "--custom-api-key",
+        envVar: "CUSTOM_API_KEY",
+        envVarName: "CUSTOM_API_KEY",
+        runtime: runtime as never,
+      });
+
+      expect(result).toEqual({
+        key: "custom-env-key",
+        source: "env",
+        envVarName: "CUSTOM_API_KEY",
+      });
+      expect(runtime.exit).not.toHaveBeenCalled();
+    } finally {
+      if (previousCustomApiKey === undefined) {
+        delete process.env.CUSTOM_API_KEY;
+      } else {
+        process.env.CUSTOM_API_KEY = previousCustomApiKey;
+      }
+    }
+  });
+
+  it("returns explicit env fallback refs in secret-ref mode", async () => {
+    const runtime = createRuntime();
+    resolveEnvApiKey.mockReturnValue(null);
+    const previousCustomApiKey = process.env.CUSTOM_API_KEY;
+    process.env.CUSTOM_API_KEY = "custom-env-key"; // pragma: allowlist secret
+
+    try {
+      const result = await resolveNonInteractiveApiKey({
+        provider: "custom-models-custom-local",
+        cfg: {},
+        flagName: "--custom-api-key",
+        envVar: "CUSTOM_API_KEY",
+        envVarName: "CUSTOM_API_KEY",
         runtime: runtime as never,
         secretInputMode: "ref",
       });
 
-      expect(result).toBeNull();
-      expect(resolveEnvApiKey).not.toHaveBeenCalled();
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-      expect(runtime.error).toHaveBeenCalledWith(
-        expect.stringContaining("--secret-input-mode ref"),
-      );
+      expect(result).toEqual({
+        key: "custom-env-key",
+        source: "env",
+        envVarName: "CUSTOM_API_KEY",
+      });
+      expect(runtime.exit).not.toHaveBeenCalled();
     } finally {
-      if (previousXaiApiKey === undefined) {
-        delete process.env.XAI_API_KEY;
+      if (previousCustomApiKey === undefined) {
+        delete process.env.CUSTOM_API_KEY;
       } else {
-        process.env.XAI_API_KEY = previousXaiApiKey;
+        process.env.CUSTOM_API_KEY = previousCustomApiKey;
       }
     }
   });

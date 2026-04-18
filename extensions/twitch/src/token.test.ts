@@ -65,6 +65,27 @@ describe("token", () => {
       expect(result.source).toBe("config");
     });
 
+    it("should resolve token from normalized account id", () => {
+      const result = resolveTwitchToken(
+        {
+          channels: {
+            twitch: {
+              accounts: {
+                Secondary: {
+                  username: "secondary",
+                  accessToken: "oauth:secondary-token",
+                },
+              },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        { accountId: "secondary" },
+      );
+
+      expect(result.token).toBe("oauth:secondary-token");
+      expect(result.source).toBe("config");
+    });
+
     it("should prioritize config token over env var (simplified config)", () => {
       process.env.OPENCLAW_TWITCH_ACCESS_TOKEN = "oauth:env-token";
 

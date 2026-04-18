@@ -8,26 +8,37 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-  readStringValue,
-} from "openclaw/plugin-sdk/text-runtime";
 import { z } from "openclaw/plugin-sdk/zod";
+import { publishNostrProfile, getNostrProfileState } from "./channel.js";
+import { NostrProfileSchema, type NostrProfile } from "./config-schema.js";
 import {
   createFixedWindowRateLimiter,
   getPluginRuntimeGatewayRequestScope,
   readJsonBodyWithLimit,
   requestBodyErrorToText,
-} from "../runtime-api.js";
-import { publishNostrProfile, getNostrProfileState } from "./channel.js";
-import { NostrProfileSchema, type NostrProfile } from "./config-schema.js";
+} from "./nostr-profile-http-runtime.js";
 import { importProfileFromRelays, mergeProfiles } from "./nostr-profile-import.js";
 import { validateUrlSafety } from "./nostr-profile-url-safety.js";
 
 // ============================================================================
 // Types
 // ============================================================================
+
+function readStringValue(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function normalizeOptionalLowercaseString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed.toLowerCase() : undefined;
+}
+
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return normalizeOptionalLowercaseString(value) ?? "";
+}
 
 export interface NostrProfileHttpContext {
   /** Get current profile from config */

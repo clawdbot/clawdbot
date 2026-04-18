@@ -18,7 +18,7 @@ The desired end state is a generic QA harness that loads powerful scenario defin
 ## Current State
 
 Primary source of truth now lives in `qa/scenarios/index.md` plus one file per
-scenario under `qa/scenarios/*.md`.
+scenario under `qa/scenarios/<theme>/*.md`.
 
 Implemented:
 
@@ -26,7 +26,7 @@ Implemented:
   - canonical QA pack metadata
   - operator identity
   - kickoff mission
-- `qa/scenarios/*.md`
+- `qa/scenarios/<theme>/*.md`
   - one markdown file per scenario
   - scenario metadata
   - handler bindings
@@ -107,8 +107,8 @@ These categories matter because they drive DSL requirements. A flat list of prom
 
 ### Single source of truth
 
-Use `qa/scenarios/index.md` plus `qa/scenarios/*.md` as the authored source of
-truth.
+Use `qa/scenarios/index.md` plus `qa/scenarios/<theme>/*.md` as the authored
+source of truth.
 
 The pack should stay:
 
@@ -363,7 +363,7 @@ Generated compatibility:
 Done.
 
 - added `qa/scenarios/index.md`
-- split scenarios into `qa/scenarios/*.md`
+- split scenarios into `qa/scenarios/<theme>/*.md`
 - added parser for named markdown YAML pack content
 - validated with zod
 - switched consumers to the parsed pack

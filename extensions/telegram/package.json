@@ -17,6 +17,9 @@
       "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts",
+    "setupFeatures": {
+      "legacyStateMigrations": true
+    },
     "channel": {
       "id": "telegram",
       "label": "Telegram",

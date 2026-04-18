@@ -11,6 +11,8 @@ PROFILE_FILE="${OPENCLAW_PROFILE_FILE:-$HOME/.profile}"
 ACP_AGENT_LIST_RAW="${OPENCLAW_LIVE_ACP_BIND_AGENTS:-${OPENCLAW_LIVE_ACP_BIND_AGENT:-claude,codex,gemini}}"
 TEMP_DIRS=()
 DOCKER_USER="${OPENCLAW_DOCKER_USER:-node}"
+DOCKER_HOME_MOUNT=()
+DOCKER_AUTH_PRESTAGED=0
 
 openclaw_live_acp_bind_resolve_auth_provider() {
   case "${1:-}" in
@@ -80,27 +82,29 @@ export npm_config_cache="$NPM_CONFIG_CACHE"
 mkdir -p "$NPM_CONFIG_PREFIX" "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CACHE"
 chmod 700 "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CACHE" || true
 export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
-IFS=',' read -r -a auth_dirs <<<"${OPENCLAW_DOCKER_AUTH_DIRS_RESOLVED:-}"
-IFS=',' read -r -a auth_files <<<"${OPENCLAW_DOCKER_AUTH_FILES_RESOLVED:-}"
-if ((${#auth_dirs[@]} > 0)); then
-  for auth_dir in "${auth_dirs[@]}"; do
-    [ -n "$auth_dir" ] || continue
-    if [ -d "/host-auth/$auth_dir" ]; then
-      mkdir -p "$HOME/$auth_dir"
-      cp -R "/host-auth/$auth_dir/." "$HOME/$auth_dir"
-      chmod -R u+rwX "$HOME/$auth_dir" || true
-    fi
-  done
-fi
-if ((${#auth_files[@]} > 0)); then
-  for auth_file in "${auth_files[@]}"; do
-    [ -n "$auth_file" ] || continue
-    if [ -f "/host-auth-files/$auth_file" ]; then
-      mkdir -p "$(dirname "$HOME/$auth_file")"
-      cp "/host-auth-files/$auth_file" "$HOME/$auth_file"
-      chmod u+rw "$HOME/$auth_file" || true
-    fi
-  done
+if [ "${OPENCLAW_DOCKER_AUTH_PRESTAGED:-0}" != "1" ]; then
+  IFS=',' read -r -a auth_dirs <<<"${OPENCLAW_DOCKER_AUTH_DIRS_RESOLVED:-}"
+  IFS=',' read -r -a auth_files <<<"${OPENCLAW_DOCKER_AUTH_FILES_RESOLVED:-}"
+  if ((${#auth_dirs[@]} > 0)); then
+    for auth_dir in "${auth_dirs[@]}"; do
+      [ -n "$auth_dir" ] || continue
+      if [ -d "/host-auth/$auth_dir" ]; then
+        mkdir -p "$HOME/$auth_dir"
+        cp -R "/host-auth/$auth_dir/." "$HOME/$auth_dir"
+        chmod -R u+rwX "$HOME/$auth_dir" || true
+      fi
+    done
+  fi
+  if ((${#auth_files[@]} > 0)); then
+    for auth_file in "${auth_files[@]}"; do
+      [ -n "$auth_file" ] || continue
+      if [ -f "/host-auth-files/$auth_file" ]; then
+        mkdir -p "$(dirname "$HOME/$auth_file")"
+        cp "/host-auth-files/$auth_file" "$HOME/$auth_file"
+        chmod u+rw "$HOME/$auth_file" || true
+      fi
+    done
+  fi
 fi
 agent="${OPENCLAW_LIVE_ACP_BIND_AGENT:-claude}"
 case "$agent" in
@@ -217,9 +221,23 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
     AUTH_FILES_CSV="$(openclaw_live_join_csv "${AUTH_FILES[@]}")"
   fi
 
+  DOCKER_HOME_MOUNT=()
+  DOCKER_AUTH_PRESTAGED=0
+  if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    DOCKER_HOME_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-home.XXXXXX")"
+    TEMP_DIRS+=("$DOCKER_HOME_DIR")
+    DOCKER_HOME_MOUNT=(-v "$DOCKER_HOME_DIR":/home/node)
+  fi
+
+  if [[ -n "${DOCKER_HOME_DIR:-}" ]]; then
+    openclaw_live_stage_auth_into_home "$DOCKER_HOME_DIR" "${AUTH_DIRS[@]}" --files "${AUTH_FILES[@]}"
+    DOCKER_AUTH_PRESTAGED=1
+  fi
+
   EXTERNAL_AUTH_MOUNTS=()
   if ((${#AUTH_DIRS[@]} > 0)); then
     for auth_dir in "${AUTH_DIRS[@]}"; do
+      auth_dir="$(openclaw_live_validate_relative_home_path "$auth_dir")"
       host_path="$HOME/$auth_dir"
       if [[ -d "$host_path" ]]; then
         EXTERNAL_AUTH_MOUNTS+=(-v "$host_path":/host-auth/"$auth_dir":ro)
@@ -228,6 +246,7 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
   fi
   if ((${#AUTH_FILES[@]} > 0)); then
     for auth_file in "${AUTH_FILES[@]}"; do
+      auth_file="$(openclaw_live_validate_relative_home_path "$auth_file")"
       host_path="$HOME/$auth_file"
       if [[ -f "$host_path" ]]; then
         EXTERNAL_AUTH_MOUNTS+=(-v "$host_path":/host-auth-files/"$auth_file":ro)
@@ -246,18 +265,22 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
     -e ANTHROPIC_API_KEY_OLD \
     -e OPENCLAW_LIVE_ACP_BIND_ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}" \
     -e OPENCLAW_LIVE_ACP_BIND_ANTHROPIC_API_KEY_OLD="${ANTHROPIC_API_KEY_OLD:-}" \
+    -e GEMINI_API_KEY \
+    -e GOOGLE_API_KEY \
     -e OPENAI_API_KEY \
     -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     -e HOME=/home/node \
     -e NODE_OPTIONS=--disable-warning=ExperimentalWarning \
     -e OPENCLAW_SKIP_CHANNELS=1 \
     -e OPENCLAW_VITEST_FS_MODULE_CACHE=0 \
+    -e OPENCLAW_DOCKER_AUTH_PRESTAGED="$DOCKER_AUTH_PRESTAGED" \
     -e OPENCLAW_DOCKER_AUTH_DIRS_RESOLVED="$AUTH_DIRS_CSV" \
     -e OPENCLAW_DOCKER_AUTH_FILES_RESOLVED="$AUTH_FILES_CSV" \
     -e OPENCLAW_LIVE_TEST=1 \
     -e OPENCLAW_LIVE_ACP_BIND=1 \
     -e OPENCLAW_LIVE_ACP_BIND_AGENT="$ACP_AGENT" \
     -e OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND="$AGENT_COMMAND" \
+    "${DOCKER_HOME_MOUNT[@]}" \
     -v "$CACHE_HOME_DIR":/home/node/.cache \
     -v "$ROOT_DIR":/src:ro \
     -v "$CONFIG_DIR":/home/node/.openclaw \

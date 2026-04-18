@@ -1,4 +1,4 @@
-import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
+import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
 import type { SsrFPolicy } from "../../runtime-api.js";
 
 export type MatrixResolvedConfig = {

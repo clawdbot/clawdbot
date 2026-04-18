@@ -4,6 +4,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
 
 export type MessageActionTargetMode = "to" | "channelId" | "none";
 
@@ -84,6 +85,7 @@ const ACTION_TARGET_ALIASES: Partial<Record<ChannelMessageActionName, ActionTarg
 
 function listActionTargetAliasSpecs(
   action: ChannelMessageActionName,
+  params: Record<string, unknown>,
   channel?: string,
 ): ActionTargetAliasSpec[] {
   const specs: ActionTargetAliasSpec[] = [];
@@ -92,7 +94,7 @@ function listActionTargetAliasSpecs(
     specs.push(coreSpec);
   }
   const normalizedChannel = normalizeOptionalLowercaseString(channel);
-  if (!normalizedChannel) {
+  if (!normalizedChannel || !hasPotentialPluginActionParam(params)) {
     return specs;
   }
   const plugin = getBootstrapChannelPlugin(normalizedChannel);
@@ -120,7 +122,7 @@ export function actionHasTarget(
   if (channelId) {
     return true;
   }
-  const specs = listActionTargetAliasSpecs(action, options?.channel);
+  const specs = listActionTargetAliasSpecs(action, params, options?.channel);
   if (specs.length === 0) {
     return false;
   }

@@ -1,4 +1,4 @@
-import { readResponseWithLimit as readSharedResponseWithLimit } from "openclaw/plugin-sdk/media-runtime";
+import { readResponseWithLimit as readSharedResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 
 export async function readResponseWithLimit(
   res: Response,

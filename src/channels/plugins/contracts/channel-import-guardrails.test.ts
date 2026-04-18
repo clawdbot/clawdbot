@@ -248,6 +248,14 @@ const sourceAnalysisCache = new Map<string, SourceAnalysis>();
 let extensionSourceFilesCache: string[] | null = null;
 let coreSourceFilesCache: string[] | null = null;
 const extensionFilesCache = new Map<string, string[]>();
+const STATIC_FROM_IMPORT_RE =
+  /^\s*import(?:\s+type)?\s+(?!["'])(?:[\s\S]*?)\s+from\s*["']([^"']+)["']/gmu;
+const STATIC_SIDE_EFFECT_IMPORT_RE = /^\s*import\s*["']([^"']+)["']/gmu;
+const RE_EXPORT_STAR_RE =
+  /^\s*export\s+(?:type\s+)?\*\s*(?:as\s+\w+\s+)?from\s*["']([^"']+)["']/gmu;
+const RE_EXPORT_NAMED_RE = /^\s*export\s+(?:type\s+)?\{[^}]*\}\s+from\s*["']([^"']+)["']/gmu;
+const DYNAMIC_IMPORT_RE = /\bimport\s*\(\s*["']([^"']+)["']\s*\)/gmu;
+const REQUIRE_RE = /\brequire\s*\(\s*["']([^"']+)["']\s*\)/gmu;
 
 type SourceFileCollectorOptions = {
   rootDir: string;
@@ -388,16 +396,18 @@ function collectExtensionFiles(extensionId: string): string[] {
 
 function collectModuleSpecifiers(text: string): string[] {
   const patterns = [
-    /\bimport\s*\(\s*["']([^"']+\.(?:[cm]?[jt]sx?))["']\s*\)/g,
-    /\brequire\s*\(\s*["']([^"']+\.(?:[cm]?[jt]sx?))["']\s*\)/g,
-    /\b(?:import|export)\b[\s\S]*?\bfrom\s*["']([^"']+\.(?:[cm]?[jt]sx?))["']/g,
-    /\bimport\s*["']([^"']+\.(?:[cm]?[jt]sx?))["']/g,
+    DYNAMIC_IMPORT_RE,
+    REQUIRE_RE,
+    STATIC_FROM_IMPORT_RE,
+    STATIC_SIDE_EFFECT_IMPORT_RE,
+    RE_EXPORT_STAR_RE,
+    RE_EXPORT_NAMED_RE,
   ] as const;
   const specifiers = new Set<string>();
   for (const pattern of patterns) {
     for (const match of text.matchAll(pattern)) {
       const specifier = match[1]?.trim();
-      if (specifier) {
+      if (specifier && /\.(?:[cm]?[jt]sx?)$/u.test(specifier)) {
         specifiers.add(specifier);
       }
     }

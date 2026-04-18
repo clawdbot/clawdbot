@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../../src/agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { ModelDefinitionConfig } from "../../../src/config/types.models.js";
@@ -171,14 +171,14 @@ function runCatalog(
 }
 
 async function importBundledProviderPlugin<T>(moduleUrl: string): Promise<T> {
-  return (await import(`${moduleUrl}?t=${Date.now()}`)) as T;
+  return (await import(moduleUrl)) as T;
 }
 
 function installDiscoveryHooks(
   state: DiscoveryState,
   providerIds: readonly BundledProviderUnderTest[],
 ) {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     vi.doMock("openclaw/plugin-sdk/agent-runtime", () => {
       return {
@@ -312,6 +312,9 @@ function installDiscoveryHooks(
         "cloudflare-ai-gateway",
       );
     }
+  });
+
+  beforeEach(() => {
     setRuntimeAuthStore();
   });
 
@@ -323,6 +326,7 @@ function installDiscoveryHooks(
     buildSglangProviderMock.mockReset();
     ensureAuthProfileStoreMock.mockReset();
     listProfilesForProviderMock.mockReset();
+    setRuntimeAuthStore();
   });
 }
 

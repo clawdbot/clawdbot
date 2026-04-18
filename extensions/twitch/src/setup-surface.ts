@@ -2,6 +2,8 @@
  * Twitch setup wizard surface for CLI setup.
  */
 
+import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-id";
+import { getChatChannelMeta, type ChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
   formatDocsLink,
   type ChannelSetupAdapter,
@@ -9,16 +11,37 @@ import {
   type ChannelSetupWizard,
   type OpenClawConfig,
   type WizardPrompter,
+  normalizeAccountId,
 } from "openclaw/plugin-sdk/setup";
-import { DEFAULT_ACCOUNT_ID, getAccountConfig, resolveDefaultTwitchAccountId } from "./config.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  getAccountConfig,
+  listAccountIds,
+  resolveDefaultTwitchAccountId,
+  resolveTwitchAccountContext,
+} from "./config.js";
 import type { TwitchAccountConfig, TwitchRole } from "./types.js";
 import { isAccountConfigured } from "./utils/twitch.js";
 
 const channel = "twitch" as const;
+const INVALID_ACCOUNT_ID_MESSAGE = "Invalid Twitch account id";
 
-function resolveSetupAccountId(cfg: OpenClawConfig): string {
+function normalizeRequestedSetupAccountId(accountId: string): string {
+  const normalized = normalizeOptionalAccountId(accountId);
+  if (!normalized) {
+    throw new Error(INVALID_ACCOUNT_ID_MESSAGE);
+  }
+  return normalized;
+}
+
+function resolveSetupAccountId(cfg: OpenClawConfig, requestedAccountId?: string): string {
+  const requested = requestedAccountId?.trim();
+  if (requested) {
+    return normalizeRequestedSetupAccountId(requested);
+  }
+
   const preferred = cfg.channels?.twitch?.defaultAccount?.trim();
-  return preferred || resolveDefaultTwitchAccountId(cfg);
+  return preferred ? normalizeAccountId(preferred) : resolveDefaultTwitchAccountId(cfg);
 }
 
 export function setTwitchAccount(
@@ -26,7 +49,10 @@ export function setTwitchAccount(
   account: Partial<TwitchAccountConfig>,
   accountId: string = resolveSetupAccountId(cfg),
 ): OpenClawConfig {
-  const existing = getAccountConfig(cfg, accountId);
+  const resolvedAccountId = accountId.trim()
+    ? normalizeRequestedSetupAccountId(accountId)
+    : resolveSetupAccountId(cfg);
+  const existing = getAccountConfig(cfg, resolvedAccountId);
   const merged: TwitchAccountConfig = {
     username: account.username ?? existing?.username ?? "",
     accessToken: account.accessToken ?? existing?.accessToken ?? "",
@@ -55,7 +81,7 @@ export function setTwitchAccount(
           ...((
             (cfg.channels as Record<string, unknown>)?.twitch as Record<string, unknown> | undefined
           )?.accounts as Record<string, unknown> | undefined),
-          [accountId]: merged,
+          [resolvedAccountId]: merged,
         },
       },
     },
@@ -192,7 +218,15 @@ export async function configureWithEnvToken(
   envToken: string,
   forceAllowFrom: boolean,
   dmPolicy: ChannelSetupDmPolicy,
+  accountId: string = resolveSetupAccountId(cfg),
 ): Promise<{ cfg: OpenClawConfig } | null> {
+  const resolvedAccountId = accountId.trim()
+    ? normalizeRequestedSetupAccountId(accountId)
+    : resolveSetupAccountId(cfg);
+  if (resolvedAccountId !== DEFAULT_ACCOUNT_ID) {
+    return null;
+  }
+
   const useEnv = await prompter.confirm({
     message: "Twitch env var OPENCLAW_TWITCH_ACCESS_TOKEN detected. Use env token?",
     initialValue: true,
@@ -204,15 +238,25 @@ export async function configureWithEnvToken(
   const username = await promptUsername(prompter, account);
   const clientId = await promptClientId(prompter, account);
 
-  const cfgWithAccount = setTwitchAccount(cfg, {
-    username,
-    clientId,
-    accessToken: "",
-    enabled: true,
-  });
+  const cfgWithAccount = setTwitchAccount(
+    cfg,
+    {
+      username,
+      clientId,
+      accessToken: "",
+      enabled: true,
+    },
+    resolvedAccountId,
+  );
 
   if (forceAllowFrom && dmPolicy.promptAllowFrom) {
-    return { cfg: await dmPolicy.promptAllowFrom({ cfg: cfgWithAccount, prompter }) };
+    return {
+      cfg: await dmPolicy.promptAllowFrom({
+        cfg: cfgWithAccount,
+        prompter,
+        accountId: resolvedAccountId,
+      }),
+    };
   }
 
   return { cfg: cfgWithAccount };
@@ -222,9 +266,10 @@ function setTwitchAccessControl(
   cfg: OpenClawConfig,
   allowedRoles: TwitchRole[],
   requireMention: boolean,
+  accountId?: string,
 ): OpenClawConfig {
-  const accountId = resolveSetupAccountId(cfg);
-  const account = getAccountConfig(cfg, accountId);
+  const resolvedAccountId = resolveSetupAccountId(cfg, accountId);
+  const account = getAccountConfig(cfg, resolvedAccountId);
   if (!account) {
     return cfg;
   }
@@ -236,12 +281,15 @@ function setTwitchAccessControl(
       allowedRoles,
       requireMention,
     },
-    accountId,
+    resolvedAccountId,
   );
 }
 
-function resolveTwitchGroupPolicy(cfg: OpenClawConfig): "open" | "allowlist" | "disabled" {
-  const account = getAccountConfig(cfg, resolveSetupAccountId(cfg));
+function resolveTwitchGroupPolicy(
+  cfg: OpenClawConfig,
+  accountId?: string,
+): "open" | "allowlist" | "disabled" {
+  const account = getAccountConfig(cfg, resolveSetupAccountId(cfg, accountId));
   if (account?.allowedRoles?.includes("all")) {
     return "open";
   }
@@ -254,19 +302,27 @@ function resolveTwitchGroupPolicy(cfg: OpenClawConfig): "open" | "allowlist" | "
 function setTwitchGroupPolicy(
   cfg: OpenClawConfig,
   policy: "open" | "allowlist" | "disabled",
+  accountId?: string,
 ): OpenClawConfig {
   const allowedRoles: TwitchRole[] =
     policy === "open" ? ["all"] : policy === "allowlist" ? ["moderator", "vip"] : [];
-  return setTwitchAccessControl(cfg, allowedRoles, true);
+  return setTwitchAccessControl(cfg, allowedRoles, true, accountId);
 }
 
 const twitchDmPolicy: ChannelSetupDmPolicy = {
   label: "Twitch",
   channel,
-  policyKey: "channels.twitch.allowedRoles",
-  allowFromKey: "channels.twitch.accounts.<default>.allowFrom",
-  getCurrent: (cfg) => {
-    const account = getAccountConfig(cfg, resolveSetupAccountId(cfg));
+  policyKey: "channels.twitch.accounts.default.allowedRoles",
+  allowFromKey: "channels.twitch.accounts.default.allowFrom",
+  resolveConfigKeys: (cfg, accountId) => {
+    const resolvedAccountId = resolveSetupAccountId(cfg, accountId);
+    return {
+      policyKey: `channels.twitch.accounts.${resolvedAccountId}.allowedRoles`,
+      allowFromKey: `channels.twitch.accounts.${resolvedAccountId}.allowFrom`,
+    };
+  },
+  getCurrent: (cfg, accountId) => {
+    const account = getAccountConfig(cfg, resolveSetupAccountId(cfg, accountId));
     if (account?.allowedRoles?.includes("all")) {
       return "open";
     }
@@ -275,14 +331,14 @@ const twitchDmPolicy: ChannelSetupDmPolicy = {
     }
     return "disabled";
   },
-  setPolicy: (cfg, policy) => {
+  setPolicy: (cfg, policy, accountId) => {
     const allowedRoles: TwitchRole[] =
       policy === "open" ? ["all"] : policy === "allowlist" ? [] : ["moderator"];
-    return setTwitchAccessControl(cfg, allowedRoles, true);
+    return setTwitchAccessControl(cfg, allowedRoles, true, accountId);
   },
-  promptAllowFrom: async ({ cfg, prompter }) => {
-    const accountId = resolveSetupAccountId(cfg);
-    const account = getAccountConfig(cfg, accountId);
+  promptAllowFrom: async ({ cfg, prompter, accountId }) => {
+    const resolvedAccountId = resolveSetupAccountId(cfg, accountId);
+    const account = getAccountConfig(cfg, resolvedAccountId);
     const existingAllowFrom = account?.allowFrom ?? [];
 
     const entry = await prompter.text({
@@ -302,7 +358,7 @@ const twitchDmPolicy: ChannelSetupDmPolicy = {
         ...(account ?? undefined),
         allowFrom,
       },
-      accountId,
+      resolvedAccountId,
     );
   },
 };
@@ -311,16 +367,16 @@ const twitchGroupAccess: NonNullable<ChannelSetupWizard["groupAccess"]> = {
   label: "Twitch chat",
   placeholder: "",
   skipAllowlistEntries: true,
-  currentPolicy: ({ cfg }) => resolveTwitchGroupPolicy(cfg),
-  currentEntries: ({ cfg }) => {
-    const account = getAccountConfig(cfg, resolveSetupAccountId(cfg));
+  currentPolicy: ({ cfg, accountId }) => resolveTwitchGroupPolicy(cfg, accountId),
+  currentEntries: ({ cfg, accountId }) => {
+    const account = getAccountConfig(cfg, resolveSetupAccountId(cfg, accountId));
     return account?.allowFrom ?? [];
   },
-  updatePrompt: ({ cfg }) => {
-    const account = getAccountConfig(cfg, resolveSetupAccountId(cfg));
+  updatePrompt: ({ cfg, accountId }) => {
+    const account = getAccountConfig(cfg, resolveSetupAccountId(cfg, accountId));
     return Boolean(account?.allowedRoles?.length || account?.allowFrom?.length);
   },
-  setPolicy: ({ cfg, policy }) => setTwitchGroupPolicy(cfg, policy),
+  setPolicy: ({ cfg, accountId, policy }) => setTwitchGroupPolicy(cfg, policy, accountId),
   resolveAllowlist: async () => [],
   applyAllowlist: ({ cfg }) => cfg,
 };
@@ -339,29 +395,28 @@ export const twitchSetupAdapter: ChannelSetupAdapter = {
 
 export const twitchSetupWizard: ChannelSetupWizard = {
   channel,
-  resolveAccountIdForConfigure: ({ defaultAccountId }) => defaultAccountId,
+  resolveAccountIdForConfigure: ({ cfg, accountOverride }) =>
+    resolveSetupAccountId(cfg, accountOverride),
   resolveShouldPromptAccountIds: () => false,
   status: {
     configuredLabel: "configured",
     unconfiguredLabel: "needs username, token, and clientId",
     configuredHint: "configured",
     unconfiguredHint: "needs setup",
-    resolveConfigured: ({ cfg }) => {
-      const account = getAccountConfig(cfg, resolveSetupAccountId(cfg));
-      return account ? isAccountConfigured(account) : false;
+    resolveConfigured: ({ cfg, accountId }) => {
+      return resolveTwitchAccountContext(cfg, resolveSetupAccountId(cfg, accountId)).configured;
     },
-    resolveStatusLines: ({ cfg }) => {
-      const accountId = resolveSetupAccountId(cfg);
-      const account = getAccountConfig(cfg, accountId);
-      const configured = account ? isAccountConfigured(account) : false;
+    resolveStatusLines: ({ cfg, accountId }) => {
+      const resolvedAccountId = resolveSetupAccountId(cfg, accountId);
+      const configured = resolveTwitchAccountContext(cfg, resolvedAccountId).configured;
       return [
-        `Twitch${accountId !== DEFAULT_ACCOUNT_ID ? ` (${accountId})` : ""}: ${configured ? "configured" : "needs username, token, and clientId"}`,
+        `Twitch${resolvedAccountId !== DEFAULT_ACCOUNT_ID ? ` (${resolvedAccountId})` : ""}: ${configured ? "configured" : "needs username, token, and clientId"}`,
       ];
     },
   },
   credentials: [],
-  finalize: async ({ cfg, prompter, forceAllowFrom }) => {
-    const accountId = resolveSetupAccountId(cfg);
+  finalize: async ({ cfg, accountId: requestedAccountId, prompter, forceAllowFrom }) => {
+    const accountId = resolveSetupAccountId(cfg, requestedAccountId);
     const account = getAccountConfig(cfg, accountId);
 
     if (!account || !isAccountConfigured(account)) {
@@ -370,7 +425,7 @@ export const twitchSetupWizard: ChannelSetupWizard = {
 
     const envToken = process.env.OPENCLAW_TWITCH_ACCESS_TOKEN?.trim();
 
-    if (envToken && !account?.accessToken) {
+    if (accountId === DEFAULT_ACCOUNT_ID && envToken && !account?.accessToken) {
       const envResult = await configureWithEnvToken(
         cfg,
         prompter,
@@ -378,6 +433,7 @@ export const twitchSetupWizard: ChannelSetupWizard = {
         envToken,
         forceAllowFrom,
         twitchDmPolicy,
+        accountId,
       );
       if (envResult) {
         return envResult;
@@ -406,7 +462,7 @@ export const twitchSetupWizard: ChannelSetupWizard = {
 
     const cfgWithAllowFrom =
       forceAllowFrom && twitchDmPolicy.promptAllowFrom
-        ? await twitchDmPolicy.promptAllowFrom({ cfg: cfgWithAccount, prompter })
+        ? await twitchDmPolicy.promptAllowFrom({ cfg: cfgWithAccount, prompter, accountId })
         : cfgWithAccount;
 
     return { cfg: cfgWithAllowFrom };
@@ -425,4 +481,40 @@ export const twitchSetupWizard: ChannelSetupWizard = {
       },
     };
   },
+};
+
+type ResolvedTwitchAccount = TwitchAccountConfig & { accountId?: string | null };
+
+export const twitchSetupPlugin: ChannelPlugin<ResolvedTwitchAccount> = {
+  id: channel,
+  meta: getChatChannelMeta(channel),
+  capabilities: {
+    chatTypes: ["group"],
+  },
+  config: {
+    listAccountIds: (cfg) => listAccountIds(cfg),
+    resolveAccount: (cfg, accountId) => {
+      const resolvedAccountId = normalizeAccountId(accountId ?? resolveDefaultTwitchAccountId(cfg));
+      const account = getAccountConfig(cfg, resolvedAccountId);
+      if (!account) {
+        return {
+          accountId: resolvedAccountId,
+          username: "",
+          accessToken: "",
+          clientId: "",
+          channel: "",
+          enabled: false,
+        };
+      }
+      return {
+        accountId: resolvedAccountId,
+        ...account,
+      };
+    },
+    defaultAccountId: (cfg) => resolveDefaultTwitchAccountId(cfg),
+    isConfigured: (account, cfg) => resolveTwitchAccountContext(cfg, account?.accountId).configured,
+    isEnabled: (account) => account.enabled !== false,
+  },
+  setup: twitchSetupAdapter,
+  setupWizard: twitchSetupWizard,
 };

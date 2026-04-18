@@ -60,6 +60,12 @@ async function runQaParityReport(opts: {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaParityReportCommand(opts);
 }
+
+async function runQaCoverageReport(opts: { repoRoot?: string; output?: string; json?: boolean }) {
+  const runtime = await loadQaLabCliRuntime();
+  await runtime.runQaCoverageReportCommand(opts);
+}
+
 async function runQaCharacterEval(opts: {
   repoRoot?: string;
   outputDir?: string;
@@ -301,6 +307,15 @@ export function registerQaLabCli(program: Command) {
         await runQaParityReport(opts);
       },
     );
+
+  qa.command("coverage")
+    .description("Print the markdown scenario coverage inventory")
+    .option("--repo-root <path>", "Repository root to target when writing --output")
+    .option("--output <path>", "Write the coverage inventory to this path")
+    .option("--json", "Print JSON instead of Markdown", false)
+    .action(async (opts: { repoRoot?: string; output?: string; json?: boolean }) => {
+      await runQaCoverageReport(opts);
+    });
 
   qa.command("character-eval")
     .description("Run the character QA scenario across live models and write a judged report")

@@ -18,12 +18,31 @@ openclaw_live_trim() {
   printf '%s' "$value"
 }
 
+openclaw_live_validate_relative_home_path() {
+  local value
+  value="$(openclaw_live_trim "${1:-}")"
+  [[ -n "$value" ]] || {
+    echo "ERROR: empty auth path." >&2
+    return 1
+  }
+  case "$value" in
+    /* | *..* | *\\* | *:*)
+      echo "ERROR: invalid auth path '$value'." >&2
+      return 1
+      ;;
+  esac
+  printf '%s' "$value"
+}
+
 openclaw_live_normalize_auth_dir() {
   local value
   value="$(openclaw_live_trim "${1:-}")"
   [[ -n "$value" ]] || return 1
-  value="${value#.}"
-  printf '.%s' "$value"
+  if [[ "$value" != .* ]]; then
+    value=".$value"
+  fi
+  value="$(openclaw_live_validate_relative_home_path "$value")" || return 1
+  printf '%s' "$value"
 }
 
 openclaw_live_should_include_auth_dir_for_provider() {
@@ -141,5 +160,46 @@ openclaw_live_join_csv() {
     else
       printf ',%s' "$value"
     fi
+  done
+}
+
+openclaw_live_stage_auth_into_home() {
+  local dest_home="${1:?destination home directory required}"
+  shift
+
+  local mode="dirs"
+  local relative_path source_path dest_path
+
+  mkdir -p "$dest_home"
+  chmod u+rwx "$dest_home" || true
+
+  while (($# > 0)); do
+    case "$1" in
+      --files)
+        mode="files"
+        shift
+        continue
+        ;;
+    esac
+
+    relative_path="$(openclaw_live_validate_relative_home_path "$1")" || return 1
+    source_path="$HOME/$relative_path"
+    dest_path="$dest_home/$relative_path"
+
+    if [[ "$mode" == "dirs" ]]; then
+      if [[ -d "$source_path" ]]; then
+        mkdir -p "$dest_path"
+        cp -R "$source_path"/. "$dest_path"
+        chmod -R u+rwX "$dest_path" || true
+      fi
+    else
+      if [[ -f "$source_path" ]]; then
+        mkdir -p "$(dirname "$dest_path")"
+        cp "$source_path" "$dest_path"
+        chmod u+rw "$dest_path" || true
+      fi
+    fi
+
+    shift
   done
 }

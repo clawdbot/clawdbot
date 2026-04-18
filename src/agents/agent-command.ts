@@ -1,7 +1,3 @@
-import { getAcpSessionManager } from "../acp/control-plane/manager.js";
-import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../acp/policy.js";
-import { toAcpRuntimeError } from "../acp/runtime/errors.js";
-import { resolveAcpSessionCwd } from "../acp/runtime/session-identifiers.js";
 import {
   formatThinkingLevels,
   formatXHighModelHint,
@@ -11,13 +7,8 @@ import {
   type VerboseLevel,
 } from "../auto-reply/thinking.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { getAgentRuntimeCommandSecretTargetIds } from "../cli/command-secret-targets.js";
-import { type CliDeps, createDefaultDeps } from "../cli/deps.js";
-import { loadConfig, readConfigFileSnapshotForWrite } from "../config/io.js";
-import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import type { CliDeps } from "../cli/deps.types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isSecretRef } from "../config/types.secrets.js";
 import {
   clearAgentRunContext,
   emitAgentEvent,
@@ -25,7 +16,6 @@ import {
 } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
-import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
@@ -36,6 +26,7 @@ import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolveMessageChannel } from "../utils/message-channel.js";
+import { resolveAgentRuntimeConfig } from "./agent-runtime-config.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -44,8 +35,8 @@ import {
   resolveAgentSkillsFilter,
   resolveAgentWorkspaceDir,
 } from "./agent-scope.js";
-import { ensureAuthProfileStore } from "./auth-profiles.js";
 import { clearSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
+import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import {
   persistSessionEntry as persistSessionEntryBase,
   prependInternalEventContext,
@@ -54,7 +45,6 @@ import { resolveAgentRunContext } from "./command/run-context.js";
 import { resolveSession } from "./command/session.js";
 import type { AgentCommandIngressOpts, AgentCommandOpts } from "./command/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
-import { canExecRequestNode } from "./exec-defaults.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch.js";
 import { loadModelCatalog } from "./model-catalog.js";
@@ -68,27 +58,64 @@ import {
   resolveDefaultModelForAgent,
   resolveThinkingDefault,
 } from "./model-selection.js";
-import { buildWorkspaceSkillSnapshot } from "./skills.js";
-import { matchesSkillFilter } from "./skills/filter.js";
-import { getSkillsSnapshotVersion, shouldRefreshSnapshotForVersion } from "./skills/refresh.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { ensureAgentWorkspace } from "./workspace.js";
 
 const log = createSubsystemLogger("agents/agent-command");
 type AttemptExecutionRuntime = typeof import("./command/attempt-execution.runtime.js");
+type AcpManagerRuntime = typeof import("../acp/control-plane/manager.js");
+type AcpPolicyRuntime = typeof import("../acp/policy.js");
+type AcpRuntimeErrorsRuntime = typeof import("../acp/runtime/errors.js");
+type AcpSessionIdentifiersRuntime = typeof import("../acp/runtime/session-identifiers.js");
 type DeliveryRuntime = typeof import("./command/delivery.runtime.js");
 type SessionStoreRuntime = typeof import("./command/session-store.runtime.js");
 type TranscriptResolveRuntime = typeof import("../config/sessions/transcript-resolve.runtime.js");
+type CliDepsRuntime = typeof import("../cli/deps.js");
+type ExecDefaultsRuntime = typeof import("./exec-defaults.js");
+type SkillsRuntime = typeof import("./skills.js");
+type SkillsFilterRuntime = typeof import("./skills/filter.js");
+type SkillsRefreshStateRuntime = typeof import("./skills/refresh-state.js");
+type SkillsRemoteRuntime = typeof import("../infra/skills-remote.js");
 
 let attemptExecutionRuntimePromise: Promise<AttemptExecutionRuntime> | undefined;
+let acpManagerRuntimePromise: Promise<AcpManagerRuntime> | undefined;
+let acpPolicyRuntimePromise: Promise<AcpPolicyRuntime> | undefined;
+let acpRuntimeErrorsRuntimePromise: Promise<AcpRuntimeErrorsRuntime> | undefined;
+let acpSessionIdentifiersRuntimePromise: Promise<AcpSessionIdentifiersRuntime> | undefined;
 let deliveryRuntimePromise: Promise<DeliveryRuntime> | undefined;
 let sessionStoreRuntimePromise: Promise<SessionStoreRuntime> | undefined;
 let transcriptResolveRuntimePromise: Promise<TranscriptResolveRuntime> | undefined;
+let cliDepsRuntimePromise: Promise<CliDepsRuntime> | undefined;
+let execDefaultsRuntimePromise: Promise<ExecDefaultsRuntime> | undefined;
+let skillsRuntimePromise: Promise<SkillsRuntime> | undefined;
+let skillsFilterRuntimePromise: Promise<SkillsFilterRuntime> | undefined;
+let skillsRefreshStateRuntimePromise: Promise<SkillsRefreshStateRuntime> | undefined;
+let skillsRemoteRuntimePromise: Promise<SkillsRemoteRuntime> | undefined;
 
 function loadAttemptExecutionRuntime(): Promise<AttemptExecutionRuntime> {
   attemptExecutionRuntimePromise ??= import("./command/attempt-execution.runtime.js");
   return attemptExecutionRuntimePromise;
+}
+
+function loadAcpManagerRuntime(): Promise<AcpManagerRuntime> {
+  acpManagerRuntimePromise ??= import("../acp/control-plane/manager.js");
+  return acpManagerRuntimePromise;
+}
+
+function loadAcpPolicyRuntime(): Promise<AcpPolicyRuntime> {
+  acpPolicyRuntimePromise ??= import("../acp/policy.js");
+  return acpPolicyRuntimePromise;
+}
+
+function loadAcpRuntimeErrorsRuntime(): Promise<AcpRuntimeErrorsRuntime> {
+  acpRuntimeErrorsRuntimePromise ??= import("../acp/runtime/errors.js");
+  return acpRuntimeErrorsRuntimePromise;
+}
+
+function loadAcpSessionIdentifiersRuntime(): Promise<AcpSessionIdentifiersRuntime> {
+  acpSessionIdentifiersRuntimePromise ??= import("../acp/runtime/session-identifiers.js");
+  return acpSessionIdentifiersRuntimePromise;
 }
 
 function loadDeliveryRuntime(): Promise<DeliveryRuntime> {
@@ -104,6 +131,44 @@ function loadSessionStoreRuntime(): Promise<SessionStoreRuntime> {
 function loadTranscriptResolveRuntime(): Promise<TranscriptResolveRuntime> {
   transcriptResolveRuntimePromise ??= import("../config/sessions/transcript-resolve.runtime.js");
   return transcriptResolveRuntimePromise;
+}
+
+function loadCliDepsRuntime(): Promise<CliDepsRuntime> {
+  cliDepsRuntimePromise ??= import("../cli/deps.js");
+  return cliDepsRuntimePromise;
+}
+
+function loadExecDefaultsRuntime(): Promise<ExecDefaultsRuntime> {
+  execDefaultsRuntimePromise ??= import("./exec-defaults.js");
+  return execDefaultsRuntimePromise;
+}
+
+function loadSkillsRuntime(): Promise<SkillsRuntime> {
+  skillsRuntimePromise ??= import("./skills.js");
+  return skillsRuntimePromise;
+}
+
+function loadSkillsFilterRuntime(): Promise<SkillsFilterRuntime> {
+  skillsFilterRuntimePromise ??= import("./skills/filter.js");
+  return skillsFilterRuntimePromise;
+}
+
+function loadSkillsRefreshStateRuntime(): Promise<SkillsRefreshStateRuntime> {
+  skillsRefreshStateRuntimePromise ??= import("./skills/refresh-state.js");
+  return skillsRefreshStateRuntimePromise;
+}
+
+function loadSkillsRemoteRuntime(): Promise<SkillsRemoteRuntime> {
+  skillsRemoteRuntimePromise ??= import("../infra/skills-remote.js");
+  return skillsRemoteRuntimePromise;
+}
+
+async function resolveAgentCommandDeps(deps: CliDeps | undefined): Promise<CliDeps> {
+  if (deps) {
+    return deps;
+  }
+  const { createDefaultDeps } = await loadCliDepsRuntime();
+  return createDefaultDeps();
 }
 
 type PersistSessionEntryParams = {
@@ -143,101 +208,6 @@ async function persistSessionEntry(params: PersistSessionEntryParams): Promise<v
     ...params,
     clearedFields: OVERRIDE_FIELDS_CLEARED_BY_DELETE,
   });
-}
-
-async function resolveAgentRuntimeConfig(
-  runtime: RuntimeEnv,
-  params?: { runtimeTargetsChannelSecrets?: boolean },
-): Promise<{
-  loadedRaw: OpenClawConfig;
-  sourceConfig: OpenClawConfig;
-  cfg: OpenClawConfig;
-}> {
-  const loadedRaw = loadConfig();
-  const sourceConfig = await (async () => {
-    try {
-      const { snapshot } = await readConfigFileSnapshotForWrite();
-      if (snapshot.valid) {
-        return snapshot.resolved;
-      }
-    } catch {
-      // Fall back to runtime-loaded config when source snapshot is unavailable.
-    }
-    return loadedRaw;
-  })();
-  const includeChannelTargets = params?.runtimeTargetsChannelSecrets === true;
-  const cfg = hasAgentRuntimeSecretRefs({
-    config: loadedRaw,
-    includeChannelTargets,
-  })
-    ? (
-        await (
-          await import("../cli/command-config-resolution.runtime.js")
-        ).resolveCommandConfigWithSecrets({
-          config: loadedRaw,
-          commandName: "agent",
-          targetIds: getAgentRuntimeCommandSecretTargetIds({
-            includeChannelTargets,
-          }),
-          runtime,
-        })
-      ).resolvedConfig
-    : loadedRaw;
-  setRuntimeConfigSnapshot(cfg, sourceConfig);
-  return { loadedRaw, sourceConfig, cfg };
-}
-
-function hasNestedSecretRef(value: unknown): boolean {
-  if (isSecretRef(value)) {
-    return true;
-  }
-  if (Array.isArray(value)) {
-    return value.some((entry) => hasNestedSecretRef(entry));
-  }
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  return Object.values(value).some((entry) => hasNestedSecretRef(entry));
-}
-
-function hasAgentRuntimeSecretRefs(params: {
-  config: OpenClawConfig;
-  includeChannelTargets: boolean;
-}): boolean {
-  const { config } = params;
-  if (hasNestedSecretRef(config.models?.providers)) {
-    return true;
-  }
-  if (hasNestedSecretRef(config.agents?.defaults?.memorySearch?.remote?.apiKey)) {
-    return true;
-  }
-  if (
-    Array.isArray(config.agents?.list) &&
-    config.agents.list.some((agent) => hasNestedSecretRef(agent?.memorySearch?.remote?.apiKey))
-  ) {
-    return true;
-  }
-  if (hasNestedSecretRef(config.messages?.tts?.providers)) {
-    return true;
-  }
-  if (hasNestedSecretRef(config.skills?.entries)) {
-    return true;
-  }
-  if (hasNestedSecretRef(config.tools?.web?.search)) {
-    return true;
-  }
-  if (
-    config.plugins?.entries &&
-    Object.values(config.plugins.entries).some((entry) =>
-      hasNestedSecretRef({
-        webSearch: entry?.config?.webSearch,
-        webFetch: entry?.config?.webFetch,
-      }),
-    )
-  ) {
-    return true;
-  }
-  return params.includeChannelTargets ? hasNestedSecretRef(config.channels) : false;
 }
 
 function containsControlCharacters(value: string): boolean {
@@ -386,6 +356,7 @@ async function prepareAgentCommandExecution(
   });
   const workspaceDir = workspace.dir;
   const runId = opts.runId?.trim() || sessionId;
+  const { getAcpSessionManager } = await loadAcpManagerRuntime();
   const acpManager = getAcpSessionManager();
   const acpResolution = sessionKey
     ? acpManager.resolveSession({
@@ -424,8 +395,9 @@ async function prepareAgentCommandExecution(
 async function agentCommandInternal(
   opts: AgentCommandOpts & { senderIsOwner: boolean },
   runtime: RuntimeEnv = defaultRuntime,
-  deps: CliDeps = createDefaultDeps(),
+  deps?: CliDeps,
 ) {
+  const resolvedDeps = await resolveAgentCommandDeps(deps);
   const prepared = await prepareAgentCommandExecution(opts, runtime);
   const {
     body,
@@ -482,6 +454,8 @@ async function agentCommandInternal(
       const visibleTextAccumulator = attemptExecutionRuntime.createAcpVisibleTextAccumulator();
       let stopReason: string | undefined;
       try {
+        const { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } =
+          await loadAcpPolicyRuntime();
         const dispatchPolicyError = resolveAcpDispatchPolicyError(cfg);
         if (dispatchPolicyError) {
           throw dispatchPolicyError;
@@ -527,6 +501,7 @@ async function agentCommandInternal(
           },
         });
       } catch (error) {
+        const { toAcpRuntimeError } = await loadAcpRuntimeErrorsRuntime();
         const acpError = toAcpRuntimeError({
           error,
           fallbackCode: "ACP_TURN_FAILED",
@@ -544,6 +519,7 @@ async function agentCommandInternal(
       const finalTextRaw = visibleTextAccumulator.finalizeRaw();
       const finalText = visibleTextAccumulator.finalize();
       try {
+        const { resolveAcpSessionCwd } = await loadAcpSessionIdentifiersRuntime();
         sessionEntry = await attemptExecutionRuntime.persistAcpTurnTranscript({
           body,
           finalText: finalTextRaw,
@@ -573,7 +549,7 @@ async function agentCommandInternal(
 
       return await deliverAgentCommandResult({
         cfg,
-        deps,
+        deps: resolvedDeps,
         runtime,
         opts,
         outboundSession,
@@ -594,6 +570,8 @@ async function agentCommandInternal(
       });
     }
 
+    const [{ getSkillsSnapshotVersion, shouldRefreshSnapshotForVersion }, { matchesSkillFilter }] =
+      await Promise.all([loadSkillsRefreshStateRuntime(), loadSkillsFilterRuntime()]);
     const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
     const skillFilter = resolveAgentSkillsFilter(cfg, sessionAgentId);
     const currentSkillsSnapshot = sessionEntry?.skillsSnapshot;
@@ -603,22 +581,33 @@ async function agentCommandInternal(
       !matchesSkillFilter(currentSkillsSnapshot.skillFilter, skillFilter);
     const needsSkillsSnapshot = isNewSession || shouldRefreshSkillsSnapshot;
     const skillsSnapshot = needsSkillsSnapshot
-      ? buildWorkspaceSkillSnapshot(workspaceDir, {
-          config: cfg,
-          eligibility: {
-            remote: getRemoteSkillEligibility({
-              advertiseExecNode: canExecRequestNode({
-                cfg,
-                sessionEntry,
-                sessionKey,
-                agentId: sessionAgentId,
+      ? await (async () => {
+          const [
+            { buildWorkspaceSkillSnapshot },
+            { getRemoteSkillEligibility },
+            { canExecRequestNode },
+          ] = await Promise.all([
+            loadSkillsRuntime(),
+            loadSkillsRemoteRuntime(),
+            loadExecDefaultsRuntime(),
+          ]);
+          return buildWorkspaceSkillSnapshot(workspaceDir, {
+            config: cfg,
+            eligibility: {
+              remote: getRemoteSkillEligibility({
+                advertiseExecNode: canExecRequestNode({
+                  cfg,
+                  sessionEntry,
+                  sessionKey,
+                  agentId: sessionAgentId,
+                }),
               }),
-            }),
-          },
-          snapshotVersion: skillsSnapshotVersion,
-          skillFilter,
-          agentId: sessionAgentId,
-        })
+            },
+            snapshotVersion: skillsSnapshotVersion,
+            skillFilter,
+            agentId: sessionAgentId,
+          });
+        })()
       : currentSkillsSnapshot;
 
     if (skillsSnapshot && sessionStore && sessionKey && needsSkillsSnapshot) {
@@ -1070,7 +1059,7 @@ async function agentCommandInternal(
     const { deliverAgentCommandResult } = await loadDeliveryRuntime();
     return await deliverAgentCommandResult({
       cfg,
-      deps,
+      deps: resolvedDeps,
       runtime,
       opts,
       outboundSession,
@@ -1086,7 +1075,7 @@ async function agentCommandInternal(
 export async function agentCommand(
   opts: AgentCommandOpts,
   runtime: RuntimeEnv = defaultRuntime,
-  deps: CliDeps = createDefaultDeps(),
+  deps?: CliDeps,
 ) {
   return await agentCommandInternal(
     {
@@ -1106,7 +1095,7 @@ export async function agentCommand(
 export async function agentCommandFromIngress(
   opts: AgentCommandIngressOpts,
   runtime: RuntimeEnv = defaultRuntime,
-  deps: CliDeps = createDefaultDeps(),
+  deps?: CliDeps,
 ) {
   if (typeof opts.senderIsOwner !== "boolean") {
     // HTTP/WS ingress must declare the trust level explicitly at the boundary.

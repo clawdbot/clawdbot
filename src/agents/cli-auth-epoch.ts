@@ -98,7 +98,6 @@ function encodeAuthProfileCredential(credential: AuthProfileCredential): string 
         credential.enterpriseUrl ?? null,
         credential.projectId ?? null,
         credential.accountId ?? null,
-        credential.managedBy ?? null,
       ]);
   }
   throw new Error("Unsupported auth profile credential type");

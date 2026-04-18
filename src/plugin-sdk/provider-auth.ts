@@ -69,6 +69,10 @@ export {
 } from "../secrets/provider-env-vars.js";
 export { buildOauthProviderAuthResult } from "./provider-auth-result.js";
 export { generatePkceVerifierChallenge, toFormUrlEncoded } from "./oauth-utils.js";
+export {
+  DEFAULT_OAUTH_REFRESH_MARGIN_MS,
+  hasUsableOAuthCredential,
+} from "../agents/auth-profiles/credential-state.js";
 
 export function isProviderApiKeyConfigured(params: {
   provider: string;

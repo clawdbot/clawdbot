@@ -72,6 +72,7 @@ import {
   runQaDockerScaffoldCommand,
   runQaDockerUpCommand,
   runQaCharacterEvalCommand,
+  runQaCoverageReportCommand,
   runQaManualLaneCommand,
   runQaParityReportCommand,
   runQaSuiteCommand,
@@ -334,6 +335,13 @@ describe("qa cli runtime", () => {
       process.exitCode = priorExitCode;
       await fs.rm(repoRoot, { recursive: true, force: true });
     }
+  });
+
+  it("prints a markdown coverage report from scenario metadata", async () => {
+    await runQaCoverageReportCommand({ repoRoot: process.cwd() });
+
+    expect(stdoutWrite).toHaveBeenCalledWith(expect.stringContaining("# QA Coverage Inventory"));
+    expect(stdoutWrite).toHaveBeenCalledWith(expect.stringContaining("memory.recall"));
   });
 
   it("resolves character eval paths and passes model refs through", async () => {

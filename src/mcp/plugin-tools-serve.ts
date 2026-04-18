@@ -10,10 +10,6 @@ import { pathToFileURL } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import {
-  isToolWrappedWithBeforeToolCallHook,
-  wrapToolWithBeforeToolCallHook,
-} from "../agents/pi-tools.before-tool-call.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -21,15 +17,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import { VERSION } from "../version.js";
-
-function resolveJsonSchemaForTool(tool: AnyAgentTool): Record<string, unknown> {
-  const params = tool.parameters;
-  if (params && typeof params === "object" && "type" in params) {
-    return params as Record<string, unknown>;
-  }
-  // Fallback: accept any object
-  return { type: "object", properties: {} };
-}
+import { createPluginToolsMcpHandlers } from "./plugin-tools-handlers.js";
 
 function resolveTools(config: OpenClawConfig): AnyAgentTool[] {
   return resolvePluginTools({
@@ -45,54 +33,18 @@ export function createPluginToolsMcpServer(
   } = {},
 ): Server {
   const cfg = params.config ?? loadConfig();
-  const tools = (params.tools ?? resolveTools(cfg)).map((tool) => {
-    if (isToolWrappedWithBeforeToolCallHook(tool)) {
-      return tool;
-    }
-    // The ACPX MCP bridge should enforce the same pre-execution hook boundary
-    // as the agent and HTTP tool execution paths.
-    return wrapToolWithBeforeToolCallHook(tool);
-  });
-
-  const toolMap = new Map<string, AnyAgentTool>();
-  for (const tool of tools) {
-    toolMap.set(tool.name, tool);
-  }
+  const tools = params.tools ?? resolveTools(cfg);
+  const handlers = createPluginToolsMcpHandlers(tools);
 
   const server = new Server(
     { name: "openclaw-plugin-tools", version: VERSION },
     { capabilities: { tools: {} } },
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: tools.map((tool) => ({
-      name: tool.name,
-      description: tool.description ?? "",
-      inputSchema: resolveJsonSchemaForTool(tool),
-    })),
-  }));
+  server.setRequestHandler(ListToolsRequestSchema, handlers.listTools);
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const tool = toolMap.get(request.params.name);
-    if (!tool) {
-      return {
-        content: [{ type: "text", text: `Unknown tool: ${request.params.name}` }],
-        isError: true,
-      };
-    }
-    try {
-      const result = await tool.execute(`mcp-${Date.now()}`, request.params.arguments ?? {});
-      return {
-        content: Array.isArray(result.content)
-          ? result.content
-          : [{ type: "text", text: String(result.content) }],
-      };
-    } catch (err) {
-      return {
-        content: [{ type: "text", text: `Tool error: ${formatErrorMessage(err)}` }],
-        isError: true,
-      };
-    }
+    return await handlers.callTool(request.params);
   });
 
   return server;

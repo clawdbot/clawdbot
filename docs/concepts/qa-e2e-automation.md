@@ -120,7 +120,7 @@ can write back through the mounted workspace.
 Seed assets live in `qa/`:
 
 - `qa/scenarios/index.md`
-- `qa/scenarios/*.md`
+- `qa/scenarios/<theme>/*.md`
 
 These are intentionally in git so the QA plan is visible to both humans and the
 agent.
@@ -129,6 +129,7 @@ agent.
 the source of truth for one test run and should define:
 
 - scenario metadata
+- optional category, capability, lane, and risk metadata
 - docs and code refs
 - optional plugin requirements
 - optional gateway config patch
@@ -138,6 +139,10 @@ The reusable runtime surface that backs `qa-flow` is allowed to stay generic
 and cross-cutting. For example, markdown scenarios can combine transport-side
 helpers with browser-side helpers that drive the embedded Control UI through the
 Gateway `browser.request` seam without adding a special-case runner.
+
+Scenario files should be grouped by product capability rather than source tree
+folder. Keep scenario IDs stable when files move; use `docsRefs` and `codeRefs`
+for implementation traceability.
 
 The baseline list should stay broad enough to cover:
 

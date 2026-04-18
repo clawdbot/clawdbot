@@ -1,4 +1,5 @@
 import {
+  getActivePluginChannelRegistry,
   getActivePluginRegistryVersion,
   requireActivePluginRegistry,
 } from "../../plugins/runtime.js";
@@ -80,6 +81,11 @@ function resolveCachedChannelSetupPlugins(): CachedChannelSetupPlugins {
 
 export function listChannelSetupPlugins(): ChannelPlugin[] {
   return resolveCachedChannelSetupPlugins().sorted.slice();
+}
+
+export function listActiveChannelSetupPlugins(): ChannelPlugin[] {
+  const registry = getActivePluginChannelRegistry();
+  return sortChannelSetupPlugins((registry?.channelSetups ?? []).map((entry) => entry.plugin));
 }
 
 export function getChannelSetupPlugin(id: ChannelId): ChannelPlugin | undefined {

@@ -25,6 +25,35 @@ import {
 } from "./handler.test-helpers.js";
 import { type MatrixRawEvent } from "./types.js";
 
+const deliverMatrixRepliesMock = vi.hoisted(() => vi.fn(async () => true));
+
+vi.mock("./replies.js", () => ({
+  deliverMatrixReplies: deliverMatrixRepliesMock,
+}));
+
+vi.mock("./route.js", () => ({
+  resolveMatrixInboundRoute: (params: {
+    resolveAgentRoute: (input: unknown) => unknown;
+    cfg: unknown;
+    accountId: string;
+    roomId: string;
+    senderId: string;
+    isDirectMessage: boolean;
+  }) => ({
+    route: params.resolveAgentRoute({
+      cfg: params.cfg,
+      channel: "matrix",
+      accountId: params.accountId,
+      peer: {
+        kind: params.isDirectMessage ? "direct" : "channel",
+        id: params.isDirectMessage ? params.senderId : params.roomId,
+      },
+    }),
+    configuredBinding: null,
+    runtimeBindingId: null,
+  }),
+}));
+
 const DEFAULT_ROOM = "!room:example.org";
 
 function makeRoomTriggerEvent(params: { eventId: string; body: string; ts?: number }) {

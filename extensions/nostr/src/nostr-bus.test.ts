@@ -5,7 +5,7 @@ import {
   isValidPubkey,
   normalizePubkey,
   pubkeyToNpub,
-} from "./nostr-bus.js";
+} from "./nostr-key-utils.js";
 import { TEST_HEX_PRIVATE_KEY, TEST_NSEC } from "./test-fixtures.js";
 
 describe("validatePrivateKey", () => {

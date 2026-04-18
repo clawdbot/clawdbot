@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { resolveManifestContractPluginIds } from "./manifest-registry.js";
+import {
+  resolveManifestContractOwnerPluginId,
+  resolveManifestContractPluginIds,
+} from "./manifest-registry.js";
 import {
   hasBundledWebFetchProviderPublicArtifact,
   hasBundledWebSearchProviderPublicArtifact,
+  resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
 } from "./web-provider-public-artifacts.explicit.js";
 
 describe("web provider public artifacts", () => {
@@ -15,6 +19,28 @@ describe("web provider public artifacts", () => {
     expect(pluginIds).not.toHaveLength(0);
     for (const pluginId of pluginIds) {
       expect(hasBundledWebSearchProviderPublicArtifact(pluginId)).toBe(true);
+    }
+  });
+
+  it("keeps public web search artifacts mapped to their manifest owner plugin", () => {
+    const pluginIds = resolveManifestContractPluginIds({
+      contract: "webSearchProviders",
+      origin: "bundled",
+    });
+
+    const providers = resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({
+      onlyPluginIds: pluginIds,
+    });
+
+    expect(providers).not.toBeNull();
+    for (const provider of providers ?? []) {
+      expect(
+        resolveManifestContractOwnerPluginId({
+          contract: "webSearchProviders",
+          value: provider.id,
+          origin: "bundled",
+        }),
+      ).toBe(provider.pluginId);
     }
   });
 

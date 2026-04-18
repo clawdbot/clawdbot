@@ -4,12 +4,39 @@ Single source of truth for repo-backed QA suite bootstrap data.
 `qa-lab` should treat this directory as a generic markdown scenario pack:
 
 - `index.md` defines pack-level bootstrap data
-- each `*.md` scenario defines one runnable test via `qa-scenario` + `qa-flow`
-- scenario markdown may also define required plugins and gateway config patching
+- each nested `*.md` scenario defines one runnable test via `qa-scenario` + `qa-flow`
+- scenario markdown may also define coverage IDs, category metadata, required plugins,
+  lane filters, and gateway config patching
 
 - kickoff mission
 - QA operator identity
-- scenario files under `./`
+- scenario files under one-level theme directories
+
+Coverage tracking:
+
+- add `coverage.primary` IDs to each scenario's `qa-scenario` block
+- add `coverage.secondary` only when a scenario intentionally protects another behavior
+- keep IDs behavior-shaped, broad enough to reuse, lowercase, and dotted or dashed
+- prefer reusing an existing feature ID over minting a scenario-shaped ID
+- avoid copying the scenario title into coverage IDs
+- use `pnpm openclaw qa coverage` to render the current inventory
+- treat the old `coverage: ["id"]` / `coverage: - id` list shape as invalid
+- keep source-path tracking in the report, not in the scenario schema
+
+Theme directories:
+
+- `agents/` - agent behavior, instructions, and subagent flows
+- `channels/` - DM, shared channel, thread, and message-action behavior
+- `character/` - persona and style eval scenarios
+- `config/` - config patch, apply, and restart behavior
+- `media/` - image understanding and generation
+- `memory/` - recall, ranking, active memory, and thread isolation
+- `models/` - provider capabilities and model switching
+- `plugins/` - plugin, skill, and MCP tool integration
+- `runtime/` - turn recovery, compaction, approval, and inventory behavior
+- `scheduling/` - cron and recurring work
+- `ui/` - Control UI plus qa-channel flows
+- `workspace/` - repo-reading and workspace artifact tasks
 
 ```yaml qa-pack
 version: 1

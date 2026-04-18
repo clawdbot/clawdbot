@@ -77,160 +77,23 @@ function createProps(overrides: Partial<CronProps> = {}): CronProps {
   };
 }
 
+function getButtonByText(container: Element, text: string) {
+  return Array.from(container.querySelectorAll("button")).find(
+    (btn) => btn.textContent?.trim() === text,
+  );
+}
+
 describe("cron view", () => {
-  it("shows all-job history mode by default", () => {
-    const container = document.createElement("div");
-    render(renderCron(createProps()), container);
-
-    expect(container.textContent).toContain("Latest runs across all jobs.");
-    expect(container.textContent).toContain("Status");
-    expect(container.textContent).toContain("All statuses");
-    expect(container.textContent).toContain("Delivery");
-    expect(container.textContent).toContain("All delivery");
-    expect(container.textContent).not.toContain("multi-select");
-  });
-
-  it("toggles run status filter via dropdown checkboxes", () => {
+  it("shows all-job history mode and wires run/job filters", () => {
     const container = document.createElement("div");
     const onRunsFiltersChange = vi.fn();
+    const onJobsFiltersChange = vi.fn();
+    const onJobsFiltersReset = vi.fn();
     render(
       renderCron(
         createProps({
           onRunsFiltersChange,
-        }),
-      ),
-      container,
-    );
-
-    const statusOk = container.querySelector(
-      '.cron-filter-dropdown[data-filter="status"] input[value="ok"]',
-    );
-    expect(statusOk).not.toBeNull();
-    if (!(statusOk instanceof HTMLInputElement)) {
-      return;
-    }
-    statusOk.checked = true;
-    statusOk.dispatchEvent(new Event("change", { bubbles: true }));
-
-    expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsStatuses: ["ok"] });
-  });
-
-  it("loads run history when clicking a job row", () => {
-    const container = document.createElement("div");
-    const onLoadRuns = vi.fn();
-    const job = createJob("job-1");
-    render(
-      renderCron(
-        createProps({
-          jobs: [job],
-          onLoadRuns,
-        }),
-      ),
-      container,
-    );
-
-    const row = container.querySelector(".list-item-clickable");
-    expect(row).not.toBeNull();
-    row?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-
-    expect(onLoadRuns).toHaveBeenCalledWith("job-1");
-  });
-
-  it("marks the selected job and keeps History button to a single call", () => {
-    const container = document.createElement("div");
-    const onLoadRuns = vi.fn();
-    const job = createJob("job-1");
-    render(
-      renderCron(
-        createProps({
-          jobs: [job],
-          runsJobId: "job-1",
-          runsScope: "job",
-          onLoadRuns,
-        }),
-      ),
-      container,
-    );
-
-    const selected = container.querySelector(".list-item-selected");
-    expect(selected).not.toBeNull();
-
-    const historyButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "History",
-    );
-    expect(historyButton).not.toBeUndefined();
-    historyButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-
-    expect(onLoadRuns).toHaveBeenCalledTimes(1);
-    expect(onLoadRuns).toHaveBeenCalledWith("job-1");
-  });
-
-  it("renders run chat links when session keys are present", () => {
-    const container = document.createElement("div");
-    render(
-      renderCron(
-        createProps({
-          basePath: "/ui",
-          runsJobId: "job-1",
-          runs: [
-            {
-              ts: Date.now(),
-              jobId: "job-1",
-              status: "ok",
-              summary: "done",
-              sessionKey: "agent:main:cron:job-1:run:abc",
-            },
-          ],
-        }),
-      ),
-      container,
-    );
-
-    const link = container.querySelector("a.session-link");
-    expect(link).not.toBeNull();
-    expect(link?.getAttribute("href")).toContain(
-      "/ui/chat?session=agent%3Amain%3Acron%3Ajob-1%3Arun%3Aabc",
-    );
-  });
-
-  it("shows selected job name and sorts run history newest first", () => {
-    const container = document.createElement("div");
-    const job = createJob("job-1");
-    render(
-      renderCron(
-        createProps({
-          jobs: [job],
-          runsJobId: "job-1",
-          runsScope: "job",
-          runs: [
-            { ts: 1, jobId: "job-1", status: "ok", summary: "older run" },
-            { ts: 2, jobId: "job-1", status: "ok", summary: "newer run" },
-          ],
-        }),
-      ),
-      container,
-    );
-
-    expect(container.textContent).toContain("Latest runs for Daily ping.");
-
-    const cards = Array.from(container.querySelectorAll(".card"));
-    const runHistoryCard = cards.find(
-      (card) => card.querySelector(".card-title")?.textContent?.trim() === "Run history",
-    );
-    expect(runHistoryCard).not.toBeUndefined();
-
-    const summaries = Array.from(
-      runHistoryCard?.querySelectorAll(".list-item .list-sub") ?? [],
-    ).map((el) => (el.textContent ?? "").trim());
-    expect(summaries[0]).toBe("newer run");
-    expect(summaries[1]).toBe("older run");
-  });
-
-  it("labels past nextRunAtMs as due instead of next", () => {
-    const container = document.createElement("div");
-    render(
-      renderCron(
-        createProps({
+          onJobsFiltersChange,
           runsScope: "all",
           runs: [
             {
@@ -246,45 +109,52 @@ describe("cron view", () => {
       container,
     );
 
+    expect(container.textContent).toContain("Latest runs across all jobs.");
+    expect(container.textContent).toContain("Status");
+    expect(container.textContent).toContain("All statuses");
+    expect(container.textContent).toContain("Delivery");
+    expect(container.textContent).toContain("All delivery");
+    expect(container.textContent).not.toContain("multi-select");
+
+    const statusOk = container.querySelector(
+      '.cron-filter-dropdown[data-filter="status"] input[value="ok"]',
+    );
+    expect(statusOk).not.toBeNull();
+    if (!(statusOk instanceof HTMLInputElement)) {
+      return;
+    }
+    statusOk.checked = true;
+    statusOk.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsStatuses: ["ok"] });
+
     expect(container.textContent).toContain("Due");
     expect(container.textContent).not.toContain("Next 13");
-  });
 
-  it("calls onJobsFiltersChange when schedule filter changes", () => {
-    const container = document.createElement("div");
-    const onJobsFiltersChange = vi.fn();
-    render(renderCron(createProps({ onJobsFiltersChange })), container);
-
-    const select = container.querySelector('select[data-test-id="cron-jobs-schedule-filter"]');
-    expect(select).not.toBeNull();
-    if (!(select instanceof HTMLSelectElement)) {
+    const scheduleSelect = container.querySelector(
+      'select[data-test-id="cron-jobs-schedule-filter"]',
+    );
+    expect(scheduleSelect).not.toBeNull();
+    if (!(scheduleSelect instanceof HTMLSelectElement)) {
       return;
     }
-    select.value = "cron";
-    select.dispatchEvent(new Event("change", { bubbles: true }));
+    scheduleSelect.value = "cron";
+    scheduleSelect.dispatchEvent(new Event("change", { bubbles: true }));
 
     expect(onJobsFiltersChange).toHaveBeenCalledWith({ cronJobsScheduleKindFilter: "cron" });
-  });
 
-  it("calls onJobsFiltersChange when last-run filter changes", () => {
-    const container = document.createElement("div");
-    const onJobsFiltersChange = vi.fn();
-    render(renderCron(createProps({ onJobsFiltersChange })), container);
-
-    const select = container.querySelector('select[data-test-id="cron-jobs-last-status-filter"]');
-    expect(select).not.toBeNull();
-    if (!(select instanceof HTMLSelectElement)) {
+    const lastRunSelect = container.querySelector(
+      'select[data-test-id="cron-jobs-last-status-filter"]',
+    );
+    expect(lastRunSelect).not.toBeNull();
+    if (!(lastRunSelect instanceof HTMLSelectElement)) {
       return;
     }
-    select.value = "error";
-    select.dispatchEvent(new Event("change", { bubbles: true }));
+    lastRunSelect.value = "error";
+    lastRunSelect.dispatchEvent(new Event("change", { bubbles: true }));
 
     expect(onJobsFiltersChange).toHaveBeenCalledWith({ cronJobsLastStatusFilter: "error" });
-  });
 
-  it("calls onJobsFiltersReset when reset button is clicked", () => {
-    const container = document.createElement("div");
-    const onJobsFiltersReset = vi.fn();
     render(
       renderCron(
         createProps({
@@ -302,7 +172,73 @@ describe("cron view", () => {
     expect(onJobsFiltersReset).toHaveBeenCalledTimes(1);
   });
 
-  it("shows webhook delivery option in the form", () => {
+  it("marks the selected job, routes history clicks, and sorts runs newest first", () => {
+    const container = document.createElement("div");
+    const onLoadRuns = vi.fn();
+    const job = createJob("job-1");
+    render(
+      renderCron(
+        createProps({
+          basePath: "/ui",
+          jobs: [job],
+          runsJobId: "job-1",
+          runsScope: "job",
+          runs: [
+            { ts: 1, jobId: "job-1", status: "ok", summary: "older run" },
+            {
+              ts: 2,
+              jobId: "job-1",
+              status: "ok",
+              summary: "newer run",
+              sessionKey: "agent:main:cron:job-1:run:abc",
+            },
+          ],
+          onLoadRuns,
+        }),
+      ),
+      container,
+    );
+
+    const selected = container.querySelector(".list-item-selected");
+    expect(selected).not.toBeNull();
+
+    const row = container.querySelector(".list-item-clickable");
+    expect(row).not.toBeNull();
+    row?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onLoadRuns).toHaveBeenCalledWith("job-1");
+
+    const historyButton = Array.from(container.querySelectorAll("button")).find(
+      (btn) => btn.textContent?.trim() === "History",
+    );
+    expect(historyButton).not.toBeUndefined();
+    historyButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(onLoadRuns).toHaveBeenCalledTimes(2);
+    expect(onLoadRuns).toHaveBeenNthCalledWith(1, "job-1");
+    expect(onLoadRuns).toHaveBeenNthCalledWith(2, "job-1");
+
+    const link = container.querySelector("a.session-link");
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute("href")).toContain(
+      "/ui/chat?session=agent%3Amain%3Acron%3Ajob-1%3Arun%3Aabc",
+    );
+
+    expect(container.textContent).toContain("Latest runs for Daily ping.");
+
+    const cards = Array.from(container.querySelectorAll(".card"));
+    const runHistoryCard = cards.find(
+      (card) => card.querySelector(".card-title")?.textContent?.trim() === "Run history",
+    );
+    expect(runHistoryCard).not.toBeUndefined();
+
+    const summaries = Array.from(
+      runHistoryCard?.querySelectorAll(".list-item .list-sub") ?? [],
+    ).map((el) => (el.textContent ?? "").trim());
+    expect(summaries[0]).toBe("newer run");
+    expect(summaries[1]).toBe("older run");
+  });
+
+  it("renders supported delivery options and normalizes stale announce selection", () => {
     const container = document.createElement("div");
     render(
       renderCron(
@@ -317,10 +253,7 @@ describe("cron view", () => {
       (opt.textContent ?? "").trim(),
     );
     expect(options).toContain("Webhook POST");
-  });
 
-  it("normalizes stale announce selection in the form when unsupported", () => {
-    const container = document.createElement("div");
     render(
       renderCron(
         createProps({
@@ -335,12 +268,12 @@ describe("cron view", () => {
       container,
     );
 
-    const options = Array.from(container.querySelectorAll("option")).map((opt) =>
+    const normalizedOptions = Array.from(container.querySelectorAll("option")).map((opt) =>
       (opt.textContent ?? "").trim(),
     );
-    expect(options).not.toContain("Announce summary (default)");
-    expect(options).toContain("Webhook POST");
-    expect(options).toContain("None (internal)");
+    expect(normalizedOptions).not.toContain("Announce summary (default)");
+    expect(normalizedOptions).toContain("Webhook POST");
+    expect(normalizedOptions).toContain("None (internal)");
     expect(container.querySelector('input[placeholder="https://example.com/cron"]')).toBeNull();
   });
 
@@ -386,9 +319,7 @@ describe("cron view", () => {
       container,
     );
 
-    const editButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "Edit",
-    );
+    const editButton = getButtonByText(container, "Edit");
     expect(editButton).not.toBeUndefined();
     editButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onEdit).toHaveBeenCalledWith(job);
@@ -397,15 +328,13 @@ describe("cron view", () => {
     expect(container.textContent).toContain("Edit Job");
     expect(container.textContent).toContain("Save changes");
 
-    const cancelButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "Cancel",
-    );
+    const cancelButton = getButtonByText(container, "Cancel");
     expect(cancelButton).not.toBeUndefined();
     cancelButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onCancelEdit).toHaveBeenCalledTimes(1);
   });
 
-  it("renders advanced controls for cron + agent payload + delivery", () => {
+  it("renders cron form sections and toggles advanced controls by schedule", () => {
     const container = document.createElement("div");
     render(
       renderCron(
@@ -428,52 +357,29 @@ describe("cron view", () => {
     expect(container.textContent).toContain("Model");
     expect(container.textContent).toContain("Thinking");
     expect(container.textContent).toContain("Best effort delivery");
-  });
-
-  it("groups stagger window and unit inside the same stagger row", () => {
-    const container = document.createElement("div");
-    render(
-      renderCron(
-        createProps({
-          form: {
-            ...DEFAULT_CRON_FORM,
-            scheduleKind: "cron",
-            payloadKind: "agentTurn",
-          },
-        }),
-      ),
-      container,
-    );
 
     const staggerGroup = container.querySelector(".cron-stagger-group");
     expect(staggerGroup).not.toBeNull();
     expect(staggerGroup?.textContent).toContain("Stagger window");
     expect(staggerGroup?.textContent).toContain("Stagger unit");
-  });
-
-  it("explains timeout blank behavior and shows cron jitter hint", () => {
-    const container = document.createElement("div");
-    render(
-      renderCron(
-        createProps({
-          form: {
-            ...DEFAULT_CRON_FORM,
-            scheduleKind: "cron",
-            payloadKind: "agentTurn",
-          },
-        }),
-      ),
-      container,
-    );
-
     expect(container.textContent).toContain(
       "Optional. Leave blank to use the gateway default timeout behavior for this run.",
     );
     expect(container.textContent).toContain("Need jitter? Use Advanced");
-  });
 
-  it("disables Agent ID when clear-agent is enabled", () => {
-    const container = document.createElement("div");
+    expect(container.textContent).toContain("Enabled");
+    expect(container.textContent).toContain("Jobs");
+    expect(container.textContent).toContain("Next wake");
+    expect(container.textContent).toContain("Basics");
+    expect(container.textContent).toContain("Schedule");
+    expect(container.textContent).toContain("Execution");
+    expect(container.textContent).toContain("Delivery");
+
+    const checkboxLabel = container.querySelector(".cron-checkbox");
+    expect(checkboxLabel).not.toBeNull();
+    const firstElement = checkboxLabel?.firstElementChild;
+    expect(firstElement?.tagName.toLowerCase()).toBe("input");
+
     render(
       renderCron(
         createProps({
@@ -490,32 +396,7 @@ describe("cron view", () => {
     expect(agentInput).not.toBeNull();
     expect(agentInput instanceof HTMLInputElement).toBe(true);
     expect(agentInput instanceof HTMLInputElement ? agentInput.disabled : false).toBe(true);
-  });
 
-  it("renders sectioned cron form layout", () => {
-    const container = document.createElement("div");
-    render(renderCron(createProps()), container);
-    expect(container.textContent).toContain("Enabled");
-    expect(container.textContent).toContain("Jobs");
-    expect(container.textContent).toContain("Next wake");
-    expect(container.textContent).toContain("Basics");
-    expect(container.textContent).toContain("Schedule");
-    expect(container.textContent).toContain("Execution");
-    expect(container.textContent).toContain("Delivery");
-    expect(container.textContent).toContain("Advanced");
-  });
-
-  it("renders checkbox fields with input first for alignment", () => {
-    const container = document.createElement("div");
-    render(renderCron(createProps()), container);
-    const checkboxLabel = container.querySelector(".cron-checkbox");
-    expect(checkboxLabel).not.toBeNull();
-    const firstElement = checkboxLabel?.firstElementChild;
-    expect(firstElement?.tagName.toLowerCase()).toBe("input");
-  });
-
-  it("hides cron-only advanced controls for non-cron schedules", () => {
-    const container = document.createElement("div");
     render(
       renderCron(
         createProps({
@@ -535,7 +416,7 @@ describe("cron view", () => {
     expect(container.textContent).not.toContain("Best effort delivery");
   });
 
-  it("renders inline validation errors and disables submit when invalid", () => {
+  it("renders inline validation errors, disabled submit, and required aria bindings", () => {
     const container = document.createElement("div");
     render(
       renderCron(
@@ -569,10 +450,7 @@ describe("cron view", () => {
     );
     expect(saveButton).not.toBeUndefined();
     expect(saveButton?.disabled).toBe(true);
-  });
 
-  it("shows required legend and aria bindings for invalid required fields", () => {
-    const container = document.createElement("div");
     render(
       renderCron(
         createProps({
@@ -609,101 +487,59 @@ describe("cron view", () => {
     );
   });
 
-  it("wires the Clone action from job rows", () => {
+  it("wires job row actions and selects the row before acting", () => {
     const container = document.createElement("div");
     const onClone = vi.fn();
-    const onLoadRuns = vi.fn();
-    const job = createJob("job-clone");
-    render(
-      renderCron(
-        createProps({
-          jobs: [job],
-          onClone,
-          onLoadRuns,
-        }),
-      ),
-      container,
-    );
-
-    const cloneButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "Clone",
-    );
-    expect(cloneButton).not.toBeUndefined();
-    cloneButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(onClone).toHaveBeenCalledWith(job);
-    expect(onLoadRuns).toHaveBeenCalledWith("job-clone");
-  });
-
-  it("selects row when clicking Enable/Disable, Run, and Remove actions", () => {
-    const container = document.createElement("div");
     const onToggle = vi.fn();
     const onRun = vi.fn();
     const onRemove = vi.fn();
-    const onLoadRuns = vi.fn();
-    const job = createJob("job-actions");
+    const actionLoadRuns = vi.fn();
+    const actionJob = createJob("job-actions");
     render(
       renderCron(
         createProps({
-          jobs: [job],
+          jobs: [actionJob],
+          onClone,
           onToggle,
           onRun,
           onRemove,
-          onLoadRuns,
+          onLoadRuns: actionLoadRuns,
         }),
       ),
       container,
     );
 
-    const enableButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "Disable",
-    );
+    const cloneButton = getButtonByText(container, "Clone");
+    expect(cloneButton).not.toBeUndefined();
+    cloneButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    const enableButton = getButtonByText(container, "Disable");
     expect(enableButton).not.toBeUndefined();
     enableButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-    const runButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "Run",
-    );
+    const runButton = getButtonByText(container, "Run");
     expect(runButton).not.toBeUndefined();
     runButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-    const removeButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "Remove",
-    );
-    expect(removeButton).not.toBeUndefined();
-    removeButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-
-    expect(onToggle).toHaveBeenCalledWith(job, false);
-    expect(onRun).toHaveBeenCalledWith(job, "force");
-    expect(onRemove).toHaveBeenCalledWith(job);
-    expect(onLoadRuns).toHaveBeenCalledTimes(3);
-    expect(onLoadRuns).toHaveBeenNthCalledWith(1, "job-actions");
-    expect(onLoadRuns).toHaveBeenNthCalledWith(2, "job-actions");
-    expect(onLoadRuns).toHaveBeenNthCalledWith(3, "job-actions");
-  });
-
-  it("wires Run if due action with due mode", () => {
-    const container = document.createElement("div");
-    const onRun = vi.fn();
-    const onLoadRuns = vi.fn();
-    const job = createJob("job-due");
-    render(
-      renderCron(
-        createProps({
-          jobs: [job],
-          onRun,
-          onLoadRuns,
-        }),
-      ),
-      container,
-    );
-
-    const runDueButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "Run if due",
-    );
+    const runDueButton = getButtonByText(container, "Run if due");
     expect(runDueButton).not.toBeUndefined();
     runDueButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-    expect(onRun).toHaveBeenCalledWith(job, "due");
+    const removeButton = getButtonByText(container, "Remove");
+    expect(removeButton).not.toBeUndefined();
+    removeButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(onClone).toHaveBeenCalledWith(actionJob);
+    expect(onToggle).toHaveBeenCalledWith(actionJob, false);
+    expect(onRun).toHaveBeenNthCalledWith(1, actionJob, "force");
+    expect(onRun).toHaveBeenNthCalledWith(2, actionJob, "due");
+    expect(onRemove).toHaveBeenCalledWith(actionJob);
+    expect(actionLoadRuns).toHaveBeenCalledTimes(5);
+    expect(actionLoadRuns).toHaveBeenNthCalledWith(1, "job-actions");
+    expect(actionLoadRuns).toHaveBeenNthCalledWith(2, "job-actions");
+    expect(actionLoadRuns).toHaveBeenNthCalledWith(3, "job-actions");
+    expect(actionLoadRuns).toHaveBeenNthCalledWith(4, "job-actions");
+    expect(actionLoadRuns).toHaveBeenNthCalledWith(5, "job-actions");
   });
 
   it("renders suggestion datalists for agent/model/thinking/timezone", () => {

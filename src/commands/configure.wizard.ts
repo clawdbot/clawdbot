@@ -35,7 +35,7 @@ import {
 } from "./configure.shared.js";
 import { formatHealthCheckFailure } from "./health-format.js";
 import { healthCommand } from "./health.js";
-import { noteChannelStatus, setupChannels } from "./onboard-channels.js";
+import { setupChannels } from "./onboard-channels.js";
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
@@ -561,12 +561,12 @@ export async function runConfigureWizard(
     };
 
     const configureChannelsSection = async () => {
-      await noteChannelStatus({ cfg: nextConfig, prompter });
       const channelMode = await promptChannelMode(runtime);
       if (channelMode === "configure") {
         nextConfig = await setupChannels(nextConfig, runtime, prompter, {
           allowDisable: true,
           allowSignalInstall: true,
+          deferStatusUntilSelection: true,
           skipConfirm: true,
           skipStatusNote: true,
         });

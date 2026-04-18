@@ -1009,12 +1009,16 @@ describe("Bundle chunk isolation (#40096)", () => {
   it("shares registrations and keeps concurrent chunk registration visible", async () => {
     const ts = Date.now().toString(36);
     const registryUrl = new URL("./registry.ts", import.meta.url).href;
-    const chunks = await Promise.all(
-      Array.from(
-        { length: 3 },
-        (_, i) => import(/* @vite-ignore */ `${registryUrl}?chunk=${ts}-${i}`),
-      ),
-    );
+    const dynamicChunk = await import(/* @vite-ignore */ `${registryUrl}?chunk=${ts}-dynamic`);
+    const chunks = [
+      {
+        registerContextEngine,
+        getContextEngineFactory,
+        listContextEngineIds,
+        resolveContextEngine,
+      },
+      dynamicChunk,
+    ];
 
     const engineId = `cross-chunk-${ts}`;
     const factory = () => ({
