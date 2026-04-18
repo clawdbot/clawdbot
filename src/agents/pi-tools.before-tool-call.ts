@@ -15,6 +15,8 @@ export type HookContext = {
   loopDetection?: ToolLoopDetectionConfig;
   /** Channel identifier (e.g. "telegram", "discord", "slack"). */
   channelId?: string;
+  /** What initiated this agent run: "user", "heartbeat", "cron", or "memory". */
+  trigger?: string;
 };
 
 type HookOutcome = { blocked: true; reason: string } | { blocked: false; params: unknown };
@@ -164,6 +166,7 @@ export async function runBeforeToolCallHook(args: {
       ...(args.ctx?.runId ? { runId: args.ctx.runId } : {}),
       ...(args.toolCallId ? { toolCallId: args.toolCallId } : {}),
       ...(args.ctx?.channelId ? { channelId: args.ctx.channelId } : {}),
+      ...(args.ctx?.trigger ? { trigger: args.ctx.trigger } : {}),
     };
     const hookResult = await hookRunner.runBeforeToolCall(
       {

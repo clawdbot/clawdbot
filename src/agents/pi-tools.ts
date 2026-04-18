@@ -606,6 +606,7 @@ export function createOpenClawCodingTools(options?: {
       runId: options?.runId,
       loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
       channelId: resolveGatewayMessageChannel(options?.messageProvider) ?? undefined,
+      trigger: options?.trigger,
     }),
   );
   const withAbort = options?.abortSignal

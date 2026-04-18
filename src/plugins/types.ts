@@ -717,6 +717,8 @@ export type PluginHookToolContext = {
   toolCallId?: string;
   /** Channel identifier (e.g. "telegram", "discord", "slack"). */
   channelId?: string;
+  /** What initiated this agent run: "user", "heartbeat", "cron", or "memory". */
+  trigger?: string;
 };
 
 // before_tool_call hook
