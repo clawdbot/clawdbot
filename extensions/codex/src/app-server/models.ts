@@ -28,6 +28,7 @@ export type CodexAppServerListModelsOptions = {
   includeHidden?: boolean;
   timeoutMs?: number;
   startOptions?: CodexAppServerStartOptions;
+  authProfileId?: string;
   sharedClient?: boolean;
 };
 
@@ -40,10 +41,12 @@ export async function listCodexAppServerModels(
     ? await getSharedCodexAppServerClient({
         startOptions: options.startOptions,
         timeoutMs,
+        authProfileId: options.authProfileId,
       })
     : await createIsolatedCodexAppServerClient({
         startOptions: options.startOptions,
         timeoutMs,
+        authProfileId: options.authProfileId,
       });
   try {
     const response = await client.request<JsonObject>(

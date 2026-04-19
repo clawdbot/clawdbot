@@ -208,11 +208,12 @@ function buildPluginReport(
   return {
     workspaceDir,
     ...registry,
-    plugins: registry.plugins.map((plugin) => ({
-      ...plugin,
-      imported: plugin.format !== "bundle" && importedPluginIds.has(plugin.id),
-      version: resolveReportedPluginVersion(plugin, params?.env),
-    })),
+    plugins: registry.plugins.map((plugin) =>
+      Object.assign({}, plugin, {
+        imported: plugin.format !== `bundle` && importedPluginIds.has(plugin.id),
+        version: resolveReportedPluginVersion(plugin, params?.env),
+      }),
+    ),
   };
 }
 

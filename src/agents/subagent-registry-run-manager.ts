@@ -31,6 +31,26 @@ function shouldDeleteAttachments(entry: SubagentRunRecord) {
   return entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
 }
 
+export type RegisterSubagentRunParams = {
+  runId: string;
+  childSessionKey: string;
+  controllerSessionKey?: string;
+  requesterSessionKey: string;
+  requesterOrigin?: DeliveryContext;
+  requesterDisplayKey: string;
+  task: string;
+  cleanup: "delete" | "keep";
+  label?: string;
+  model?: string;
+  workspaceDir?: string;
+  runTimeoutSeconds?: number;
+  expectsCompletionMessage?: boolean;
+  spawnMode?: "run" | "session";
+  attachmentsDir?: string;
+  attachmentsRootDir?: string;
+  retainAttachmentsOnKeep?: boolean;
+};
+
 export function createSubagentRunManager(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
@@ -261,25 +281,7 @@ export function createSubagentRunManager(params: {
     return true;
   };
 
-  const registerSubagentRun = (registerParams: {
-    runId: string;
-    childSessionKey: string;
-    controllerSessionKey?: string;
-    requesterSessionKey: string;
-    requesterOrigin?: DeliveryContext;
-    requesterDisplayKey: string;
-    task: string;
-    cleanup: "delete" | "keep";
-    label?: string;
-    model?: string;
-    workspaceDir?: string;
-    runTimeoutSeconds?: number;
-    expectsCompletionMessage?: boolean;
-    spawnMode?: "run" | "session";
-    attachmentsDir?: string;
-    attachmentsRootDir?: string;
-    retainAttachmentsOnKeep?: boolean;
-  }) => {
+  const registerSubagentRun = (registerParams: RegisterSubagentRunParams) => {
     const runId = registerParams.runId.trim();
     const childSessionKey = registerParams.childSessionKey.trim();
     const requesterSessionKey = registerParams.requesterSessionKey.trim();

@@ -134,6 +134,13 @@ export async function updateSessionStoreAfterAgentRun(params: {
       next.estimatedCostUsd =
         (resolveNonNegativeNumber(entry.estimatedCostUsd) ?? 0) + runEstimatedCostUsd;
     }
+  } else if (
+    typeof entry.totalTokens === "number" &&
+    Number.isFinite(entry.totalTokens) &&
+    entry.totalTokens > 0
+  ) {
+    next.totalTokens = entry.totalTokens;
+    next.totalTokensFresh = false;
   }
   if (compactionsThisRun > 0) {
     next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;

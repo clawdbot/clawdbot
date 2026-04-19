@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { quoteCmdScriptArg } from "../daemon/cmd-argv.js";
 import { resolveGatewayWindowsTaskName } from "../daemon/constants.js";
+import { renderCmdRestartLogSetup } from "../daemon/restart-logs.js";
 import { resolveTaskScriptPath } from "../daemon/schtasks.js";
 import { formatErrorMessage } from "./errors.js";
 import type { RestartAttempt } from "./restart.types.js";
@@ -20,28 +21,41 @@ function resolveWindowsTaskName(env: NodeJS.ProcessEnv): string {
   return resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE);
 }
 
-function buildScheduledTaskRestartScript(taskName: string, taskScriptPath?: string): string {
+function buildScheduledTaskRestartScript(params: {
+  quotedLogPath: string;
+  setupLines: string[];
+  taskName: string;
+  taskScriptPath?: string;
+}): string {
+  const { quotedLogPath, setupLines, taskName, taskScriptPath } = params;
   const quotedTaskName = quoteCmdScriptArg(taskName);
   const lines = [
     "@echo off",
     "setlocal",
-    `schtasks /Query /TN ${quotedTaskName} >nul 2>&1`,
+    ...setupLines,
+    `>> ${quotedLogPath} 2>&1 echo [%DATE% %TIME%] openclaw restart attempt source=windows-task-handoff target=${quotedTaskName}`,
+    `schtasks /Query /TN ${quotedTaskName} >> ${quotedLogPath} 2>&1`,
     "if errorlevel 1 goto fallback",
     "set /a attempts=0",
     ":retry",
     `timeout /t ${TASK_RESTART_RETRY_DELAY_SEC} /nobreak >nul`,
     "set /a attempts+=1",
-    `schtasks /Run /TN ${quotedTaskName} >nul 2>&1`,
+    `schtasks /Run /TN ${quotedTaskName} >> ${quotedLogPath} 2>&1`,
     "if not errorlevel 1 goto cleanup",
     `if %attempts% GEQ ${TASK_RESTART_RETRY_LIMIT} goto fallback`,
     "goto retry",
     ":fallback",
+    `>> ${quotedLogPath} 2>&1 echo [%DATE% %TIME%] openclaw restart fallback source=windows-task-handoff`,
   ];
   if (taskScriptPath) {
     const quotedScript = quoteCmdScriptArg(taskScriptPath);
     lines.push(`if exist ${quotedScript} (`, `  start "" /min cmd.exe /d /c ${quotedScript}`, ")");
   }
-  lines.push(":cleanup", 'del "%~f0" >nul 2>&1');
+  lines.push(
+    ":cleanup",
+    `>> ${quotedLogPath} 2>&1 echo [%DATE% %TIME%] openclaw restart finished source=windows-task-handoff`,
+    'del "%~f0" >nul 2>&1',
+  );
   return lines.join("\r\n");
 }
 
@@ -53,10 +67,16 @@ export function relaunchGatewayScheduledTask(env: NodeJS.ProcessEnv = process.en
     `openclaw-schtasks-restart-${randomUUID()}.cmd`,
   );
   const quotedScriptPath = quoteCmdScriptArg(scriptPath);
+  const restartLog = renderCmdRestartLogSetup({ ...process.env, ...env });
   try {
     fs.writeFileSync(
       scriptPath,
-      `${buildScheduledTaskRestartScript(taskName, taskScriptPath)}\r\n`,
+      `${buildScheduledTaskRestartScript({
+        quotedLogPath: restartLog.quotedLogPath,
+        setupLines: restartLog.lines,
+        taskName,
+        taskScriptPath,
+      })}\r\n`,
       "utf8",
     );
     const child = spawn("cmd.exe", ["/d", "/s", "/c", quotedScriptPath], {

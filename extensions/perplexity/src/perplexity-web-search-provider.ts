@@ -9,6 +9,15 @@ import { resolvePerplexityRuntimeTransport } from "./perplexity-web-search-provi
 
 const PERPLEXITY_CREDENTIAL_PATH = "plugins.entries.perplexity.config.webSearch.apiKey";
 
+type PerplexityWebSearchRuntime = typeof import("./perplexity-web-search-provider.runtime.js");
+
+let perplexityWebSearchRuntimePromise: Promise<PerplexityWebSearchRuntime> | undefined;
+
+function loadPerplexityWebSearchRuntime(): Promise<PerplexityWebSearchRuntime> {
+  perplexityWebSearchRuntimePromise ??= import("./perplexity-web-search-provider.runtime.js");
+  return perplexityWebSearchRuntimePromise;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -95,8 +104,7 @@ function createPerplexityToolDefinition(
         : "Search the web using Perplexity. Runtime routing decides between native Search API and Sonar chat-completions compatibility. Structured filters are available on the native Search API path.",
     parameters: createPerplexityParameters(schemaTransport),
     execute: async (args) => {
-      const { executePerplexitySearch } =
-        await import("./perplexity-web-search-provider.runtime.js");
+      const { executePerplexitySearch } = await loadPerplexityWebSearchRuntime();
       return await executePerplexitySearch(args, searchConfig);
     },
   };

@@ -24,6 +24,7 @@ import type { ReplyToMode } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
+import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { OpenClawPluginApi } from "../plugins/types.js";
@@ -227,11 +228,22 @@ export type ChannelOutboundSessionRouteParams = Parameters<
   NonNullable<ChannelMessagingAdapter["resolveOutboundSessionRoute"]>
 >[0];
 
-var cachedSdkChatChannelMeta: ReturnType<typeof buildChatChannelMetaById> | undefined;
+var cachedSdkChatChannelMeta:
+  | {
+      cacheKey: string;
+      metaById: ReturnType<typeof buildChatChannelMetaById>;
+    }
+  | undefined;
 
 function resolveSdkChatChannelMeta(id: string) {
-  cachedSdkChatChannelMeta ??= buildChatChannelMetaById();
-  return cachedSdkChatChannelMeta[id];
+  const cacheKey = resolveBundledPluginsDir(process.env) ?? "";
+  if (cachedSdkChatChannelMeta?.cacheKey !== cacheKey) {
+    cachedSdkChatChannelMeta = {
+      cacheKey,
+      metaById: buildChatChannelMetaById(),
+    };
+  }
+  return cachedSdkChatChannelMeta.metaById[id];
 }
 
 export function getChatChannelMeta(id: ChatChannelId): ChannelMeta {

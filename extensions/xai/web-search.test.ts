@@ -78,8 +78,8 @@ describe("xai web search config resolution", () => {
     expect(resolveXaiWebSearchModel(searchConfig)).toBe("grok-4-fast");
   });
 
-  it("treats unresolved non-env SecretRefs as missing credentials instead of throwing", async () => {
-    await withEnvAsync({ XAI_API_KEY: undefined }, async () => {
+  it("treats unresolved non-env SecretRefs as missing credentials instead of using env fallback", async () => {
+    await withEnvAsync({ XAI_API_KEY: "ambient-xai-test-key" }, async () => {
       const provider = createXaiWebSearchProvider();
       const maybeTool = provider.createTool({
         config: {

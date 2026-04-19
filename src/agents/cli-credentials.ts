@@ -56,6 +56,7 @@ export type CodexCliCredential = {
   refresh: string;
   expires: number;
   accountId?: string;
+  idToken?: string;
 };
 
 export type MiniMaxCliCredential = {
@@ -289,6 +290,7 @@ function readCodexKeychainCredentials(options?: {
       : Date.now() + 60 * 60 * 1000;
     const expires = decodeJwtExpiryMs(accessToken) ?? fallbackExpiry;
     const accountId = typeof tokens?.account_id === "string" ? tokens.account_id : undefined;
+    const idToken = typeof tokens?.id_token === "string" ? tokens.id_token : undefined;
 
     log.info("read codex credentials from keychain", {
       source: "keychain",
@@ -302,6 +304,7 @@ function readCodexKeychainCredentials(options?: {
       refresh: refreshToken,
       expires,
       accountId,
+      idToken,
     };
   } catch {
     return null;
@@ -542,6 +545,9 @@ function buildUpdatedCodexAuthRecord(
     ...existingTokens,
     access_token: newCredentials.access,
     refresh_token: newCredentials.refresh,
+    ...(typeof newCredentials.idToken === "string" && newCredentials.idToken.trim().length > 0
+      ? { id_token: newCredentials.idToken }
+      : {}),
     ...(typeof newCredentials.accountId === "string" && newCredentials.accountId.trim().length > 0
       ? { account_id: newCredentials.accountId }
       : {}),
@@ -698,6 +704,7 @@ export function readCodexCliCredentials(options?: {
     refresh: refreshToken,
     expires,
     accountId: typeof tokens.account_id === "string" ? tokens.account_id : undefined,
+    idToken: typeof tokens.id_token === "string" ? tokens.id_token : undefined,
   };
 }
 

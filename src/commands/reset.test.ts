@@ -1,28 +1,12 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createNonExitingRuntime } from "../runtime.js";
-const resolveCleanupPlanFromDisk = vi.fn();
-const removePath = vi.fn();
-const listAgentSessionDirs = vi.fn();
-const removeStateAndLinkedPaths = vi.fn();
-const removeWorkspaceDirs = vi.fn();
-
-vi.mock("../config/config.js", () => ({
-  isNixMode: false,
-}));
-
-vi.mock("./cleanup-plan.js", () => ({
-  resolveCleanupPlanFromDisk,
-}));
-
-vi.mock("./cleanup-utils.js", () => ({
-  removePath,
-  listAgentSessionDirs,
-  removeStateAndLinkedPaths,
-  removeWorkspaceDirs,
-}));
+import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  createCleanupCommandRuntime,
+  resetCleanupCommandMocks,
+  silenceCleanupCommandRuntime,
+} from "./cleanup-command.test-support.js";
 
 describe("resetCommand", () => {
-  const runtime = createNonExitingRuntime();
+  const runtime = createCleanupCommandRuntime();
   let resetCommand: typeof import("./reset.js").resetCommand;
 
   beforeAll(async () => {
@@ -30,21 +14,8 @@ describe("resetCommand", () => {
   });
 
   beforeEach(() => {
-    vi.clearAllMocks();
-    resolveCleanupPlanFromDisk.mockReturnValue({
-      stateDir: "/tmp/.openclaw",
-      configPath: "/tmp/.openclaw/openclaw.json",
-      oauthDir: "/tmp/.openclaw/credentials",
-      configInsideState: true,
-      oauthInsideState: true,
-      workspaceDirs: ["/tmp/.openclaw/workspace"],
-    });
-    removePath.mockResolvedValue({ ok: true });
-    listAgentSessionDirs.mockResolvedValue(["/tmp/.openclaw/agents/main/sessions"]);
-    removeStateAndLinkedPaths.mockResolvedValue(undefined);
-    removeWorkspaceDirs.mockResolvedValue(undefined);
-    vi.spyOn(runtime, "log").mockImplementation(() => {});
-    vi.spyOn(runtime, "error").mockImplementation(() => {});
+    resetCleanupCommandMocks();
+    silenceCleanupCommandRuntime(runtime);
   });
 
   it("recommends creating a backup before state-destructive reset scopes", async () => {

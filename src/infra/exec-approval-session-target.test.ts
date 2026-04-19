@@ -107,6 +107,24 @@ function buildPluginRequest(
   };
 }
 
+function resolveSlackPluginOriginTarget(params: { cfg: OpenClawConfig; turnSourceTo: string }) {
+  return resolveApprovalRequestOriginTarget({
+    cfg: params.cfg,
+    request: buildPluginRequest({
+      turnSourceChannel: "slack",
+      turnSourceTo: params.turnSourceTo,
+    }),
+    channel: "slack",
+    accountId: "default",
+    resolveTurnSourceTarget: (request) =>
+      request.request.turnSourceChannel === "slack" && request.request.turnSourceTo
+        ? { to: request.request.turnSourceTo }
+        : null,
+    resolveSessionTarget: (sessionTarget) => ({ to: sessionTarget.to }),
+    targetsMatch: (a, b) => a.to === b.to,
+  });
+}
+
 describe("exec approval session target", () => {
   type PlaceholderStoreCase = {
     name: string;
@@ -426,20 +444,9 @@ describe("exec approval session target", () => {
         },
       });
 
-      const target = resolveApprovalRequestOriginTarget({
+      const target = resolveSlackPluginOriginTarget({
         cfg,
-        request: buildPluginRequest({
-          turnSourceChannel: "slack",
-          turnSourceTo: "channel:C123",
-        }),
-        channel: "slack",
-        accountId: "default",
-        resolveTurnSourceTarget: (request) =>
-          request.request.turnSourceChannel === "slack" && request.request.turnSourceTo
-            ? { to: request.request.turnSourceTo }
-            : null,
-        resolveSessionTarget: (sessionTarget) => ({ to: sessionTarget.to }),
-        targetsMatch: (a, b) => a.to === b.to,
+        turnSourceTo: "channel:C123",
       });
 
       expect(target).toEqual({ to: "channel:C123" });
@@ -458,20 +465,9 @@ describe("exec approval session target", () => {
         },
       });
 
-      const target = resolveApprovalRequestOriginTarget({
+      const target = resolveSlackPluginOriginTarget({
         cfg,
-        request: buildPluginRequest({
-          turnSourceChannel: "slack",
-          turnSourceTo: "channel:C999",
-        }),
-        channel: "slack",
-        accountId: "default",
-        resolveTurnSourceTarget: (request) =>
-          request.request.turnSourceChannel === "slack" && request.request.turnSourceTo
-            ? { to: request.request.turnSourceTo }
-            : null,
-        resolveSessionTarget: (sessionTarget) => ({ to: sessionTarget.to }),
-        targetsMatch: (a, b) => a.to === b.to,
+        turnSourceTo: "channel:C999",
       });
 
       expect(target).toBeNull();

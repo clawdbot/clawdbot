@@ -5,7 +5,21 @@ import type { OpenClawConfig } from "../../../src/config/config.js";
 import { resolveRelativeBundledPluginPublicModuleId } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import { withTempHome } from "../temp-home.js";
 
-type ResolvedSlackAccount = import("@openclaw/slack/api.js").ResolvedSlackAccount;
+type ResolvedSlackAccount = {
+  accountId: string;
+  enabled: boolean;
+  botTokenSource: string;
+  appTokenSource: string;
+  userTokenSource: string;
+  config: {
+    replyToMode?: unknown;
+    replyToModeByChatType?: unknown;
+    dm?: unknown;
+  };
+  replyToMode?: unknown;
+  replyToModeByChatType?: unknown;
+  dm?: unknown;
+};
 
 type SlackMessageEvent = {
   channel: string;

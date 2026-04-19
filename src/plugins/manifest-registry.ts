@@ -34,6 +34,7 @@ import {
   type PluginManifestChannelConfig,
   type PluginManifestContracts,
   type PluginManifestModelSupport,
+  type PluginManifestProviderEndpoint,
   type PluginManifestQaRunner,
   type PluginManifestSetup,
 } from "./manifest.js";
@@ -85,7 +86,10 @@ export type PluginManifestRecord = {
   providers: string[];
   providerDiscoverySource?: string;
   modelSupport?: PluginManifestModelSupport;
+  providerEndpoints?: PluginManifestProviderEndpoint[];
   cliBackends: string[];
+  syntheticAuthRefs?: string[];
+  nonSecretAuthMarkers?: string[];
   commandAliases?: PluginManifestCommandAlias[];
   providerAuthEnvVars?: Record<string, string[]>;
   providerAuthAliases?: Record<string, string>;
@@ -327,7 +331,10 @@ function buildRecord(params: {
       ? path.resolve(params.candidate.rootDir, params.manifest.providerDiscoveryEntry)
       : undefined,
     modelSupport: params.manifest.modelSupport,
+    providerEndpoints: params.manifest.providerEndpoints,
     cliBackends: params.manifest.cliBackends ?? [],
+    syntheticAuthRefs: params.manifest.syntheticAuthRefs ?? [],
+    nonSecretAuthMarkers: params.manifest.nonSecretAuthMarkers ?? [],
     commandAliases: params.manifest.commandAliases,
     providerAuthEnvVars: params.manifest.providerAuthEnvVars,
     providerAuthAliases: params.manifest.providerAuthAliases,
@@ -398,6 +405,8 @@ function buildBundleRecord(params: {
     channels: [],
     providers: [],
     cliBackends: [],
+    syntheticAuthRefs: [],
+    nonSecretAuthMarkers: [],
     skills: params.manifest.skills ?? [],
     settingsFiles: params.manifest.settingsFiles ?? [],
     hooks: params.manifest.hooks ?? [],

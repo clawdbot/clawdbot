@@ -22,12 +22,12 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
 });
 
 describe("lmstudio-models", () => {
-  const asFetch = <T>(mock: T) => mock as unknown as typeof fetch;
-  const parseJsonRequestBody = <T>(init: RequestInit | undefined): T => {
+  const asFetch = (mock: unknown) => mock as typeof fetch;
+  const parseJsonRequestBody = (init: RequestInit | undefined): unknown => {
     if (typeof init?.body !== "string") {
       throw new Error("Expected request body to be a JSON string");
     }
-    return JSON.parse(init.body) as T;
+    return JSON.parse(init.body) as unknown;
   };
 
   afterEach(() => {
@@ -215,7 +215,7 @@ describe("lmstudio-models", () => {
     const loadCall = fetchMock.mock.calls.find((call) => String(call[0]).endsWith("/models/load"));
     expect(loadCall).toBeDefined();
     const loadInit = loadCall?.[1] as RequestInit;
-    const loadBody = parseJsonRequestBody<{ context_length: number }>(loadInit);
+    const loadBody = parseJsonRequestBody(loadInit) as { context_length: number };
     expect(loadBody.context_length).toBe(8192);
   });
 
@@ -258,7 +258,7 @@ describe("lmstudio-models", () => {
     const loadCall = fetchMock.mock.calls.find((call) => String(call[0]).endsWith("/models/load"));
     expect(loadCall).toBeDefined();
     const loadInit = loadCall?.[1] as RequestInit;
-    const loadBody = parseJsonRequestBody<{ context_length: number }>(loadInit);
+    const loadBody = parseJsonRequestBody(loadInit) as { context_length: number };
     expect(loadBody.context_length).toBe(32768);
   });
 
@@ -318,7 +318,7 @@ describe("lmstudio-models", () => {
       }),
     });
     const loadInit = loadCall![1] as RequestInit;
-    const loadBody = parseJsonRequestBody<{ context_length: number }>(loadInit);
+    const loadBody = parseJsonRequestBody(loadInit) as { context_length: number };
     expect(loadBody.context_length).not.toBe(LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH);
   });
 
@@ -360,7 +360,7 @@ describe("lmstudio-models", () => {
     const loadCall = fetchMock.mock.calls.find((call) => String(call[0]).endsWith("/models/load"));
     expect(loadCall).toBeDefined();
     const loadInit = loadCall?.[1] as unknown as RequestInit;
-    const loadBody = parseJsonRequestBody<{ context_length: number }>(loadInit);
+    const loadBody = parseJsonRequestBody(loadInit) as { context_length: number };
     expect(loadBody.context_length).toBe(8192);
   });
 

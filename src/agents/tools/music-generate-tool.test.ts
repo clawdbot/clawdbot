@@ -104,17 +104,19 @@ function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
 
+function resetMusicGenerateMocks() {
+  vi.restoreAllMocks();
+  vi.spyOn(musicGenerationRuntime, "listRuntimeMusicGenerationProviders").mockReturnValue([]);
+  taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
+  taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
+  taskExecutorMocks.createRunningTaskRun.mockReset();
+  taskExecutorMocks.completeTaskRunByRunId.mockReset();
+  taskExecutorMocks.failTaskRunByRunId.mockReset();
+  taskExecutorMocks.recordTaskRunProgressByRunId.mockReset();
+}
+
 describe("createMusicGenerateTool", () => {
-  beforeEach(() => {
-    vi.restoreAllMocks();
-    vi.spyOn(musicGenerationRuntime, "listRuntimeMusicGenerationProviders").mockReturnValue([]);
-    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
-    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
-    taskExecutorMocks.createRunningTaskRun.mockReset();
-    taskExecutorMocks.completeTaskRunByRunId.mockReset();
-    taskExecutorMocks.failTaskRunByRunId.mockReset();
-    taskExecutorMocks.recordTaskRunProgressByRunId.mockReset();
-  });
+  beforeEach(resetMusicGenerateMocks);
 
   afterEach(() => {
     vi.unstubAllEnvs();

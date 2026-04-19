@@ -136,14 +136,17 @@ function getAuthProfileCredential(
 export async function resolveCliAuthEpoch(params: {
   provider: string;
   authProfileId?: string;
+  skipLocalCredential?: boolean;
 }): Promise<string | undefined> {
   const provider = params.provider.trim();
   const authProfileId = normalizeOptionalString(params.authProfileId);
   const parts: string[] = [];
 
-  const localFingerprint = getLocalCliCredentialFingerprint(provider);
-  if (localFingerprint) {
-    parts.push(`local:${provider}:${localFingerprint}`);
+  if (params.skipLocalCredential !== true) {
+    const localFingerprint = getLocalCliCredentialFingerprint(provider);
+    if (localFingerprint) {
+      parts.push(`local:${provider}:${localFingerprint}`);
+    }
   }
 
   if (authProfileId) {

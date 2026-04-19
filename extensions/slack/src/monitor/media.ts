@@ -1,10 +1,13 @@
 import type { WebClient as SlackWebClient } from "@slack/web-api";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeHostname } from "openclaw/plugin-sdk/host-runtime";
 import { fetchWithRuntimeDispatcher } from "openclaw/plugin-sdk/infra-runtime";
 import type { FetchLike } from "openclaw/plugin-sdk/media-runtime";
 import { fetchRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -383,18 +386,11 @@ function evictThreadStarterCache(): void {
       THREAD_STARTER_CACHE.delete(cacheKey);
     }
   }
-  if (THREAD_STARTER_CACHE.size <= THREAD_STARTER_CACHE_MAX) {
-    return;
-  }
-  const excess = THREAD_STARTER_CACHE.size - THREAD_STARTER_CACHE_MAX;
-  let removed = 0;
-  for (const cacheKey of THREAD_STARTER_CACHE.keys()) {
-    THREAD_STARTER_CACHE.delete(cacheKey);
-    removed += 1;
-    if (removed >= excess) {
-      break;
-    }
-  }
+  pruneMapToMaxSize(THREAD_STARTER_CACHE, THREAD_STARTER_CACHE_MAX);
+}
+
+function formatSlackFilePlaceholder(files: SlackFile[] | undefined): string {
+  return `[attached: ${files?.map((file) => file.name ?? "file").join(", ") ?? "file"}]`;
 }
 
 export async function resolveSlackThreadStarter(params: {
@@ -428,15 +424,16 @@ export async function resolveSlackThreadStarter(params: {
     };
     const message = response?.messages?.[0];
     const text = (message?.text ?? "").trim();
-    if (!message || !text) {
+    const files = message?.files?.length ? message.files : undefined;
+    if (!message || (!text && !files)) {
       return null;
     }
     const starter: SlackThreadStarter = {
-      text,
+      text: text || formatSlackFilePlaceholder(files),
       userId: message.user,
       botId: message.bot_id,
       ts: message.ts,
-      files: message.files,
+      files,
     };
     if (THREAD_STARTER_CACHE.has(cacheKey)) {
       THREAD_STARTER_CACHE.delete(cacheKey);
@@ -447,7 +444,10 @@ export async function resolveSlackThreadStarter(params: {
     });
     evictThreadStarterCache();
     return starter;
-  } catch {
+  } catch (err) {
+    logVerbose(
+      `slack thread starter fetch failed channel=${params.channelId} ts=${params.threadTs}: ${formatErrorMessage(err)}`,
+    );
     return null;
   }
 }
@@ -531,15 +531,16 @@ export async function resolveSlackThreadHistory(params: {
 
     return retained.map((msg) => ({
       // For file-only messages, create a placeholder showing attached filenames
-      text: msg.text?.trim()
-        ? msg.text
-        : `[attached: ${msg.files?.map((f) => f.name ?? "file").join(", ")}]`,
+      text: msg.text?.trim() ? msg.text : formatSlackFilePlaceholder(msg.files),
       userId: msg.user,
       botId: msg.bot_id,
       ts: msg.ts,
       files: msg.files,
     }));
-  } catch {
+  } catch (err) {
+    logVerbose(
+      `slack thread history fetch failed channel=${params.channelId} ts=${params.threadTs}: ${formatErrorMessage(err)}`,
+    );
     return [];
   }
 }

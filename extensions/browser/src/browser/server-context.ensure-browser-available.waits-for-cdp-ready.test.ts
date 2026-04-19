@@ -55,8 +55,12 @@ describe("browser server-context ensureBrowserAvailable", () => {
 
     const promise = profile.ensureBrowserAvailable();
     const rejected = expect(promise).rejects.toThrow("not reachable after start");
+    const diagnosticRejected = expect(promise).rejects.toThrow(
+      "CDP diagnostic: websocket_health_command_timeout; mock CDP diagnostic.",
+    );
     await vi.advanceTimersByTimeAsync(8100);
     await rejected;
+    await diagnosticRejected;
 
     expect(launchOpenClawChrome).toHaveBeenCalledTimes(1);
     expect(stopOpenClawChrome).toHaveBeenCalledTimes(1);

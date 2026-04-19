@@ -28,8 +28,7 @@ function loadPluginRuntime(): PluginRuntimeModule | null {
 }
 
 export function resolveRuntimeCliBackends(): PluginCliBackendEntry[] {
-  return (loadPluginRuntime()?.getActivePluginRegistry()?.cliBackends ?? []).map((entry) => ({
-    ...entry.backend,
-    pluginId: entry.pluginId,
-  }));
+  return (loadPluginRuntime()?.getActivePluginRegistry()?.cliBackends ?? []).map((entry) =>
+    Object.assign({}, entry.backend, { pluginId: entry.pluginId }),
+  );
 }

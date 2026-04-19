@@ -20,6 +20,8 @@ import {
   activateSecretsRuntimeSnapshot,
   prepareSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
+import { resolveGatewayAuth } from "./auth.js";
+import { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
 import {
   ensureGatewayStartupAuth,
   mergeGatewayAuthConfig,
@@ -114,6 +116,7 @@ export function createRuntimeSecretsActivator(params: {
         const prepared = await prepareRuntimeSecretsSnapshot({
           config: pruneSkippedStartupSecretSurfaces(config),
         });
+        assertRuntimeGatewayAuthNotKnownWeak(prepared.config);
         if (activationParams.activate) {
           activateRuntimeSecretsSnapshot(prepared);
           logGatewayAuthSurfaceDiagnostics(prepared, params.logSecrets);
@@ -239,6 +242,16 @@ function pruneSkippedStartupSecretSurfaces(config: OpenClawConfig): OpenClawConf
     ...config,
     channels: undefined,
   };
+}
+
+function assertRuntimeGatewayAuthNotKnownWeak(config: OpenClawConfig): void {
+  assertGatewayAuthNotKnownWeak(
+    resolveGatewayAuth({
+      authConfig: config.gateway?.auth,
+      env: process.env,
+      tailscaleMode: config.gateway?.tailscale?.mode ?? "off",
+    }),
+  );
 }
 
 function logGatewayAuthSurfaceDiagnostics(

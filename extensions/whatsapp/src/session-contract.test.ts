@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { canonicalizeLegacySessionKey, isLegacyGroupSessionKey } from "./session-contract.js";
+import {
+  canonicalizeLegacySessionKey,
+  deriveLegacySessionChatType,
+  isLegacyGroupSessionKey,
+} from "./session-contract.js";
 
 describe("whatsapp legacy session contract", () => {
   it("canonicalizes legacy WhatsApp group keys to channel-qualified agent keys", () => {
@@ -16,6 +20,12 @@ describe("whatsapp legacy session contract", () => {
 
   it("does not claim generic non-WhatsApp group keys", () => {
     expect(isLegacyGroupSessionKey("group:abc")).toBe(false);
+    expect(deriveLegacySessionChatType("group:abc")).toBeUndefined();
     expect(canonicalizeLegacySessionKey({ key: "group:abc", agentId: "main" })).toBeNull();
+  });
+
+  it("derives chat type for legacy WhatsApp group keys", () => {
+    expect(deriveLegacySessionChatType("123@g.us")).toBe("group");
+    expect(deriveLegacySessionChatType("whatsapp:123@g.us")).toBe("group");
   });
 });

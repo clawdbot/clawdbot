@@ -1469,6 +1469,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         runtimeConfig: snapshot.config,
         sourceConfig: snapshot.resolved,
         nextConfig: cfg,
+        rootAuthoredConfig: snapshot.parsed,
       });
       try {
         const resolvedIncludes = resolveConfigIncludes(snapshot.parsed, configPath, {

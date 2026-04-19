@@ -467,14 +467,14 @@ describe("parseAudioTag", () => {
 });
 
 describe("resolveResponsePrefixTemplate", () => {
-  function expectResolvedTemplateCases<
-    T extends ReadonlyArray<{
+  function expectResolvedTemplateCases(
+    cases: ReadonlyArray<{
       name: string;
       template: string | undefined;
       values: Parameters<typeof resolveResponsePrefixTemplate>[1];
       expected: string | undefined;
     }>,
-  >(cases: T) {
+  ) {
     for (const testCase of cases) {
       expect(resolveResponsePrefixTemplate(testCase.template, testCase.values), testCase.name).toBe(
         testCase.expected,

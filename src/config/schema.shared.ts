@@ -15,11 +15,11 @@ export function cloneSchema<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-export function asSchemaObject<T extends object>(value: unknown): T | null {
+export function asSchemaObject(value: unknown): object | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
-  return value as T;
+  return value;
 }
 
 export function schemaHasChildren(schema: JsonSchemaObject): boolean {

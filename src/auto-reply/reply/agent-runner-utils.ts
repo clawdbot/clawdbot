@@ -238,6 +238,7 @@ export function buildEmbeddedContextFromTemplate(params: {
       to: params.sessionCtx.To,
     }),
     messageThreadId: params.sessionCtx.MessageThreadId ?? undefined,
+    memberRoleIds: normalizeMemberRoleIds(params.sessionCtx.MemberRoleIds),
     // Provider threading context for tool auto-injection
     ...buildThreadingToolContext({
       sessionCtx: params.sessionCtx,
@@ -245,6 +246,15 @@ export function buildEmbeddedContextFromTemplate(params: {
       hasRepliedRef: params.hasRepliedRef,
     }),
   };
+}
+
+function normalizeMemberRoleIds(value: TemplateContext["MemberRoleIds"]): string[] | undefined {
+  const roles = Array.isArray(value)
+    ? value
+        .map((roleId) => normalizeOptionalString(roleId))
+        .filter((roleId): roleId is string => Boolean(roleId))
+    : [];
+  return roles.length > 0 ? roles : undefined;
 }
 
 export function buildTemplateSenderContext(sessionCtx: TemplateContext) {

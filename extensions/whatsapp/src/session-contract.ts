@@ -28,6 +28,10 @@ export function isLegacyGroupSessionKey(key: string): boolean {
   return extractLegacyWhatsAppGroupId(key) !== null;
 }
 
+export function deriveLegacySessionChatType(key: string): "group" | undefined {
+  return isLegacyGroupSessionKey(key) ? "group" : undefined;
+}
+
 export function canonicalizeLegacySessionKey(params: {
   key: string;
   agentId: string;

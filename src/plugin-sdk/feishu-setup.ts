@@ -1,9 +1,15 @@
 // Manual facade. Keep loader boundary explicit.
-type FacadeModule = typeof import("@openclaw/feishu/setup-api.js");
+import type { ChannelSetupWizard } from "../channels/plugins/setup-wizard-types.js";
+import type { ChannelSetupAdapter } from "../channels/plugins/types.adapters.js";
 import {
   createLazyFacadeObjectValue,
   loadBundledPluginPublicSurfaceModuleSync,
 } from "./facade-loader.js";
+
+type FacadeModule = {
+  feishuSetupAdapter: ChannelSetupAdapter;
+  feishuSetupWizard: ChannelSetupWizard;
+};
 
 function loadFacadeModule(): FacadeModule {
   return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({

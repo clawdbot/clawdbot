@@ -90,6 +90,22 @@ NODE
     node "$entry" config set --batch-file "$batch_file" >/dev/null
     rm -f "$batch_file"
 
+    workspace="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
+    mkdir -p "$workspace/.openclaw"
+    cat > "$workspace/IDENTITY.md" <<'"'"'EOF'"'"'
+# Identity
+
+- Name: OpenClaw
+- Purpose: Open WebUI Docker compatibility smoke test assistant.
+EOF
+    cat > "$workspace/.openclaw/workspace-state.json" <<'"'"'EOF'"'"'
+{
+  "version": 1,
+  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
+}
+EOF
+    rm -f "$workspace/BOOTSTRAP.md"
+
     exec node "$entry" gateway --port '"$PORT"' --bind lan --allow-unconfigured > /tmp/openwebui-gateway.log 2>&1
   ' >/dev/null
 

@@ -149,7 +149,7 @@ describe("browser remote profile tab ops via Playwright", () => {
     expect(state.profiles.get("remote")?.lastTargetId).toBe("T1");
   });
 
-  it("blocks remote Playwright tab operations when strict SSRF policy rejects the cdpUrl", async () => {
+  it("blocks remote Playwright tab operations when strict SSRF hostname allowlist rejects the cdpUrl", async () => {
     const listPagesViaPlaywright = vi.fn(async () => [
       { targetId: "T1", title: "Tab 1", url: "https://example.com", type: "page" },
     ]);
@@ -163,7 +163,10 @@ describe("browser remote profile tab ops via Playwright", () => {
     } as unknown as Awaited<ReturnType<typeof deps.pwAiModule.getPwAiModule>>);
 
     const state = deps.makeState("remote");
-    state.resolved.ssrfPolicy = { dangerouslyAllowPrivateNetwork: false };
+    state.resolved.ssrfPolicy = {
+      dangerouslyAllowPrivateNetwork: false,
+      hostnameAllowlist: ["browserless.example.com"],
+    };
     state.resolved.profiles.remote = {
       ...state.resolved.profiles.remote,
       cdpUrl: "http://10.0.0.42:9222",

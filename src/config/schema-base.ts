@@ -35,7 +35,7 @@ type JsonSchemaObject = Record<string, unknown> & {
 const LEGACY_HIDDEN_PUBLIC_PATHS = ["hooks.internal.handlers"] as const;
 
 const asJsonSchemaObject = (value: unknown): JsonSchemaObject | null =>
-  asSchemaObject<JsonSchemaObject>(value);
+  asSchemaObject(value) as JsonSchemaObject | null;
 
 function buildFieldDocumentation(): FieldDocumentation {
   const titles: Record<string, string> = {};

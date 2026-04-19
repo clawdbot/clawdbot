@@ -14,6 +14,14 @@ signals, not just runner noise.
 - Keep expensive bootstrap, embedded runner, provider, plugin, and channel
   runtime work behind dependency injection or narrow helpers so tests can cover
   behavior without starting the whole runtime.
+- Treat channel/plugin lookups inside agent hot paths as suspect. If the code
+  only needs target parsing, peer-kind inference, setup hints, or static
+  descriptors, use a local pure helper or lightweight public artifact before
+  reaching for `getChannelPlugin()` / bundled runtime fallback.
+- In spawn/session/requester-origin logic, keep routing and delivery-context
+  normalization deterministic and runtime-free. Add explicit parser coverage for
+  channel-specific prefixes instead of loading a channel plugin just to classify
+  a target.
 - If moving coverage out of a slow integration test, preserve the exact
   production composition in a named helper and test that helper. Do not remove
   the behavior proof just because the old proof was slow.

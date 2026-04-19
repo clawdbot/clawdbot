@@ -1,6 +1,10 @@
 import { resolveRelativeBundledPluginPublicModuleId } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 
-type IMessageContractSurface = typeof import("@openclaw/imessage/contract-api.js");
+type IMessageContractSurface = {
+  DEFAULT_IMESSAGE_ATTACHMENT_ROOTS: string[];
+  resolveIMessageAttachmentRoots: (params: unknown) => string[];
+  resolveIMessageRemoteAttachmentRoots: (params: unknown) => string[];
+};
 
 const {
   DEFAULT_IMESSAGE_ATTACHMENT_ROOTS,

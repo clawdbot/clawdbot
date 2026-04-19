@@ -176,14 +176,14 @@ export function resolveMergedAccountConfig<TConfig extends Record<string, unknow
   });
 }
 
-export function describeAccountSnapshot<
-  TAccount extends {
-    accountId?: string | null;
-    enabled?: boolean | null;
-    name?: string | null | undefined;
-  },
->(params: {
-  account: TAccount;
+type AccountSnapshotInput = {
+  accountId?: string | null;
+  enabled?: boolean | null;
+  name?: string | null | undefined;
+};
+
+export function describeAccountSnapshot(params: {
+  account: AccountSnapshotInput;
   configured?: boolean | undefined;
   extra?: Record<string, unknown> | undefined;
 }): ChannelAccountSnapshot {
@@ -196,14 +196,8 @@ export function describeAccountSnapshot<
   };
 }
 
-export function describeWebhookAccountSnapshot<
-  TAccount extends {
-    accountId?: string | null;
-    enabled?: boolean | null;
-    name?: string | null | undefined;
-  },
->(params: {
-  account: TAccount;
+export function describeWebhookAccountSnapshot(params: {
+  account: AccountSnapshotInput;
   configured?: boolean | undefined;
   mode?: string | undefined;
   extra?: Record<string, unknown> | undefined;

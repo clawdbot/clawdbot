@@ -4,15 +4,14 @@ import type { OpenClawConfig } from "../../../src/config/config.js";
 import { createEmptyPluginRegistry } from "../../../src/plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
 import type { SpeechProviderPlugin } from "../../../src/plugins/types.js";
-import { resolveRelativeWorkspacePackagePublicModuleId } from "../../../src/test-utils/bundled-plugin-public-surface.js";
+import { resolveWorkspacePackagePublicModuleUrl } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import { withEnv } from "../../../src/test-utils/env.js";
 import type { ResolvedTtsConfig } from "../../../src/tts/tts-types.js";
 
 type TtsRuntimeModule = typeof import("../../../src/tts/tts.js");
 type TtsCoreModule = typeof import("../../../src/tts/tts-core.js");
 
-const speechCoreRuntimeApiModuleId = resolveRelativeWorkspacePackagePublicModuleId({
-  fromModuleUrl: import.meta.url,
+const speechCoreRuntimeApiModuleId = resolveWorkspacePackagePublicModuleUrl({
   packageName: "@openclaw/speech-core",
   artifactBasename: "runtime-api.js",
 });
@@ -900,18 +899,18 @@ export function describeTtsSummarizationContract() {
       expect(resolveModelAsyncMock).toHaveBeenCalledWith("openai", "gpt-4.1-mini", undefined, cfg);
     });
 
-    it("keeps the Ollama api for direct summarization", async () => {
+    it("keeps native completion APIs for direct summarization", async () => {
       vi.mocked(resolveModelAsyncMock).mockResolvedValue({
-        ...createResolvedModel("ollama", "qwen3:8b", "ollama"),
+        ...createResolvedModel("local-summary", "demo-model", "openai-completions"),
         model: {
-          ...createResolvedModel("ollama", "qwen3:8b", "ollama").model,
-          baseUrl: "http://127.0.0.1:11434",
+          ...createResolvedModel("local-summary", "demo-model", "openai-completions").model,
+          baseUrl: "http://127.0.0.1:4000/v1",
         },
       } as never);
 
       await runSummarizeText();
 
-      expect(vi.mocked(completeSimple).mock.calls[0]?.[0]?.api).toBe("ollama");
+      expect(vi.mocked(completeSimple).mock.calls[0]?.[0]?.api).toBe("openai-completions");
       expect(ensureCustomApiRegisteredMock).not.toHaveBeenCalled();
     });
 

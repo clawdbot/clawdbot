@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ProgressReporter } from "../../cli/progress.js";
 
-vi.mock("../../daemon/launchd.js", () => ({
+vi.mock("../../daemon/restart-logs.js", () => ({
   resolveGatewayLogPaths: () => {
     throw new Error("skip log tail");
   },
+  resolveGatewayRestartLogPath: () => "/tmp/gateway-restart.log",
 }));
 
 vi.mock("./gateway.js", () => ({

@@ -86,11 +86,12 @@ function buildButtonsBlock(
   }
   return {
     type: "buttons",
-    buttons: choices.map((choice) => ({
-      label: choice.label,
-      value: choice.value,
-      ...(choice.style ? { style: choice.style } : {}),
-    })),
+    buttons: choices.map((choice) =>
+      Object.assign(
+        { label: choice.label, value: choice.value },
+        choice.style ? { style: choice.style } : {},
+      ),
+    ),
   };
 }
 

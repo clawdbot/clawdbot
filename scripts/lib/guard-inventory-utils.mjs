@@ -74,6 +74,42 @@ export function writeLine(stream, text) {
   stream.write(`${text}\n`);
 }
 
+export function createCachedAsync(factory) {
+  let cachedPromise = null;
+  return async function getCachedValue() {
+    if (cachedPromise) {
+      return cachedPromise;
+    }
+
+    cachedPromise = factory();
+    try {
+      return await cachedPromise;
+    } catch (error) {
+      cachedPromise = null;
+      throw error;
+    }
+  };
+}
+
+export function formatGroupedInventoryHuman(params, inventory) {
+  if (inventory.length === 0) {
+    return `${params.rule}\n${params.cleanMessage}`;
+  }
+
+  const lines = [params.rule, params.inventoryTitle];
+  let activeFile = "";
+  for (const entry of inventory) {
+    if (entry.file !== activeFile) {
+      activeFile = entry.file;
+      lines.push(activeFile);
+    }
+    lines.push(`  - line ${entry.line} [${entry.kind}] ${entry.reason}`);
+    lines.push(`    specifier: ${entry.specifier}`);
+    lines.push(`    resolved: ${entry.resolvedPath}`);
+  }
+  return lines.join("\n");
+}
+
 export async function collectTypeScriptInventory(params) {
   const inventory = [];
   const scriptKind = params.scriptKind ?? params.ts.ScriptKind.TS;

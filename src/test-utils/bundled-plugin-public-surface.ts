@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { loadBundledPluginPublicSurfaceModuleSync } from "../plugin-sdk/facade-loader.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import {
@@ -102,44 +102,50 @@ function resolveWorkspacePackageDir(packageName: string): string {
   throw new Error(`Unknown workspace package: ${packageName}`);
 }
 
-export function loadBundledPluginPublicSurfaceSync<T extends object>(params: {
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test loaders use caller-supplied module surface types.
+type BundledPluginPublicSurfaceLoader = <T extends object>(params: {
   pluginId: string;
   artifactBasename: string;
-}): T {
+}) => T;
+
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test loaders use caller-supplied module surface types.
+type BundledPluginPublicArtifactLoader = <T extends object>(pluginId: string) => T;
+
+export const loadBundledPluginPublicSurfaceSync: BundledPluginPublicSurfaceLoader = (params) => {
   const metadata = findBundledPluginMetadata(params.pluginId);
-  return loadBundledPluginPublicSurfaceModuleSync<T>({
+  return loadBundledPluginPublicSurfaceModuleSync({
     dirName: metadata.dirName,
     artifactBasename: normalizeBundledPluginArtifactSubpath(params.artifactBasename),
   });
-}
+};
 
-export function loadBundledPluginApiSync<T extends object>(pluginId: string): T {
-  return loadBundledPluginPublicSurfaceSync<T>({
+export const loadBundledPluginApiSync: BundledPluginPublicArtifactLoader = (pluginId) => {
+  return loadBundledPluginPublicSurfaceSync({
     pluginId,
     artifactBasename: "api.js",
   });
-}
+};
 
-export function loadBundledPluginContractApiSync<T extends object>(pluginId: string): T {
-  return loadBundledPluginPublicSurfaceSync<T>({
+export const loadBundledPluginContractApiSync: BundledPluginPublicArtifactLoader = (pluginId) => {
+  return loadBundledPluginPublicSurfaceSync({
     pluginId,
     artifactBasename: "contract-api.js",
   });
-}
+};
 
-export function loadBundledPluginRuntimeApiSync<T extends object>(pluginId: string): T {
-  return loadBundledPluginPublicSurfaceSync<T>({
+export const loadBundledPluginRuntimeApiSync: BundledPluginPublicArtifactLoader = (pluginId) => {
+  return loadBundledPluginPublicSurfaceSync({
     pluginId,
     artifactBasename: "runtime-api.js",
   });
-}
+};
 
-export function loadBundledPluginTestApiSync<T extends object>(pluginId: string): T {
-  return loadBundledPluginPublicSurfaceSync<T>({
+export const loadBundledPluginTestApiSync: BundledPluginPublicArtifactLoader = (pluginId) => {
+  return loadBundledPluginPublicSurfaceSync({
     pluginId,
     artifactBasename: "test-api.js",
   });
-}
+};
 
 export function resolveBundledPluginPublicModulePath(params: {
   pluginId: string;
@@ -218,5 +224,22 @@ export function resolveRelativeWorkspacePackagePublicModuleId(params: {
   const relativePath = path
     .relative(path.dirname(fromFilePath), targetPath)
     .replaceAll(path.sep, "/");
-  return relativePath.startsWith(".") ? relativePath : `./${relativePath}`;
+  const normalizedRelativePath = relativePath.startsWith(".") ? relativePath : `./${relativePath}`;
+  if (path.resolve(path.dirname(fromFilePath), normalizedRelativePath) !== targetPath) {
+    return pathToFileURL(targetPath).href;
+  }
+  return normalizedRelativePath;
+}
+
+export function resolveWorkspacePackagePublicModuleUrl(params: {
+  packageName: string;
+  artifactBasename: string;
+}): string {
+  const targetPath = resolveVitestSourceModulePath(
+    path.resolve(
+      resolveWorkspacePackageDir(params.packageName),
+      normalizeBundledPluginArtifactSubpath(params.artifactBasename),
+    ),
+  );
+  return pathToFileURL(targetPath).href;
 }

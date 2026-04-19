@@ -255,6 +255,7 @@ describe("cli credentials", () => {
       expect(cmd).toContain(accountHash);
       return JSON.stringify({
         tokens: {
+          id_token: "keychain-id-token",
           access_token: createJwtWithExp(expSeconds),
           refresh_token: "keychain-refresh",
         },
@@ -269,6 +270,7 @@ describe("cli credentials", () => {
       refresh: "keychain-refresh",
       provider: "openai-codex",
       expires: expSeconds * 1000,
+      idToken: "keychain-id-token",
     });
   });
 
@@ -286,6 +288,7 @@ describe("cli credentials", () => {
       authPath,
       JSON.stringify({
         tokens: {
+          id_token: "file-id-token",
           access_token: createJwtWithExp(expSeconds),
           refresh_token: "file-refresh",
         },
@@ -300,6 +303,7 @@ describe("cli credentials", () => {
       refresh: "file-refresh",
       provider: "openai-codex",
       expires: expSeconds * 1000,
+      idToken: "file-id-token",
     });
   });
 
@@ -393,6 +397,7 @@ describe("cli credentials", () => {
         access: "new-access",
         refresh: "new-refresh",
         expires: Date.now() + 60_000,
+        idToken: "new-id-token",
         accountId: "acct-new",
       });
 
@@ -403,7 +408,7 @@ describe("cli credentials", () => {
         OPENAI_API_KEY: "sk-existing",
       });
       expect(persisted.tokens).toMatchObject({
-        id_token: "id-token",
+        id_token: "new-id-token",
         access_token: "new-access",
         refresh_token: "new-refresh",
         account_id: "acct-new",
@@ -439,6 +444,7 @@ describe("cli credentials", () => {
           access: "new-access",
           refresh: "new-refresh",
           expires: Date.now() + 60_000,
+          idToken: "new-id-token",
           accountId: "acct-new",
         },
         {
@@ -460,7 +466,7 @@ describe("cli credentials", () => {
       expect(payload).toBeDefined();
       const parsed = JSON.parse(String(payload)) as Record<string, unknown>;
       expect(parsed.tokens).toMatchObject({
-        id_token: "id-token",
+        id_token: "new-id-token",
         access_token: "new-access",
         refresh_token: "new-refresh",
         account_id: "acct-new",

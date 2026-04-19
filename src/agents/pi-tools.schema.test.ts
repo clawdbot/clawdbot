@@ -1,6 +1,10 @@
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it, vi } from "vitest";
-import { normalizeToolParameterSchema, normalizeToolParameters } from "./pi-tools.schema.js";
+import {
+  cleanToolSchemaForGemini,
+  normalizeToolParameterSchema,
+  normalizeToolParameters,
+} from "./pi-tools.schema.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 
 describe("normalizeToolParameterSchema", () => {
@@ -30,6 +34,76 @@ describe("normalizeToolParameterSchema", () => {
       properties: { q: { type: "string" } },
       required: ["q"],
     });
+  });
+
+  it("inlines local $ref before removing unsupported keywords", () => {
+    const cleaned = cleanToolSchemaForGemini({
+      type: "object",
+      properties: {
+        foo: { $ref: "#/$defs/Foo" },
+      },
+      $defs: {
+        Foo: { type: "string", enum: ["a", "b"] },
+      },
+    }) as {
+      $defs?: unknown;
+      properties?: Record<string, unknown>;
+    };
+
+    expect(cleaned.$defs).toBeUndefined();
+    expect(cleaned.properties).toBeDefined();
+    expect(cleaned.properties?.foo).toMatchObject({
+      type: "string",
+      enum: ["a", "b"],
+    });
+  });
+
+  it("cleans tuple items schemas", () => {
+    const cleaned = cleanToolSchemaForGemini({
+      type: "object",
+      properties: {
+        tuples: {
+          type: "array",
+          items: [
+            { type: "string", format: "uuid" },
+            { type: "number", minimum: 1 },
+          ],
+        },
+      },
+    }) as {
+      properties?: Record<string, unknown>;
+    };
+
+    const tuples = cleaned.properties?.tuples as { items?: unknown } | undefined;
+    const items = Array.isArray(tuples?.items) ? tuples?.items : [];
+    const first = items[0] as { format?: unknown } | undefined;
+    const second = items[1] as { minimum?: unknown } | undefined;
+
+    expect(first?.format).toBeUndefined();
+    expect(second?.minimum).toBeUndefined();
+  });
+
+  it("drops null-only union variants without flattening other unions", () => {
+    const cleaned = cleanToolSchemaForGemini({
+      type: "object",
+      properties: {
+        parentId: { anyOf: [{ type: "string" }, { type: "null" }] },
+        count: { oneOf: [{ type: "string" }, { type: "number" }] },
+      },
+    }) as {
+      properties?: Record<string, unknown>;
+    };
+
+    const parentId = cleaned.properties?.parentId as
+      | { type?: unknown; anyOf?: unknown; oneOf?: unknown }
+      | undefined;
+    const count = cleaned.properties?.count as
+      | { type?: unknown; anyOf?: unknown; oneOf?: unknown }
+      | undefined;
+
+    expect(parentId?.type).toBe("string");
+    expect(parentId?.anyOf).toBeUndefined();
+    expect(count?.oneOf).toBeUndefined();
   });
 });
 

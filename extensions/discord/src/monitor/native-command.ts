@@ -1183,6 +1183,8 @@ async function dispatchDiscordCommandInteraction(params: {
     interactionId,
     channelId,
     threadParentId,
+    memberRoleIds,
+    guildId: interaction.guild?.id,
     guildName: interaction.guild?.name,
     channelTopic: channel && "topic" in channel ? (channel.topic ?? undefined) : undefined,
     channelConfig,

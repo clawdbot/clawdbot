@@ -51,6 +51,36 @@ function normalizeIdentity(
   };
 }
 
+type IdentityIds = Pick<SessionAcpIdentity, "acpxRecordId" | "acpxSessionId" | "agentSessionId">;
+
+function readIdentityIdsFromHandle(handle: AcpRuntimeHandle): IdentityIds {
+  return {
+    acpxRecordId: normalizeText((handle as { acpxRecordId?: unknown }).acpxRecordId),
+    acpxSessionId: normalizeText(handle.backendSessionId),
+    agentSessionId: normalizeText(handle.agentSessionId),
+  };
+}
+
+function buildSessionIdentity(params: {
+  ids: IdentityIds;
+  state: SessionAcpIdentity["state"];
+  source: SessionAcpIdentitySource;
+  now: number;
+}): SessionAcpIdentity | undefined {
+  const { acpxRecordId, acpxSessionId, agentSessionId } = params.ids;
+  if (!acpxRecordId && !acpxSessionId && !agentSessionId) {
+    return undefined;
+  }
+  return {
+    state: params.state,
+    ...(acpxRecordId ? { acpxRecordId } : {}),
+    ...(acpxSessionId ? { acpxSessionId } : {}),
+    ...(agentSessionId ? { agentSessionId } : {}),
+    source: params.source,
+    lastUpdatedAt: params.now,
+  };
+}
+
 export function resolveSessionIdentityFromMeta(
   meta: SessionAcpMeta | undefined,
 ): SessionAcpIdentity | undefined {
@@ -152,40 +182,25 @@ export function createIdentityFromEnsure(params: {
   handle: AcpRuntimeHandle;
   now: number;
 }): SessionAcpIdentity | undefined {
-  const acpxRecordId = normalizeText((params.handle as { acpxRecordId?: unknown }).acpxRecordId);
-  const acpxSessionId = normalizeText(params.handle.backendSessionId);
-  const agentSessionId = normalizeText(params.handle.agentSessionId);
-  if (!acpxRecordId && !acpxSessionId && !agentSessionId) {
-    return undefined;
-  }
-  return {
+  return buildSessionIdentity({
+    ids: readIdentityIdsFromHandle(params.handle),
     state: "pending",
-    ...(acpxRecordId ? { acpxRecordId } : {}),
-    ...(acpxSessionId ? { acpxSessionId } : {}),
-    ...(agentSessionId ? { agentSessionId } : {}),
     source: "ensure",
-    lastUpdatedAt: params.now,
-  };
+    now: params.now,
+  });
 }
 
 export function createIdentityFromHandleEvent(params: {
   handle: AcpRuntimeHandle;
   now: number;
 }): SessionAcpIdentity | undefined {
-  const acpxRecordId = normalizeText((params.handle as { acpxRecordId?: unknown }).acpxRecordId);
-  const acpxSessionId = normalizeText(params.handle.backendSessionId);
-  const agentSessionId = normalizeText(params.handle.agentSessionId);
-  if (!acpxRecordId && !acpxSessionId && !agentSessionId) {
-    return undefined;
-  }
-  return {
-    state: agentSessionId ? "resolved" : "pending",
-    ...(acpxRecordId ? { acpxRecordId } : {}),
-    ...(acpxSessionId ? { acpxSessionId } : {}),
-    ...(agentSessionId ? { agentSessionId } : {}),
+  const ids = readIdentityIdsFromHandle(params.handle);
+  return buildSessionIdentity({
+    ids,
+    state: ids.agentSessionId ? "resolved" : "pending",
     source: "event",
-    lastUpdatedAt: params.now,
-  };
+    now: params.now,
+  });
 }
 
 export function createIdentityFromStatus(params: {

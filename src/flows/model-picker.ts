@@ -319,11 +319,12 @@ async function resolveProviderPluginSetupOptions(params: {
           workspaceDir: params.workspaceDir,
           env: params.env,
         });
-  return providerModelPickerOptions.map((entry) => ({
-    value: entry.value,
-    label: entry.label,
-    ...(entry.hint ? { hint: entry.hint } : {}),
-  }));
+  return providerModelPickerOptions.map((entry) =>
+    Object.assign(
+      { value: entry.value, label: entry.label },
+      entry.hint ? { hint: entry.hint } : {},
+    ),
+  );
 }
 
 async function maybeHandleProviderPluginSelection(params: {

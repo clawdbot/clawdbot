@@ -222,15 +222,25 @@ systemctl --user status
 
 ### 3) Install OpenClaw (inside WSL)
 
-Follow the Linux Getting Started flow inside WSL:
+For a normal first-time setup inside WSL, follow the Linux Getting Started flow:
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
 cd openclaw
 pnpm install
-pnpm ui:build # auto-installs UI deps on first run
 pnpm build
-openclaw onboard
+pnpm ui:build
+pnpm openclaw onboard --install-daemon
+```
+
+If you are developing from source instead of doing first-time onboarding, use the
+source dev loop from [Setup](/start/setup):
+
+```bash
+pnpm install
+# First run only (or after resetting local OpenClaw config/workspace)
+pnpm openclaw setup
+pnpm gateway:watch
 ```
 
 Full guide: [Getting Started](/start/getting-started)

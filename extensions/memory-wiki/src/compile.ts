@@ -840,35 +840,45 @@ function buildAgentDigest(params: {
     .toSorted((left, right) => left.relativePath.localeCompare(right.relativePath))
     .map((page) => {
       const pageFreshness = assessPageFreshness(page);
-      return {
-        ...(page.id ? { id: page.id } : {}),
-        title: page.title,
-        kind: page.kind,
-        path: page.relativePath,
-        sourceIds: [...page.sourceIds],
-        questions: [...page.questions],
-        contradictions: [...page.contradictions],
-        ...(typeof page.confidence === "number" ? { confidence: page.confidence } : {}),
-        freshnessLevel: pageFreshness.level,
-        ...(pageFreshness.lastTouchedAt ? { lastTouchedAt: pageFreshness.lastTouchedAt } : {}),
-        claimCount: page.claims.length,
-        topClaims: sortClaims(page)
-          .slice(0, 5)
-          .map((claim) => {
-            const freshness = assessClaimFreshness({ page, claim });
-            return {
-              ...(claim.id ? { id: claim.id } : {}),
-              text: claim.text,
-              status: normalizeClaimStatus(claim.status),
-              ...(typeof claim.confidence === "number" ? { confidence: claim.confidence } : {}),
-              evidenceCount: claim.evidence.length,
-              missingEvidence: claim.evidence.length === 0,
-              evidence: [...claim.evidence],
-              freshnessLevel: freshness.level,
-              ...(freshness.lastTouchedAt ? { lastTouchedAt: freshness.lastTouchedAt } : {}),
-            };
-          }),
-      };
+      return Object.assign(
+        {},
+        page.id ? { id: page.id } : {},
+        {
+          title: page.title,
+          kind: page.kind,
+          path: page.relativePath,
+          sourceIds: [...page.sourceIds],
+          questions: [...page.questions],
+          contradictions: [...page.contradictions],
+        },
+        typeof page.confidence === "number" ? { confidence: page.confidence } : {},
+        { freshnessLevel: pageFreshness.level },
+        pageFreshness.lastTouchedAt ? { lastTouchedAt: pageFreshness.lastTouchedAt } : {},
+        {
+          claimCount: page.claims.length,
+          topClaims: sortClaims(page)
+            .slice(0, 5)
+            .map((claim) => {
+              const freshness = assessClaimFreshness({ page, claim });
+              return Object.assign(
+                {},
+                claim.id ? { id: claim.id } : {},
+                {
+                  text: claim.text,
+                  status: normalizeClaimStatus(claim.status),
+                },
+                typeof claim.confidence === "number" ? { confidence: claim.confidence } : {},
+                {
+                  evidenceCount: claim.evidence.length,
+                  missingEvidence: claim.evidence.length === 0,
+                  evidence: [...claim.evidence],
+                  freshnessLevel: freshness.level,
+                },
+                freshness.lastTouchedAt ? { lastTouchedAt: freshness.lastTouchedAt } : {},
+              );
+            }),
+        },
+      );
     });
   return {
     pageCounts: params.pageCounts,

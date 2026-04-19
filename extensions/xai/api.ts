@@ -2,7 +2,6 @@ import {
   getModelProviderHint,
   normalizeNativeXaiModelId,
   normalizeProviderId,
-  resolveProviderEndpoint,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   applyXaiModelCompat,
@@ -30,9 +29,19 @@ export {
   resolveXaiModelCompatPatch,
 } from "openclaw/plugin-sdk/provider-tools";
 
+const XAI_NATIVE_ENDPOINT_HOSTS = new Set(["api.x.ai", "api.grok.x.ai"]);
+
+function resolveHostname(value: string): string | undefined {
+  try {
+    return new URL(value).hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
 function isXaiNativeEndpoint(baseUrl: unknown): boolean {
   return (
-    typeof baseUrl === "string" && resolveProviderEndpoint(baseUrl).endpointClass === "xai-native"
+    typeof baseUrl === "string" && XAI_NATIVE_ENDPOINT_HOSTS.has(resolveHostname(baseUrl) ?? "")
   );
 }
 

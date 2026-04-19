@@ -164,11 +164,8 @@ export function buildWebProviderSnapshotCacheKey(params: {
   });
 }
 
-export function mapRegistryProviders<
-  TProvider extends { id: string },
-  TEntry extends { pluginId: string; provider: TProvider },
->(params: {
-  entries: readonly TEntry[];
+export function mapRegistryProviders<TProvider extends { id: string }>(params: {
+  entries: readonly { pluginId: string; provider: TProvider }[];
   onlyPluginIds?: readonly string[];
   sortProviders: (
     providers: Array<TProvider & { pluginId: string }>,
@@ -178,9 +175,6 @@ export function mapRegistryProviders<
   return params.sortProviders(
     params.entries
       .filter((entry) => !onlyPluginIdSet || onlyPluginIdSet.has(entry.pluginId))
-      .map((entry) => ({
-        ...entry.provider,
-        pluginId: entry.pluginId,
-      })),
+      .map((entry) => Object.assign({}, entry.provider, { pluginId: entry.pluginId })),
   );
 }

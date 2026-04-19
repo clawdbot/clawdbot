@@ -83,7 +83,7 @@ function graphCollection<T>(...items: T[]) {
   return { value: items };
 }
 
-function mockGraphCollection<T>(...items: T[]) {
+function mockGraphCollection(...items: unknown[]) {
   mockJsonFetchResponse(graphCollection(...items));
 }
 

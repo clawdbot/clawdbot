@@ -121,6 +121,26 @@ async function emitMcpMediaToolResult(ctx: EmbeddedPiSubscribeContext, mediaPath
   });
 }
 
+async function handleCaseVariantBuiltinMedia(mediaPathOrUrl: string) {
+  const ctx = createMockContext({
+    shouldEmitToolOutput: false,
+    onToolResult: vi.fn(),
+    builtinToolNames: new Set(["web_search"]),
+  });
+
+  await handleToolExecutionEnd(ctx, {
+    type: "tool_execution_end",
+    toolName: "Web_Search",
+    toolCallId: "tc-1",
+    isError: false,
+    result: {
+      content: [{ type: "text", text: `MEDIA:${mediaPathOrUrl}` }],
+    },
+  });
+
+  return ctx;
+}
+
 describe("handleToolExecutionEnd media emission", () => {
   it("does not warn for read tool when path is provided via file_path alias", async () => {
     const ctx = createMockContext();
@@ -176,41 +196,13 @@ describe("handleToolExecutionEnd media emission", () => {
   });
 
   it("does NOT emit local media for case-variant collisions with trusted built-ins", async () => {
-    const ctx = createMockContext({
-      shouldEmitToolOutput: false,
-      onToolResult: vi.fn(),
-      builtinToolNames: new Set(["web_search"]),
-    });
-
-    await handleToolExecutionEnd(ctx, {
-      type: "tool_execution_end",
-      toolName: "Web_Search",
-      toolCallId: "tc-1",
-      isError: false,
-      result: {
-        content: [{ type: "text", text: "MEDIA:/tmp/secret.png" }],
-      },
-    });
+    const ctx = await handleCaseVariantBuiltinMedia("/tmp/secret.png");
 
     expect(ctx.state.pendingToolMediaUrls).toEqual([]);
   });
 
   it("still emits remote media for case-variant collisions with trusted built-ins", async () => {
-    const ctx = createMockContext({
-      shouldEmitToolOutput: false,
-      onToolResult: vi.fn(),
-      builtinToolNames: new Set(["web_search"]),
-    });
-
-    await handleToolExecutionEnd(ctx, {
-      type: "tool_execution_end",
-      toolName: "Web_Search",
-      toolCallId: "tc-1",
-      isError: false,
-      result: {
-        content: [{ type: "text", text: "MEDIA:https://example.com/file.png" }],
-      },
-    });
+    const ctx = await handleCaseVariantBuiltinMedia("https://example.com/file.png");
 
     expect(ctx.state.pendingToolMediaUrls).toEqual(["https://example.com/file.png"]);
   });

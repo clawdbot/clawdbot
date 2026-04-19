@@ -1,21 +1,32 @@
 import { describe, expect, it } from "vitest";
 import { applyDoctorConfigMutation } from "./config-mutation-state.js";
+import type { DoctorConfigMutationState } from "./config-mutation-state.js";
+
+const DOCTOR_FIX_HINT = 'Run "openclaw doctor --fix" to apply these changes.';
+
+function emptyMutationState(): DoctorConfigMutationState {
+  return {
+    cfg: { channels: {} },
+    candidate: { channels: {} },
+    pendingChanges: false,
+    fixHints: [],
+  };
+}
+
+function enabledSignalMutation() {
+  return {
+    config: { channels: { signal: { enabled: true } } },
+    changes: ["enabled signal"],
+  };
+}
 
 describe("doctor config mutation state", () => {
   it("updates candidate and fix hints in preview mode", () => {
     const next = applyDoctorConfigMutation({
-      state: {
-        cfg: { channels: {} },
-        candidate: { channels: {} },
-        pendingChanges: false,
-        fixHints: [],
-      },
-      mutation: {
-        config: { channels: { signal: { enabled: true } } },
-        changes: ["enabled signal"],
-      },
+      state: emptyMutationState(),
+      mutation: enabledSignalMutation(),
       shouldRepair: false,
-      fixHint: 'Run "openclaw doctor --fix" to apply these changes.',
+      fixHint: DOCTOR_FIX_HINT,
     });
 
     expect(next).toEqual({
@@ -28,18 +39,10 @@ describe("doctor config mutation state", () => {
 
   it("updates cfg directly in repair mode", () => {
     const next = applyDoctorConfigMutation({
-      state: {
-        cfg: { channels: {} },
-        candidate: { channels: {} },
-        pendingChanges: false,
-        fixHints: [],
-      },
-      mutation: {
-        config: { channels: { signal: { enabled: true } } },
-        changes: ["enabled signal"],
-      },
+      state: emptyMutationState(),
+      mutation: enabledSignalMutation(),
       shouldRepair: true,
-      fixHint: 'Run "openclaw doctor --fix" to apply these changes.',
+      fixHint: DOCTOR_FIX_HINT,
     });
 
     expect(next).toEqual({
@@ -51,17 +54,12 @@ describe("doctor config mutation state", () => {
   });
 
   it("stays unchanged when there are no changes", () => {
-    const state = {
-      cfg: { channels: {} },
-      candidate: { channels: {} },
-      pendingChanges: false,
-      fixHints: [],
-    };
+    const state = emptyMutationState();
 
     expect(
       applyDoctorConfigMutation({
         state,
-        mutation: { config: { channels: { signal: { enabled: true } } }, changes: [] },
+        mutation: { ...enabledSignalMutation(), changes: [] },
         shouldRepair: false,
       }),
     ).toBe(state);

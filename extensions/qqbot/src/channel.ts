@@ -12,12 +12,21 @@ import { qqbotSetupWizard } from "./setup-surface.js";
 export { chunkText, TEXT_CHUNK_LIMIT } from "./text-utils.js";
 import type { ResolvedQQBotAccount } from "./types.js";
 
+type QQBotOutboundModule = typeof import("./outbound.js");
+
 // Shared promise so concurrent multi-account startups serialize the dynamic
 // import of the gateway module, avoiding an ESM circular-dependency race.
 let _gatewayModulePromise: Promise<typeof import("./gateway.js")> | undefined;
+let _outboundModulePromise: Promise<QQBotOutboundModule> | undefined;
+
 function loadGatewayModule(): Promise<typeof import("./gateway.js")> {
   _gatewayModulePromise ??= import("./gateway.js");
   return _gatewayModulePromise;
+}
+
+function loadOutboundModule(): Promise<QQBotOutboundModule> {
+  _outboundModulePromise ??= import("./outbound.js");
+  return _outboundModulePromise;
 }
 
 export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
@@ -91,7 +100,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     textChunkLimit: 5000,
     sendText: async ({ to, text, accountId, replyToId, cfg }) => {
       const account = resolveQQBotAccount(cfg, accountId);
-      const { sendText } = await import("./outbound.js");
+      const { sendText } = await loadOutboundModule();
       initApiConfig(account.appId, { markdownSupport: account.markdownSupport });
       const result = await sendText({ to, text, accountId, replyToId, account });
       return {
@@ -102,7 +111,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     },
     sendMedia: async ({ to, text, mediaUrl, accountId, replyToId, cfg }) => {
       const account = resolveQQBotAccount(cfg, accountId);
-      const { sendMedia } = await import("./outbound.js");
+      const { sendMedia } = await loadOutboundModule();
       initApiConfig(account.appId, { markdownSupport: account.markdownSupport });
       const result = await sendMedia({
         to,

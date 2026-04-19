@@ -219,6 +219,18 @@ async function resolveEnvProxyAgent(
   });
 }
 
+type UndiciProxyAgentsModule = Pick<typeof import("undici"), "EnvHttpProxyAgent" | "ProxyAgent">;
+
+let undiciProxyAgentsModulePromise: Promise<UndiciProxyAgentsModule> | null = null;
+
+async function loadUndiciProxyAgents(): Promise<UndiciProxyAgentsModule> {
+  undiciProxyAgentsModulePromise ??= import("undici").then(({ EnvHttpProxyAgent, ProxyAgent }) => ({
+    EnvHttpProxyAgent,
+    ProxyAgent,
+  }));
+  return undiciProxyAgentsModulePromise;
+}
+
 async function resolveEnvFetchDispatcher(
   logger: ReturnType<typeof getChildLogger>,
   agent?: unknown,
@@ -229,7 +241,7 @@ async function resolveEnvFetchDispatcher(
     return undefined;
   }
   try {
-    const { EnvHttpProxyAgent, ProxyAgent } = await import("undici");
+    const { EnvHttpProxyAgent, ProxyAgent } = await loadUndiciProxyAgents();
     return proxyUrl
       ? new ProxyAgent({ allowH2: false, uri: proxyUrl })
       : new EnvHttpProxyAgent({ allowH2: false });

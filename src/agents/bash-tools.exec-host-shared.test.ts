@@ -235,6 +235,32 @@ describe("enforceStrictInlineEvalApprovalBoundary", () => {
 });
 
 describe("buildExecApprovalPendingToolResult", () => {
+  function buildDisabledSurfaceApprovalResult(params: {
+    channel: "discord" | "telegram";
+    channelLabel: "Discord" | "Telegram";
+    unavailableReason: "initiating-platform-disabled" | null;
+    allowedDecisions?: readonly ("allow-once" | "deny")[];
+  }) {
+    return buildExecApprovalPendingToolResult({
+      host: "gateway",
+      command: "npm view diver name version description",
+      cwd: process.cwd(),
+      warningText: "",
+      approvalId: "approval-id",
+      approvalSlug: "approval-slug",
+      expiresAtMs: Date.now() + 60_000,
+      initiatingSurface: {
+        kind: "disabled",
+        channel: params.channel,
+        channelLabel: params.channelLabel,
+        accountId: "default",
+      },
+      sentApproverDms: false,
+      unavailableReason: params.unavailableReason,
+      ...(params.allowedDecisions ? { allowedDecisions: params.allowedDecisions } : {}),
+    });
+  }
+
   it("does not infer approver DM delivery from unavailable approval state", () => {
     expect(
       resolveExecApprovalUnavailableState({
@@ -249,21 +275,9 @@ describe("buildExecApprovalPendingToolResult", () => {
   });
 
   it("keeps a local /approve prompt when the initiating Discord surface is disabled", () => {
-    const result = buildExecApprovalPendingToolResult({
-      host: "gateway",
-      command: "npm view diver name version description",
-      cwd: process.cwd(),
-      warningText: "",
-      approvalId: "approval-id",
-      approvalSlug: "approval-slug",
-      expiresAtMs: Date.now() + 60_000,
-      initiatingSurface: {
-        kind: "disabled",
-        channel: "discord",
-        channelLabel: "Discord",
-        accountId: "default",
-      },
-      sentApproverDms: false,
+    const result = buildDisabledSurfaceApprovalResult({
+      channel: "discord",
+      channelLabel: "Discord",
       unavailableReason: null,
       allowedDecisions: ["allow-once", "deny"],
     });
@@ -275,21 +289,9 @@ describe("buildExecApprovalPendingToolResult", () => {
   });
 
   it("returns an unavailable reply when Discord exec approvals are disabled", () => {
-    const result = buildExecApprovalPendingToolResult({
-      host: "gateway",
-      command: "npm view diver name version description",
-      cwd: process.cwd(),
-      warningText: "",
-      approvalId: "approval-id",
-      approvalSlug: "approval-slug",
-      expiresAtMs: Date.now() + 60_000,
-      initiatingSurface: {
-        kind: "disabled",
-        channel: "discord",
-        channelLabel: "Discord",
-        accountId: "default",
-      },
-      sentApproverDms: false,
+    const result = buildDisabledSurfaceApprovalResult({
+      channel: "discord",
+      channelLabel: "Discord",
       unavailableReason: "initiating-platform-disabled",
     });
 
@@ -308,21 +310,9 @@ describe("buildExecApprovalPendingToolResult", () => {
   });
 
   it("keeps the Telegram unavailable reply when Discord DM approvals are not fully configured", () => {
-    const result = buildExecApprovalPendingToolResult({
-      host: "gateway",
-      command: "npm view diver name version description",
-      cwd: process.cwd(),
-      warningText: "",
-      approvalId: "approval-id",
-      approvalSlug: "approval-slug",
-      expiresAtMs: Date.now() + 60_000,
-      initiatingSurface: {
-        kind: "disabled",
-        channel: "telegram",
-        channelLabel: "Telegram",
-        accountId: "default",
-      },
-      sentApproverDms: false,
+    const result = buildDisabledSurfaceApprovalResult({
+      channel: "telegram",
+      channelLabel: "Telegram",
       unavailableReason: "initiating-platform-disabled",
     });
 

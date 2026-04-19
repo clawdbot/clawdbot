@@ -11,14 +11,3 @@ export function resolveOpenClawAgentDir(env: NodeJS.ProcessEnv = process.env): s
   const defaultAgentDir = path.join(resolveStateDir(env), "agents", DEFAULT_AGENT_ID, "agent");
   return resolveUserPath(defaultAgentDir, env);
 }
-
-export function ensureOpenClawAgentEnv(): string {
-  const dir = resolveOpenClawAgentDir();
-  if (!process.env.OPENCLAW_AGENT_DIR) {
-    process.env.OPENCLAW_AGENT_DIR = dir;
-  }
-  if (!process.env.PI_CODING_AGENT_DIR) {
-    process.env.PI_CODING_AGENT_DIR = dir;
-  }
-  return dir;
-}

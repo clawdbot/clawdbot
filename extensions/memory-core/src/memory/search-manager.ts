@@ -34,10 +34,16 @@ function getMemorySearchManagerCacheStore(): MemorySearchManagerCacheStore {
 const log = createSubsystemLogger("memory");
 const { qmdManagerCache: QMD_MANAGER_CACHE } = getMemorySearchManagerCacheStore();
 let managerRuntimePromise: Promise<typeof import("../../manager-runtime.js")> | null = null;
+let qmdManagerModulePromise: Promise<typeof import("./qmd-manager.js")> | null = null;
 
 function loadManagerRuntime() {
   managerRuntimePromise ??= import("../../manager-runtime.js");
   return managerRuntimePromise;
+}
+
+function loadQmdManagerModule() {
+  qmdManagerModulePromise ??= import("./qmd-manager.js");
+  return qmdManagerModulePromise;
 }
 
 export type MemorySearchManagerResult = {
@@ -90,7 +96,7 @@ export async function getMemorySearchManager(params: {
       );
     } else {
       try {
-        const { QmdMemoryManager } = await import("./qmd-manager.js");
+        const { QmdMemoryManager } = await loadQmdManagerModule();
         const primary = await QmdMemoryManager.create({
           cfg: params.cfg,
           agentId: params.agentId,

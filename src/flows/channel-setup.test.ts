@@ -190,8 +190,8 @@ describe("setupChannels workspace shadow exclusion", () => {
     resolveDefaultAgentId.mockReturnValue("default");
     listTrustedChannelPluginCatalogEntries.mockReturnValue([
       {
-        id: "telegram",
-        pluginId: "@openclaw/telegram-plugin",
+        id: "external-chat",
+        pluginId: "@vendor/external-chat-plugin",
         origin: "bundled",
       },
     ]);
@@ -234,8 +234,8 @@ describe("setupChannels workspace shadow exclusion", () => {
     );
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
       expect.objectContaining({
-        channel: "telegram",
-        pluginId: "@openclaw/telegram-plugin",
+        channel: "external-chat",
+        pluginId: "@vendor/external-chat-plugin",
         workspaceDir: "/tmp/openclaw-workspace",
       }),
     );
@@ -243,14 +243,14 @@ describe("setupChannels workspace shadow exclusion", () => {
 
   it("keeps trusted workspace overrides eligible during preload", async () => {
     listTrustedChannelPluginCatalogEntries.mockReturnValue([
-      { id: "telegram", pluginId: "trusted-telegram-shadow", origin: "workspace" },
+      { id: "external-chat", pluginId: "trusted-external-chat-shadow", origin: "workspace" },
     ]);
 
     await setupChannels(
       {
         plugins: {
           enabled: true,
-          allow: ["trusted-telegram-shadow"],
+          allow: ["trusted-external-chat-shadow"],
         },
       } as never,
       {} as never,
@@ -262,8 +262,8 @@ describe("setupChannels workspace shadow exclusion", () => {
 
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
       expect.objectContaining({
-        channel: "telegram",
-        pluginId: "trusted-telegram-shadow",
+        channel: "external-chat",
+        pluginId: "trusted-external-chat-shadow",
         workspaceDir: "/tmp/openclaw-workspace",
       }),
     );
@@ -273,8 +273,8 @@ describe("setupChannels workspace shadow exclusion", () => {
     resolveChannelSetupEntries.mockReturnValue({
       entries: [
         {
-          id: "telegram",
-          meta: makeMeta("telegram", "Telegram"),
+          id: "external-chat",
+          meta: makeMeta("external-chat", "External Chat"),
         },
       ],
       installedCatalogEntries: [],
@@ -413,52 +413,52 @@ describe("setupChannels workspace shadow exclusion", () => {
       cfg: {
         ...cfg,
         channels: {
-          telegram: { token: "secret" },
+          "external-chat": { token: "secret" },
         },
       } as never,
     }));
     const setupWizard = {
-      channel: "telegram",
+      channel: "external-chat",
       getStatus: vi.fn(async () => ({
-        channel: "telegram",
+        channel: "external-chat",
         configured: false,
         statusLines: [],
       })),
       configure,
     } as ChannelSetupPlugin["setupWizard"];
-    const telegramPlugin = makeSetupPlugin({
-      id: "telegram",
-      label: "Telegram",
+    const externalChatPlugin = makeSetupPlugin({
+      id: "external-chat",
+      label: "External Chat",
       setupWizard,
     });
-    const installedCatalogEntry = makeCatalogEntry("telegram", "Telegram", {
-      pluginId: "telegram",
+    const installedCatalogEntry = makeCatalogEntry("external-chat", "External Chat", {
+      pluginId: "external-chat",
       origin: "bundled",
     });
     resolveChannelSetupEntries.mockReturnValue({
       entries: [
         {
-          id: "telegram",
-          meta: makeMeta("telegram", "Telegram"),
+          id: "external-chat",
+          meta: makeMeta("external-chat", "External Chat"),
         },
       ],
       installedCatalogEntries: [installedCatalogEntry],
       installableCatalogEntries: [],
-      installedCatalogById: new Map([["telegram", installedCatalogEntry]]),
+      installedCatalogById: new Map([["external-chat", installedCatalogEntry]]),
       installableCatalogById: new Map(),
     });
     loadChannelSetupPluginRegistrySnapshotForChannel.mockReturnValue(
       makePluginRegistry({
         channels: [
           {
-            pluginId: "telegram",
+            pluginId: "external-chat",
             source: "bundled",
-            plugin: telegramPlugin,
+            plugin: externalChatPlugin,
           },
         ],
       }),
     );
-    const select = vi.fn().mockResolvedValueOnce("telegram").mockResolvedValueOnce("__done__");
+    const select = vi.fn().mockResolvedValueOnce("external-chat").mockResolvedValueOnce("__done__");
 
     const next = await setupChannels(
       {} as never,
@@ -478,8 +478,8 @@ describe("setupChannels workspace shadow exclusion", () => {
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(1);
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
       expect.objectContaining({
-        channel: "telegram",
-        pluginId: "telegram",
+        channel: "external-chat",
+        pluginId: "external-chat",
         workspaceDir: "/tmp/openclaw-workspace",
       }),
     );
@@ -492,16 +492,16 @@ describe("setupChannels workspace shadow exclusion", () => {
     );
     expect(next).toEqual({
       channels: {
-        telegram: { token: "secret" },
+        "external-chat": { token: "secret" },
       },
     });
   });
 
   it("does not load or re-enable an explicitly disabled channel when selected lazily", async () => {
     const setupWizard = {
-      channel: "telegram",
+      channel: "external-chat",
       getStatus: vi.fn(async () => ({
-        channel: "telegram",
+        channel: "external-chat",
         configured: true,
         statusLines: [],
       })),
@@ -510,8 +510,8 @@ describe("setupChannels workspace shadow exclusion", () => {
     resolveChannelSetupEntries.mockReturnValue({
       entries: [
         {
-          id: "telegram",
-          meta: makeMeta("telegram", "Telegram"),
+          id: "external-chat",
+          meta: makeMeta("external-chat", "External Chat"),
         },
       ],
       installedCatalogEntries: [],
@@ -519,11 +519,11 @@ describe("setupChannels workspace shadow exclusion", () => {
       installedCatalogById: new Map(),
       installableCatalogById: new Map(),
     });
-    const select = vi.fn().mockResolvedValueOnce("telegram").mockResolvedValueOnce("__done__");
+    const select = vi.fn().mockResolvedValueOnce("external-chat").mockResolvedValueOnce("__done__");
     const note = vi.fn(async () => undefined);
     const cfg = {
       channels: {
-        telegram: { enabled: false, token: "secret" },
+        "external-chat": { enabled: false, token: "secret" },
       },
     };
 
@@ -544,13 +544,13 @@ describe("setupChannels workspace shadow exclusion", () => {
 
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
     expect(note).toHaveBeenCalledWith(
-      "telegram cannot be configured while disabled. Enable it before setup.",
+      "external-chat cannot be configured while disabled. Enable it before setup.",
       "Channel setup",
     );
     expect(setupWizard.configure).not.toHaveBeenCalled();
     expect(next).toEqual({
       channels: {
-        telegram: { enabled: false, token: "secret" },
+        "external-chat": { enabled: false, token: "secret" },
       },
     });
   });
@@ -559,8 +559,8 @@ describe("setupChannels workspace shadow exclusion", () => {
     resolveChannelSetupEntries.mockReturnValue({
       entries: [
         {
-          id: "telegram",
-          meta: makeMeta("telegram", "Telegram"),
+          id: "external-chat",
+          meta: makeMeta("external-chat", "External Chat"),
         },
       ],
       installedCatalogEntries: [],
@@ -568,12 +568,12 @@ describe("setupChannels workspace shadow exclusion", () => {
       installedCatalogById: new Map(),
       installableCatalogById: new Map(),
     });
-    const select = vi.fn().mockResolvedValueOnce("telegram").mockResolvedValueOnce("__done__");
+    const select = vi.fn().mockResolvedValueOnce("external-chat").mockResolvedValueOnce("__done__");
     const note = vi.fn(async () => undefined);
     const cfg = {
       plugins: { enabled: false },
       channels: {
-        telegram: { enabled: true, token: "secret" },
+        "external-chat": { enabled: true, token: "secret" },
       },
     };
 
@@ -594,7 +594,7 @@ describe("setupChannels workspace shadow exclusion", () => {
 
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
     expect(note).toHaveBeenCalledWith(
-      "telegram cannot be configured while plugins disabled. Enable it before setup.",
+      "external-chat cannot be configured while plugins disabled. Enable it before setup.",
       "Channel setup",
     );
   });

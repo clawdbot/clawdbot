@@ -164,22 +164,16 @@ export function forwardVitestOutput(stream, target, shouldSuppressLine = () => f
   });
 }
 
-function main(argv = process.argv.slice(2), env = process.env) {
-  if (argv.length === 0) {
-    console.error("usage: node scripts/run-vitest.mjs <vitest args...>");
-    process.exit(1);
-  }
-
-  const spawnParams = resolveVitestSpawnParams(env);
+export function spawnWatchedVitestProcess({ pnpmArgs, spawnParams, env, label }) {
   const child = spawnPnpmRunner({
-    pnpmArgs: ["exec", "node", ...resolveVitestNodeArgs(env), resolveVitestCliEntry(), ...argv],
+    pnpmArgs,
     ...spawnParams,
   });
   const teardownChildCleanup = installVitestProcessGroupCleanup({ child });
   const teardownNoOutputWatchdog = installVitestNoOutputWatchdog({
     streams: [child.stdout, child.stderr],
     timeoutMs: resolveVitestNoOutputTimeoutMs(env),
-    label: argv.join(" "),
+    label,
     log: (message) => {
       console.error(message);
     },
@@ -201,9 +195,30 @@ function main(argv = process.argv.slice(2), env = process.env) {
   forwardVitestOutput(child.stdout, process.stdout);
   forwardVitestOutput(child.stderr, process.stderr, shouldSuppressVitestStderrLine);
 
+  return {
+    child,
+    teardown: () => {
+      teardownChildCleanup();
+      teardownNoOutputWatchdog();
+    },
+  };
+}
+
+function main(argv = process.argv.slice(2), env = process.env) {
+  if (argv.length === 0) {
+    console.error("usage: node scripts/run-vitest.mjs <vitest args...>");
+    process.exit(1);
+  }
+
+  const { child, teardown } = spawnWatchedVitestProcess({
+    pnpmArgs: ["exec", "node", ...resolveVitestNodeArgs(env), resolveVitestCliEntry(), ...argv],
+    spawnParams: resolveVitestSpawnParams(env),
+    env,
+    label: argv.join(" "),
+  });
+
   child.on("exit", (code, signal) => {
-    teardownChildCleanup();
-    teardownNoOutputWatchdog();
+    teardown();
     if (signal) {
       process.kill(process.pid, signal);
       return;
@@ -212,8 +227,7 @@ function main(argv = process.argv.slice(2), env = process.env) {
   });
 
   child.on("error", (error) => {
-    teardownChildCleanup();
-    teardownNoOutputWatchdog();
+    teardown();
     console.error(error);
     process.exit(1);
   });

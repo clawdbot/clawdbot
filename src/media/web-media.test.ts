@@ -102,6 +102,17 @@ describe("loadWebMedia", () => {
     expect(result.buffer.length).toBeGreaterThan(0);
   }
 
+  async function loadDocumentWithHostRead(fileName: string, body: Buffer | string) {
+    const textFile = path.join(fixtureRoot, fileName);
+    await fs.writeFile(textFile, body);
+    return loadWebMedia(textFile, {
+      maxBytes: 1024 * 1024,
+      localRoots: "any",
+      readFile: async (filePath) => await fs.readFile(filePath),
+      hostReadCapability: true,
+    });
+  }
+
   it.each([
     {
       name: "allows localhost file URLs for local files",
@@ -290,14 +301,7 @@ describe("loadWebMedia", () => {
   ])(
     "loads valid punctuation-heavy %s files when host-read capability is enabled",
     async ({ fileName, contentType, body }) => {
-      const textFile = path.join(fixtureRoot, fileName);
-      await fs.writeFile(textFile, Buffer.from(body, "utf8"));
-      const result = await loadWebMedia(textFile, {
-        maxBytes: 1024 * 1024,
-        localRoots: "any",
-        readFile: async (filePath) => await fs.readFile(filePath),
-        hostReadCapability: true,
-      });
+      const result = await loadDocumentWithHostRead(fileName, Buffer.from(body, "utf8"));
       expect(result.kind).toBe("document");
       expect(result.contentType).toBe(contentType);
     },
@@ -319,14 +323,7 @@ describe("loadWebMedia", () => {
   ])(
     "loads valid single-byte encoded %s files when host-read capability is enabled",
     async ({ fileName, contentType, body }) => {
-      const textFile = path.join(fixtureRoot, fileName);
-      await fs.writeFile(textFile, body);
-      const result = await loadWebMedia(textFile, {
-        maxBytes: 1024 * 1024,
-        localRoots: "any",
-        readFile: async (filePath) => await fs.readFile(filePath),
-        hostReadCapability: true,
-      });
+      const result = await loadDocumentWithHostRead(fileName, body);
       expect(result.kind).toBe("document");
       expect(result.contentType).toBe(contentType);
     },

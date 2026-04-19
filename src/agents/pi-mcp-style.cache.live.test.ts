@@ -47,13 +47,14 @@ function buildToolResultMessage(toolCallId: string) {
   };
 }
 
-async function runToolOnlyTurn(params: {
+type ToolOnlyTurnParams = {
   apiKey: string;
   model: Awaited<ReturnType<typeof resolveLiveDirectModel>>["model"];
   sessionId: string;
-}) {
-  let prompt = `Call the tool \`${MCP_TOOL.name}\` with {}. IMPORTANT: respond ONLY with the tool call and no other text.`;
-  let response = await completeSimpleWithLiveTimeout(
+};
+
+async function completeToolOnlyTurn(params: ToolOnlyTurnParams, prompt: string, label: string) {
+  return completeSimpleWithLiveTimeout(
     params.model,
     {
       systemPrompt: OPENAI_PREFIX,
@@ -68,31 +69,23 @@ async function runToolOnlyTurn(params: {
       temperature: 0,
       reasoning: "none" as unknown as never,
     },
-    "openai mcp-style tool-only turn",
+    label,
     OPENAI_TIMEOUT_MS,
   );
+}
+
+async function runToolOnlyTurn(params: ToolOnlyTurnParams) {
+  let prompt = `Call the tool \`${MCP_TOOL.name}\` with {}. IMPORTANT: respond ONLY with the tool call and no other text.`;
+  let response = await completeToolOnlyTurn(params, prompt, "openai mcp-style tool-only turn");
 
   let toolCall = extractFirstToolCall(response);
   let text = extractAssistantText(response);
   for (let attempt = 0; attempt < 2 && (!toolCall || text.length > 0); attempt += 1) {
     prompt = `Return only a tool call for \`${MCP_TOOL.name}\` with {}. No text.`;
-    response = await completeSimpleWithLiveTimeout(
-      params.model,
-      {
-        systemPrompt: OPENAI_PREFIX,
-        messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
-        tools: [MCP_TOOL],
-      },
-      {
-        apiKey: params.apiKey,
-        cacheRetention: "short",
-        sessionId: params.sessionId,
-        maxTokens: 128,
-        temperature: 0,
-        reasoning: "none" as unknown as never,
-      },
+    response = await completeToolOnlyTurn(
+      params,
+      prompt,
       `openai mcp-style tool-only retry ${attempt + 1}`,
-      OPENAI_TIMEOUT_MS,
     );
     toolCall = extractFirstToolCall(response);
     text = extractAssistantText(response);

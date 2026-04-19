@@ -96,7 +96,7 @@ beforeEach(() => {
 
 async function invokeUpdateRun(
   params: Record<string, unknown>,
-  respond: ((ok: boolean, response?: unknown) => void) | undefined = undefined,
+  respond?: (ok: boolean, response?: unknown) => void,
 ) {
   const { updateHandlers } = await import("./update.js");
   const onRespond = respond ?? (() => {});

@@ -1,14 +1,11 @@
 import fs from "node:fs";
 import { acquireLocalHeavyCheckLockSync } from "./lib/local-heavy-check-runtime.mjs";
 import { isCiLikeEnv, resolveLocalFullSuiteProfile } from "./lib/vitest-local-scheduling.mjs";
-import { spawnPnpmRunner } from "./pnpm-runner.mjs";
 import {
-  forwardVitestOutput,
-  installVitestNoOutputWatchdog,
   resolveVitestCliEntry,
   resolveVitestNodeArgs,
-  resolveVitestNoOutputTimeoutMs,
-  shouldSuppressVitestStderrLine,
+  resolveVitestSpawnParams,
+  spawnWatchedVitestProcess,
 } from "./run-vitest.mjs";
 import {
   applyParallelVitestCachePaths,
@@ -20,11 +17,6 @@ import {
   shouldAcquireLocalHeavyCheckLock,
   writeVitestIncludeFile,
 } from "./test-projects.test-support.mjs";
-import {
-  forwardSignalToVitestProcessGroup,
-  installVitestProcessGroupCleanup,
-  shouldUseDetachedVitestProcessGroup,
-} from "./vitest-process-group.mjs";
 
 // Keep this shim so `pnpm test -- src/foo.test.ts` still forwards filters
 // cleanly instead of leaking pnpm's passthrough sentinel to Vitest.
@@ -107,50 +99,24 @@ function runVitestSpec(spec) {
     writeVitestIncludeFile(spec.includeFilePath, spec.includePatterns);
   }
   return new Promise((resolve, reject) => {
-    const child = spawnPnpmRunner({
-      cwd: process.cwd(),
-      detached: shouldUseDetachedVitestProcessGroup(),
+    const { child, teardown } = spawnWatchedVitestProcess({
       pnpmArgs: spec.pnpmArgs,
       env: spec.env,
-      stdio: ["inherit", "pipe", "pipe"],
-    });
-    const teardownChildCleanup = installVitestProcessGroupCleanup({ child });
-    const teardownNoOutputWatchdog = installVitestNoOutputWatchdog({
-      streams: [child.stdout, child.stderr],
-      timeoutMs: resolveVitestNoOutputTimeoutMs(spec.env),
       label: spec.config,
-      log: (message) => {
-        console.error(message);
-      },
-      onTimeout: () => {
-        forwardSignalToVitestProcessGroup({
-          child,
-          signal: "SIGTERM",
-          kill: process.kill.bind(process),
-        });
-      },
-      onForceKill: () => {
-        forwardSignalToVitestProcessGroup({
-          child,
-          signal: "SIGKILL",
-          kill: process.kill.bind(process),
-        });
+      spawnParams: {
+        cwd: process.cwd(),
+        ...resolveVitestSpawnParams(spec.env),
       },
     });
-
-    forwardVitestOutput(child.stdout, process.stdout);
-    forwardVitestOutput(child.stderr, process.stderr, shouldSuppressVitestStderrLine);
 
     child.on("exit", (code, signal) => {
-      teardownChildCleanup();
-      teardownNoOutputWatchdog();
+      teardown();
       cleanupVitestRunSpec(spec);
       resolve({ code: code ?? 1, signal });
     });
 
     child.on("error", (error) => {
-      teardownChildCleanup();
-      teardownNoOutputWatchdog();
+      teardown();
       cleanupVitestRunSpec(spec);
       reject(error);
     });
@@ -169,6 +135,18 @@ function applyDefaultParallelVitestWorkerBudget(specs, env) {
       OPENCLAW_VITEST_MAX_WORKERS: String(vitestMaxWorkers),
     },
   }));
+}
+
+async function runLoggedVitestSpec(spec) {
+  console.error(`[test] starting ${spec.config}`);
+  const result = await runVitestSpec(spec);
+  if (result.signal) {
+    console.error(`[test] ${spec.config} exited by signal ${result.signal}`);
+    releaseLockOnce();
+    process.kill(process.pid, result.signal);
+    return null;
+  }
+  return result;
 }
 
 function orderFullSuiteSpecsForParallelRun(specs) {
@@ -194,12 +172,8 @@ async function runVitestSpecsParallel(specs, concurrency) {
       if (!spec) {
         return;
       }
-      console.error(`[test] starting ${spec.config}`);
-      const result = await runVitestSpec(spec);
-      if (result.signal) {
-        console.error(`[test] ${spec.config} exited by signal ${result.signal}`);
-        releaseLockOnce();
-        process.kill(process.pid, result.signal);
+      const result = await runLoggedVitestSpec(spec);
+      if (!result) {
         return;
       }
       if (result.code !== 0) {
@@ -292,12 +266,8 @@ async function main() {
 
   let exitCode = 0;
   for (const spec of runSpecs) {
-    console.error(`[test] starting ${spec.config}`);
-    const result = await runVitestSpec(spec);
-    if (result.signal) {
-      console.error(`[test] ${spec.config} exited by signal ${result.signal}`);
-      releaseLockOnce();
-      process.kill(process.pid, result.signal);
+    const result = await runLoggedVitestSpec(spec);
+    if (!result) {
       return;
     }
     if (result.code !== 0) {

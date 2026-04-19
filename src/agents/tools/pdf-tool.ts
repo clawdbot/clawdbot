@@ -457,10 +457,12 @@ export function createPdfTool(options?: {
                 : {}),
             }
           : {
-              pdfs: loadedPdfs.map((p) => ({
-                pdf: p.resolvedPath,
-                ...(p.rewrittenFrom ? { rewrittenFrom: p.rewrittenFrom } : {}),
-              })),
+              pdfs: loadedPdfs.map((p) =>
+                Object.assign(
+                  { pdf: p.resolvedPath },
+                  p.rewrittenFrom ? { rewrittenFrom: p.rewrittenFrom } : {},
+                ),
+              ),
             };
 
       return buildTextToolResult(result, { native: result.native, ...pdfDetails });

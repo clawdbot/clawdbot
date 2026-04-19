@@ -93,6 +93,15 @@ import type {
 } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
+type SessionsRuntimeModule = typeof import("./sessions.runtime.js");
+
+let sessionsRuntimeModulePromise: Promise<SessionsRuntimeModule> | undefined;
+
+function loadSessionsRuntimeModule(): Promise<SessionsRuntimeModule> {
+  sessionsRuntimeModulePromise ??= import("./sessions.runtime.js");
+  return sessionsRuntimeModulePromise;
+}
+
 function requireSessionKey(key: unknown, respond: RespondFn): string | null {
   const raw =
     typeof key === "string"
@@ -1331,7 +1340,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     const reason = p.reason === "new" ? "new" : "reset";
-    const { performGatewaySessionReset } = await import("./sessions.runtime.js");
+    const { performGatewaySessionReset } = await loadSessionsRuntimeModule();
     const result = await performGatewaySessionReset({
       key,
       reason,
@@ -1377,7 +1386,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       cleanupSessionBeforeMutation,
       emitGatewaySessionEndPluginHook,
       emitSessionUnboundLifecycleEvent,
-    } = await import("./sessions.runtime.js");
+    } = await loadSessionsRuntimeModule();
 
     const { entry, legacyKey, canonicalKey } = loadSessionEntry(key);
     const mutationCleanupError = await cleanupSessionBeforeMutation({

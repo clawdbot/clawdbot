@@ -27,6 +27,12 @@ export const offsetMocks: {
   deleteTelegramUpdateOffset: vi.fn().mockResolvedValue(undefined) as unknown as MockFn,
 };
 
+export const lifecycleMocks: {
+  onAccountConfigChanged: MockFn;
+} = {
+  onAccountConfigChanged: vi.fn().mockResolvedValue(undefined) as unknown as MockFn,
+};
+
 export const secretMocks = {
   resolveCommandConfigWithSecrets: vi.fn(async ({ config }: { config: unknown }) => ({
     resolvedConfig: config,

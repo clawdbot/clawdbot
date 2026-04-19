@@ -4,7 +4,7 @@ import { GRAPH_ROOT } from "./attachments/shared.js";
 const GRAPH_BETA = "https://graph.microsoft.com/beta";
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { readAccessToken } from "./token-response.js";
-import { resolveMSTeamsCredentials } from "./token.js";
+import { resolveDelegatedAccessToken, resolveMSTeamsCredentials } from "./token.js";
 import { buildUserAgent } from "./user-agent.js";
 
 export type GraphUser = {
@@ -199,8 +199,6 @@ export async function resolveGraphToken(
 
   // Try delegated token if requested and configured
   if (options?.preferDelegated && msteamsCfg?.delegatedAuth?.enabled && creds.type === "secret") {
-    // Dynamic import to avoid circular dependency (token.ts imports from graph.ts indirectly)
-    const { resolveDelegatedAccessToken } = await import("./token.js");
     const delegated = await resolveDelegatedAccessToken({
       tenantId: creds.tenantId,
       clientId: creds.appId,

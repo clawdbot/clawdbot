@@ -160,7 +160,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     cd openclaw
     pnpm install
     pnpm build
-    pnpm ui:build # auto-installs UI deps on first run
+    pnpm ui:build
     openclaw onboard
     ```
 

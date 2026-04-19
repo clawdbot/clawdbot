@@ -77,13 +77,19 @@ describe("deriveSessionChatTypeFromKey", () => {
     { key: "agent:main:discord:channel:c1", expected: "channel" },
     { key: "agent:main:telegram:dm:123456", expected: "direct" },
     { key: "telegram:dm:123456", expected: "direct" },
-    { key: "discord:acc-1:guild-123:channel-456", expected: "channel" },
-    { key: "12345-678@g.us", expected: "group" },
     { key: "agent:main:main", expected: "unknown" },
     { key: "agent:main", expected: "unknown" },
     { key: "", expected: "unknown" },
   ] as const)("derives chat type for %j => $expected", ({ key, expected }) => {
     expect(deriveSessionChatTypeFromKey(key)).toBe(expected);
+  });
+
+  it("uses plugin-owned legacy chat-type hooks after generic token parsing", () => {
+    expect(
+      deriveSessionChatTypeFromKey("legacy-room:abc", [
+        (sessionKey) => (sessionKey.startsWith("legacy-room:") ? "channel" : undefined),
+      ]),
+    ).toBe("channel");
   });
 });
 

@@ -30,6 +30,54 @@ describe("openrouter provider hooks", () => {
     ).toBe("native");
   });
 
+  it("canonicalizes stale OpenRouter /v1 config and runtime metadata", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+
+    expect(
+      provider.normalizeConfig?.({
+        provider: "openrouter",
+        providerConfig: {
+          api: "openai-completions",
+          baseUrl: "https://openrouter.ai/v1/",
+          models: [],
+        },
+      } as never),
+    ).toMatchObject({
+      baseUrl: "https://openrouter.ai/api/v1",
+    });
+
+    expect(
+      provider.normalizeResolvedModel?.({
+        provider: "openrouter",
+        model: {
+          provider: "openrouter",
+          id: "openai/gpt-5.4",
+          name: "openai/gpt-5.4",
+          api: "openai-completions",
+          baseUrl: "https://openrouter.ai/v1",
+          reasoning: true,
+          input: ["text", "image"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 200_000,
+          maxTokens: 8192,
+        },
+      } as never),
+    ).toMatchObject({
+      baseUrl: "https://openrouter.ai/api/v1",
+    });
+
+    expect(
+      provider.normalizeTransport?.({
+        provider: "openrouter",
+        api: "openai-completions",
+        baseUrl: "https://openrouter.ai/v1",
+      } as never),
+    ).toEqual({
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
+    });
+  });
+
   it("injects provider routing into compat before applying stream wrappers", async () => {
     const provider = await registerSingleProviderPlugin(openrouterPlugin);
     const baseStreamFn = vi.fn(

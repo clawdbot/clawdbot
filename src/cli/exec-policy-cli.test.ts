@@ -13,6 +13,22 @@ function hashApprovalsFile(file: ExecApprovalsFile): string {
     .digest("hex");
 }
 
+function createCurrentApprovalsSnapshot(path: string): ExecApprovalsSnapshot {
+  return {
+    path,
+    exists: true,
+    raw: JSON.stringify(mocks.getApprovals(), null, 2),
+    hash: hashApprovalsFile(mocks.getApprovals()),
+    file: structuredClone(mocks.getApprovals()),
+  };
+}
+
+function mockRollbackApprovalSnapshots(originalSnapshot: ExecApprovalsSnapshot) {
+  mocks.readExecApprovalsSnapshot
+    .mockImplementationOnce(() => originalSnapshot)
+    .mockImplementationOnce(() => createCurrentApprovalsSnapshot(originalSnapshot.path));
+}
+
 const mocks = vi.hoisted(() => {
   const runtimeErrors: string[] = [];
   const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
@@ -454,17 +470,7 @@ describe("exec-policy CLI", () => {
       hash: "approvals-hash",
       file: originalApprovals,
     };
-    mocks.readExecApprovalsSnapshot
-      .mockImplementationOnce(() => originalSnapshot)
-      .mockImplementationOnce(
-        (): ExecApprovalsSnapshot => ({
-          path: "/tmp/exec-approvals.json",
-          exists: true,
-          raw: JSON.stringify(mocks.getApprovals(), null, 2),
-          hash: hashApprovalsFile(mocks.getApprovals()),
-          file: structuredClone(mocks.getApprovals()),
-        }),
-      );
+    mockRollbackApprovalSnapshots(originalSnapshot);
     mocks.replaceConfigFile.mockImplementationOnce(async () => {
       throw new Error("config write failed");
     });
@@ -486,17 +492,7 @@ describe("exec-policy CLI", () => {
       hash: "approvals-hash",
       file: { version: 1, agents: {} },
     };
-    mocks.readExecApprovalsSnapshot
-      .mockImplementationOnce(() => missingSnapshot)
-      .mockImplementationOnce(
-        (): ExecApprovalsSnapshot => ({
-          path: "/tmp/missing-exec-approvals.json",
-          exists: true,
-          raw: JSON.stringify(mocks.getApprovals(), null, 2),
-          hash: hashApprovalsFile(mocks.getApprovals()),
-          file: structuredClone(mocks.getApprovals()),
-        }),
-      );
+    mockRollbackApprovalSnapshots(missingSnapshot);
     mocks.replaceConfigFile.mockImplementationOnce(async () => {
       throw new Error("config write failed");
     });

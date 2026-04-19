@@ -32,11 +32,10 @@ function createExtensionFallbackBrowserHarness(options?: {
 
   const pages = (options?.urls ?? [undefined]).map(
     (url) =>
-      ({
-        on: pageOn,
-        context: () => context,
-        ...(url ? { url: () => url } : {}),
-      }) as unknown as import("playwright-core").Page,
+      Object.assign(
+        { on: pageOn, context: () => context },
+        url ? { url: () => url } : {},
+      ) as unknown as import("playwright-core").Page,
   );
   (context as unknown as { pages: () => unknown[] }).pages = () => pages;
 

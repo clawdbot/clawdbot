@@ -24,21 +24,11 @@ const baseCatalog = [
 let catalog = [...baseCatalog];
 
 const loadModelCatalog = vi.hoisted(() => vi.fn(async () => catalog));
-const modelAuthMocks = vi.hoisted(() => ({
-  hasAvailableAuthForProvider: vi.fn(() => true),
-  resolveApiKeyForProvider: vi.fn(async () => ({
-    apiKey: "test-key",
-    source: "test",
-    mode: "api-key",
-  })),
-  requireApiKey: vi.fn((auth: { apiKey?: string }) => auth.apiKey ?? "test-key"),
-}));
 
-vi.mock("../agents/model-auth.js", () => ({
-  hasAvailableAuthForProvider: modelAuthMocks.hasAvailableAuthForProvider,
-  resolveApiKeyForProvider: modelAuthMocks.resolveApiKeyForProvider,
-  requireApiKey: modelAuthMocks.requireApiKey,
-}));
+vi.mock("../agents/model-auth.js", async () => {
+  const { createAvailableModelAuthMockModule } = await import("./runner.test-mocks.js");
+  return createAvailableModelAuthMockModule();
+});
 
 vi.mock("../plugins/capability-provider-runtime.js", async () => {
   const runtime =

@@ -50,7 +50,13 @@ describe("CodexAppServerEventProjector", () => {
         turnId: "turn-1",
         tokenUsage: {
           total: {
-            totalTokens: 12,
+            totalTokens: 900_000,
+            inputTokens: 700_000,
+            cachedInputTokens: 100_000,
+            outputTokens: 100_000,
+          },
+          last: {
+            totalTokens: 14,
             inputTokens: 5,
             cachedInputTokens: 2,
             outputTokens: 7,
@@ -83,8 +89,96 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.assistantTexts).toEqual(["hello"]);
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["user", "assistant"]);
     expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "hello" }]);
-    expect(result.attemptUsage).toMatchObject({ input: 5, output: 7, cacheRead: 2, total: 12 });
+    expect(result.attemptUsage).toMatchObject({ input: 5, output: 7, cacheRead: 2, total: 14 });
+    expect(result.lastAssistant?.usage).toMatchObject({
+      input: 5,
+      output: 7,
+      cacheRead: 2,
+      totalTokens: 14,
+    });
     expect(result.replayMetadata.replaySafe).toBe(true);
+  });
+
+  it("does not treat cumulative-only token usage as fresh context usage", async () => {
+    const params = createParams();
+    const projector = new CodexAppServerEventProjector(params, "thread-1", "turn-1");
+
+    await projector.handleNotification({
+      method: "item/agentMessage/delta",
+      params: { threadId: "thread-1", turnId: "turn-1", itemId: "msg-1", delta: "done" },
+    });
+    await projector.handleNotification({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        tokenUsage: {
+          total: {
+            totalTokens: 1_000_000,
+            inputTokens: 999_000,
+            cachedInputTokens: 500,
+            outputTokens: 500,
+          },
+        },
+      },
+    });
+
+    const result = projector.buildResult({
+      didSendViaMessagingTool: false,
+      messagingToolSentTexts: [],
+      messagingToolSentMediaUrls: [],
+      messagingToolSentTargets: [],
+    });
+
+    expect(result.assistantTexts).toEqual(["done"]);
+    expect(result.attemptUsage).toBeUndefined();
+    expect(result.lastAssistant?.usage).toMatchObject({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      totalTokens: 0,
+    });
+  });
+
+  it("normalizes snake_case current token usage fields", async () => {
+    const params = createParams();
+    const projector = new CodexAppServerEventProjector(params, "thread-1", "turn-1");
+
+    await projector.handleNotification({
+      method: "item/agentMessage/delta",
+      params: { threadId: "thread-1", turnId: "turn-1", itemId: "msg-1", delta: "done" },
+    });
+    await projector.handleNotification({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        tokenUsage: {
+          total: { total_tokens: 1_000_000 },
+          last_token_usage: {
+            total_tokens: 20,
+            input_tokens: 8,
+            cached_input_tokens: 3,
+            output_tokens: 9,
+          },
+        },
+      },
+    });
+
+    const result = projector.buildResult({
+      didSendViaMessagingTool: false,
+      messagingToolSentTexts: [],
+      messagingToolSentMediaUrls: [],
+      messagingToolSentTargets: [],
+    });
+
+    expect(result.attemptUsage).toMatchObject({ input: 8, output: 9, cacheRead: 3, total: 20 });
+    expect(result.lastAssistant?.usage).toMatchObject({
+      input: 8,
+      output: 9,
+      cacheRead: 3,
+      totalTokens: 20,
+    });
   });
 
   it("keeps intermediate agentMessage items out of the final visible reply", async () => {

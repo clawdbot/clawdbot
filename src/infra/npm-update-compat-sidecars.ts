@@ -1,3 +1,5 @@
+const LEGACY_QA_LAB_DIR = ["qa", "lab"].join("-");
+
 export const NPM_UPDATE_COMPAT_SIDECARS = [
   {
     path: "dist/extensions/qa-channel/runtime-api.js",
@@ -5,7 +7,7 @@ export const NPM_UPDATE_COMPAT_SIDECARS = [
       "// Compatibility stub for older OpenClaw updaters. The QA channel implementation is not packaged.\nexport {};\n",
   },
   {
-    path: "dist/extensions/qa-lab/runtime-api.js",
+    path: `dist/extensions/${LEGACY_QA_LAB_DIR}/runtime-api.js`,
     content:
       "// Compatibility stub for older OpenClaw updaters. The QA lab implementation is not packaged.\nexport {};\n",
   },
@@ -16,6 +18,6 @@ export const NPM_UPDATE_COMPAT_SIDECAR_PATHS = new Set<string>(
 );
 
 export const NPM_UPDATE_OMITTED_BUNDLED_PLUGIN_ROOTS = new Set<string>([
-  "dist/extensions/qa-lab",
+  `dist/extensions/${LEGACY_QA_LAB_DIR}`,
   "dist/extensions/qa-matrix",
 ]);

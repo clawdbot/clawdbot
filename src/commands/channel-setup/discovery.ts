@@ -97,13 +97,11 @@ export function resolveChannelSetupEntries(params: {
         manifestInstalledIds.has(entry.id as ChannelChoice) &&
         shouldShowChannelInSetup(entry.meta),
     )
-    .map((entry) => ({
-      ...entry,
-      meta: normalizeChannelMeta({
-        id: entry.id as ChannelChoice,
-        meta: entry.meta,
+    .map((entry) =>
+      Object.assign({}, entry, {
+        meta: normalizeChannelMeta({ id: entry.id as ChannelChoice, meta: entry.meta }),
       }),
-    }));
+    );
   const installableCatalogEntries = installableCatalogEntriesSource
     .filter(
       (entry) =>
@@ -111,13 +109,11 @@ export function resolveChannelSetupEntries(params: {
         !manifestInstalledIds.has(entry.id as ChannelChoice) &&
         shouldShowChannelInSetup(entry.meta),
     )
-    .map((entry) => ({
-      ...entry,
-      meta: normalizeChannelMeta({
-        id: entry.id as ChannelChoice,
-        meta: entry.meta,
+    .map((entry) =>
+      Object.assign({}, entry, {
+        meta: normalizeChannelMeta({ id: entry.id as ChannelChoice, meta: entry.meta }),
       }),
-    }));
+    );
 
   const metaById = new Map<string, ChannelMeta>();
   for (const meta of listChatChannels()) {

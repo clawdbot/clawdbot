@@ -9,6 +9,13 @@ import {
 import type { CommandHandler } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 
+let compactRuntimePromise: Promise<typeof import("./commands-compact.runtime.js")> | null = null;
+
+function loadCompactRuntime(): Promise<typeof import("./commands-compact.runtime.js")> {
+  compactRuntimePromise ??= import("./commands-compact.runtime.js");
+  return compactRuntimePromise;
+}
+
 function extractCompactInstructions(params: {
   rawBody?: string;
   ctx: import("../templating.js").MsgContext;
@@ -88,7 +95,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       reply: { text: "⚙️ Compaction unavailable (missing session id)." },
     };
   }
-  const runtime = await import("./commands-compact.runtime.js");
+  const runtime = await loadCompactRuntime();
   const sessionId = targetSessionEntry.sessionId;
   if (runtime.isEmbeddedPiRunActive(sessionId)) {
     runtime.abortEmbeddedPiRun(sessionId);

@@ -85,10 +85,10 @@ export function buildQaBusSnapshot(params: {
 }): QaBusStateSnapshot {
   return {
     cursor: params.cursor,
-    conversations: Array.from(params.conversations.values()).map((conversation) => ({
-      ...conversation,
-    })),
-    threads: Array.from(params.threads.values()).map((thread) => ({ ...thread })),
+    conversations: Array.from(params.conversations.values()).map((conversation) =>
+      Object.assign({}, conversation),
+    ),
+    threads: Array.from(params.threads.values()).map((thread) => Object.assign({}, thread)),
     messages: Array.from(params.messages.values()).map((message) => cloneMessage(message)),
     events: params.events.map((event) => cloneEvent(event)),
   };

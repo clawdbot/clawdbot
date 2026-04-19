@@ -31,6 +31,22 @@ const WEBHOOK_BODY_TIMEOUT_MS = WEBHOOK_BODY_READ_DEFAULTS.preAuth.timeoutMs;
 const STREAM_DISCONNECT_HANGUP_GRACE_MS = 2000;
 const TRANSCRIPT_LOG_MAX_CHARS = 200;
 
+type RealtimeTranscriptionRuntime = typeof import("./realtime-transcription.runtime.js");
+type ResponseGeneratorModule = typeof import("./response-generator.js");
+
+let realtimeTranscriptionRuntimePromise: Promise<RealtimeTranscriptionRuntime> | undefined;
+let responseGeneratorModulePromise: Promise<ResponseGeneratorModule> | undefined;
+
+function loadRealtimeTranscriptionRuntime(): Promise<RealtimeTranscriptionRuntime> {
+  realtimeTranscriptionRuntimePromise ??= import("./realtime-transcription.runtime.js");
+  return realtimeTranscriptionRuntimePromise;
+}
+
+function loadResponseGeneratorModule(): Promise<ResponseGeneratorModule> {
+  responseGeneratorModulePromise ??= import("./response-generator.js");
+  return responseGeneratorModulePromise;
+}
+
 type WebhookHeaderGateResult =
   | { ok: true }
   | {
@@ -233,7 +249,7 @@ export class VoiceCallWebhookServer {
     const pluginConfig =
       this.fullConfig ?? (this.coreConfig as unknown as OpenClawConfig | undefined);
     const { getRealtimeTranscriptionProvider, listRealtimeTranscriptionProviders } =
-      await import("./realtime-transcription.runtime.js");
+      await loadRealtimeTranscriptionRuntime();
     const resolution = resolveConfiguredCapabilityProvider({
       configuredProviderId: streaming.provider,
       providerConfigs: streaming.providers,
@@ -762,7 +778,7 @@ export class VoiceCallWebhookServer {
     }
 
     try {
-      const { generateVoiceResponse } = await import("./response-generator.js");
+      const { generateVoiceResponse } = await loadResponseGeneratorModule();
 
       const result = await generateVoiceResponse({
         voiceConfig: this.config,

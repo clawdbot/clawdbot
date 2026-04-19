@@ -22,6 +22,7 @@ function createState(): { state: DreamingState; request: ReturnType<typeof vi.fn
       request,
     } as unknown as DreamingState["client"],
     connected: true,
+    hello: null,
     configSnapshot: { hash: "hash-1" },
     applySessionKey: "main",
     dreamingStatusLoading: false,
@@ -227,6 +228,11 @@ describe("dreaming controller", () => {
 
   it("loads and normalizes wiki import insights", async () => {
     const { state, request } = createState();
+    state.hello = {
+      type: "hello-ok",
+      protocol: 3,
+      features: { methods: ["wiki.importInsights"] },
+    };
     state.configSnapshot = {
       hash: "hash-1",
       config: {
@@ -297,6 +303,40 @@ describe("dreaming controller", () => {
     expect(state.wikiImportInsightsLoading).toBe(false);
   });
 
+  it("falls back to config gating for wiki import insights when methods are not advertised", async () => {
+    const { state, request } = createState();
+    state.configSnapshot = {
+      hash: "hash-1",
+      config: {
+        plugins: {
+          entries: {
+            "memory-wiki": {
+              enabled: true,
+            },
+          },
+        },
+      },
+    };
+    request.mockResolvedValue({
+      sourceType: "chatgpt",
+      totalItems: 1,
+      totalClusters: 1,
+      clusters: [],
+    });
+
+    await loadWikiImportInsights(state);
+
+    expect(request).toHaveBeenCalledWith("wiki.importInsights", {});
+    expect(state.wikiImportInsights).toEqual(
+      expect.objectContaining({
+        totalItems: 1,
+        totalClusters: 1,
+      }),
+    );
+    expect(state.wikiImportInsightsError).toBeNull();
+    expect(state.wikiImportInsightsLoading).toBe(false);
+  });
+
   it("skips wiki import insights when memory-wiki is not enabled", async () => {
     const { state, request } = createState();
     state.configSnapshot = {
@@ -321,8 +361,48 @@ describe("dreaming controller", () => {
     expect(state.wikiImportInsightsLoading).toBe(false);
   });
 
+  it("skips wiki import insights when the gateway does not advertise the method", async () => {
+    const { state, request } = createState();
+    state.hello = {
+      type: "hello-ok",
+      protocol: 3,
+      features: { methods: ["doctor.memory.status"] },
+    };
+    state.configSnapshot = {
+      hash: "hash-1",
+      config: {
+        plugins: {
+          entries: {
+            "memory-wiki": {
+              enabled: true,
+            },
+          },
+        },
+      },
+    };
+    state.wikiImportInsights = {
+      sourceType: "chatgpt",
+      totalItems: 1,
+      totalClusters: 1,
+      clusters: [],
+    };
+    state.wikiImportInsightsError = "unknown method: wiki.importInsights";
+
+    await loadWikiImportInsights(state);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(state.wikiImportInsights).toBeNull();
+    expect(state.wikiImportInsightsError).toBeNull();
+    expect(state.wikiImportInsightsLoading).toBe(false);
+  });
+
   it("loads and normalizes the wiki memory palace", async () => {
     const { state, request } = createState();
+    state.hello = {
+      type: "hello-ok",
+      protocol: 3,
+      features: { methods: ["wiki.palace"] },
+    };
     state.configSnapshot = {
       hash: "hash-1",
       config: {
@@ -391,12 +471,83 @@ describe("dreaming controller", () => {
     expect(state.wikiMemoryPalaceLoading).toBe(false);
   });
 
+  it("falls back to config gating for wiki memory palace when methods are not advertised", async () => {
+    const { state, request } = createState();
+    state.configSnapshot = {
+      hash: "hash-1",
+      config: {
+        plugins: {
+          entries: {
+            "memory-wiki": {
+              enabled: true,
+            },
+          },
+        },
+      },
+    };
+    request.mockResolvedValue({
+      totalItems: 1,
+      totalClaims: 2,
+      totalQuestions: 0,
+      totalContradictions: 0,
+      clusters: [],
+    });
+
+    await loadWikiMemoryPalace(state);
+
+    expect(request).toHaveBeenCalledWith("wiki.palace", {});
+    expect(state.wikiMemoryPalace).toEqual(
+      expect.objectContaining({
+        totalItems: 1,
+        totalClaims: 2,
+      }),
+    );
+    expect(state.wikiMemoryPalaceError).toBeNull();
+    expect(state.wikiMemoryPalaceLoading).toBe(false);
+  });
+
   it("skips wiki memory palace when memory-wiki is not enabled", async () => {
     const { state, request } = createState();
     state.configSnapshot = {
       hash: "hash-1",
       config: {
         plugins: {},
+      },
+    };
+    state.wikiMemoryPalace = {
+      totalItems: 1,
+      totalClaims: 1,
+      totalQuestions: 0,
+      totalContradictions: 0,
+      clusters: [],
+    };
+    state.wikiMemoryPalaceError = "unknown method: wiki.palace";
+
+    await loadWikiMemoryPalace(state);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(state.wikiMemoryPalace).toBeNull();
+    expect(state.wikiMemoryPalaceError).toBeNull();
+    expect(state.wikiMemoryPalaceLoading).toBe(false);
+  });
+
+  it("skips wiki memory palace when the gateway does not advertise the method", async () => {
+    const { state, request } = createState();
+    state.hello = {
+      type: "hello-ok",
+      protocol: 3,
+      features: { methods: ["doctor.memory.status"] },
+    };
+    state.configSnapshot = {
+      hash: "hash-1",
+      config: {
+        plugins: {
+          entries: {
+            "memory-wiki": {
+              enabled: true,
+            },
+          },
+        },
       },
     };
     state.wikiMemoryPalace = {

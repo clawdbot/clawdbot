@@ -69,8 +69,8 @@ function applyVitestCapabilityAliasOverrides(params: {
   }
 
   const {
-    ["openclaw/plugin-sdk"]: _ignoredLegacyRootAlias,
-    ["@openclaw/plugin-sdk"]: _ignoredScopedRootAlias,
+    "openclaw/plugin-sdk": _ignoredLegacyRootAlias,
+    "@openclaw/plugin-sdk": _ignoredScopedRootAlias,
     ...scopedAliasMap
   } = params.aliasMap;
   return {

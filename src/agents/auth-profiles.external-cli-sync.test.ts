@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
 let readManagedExternalCliCredential: typeof import("./auth-profiles/external-cli-sync.js").readManagedExternalCliCredential;
 let resolveExternalCliAuthProfiles: typeof import("./auth-profiles/external-cli-sync.js").resolveExternalCliAuthProfiles;
 let hasUsableOAuthCredential: typeof import("./auth-profiles/external-cli-sync.js").hasUsableOAuthCredential;
+let isSafeToUseExternalCliCredential: typeof import("./auth-profiles/external-cli-sync.js").isSafeToUseExternalCliCredential;
 let shouldBootstrapFromExternalCliCredential: typeof import("./auth-profiles/external-cli-sync.js").shouldBootstrapFromExternalCliCredential;
 let shouldReplaceStoredOAuthCredential: typeof import("./auth-profiles/external-cli-sync.js").shouldReplaceStoredOAuthCredential;
 let OPENAI_CODEX_DEFAULT_PROFILE_ID: typeof import("./auth-profiles/constants.js").OPENAI_CODEX_DEFAULT_PROFILE_ID;
@@ -48,6 +49,7 @@ describe("external cli oauth resolution", () => {
     mocks.readMiniMaxCliCredentialsCached.mockReset().mockReturnValue(null);
     ({
       hasUsableOAuthCredential,
+      isSafeToUseExternalCliCredential,
       readManagedExternalCliCredential,
       resolveExternalCliAuthProfiles,
       shouldBootstrapFromExternalCliCredential,
@@ -154,6 +156,7 @@ describe("external cli oauth resolution", () => {
         access: "fresh-cli-access",
         refresh: "fresh-cli-refresh",
         expires: Date.now() + 5 * 24 * 60 * 60_000,
+        accountId: "acct-123",
       });
 
       expect(
@@ -174,6 +177,7 @@ describe("external cli oauth resolution", () => {
             access: "expired-local-access",
             refresh: "expired-local-refresh",
             expires: Date.now() - 60_000,
+            accountId: "acct-123",
           }),
           imported,
         }),
@@ -191,7 +195,7 @@ describe("external cli oauth resolution", () => {
       ).toBe(true);
     });
 
-    it("does not bootstrap across different known oauth identities", () => {
+    it("refuses external oauth usage across different known identities", () => {
       const imported = makeOAuthCredential({
         provider: "openai-codex",
         access: "fresh-cli-access",
@@ -201,8 +205,8 @@ describe("external cli oauth resolution", () => {
       });
 
       expect(
-        shouldBootstrapFromExternalCliCredential({
-          existing: makeOAuthCredential({
+        isSafeToUseExternalCliCredential(
+          makeOAuthCredential({
             provider: "openai-codex",
             access: "expired-local-access",
             refresh: "expired-local-refresh",
@@ -210,12 +214,12 @@ describe("external cli oauth resolution", () => {
             accountId: "acct-local",
           }),
           imported,
-        }),
+        ),
       ).toBe(false);
     });
   });
 
-  it("reads codex external cli credentials by profile id", () => {
+  it("does not use codex as a runtime bootstrap source anymore", () => {
     mocks.readCodexCliCredentialsCached.mockReturnValue(
       makeOAuthCredential({
         provider: "openai-codex",
@@ -229,10 +233,7 @@ describe("external cli oauth resolution", () => {
       credential: makeOAuthCredential({ provider: "openai-codex" }),
     });
 
-    expect(credential).toMatchObject({
-      access: "codex-access-token",
-      refresh: "codex-refresh-token",
-    });
+    expect(credential).toBeNull();
   });
 
   it("returns null when the profile id/provider do not map to the same external source", () => {
@@ -248,38 +249,26 @@ describe("external cli oauth resolution", () => {
     expect(credential).toBeNull();
   });
 
-  it("resolves fresher codex and minimax external oauth profiles as runtime overlays", () => {
-    mocks.readCodexCliCredentialsCached.mockReturnValue(
-      makeOAuthCredential({
-        provider: "openai-codex",
-        access: "codex-fresh-access",
-        refresh: "codex-fresh-refresh",
-        expires: Date.now() + 5 * 24 * 60 * 60_000,
-      }),
-    );
+  it("resolves fresher minimax external oauth profiles as runtime overlays", () => {
     mocks.readMiniMaxCliCredentialsCached.mockReturnValue(
       makeOAuthCredential({
         provider: "minimax-portal",
         access: "minimax-fresh-access",
         refresh: "minimax-fresh-refresh",
         expires: Date.now() + 5 * 24 * 60 * 60_000,
+        email: "minimax@example.com",
       }),
     );
 
     const profiles = resolveExternalCliAuthProfiles({
       version: 1,
       profiles: {
-        [OPENAI_CODEX_DEFAULT_PROFILE_ID]: makeOAuthCredential({
-          provider: "openai-codex",
-          access: "codex-stale-access",
-          refresh: "codex-stale-refresh",
-          expires: Date.now() - 5_000,
-        }),
         [MINIMAX_CLI_PROFILE_ID]: makeOAuthCredential({
           provider: "minimax-portal",
           access: "minimax-stale-access",
           refresh: "minimax-stale-refresh",
           expires: Date.now() - 5_000,
+          email: "minimax@example.com",
         }),
       },
     });
@@ -287,20 +276,16 @@ describe("external cli oauth resolution", () => {
     const profilesById = new Map(
       profiles.map((profile) => [profile.profileId, profile.credential]),
     );
-    expect(profilesById.get(OPENAI_CODEX_DEFAULT_PROFILE_ID)).toMatchObject({
-      access: "codex-fresh-access",
-      refresh: "codex-fresh-refresh",
-    });
     expect(profilesById.get(MINIMAX_CLI_PROFILE_ID)).toMatchObject({
       access: "minimax-fresh-access",
       refresh: "minimax-fresh-refresh",
     });
   });
 
-  it("does not emit runtime overlays when the stored credential is newer", () => {
-    mocks.readCodexCliCredentialsCached.mockReturnValue(
+  it("does not emit runtime overlays when the stored minimax credential is newer", () => {
+    mocks.readMiniMaxCliCredentialsCached.mockReturnValue(
       makeOAuthCredential({
-        provider: "openai-codex",
+        provider: "minimax-portal",
         access: "stale-external-access",
         refresh: "stale-external-refresh",
         expires: Date.now() - 5_000,
@@ -309,9 +294,9 @@ describe("external cli oauth resolution", () => {
 
     const profiles = resolveExternalCliAuthProfiles(
       makeStore(
-        OPENAI_CODEX_DEFAULT_PROFILE_ID,
+        MINIMAX_CLI_PROFILE_ID,
         makeOAuthCredential({
-          provider: "openai-codex",
+          provider: "minimax-portal",
           access: "fresh-store-access",
           refresh: "fresh-store-refresh",
           expires: Date.now() + 5 * 24 * 60 * 60_000,
@@ -322,10 +307,10 @@ describe("external cli oauth resolution", () => {
     expect(profiles).toEqual([]);
   });
 
-  it("does not overlay fresh external cli oauth over a still-usable local credential", () => {
-    mocks.readCodexCliCredentialsCached.mockReturnValue(
+  it("does not overlay fresh minimax oauth over a still-usable local credential", () => {
+    mocks.readMiniMaxCliCredentialsCached.mockReturnValue(
       makeOAuthCredential({
-        provider: "openai-codex",
+        provider: "minimax-portal",
         access: "fresh-cli-access",
         refresh: "fresh-cli-refresh",
         expires: Date.now() + 5 * 24 * 60 * 60_000,
@@ -334,9 +319,9 @@ describe("external cli oauth resolution", () => {
 
     const profiles = resolveExternalCliAuthProfiles(
       makeStore(
-        OPENAI_CODEX_DEFAULT_PROFILE_ID,
+        MINIMAX_CLI_PROFILE_ID,
         makeOAuthCredential({
-          provider: "openai-codex",
+          provider: "minimax-portal",
           access: "healthy-local-access",
           refresh: "healthy-local-refresh",
           expires: Date.now() + 10 * 60_000,

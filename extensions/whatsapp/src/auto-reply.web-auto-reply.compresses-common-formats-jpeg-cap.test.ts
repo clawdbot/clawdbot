@@ -169,10 +169,9 @@ describe("web auto-reply", () => {
     const sharedRaw = crypto.randomBytes(width * height * 3);
 
     const renderedFormats = await Promise.all(
-      formats.map(async (fmt) => ({
-        ...fmt,
-        image: await fmt.make(sharedRaw, { width, height }),
-      })),
+      formats.map(async (fmt) =>
+        Object.assign({}, fmt, { image: await fmt.make(sharedRaw, { width, height }) }),
+      ),
     );
 
     await withMediaCap(SMALL_MEDIA_CAP_MB, async () => {

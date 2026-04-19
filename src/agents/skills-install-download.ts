@@ -12,11 +12,17 @@ import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { isWithinDir } from "../infra/path-safety.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { ensureDir, resolveUserPath } from "../utils.js";
-import { extractArchive } from "./skills-install-extract.js";
 import { formatInstallFailureMessage } from "./skills-install-output.js";
 import type { SkillInstallResult } from "./skills-install.types.js";
 import type { SkillEntry, SkillInstallSpec } from "./skills.js";
 import { resolveSkillToolsRootDir } from "./skills/tools-dir.js";
+
+let extractModulePromise: Promise<typeof import("./skills-install-extract.js")> | undefined;
+
+async function loadExtractModule() {
+  extractModulePromise ??= import("./skills-install-extract.js");
+  return await extractModulePromise;
+}
 
 function isNodeReadableStream(value: unknown): value is NodeJS.ReadableStream {
   return Boolean(value && typeof (value as NodeJS.ReadableStream).pipe === "function");
@@ -223,6 +229,7 @@ export async function installDownloadSpec(params: {
     return { ok: false, message, stdout: "", stderr: message, code: null };
   }
 
+  const { extractArchive } = await loadExtractModule();
   const extractResult = await extractArchive({
     archivePath,
     archiveType,

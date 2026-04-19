@@ -24,6 +24,12 @@ export function createBackupTestRuntime(): RuntimeEnv {
   } satisfies RuntimeEnv;
 }
 
+export async function resetBackupTempHome(tempHome: { home: string }) {
+  await fs.rm(tempHome.home, { recursive: true, force: true });
+  await fs.mkdir(path.join(tempHome.home, ".openclaw"), { recursive: true });
+  delete process.env.OPENCLAW_CONFIG_PATH;
+}
+
 export async function mockStateOnlyBackupPlan(stateDir: string) {
   await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
   vi.spyOn(backupShared, "resolveBackupPlanFromDisk").mockResolvedValue(

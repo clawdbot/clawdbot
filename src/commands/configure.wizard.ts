@@ -50,6 +50,14 @@ import { promptRemoteGatewayConfig } from "./onboard-remote.js";
 import { setupSkills } from "./onboard-skills.js";
 
 type ConfigureSectionChoice = WizardSection | "__continue";
+type SetupPluginConfigModule = typeof import("../wizard/setup.plugin-config.js");
+
+let setupPluginConfigModulePromise: Promise<SetupPluginConfigModule> | undefined;
+
+function loadSetupPluginConfigModule(): Promise<SetupPluginConfigModule> {
+  setupPluginConfigModulePromise ??= import("../wizard/setup.plugin-config.js");
+  return setupPluginConfigModulePromise;
+}
 
 function mergeWizardConfigOntoLatest(current: unknown, base: unknown, next: unknown): unknown {
   if (isDeepStrictEqual(next, base)) {
@@ -617,7 +625,7 @@ export async function runConfigureWizard(
       }
 
       if (selected.includes("plugins")) {
-        const { configurePluginConfig } = await import("../wizard/setup.plugin-config.js");
+        const { configurePluginConfig } = await loadSetupPluginConfigModule();
         nextConfig = await configurePluginConfig({
           config: nextConfig,
           prompter,
@@ -683,7 +691,7 @@ export async function runConfigureWizard(
         }
 
         if (choice === "plugins") {
-          const { configurePluginConfig } = await import("../wizard/setup.plugin-config.js");
+          const { configurePluginConfig } = await loadSetupPluginConfigModule();
           nextConfig = await configurePluginConfig({
             config: nextConfig,
             prompter,

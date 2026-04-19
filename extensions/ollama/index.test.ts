@@ -301,6 +301,35 @@ describe("ollama plugin", () => {
     expect((payloadSeen?.options as Record<string, unknown> | undefined)?.num_ctx).toBe(202752);
   });
 
+  it("declares streaming usage support for OpenAI-compatible Ollama routes", () => {
+    const provider = registerProvider();
+
+    expect(
+      provider.contributeResolvedModelCompat?.({
+        modelId: "qwen3:32b",
+        provider: "ollama",
+        model: {
+          api: "openai-completions",
+          provider: "ollama",
+          id: "qwen3:32b",
+          baseUrl: "http://127.0.0.1:11434/v1",
+        },
+      } as never),
+    ).toEqual({ supportsUsageInStreaming: true });
+    expect(
+      provider.contributeResolvedModelCompat?.({
+        modelId: "qwen3:32b",
+        provider: "custom",
+        model: {
+          api: "openai-completions",
+          provider: "custom",
+          id: "qwen3:32b",
+          baseUrl: "https://proxy.example.com/v1",
+        },
+      } as never),
+    ).toBeUndefined();
+  });
+
   it("owns replay policy for OpenAI-compatible Ollama routes only", () => {
     const provider = registerProvider();
 

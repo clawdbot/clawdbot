@@ -6,6 +6,15 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vite
 
 const execFileMock = vi.hoisted(() => vi.fn());
 
+function readRootPackageManager() {
+  const packageJson = JSON.parse(
+    fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8"),
+  ) as {
+    packageManager?: string;
+  };
+  return packageJson.packageManager;
+}
+
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
@@ -92,7 +101,7 @@ describe("qa multipass runtime", () => {
 
     expect(script).toContain("pnpm install --frozen-lockfile");
     expect(script).toContain("pnpm build");
-    expect(script).toContain("corepack prepare 'pnpm@10.32.1' --activate");
+    expect(script).toContain(`corepack prepare '${readRootPackageManager()}' --activate`);
     expect(script).toContain("'pnpm' 'openclaw' 'qa' 'suite' '--transport' 'qa-channel'");
     expect(script).toContain("'--provider-mode' 'live-frontier'");
     expect(script).toContain("'--scenario' 'channel-chat-baseline'");

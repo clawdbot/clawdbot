@@ -1,4 +1,4 @@
-import "@mariozechner/pi-coding-agent";
+export type OpenClawPiCodingAgentSkillSourceAugmentation = never;
 
 declare module "@mariozechner/pi-coding-agent" {
   interface Skill {

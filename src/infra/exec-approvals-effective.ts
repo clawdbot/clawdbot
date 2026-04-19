@@ -94,7 +94,10 @@ function formatRequestedSource(params: {
 
 type ExecPolicyField = "security" | "ask" | "askFallback";
 
-function resolveRequestedField<TValue extends ExecSecurity | ExecAsk>(params: {
+function resolveRequestedField<
+  // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Field-specific callers narrow the shared requested policy value.
+  TValue extends ExecSecurity | ExecAsk,
+>(params: {
   field: ExecPolicyRequestedField;
   scopeExecConfig?: ExecPolicyConfig;
   globalExecConfig?: ExecPolicyConfig;

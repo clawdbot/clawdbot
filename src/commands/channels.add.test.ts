@@ -8,10 +8,10 @@ import {
   ensureChannelSetupPluginInstalled,
   loadChannelSetupPluginRegistrySnapshotForChannel,
 } from "./channel-setup/plugin-install.js";
-import { configMocks, offsetMocks } from "./channels.mock-harness.js";
+import { configMocks, lifecycleMocks } from "./channels.mock-harness.js";
 import {
-  createMSTeamsCatalogEntry,
-  createMSTeamsSetupPlugin,
+  createExternalChatCatalogEntry,
+  createExternalChatSetupPlugin,
 } from "./channels.plugin-install.test-helpers.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -53,66 +53,78 @@ vi.mock("./channel-setup/plugin-install.js", () => pluginInstallMocks);
 const runtime = createTestRuntime();
 
 function listConfiguredAccountIds(
-  channelConfig: { accounts?: Record<string, unknown>; botToken?: string } | undefined,
+  channelConfig: { accounts?: Record<string, unknown>; token?: string } | undefined,
 ): string[] {
   const accountIds = Object.keys(channelConfig?.accounts ?? {});
   if (accountIds.length > 0) {
     return accountIds;
   }
-  if (channelConfig?.botToken) {
+  if (channelConfig?.token) {
     return [DEFAULT_ACCOUNT_ID];
   }
   return [];
 }
 
-function createTelegramAddTestPlugin(): ChannelPlugin {
-  const resolveTelegramAccount = (
+function expectExternalChatEnabledConfigWrite() {
+  expect(configMocks.writeConfigFile).toHaveBeenCalledWith(
+    expect.objectContaining({
+      channels: {
+        "external-chat": expect.objectContaining({
+          enabled: true,
+        }),
+      },
+    }),
+  );
+}
+
+function createLifecycleChatAddTestPlugin(): ChannelPlugin {
+  const resolveLifecycleChatAccount = (
     cfg: Parameters<NonNullable<ChannelPlugin["config"]["resolveAccount"]>>[0],
     accountId: string,
   ) => {
-    const telegram = cfg.channels?.telegram as
+    const lifecycleChat = cfg.channels?.["lifecycle-chat"] as
       | {
-          botToken?: string;
+          token?: string;
           enabled?: boolean;
-          accounts?: Record<string, { botToken?: string; enabled?: boolean }>;
+          accounts?: Record<string, { token?: string; enabled?: boolean }>;
         }
       | undefined;
     const resolvedAccountId = accountId || DEFAULT_ACCOUNT_ID;
-    const scoped = telegram?.accounts?.[resolvedAccountId];
+    const scoped = lifecycleChat?.accounts?.[resolvedAccountId];
     return {
-      token: scoped?.botToken ?? telegram?.botToken ?? "",
+      token: scoped?.token ?? lifecycleChat?.token ?? "",
       enabled:
         typeof scoped?.enabled === "boolean"
           ? scoped.enabled
-          : typeof telegram?.enabled === "boolean"
-            ? telegram.enabled
+          : typeof lifecycleChat?.enabled === "boolean"
+            ? lifecycleChat.enabled
             : true,
     };
   };
 
   return {
     ...createChannelTestPluginBase({
-      id: "telegram",
-      label: "Telegram",
-      docsPath: "/channels/telegram",
+      id: "lifecycle-chat",
+      label: "Lifecycle Chat",
+      docsPath: "/channels/lifecycle-chat",
     }),
     config: {
       listAccountIds: (cfg) =>
         listConfiguredAccountIds(
-          cfg.channels?.telegram as
-            | { accounts?: Record<string, unknown>; botToken?: string }
+          cfg.channels?.["lifecycle-chat"] as
+            | { accounts?: Record<string, unknown>; token?: string }
             | undefined,
         ),
-      resolveAccount: resolveTelegramAccount,
+      resolveAccount: resolveLifecycleChatAccount,
     },
     setup: {
       resolveAccountId: ({ accountId }) => accountId || DEFAULT_ACCOUNT_ID,
       applyAccountConfig: ({ cfg, accountId, input }) => {
-        const telegram = (cfg.channels?.telegram as
+        const lifecycleChat = (cfg.channels?.["lifecycle-chat"] as
           | {
               enabled?: boolean;
-              botToken?: string;
-              accounts?: Record<string, { botToken?: string }>;
+              token?: string;
+              accounts?: Record<string, { token?: string }>;
             }
           | undefined) ?? { enabled: true };
         const resolvedAccountId = accountId || DEFAULT_ACCOUNT_ID;
@@ -121,10 +133,10 @@ function createTelegramAddTestPlugin(): ChannelPlugin {
             ...cfg,
             channels: {
               ...cfg.channels,
-              telegram: {
-                ...telegram,
+              "lifecycle-chat": {
+                ...lifecycleChat,
                 enabled: true,
-                ...(input.token ? { botToken: input.token } : {}),
+                ...(input.token ? { token: input.token } : {}),
               },
             },
           };
@@ -133,14 +145,14 @@ function createTelegramAddTestPlugin(): ChannelPlugin {
           ...cfg,
           channels: {
             ...cfg.channels,
-            telegram: {
-              ...telegram,
+            "lifecycle-chat": {
+              ...lifecycleChat,
               enabled: true,
               accounts: {
-                ...telegram.accounts,
+                ...lifecycleChat.accounts,
                 [resolvedAccountId]: {
-                  ...telegram.accounts?.[resolvedAccountId],
-                  ...(input.token ? { botToken: input.token } : {}),
+                  ...lifecycleChat.accounts?.[resolvedAccountId],
+                  ...(input.token ? { token: input.token } : {}),
                 },
               },
             },
@@ -150,10 +162,10 @@ function createTelegramAddTestPlugin(): ChannelPlugin {
     },
     lifecycle: {
       onAccountConfigChanged: async ({ prevCfg, nextCfg, accountId }) => {
-        const prevTelegram = resolveTelegramAccount(prevCfg, accountId) as { token?: string };
-        const nextTelegram = resolveTelegramAccount(nextCfg, accountId) as { token?: string };
-        if ((prevTelegram.token ?? "").trim() !== (nextTelegram.token ?? "").trim()) {
-          await offsetMocks.deleteTelegramUpdateOffset({ accountId });
+        const prev = resolveLifecycleChatAccount(prevCfg, accountId) as { token?: string };
+        const next = resolveLifecycleChatAccount(nextCfg, accountId) as { token?: string };
+        if ((prev.token ?? "").trim() !== (next.token ?? "").trim()) {
+          await lifecycleMocks.onAccountConfigChanged({ accountId });
         }
       },
     },
@@ -164,17 +176,17 @@ function setMinimalChannelsAddRegistryForTests(): void {
   setActivePluginRegistry(
     createTestRegistry([
       {
-        pluginId: "telegram",
-        plugin: createTelegramAddTestPlugin(),
+        pluginId: "lifecycle-chat",
+        plugin: createLifecycleChatAddTestPlugin(),
         source: "test",
       },
     ]),
   );
 }
 
-function registerMSTeamsSetupPlugin(pluginId = "@openclaw/msteams-plugin"): void {
+function registerExternalChatSetupPlugin(pluginId = "@vendor/external-chat-plugin"): void {
   vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
-    createTestRegistry([{ pluginId, plugin: createMSTeamsSetupPlugin(), source: "test" }]),
+    createTestRegistry([{ pluginId, plugin: createExternalChatSetupPlugin(), source: "test" }]),
   );
 }
 
@@ -235,7 +247,7 @@ describe("channelsAddCommand", () => {
       .mockImplementation(async (params: { nextConfig: unknown }) => {
         await configMocks.writeConfigFile(params.nextConfig);
       });
-    offsetMocks.deleteTelegramUpdateOffset.mockClear();
+    lifecycleMocks.onAccountConfigChanged.mockClear();
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();
@@ -255,54 +267,54 @@ describe("channelsAddCommand", () => {
     setMinimalChannelsAddRegistryForTests();
   });
 
-  it("clears telegram update offsets only when the token changes", async () => {
+  it("runs channel lifecycle hooks only when account config changes", async () => {
     configMocks.readConfigFileSnapshot.mockResolvedValue({
       ...baseConfigSnapshot,
       config: {
         channels: {
-          telegram: { botToken: "old-token", enabled: true },
+          "lifecycle-chat": { token: "old-token", enabled: true },
         },
       },
     });
 
     await channelsAddCommand(
-      { channel: "telegram", account: "default", token: "new-token" },
+      { channel: "lifecycle-chat", account: "default", token: "new-token" },
       runtime,
       { hasFlags: true },
     );
 
-    expect(offsetMocks.deleteTelegramUpdateOffset).toHaveBeenCalledTimes(1);
-    expect(offsetMocks.deleteTelegramUpdateOffset).toHaveBeenCalledWith({ accountId: "default" });
+    expect(lifecycleMocks.onAccountConfigChanged).toHaveBeenCalledTimes(1);
+    expect(lifecycleMocks.onAccountConfigChanged).toHaveBeenCalledWith({ accountId: "default" });
 
-    offsetMocks.deleteTelegramUpdateOffset.mockClear();
+    lifecycleMocks.onAccountConfigChanged.mockClear();
     configMocks.readConfigFileSnapshot.mockResolvedValue({
       ...baseConfigSnapshot,
       config: {
         channels: {
-          telegram: { botToken: "same-token", enabled: true },
+          "lifecycle-chat": { token: "same-token", enabled: true },
         },
       },
     });
 
     await channelsAddCommand(
-      { channel: "telegram", account: "default", token: "same-token" },
+      { channel: "lifecycle-chat", account: "default", token: "same-token" },
       runtime,
       { hasFlags: true },
     );
 
-    expect(offsetMocks.deleteTelegramUpdateOffset).not.toHaveBeenCalled();
+    expect(lifecycleMocks.onAccountConfigChanged).not.toHaveBeenCalled();
   });
 
   it("loads external channel setup snapshots for newly installed and existing plugins", async () => {
     configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
     setActivePluginRegistry(createTestRegistry());
-    const catalogEntry = createMSTeamsCatalogEntry();
+    const catalogEntry = createExternalChatCatalogEntry();
     catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([catalogEntry]);
-    registerMSTeamsSetupPlugin("msteams");
+    registerExternalChatSetupPlugin("external-chat");
 
     await channelsAddCommand(
       {
-        channel: "msteams",
+        channel: "external-chat",
         account: "default",
         token: "tenant-scoped",
       },
@@ -314,15 +326,7 @@ describe("channelsAddCommand", () => {
       expect.objectContaining({ entry: catalogEntry }),
     );
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(1);
-    expect(configMocks.writeConfigFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channels: {
-          msteams: expect.objectContaining({
-            enabled: true,
-          }),
-        },
-      }),
-    );
+    expectExternalChatEnabledConfigWrite();
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
 
@@ -333,7 +337,7 @@ describe("channelsAddCommand", () => {
 
     await channelsAddCommand(
       {
-        channel: "msteams",
+        channel: "external-chat",
         account: "default",
         token: "tenant-installed",
       },
@@ -343,58 +347,50 @@ describe("channelsAddCommand", () => {
 
     expect(ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(1);
-    expect(configMocks.writeConfigFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channels: {
-          msteams: expect.objectContaining({
-            enabled: true,
-          }),
-        },
-      }),
-    );
+    expectExternalChatEnabledConfigWrite();
   });
 
   it("uses the installed plugin id when channel and plugin ids differ", async () => {
     configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
     setActivePluginRegistry(createTestRegistry());
     const catalogEntry: ChannelPluginCatalogEntry = {
-      id: "msteams",
-      pluginId: "@openclaw/msteams-plugin",
+      id: "external-chat",
+      pluginId: "@vendor/external-chat-plugin",
       meta: {
-        id: "msteams",
-        label: "Microsoft Teams",
-        selectionLabel: "Microsoft Teams",
-        docsPath: "/channels/msteams",
-        blurb: "teams channel",
+        id: "external-chat",
+        label: "External Chat",
+        selectionLabel: "External Chat",
+        docsPath: "/channels/external-chat",
+        blurb: "external chat channel",
       },
       install: {
-        npmSpec: "@openclaw/msteams",
+        npmSpec: "@vendor/external-chat",
       },
     };
     catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([catalogEntry]);
     vi.mocked(ensureChannelSetupPluginInstalled).mockImplementation(async ({ cfg }) => ({
       cfg,
       installed: true,
-      pluginId: "@vendor/teams-runtime",
+      pluginId: "@vendor/external-chat-runtime",
     }));
     vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
       createTestRegistry([
         {
-          pluginId: "@vendor/teams-runtime",
+          pluginId: "@vendor/external-chat-runtime",
           plugin: {
             ...createChannelTestPluginBase({
-              id: "msteams",
-              label: "Microsoft Teams",
-              docsPath: "/channels/msteams",
+              id: "external-chat",
+              label: "External Chat",
+              docsPath: "/channels/external-chat",
             }),
             setup: {
               applyAccountConfig: vi.fn(({ cfg, input }) => ({
                 ...cfg,
                 channels: {
                   ...cfg.channels,
-                  msteams: {
+                  "external-chat": {
                     enabled: true,
-                    tenantId: input.token,
+                    token: input.token,
                   },
                 },
               })),
@@ -407,7 +403,7 @@ describe("channelsAddCommand", () => {
 
     await channelsAddCommand(
       {
-        channel: "msteams",
+        channel: "external-chat",
         account: "default",
         token: "tenant-scoped",
       },
@@ -416,15 +412,7 @@ describe("channelsAddCommand", () => {
     );
 
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(1);
-    expect(configMocks.writeConfigFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channels: {
-          msteams: expect.objectContaining({
-            enabled: true,
-          }),
-        },
-      }),
-    );
+    expectExternalChatEnabledConfigWrite();
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
   });

@@ -33,18 +33,15 @@ export function buildSecretRefCredentialMatrix(): SecretRefCredentialMatrixDocum
         ? "tools.web.fetch.firecrawl.apiKey"
         : entry.pathPattern;
 
-      return {
-        id: canonicalId,
-        configFile: entry.configFile,
-        path: canonicalPath,
-        ...(entry.refPathPattern ? { refPath: entry.refPathPattern } : {}),
-        ...(entry.authProfileType ? { when: { type: entry.authProfileType } } : {}),
-        secretShape: entry.secretShape,
-        optIn: true as const,
-        ...(entry.secretShape === "sibling_ref" && entry.refPathPattern
-          ? { notes: "Compatibility exception: sibling ref field remains canonical." }
-          : {}),
-      };
+      return Object.assign(
+        { id: canonicalId, configFile: entry.configFile, path: canonicalPath },
+        entry.refPathPattern ? { refPath: entry.refPathPattern } : {},
+        entry.authProfileType ? { when: { type: entry.authProfileType } } : {},
+        { secretShape: entry.secretShape, optIn: true as const },
+        entry.secretShape === `sibling_ref` && entry.refPathPattern
+          ? { notes: `Compatibility exception: sibling ref field remains canonical.` }
+          : {},
+      );
     })
     .toSorted((a, b) => a.id.localeCompare(b.id));
 

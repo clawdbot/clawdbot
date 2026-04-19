@@ -4,6 +4,16 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search-contract";
 
 const FIRECRAWL_CREDENTIAL_PATH = "plugins.entries.firecrawl.config.webSearch.apiKey";
+
+type FirecrawlClientModule = typeof import("./firecrawl-client.js");
+
+let firecrawlClientModulePromise: Promise<FirecrawlClientModule> | undefined;
+
+function loadFirecrawlClientModule(): Promise<FirecrawlClientModule> {
+  firecrawlClientModulePromise ??= import("./firecrawl-client.js");
+  return firecrawlClientModulePromise;
+}
+
 const GenericFirecrawlSearchSchema = {
   type: "object",
   properties: {
@@ -42,7 +52,7 @@ export function createFirecrawlWebSearchProvider(): WebSearchProviderPlugin {
         "Search the web using Firecrawl. Returns structured results with snippets from Firecrawl Search. Use firecrawl_search for Firecrawl-specific knobs like sources or categories.",
       parameters: GenericFirecrawlSearchSchema,
       execute: async (args) => {
-        const { runFirecrawlSearch } = await import("./firecrawl-client.js");
+        const { runFirecrawlSearch } = await loadFirecrawlClientModule();
         return await runFirecrawlSearch({
           cfg: ctx.config,
           query: typeof args.query === "string" ? args.query : "",

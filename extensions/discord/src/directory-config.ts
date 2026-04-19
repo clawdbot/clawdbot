@@ -25,10 +25,11 @@ export const listDiscordDirectoryPeersFromConfig = createResolvedDirectoryEntrie
   resolveAccount: (cfg, accountId) => resolveDiscordDirectoryConfigAccount(cfg, accountId),
   resolveSources: (account) => {
     const allowFrom = account.config.allowFrom ?? account.config.dm?.allowFrom ?? [];
-    const guildUsers = Object.values(account.config.guilds ?? {}).flatMap((guild) => [
-      ...(guild.users ?? []),
-      ...Object.values(guild.channels ?? {}).flatMap((channel) => channel.users ?? []),
-    ]);
+    const guildUsers = Object.values(account.config.guilds ?? {}).flatMap((guild) =>
+      (guild.users ?? []).concat(
+        Object.values(guild.channels ?? {}).flatMap((channel) => channel.users ?? []),
+      ),
+    );
     return [allowFrom, Object.keys(account.config.dms ?? {}), guildUsers];
   },
   normalizeId: (raw) => {

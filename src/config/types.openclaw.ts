@@ -30,6 +30,8 @@ import type { SkillsConfig } from "./types.skills.js";
 import type { ToolsConfig } from "./types.tools.js";
 
 export type OpenClawConfig = {
+  /** JSON Schema URL for editor tooling (VS Code, etc.). Preserved across config rewrites. */
+  $schema?: string;
   meta?: {
     /** Last OpenClaw version that wrote this config. */
     lastTouchedVersion?: string;

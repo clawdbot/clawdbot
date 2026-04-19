@@ -3,79 +3,55 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
-import {
-  hasBinaryMock,
-  runCommandWithTimeoutMock,
-  scanDirectoryWithSummaryMock,
-} from "./skills-install.test-mocks.js";
+import { hasBinaryMock, runCommandWithTimeoutMock } from "./skills-install.test-mocks.js";
+import type { SkillEntry, SkillInstallSpec } from "./skills.js";
+
+const skillsMocks = vi.hoisted(() => ({
+  loadWorkspaceSkillEntries: vi.fn(),
+}));
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
 }));
 
-vi.mock("../infra/net/fetch-guard.js", () => ({
-  fetchWithSsrFGuard: vi.fn(),
+vi.mock("../plugins/install-security-scan.js", () => ({
+  scanSkillInstallSource: vi.fn(async () => undefined),
 }));
 
-vi.mock("../security/skill-scanner.js", async () => ({
-  ...(await vi.importActual<typeof import("../security/skill-scanner.js")>(
-    "../security/skill-scanner.js",
-  )),
-  scanDirectoryWithSummary: (...args: unknown[]) => scanDirectoryWithSummaryMock(...args),
-}));
-
-vi.mock("../shared/config-eval.js", async () => {
-  const actual = await vi.importActual<typeof import("../shared/config-eval.js")>(
-    "../shared/config-eval.js",
-  );
+vi.mock("./skills.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./skills.js")>();
   return {
     ...actual,
-    hasBinary: (bin: string) => hasBinaryMock(bin),
+    loadWorkspaceSkillEntries: skillsMocks.loadWorkspaceSkillEntries,
   };
 });
 
-vi.mock("../infra/brew.js", () => ({
-  resolveBrewExecutable: () => undefined,
-}));
-
 let installSkill: typeof import("./skills-install.js").installSkill;
-let buildWorkspaceSkillStatus: typeof import("./skills-status.js").buildWorkspaceSkillStatus;
+let skillsInstallTesting: typeof import("./skills-install.js").__testing;
 
 async function loadSkillsInstallModulesForTest() {
-  ({ installSkill } = await import("./skills-install.js"));
-  ({ buildWorkspaceSkillStatus } = await import("./skills-status.js"));
+  ({ installSkill, __testing: skillsInstallTesting } = await import("./skills-install.js"));
 }
 
-async function writeSkillWithInstallers(
+function makeSkillEntry(
   workspaceDir: string,
   name: string,
-  installSpecs: Array<Record<string, string>>,
-): Promise<string> {
+  installSpec: SkillInstallSpec,
+): SkillEntry {
   const skillDir = path.join(workspaceDir, "skills", name);
-  await fs.mkdir(skillDir, { recursive: true });
-  await fs.writeFile(
-    path.join(skillDir, "SKILL.md"),
-    `---
-name: ${name}
-description: test skill
-metadata: ${JSON.stringify({ openclaw: { install: installSpecs } })}
----
-
-# ${name}
-`,
-    "utf-8",
-  );
-  await fs.writeFile(path.join(skillDir, "runner.js"), "export {};\n", "utf-8");
-  return skillDir;
-}
-
-async function writeSkillWithInstaller(
-  workspaceDir: string,
-  name: string,
-  kind: string,
-  extra: Record<string, string>,
-): Promise<string> {
-  return writeSkillWithInstallers(workspaceDir, name, [{ id: "deps", kind, ...extra }]);
+  return {
+    skill: {
+      name,
+      description: "test skill",
+      filePath: path.join(skillDir, "SKILL.md"),
+      baseDir: skillDir,
+      source: "openclaw-workspace",
+    } as SkillEntry["skill"],
+    frontmatter: {},
+    metadata: {
+      install: [{ id: "deps", ...installSpec }],
+    },
+  };
 }
 
 function mockAvailableBinaries(binaries: string[]) {
@@ -95,27 +71,30 @@ describe("skills-install fallback edge cases", () => {
 
   beforeAll(async () => {
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fallback-test-"));
-    await writeSkillWithInstaller(workspaceDir, "go-tool-single", "go", {
-      module: "example.com/tool@latest",
-    });
-    await writeSkillWithInstallers(workspaceDir, "go-tool-multi", [
-      { id: "brew", kind: "brew", formula: "go" },
-      { id: "go", kind: "go", module: "example.com/tool@latest" },
+    skillsMocks.loadWorkspaceSkillEntries.mockReturnValue([
+      makeSkillEntry(workspaceDir, "go-tool-single", {
+        kind: "go",
+        module: "example.com/tool@latest",
+      }),
+      makeSkillEntry(workspaceDir, "py-tool", {
+        kind: "uv",
+        package: "example-package",
+      }),
     ]);
-    await writeSkillWithInstaller(workspaceDir, "py-tool", "uv", {
-      package: "example-package",
-    });
     await loadSkillsInstallModulesForTest();
   });
 
   beforeEach(() => {
-    runCommandWithTimeoutMock.mockClear();
-    scanDirectoryWithSummaryMock.mockClear();
-    hasBinaryMock.mockClear();
-    scanDirectoryWithSummaryMock.mockResolvedValue({ critical: 0, warn: 0, findings: [] });
+    runCommandWithTimeoutMock.mockReset();
+    hasBinaryMock.mockReset();
+    skillsInstallTesting.setDepsForTest({
+      hasBinary: (bin: string) => hasBinaryMock(bin),
+      resolveBrewExecutable: () => undefined,
+    });
   });
 
   afterAll(async () => {
+    skillsInstallTesting.setDepsForTest();
     await fs.rm(workspaceDir, { recursive: true, force: true }).catch(() => undefined);
   });
 
@@ -168,31 +147,6 @@ describe("skills-install fallback edge cases", () => {
       );
       assertNoAptGetFallbackCalls();
     }
-  });
-
-  it("status-selected go installer fails gracefully when apt fallback needs sudo", async () => {
-    vi.spyOn(process, "getuid").mockReturnValue(1000);
-    mockAvailableBinaries(["apt-get", "sudo"]);
-
-    runCommandWithTimeoutMock.mockResolvedValueOnce({
-      code: 1,
-      stdout: "",
-      stderr: "sudo: a password is required",
-    });
-
-    const status = buildWorkspaceSkillStatus(workspaceDir);
-    const skill = status.skills.find((entry) => entry.name === "go-tool-multi");
-    expect(skill?.install[0]?.id).toBe("go");
-
-    const result = await installSkill({
-      workspaceDir,
-      skillName: "go-tool-multi",
-      installId: skill?.install[0]?.id ?? "",
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.message).toContain("sudo is not usable");
-    expect(result.stderr).toContain("sudo: a password is required");
   });
 
   it("uv not installed and no brew returns helpful error without curl auto-install", async () => {

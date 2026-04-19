@@ -202,12 +202,15 @@ function compareScores(
   return next.tertiary.localeCompare(best.tertiary) < 0;
 }
 
-function parseAspectRatioValue(raw?: string | null): ParsedAspectRatio | null {
+function parsePositiveDimensionPair(
+  raw: string | null | undefined,
+  pattern: RegExp,
+): { width: number; height: number } | null {
   const trimmed = normalizeOptionalString(raw);
   if (!trimmed) {
     return null;
   }
-  const match = /^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/.exec(trimmed);
+  const match = pattern.exec(trimmed);
   if (!match) {
     return null;
   }
@@ -216,32 +219,31 @@ function parseAspectRatioValue(raw?: string | null): ParsedAspectRatio | null {
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
     return null;
   }
+  return { width, height };
+}
+
+function parseAspectRatioValue(raw?: string | null): ParsedAspectRatio | null {
+  const pair = parsePositiveDimensionPair(raw, /^(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)$/);
+  if (!pair) {
+    return null;
+  }
   return {
-    width,
-    height,
-    value: width / height,
+    width: pair.width,
+    height: pair.height,
+    value: pair.width / pair.height,
   };
 }
 
 function parseSizeValue(raw?: string | null): ParsedSize | null {
-  const trimmed = normalizeOptionalString(raw);
-  if (!trimmed) {
-    return null;
-  }
-  const match = /^(\d+)\s*x\s*(\d+)$/i.exec(trimmed);
-  if (!match) {
-    return null;
-  }
-  const width = Number(match[1]);
-  const height = Number(match[2]);
-  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+  const pair = parsePositiveDimensionPair(raw, /^(\d+)\s*x\s*(\d+)$/i);
+  if (!pair) {
     return null;
   }
   return {
-    width,
-    height,
-    aspectRatio: width / height,
-    area: width * height,
+    width: pair.width,
+    height: pair.height,
+    aspectRatio: pair.width / pair.height,
+    area: pair.width * pair.height,
   };
 }
 

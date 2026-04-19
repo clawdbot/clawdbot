@@ -30,17 +30,18 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
-import type { CodexAppServerThreadBinding } from "./session-binding.js";
+import { readCodexAppServerBinding, type CodexAppServerThreadBinding } from "./session-binding.js";
 import { clearSharedCodexAppServerClient, getSharedCodexAppServerClient } from "./shared-client.js";
 import { buildTurnStartParams, startOrResumeThread } from "./thread-lifecycle.js";
 import { mirrorCodexAppServerTranscript } from "./transcript-mirror.js";
 
 type CodexAppServerClientFactory = (
   startOptions?: CodexAppServerStartOptions,
+  authProfileId?: string,
 ) => Promise<CodexAppServerClient>;
 
-let clientFactory: CodexAppServerClientFactory = (startOptions) =>
-  getSharedCodexAppServerClient({ startOptions });
+let clientFactory: CodexAppServerClientFactory = (startOptions, authProfileId) =>
+  getSharedCodexAppServerClient({ startOptions, authProfileId });
 
 export async function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParams,
@@ -78,6 +79,8 @@ export async function runCodexAppServerAttempt(
     agentId: params.agentId,
   });
   let yieldDetected = false;
+  const startupBinding = await readCodexAppServerBinding(params.sessionFile);
+  const startupAuthProfileId = params.authProfileId ?? startupBinding?.authProfileId;
   const tools = await buildDynamicTools({
     params,
     resolvedWorkspace,
@@ -101,7 +104,7 @@ export async function runCodexAppServerAttempt(
       timeoutMs: params.timeoutMs,
       signal: runAbortController.signal,
       operation: async () => {
-        const startupClient = await clientFactory(appServer.start);
+        const startupClient = await clientFactory(appServer.start, startupAuthProfileId);
         const startupThread = await startOrResumeThread({
           client: startupClient,
           params,
@@ -487,6 +490,7 @@ export const __testing = {
     clientFactory = factory;
   },
   resetCodexAppServerClientFactoryForTests(): void {
-    clientFactory = (startOptions) => getSharedCodexAppServerClient({ startOptions });
+    clientFactory = (startOptions, authProfileId) =>
+      getSharedCodexAppServerClient({ startOptions, authProfileId });
   },
 } as const;

@@ -126,11 +126,13 @@ export const entraIdAuthMethod: ProviderAuthMethod = {
           selectedResource,
           resourceDeployments,
         );
-        discoveredDeployments = resourceDeployments.map((deployment) => ({
-          name: deployment.name,
-          ...(deployment.modelName ? { modelName: deployment.modelName } : {}),
-          api: resolveFoundryApi(deployment.name, deployment.modelName),
-        }));
+        discoveredDeployments = resourceDeployments.map((deployment) =>
+          Object.assign(
+            { name: deployment.name },
+            deployment.modelName ? { modelName: deployment.modelName } : {},
+            { api: resolveFoundryApi(deployment.name, deployment.modelName) },
+          ),
+        );
         endpoint = selectedResource.endpoint;
         modelId = selectedDeployment.name;
         modelNameHint = resolveConfiguredModelNameHint(modelId, selectedDeployment.modelName);

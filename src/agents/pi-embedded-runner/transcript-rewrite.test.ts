@@ -1,10 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  buildSessionWriteLockModuleMock,
-  resetModulesWithSessionWriteLockDoMock,
-} from "../../test-utils/session-write-lock-module-mock.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildSessionWriteLockModuleMock } from "../../test-utils/session-write-lock-module-mock.js";
 
 const acquireSessionWriteLockReleaseMock = vi.hoisted(() => vi.fn(async () => {}));
 const acquireSessionWriteLockMock = vi.hoisted(() =>
@@ -22,16 +19,6 @@ let rewriteTranscriptEntriesInSessionFile: typeof import("./transcript-rewrite.j
 let rewriteTranscriptEntriesInSessionManager: typeof import("./transcript-rewrite.js").rewriteTranscriptEntriesInSessionManager;
 let onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 let installSessionToolResultGuard: typeof import("../session-tool-result-guard.js").installSessionToolResultGuard;
-
-async function loadFreshTranscriptRewriteModuleForTest() {
-  resetModulesWithSessionWriteLockDoMock("../session-write-lock.js", (params) =>
-    acquireSessionWriteLockMock(params),
-  );
-  ({ onSessionTranscriptUpdate } = await import("../../sessions/transcript-events.js"));
-  ({ installSessionToolResultGuard } = await import("../session-tool-result-guard.js"));
-  ({ rewriteTranscriptEntriesInSessionFile, rewriteTranscriptEntriesInSessionManager } =
-    await import("./transcript-rewrite.js"));
-}
 
 type AppendMessage = Parameters<SessionManager["appendMessage"]>[0];
 
@@ -142,10 +129,16 @@ function findAssistantEntryByText(sessionManager: SessionManager, text: string) 
     );
 }
 
-beforeEach(async () => {
+beforeAll(async () => {
+  ({ onSessionTranscriptUpdate } = await import("../../sessions/transcript-events.js"));
+  ({ installSessionToolResultGuard } = await import("../session-tool-result-guard.js"));
+  ({ rewriteTranscriptEntriesInSessionFile, rewriteTranscriptEntriesInSessionManager } =
+    await import("./transcript-rewrite.js"));
+});
+
+beforeEach(() => {
   acquireSessionWriteLockMock.mockClear();
   acquireSessionWriteLockReleaseMock.mockClear();
-  await loadFreshTranscriptRewriteModuleForTest();
 });
 
 describe("rewriteTranscriptEntriesInSessionManager", () => {

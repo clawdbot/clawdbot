@@ -42,6 +42,7 @@ describe("readOpenAICodexCliOAuthProfile", () => {
       JSON.stringify({
         auth_mode: "chatgpt",
         tokens: {
+          id_token: "id-token",
           access_token: accessToken,
           refresh_token: "refresh-token",
           account_id: "acct_123",
@@ -61,6 +62,7 @@ describe("readOpenAICodexCliOAuthProfile", () => {
         access: accessToken,
         refresh: "refresh-token",
         accountId: "acct_123",
+        idToken: "id-token",
         email: "codex@example.com",
       },
     });
@@ -123,50 +125,6 @@ describe("readOpenAICodexCliOAuthProfile", () => {
     expect(parsed).toBeNull();
   });
 
-  it("allows Codex CLI bootstrap when the stored default is expired", () => {
-    const accessToken = buildJwt({
-      exp: Math.floor(Date.now() / 1000) + 600,
-      "https://api.openai.com/profile": {
-        email: "codex@example.com",
-      },
-    });
-    vi.spyOn(fs, "readFileSync").mockReturnValue(
-      JSON.stringify({
-        auth_mode: "chatgpt",
-        tokens: {
-          access_token: accessToken,
-          refresh_token: "refresh-token",
-          account_id: "acct_123",
-        },
-      }),
-    );
-
-    const parsed = readOpenAICodexCliOAuthProfile({
-      store: {
-        version: 1,
-        profiles: {
-          [OPENAI_CODEX_DEFAULT_PROFILE_ID]: {
-            type: "oauth",
-            provider: "openai-codex",
-            access: "expired-local-access",
-            refresh: "expired-local-refresh",
-            expires: Date.now() - 60_000,
-          },
-        },
-      },
-    });
-
-    expect(parsed).toMatchObject({
-      profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
-      credential: {
-        access: accessToken,
-        refresh: "refresh-token",
-        accountId: "acct_123",
-        email: "codex@example.com",
-      },
-    });
-  });
-
   it("refuses Codex CLI bootstrap when an expired local default belongs to a different account", () => {
     const accessToken = buildJwt({
       exp: Math.floor(Date.now() / 1000) + 600,
@@ -205,6 +163,91 @@ describe("readOpenAICodexCliOAuthProfile", () => {
     expect(parsed).toBeNull();
   });
 
+  it("allows cli bootstrap when the stored default profile is expired", () => {
+    const accessToken = buildJwt({
+      exp: Math.floor(Date.now() / 1000) + 600,
+      "https://api.openai.com/profile": {
+        email: "codex@example.com",
+      },
+    });
+    vi.spyOn(fs, "readFileSync").mockReturnValue(
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: {
+          id_token: "id-token",
+          access_token: accessToken,
+          refresh_token: "refresh-token",
+          account_id: "acct_123",
+        },
+      }),
+    );
+
+    const parsed = readOpenAICodexCliOAuthProfile({
+      store: {
+        version: 1,
+        profiles: {
+          [OPENAI_CODEX_DEFAULT_PROFILE_ID]: {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "expired-local-access",
+            refresh: "expired-local-refresh",
+            expires: Date.now() - 60_000,
+            accountId: "acct_123",
+          },
+        },
+      },
+    });
+
+    expect(parsed).toMatchObject({
+      profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
+      credential: {
+        access: accessToken,
+        refresh: "refresh-token",
+        accountId: "acct_123",
+        idToken: "id-token",
+        email: "codex@example.com",
+      },
+    });
+  });
+
+  it("refuses cli bootstrap when the stored default profile is expired but identity mismatches", () => {
+    const accessToken = buildJwt({
+      exp: Math.floor(Date.now() / 1000) + 600,
+      "https://api.openai.com/profile": {
+        email: "codex@example.com",
+      },
+    });
+    vi.spyOn(fs, "readFileSync").mockReturnValue(
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: {
+          id_token: "id-token",
+          access_token: accessToken,
+          refresh_token: "refresh-token",
+          account_id: "acct_123",
+        },
+      }),
+    );
+
+    const parsed = readOpenAICodexCliOAuthProfile({
+      store: {
+        version: 1,
+        profiles: {
+          [OPENAI_CODEX_DEFAULT_PROFILE_ID]: {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "expired-local-access",
+            refresh: "expired-local-refresh",
+            expires: Date.now() - 60_000,
+            accountId: "acct_local",
+          },
+        },
+      },
+    });
+
+    expect(parsed).toBeNull();
+  });
+
   it("allows the runtime-only Codex CLI profile when the stored default already matches", () => {
     const accessToken = buildJwt({
       exp: Math.floor(Date.now() / 1000) + 600,
@@ -216,6 +259,7 @@ describe("readOpenAICodexCliOAuthProfile", () => {
       JSON.stringify({
         auth_mode: "chatgpt",
         tokens: {
+          id_token: "id-token",
           access_token: accessToken,
           refresh_token: "refresh-token",
           account_id: "acct_123",
@@ -243,6 +287,7 @@ describe("readOpenAICodexCliOAuthProfile", () => {
         access: accessToken,
         refresh: "refresh-token",
         accountId: "acct_123",
+        idToken: "id-token",
         email: "codex@example.com",
       },
     });

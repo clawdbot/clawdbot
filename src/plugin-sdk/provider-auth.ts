@@ -12,7 +12,10 @@ export type { ProviderAuthContext } from "../plugins/types.js";
 export type { AuthProfileStore, OAuthCredential } from "../agents/auth-profiles/types.js";
 
 export { CLAUDE_CLI_PROFILE_ID, CODEX_CLI_PROFILE_ID } from "../agents/auth-profiles/constants.js";
-export { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
+export {
+  ensureAuthProfileStore,
+  ensureAuthProfileStoreForLocalUpdate,
+} from "../agents/auth-profiles/store.js";
 export {
   listProfilesForProvider,
   removeProviderAuthProfilesWithLock,
@@ -59,6 +62,7 @@ export { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth
 export { coerceSecretRef, hasConfiguredSecretInput } from "../config/types.secrets.js";
 export { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 export { resolveRequiredHomeDir } from "../infra/home-dir.js";
+export { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 export {
   normalizeOptionalSecretInput,
   normalizeSecretInput,

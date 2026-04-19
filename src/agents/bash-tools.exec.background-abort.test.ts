@@ -1,12 +1,13 @@
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { killProcessTree } from "../process/kill-tree.js";
 
-const BACKGROUND_HOLD_CMD = 'node -e "setTimeout(() => {}, 5000)"';
-const ABORT_SETTLE_MS = process.platform === "win32" ? 200 : 25;
-const ABORT_WAIT_TIMEOUT_MS = process.platform === "win32" ? 1_500 : 1_200;
-const POLL_INTERVAL_MS = 15;
-const FINISHED_WAIT_TIMEOUT_MS = process.platform === "win32" ? 8_000 : 3_000;
-const BACKGROUND_TIMEOUT_SEC = process.platform === "win32" ? 0.2 : 0.05;
+const BACKGROUND_HOLD_CMD =
+  process.platform === "win32" ? 'node -e "setTimeout(() => {}, 5000)"' : "exec sleep 5";
+const ABORT_SETTLE_MS = process.platform === "win32" ? 200 : 10;
+const ABORT_WAIT_TIMEOUT_MS = process.platform === "win32" ? 1_500 : 400;
+const POLL_INTERVAL_MS = process.platform === "win32" ? 15 : 5;
+const FINISHED_WAIT_TIMEOUT_MS = process.platform === "win32" ? 8_000 : 1_000;
+const BACKGROUND_TIMEOUT_SEC = process.platform === "win32" ? 0.2 : 0.02;
 const TEST_EXEC_DEFAULTS = {
   host: "gateway" as const,
   security: "full" as const,
@@ -162,7 +163,7 @@ test("background exec without explicit timeout ignores default timeout", async (
   const result = await tool.execute("toolcall", { command: BACKGROUND_HOLD_CMD, background: true });
   expect(result.details.status).toBe("running");
   const sessionId = (result.details as { sessionId: string }).sessionId;
-  const waitMs = Math.max(ABORT_SETTLE_MS + 80, BACKGROUND_TIMEOUT_SEC * 1000 + 80);
+  const waitMs = Math.max(ABORT_SETTLE_MS + 30, BACKGROUND_TIMEOUT_SEC * 1000 + 30);
 
   const startedAt = Date.now();
   await expect

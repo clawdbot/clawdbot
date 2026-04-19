@@ -102,11 +102,15 @@ export function loadEnabledBundleConfig<TConfig, TDiagnostic>(params: {
   }) => { config: TConfig; diagnostics: string[] };
   createDiagnostic: (pluginId: string, message: string) => TDiagnostic;
 }): { config: TConfig; diagnostics: TDiagnostic[] } {
+  const normalizedPlugins = normalizePluginsConfig(params.cfg?.plugins);
+  if (!normalizedPlugins.enabled) {
+    return { config: params.createEmptyConfig(), diagnostics: [] };
+  }
+
   const registry = loadPluginManifestRegistry({
     workspaceDir: params.workspaceDir,
     config: params.cfg,
   });
-  const normalizedPlugins = normalizePluginsConfig(params.cfg?.plugins);
   const diagnostics: TDiagnostic[] = [];
   let merged = params.createEmptyConfig();
 

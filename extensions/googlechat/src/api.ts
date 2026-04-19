@@ -154,10 +154,12 @@ export async function sendGoogleChatMessage(params: {
     body.thread = { name: thread };
   }
   if (attachments && attachments.length > 0) {
-    body.attachment = attachments.map((item) => ({
-      attachmentDataRef: { attachmentUploadToken: item.attachmentUploadToken },
-      ...(item.contentName ? { contentName: item.contentName } : {}),
-    }));
+    body.attachment = attachments.map((item) =>
+      Object.assign(
+        { attachmentDataRef: { attachmentUploadToken: item.attachmentUploadToken } },
+        item.contentName ? { contentName: item.contentName } : {},
+      ),
+    );
   }
   const urlObj = new URL(`${CHAT_API_BASE}/${space}/messages`);
   if (thread) {

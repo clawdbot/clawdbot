@@ -6,24 +6,57 @@ export type ExtractMode = "markdown" | "text";
 const READABILITY_MAX_HTML_CHARS = 1_000_000;
 const READABILITY_MAX_ESTIMATED_NESTING_DEPTH = 3_000;
 
+type ParsedHtml = {
+  document: Document;
+};
+
+type ParseHtml = (html: string) => ParsedHtml;
+
+type ReadabilityResult = {
+  content?: string;
+  textContent?: string | null;
+  title?: string | null;
+};
+
+type ReadabilityInstance = {
+  parse(): ReadabilityResult | null;
+};
+
+type ReadabilityConstructor = new (
+  document: Document,
+  options: { charThreshold: number },
+) => ReadabilityInstance;
+
+type ReadabilityModule = {
+  Readability: ReadabilityConstructor;
+};
+
+type LinkedomModule = {
+  parseHTML: ParseHtml;
+};
+
+const READABILITY_MODULE = "@mozilla/readability";
+const LINKEDOM_MODULE = "linkedom";
+
 let readabilityDepsPromise:
   | Promise<{
-      Readability: typeof import("@mozilla/readability").Readability;
-      parseHTML: typeof import("linkedom").parseHTML;
+      Readability: ReadabilityConstructor;
+      parseHTML: ParseHtml;
     }>
   | undefined;
 
 async function loadReadabilityDeps(): Promise<{
-  Readability: typeof import("@mozilla/readability").Readability;
-  parseHTML: typeof import("linkedom").parseHTML;
+  Readability: ReadabilityConstructor;
+  parseHTML: ParseHtml;
 }> {
   if (!readabilityDepsPromise) {
-    readabilityDepsPromise = Promise.all([import("@mozilla/readability"), import("linkedom")]).then(
-      ([readability, linkedom]) => ({
-        Readability: readability.Readability,
-        parseHTML: linkedom.parseHTML,
-      }),
-    );
+    readabilityDepsPromise = Promise.all([
+      import(READABILITY_MODULE) as Promise<ReadabilityModule>,
+      import(LINKEDOM_MODULE) as Promise<LinkedomModule>,
+    ]).then(([readability, linkedom]) => ({
+      Readability: readability.Readability,
+      parseHTML: linkedom.parseHTML,
+    }));
   }
   try {
     return await readabilityDepsPromise;

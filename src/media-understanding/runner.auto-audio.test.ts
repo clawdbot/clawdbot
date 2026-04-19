@@ -8,25 +8,15 @@ import { runCapability } from "./runner.js";
 import { withAudioFixture } from "./runner.test-utils.js";
 import type { AudioTranscriptionRequest, MediaUnderstandingProvider } from "./types.js";
 
-const modelAuthMocks = vi.hoisted(() => ({
-  hasAvailableAuthForProvider: vi.fn(() => true),
-  resolveApiKeyForProvider: vi.fn(async () => ({
-    apiKey: "test-key",
-    source: "test",
-    mode: "api-key",
-  })),
-  requireApiKey: vi.fn((auth: { apiKey?: string }) => auth.apiKey ?? "test-key"),
-}));
+vi.mock("../agents/model-auth.js", async () => {
+  const { createAvailableModelAuthMockModule } = await import("./runner.test-mocks.js");
+  return createAvailableModelAuthMockModule();
+});
 
-vi.mock("../agents/model-auth.js", () => ({
-  hasAvailableAuthForProvider: modelAuthMocks.hasAvailableAuthForProvider,
-  resolveApiKeyForProvider: modelAuthMocks.resolveApiKeyForProvider,
-  requireApiKey: modelAuthMocks.requireApiKey,
-}));
-
-vi.mock("../plugins/capability-provider-runtime.js", () => ({
-  resolvePluginCapabilityProviders: () => [],
-}));
+vi.mock("../plugins/capability-provider-runtime.js", async () => {
+  const { createEmptyCapabilityProviderMockModule } = await import("./runner.test-mocks.js");
+  return createEmptyCapabilityProviderMockModule();
+});
 
 function createProviderRegistry(
   providers: Record<string, MediaUnderstandingProvider>,

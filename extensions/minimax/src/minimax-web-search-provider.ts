@@ -6,6 +6,15 @@ import {
 const MINIMAX_CREDENTIAL_PATH = "plugins.entries.minimax.config.webSearch.apiKey";
 const MINIMAX_CODING_PLAN_ENV_VARS = ["MINIMAX_CODE_PLAN_KEY", "MINIMAX_CODING_API_KEY"] as const;
 
+type MiniMaxWebSearchRuntime = typeof import("./minimax-web-search-provider.runtime.js");
+
+let miniMaxWebSearchRuntimePromise: Promise<MiniMaxWebSearchRuntime> | undefined;
+
+function loadMiniMaxWebSearchRuntime(): Promise<MiniMaxWebSearchRuntime> {
+  miniMaxWebSearchRuntimePromise ??= import("./minimax-web-search-provider.runtime.js");
+  return miniMaxWebSearchRuntimePromise;
+}
+
 const MiniMaxSearchSchema = {
   type: "object",
   properties: {
@@ -41,8 +50,7 @@ export function createMiniMaxWebSearchProvider(): WebSearchProviderPlugin {
         "Search the web using MiniMax Search API. Returns titles, URLs, snippets, and related search suggestions.",
       parameters: MiniMaxSearchSchema,
       execute: async (args) => {
-        const { executeMiniMaxWebSearchProviderTool } =
-          await import("./minimax-web-search-provider.runtime.js");
+        const { executeMiniMaxWebSearchProviderTool } = await loadMiniMaxWebSearchRuntime();
         return await executeMiniMaxWebSearchProviderTool(ctx, args);
       },
     }),

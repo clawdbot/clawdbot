@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
-import * as sessions from "../config/sessions.js";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import {
   __testing,
@@ -14,10 +14,163 @@ import {
   steerControlledSubagentRun,
 } from "./subagent-control.js";
 import {
+  __testing as subagentRegistryTesting,
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
 } from "./subagent-registry.js";
+
+vi.mock("../gateway/call.js", () => ({
+  callGateway: vi.fn(),
+}));
+
+vi.mock("./run-wait.js", () => {
+  const readLatestAssistantReplySnapshot = async (params: {
+    sessionKey: string;
+    limit?: number;
+    callGateway?: (request: CallGatewayOptions) => Promise<{ messages?: unknown[] }>;
+  }) => {
+    const history = await params.callGateway?.({
+      method: "chat.history",
+      params: { sessionKey: params.sessionKey, limit: params.limit ?? 50 },
+    });
+    const messages = Array.isArray(history?.messages) ? history.messages : [];
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const message = messages[i];
+      if (!message || typeof message !== "object") {
+        continue;
+      }
+      if ((message as { role?: unknown }).role !== "assistant") {
+        continue;
+      }
+      const content = (message as { content?: unknown }).content;
+      const text = Array.isArray(content)
+        ? content
+            .map((block) =>
+              block &&
+              typeof block === "object" &&
+              typeof (block as { text?: unknown }).text === "string"
+                ? (block as { text: string }).text
+                : "",
+            )
+            .filter(Boolean)
+            .join("\n")
+        : typeof content === "string"
+          ? content
+          : "";
+      if (text.trim()) {
+        return { text, fingerprint: JSON.stringify(message) };
+      }
+    }
+    return {};
+  };
+
+  return {
+    readLatestAssistantReplySnapshot,
+    waitForAgentRunAndReadUpdatedAssistantReply: async (params: {
+      runId: string;
+      sessionKey: string;
+      timeoutMs: number;
+      limit?: number;
+      baseline?: { fingerprint?: string };
+      callGateway?: (request: CallGatewayOptions) => Promise<Record<string, unknown>>;
+    }) => {
+      const wait = await params.callGateway?.({
+        method: "agent.wait",
+        params: {
+          runId: params.runId,
+          timeoutMs: Math.max(1, Math.floor(params.timeoutMs)),
+        },
+        timeoutMs: Math.max(1, Math.floor(params.timeoutMs)) + 2000,
+      });
+      const status = wait?.status;
+      if (status === "timeout" || status === "pending" || status === "error") {
+        return { status, error: typeof wait?.error === "string" ? wait.error : undefined };
+      }
+      const latestReply = await readLatestAssistantReplySnapshot({
+        sessionKey: params.sessionKey,
+        limit: params.limit,
+        callGateway: params.callGateway as
+          | ((request: CallGatewayOptions) => Promise<{ messages?: unknown[] }>)
+          | undefined,
+      });
+      return {
+        status: "ok",
+        replyText:
+          latestReply.text &&
+          (!params.baseline?.fingerprint || latestReply.fingerprint !== params.baseline.fingerprint)
+            ? latestReply.text
+            : undefined,
+      };
+    },
+  };
+});
+
+function setSubagentControlDepsForTest(
+  overrides: Parameters<typeof __testing.setDepsForTest>[0] = {},
+) {
+  __testing.setDepsForTest({
+    abortEmbeddedPiRun: () => false,
+    clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
+    updateSessionStore: async <T>(
+      storePath: string,
+      mutator: (store: Record<string, SessionEntry>) => Promise<T> | T,
+    ) => {
+      const store = JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<string, SessionEntry>;
+      const result = await mutator(store);
+      fs.writeFileSync(storePath, JSON.stringify(store, null, 2), "utf-8");
+      return result;
+    },
+    ...overrides,
+  });
+}
+
+let tempRoot = "";
+let tempStoreIndex = 0;
+
+beforeAll(() => {
+  tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-control-"));
+});
+
+afterAll(() => {
+  fs.rmSync(tempRoot, { recursive: true, force: true });
+});
+
+function nextSessionStorePath(label: string) {
+  tempStoreIndex += 1;
+  return path.join(tempRoot, `${tempStoreIndex}-${label}.json`);
+}
+
+function cfgWithSessionStore(storePath = nextSessionStorePath("sessions")): OpenClawConfig {
+  return {
+    session: { store: storePath },
+  } as OpenClawConfig;
+}
+
+function writeSessionStoreFixture(label: string, store: Record<string, unknown>) {
+  const storePath = nextSessionStorePath(label);
+  fs.writeFileSync(storePath, JSON.stringify(store, null, 2), "utf-8");
+  return storePath;
+}
+
+beforeEach(() => {
+  setSubagentControlDepsForTest();
+  subagentRegistryTesting.setDepsForTest({
+    cleanupBrowserSessionsForLifecycleEnd: async () => {},
+    ensureContextEnginesInitialized: () => {},
+    ensureRuntimePluginsLoaded: () => {},
+    resolveContextEngine: async () => ({
+      info: { id: "test", name: "Test" },
+      assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+      compact: async () => ({ ok: true, compacted: false }),
+      ingest: async () => ({ ingested: false }),
+    }),
+  });
+});
+
+afterEach(() => {
+  subagentRegistryTesting.setDepsForTest();
+});
 
 describe("sendControlledSubagentMessage", () => {
   afterEach(() => {
@@ -71,7 +224,7 @@ describe("sendControlledSubagentMessage", () => {
       startedAt: Date.now() - 4_000,
     });
 
-    __testing.setDepsForTest({
+    setSubagentControlDepsForTest({
       callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
         if (request.method === "agent") {
           throw new Error("gateway unavailable");
@@ -170,7 +323,7 @@ describe("sendControlledSubagentMessage", () => {
       outcome: { status: "ok" },
     });
 
-    __testing.setDepsForTest({
+    setSubagentControlDepsForTest({
       callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
         if (request.method === "chat.history") {
           return { messages: [] } as T;
@@ -245,7 +398,7 @@ describe("sendControlledSubagentMessage", () => {
       outcome: { status: "ok" },
     });
 
-    __testing.setDepsForTest({
+    setSubagentControlDepsForTest({
       callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
         if (request.method === "chat.history") {
           return { messages: [] } as T;
@@ -314,7 +467,7 @@ describe("sendControlledSubagentMessage", () => {
       content: [{ type: "text", text: "older reply from a previous run" }],
     };
 
-    __testing.setDepsForTest({
+    setSubagentControlDepsForTest({
       callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
         if (request.method === "chat.history") {
           historyCalls += 1;
@@ -372,24 +525,13 @@ describe("killSubagentRunAdmin", () => {
   });
 
   it("kills a subagent by session key without requester ownership checks", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-admin-kill-"));
-    const storePath = path.join(tmpDir, "sessions.json");
     const childSessionKey = "agent:main:subagent:worker";
-
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify(
-        {
-          [childSessionKey]: {
-            sessionId: "sess-worker",
-            updatedAt: Date.now(),
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    const storePath = writeSessionStoreFixture("admin-kill", {
+      [childSessionKey]: {
+        sessionId: "sess-worker",
+        updatedAt: Date.now(),
+      },
+    });
 
     addSubagentRunForTests({
       runId: "run-worker",
@@ -403,9 +545,7 @@ describe("killSubagentRunAdmin", () => {
       startedAt: Date.now() - 4_000,
     });
 
-    const cfg = {
-      session: { store: storePath },
-    } as OpenClawConfig;
+    const cfg = cfgWithSessionStore(storePath);
 
     const result = await killSubagentRunAdmin({
       cfg,
@@ -423,7 +563,7 @@ describe("killSubagentRunAdmin", () => {
 
   it("returns found=false when the session key is not tracked as a subagent run", async () => {
     const result = await killSubagentRunAdmin({
-      cfg: {} as OpenClawConfig,
+      cfg: cfgWithSessionStore(),
       sessionKey: "agent:main:subagent:missing",
     });
 
@@ -459,7 +599,7 @@ describe("killSubagentRunAdmin", () => {
     });
 
     const result = await killSubagentRunAdmin({
-      cfg: {} as OpenClawConfig,
+      cfg: cfgWithSessionStore(),
       sessionKey: childSessionKey,
     });
 
@@ -472,24 +612,13 @@ describe("killSubagentRunAdmin", () => {
   });
 
   it("still terminates the run when session store persistence fails during kill", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-admin-kill-store-"));
-    const storePath = path.join(tmpDir, "sessions.json");
     const childSessionKey = "agent:main:subagent:worker-store-fail";
-
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify(
-        {
-          [childSessionKey]: {
-            sessionId: "sess-worker-store-fail",
-            updatedAt: Date.now(),
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    const storePath = writeSessionStoreFixture("admin-kill-store-fail", {
+      [childSessionKey]: {
+        sessionId: "sess-worker-store-fail",
+        updatedAt: Date.now(),
+      },
+    });
 
     addSubagentRunForTests({
       runId: "run-worker-store-fail",
@@ -503,28 +632,24 @@ describe("killSubagentRunAdmin", () => {
       startedAt: Date.now() - 4_000,
     });
 
-    const updateSessionStoreSpy = vi
-      .spyOn(sessions, "updateSessionStore")
-      .mockRejectedValueOnce(new Error("session store unavailable"));
+    setSubagentControlDepsForTest({
+      updateSessionStore: async () => {
+        throw new Error("session store unavailable");
+      },
+    });
 
-    try {
-      const result = await killSubagentRunAdmin({
-        cfg: {
-          session: { store: storePath },
-        } as OpenClawConfig,
-        sessionKey: childSessionKey,
-      });
+    const result = await killSubagentRunAdmin({
+      cfg: cfgWithSessionStore(storePath),
+      sessionKey: childSessionKey,
+    });
 
-      expect(result).toMatchObject({
-        found: true,
-        killed: true,
-        runId: "run-worker-store-fail",
-        sessionKey: childSessionKey,
-      });
-      expect(getSubagentRunByChildSessionKey(childSessionKey)?.endedAt).toBeTypeOf("number");
-    } finally {
-      updateSessionStoreSpy.mockRestore();
-    }
+    expect(result).toMatchObject({
+      found: true,
+      killed: true,
+      runId: "run-worker-store-fail",
+      sessionKey: childSessionKey,
+    });
+    expect(getSubagentRunByChildSessionKey(childSessionKey)?.endedAt).toBeTypeOf("number");
   });
 });
 
@@ -535,23 +660,12 @@ describe("killControlledSubagentRun", () => {
   });
 
   it("does not mutate the live session when the caller passes a stale run entry", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-stale-kill-"));
-    const storePath = path.join(tmpDir, "sessions.json");
     const childSessionKey = "agent:main:subagent:stale-kill-worker";
-
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify(
-        {
-          [childSessionKey]: {
-            updatedAt: Date.now(),
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    const storePath = writeSessionStoreFixture("stale-kill", {
+      [childSessionKey]: {
+        updatedAt: Date.now(),
+      },
+    });
 
     addSubagentRunForTests({
       runId: "run-current",
@@ -566,9 +680,7 @@ describe("killControlledSubagentRun", () => {
     });
 
     const result = await killControlledSubagentRun({
-      cfg: {
-        session: { store: storePath },
-      } as OpenClawConfig,
+      cfg: cfgWithSessionStore(storePath),
       controller: {
         controllerSessionKey: "agent:main:main",
         callerSessionKey: "agent:main:main",
@@ -658,7 +770,7 @@ describe("killControlledSubagentRun", () => {
     });
 
     const result = await killControlledSubagentRun({
-      cfg: {} as OpenClawConfig,
+      cfg: cfgWithSessionStore(),
       controller: {
         controllerSessionKey: "agent:main:main",
         callerSessionKey: "agent:main:main",
@@ -759,7 +871,7 @@ describe("killControlledSubagentRun", () => {
     });
 
     const result = await killControlledSubagentRun({
-      cfg: {} as OpenClawConfig,
+      cfg: cfgWithSessionStore(),
       controller: {
         controllerSessionKey: "agent:main:main",
         callerSessionKey: "agent:main:main",
@@ -799,23 +911,12 @@ describe("killAllControlledSubagentRuns", () => {
   });
 
   it("ignores stale run snapshots in bulk kill requests", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-stale-kill-all-"));
-    const storePath = path.join(tmpDir, "sessions.json");
     const childSessionKey = "agent:main:subagent:stale-kill-all-worker";
-
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify(
-        {
-          [childSessionKey]: {
-            updatedAt: Date.now(),
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    const storePath = writeSessionStoreFixture("stale-kill-all", {
+      [childSessionKey]: {
+        updatedAt: Date.now(),
+      },
+    });
 
     addSubagentRunForTests({
       runId: "run-current-bulk",
@@ -830,9 +931,7 @@ describe("killAllControlledSubagentRuns", () => {
     });
 
     const result = await killAllControlledSubagentRuns({
-      cfg: {
-        session: { store: storePath },
-      } as OpenClawConfig,
+      cfg: cfgWithSessionStore(storePath),
       controller: {
         controllerSessionKey: "agent:main:main",
         callerSessionKey: "agent:main:main",
@@ -868,25 +967,12 @@ describe("killAllControlledSubagentRuns", () => {
   });
 
   it("does not let a stale bulk entry suppress the current live entry for the same child key", async () => {
-    const tmpDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), "openclaw-subagent-stale-kill-all-shadow-"),
-    );
-    const storePath = path.join(tmpDir, "sessions.json");
     const childSessionKey = "agent:main:subagent:stale-kill-all-shadow-worker";
-
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify(
-        {
-          [childSessionKey]: {
-            updatedAt: Date.now(),
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    const storePath = writeSessionStoreFixture("stale-kill-all-shadow", {
+      [childSessionKey]: {
+        updatedAt: Date.now(),
+      },
+    });
 
     addSubagentRunForTests({
       runId: "run-current-shadow",
@@ -901,9 +987,7 @@ describe("killAllControlledSubagentRuns", () => {
     });
 
     const result = await killAllControlledSubagentRuns({
-      cfg: {
-        session: { store: storePath },
-      } as OpenClawConfig,
+      cfg: cfgWithSessionStore(storePath),
       controller: {
         controllerSessionKey: "agent:main:main",
         callerSessionKey: "agent:main:main",
@@ -973,7 +1057,7 @@ describe("killAllControlledSubagentRuns", () => {
     });
 
     const result = await killAllControlledSubagentRuns({
-      cfg: {} as OpenClawConfig,
+      cfg: cfgWithSessionStore(),
       controller: {
         controllerSessionKey: "agent:main:main",
         callerSessionKey: "agent:main:main",
@@ -1045,7 +1129,7 @@ describe("killAllControlledSubagentRuns", () => {
     });
 
     const result = await killAllControlledSubagentRuns({
-      cfg: {} as OpenClawConfig,
+      cfg: cfgWithSessionStore(),
       controller: {
         controllerSessionKey: "agent:main:main",
         callerSessionKey: "agent:main:main",
@@ -1101,7 +1185,7 @@ describe("steerControlledSubagentRun", () => {
       .spyOn(await import("./subagent-registry.js"), "replaceSubagentRunAfterSteer")
       .mockReturnValue(false);
 
-    __testing.setDepsForTest({
+    setSubagentControlDepsForTest({
       callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
         if (request.method === "agent.wait") {
           return {} as T;
@@ -1115,7 +1199,7 @@ describe("steerControlledSubagentRun", () => {
 
     try {
       const result = await steerControlledSubagentRun({
-        cfg: {} as OpenClawConfig,
+        cfg: cfgWithSessionStore(),
         controller: {
           controllerSessionKey: "agent:main:main",
           callerSessionKey: "agent:main:main",
@@ -1153,14 +1237,14 @@ describe("steerControlledSubagentRun", () => {
   });
 
   it("rejects steering runs that are no longer tracked in the registry", async () => {
-    __testing.setDepsForTest({
+    setSubagentControlDepsForTest({
       callGateway: async () => {
         throw new Error("gateway should not be called");
       },
     });
 
     const result = await steerControlledSubagentRun({
-      cfg: {} as OpenClawConfig,
+      cfg: cfgWithSessionStore(),
       controller: {
         controllerSessionKey: "agent:main:main",
         callerSessionKey: "agent:main:main",
@@ -1227,7 +1311,7 @@ describe("steerControlledSubagentRun", () => {
       startedAt: Date.now() - 500,
     });
 
-    __testing.setDepsForTest({
+    setSubagentControlDepsForTest({
       callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
         if (request.method === "agent.wait") {
           return {} as T;
@@ -1240,7 +1324,7 @@ describe("steerControlledSubagentRun", () => {
     });
 
     const result = await steerControlledSubagentRun({
-      cfg: {} as OpenClawConfig,
+      cfg: cfgWithSessionStore(),
       controller: {
         controllerSessionKey: "agent:main:main",
         callerSessionKey: "agent:main:main",

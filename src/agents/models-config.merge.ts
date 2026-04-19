@@ -97,14 +97,17 @@ export function mergeProviderModels(
       implicitValue: implicitModel.maxTokens,
     });
 
-    return {
-      ...explicitModel,
-      input: implicitModel.input,
-      reasoning: "reasoning" in explicitModel ? explicitModel.reasoning : implicitModel.reasoning,
-      ...(contextWindow === undefined ? {} : { contextWindow }),
-      ...(contextTokens === undefined ? {} : { contextTokens }),
-      ...(maxTokens === undefined ? {} : { maxTokens }),
-    };
+    return Object.assign(
+      {},
+      explicitModel,
+      {
+        input: implicitModel.input,
+        reasoning: `reasoning` in explicitModel ? explicitModel.reasoning : implicitModel.reasoning,
+      },
+      contextWindow === undefined ? {} : { contextWindow },
+      contextTokens === undefined ? {} : { contextTokens },
+      maxTokens === undefined ? {} : { maxTokens },
+    );
   });
 
   for (const implicitModel of implicitModels) {

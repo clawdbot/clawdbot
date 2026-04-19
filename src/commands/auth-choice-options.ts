@@ -31,24 +31,28 @@ function resolveProviderChoiceOptions(params?: {
   return resolveProviderSetupFlowContributions({
     ...params,
     scope: "text-inference",
-  }).map((contribution) => ({
-    value: contribution.option.value as AuthChoice,
-    label: contribution.option.label,
-    ...(contribution.option.hint ? { hint: contribution.option.hint } : {}),
-    ...(contribution.option.assistantPriority !== undefined
-      ? { assistantPriority: contribution.option.assistantPriority }
-      : {}),
-    ...(contribution.option.assistantVisibility
-      ? { assistantVisibility: contribution.option.assistantVisibility }
-      : {}),
-    ...(contribution.option.group
-      ? {
-          groupId: contribution.option.group.id as AuthChoiceGroupId,
-          groupLabel: contribution.option.group.label,
-          ...(contribution.option.group.hint ? { groupHint: contribution.option.group.hint } : {}),
-        }
-      : {}),
-  }));
+  }).map((contribution) =>
+    Object.assign(
+      {},
+      { value: contribution.option.value as AuthChoice, label: contribution.option.label },
+      contribution.option.hint ? { hint: contribution.option.hint } : {},
+      contribution.option.assistantPriority !== undefined
+        ? { assistantPriority: contribution.option.assistantPriority }
+        : {},
+      contribution.option.assistantVisibility
+        ? { assistantVisibility: contribution.option.assistantVisibility }
+        : {},
+      contribution.option.group
+        ? {
+            groupId: contribution.option.group.id as AuthChoiceGroupId,
+            groupLabel: contribution.option.group.label,
+            ...(contribution.option.group.hint
+              ? { groupHint: contribution.option.group.hint }
+              : {}),
+          }
+        : {},
+    ),
+  );
 }
 
 export function formatAuthChoiceChoicesForCli(params?: {
@@ -137,10 +141,9 @@ export function buildAuthChoiceGroups(params: {
     });
   }
   const groups = Array.from(groupsById.values())
-    .map((group) => ({
-      ...group,
-      options: [...group.options].toSorted(compareAssistantOptions),
-    }))
+    .map((group) =>
+      Object.assign({}, group, { options: [...group.options].toSorted(compareAssistantOptions) }),
+    )
     .toSorted(compareGroupLabels);
 
   const skipOption = params.includeSkip

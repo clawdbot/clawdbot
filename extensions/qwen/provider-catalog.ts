@@ -6,7 +6,7 @@ export function buildQwenProvider(params?: { baseUrl?: string }): ModelProviderC
   return {
     baseUrl,
     api: "openai-completions",
-    models: buildQwenModelCatalogForBaseUrl(baseUrl).map((model) => ({ ...model })),
+    models: buildQwenModelCatalogForBaseUrl(baseUrl).map((model) => Object.assign({}, model)),
   };
 }
 

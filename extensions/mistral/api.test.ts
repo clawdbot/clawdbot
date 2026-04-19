@@ -7,6 +7,7 @@ import {
 } from "./api.js";
 import { contributeMistralResolvedModelCompat } from "./provider-compat.js";
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe provider compat shape.
 function readCompat<T>(model: unknown): T | undefined {
   return (model as { compat?: T }).compat;
 }

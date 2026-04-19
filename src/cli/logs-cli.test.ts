@@ -45,6 +45,24 @@ async function runLogsCli(argv: string[]) {
   });
 }
 
+function captureStdoutWrites() {
+  const writes: string[] = [];
+  vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+    writes.push(String(chunk));
+    return true;
+  });
+  return writes;
+}
+
+function captureStderrWrites() {
+  const writes: string[] = [];
+  vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+    writes.push(String(chunk));
+    return true;
+  });
+  return writes;
+}
+
 describe("logs cli", () => {
   afterEach(() => {
     callGatewayFromCli.mockClear();
@@ -63,16 +81,8 @@ describe("logs cli", () => {
       reset: true,
     });
 
-    const stdoutWrites: string[] = [];
-    const stderrWrites: string[] = [];
-    vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
-      stdoutWrites.push(String(chunk));
-      return true;
-    });
-    vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
-      stderrWrites.push(String(chunk));
-      return true;
-    });
+    const stdoutWrites = captureStdoutWrites();
+    const stderrWrites = captureStderrWrites();
 
     await runLogsCli(["logs"]);
 
@@ -94,11 +104,7 @@ describe("logs cli", () => {
       ],
     });
 
-    const stdoutWrites: string[] = [];
-    vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
-      stdoutWrites.push(String(chunk));
-      return true;
-    });
+    const stdoutWrites = captureStdoutWrites();
 
     await runLogsCli(["logs", "--local-time", "--plain"]);
 
@@ -115,15 +121,11 @@ describe("logs cli", () => {
       lines: ["line one"],
     });
 
-    const stderrWrites: string[] = [];
+    const stderrWrites = captureStderrWrites();
     vi.spyOn(process.stdout, "write").mockImplementation(() => {
       const err = new Error("EPIPE") as NodeJS.ErrnoException;
       err.code = "EPIPE";
       throw err;
-    });
-    vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
-      stderrWrites.push(String(chunk));
-      return true;
     });
 
     await runLogsCli(["logs"]);
@@ -142,16 +144,8 @@ describe("logs cli", () => {
       reset: false,
     });
 
-    const stdoutWrites: string[] = [];
-    const stderrWrites: string[] = [];
-    vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
-      stdoutWrites.push(String(chunk));
-      return true;
-    });
-    vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
-      stderrWrites.push(String(chunk));
-      return true;
-    });
+    const stdoutWrites = captureStdoutWrites();
+    const stderrWrites = captureStderrWrites();
 
     await runLogsCli(["logs"]);
 

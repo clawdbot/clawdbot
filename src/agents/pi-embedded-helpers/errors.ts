@@ -298,7 +298,7 @@ const RETRYABLE_402_SCOPED_RESULT_HINTS = [
   "exhausted",
 ] as const;
 const RAW_402_MARKER_RE =
-  /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment required\b|^\s*402\s+.*used up your points\b/i;
+  /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+(?:payment required\b|.*used up your points\b|no available asset for api access\b)/i;
 const BARE_LEADING_402_RE = /^\s*402\b/i;
 const LEADING_402_WRAPPER_RE =
   /^(?:error[:\s-]+)?(?:(?:http\s*)?402(?:\s+payment required)?|payment required)(?:[:\s-]+|$)/i;
@@ -464,7 +464,6 @@ function isOAuthCallbackTimeoutMessage(raw: string): boolean {
 function isOAuthCallbackValidationMessage(raw: string): boolean {
   return /\bcallback_validation_failed\b/i.test(raw);
 }
-
 function includesAnyHint(text: string, hints: readonly string[]): boolean {
   return hints.some((hint) => text.includes(hint));
 }
@@ -584,7 +583,7 @@ export function classifyFailoverReasonFromHttpStatus(
     ? classifyFailoverClassificationFromMessage(message, opts?.provider)
     : null;
   return failoverReasonFromClassification(
-    classifyFailoverClassificationFromHttpStatus(status, message, messageClassification),
+    classifyFailoverClassificationFromHttpStatus(status, message, messageClassification, status),
   );
 }
 
@@ -592,6 +591,7 @@ function classifyFailoverClassificationFromHttpStatus(
   status: number | undefined,
   message: string | undefined,
   messageClassification: FailoverClassification | null,
+  explicitStatus: number | undefined,
 ): FailoverClassification | null {
   const messageReason = failoverReasonFromClassification(messageClassification);
   if (typeof status !== "number" || !Number.isFinite(status)) {
@@ -599,7 +599,20 @@ function classifyFailoverClassificationFromHttpStatus(
   }
 
   if (status === 402) {
-    return toReasonClassification(message ? classify402Message(message) : "billing");
+    if (!message) {
+      return toReasonClassification("billing");
+    }
+    const leadingStatus = extractLeadingHttpStatus(message.trim());
+    if (leadingStatus?.code === 402) {
+      const reasonFrom402Text = classifyFailoverReasonFrom402Text(message);
+      if (reasonFrom402Text) {
+        return toReasonClassification(reasonFrom402Text);
+      }
+      return typeof explicitStatus === "number"
+        ? toReasonClassification(classify402Message(message))
+        : messageClassification;
+    }
+    return toReasonClassification(classify402Message(message));
   }
   if (status === 429) {
     return toReasonClassification("rate_limit");
@@ -828,6 +841,7 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
     inferredStatus,
     signal.message,
     messageClassification,
+    signal.status,
   );
   if (statusClassification) {
     return statusClassification;
@@ -1239,20 +1253,8 @@ export function classifyFailoverReason(
   raw: string,
   opts?: { provider?: string },
 ): FailoverReason | null {
-  const trimmed = raw.trim();
-  const leadingStatus = extractLeadingHttpStatus(trimmed);
-  const reasonFrom402Text =
-    leadingStatus?.code === 402 ? classifyFailoverReasonFrom402Text(trimmed) : null;
-  if (
-    leadingStatus?.code === 402 &&
-    !reasonFrom402Text &&
-    !isHtmlErrorResponse(trimmed, leadingStatus.code)
-  ) {
-    return null;
-  }
   return failoverReasonFromClassification(
     classifyFailoverSignal({
-      status: leadingStatus?.code,
       message: raw,
       provider: opts?.provider,
     }),

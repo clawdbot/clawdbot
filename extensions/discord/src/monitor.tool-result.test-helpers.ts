@@ -311,6 +311,7 @@ export function createMentionRequiredGuildConfig(overrides?: Partial<Config>): C
 }
 
 export function captureNextDispatchCtx<
+  // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe captured dispatch context shape.
   T extends {
     SessionKey?: string;
     ParentSessionKey?: string;

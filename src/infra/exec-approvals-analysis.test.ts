@@ -23,6 +23,23 @@ function expectAnalyzedShellCommand(
   return res;
 }
 
+function createSkillPreludeFixture(options: { withWrapper?: boolean } = {}) {
+  const skillRoot = makeTempDir();
+  const skillDir = path.join(skillRoot, "skills", "gog");
+  const skillPath = path.join(skillDir, "SKILL.md");
+  const wrapperPath = path.join(skillRoot, "bin", "gog-wrapper");
+
+  fs.mkdirSync(skillDir, { recursive: true });
+  fs.writeFileSync(skillPath, "# gog\n");
+
+  if (options.withWrapper) {
+    fs.mkdirSync(path.dirname(wrapperPath), { recursive: true });
+    fs.writeFileSync(wrapperPath, "#!/bin/sh\n", { mode: 0o755 });
+  }
+
+  return { skillRoot, skillPath, wrapperPath };
+}
+
 describe("exec approvals shell analysis", () => {
   describe("safe shell command builder", () => {
     it("quotes only safeBins segments (leaves other segments untouched)", () => {
@@ -516,14 +533,9 @@ describe("exec approvals shell analysis", () => {
       if (process.platform === "win32") {
         return;
       }
-      const skillRoot = makeTempDir();
-      const skillDir = path.join(skillRoot, "skills", "gog");
-      const skillPath = path.join(skillDir, "SKILL.md");
-      const wrapperPath = path.join(skillRoot, "bin", "gog-wrapper");
-      fs.mkdirSync(path.dirname(skillPath), { recursive: true });
-      fs.mkdirSync(path.dirname(wrapperPath), { recursive: true });
-      fs.writeFileSync(skillPath, "# gog\n");
-      fs.writeFileSync(wrapperPath, "#!/bin/sh\n", { mode: 0o755 });
+      const { skillRoot, skillPath, wrapperPath } = createSkillPreludeFixture({
+        withWrapper: true,
+      });
 
       const result = evaluateShellAllowlist({
         command: `cat ${skillPath} && printf '\\n---CMD---\\n' && ${wrapperPath} calendar events primary --today --json`,
@@ -541,11 +553,7 @@ describe("exec approvals shell analysis", () => {
       if (process.platform === "win32") {
         return;
       }
-      const skillRoot = makeTempDir();
-      const skillDir = path.join(skillRoot, "skills", "gog");
-      const skillPath = path.join(skillDir, "SKILL.md");
-      fs.mkdirSync(skillDir, { recursive: true });
-      fs.writeFileSync(skillPath, "# gog\n");
+      const { skillRoot, skillPath } = createSkillPreludeFixture();
 
       const result = evaluateShellAllowlist({
         command: `cat ${skillPath} && printf '\\n---CMD---\\n' && /bin/echo calendar events primary --today --json`,
@@ -563,11 +571,7 @@ describe("exec approvals shell analysis", () => {
       if (process.platform === "win32") {
         return;
       }
-      const skillRoot = makeTempDir();
-      const skillDir = path.join(skillRoot, "skills", "gog");
-      const skillPath = path.join(skillDir, "SKILL.md");
-      fs.mkdirSync(skillDir, { recursive: true });
-      fs.writeFileSync(skillPath, "# gog\n");
+      const { skillRoot, skillPath } = createSkillPreludeFixture();
 
       const result = evaluateShellAllowlist({
         command: `cat ${skillPath} && printf '\\n---CMD---\\n'`,
@@ -585,14 +589,9 @@ describe("exec approvals shell analysis", () => {
       if (process.platform === "win32") {
         return;
       }
-      const skillRoot = makeTempDir();
-      const skillDir = path.join(skillRoot, "skills", "gog");
-      const skillPath = path.join(skillDir, "SKILL.md");
-      const wrapperPath = path.join(skillRoot, "bin", "gog-wrapper");
-      fs.mkdirSync(path.dirname(skillPath), { recursive: true });
-      fs.mkdirSync(path.dirname(wrapperPath), { recursive: true });
-      fs.writeFileSync(skillPath, "# gog\n");
-      fs.writeFileSync(wrapperPath, "#!/bin/sh\n", { mode: 0o755 });
+      const { skillRoot, skillPath, wrapperPath } = createSkillPreludeFixture({
+        withWrapper: true,
+      });
 
       const result = evaluateShellAllowlist({
         command: `cat ${skillPath} && printf '\\n---CMD---\\n' && false && ${wrapperPath} calendar events primary --today --json`,

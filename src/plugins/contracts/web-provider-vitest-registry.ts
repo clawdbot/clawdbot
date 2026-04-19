@@ -9,8 +9,9 @@ export type WebSearchProviderContractEntry = {
 
 let webSearchProviderContractRegistryCache: WebSearchProviderContractEntry[] | null = null;
 
-type GoogleWebSearchContractApiSurface =
-  typeof import("../../../extensions/google/web-search-contract-api.js");
+type GoogleWebSearchContractApiSurface = {
+  createGeminiWebSearchProvider: () => WebSearchProviderPlugin;
+};
 
 export function loadVitestWebSearchProviderContractRegistry(): WebSearchProviderContractEntry[] {
   const googleWebSearchContractApi =

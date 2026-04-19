@@ -6,6 +6,7 @@
     "modelPrefixes": ["claude-"]
   },
   "cliBackends": ["claude-cli"],
+  "syntheticAuthRefs": ["claude-cli"],
   "providerAuthEnvVars": {
     "anthropic": ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]
   },

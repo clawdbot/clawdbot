@@ -147,6 +147,7 @@ function mockCronEditJobLookup(schedule: unknown): void {
   );
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets each assertion ascribe expected RPC params.
 function getGatewayCallParams<T>(method: string): T {
   const call = callGatewayFromCli.mock.calls.find((entry) => entry[0] === method);
   return (call?.[2] ?? {}) as T;

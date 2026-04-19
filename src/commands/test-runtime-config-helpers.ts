@@ -29,3 +29,13 @@ export function createTestRuntime(): TestRuntime {
     exit,
   };
 }
+
+export function createThrowingTestRuntime(): RuntimeEnv {
+  return {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(() => {
+      throw new Error("exit");
+    }),
+  };
+}

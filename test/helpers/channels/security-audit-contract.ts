@@ -1,15 +1,54 @@
+import type { OpenClawConfig } from "../../../src/config/config.js";
+import type { SecurityAuditFinding } from "../../../src/security/audit.types.js";
 import {
   loadBundledPluginPublicSurfaceSync,
   resolveRelativeBundledPluginPublicModuleId,
 } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 
-type DiscordSecurityAuditSurface =
-  typeof import("@openclaw/discord/security-audit-contract-api.js");
-type FeishuSecuritySurface = typeof import("@openclaw/feishu/security-contract-api.js");
-type SlackSecuritySurface = typeof import("@openclaw/slack/security-contract-api.js");
-type SynologyChatSecuritySurface = typeof import("@openclaw/synology-chat/contract-api.js");
-type TelegramSecuritySurface = typeof import("@openclaw/telegram/security-audit-contract-api.js");
-type ZalouserSecuritySurface = typeof import("@openclaw/zalouser/contract-api.js");
+type SecurityAuditAccount = {
+  accountId: string;
+  enabled?: boolean;
+  token?: unknown;
+  tokenSource?: string;
+  config?: Record<string, unknown>;
+  [key: string]: unknown;
+};
+type FlexibleSecurityAuditParams = {
+  cfg?: OpenClawConfig;
+  sourceConfig?: OpenClawConfig;
+  account: SecurityAuditAccount;
+  accountId?: string | null;
+  orderedAccountIds?: string[];
+  hasExplicitAccountPath?: boolean;
+};
+type ConfigSecurityAuditParams = {
+  cfg: OpenClawConfig;
+};
+type AsyncChannelSecurityAuditCollector = (
+  params: FlexibleSecurityAuditParams,
+) => Promise<SecurityAuditFinding[]>;
+type SyncChannelSecurityAuditCollector = (
+  params: FlexibleSecurityAuditParams,
+) => SecurityAuditFinding[];
+type ConfigSecurityAuditCollector = (params: ConfigSecurityAuditParams) => SecurityAuditFinding[];
+type DiscordSecurityAuditSurface = {
+  collectDiscordSecurityAuditFindings: AsyncChannelSecurityAuditCollector;
+};
+type FeishuSecuritySurface = {
+  collectFeishuSecurityAuditFindings: ConfigSecurityAuditCollector;
+};
+type SlackSecuritySurface = {
+  collectSlackSecurityAuditFindings: AsyncChannelSecurityAuditCollector;
+};
+type SynologyChatSecuritySurface = {
+  collectSynologyChatSecurityAuditFindings: SyncChannelSecurityAuditCollector;
+};
+type TelegramSecuritySurface = {
+  collectTelegramSecurityAuditFindings: AsyncChannelSecurityAuditCollector;
+};
+type ZalouserSecuritySurface = {
+  collectZalouserSecurityAuditFindings: SyncChannelSecurityAuditCollector;
+};
 
 const discordSecurityAuditModuleId = resolveRelativeBundledPluginPublicModuleId({
   fromModuleUrl: import.meta.url,

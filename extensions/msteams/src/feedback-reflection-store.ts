@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+
 /** Default cooldown between reflections per session (5 minutes). */
 export const DEFAULT_COOLDOWN_MS = 300_000;
 
@@ -26,8 +29,6 @@ function resolveLegacyLearningsFilePath(storePath: string, sessionKey: string): 
 async function readLearningsFile(
   filePath: string,
 ): Promise<{ exists: boolean; learnings: string[] }> {
-  const fs = await import("node:fs/promises");
-
   try {
     const content = await fs.readFile(filePath, "utf-8");
     const parsed = JSON.parse(content);
@@ -77,9 +78,6 @@ export async function storeSessionLearning(params: {
   sessionKey: string;
   learning: string;
 }): Promise<void> {
-  const fs = await import("node:fs/promises");
-  const path = await import("node:path");
-
   const learningsFile = resolveLearningsFilePath(params.storePath, params.sessionKey);
   const legacyLearningsFile = resolveLegacyLearningsFilePath(params.storePath, params.sessionKey);
   const { exists, learnings: existingLearnings } = await readLearningsFile(learningsFile);

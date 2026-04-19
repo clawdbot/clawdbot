@@ -31,6 +31,8 @@ export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
       ws.port = cdpPort;
     }
     ws.protocol = cdp.protocol === "https:" ? "wss:" : "ws:";
+  } else if (isLoopbackHost(ws.hostname) && isLoopbackHost(cdp.hostname)) {
+    ws.hostname = cdp.hostname;
   }
   if (cdp.protocol === "https:" && ws.protocol === "ws:") {
     ws.protocol = "wss:";

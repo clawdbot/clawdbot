@@ -187,6 +187,18 @@ describe("runWithModelFallback – probe logic", () => {
       run,
     });
 
+  async function expectPrimarySkippedAfterLongCooldown(reason: "billing" | "rate_limit") {
+    const cfg = makeCfg();
+    const expiresIn30Min = NOW + 30 * 60 * 1000;
+    mockedGetSoonestCooldownExpiry.mockReturnValue(expiresIn30Min);
+    mockedResolveProfilesUnavailableReason.mockReturnValue(reason);
+
+    const run = vi.fn().mockResolvedValue("ok");
+
+    const result = await runPrimaryCandidate(cfg, run);
+    expectPrimarySkippedForReason(result, run, reason);
+  }
+
   beforeEach(() => {
     realDateNow = Date.now;
     Date.now = vi.fn(() => NOW);
@@ -246,15 +258,7 @@ describe("runWithModelFallback – probe logic", () => {
   });
 
   it("uses inferred unavailable reason when skipping a cooldowned primary model", async () => {
-    const cfg = makeCfg();
-    const expiresIn30Min = NOW + 30 * 60 * 1000;
-    mockedGetSoonestCooldownExpiry.mockReturnValue(expiresIn30Min);
-    mockedResolveProfilesUnavailableReason.mockReturnValue("billing");
-
-    const run = vi.fn().mockResolvedValue("ok");
-
-    const result = await runPrimaryCandidate(cfg, run);
-    expectPrimarySkippedForReason(result, run, "billing");
+    await expectPrimarySkippedAfterLongCooldown("billing");
   });
 
   it("probes primary model when within 2-min margin of cooldown expiry", async () => {
@@ -662,22 +666,10 @@ describe("runWithModelFallback – probe logic", () => {
 
     const result = await runPrimaryCandidate(cfg, run);
 
-    expect(result.result).toBe("billing-probe-ok");
-    expect(run).toHaveBeenCalledTimes(1);
-    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini", {
-      allowTransientCooldownProbe: true,
-    });
+    expectPrimaryProbeSuccess(result, run, "billing-probe-ok");
   });
 
   it("skips billing-cooldowned primary with fallbacks when far from cooldown expiry", async () => {
-    const cfg = makeCfg();
-    const expiresIn30Min = NOW + 30 * 60 * 1000;
-    mockedGetSoonestCooldownExpiry.mockReturnValue(expiresIn30Min);
-    mockedResolveProfilesUnavailableReason.mockReturnValue("billing");
-
-    const run = vi.fn().mockResolvedValue("ok");
-
-    const result = await runPrimaryCandidate(cfg, run);
-    expectPrimarySkippedForReason(result, run, "billing");
+    await expectPrimarySkippedAfterLongCooldown("billing");
   });
 });

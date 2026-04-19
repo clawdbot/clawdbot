@@ -2,28 +2,157 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import * as authProfileSourceCheckModule from "./auth-profiles/source-check.js";
 import * as authProfileStoreModule from "./auth-profiles/store.js";
-import { saveAuthProfileStore } from "./auth-profiles/store.js";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  replaceRuntimeAuthProfileStoreSnapshots,
+} from "./auth-profiles/store.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { isAnthropicBillingError } from "./live-auth-keys.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import { runWithImageModelFallback, runWithModelFallback } from "./model-fallback.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
 
+vi.mock("../infra/file-lock.js", () => ({
+  withFileLock: async <T>(_filePath: string, _options: unknown, run: () => Promise<T>) => run(),
+}));
+
 vi.mock("../plugins/provider-runtime.js", () => ({
   buildProviderMissingAuthMessageWithPlugin: () => undefined,
   resolveExternalAuthProfilesWithPlugins: () => [],
 }));
 
+const authRuntimeMock = vi.hoisted(() => {
+  const stores = new Map<string, AuthProfileStore>();
+  const keyFor = (agentDir?: string) => agentDir ?? "__main__";
+  const now = () => Date.now();
+  const isActive = (value: unknown, ts = now()) =>
+    typeof value === "number" && Number.isFinite(value) && value > ts;
+  const cloneStore = (store: AuthProfileStore): AuthProfileStore => structuredClone(store);
+  const getStore = (agentDir?: string): AuthProfileStore =>
+    cloneStore(stores.get(keyFor(agentDir)) ?? { version: 1, profiles: {} });
+  const getProfileIds = (store: AuthProfileStore, provider: string) =>
+    Object.entries(store.profiles)
+      .filter(([, profile]) => profile.provider === provider)
+      .map(([id]) => id);
+  const isProfileInCooldown = (
+    store: AuthProfileStore,
+    profileId: string,
+    tsOrOptions?: number | { now?: number; forModel?: string },
+    forModel?: string,
+  ) => {
+    const stats = store.usageStats?.[profileId];
+    if (!stats || store.profiles[profileId]?.provider === "openrouter") {
+      return false;
+    }
+    const ts = typeof tsOrOptions === "number" ? tsOrOptions : (tsOrOptions?.now ?? now());
+    const model = typeof tsOrOptions === "object" ? tsOrOptions.forModel : forModel;
+    if (isActive(stats.disabledUntil, ts)) {
+      return true;
+    }
+    if (!isActive(stats.cooldownUntil, ts)) {
+      return false;
+    }
+    return !stats.cooldownModel || !model || stats.cooldownModel === model;
+  };
+  const resolveReason = (store: AuthProfileStore, profileIds: string[], ts = now()) => {
+    for (const profileId of profileIds) {
+      const stats = store.usageStats?.[profileId];
+      if (!stats) {
+        continue;
+      }
+      if (isActive(stats.disabledUntil, ts)) {
+        return stats.disabledReason ?? "auth";
+      }
+      if (!isActive(stats.cooldownUntil, ts)) {
+        continue;
+      }
+      if (stats.cooldownReason) {
+        return stats.cooldownReason;
+      }
+      const counts = stats.failureCounts ?? {};
+      if ((counts.rate_limit ?? 0) > 0) {
+        return "rate_limit";
+      }
+      if ((counts.overloaded ?? 0) > 0) {
+        return "overloaded";
+      }
+      if ((counts.timeout ?? 0) > 0) {
+        return "timeout";
+      }
+      return "unknown";
+    }
+    return null;
+  };
+  return {
+    clear: () => stores.clear(),
+    setStore: (agentDir: string | undefined, store: AuthProfileStore) => {
+      stores.set(keyFor(agentDir), cloneStore(store));
+    },
+    runtime: {
+      ensureAuthProfileStore: (agentDir?: string) => getStore(agentDir),
+      loadAuthProfileStoreForRuntime: (agentDir?: string) => getStore(agentDir),
+      resolveAuthProfileOrder: (params: { store: AuthProfileStore; provider: string }) =>
+        getProfileIds(params.store, params.provider),
+      isProfileInCooldown,
+      resolveProfilesUnavailableReason: (params: {
+        store: AuthProfileStore;
+        profileIds: string[];
+        now?: number;
+      }) => resolveReason(params.store, params.profileIds, params.now),
+      getSoonestCooldownExpiry: (
+        store: AuthProfileStore,
+        profileIds: string[],
+        options?: { now?: number; forModel?: string },
+      ) => {
+        const ts = options?.now ?? now();
+        let soonest: number | null = null;
+        for (const profileId of profileIds) {
+          if (!isProfileInCooldown(store, profileId, { now: ts, forModel: options?.forModel })) {
+            continue;
+          }
+          const stats = store.usageStats?.[profileId];
+          const expiry = [stats?.cooldownUntil, stats?.disabledUntil]
+            .filter((value): value is number => isActive(value, ts))
+            .toSorted((a, b) => a - b)[0];
+          if (expiry !== undefined && (soonest === null || expiry < soonest)) {
+            soonest = expiry;
+          }
+        }
+        return soonest;
+      },
+    },
+  };
+});
+
+vi.mock("./model-fallback-auth.runtime.js", () => authRuntimeMock.runtime);
+
 const makeCfg = makeModelFallbackCfg;
 const OPENROUTER_MODEL_NOT_FOUND_PAYLOAD =
   '{"error":{"message":"Healer Alpha was a stealth model revealed on March 18th as an early testing version of MiMo-V2-Omni. Find it here: https://openrouter.ai/xiaomi/mimo-v2-omni","code":404},"user_id":"user_33GTyP8uDSYYbaeBO48AGHXyuMC"}';
+let authTempRoot = "";
+let authTempCounter = 0;
+
+beforeAll(async () => {
+  authTempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-suite-"));
+});
+
+afterAll(async () => {
+  if (authTempRoot) {
+    await fs.rm(authTempRoot, { recursive: true, force: true });
+  }
+});
+
+afterEach(() => {
+  clearRuntimeAuthProfileStoreSnapshots();
+  authRuntimeMock.clear();
+});
 
 function makeFallbacksOnlyCfg(): OpenClawConfig {
   return {
@@ -54,13 +183,15 @@ async function withTempAuthStore<T>(
   store: AuthProfileStore,
   run: (tempDir: string) => Promise<T>,
 ): Promise<T> {
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
-  saveAuthProfileStore(store, tempDir);
-  try {
-    return await run(tempDir);
-  } finally {
-    await fs.rm(tempDir, { recursive: true, force: true });
-  }
+  const tempDir = await makeAuthTempDir();
+  setAuthRuntimeStore(tempDir, store);
+  return await run(tempDir);
+}
+
+async function makeAuthTempDir(): Promise<string> {
+  const tempDir = path.join(authTempRoot, `case-${++authTempCounter}`);
+  await fs.mkdir(tempDir, { recursive: true });
+  return tempDir;
 }
 
 async function runWithStoredAuth(params: {
@@ -69,15 +200,20 @@ async function runWithStoredAuth(params: {
   provider: string;
   run: (provider: string, model: string) => Promise<string>;
 }) {
-  return withTempAuthStore(params.store, async (tempDir) =>
-    runWithModelFallback({
-      cfg: params.cfg,
-      provider: params.provider,
-      model: "m1",
-      agentDir: tempDir,
-      run: params.run,
-    }),
-  );
+  const tempDir = await makeAuthTempDir();
+  setAuthRuntimeStore(tempDir, params.store);
+  return await runWithModelFallback({
+    cfg: params.cfg,
+    provider: params.provider,
+    model: "m1",
+    agentDir: tempDir,
+    run: params.run,
+  });
+}
+
+function setAuthRuntimeStore(agentDir: string | undefined, store: AuthProfileStore): void {
+  replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store }]);
+  authRuntimeMock.setStore(agentDir, store);
 }
 
 async function expectFallsBackToHaiku(params: {
@@ -835,20 +971,17 @@ describe("runWithModelFallback", () => {
     await withTempAuthStore(store, async (tempDir) => {
       const run = vi.fn().mockImplementation(async (provider: string, model: string) => {
         if (provider === "anthropic" && model === "claude-opus-4-5") {
-          saveAuthProfileStore(
-            {
-              ...store,
-              usageStats: {
-                "anthropic:default": {
-                  cooldownUntil: expiry,
-                  cooldownReason: "rate_limit",
-                  cooldownModel: "claude-opus-4-5",
-                  failureCounts: { rate_limit: 1 },
-                },
+          setAuthRuntimeStore(tempDir, {
+            ...store,
+            usageStats: {
+              "anthropic:default": {
+                cooldownUntil: expiry,
+                cooldownReason: "rate_limit",
+                cooldownModel: "claude-opus-4-5",
+                failureCounts: { rate_limit: 1 },
               },
             },
-            tempDir,
-          );
+          });
         }
 
         throw Object.assign(new Error("rate limited"), { status: 429 });
@@ -1368,8 +1501,8 @@ describe("runWithModelFallback", () => {
     async function makeAuthStoreWithCooldown(
       provider: string,
       reason: "rate_limit" | "overloaded" | "timeout" | "auth" | "billing",
-    ): Promise<{ store: AuthProfileStore; dir: string }> {
-      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
+    ): Promise<{ dir: string }> {
+      const tmpDir = await makeAuthTempDir();
       const now = Date.now();
       const store: AuthProfileStore = {
         version: AUTH_STORE_VERSION,
@@ -1389,8 +1522,8 @@ describe("runWithModelFallback", () => {
                 },
         },
       };
-      saveAuthProfileStore(store, tmpDir);
-      return { store, dir: tmpDir };
+      setAuthRuntimeStore(tmpDir, store);
+      return { dir: tmpDir };
     }
 
     it("attempts same-provider fallbacks during rate limit cooldown", async () => {
@@ -1540,7 +1673,7 @@ describe("runWithModelFallback", () => {
     });
 
     it("tries cross-provider fallbacks when same provider has rate limit", async () => {
-      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
+      const tmpDir = await makeAuthTempDir();
       const store: AuthProfileStore = {
         version: AUTH_STORE_VERSION,
         profiles: {
@@ -1554,7 +1687,7 @@ describe("runWithModelFallback", () => {
           },
         },
       };
-      saveAuthProfileStore(store, tmpDir);
+      setAuthRuntimeStore(tmpDir, store);
 
       const cfg = makeCfg({
         agents: {

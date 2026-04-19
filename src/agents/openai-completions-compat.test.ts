@@ -2,22 +2,24 @@ import { describe, expect, it } from "vitest";
 import { resolveOpenAICompletionsCompatDefaults } from "./openai-completions-compat.js";
 
 describe("resolveOpenAICompletionsCompatDefaults", () => {
-  it("enables streaming usage for local ollama OpenAI-compat endpoints", () => {
+  it("keeps streaming usage enabled for provider-declared compatible endpoints", () => {
     expect(
       resolveOpenAICompletionsCompatDefaults({
-        provider: "ollama",
+        provider: "custom-local",
         endpointClass: "local",
-        knownProviderFamily: "ollama",
+        knownProviderFamily: "custom-local",
+        supportsNativeStreamingUsageCompat: true,
       }).supportsUsageInStreaming,
     ).toBe(true);
   });
 
-  it("keeps streaming usage enabled for custom ollama OpenAI-compat endpoints", () => {
+  it("keeps streaming usage enabled for custom provider-declared compatible endpoints", () => {
     expect(
       resolveOpenAICompletionsCompatDefaults({
-        provider: "ollama",
+        provider: "custom-local",
         endpointClass: "custom",
-        knownProviderFamily: "ollama",
+        knownProviderFamily: "custom-local",
+        supportsNativeStreamingUsageCompat: true,
       }).supportsUsageInStreaming,
     ).toBe(true);
   });

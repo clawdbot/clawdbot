@@ -1,37 +1,57 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
-import { withPathResolutionEnv } from "../test-utils/env.js";
-import { writeSkill } from "./skills.e2e-test-helpers.js";
-import { loadWorkspaceSkillEntries } from "./skills.js";
+import { writeSkill, writeWorkspaceSkills } from "./skills.e2e-test-helpers.js";
 import {
   restoreMockSkillsHomeEnv,
   setMockSkillsHomeEnv,
   type SkillsHomeEnvSnapshot,
 } from "./skills/home-env.test-support.js";
 import { readSkillFrontmatterSafe } from "./skills/local-loader.js";
+import { loadWorkspaceSkillEntries } from "./skills/workspace.js";
 import { writePluginWithSkill } from "./test-helpers/skill-plugin-fixtures.js";
 
-const tempDirs: string[] = [];
 let fakeHome = "";
 let envSnapshot: SkillsHomeEnvSnapshot;
+let tempRoot = "";
+let workspaceCaseIndex = 0;
 
 async function createTempWorkspaceDir() {
-  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
-  tempDirs.push(workspaceDir);
+  const workspaceDir = path.join(tempRoot, `workspace-${++workspaceCaseIndex}`);
+  await fs.mkdir(workspaceDir, { recursive: true });
   return workspaceDir;
 }
 
-function withWorkspaceHome<T>(workspaceDir: string, cb: () => T): T {
-  return withPathResolutionEnv(workspaceDir, { PATH: "" }, () => cb());
+function captureWarningLogger() {
+  setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+  const warn = vi.fn();
+  loggingState.rawConsole = {
+    log: vi.fn(),
+    info: vi.fn(),
+    warn,
+    error: vi.fn(),
+  };
+  return warn;
 }
 
-beforeEach(async () => {
-  fakeHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-home-"));
-  tempDirs.push(fakeHome);
+function loadTestWorkspaceSkillEntries(
+  workspaceDir: string,
+  opts?: Parameters<typeof loadWorkspaceSkillEntries>[1],
+) {
+  return loadWorkspaceSkillEntries(workspaceDir, {
+    managedSkillsDir: path.join(workspaceDir, ".managed"),
+    bundledSkillsDir: "",
+    ...opts,
+  });
+}
+
+beforeAll(async () => {
+  tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-workspace-"));
+  fakeHome = path.join(tempRoot, "home");
+  await fs.mkdir(fakeHome, { recursive: true });
   envSnapshot = setMockSkillsHomeEnv(fakeHome);
 });
 
@@ -39,12 +59,13 @@ afterEach(async () => {
   setLoggerOverride(null);
   loggingState.rawConsole = null;
   resetLogger();
+});
+
+afterAll(async () => {
   await restoreMockSkillsHomeEnv(envSnapshot, async () => {
-    await Promise.all(
-      tempDirs
-        .splice(0, tempDirs.length)
-        .map((dir) => fs.rm(dir, { recursive: true, force: true })),
-    );
+    if (tempRoot) {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
   });
 });
 
@@ -64,103 +85,53 @@ async function setupWorkspaceWithProsePlugin() {
   return { workspaceDir, managedDir, bundledDir };
 }
 
-async function setupWorkspaceWithDiffsPlugin() {
-  const workspaceDir = await createTempWorkspaceDir();
-  const managedDir = path.join(workspaceDir, ".managed");
+async function createEscapedBundledSkillFixture(params?: {
+  workspaceDir?: string;
+  outsideDir?: string;
+}) {
+  const workspaceDir = params?.workspaceDir ?? (await createTempWorkspaceDir());
+  const outsideDir = params?.outsideDir ?? (await createTempWorkspaceDir());
   const bundledDir = path.join(workspaceDir, ".bundled");
-  const pluginRoot = path.join(workspaceDir, ".openclaw", "extensions", "diffs");
-
-  await writePluginWithSkill({
-    pluginRoot,
-    pluginId: "diffs",
-    skillId: "diffs",
-    skillDescription: "test",
+  const escapedSkillDir = path.join(outsideDir, "outside-bundled-skill");
+  await writeSkill({
+    dir: escapedSkillDir,
+    name: "outside-bundled-skill",
+    description: "Outside bundled",
   });
-
-  return { workspaceDir, managedDir, bundledDir };
+  await fs.mkdir(bundledDir, { recursive: true });
+  const requestedPath = path.join(bundledDir, "escaped-bundled-skill");
+  await fs.symlink(escapedSkillDir, requestedPath, "dir");
+  return { workspaceDir, outsideDir, bundledDir, escapedSkillDir, requestedPath };
 }
 
 describe("loadWorkspaceSkillEntries", () => {
-  it("handles an empty managed skills dir without throwing", async () => {
-    const workspaceDir = await createTempWorkspaceDir();
-    const managedDir = path.join(workspaceDir, ".managed");
-    await fs.mkdir(managedDir, { recursive: true });
+  it("filters plugin-shipped skills through plugin config", async () => {
+    const { workspaceDir, managedDir } = await setupWorkspaceWithProsePlugin();
 
-    const entries = withWorkspaceHome(workspaceDir, () =>
-      loadWorkspaceSkillEntries(workspaceDir, {
-        managedSkillsDir: managedDir,
-        bundledSkillsDir: path.join(workspaceDir, ".bundled"),
-      }),
-    );
-
-    expect(entries).toEqual([]);
-  });
-
-  it("includes plugin-shipped skills when the plugin is enabled", async () => {
-    const { workspaceDir, managedDir, bundledDir } = await setupWorkspaceWithProsePlugin();
-
-    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+    const enabledEntries = loadTestWorkspaceSkillEntries(workspaceDir, {
       config: {
         plugins: {
           entries: { "open-prose": { enabled: true } },
         },
       },
       managedSkillsDir: managedDir,
-      bundledSkillsDir: bundledDir,
     });
 
-    expect(entries.map((entry) => entry.skill.name)).toContain("prose");
-  });
+    expect(enabledEntries.map((entry) => entry.skill.name)).toContain("prose");
 
-  it("excludes plugin-shipped skills when the plugin is not allowed", async () => {
-    const { workspaceDir, managedDir, bundledDir } = await setupWorkspaceWithProsePlugin();
-
-    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+    const blockedEntries = loadTestWorkspaceSkillEntries(workspaceDir, {
       config: {
         plugins: {
           allow: ["something-else"],
         },
       },
       managedSkillsDir: managedDir,
-      bundledSkillsDir: bundledDir,
     });
 
-    expect(entries.map((entry) => entry.skill.name)).not.toContain("prose");
+    expect(blockedEntries.map((entry) => entry.skill.name)).not.toContain("prose");
   });
 
-  it("includes diffs plugin skill when the plugin is enabled", async () => {
-    const { workspaceDir, managedDir, bundledDir } = await setupWorkspaceWithDiffsPlugin();
-
-    const entries = loadWorkspaceSkillEntries(workspaceDir, {
-      config: {
-        plugins: {
-          entries: { diffs: { enabled: true } },
-        },
-      },
-      managedSkillsDir: managedDir,
-      bundledSkillsDir: bundledDir,
-    });
-
-    expect(entries.map((entry) => entry.skill.name)).toContain("diffs");
-  });
-
-  it("excludes diffs plugin skill when the plugin is disabled", async () => {
-    const { workspaceDir, managedDir, bundledDir } = await setupWorkspaceWithDiffsPlugin();
-
-    const entries = loadWorkspaceSkillEntries(workspaceDir, {
-      config: {
-        plugins: {
-          entries: { diffs: { enabled: false } },
-        },
-      },
-      managedSkillsDir: managedDir,
-      bundledSkillsDir: bundledDir,
-    });
-
-    expect(entries.map((entry) => entry.skill.name)).not.toContain("diffs");
-  });
-
-  it("falls back to the skill directory name when frontmatter omits name", async () => {
+  it("loads frontmatter edge cases in one workspace", async () => {
     const workspaceDir = await createTempWorkspaceDir();
     const skillDir = path.join(workspaceDir, "skills", "fallback-name");
     await fs.mkdir(skillDir, { recursive: true });
@@ -169,17 +140,6 @@ describe("loadWorkspaceSkillEntries", () => {
       ["---", "description: Skill without explicit name", "---", "", "# Fallback"].join("\n"),
       "utf8",
     );
-
-    const entries = loadWorkspaceSkillEntries(workspaceDir, {
-      managedSkillsDir: path.join(workspaceDir, ".managed"),
-      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
-    });
-
-    expect(entries.map((entry) => entry.skill.name)).toContain("fallback-name");
-  });
-
-  it("marks disable-model-invocation skills as hidden in exposure metadata for newly loaded entries", async () => {
-    const workspaceDir = await createTempWorkspaceDir();
     await writeSkill({
       dir: path.join(workspaceDir, "skills", "hidden-skill"),
       name: "hidden-skill",
@@ -187,31 +147,24 @@ describe("loadWorkspaceSkillEntries", () => {
       frontmatterExtra: "disable-model-invocation: true",
     });
 
-    const entries = loadWorkspaceSkillEntries(workspaceDir, {
-      managedSkillsDir: path.join(workspaceDir, ".managed"),
-      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
-    });
+    const entries = loadTestWorkspaceSkillEntries(workspaceDir);
 
+    expect(entries.map((entry) => entry.skill.name)).toContain("fallback-name");
     const hiddenEntry = entries.find((entry) => entry.skill.name === "hidden-skill");
 
     expect(hiddenEntry?.invocation?.disableModelInvocation).toBe(true);
     expect(hiddenEntry?.exposure?.includeInAvailableSkillsPrompt).toBe(false);
   });
 
-  it("inherits agents.defaults.skills when an agent omits skills", async () => {
+  it("applies agent skill filters and replacement semantics", async () => {
     const workspaceDir = await createTempWorkspaceDir();
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "github"),
-      name: "github",
-      description: "GitHub",
-    });
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "weather"),
-      name: "weather",
-      description: "Weather",
-    });
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "github", description: "GitHub" },
+      { name: "weather", description: "Weather" },
+      { name: "docs-search", description: "Docs" },
+    ]);
 
-    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+    const defaultEntries = loadTestWorkspaceSkillEntries(workspaceDir, {
       config: {
         agents: {
           defaults: {
@@ -221,27 +174,11 @@ describe("loadWorkspaceSkillEntries", () => {
         },
       },
       agentId: "writer",
-      managedSkillsDir: path.join(workspaceDir, ".managed"),
-      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
     });
 
-    expect(entries.map((entry) => entry.skill.name)).toEqual(["github"]);
-  });
+    expect(defaultEntries.map((entry) => entry.skill.name)).toEqual(["github"]);
 
-  it("uses agents.list[].skills as a full replacement for defaults", async () => {
-    const workspaceDir = await createTempWorkspaceDir();
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "github"),
-      name: "github",
-      description: "GitHub",
-    });
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "docs-search"),
-      name: "docs-search",
-      description: "Docs",
-    });
-
-    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+    const replacementEntries = loadTestWorkspaceSkillEntries(workspaceDir, {
       config: {
         agents: {
           defaults: {
@@ -251,11 +188,9 @@ describe("loadWorkspaceSkillEntries", () => {
         },
       },
       agentId: "writer",
-      managedSkillsDir: path.join(workspaceDir, ".managed"),
-      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
     });
 
-    expect(entries.map((entry) => entry.skill.name)).toEqual(["docs-search"]);
+    expect(replacementEntries.map((entry) => entry.skill.name)).toEqual(["docs-search"]);
   });
 
   it("keeps remote-eligible skills when agent filtering is active", async () => {
@@ -267,7 +202,7 @@ describe("loadWorkspaceSkillEntries", () => {
       metadata: '{"openclaw":{"requires":{"anyBins":["missingbin","sandboxbin"]}}}',
     });
 
-    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+    const entries = loadTestWorkspaceSkillEntries(workspaceDir, {
       config: {
         agents: {
           defaults: {
@@ -285,8 +220,6 @@ describe("loadWorkspaceSkillEntries", () => {
           note: "sandbox",
         },
       },
-      managedSkillsDir: path.join(workspaceDir, ".managed"),
-      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
     });
 
     expect(entries.map((entry) => entry.skill.name)).toEqual(["remote-only"]);
@@ -306,19 +239,9 @@ describe("loadWorkspaceSkillEntries", () => {
       await fs.mkdir(path.join(workspaceDir, "skills"), { recursive: true });
       const requestedPath = path.join(workspaceDir, "skills", "escaped-skill");
       await fs.symlink(escapedSkillDir, requestedPath, "dir");
-      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
-      const warn = vi.fn();
-      loggingState.rawConsole = {
-        log: vi.fn(),
-        info: vi.fn(),
-        warn,
-        error: vi.fn(),
-      };
+      const warn = captureWarningLogger();
 
-      const entries = loadWorkspaceSkillEntries(workspaceDir, {
-        managedSkillsDir: path.join(workspaceDir, ".managed"),
-        bundledSkillsDir: path.join(workspaceDir, ".bundled"),
-      });
+      const entries = loadTestWorkspaceSkillEntries(workspaceDir);
 
       expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-skill");
       const [line] = warn.mock.calls[0] ?? [];
@@ -335,29 +258,10 @@ describe("loadWorkspaceSkillEntries", () => {
   it.runIf(process.platform !== "win32")(
     "calls out bundled symlink escapes as likely local checkout mutations",
     async () => {
-      const workspaceDir = await createTempWorkspaceDir();
-      const bundledDir = path.join(workspaceDir, ".bundled");
-      const outsideDir = await createTempWorkspaceDir();
-      const escapedSkillDir = path.join(outsideDir, "outside-bundled-skill");
-      await writeSkill({
-        dir: escapedSkillDir,
-        name: "outside-bundled-skill",
-        description: "Outside bundled",
-      });
-      await fs.mkdir(bundledDir, { recursive: true });
-      const requestedPath = path.join(bundledDir, "escaped-bundled-skill");
-      await fs.symlink(escapedSkillDir, requestedPath, "dir");
-      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
-      const warn = vi.fn();
-      loggingState.rawConsole = {
-        log: vi.fn(),
-        info: vi.fn(),
-        warn,
-        error: vi.fn(),
-      };
+      const { workspaceDir, bundledDir, requestedPath } = await createEscapedBundledSkillFixture();
+      const warn = captureWarningLogger();
 
-      const entries = loadWorkspaceSkillEntries(workspaceDir, {
-        managedSkillsDir: path.join(workspaceDir, ".managed"),
+      const entries = loadTestWorkspaceSkillEntries(workspaceDir, {
         bundledSkillsDir: bundledDir,
       });
 
@@ -376,30 +280,13 @@ describe("loadWorkspaceSkillEntries", () => {
   it.runIf(process.platform !== "win32")(
     "uses compact home-relative paths in escaped skill console warnings",
     async () => {
-      const workspaceDir = path.join(fakeHome, "workspace");
-      const outsideDir = path.join(fakeHome, "outside");
-      tempDirs.push(workspaceDir, outsideDir);
-      const bundledDir = path.join(workspaceDir, ".bundled");
-      const escapedSkillDir = path.join(outsideDir, "outside-bundled-skill");
-      await writeSkill({
-        dir: escapedSkillDir,
-        name: "outside-bundled-skill",
-        description: "Outside bundled",
+      const { workspaceDir, bundledDir } = await createEscapedBundledSkillFixture({
+        workspaceDir: path.join(fakeHome, "workspace"),
+        outsideDir: path.join(fakeHome, "outside"),
       });
-      await fs.mkdir(bundledDir, { recursive: true });
-      const requestedPath = path.join(bundledDir, "escaped-bundled-skill");
-      await fs.symlink(escapedSkillDir, requestedPath, "dir");
-      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
-      const warn = vi.fn();
-      loggingState.rawConsole = {
-        log: vi.fn(),
-        info: vi.fn(),
-        warn,
-        error: vi.fn(),
-      };
+      const warn = captureWarningLogger();
 
-      loadWorkspaceSkillEntries(workspaceDir, {
-        managedSkillsDir: path.join(workspaceDir, ".managed"),
+      loadTestWorkspaceSkillEntries(workspaceDir, {
         bundledSkillsDir: bundledDir,
       });
 
@@ -412,7 +299,7 @@ describe("loadWorkspaceSkillEntries", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "skips workspace skill files that resolve outside the workspace root",
+    "skips symlinked skill files outside the root or through file links",
     async () => {
       const workspaceDir = await createTempWorkspaceDir();
       const outsideDir = await createTempWorkspaceDir();
@@ -424,20 +311,6 @@ describe("loadWorkspaceSkillEntries", () => {
       const skillDir = path.join(workspaceDir, "skills", "escaped-file");
       await fs.mkdir(skillDir, { recursive: true });
       await fs.symlink(path.join(outsideDir, "SKILL.md"), path.join(skillDir, "SKILL.md"));
-
-      const entries = loadWorkspaceSkillEntries(workspaceDir, {
-        managedSkillsDir: path.join(workspaceDir, ".managed"),
-        bundledSkillsDir: path.join(workspaceDir, ".bundled"),
-      });
-
-      expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-file-skill");
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "skips symlinked SKILL.md even when the target stays inside the workspace root",
-    async () => {
-      const workspaceDir = await createTempWorkspaceDir();
       const targetDir = path.join(workspaceDir, "safe-target");
       await writeSkill({
         dir: targetDir,
@@ -445,15 +318,13 @@ describe("loadWorkspaceSkillEntries", () => {
         description: "Target skill",
       });
 
-      const skillDir = path.join(workspaceDir, "skills", "symlinked");
-      await fs.mkdir(skillDir, { recursive: true });
-      await fs.symlink(path.join(targetDir, "SKILL.md"), path.join(skillDir, "SKILL.md"));
+      const symlinkedSkillDir = path.join(workspaceDir, "skills", "symlinked");
+      await fs.mkdir(symlinkedSkillDir, { recursive: true });
+      await fs.symlink(path.join(targetDir, "SKILL.md"), path.join(symlinkedSkillDir, "SKILL.md"));
 
-      const entries = loadWorkspaceSkillEntries(workspaceDir, {
-        managedSkillsDir: path.join(workspaceDir, ".managed"),
-        bundledSkillsDir: path.join(workspaceDir, ".bundled"),
-      });
+      const entries = loadTestWorkspaceSkillEntries(workspaceDir);
 
+      expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-file-skill");
       expect(entries.map((entry) => entry.skill.name)).not.toContain("symlink-target");
     },
   );

@@ -54,6 +54,7 @@ export type CliReusableSession = {
 
 export type PreparedCliRunContext = {
   params: RunCliAgentParams;
+  effectiveAuthProfileId?: string;
   started: number;
   workspaceDir: string;
   backendResolved: ResolvedCliBackend;

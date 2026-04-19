@@ -15,6 +15,15 @@ export type ConfigurablePlugin = {
   jsonSchema?: Record<string, unknown>;
 };
 
+type ManifestRegistryModule = typeof import("../plugins/manifest-registry.js");
+
+let manifestRegistryModulePromise: Promise<ManifestRegistryModule> | undefined;
+
+function loadManifestRegistryModule(): Promise<ManifestRegistryModule> {
+  manifestRegistryModulePromise ??= import("../plugins/manifest-registry.js");
+  return manifestRegistryModulePromise;
+}
+
 type JsonSchemaProperty = {
   type?: string;
   enum?: unknown[];
@@ -289,7 +298,7 @@ export async function setupPluginConfig(params: {
   prompter: WizardPrompter;
   workspaceDir?: string;
 }): Promise<OpenClawConfig> {
-  const { loadPluginManifestRegistry } = await import("../plugins/manifest-registry.js");
+  const { loadPluginManifestRegistry } = await loadManifestRegistryModule();
   const registry = loadPluginManifestRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -351,7 +360,7 @@ export async function configurePluginConfig(params: {
   prompter: WizardPrompter;
   workspaceDir?: string;
 }): Promise<OpenClawConfig> {
-  const { loadPluginManifestRegistry } = await import("../plugins/manifest-registry.js");
+  const { loadPluginManifestRegistry } = await loadManifestRegistryModule();
   const registry = loadPluginManifestRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,

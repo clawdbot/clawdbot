@@ -4,6 +4,16 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search-contract";
 
 const TAVILY_CREDENTIAL_PATH = "plugins.entries.tavily.config.webSearch.apiKey";
+
+type TavilyClientModule = typeof import("./tavily-client.js");
+
+let tavilyClientModulePromise: Promise<TavilyClientModule> | undefined;
+
+function loadTavilyClientModule(): Promise<TavilyClientModule> {
+  tavilyClientModulePromise ??= import("./tavily-client.js");
+  return tavilyClientModulePromise;
+}
+
 const GenericTavilySearchSchema = {
   type: "object",
   properties: {
@@ -42,7 +52,7 @@ export function createTavilyWebSearchProvider(): WebSearchProviderPlugin {
         "Search the web using Tavily. Returns structured results with snippets. Use tavily_search for Tavily-specific options like search depth, topic filtering, or AI answers.",
       parameters: GenericTavilySearchSchema,
       execute: async (args) => {
-        const { runTavilySearch } = await import("./tavily-client.js");
+        const { runTavilySearch } = await loadTavilyClientModule();
         return await runTavilySearch({
           cfg: ctx.config,
           query: typeof args.query === "string" ? args.query : "",

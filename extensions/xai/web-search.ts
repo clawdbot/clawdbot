@@ -5,6 +5,15 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search-config-contract";
 
 const XAI_CREDENTIAL_PATH = "plugins.entries.xai.config.webSearch.apiKey";
+type XaiWebSearchProviderRuntime = typeof import("./src/web-search-provider.runtime.js");
+
+let xaiWebSearchProviderRuntimePromise: Promise<XaiWebSearchProviderRuntime> | undefined;
+
+function loadXaiWebSearchProviderRuntime(): Promise<XaiWebSearchProviderRuntime> {
+  xaiWebSearchProviderRuntimePromise ??= import("./src/web-search-provider.runtime.js");
+  return xaiWebSearchProviderRuntimePromise;
+}
+
 const GenericXaiSearchSchema = {
   type: "object",
   properties: {
@@ -22,7 +31,7 @@ const GenericXaiSearchSchema = {
 async function runXaiSearchProviderSetup(
   ctx: WebSearchProviderSetupContext,
 ): Promise<WebSearchProviderSetupContext["config"]> {
-  const runtime = await import("./src/web-search-provider.runtime.js");
+  const runtime = await loadXaiWebSearchProviderRuntime();
   return await runtime.runXaiSearchProviderSetup(ctx);
 }
 
@@ -50,8 +59,7 @@ export function createXaiWebSearchProvider(): WebSearchProviderPlugin {
         "Search the web using xAI Grok. Returns AI-synthesized answers with citations from real-time web search.",
       parameters: GenericXaiSearchSchema,
       execute: async (args) => {
-        const { executeXaiWebSearchProviderTool } =
-          await import("./src/web-search-provider.runtime.js");
+        const { executeXaiWebSearchProviderTool } = await loadXaiWebSearchProviderRuntime();
         return await executeXaiWebSearchProviderTool(ctx, args);
       },
     }),

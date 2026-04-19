@@ -201,6 +201,20 @@ describe("resolveTranscriptPolicy", () => {
     vi.clearAllMocks();
   });
 
+  function expectStrictOpenAiCompatibleReplayDefaults(provider: string): void {
+    const policy = resolveTranscriptPolicy({
+      provider,
+      modelId: "demo-model",
+      modelApi: "openai-completions",
+    });
+
+    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.toolCallIdMode).toBe("strict");
+    expect(policy.applyGoogleTurnOrdering).toBe(true);
+    expect(policy.validateGeminiTurns).toBe(true);
+    expect(policy.validateAnthropicTurns).toBe(true);
+  }
+
   it("enables sanitizeToolCallIds for Anthropic provider", () => {
     const policy = resolveTranscriptPolicy({
       provider: "anthropic",
@@ -268,17 +282,7 @@ describe("resolveTranscriptPolicy", () => {
   });
 
   it("falls back to unowned transport defaults when no owning plugin exists", () => {
-    const policy = resolveTranscriptPolicy({
-      provider: "custom-openai-proxy",
-      modelId: "demo-model",
-      modelApi: "openai-completions",
-    });
-
-    expect(policy.sanitizeToolCallIds).toBe(true);
-    expect(policy.toolCallIdMode).toBe("strict");
-    expect(policy.applyGoogleTurnOrdering).toBe(true);
-    expect(policy.validateGeminiTurns).toBe(true);
-    expect(policy.validateAnthropicTurns).toBe(true);
+    expectStrictOpenAiCompatibleReplayDefaults("custom-openai-proxy");
   });
 
   it("preserves thinking blocks for newer Claude models in unowned Anthropic transport fallback", () => {
@@ -308,17 +312,7 @@ describe("resolveTranscriptPolicy", () => {
   });
 
   it("preserves transport defaults when a runtime plugin has not adopted replay hooks", () => {
-    const policy = resolveTranscriptPolicy({
-      provider: "vllm",
-      modelId: "demo-model",
-      modelApi: "openai-completions",
-    });
-
-    expect(policy.sanitizeToolCallIds).toBe(true);
-    expect(policy.toolCallIdMode).toBe("strict");
-    expect(policy.applyGoogleTurnOrdering).toBe(true);
-    expect(policy.validateGeminiTurns).toBe(true);
-    expect(policy.validateAnthropicTurns).toBe(true);
+    expectStrictOpenAiCompatibleReplayDefaults("vllm");
   });
 
   it("uses provider-owned Anthropic replay policy for MiniMax transports", () => {

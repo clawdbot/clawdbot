@@ -106,6 +106,29 @@ describe("sessionsCommand", () => {
     expect(group?.totalTokensFresh).toBe(false);
   });
 
+  it("shows preserved stale totals in JSON output", async () => {
+    const store = writeStore({
+      main: {
+        sessionId: "abc123",
+        updatedAt: Date.now() - 10 * 60_000,
+        totalTokens: 2000,
+        totalTokensFresh: false,
+        model: "pi:opus",
+      },
+    });
+
+    const payload = await runSessionsJson<{
+      sessions?: Array<{
+        key: string;
+        totalTokens: number | null;
+        totalTokensFresh: boolean;
+      }>;
+    }>(sessionsCommand, store);
+    const main = payload.sessions?.find((row) => row.key === "main");
+    expect(main?.totalTokens).toBe(2000);
+    expect(main?.totalTokensFresh).toBe(false);
+  });
+
   it("applies --active filtering in JSON output", async () => {
     const store = writeStore(
       {

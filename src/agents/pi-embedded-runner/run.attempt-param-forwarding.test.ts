@@ -10,7 +10,6 @@ import {
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 
 type ForwardingCase = {
-  name: string;
   runId: string;
   params: Partial<RunEmbeddedPiAgentParams>;
   expected: Record<string, unknown>;
@@ -18,44 +17,25 @@ type ForwardingCase = {
 
 let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
 const internalEvents: AgentInternalEvent[] = [];
-const forwardingCases = [
-  {
-    name: "forwards toolsAllow so the per-job tool allowlist can be honored",
-    runId: "forward-toolsAllow",
-    params: { toolsAllow: ["exec", "read"] },
-    expected: { toolsAllow: ["exec", "read"] },
+const forwardingCase = {
+  runId: "forward-attempt-params",
+  params: {
+    toolsAllow: ["exec", "read"],
+    bootstrapContextMode: "lightweight",
+    bootstrapContextRunKind: "cron",
+    disableMessageTool: true,
+    requireExplicitMessageTarget: true,
+    internalEvents,
   },
-  {
-    name: "forwards bootstrapContextMode so lightContext cron jobs strip workspace bootstrap files",
-    runId: "forward-bootstrapContextMode",
-    params: { bootstrapContextMode: "lightweight" },
-    expected: { bootstrapContextMode: "lightweight" },
+  expected: {
+    toolsAllow: ["exec", "read"],
+    bootstrapContextMode: "lightweight",
+    bootstrapContextRunKind: "cron",
+    disableMessageTool: true,
+    requireExplicitMessageTarget: true,
+    internalEvents,
   },
-  {
-    name: "forwards bootstrapContextRunKind so the bootstrap filter knows the caller context",
-    runId: "forward-bootstrapContextRunKind",
-    params: { bootstrapContextRunKind: "cron" },
-    expected: { bootstrapContextRunKind: "cron" },
-  },
-  {
-    name: "forwards disableMessageTool so cron-owned delivery suppresses the messaging tool",
-    runId: "forward-disableMessageTool",
-    params: { disableMessageTool: true },
-    expected: { disableMessageTool: true },
-  },
-  {
-    name: "forwards requireExplicitMessageTarget so non-subagent callers can opt in explicitly",
-    runId: "forward-requireExplicitMessageTarget",
-    params: { requireExplicitMessageTarget: true },
-    expected: { requireExplicitMessageTarget: true },
-  },
-  {
-    name: "forwards internalEvents so the agent command attempt path can deliver internal events",
-    runId: "forward-internalEvents",
-    params: { internalEvents },
-    expected: { internalEvents },
-  },
-] satisfies ForwardingCase[];
+} satisfies ForwardingCase;
 
 describe("runEmbeddedPiAgent forwards optional params to runEmbeddedAttempt", () => {
   beforeAll(async () => {
@@ -66,15 +46,17 @@ describe("runEmbeddedPiAgent forwards optional params to runEmbeddedAttempt", ()
     resetRunOverflowCompactionHarnessMocks();
   });
 
-  it.each(forwardingCases)("$name", async ({ runId, params, expected }) => {
+  it("forwards optional attempt params in one attempt call", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
     await runEmbeddedPiAgent({
       ...overflowBaseRunParams,
-      ...params,
-      runId,
+      ...forwardingCase.params,
+      runId: forwardingCase.runId,
     });
 
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(expect.objectContaining(expected));
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
+      expect.objectContaining(forwardingCase.expected),
+    );
   });
 });

@@ -817,10 +817,11 @@ export async function prepareLmstudioDynamicModels(
     headers,
     quiet: true,
   });
-  return discoveredModels.map((model) => ({
-    ...model,
-    provider: PROVIDER_ID,
-    api: ctx.providerConfig?.api ?? "openai-completions",
-    baseUrl,
-  }));
+  return discoveredModels.map((model) =>
+    Object.assign({}, model, {
+      provider: PROVIDER_ID,
+      api: ctx.providerConfig?.api ?? `openai-completions`,
+      baseUrl,
+    }),
+  );
 }

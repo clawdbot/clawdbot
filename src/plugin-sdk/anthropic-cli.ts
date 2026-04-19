@@ -1,6 +1,10 @@
 // Manual facade. Keep loader boundary explicit.
-type FacadeModule = typeof import("@openclaw/anthropic/api.js");
 import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
+
+type FacadeModule = {
+  CLAUDE_CLI_BACKEND_ID: string;
+  isClaudeCliProvider: (providerId: string) => boolean;
+};
 
 function loadFacadeModule(): FacadeModule {
   return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({

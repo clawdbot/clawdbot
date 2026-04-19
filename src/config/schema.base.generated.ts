@@ -2819,6 +2819,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           requiresStringContent: {
                             type: "boolean",
                           },
+                          visibleReasoningDetailTypes: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                              minLength: 1,
+                            },
+                          },
                           maxTokensField: {
                             anyOf: [
                               {
@@ -27464,6 +27471,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.4.16",
+  version: "2026.4.19-beta.2",
   generatedAt: "2026-03-22T21:17:33.302Z",
 };

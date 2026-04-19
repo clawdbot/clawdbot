@@ -1,22 +1,24 @@
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildWorkspaceSkillsPrompt } from "./skills.js";
 import { createCanonicalFixtureSkill } from "./skills.test-helpers.js";
+import { buildWorkspaceSkillsPrompt } from "./skills/workspace.js";
 
 describe("compactSkillPaths", () => {
-  it("replaces home directory prefix with ~ in skill locations", () => {
-    const home = os.homedir();
-    const skillDir = path.join(home, ".openclaw-test-skills", "test-skill");
-
-    const prompt = buildWorkspaceSkillsPrompt(home, {
+  function buildPromptForFixtureSkill(params: {
+    workspaceRoot: string;
+    skillDir: string;
+    name: string;
+    description: string;
+  }) {
+    return buildWorkspaceSkillsPrompt(params.workspaceRoot, {
       entries: [
         {
           skill: createCanonicalFixtureSkill({
-            name: "test-skill",
-            description: "A test skill for path compaction",
-            filePath: path.join(skillDir, "SKILL.md"),
-            baseDir: skillDir,
+            name: params.name,
+            description: params.description,
+            filePath: path.join(params.skillDir, "SKILL.md"),
+            baseDir: params.skillDir,
             source: "test",
           }),
           frontmatter: {},
@@ -30,6 +32,18 @@ describe("compactSkillPaths", () => {
         },
       ],
     });
+  }
+
+  it("replaces home directory prefix with ~ in skill locations", () => {
+    const home = os.homedir();
+    const skillDir = path.join(home, ".openclaw-test-skills", "test-skill");
+
+    const prompt = buildPromptForFixtureSkill({
+      workspaceRoot: home,
+      skillDir,
+      name: "test-skill",
+      description: "A test skill for path compaction",
+    });
 
     expect(prompt).not.toContain(home + path.sep);
     expect(prompt).toContain("~/");
@@ -41,26 +55,11 @@ describe("compactSkillPaths", () => {
     const outsideHome = path.join(path.parse(os.homedir()).root, "openclaw-external-skills");
     const skillDir = path.join(outsideHome, "skills", "ext-skill");
 
-    const prompt = buildWorkspaceSkillsPrompt(outsideHome, {
-      entries: [
-        {
-          skill: createCanonicalFixtureSkill({
-            name: "ext-skill",
-            description: "External skill",
-            filePath: path.join(skillDir, "SKILL.md"),
-            baseDir: skillDir,
-            source: "test",
-          }),
-          frontmatter: {},
-          metadata: undefined,
-          invocation: { disableModelInvocation: false, userInvocable: true },
-          exposure: {
-            includeInRuntimeRegistry: true,
-            includeInAvailableSkillsPrompt: true,
-            userInvocable: true,
-          },
-        },
-      ],
+    const prompt = buildPromptForFixtureSkill({
+      workspaceRoot: outsideHome,
+      skillDir,
+      name: "ext-skill",
+      description: "External skill",
     });
 
     expect(prompt).toMatch(/<location>[^<]+SKILL\.md<\/location>/);

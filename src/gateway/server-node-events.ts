@@ -693,7 +693,9 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         // Scope wakes only for canonical agent sessions. Synthetic node-* fallback
         // keys should keep legacy unscoped behavior so enabled non-main heartbeat
         // agents still run when no explicit agent session is provided.
-        requestHeartbeatNow(scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event" }));
+        requestHeartbeatNow(
+          scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event", coalesceMs: 0 }),
+        );
       }
       return;
     }

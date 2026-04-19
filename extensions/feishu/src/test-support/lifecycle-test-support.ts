@@ -413,13 +413,13 @@ async function loadMonitorSingleAccount() {
   return module.monitorSingleAccount;
 }
 
-export async function setupFeishuLifecycleHandler<T extends RuntimeEnv>(params: {
+export async function setupFeishuLifecycleHandler(params: {
   createEventDispatcherMock: {
     mockReturnValue: (value: unknown) => unknown;
     mockReturnValueOnce: (value: unknown) => unknown;
   };
   onRegister: (registered: Record<string, (data: unknown) => Promise<void>>) => void;
-  runtime: T;
+  runtime: RuntimeEnv;
   cfg: ClawdbotConfig;
   account: ResolvedFeishuAccount;
   handlerKey: string;

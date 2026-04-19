@@ -2,10 +2,10 @@ import { z } from "zod";
 import { isSafeScpRemoteHost } from "../infra/scp-host.js";
 import { isValidInboundPathRootPattern } from "../media/inbound-path-policy.js";
 import {
-  normalizeTelegramCommandDescription,
-  normalizeTelegramCommandName,
-  resolveTelegramCustomCommands,
-} from "../plugin-sdk/telegram-command-config.js";
+  normalizeCommandDescription,
+  normalizeSlashCommandName,
+  resolveCustomCommands,
+} from "../shared/custom-command-config.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
 import {
@@ -105,6 +105,12 @@ const SlackCapabilitiesSchema = z.union([
 ]);
 
 const TelegramErrorPolicySchema = z.enum(["always", "once", "silent"]).optional();
+const TelegramCommandNamePattern = /^[a-z0-9_]{1,32}$/;
+const TelegramCustomCommandConfig = {
+  label: "Telegram",
+  pattern: TelegramCommandNamePattern,
+  patternDescription: "use a-z, 0-9, underscore; max 32 chars",
+} as const;
 export const TelegramTopicSchema = z
   .object({
     requireMention: z.boolean().optional(),
@@ -170,8 +176,8 @@ export const TelegramDirectSchema = z
 
 const TelegramCustomCommandSchema = z
   .object({
-    command: z.string().overwrite(normalizeTelegramCommandName),
-    description: z.string().overwrite(normalizeTelegramCommandDescription),
+    command: z.string().overwrite(normalizeSlashCommandName),
+    description: z.string().overwrite(normalizeCommandDescription),
   })
   .strict();
 
@@ -182,10 +188,11 @@ const validateTelegramCustomCommands = (
   if (!value.customCommands || value.customCommands.length === 0) {
     return;
   }
-  const { issues } = resolveTelegramCustomCommands({
+  const { issues } = resolveCustomCommands({
     commands: value.customCommands,
     checkReserved: false,
     checkDuplicates: false,
+    config: TelegramCustomCommandConfig,
   });
   for (const issue of issues) {
     ctx.addIssue({

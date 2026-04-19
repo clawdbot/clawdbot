@@ -28,6 +28,7 @@ import { resolveOllamaApiBase } from "./src/provider-models.js";
 import {
   createConfiguredOllamaCompatStreamWrapper,
   createConfiguredOllamaStreamFn,
+  isOllamaCompatProvider,
   resolveConfiguredOllamaProviderConfig,
 } from "./src/stream.js";
 import { createOllamaWebSearchProvider } from "./src/web-search-provider.js";
@@ -91,6 +92,21 @@ function hasMeaningfulExplicitOllamaConfig(providerConfig?: OllamaProviderLikeCo
     return true;
   }
   return false;
+}
+
+function usesOllamaOpenAICompatTransport(model: {
+  api?: unknown;
+  provider?: unknown;
+  baseUrl?: unknown;
+}): boolean {
+  return (
+    model.api === "openai-completions" &&
+    isOllamaCompatProvider({
+      provider: typeof model.provider === "string" ? model.provider : undefined,
+      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+      api: "openai-completions",
+    })
+  );
 }
 
 export default definePluginEntry({
@@ -248,6 +264,8 @@ export default definePluginEntry({
         });
       },
       ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
+      contributeResolvedModelCompat: ({ model }) =>
+        usesOllamaOpenAICompatTransport(model) ? { supportsUsageInStreaming: true } : undefined,
       resolveReasoningOutputMode: () => "native",
       wrapStreamFn: createConfiguredOllamaCompatStreamWrapper,
       createEmbeddingProvider: async ({ config, model, remote }) => {

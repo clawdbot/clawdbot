@@ -404,6 +404,14 @@ describe("cdp", () => {
     expect(normalized).toBe("wss://user:pass@example.com/devtools/browser/ABC?token=abc");
   });
 
+  it("normalizes loopback websocket aliases to the configured CDP loopback host", () => {
+    const normalized = normalizeCdpWsUrl(
+      "ws://localhost.:18800/devtools/browser/ABC",
+      "http://127.0.0.1:18800",
+    );
+    expect(normalized).toBe("ws://127.0.0.1:18800/devtools/browser/ABC");
+  });
+
   it("rewrites 0.0.0.0 wildcard bind address to remote CDP host", () => {
     const normalized = normalizeCdpWsUrl(
       "ws://0.0.0.0:3000/devtools/browser/ABC",

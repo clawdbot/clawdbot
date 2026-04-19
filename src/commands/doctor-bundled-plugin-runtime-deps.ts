@@ -185,13 +185,14 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
 
   const { missing, conflicts } = scanBundledPluginRuntimeDeps({ packageRoot });
   if (conflicts.length > 0) {
-    const conflictLines = conflicts.flatMap((conflict) => [
-      `- ${conflict.name}: ${conflict.versions.join(", ")}`,
-      ...conflict.versions.flatMap((version) => {
-        const pluginIds = conflict.pluginIdsByVersion.get(version) ?? [];
-        return pluginIds.length > 0 ? [`  - ${version}: ${pluginIds.join(", ")}`] : [];
-      }),
-    ]);
+    const conflictLines = conflicts.flatMap((conflict) =>
+      [`- ${conflict.name}: ${conflict.versions.join(", ")}`].concat(
+        conflict.versions.flatMap((version) => {
+          const pluginIds = conflict.pluginIdsByVersion.get(version) ?? [];
+          return pluginIds.length > 0 ? [`  - ${version}: ${pluginIds.join(", ")}`] : [];
+        }),
+      ),
+    );
     note(
       [
         "Bundled plugin runtime deps use conflicting versions.",

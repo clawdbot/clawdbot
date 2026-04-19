@@ -288,6 +288,13 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
     messaging: {
       defaultMarkdownTableMode: "off",
       normalizeTarget: normalizeMattermostMessagingTarget,
+      resolveDeliveryTarget: ({ conversationId, parentConversationId }) => {
+        const parent = parentConversationId?.trim();
+        const child = conversationId.trim();
+        return parent && parent !== child
+          ? { to: `channel:${parent}`, threadId: child }
+          : { to: normalizeMattermostMessagingTarget(`channel:${child}`) };
+      },
       resolveOutboundSessionRoute: (params) => resolveMattermostOutboundSessionRoute(params),
       targetResolver: {
         looksLikeId: looksLikeMattermostTargetId,

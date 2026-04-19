@@ -46,12 +46,33 @@ import {
 } from "./shared.js";
 
 type ProviderUsageRuntime = typeof import("../../infra/provider-usage.js");
+type ProgressRuntime = typeof import("../../cli/progress.js");
+type TerminalTableRuntime = typeof import("../../terminal/table.js");
+type ListProbeRuntime = typeof import("./list.probe.js");
 
 let providerUsageRuntimePromise: Promise<ProviderUsageRuntime> | undefined;
+let progressRuntimePromise: Promise<ProgressRuntime> | undefined;
+let terminalTableRuntimePromise: Promise<TerminalTableRuntime> | undefined;
+let listProbeRuntimePromise: Promise<ListProbeRuntime> | undefined;
 
 function loadProviderUsageRuntime(): Promise<ProviderUsageRuntime> {
   providerUsageRuntimePromise ??= import("../../infra/provider-usage.js");
   return providerUsageRuntimePromise;
+}
+
+function loadProgressRuntime(): Promise<ProgressRuntime> {
+  progressRuntimePromise ??= import("../../cli/progress.js");
+  return progressRuntimePromise;
+}
+
+function loadTerminalTableRuntime(): Promise<TerminalTableRuntime> {
+  terminalTableRuntimePromise ??= import("../../terminal/table.js");
+  return terminalTableRuntimePromise;
+}
+
+function loadListProbeRuntime(): Promise<ListProbeRuntime> {
+  listProbeRuntimePromise ??= import("./list.probe.js");
+  return listProbeRuntimePromise;
 }
 
 export async function modelsStatusCommand(
@@ -220,8 +241,8 @@ export async function modelsStatusCommand(
   let probeSummary: AuthProbeSummary | undefined;
   if (opts.probe) {
     const [{ withProgressTotals }, { runAuthProbes }] = await Promise.all([
-      import("../../cli/progress.js"),
-      import("./list.probe.js"),
+      loadProgressRuntime(),
+      loadListProbeRuntime(),
     ]);
     probeSummary = await withProgressTotals(
       { label: "Probing auth profiles…", total: 1 },
@@ -613,7 +634,7 @@ export async function modelsStatusCommand(
     const [
       { getTerminalTableWidth, renderTable },
       { describeProbeSummary, formatProbeLatency, sortProbeResults },
-    ] = await Promise.all([import("../../terminal/table.js"), import("./list.probe.js")]);
+    ] = await Promise.all([loadTerminalTableRuntime(), loadListProbeRuntime()]);
     runtime.log("");
     runtime.log(colorize(rich, theme.heading, "Auth probes"));
     if (probeSummary.results.length === 0) {

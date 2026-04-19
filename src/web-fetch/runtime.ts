@@ -42,7 +42,7 @@ export function resolveWebFetchEnabled(params: {
 }
 
 function resolveFetchConfig(config: OpenClawConfig | undefined): WebFetchConfig | undefined {
-  return resolveWebProviderConfig<"fetch", NonNullable<WebFetchConfig>>(config, "fetch");
+  return resolveWebProviderConfig(config, "fetch") as NonNullable<WebFetchConfig> | undefined;
 }
 
 function hasEntryCredential(
@@ -141,10 +141,9 @@ export function resolveWebFetchProviderId(params: {
 export function resolveWebFetchDefinition(
   options?: ResolveWebFetchDefinitionParams,
 ): { provider: PluginWebFetchProviderEntry; definition: WebFetchProviderToolDefinition } | null {
-  const fetch = resolveWebProviderConfig<"fetch", NonNullable<WebFetchConfig>>(
-    options?.config,
-    "fetch",
-  );
+  const fetch = resolveWebProviderConfig(options?.config, "fetch") as
+    | NonNullable<WebFetchConfig>
+    | undefined;
   const runtimeWebFetch = options?.runtimeWebFetch ?? getActiveRuntimeWebToolsMetadata()?.fetch;
   const providers = sortWebFetchProvidersForAutoDetect(
     resolvePluginWebFetchProviders({

@@ -6,6 +6,7 @@ export type LazyPluginServiceHandle = {
   stop: () => Promise<void>;
 };
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic service exports are typed by the caller.
 function resolveExport<T>(mod: LazyServiceModule, names: string[]): T | null {
   for (const name of names) {
     const value = mod[name];

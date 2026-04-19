@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { CliBackendConfig } from "../config/types.js";
-import type { CliBundleMcpMode } from "../plugins/types.js";
+import type { CliBackendAuthEpochMode, CliBundleMcpMode } from "../plugins/types.js";
 import {
   __testing as cliBackendsTesting,
   resolveCliBackendConfig,
@@ -24,6 +24,9 @@ function createBackendEntry(params: {
   config: CliBackendConfig;
   bundleMcp?: boolean;
   bundleMcpMode?: CliBundleMcpMode;
+  defaultAuthProfileId?: string;
+  authEpochMode?: CliBackendAuthEpochMode;
+  prepareExecution?: () => Promise<null>;
   normalizeConfig?: (config: CliBackendConfig) => CliBackendConfig;
 }) {
   return {
@@ -34,6 +37,9 @@ function createBackendEntry(params: {
       config: params.config,
       ...(params.bundleMcp ? { bundleMcp: params.bundleMcp } : {}),
       ...(params.bundleMcpMode ? { bundleMcpMode: params.bundleMcpMode } : {}),
+      ...(params.defaultAuthProfileId ? { defaultAuthProfileId: params.defaultAuthProfileId } : {}),
+      ...(params.authEpochMode ? { authEpochMode: params.authEpochMode } : {}),
+      ...(params.prepareExecution ? { prepareExecution: params.prepareExecution } : {}),
       ...(params.normalizeConfig ? { normalizeConfig: params.normalizeConfig } : {}),
       liveTest: {
         defaultModelRef:
@@ -233,6 +239,9 @@ beforeEach(() => {
       id: "codex-cli",
       bundleMcp: true,
       bundleMcpMode: "codex-config-overrides",
+      defaultAuthProfileId: "openai-codex:default",
+      authEpochMode: "profile-only",
+      prepareExecution: async () => null,
       config: {
         command: "codex",
         args: [
@@ -764,6 +773,9 @@ describe("resolveCliBackendConfig google-gemini-cli defaults", () => {
     expect(resolved).not.toBeNull();
     expect(resolved?.bundleMcp).toBe(true);
     expect(resolved?.bundleMcpMode).toBe("codex-config-overrides");
+    expect(resolved?.defaultAuthProfileId).toBe("openai-codex:default");
+    expect(resolved?.authEpochMode).toBe("profile-only");
+    expect(typeof resolved?.prepareExecution).toBe("function");
     expect(resolved?.config.systemPromptFileConfigArg).toBe("-c");
     expect(resolved?.config.systemPromptFileConfigKey).toBe("model_instructions_file");
     expect(resolved?.config.systemPromptWhen).toBe("first");

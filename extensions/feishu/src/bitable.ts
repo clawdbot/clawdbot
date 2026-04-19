@@ -558,7 +558,10 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
   const getClient = (params: AccountAwareParams | undefined, defaultAccountId?: string) =>
     createFeishuToolClient({ api, executeParams: params, defaultAccountId });
 
-  const registerBitableTool = <TParams extends AccountAwareParams>(params: {
+  const registerBitableTool = <
+    // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Tool params bind each schema-specific executor to its registered tool.
+    TParams extends AccountAwareParams,
+  >(params: {
     name: string;
     label: string;
     description: string;

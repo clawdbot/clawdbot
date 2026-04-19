@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "../utils/zod-parse.js";
-import { ensureAuthProfileStore } from "./auth-profiles.js";
+import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import {
   piCredentialsEqual,
   resolvePiCredentialMapFromStore,

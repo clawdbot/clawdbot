@@ -1,4 +1,5 @@
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { SlackMonitorContext } from "../context.js";
@@ -46,7 +47,7 @@ export function registerSlackReactionEvents(params: {
         contextKey: `slack:reaction:${action}:${item.channel}:${item.ts}:${event.user}:${emojiLabel}`,
       });
     } catch (err) {
-      ctx.runtime.error?.(danger(`slack reaction handler failed: ${String(err)}`));
+      ctx.runtime.error?.(danger(`slack reaction handler failed: ${formatErrorMessage(err)}`));
     }
   };
 

@@ -38,7 +38,7 @@ export type {
 } from "./runtime-types.js";
 
 function resolveSearchConfig(cfg?: OpenClawConfig): WebSearchConfig {
-  return resolveWebProviderConfig<"search", NonNullable<WebSearchConfig>>(cfg, "search");
+  return resolveWebProviderConfig(cfg, "search") as NonNullable<WebSearchConfig> | undefined;
 }
 
 export function resolveWebSearchEnabled(params: {

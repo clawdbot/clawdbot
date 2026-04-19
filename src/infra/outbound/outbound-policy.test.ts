@@ -1,4 +1,3 @@
-import { Container, Separator, TextDisplay } from "@buape/carbon";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { vi } from "vitest";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.js";
@@ -9,7 +8,17 @@ let buildCrossContextDecoration: typeof import("./outbound-policy.js").buildCros
 let enforceCrossContextPolicy: typeof import("./outbound-policy.js").enforceCrossContextPolicy;
 let shouldApplyCrossContextMarker: typeof import("./outbound-policy.js").shouldApplyCrossContextMarker;
 
-class TestDiscordUiContainer extends Container {}
+class TestTextDisplay {
+  constructor(readonly content: string) {}
+}
+
+class TestSeparator {
+  constructor(readonly options: { divider: boolean; spacing: string }) {}
+}
+
+class TestDiscordUiContainer {
+  constructor(readonly components: Array<TestTextDisplay | TestSeparator>) {}
+}
 
 const mocks = vi.hoisted(() => ({
   getChannelMessageAdapter: vi.fn((channel: string) =>
@@ -24,12 +33,12 @@ const mocks = vi.hoisted(() => ({
             message: string;
           }) => {
             const trimmed = message.trim();
-            const components: Array<TextDisplay | Separator> = [];
+            const components: Array<TestTextDisplay | TestSeparator> = [];
             if (trimmed) {
-              components.push(new TextDisplay(message));
-              components.push(new Separator({ divider: true, spacing: "small" }));
+              components.push(new TestTextDisplay(message));
+              components.push(new TestSeparator({ divider: true, spacing: "small" }));
             }
-            components.push(new TextDisplay(`*From ${originLabel}*`));
+            components.push(new TestTextDisplay(`*From ${originLabel}*`));
             return [new TestDiscordUiContainer(components)];
           },
         }

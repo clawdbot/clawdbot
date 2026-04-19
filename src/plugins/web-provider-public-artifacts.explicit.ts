@@ -126,7 +126,7 @@ export function loadBundledWebSearchProviderEntriesFromDir(params: {
   if (providers.length === 0) {
     return null;
   }
-  return providers.map((provider) => ({ ...provider, pluginId: params.pluginId }));
+  return providers.map((provider) => Object.assign({}, provider, { pluginId: params.pluginId }));
 }
 
 export function loadBundledRuntimeWebSearchProviderEntriesFromDir(params: {
@@ -148,7 +148,7 @@ export function loadBundledRuntimeWebSearchProviderEntriesFromDir(params: {
   if (providers.length === 0) {
     return null;
   }
-  return providers.map((provider) => ({ ...provider, pluginId: params.pluginId }));
+  return providers.map((provider) => Object.assign({}, provider, { pluginId: params.pluginId }));
 }
 
 export function loadBundledWebFetchProviderEntriesFromDir(params: {
@@ -170,7 +170,7 @@ export function loadBundledWebFetchProviderEntriesFromDir(params: {
   if (providers.length === 0) {
     return null;
   }
-  return providers.map((provider) => ({ ...provider, pluginId: params.pluginId }));
+  return providers.map((provider) => Object.assign({}, provider, { pluginId: params.pluginId }));
 }
 
 export function resolveBundledExplicitWebSearchProvidersFromPublicArtifacts(params: {

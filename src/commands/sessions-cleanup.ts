@@ -123,16 +123,17 @@ function buildActionRows(params: {
   cappedKeys: Set<string>;
   budgetEvictedKeys: Set<string>;
 }): SessionCleanupActionRow[] {
-  return toSessionDisplayRows(params.beforeStore).map((row) => ({
-    ...row,
-    action: resolveSessionCleanupAction({
-      key: row.key,
-      missingKeys: params.missingKeys,
-      staleKeys: params.staleKeys,
-      cappedKeys: params.cappedKeys,
-      budgetEvictedKeys: params.budgetEvictedKeys,
+  return toSessionDisplayRows(params.beforeStore).map((row) =>
+    Object.assign({}, row, {
+      action: resolveSessionCleanupAction({
+        key: row.key,
+        missingKeys: params.missingKeys,
+        staleKeys: params.staleKeys,
+        cappedKeys: params.cappedKeys,
+        budgetEvictedKeys: params.budgetEvictedKeys,
+      }),
     }),
-  }));
+  );
 }
 
 function pruneMissingTranscriptEntries(params: {

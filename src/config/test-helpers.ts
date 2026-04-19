@@ -26,6 +26,11 @@ export async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise
         OPENCLAW_MPM_CATALOG_PATHS: undefined,
         OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: undefined,
         OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: undefined,
+        OPENCLAW_LOAD_SHELL_ENV: undefined,
+        OPENCLAW_DEFER_SHELL_ENV_FALLBACK: undefined,
+        OPENCLAW_SHELL_ENV_TIMEOUT_MS: undefined,
+        ANTHROPIC_API_KEY: undefined,
+        ANTHROPIC_OAUTH_TOKEN: undefined,
       },
     });
   } finally {

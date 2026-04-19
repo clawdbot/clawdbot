@@ -71,18 +71,21 @@ export const resolveMemorySearchConfigMock = vi.fn(() => ({
 }));
 export const resolveSessionAgentIdMock = vi.fn(() => "main");
 export const estimateTokensMock = vi.fn((_message?: unknown) => 10);
-export const sessionMessages: unknown[] = [
-  { role: "user", content: "hello", timestamp: 1 },
-  { role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: 2 },
-  {
-    role: "toolResult",
-    toolCallId: "t1",
-    toolName: "exec",
-    content: [{ type: "text", text: "output" }],
-    isError: false,
-    timestamp: 3,
-  },
-];
+function createDefaultSessionMessages(): unknown[] {
+  return [
+    { role: "user", content: "hello", timestamp: 1 },
+    { role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: 2 },
+    {
+      role: "toolResult",
+      toolCallId: "t1",
+      toolName: "exec",
+      content: [{ type: "text", text: "output" }],
+      isError: false,
+      timestamp: 3,
+    },
+  ];
+}
+export const sessionMessages: unknown[] = createDefaultSessionMessages();
 export const sessionAbortCompactionMock: Mock<(reason?: unknown) => void> = vi.fn();
 export const createOpenClawCodingToolsMock = vi.fn(() => []);
 export const resolveEmbeddedAgentStreamFnMock: Mock<
@@ -118,20 +121,7 @@ export function resetCompactSessionStateMocks(): void {
   resolveSessionAgentIdMock.mockReturnValue("main");
   estimateTokensMock.mockReset();
   estimateTokensMock.mockReturnValue(10);
-  sessionMessages.splice(
-    0,
-    sessionMessages.length,
-    { role: "user", content: "hello", timestamp: 1 },
-    { role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: 2 },
-    {
-      role: "toolResult",
-      toolCallId: "t1",
-      toolName: "exec",
-      content: [{ type: "text", text: "output" }],
-      isError: false,
-      timestamp: 3,
-    },
-  );
+  sessionMessages.splice(0, sessionMessages.length, ...createDefaultSessionMessages());
   sessionAbortCompactionMock.mockReset();
   resolveEmbeddedAgentStreamFnMock.mockReset();
   resolveEmbeddedAgentStreamFnMock.mockImplementation((_params?: unknown) => vi.fn());

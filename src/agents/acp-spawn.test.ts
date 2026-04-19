@@ -2,19 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as acpSessionManager from "../acp/control-plane/manager.js";
 import type { AcpInitializeSessionInput } from "../acp/control-plane/manager.types.js";
-import * as channelPlugins from "../channels/plugins/index.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../config/config.js";
-import * as sessionPaths from "../config/sessions/paths.js";
-import * as sessionStore from "../config/sessions/store.js";
-import * as sessionTranscript from "../config/sessions/transcript.js";
-import * as gatewayCall from "../gateway/call.js";
-import * as heartbeatWake from "../infra/heartbeat-wake.js";
 import {
   __testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
@@ -22,8 +15,6 @@ import {
   type SessionBindingPlacement,
   type SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
-import { resetTaskRegistryForTests } from "../tasks/task-registry.js";
-import * as acpSpawnParentStream from "./acp-spawn-parent-stream.js";
 
 function createDefaultSpawnConfig(): OpenClawConfig {
   return {
@@ -55,12 +46,21 @@ const hoisted = vi.hoisted(() => {
   const sessionBindingListBySessionMock = vi.fn();
   const closeSessionMock = vi.fn();
   const initializeSessionMock = vi.fn();
+  const getAcpSessionManagerMock = vi.fn();
   const startAcpSpawnParentStreamRelayMock = vi.fn();
   const resolveAcpSpawnStreamLogPathMock = vi.fn();
   const loadSessionStoreMock = vi.fn();
   const resolveStorePathMock = vi.fn();
   const resolveSessionTranscriptFileMock = vi.fn();
   const areHeartbeatsEnabledMock = vi.fn();
+  const getChannelPluginMock = vi.fn();
+  const getLoadedChannelPluginMock = vi.fn();
+  const normalizeChannelIdMock = vi.fn((channelId: string) => {
+    const normalized = channelId.trim().toLowerCase();
+    return normalized || null;
+  });
+  const cleanupFailedAcpSpawnMock = vi.fn();
+  const createRunningTaskRunMock = vi.fn();
   const state = {
     cfg: createDefaultSpawnConfig(),
   };
@@ -72,31 +72,64 @@ const hoisted = vi.hoisted(() => {
     sessionBindingListBySessionMock,
     closeSessionMock,
     initializeSessionMock,
+    getAcpSessionManagerMock,
     startAcpSpawnParentStreamRelayMock,
     resolveAcpSpawnStreamLogPathMock,
     loadSessionStoreMock,
     resolveStorePathMock,
     resolveSessionTranscriptFileMock,
     areHeartbeatsEnabledMock,
+    getChannelPluginMock,
+    getLoadedChannelPluginMock,
+    normalizeChannelIdMock,
+    cleanupFailedAcpSpawnMock,
+    createRunningTaskRunMock,
     state,
   };
 });
 
-const callGatewaySpy = vi.spyOn(gatewayCall, "callGateway");
-const getChannelPluginSpy = vi.spyOn(channelPlugins, "getChannelPlugin");
-const getAcpSessionManagerSpy = vi.spyOn(acpSessionManager, "getAcpSessionManager");
-const loadSessionStoreSpy = vi.spyOn(sessionStore, "loadSessionStore");
-const resolveStorePathSpy = vi.spyOn(sessionPaths, "resolveStorePath");
-const resolveSessionTranscriptFileSpy = vi.spyOn(sessionTranscript, "resolveSessionTranscriptFile");
-const areHeartbeatsEnabledSpy = vi.spyOn(heartbeatWake, "areHeartbeatsEnabled");
-const startAcpSpawnParentStreamRelaySpy = vi.spyOn(
-  acpSpawnParentStream,
-  "startAcpSpawnParentStreamRelay",
-);
-const resolveAcpSpawnStreamLogPathSpy = vi.spyOn(
-  acpSpawnParentStream,
-  "resolveAcpSpawnStreamLogPath",
-);
+vi.mock("../acp/control-plane/manager.js", () => ({
+  getAcpSessionManager: hoisted.getAcpSessionManagerMock,
+}));
+
+vi.mock("../acp/control-plane/spawn.js", () => ({
+  cleanupFailedAcpSpawn: hoisted.cleanupFailedAcpSpawnMock,
+}));
+
+vi.mock("../channels/plugins/index.js", () => ({
+  getChannelPlugin: hoisted.getChannelPluginMock,
+  getLoadedChannelPlugin: hoisted.getLoadedChannelPluginMock,
+  normalizeChannelId: hoisted.normalizeChannelIdMock,
+}));
+
+vi.mock("../config/sessions/paths.js", () => ({
+  resolveStorePath: hoisted.resolveStorePathMock,
+}));
+
+vi.mock("../config/sessions/store.js", () => ({
+  loadSessionStore: hoisted.loadSessionStoreMock,
+}));
+
+vi.mock("../config/sessions/transcript.js", () => ({
+  resolveSessionTranscriptFile: hoisted.resolveSessionTranscriptFileMock,
+}));
+
+vi.mock("../gateway/call.js", () => ({
+  callGateway: hoisted.callGatewayMock,
+}));
+
+vi.mock("../infra/heartbeat-wake.js", () => ({
+  areHeartbeatsEnabled: hoisted.areHeartbeatsEnabledMock,
+}));
+
+vi.mock("../tasks/task-executor.js", () => ({
+  createRunningTaskRun: hoisted.createRunningTaskRunMock,
+}));
+
+vi.mock("./acp-spawn-parent-stream.js", () => ({
+  resolveAcpSpawnStreamLogPath: hoisted.resolveAcpSpawnStreamLogPathMock,
+  startAcpSpawnParentStreamRelay: hoisted.startAcpSpawnParentStreamRelayMock,
+}));
 
 const { isSpawnAcpAcceptedResult, spawnAcpDirect } = await import("./acp-spawn.js");
 type SpawnRequest = Parameters<typeof spawnAcpDirect>[0];
@@ -272,6 +305,15 @@ function expectAgentGatewayCall(overrides: AgentCallParams): void {
   expect(agentCall?.params?.threadId).toBe(overrides.threadId);
 }
 
+function resolveMatrixRoomTargetForTest(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const normalized = trimmed.replace(/^(?:matrix:)?(?:channel:|room:)/iu, "").trim();
+  return normalized || undefined;
+}
+
 function enableMatrixAcpThreadBindings(): void {
   replaceSpawnConfig({
     ...hoisted.state.cfg,
@@ -285,6 +327,42 @@ function enableMatrixAcpThreadBindings(): void {
       },
     },
   });
+  const matrixPlugin = {
+    messaging: {
+      resolveDeliveryTarget: ({
+        conversationId,
+        parentConversationId,
+      }: {
+        conversationId: string;
+        parentConversationId?: string;
+      }) => {
+        const parent = resolveMatrixRoomTargetForTest(parentConversationId);
+        const child = conversationId.trim();
+        return parent ? { to: `room:${parent}`, threadId: child } : { to: `room:${child}` };
+      },
+      resolveInboundConversation: ({
+        to,
+        threadId,
+      }: {
+        to?: string;
+        threadId?: string | number;
+      }) => {
+        const parent = resolveMatrixRoomTargetForTest(to);
+        const thread = threadId != null ? String(threadId).trim() : "";
+        return thread && parent
+          ? { conversationId: thread, parentConversationId: parent }
+          : parent
+            ? { conversationId: parent }
+            : undefined;
+      },
+    },
+  };
+  hoisted.getChannelPluginMock.mockImplementation((channelId: string) =>
+    channelId === "matrix" ? matrixPlugin : undefined,
+  );
+  hoisted.getLoadedChannelPluginMock.mockImplementation((channelId: string) =>
+    channelId === "matrix" ? matrixPlugin : undefined,
+  );
   registerSessionBindingAdapter({
     channel: "matrix",
     accountId: "default",
@@ -309,6 +387,28 @@ function enableLineCurrentConversationBindings(): void {
       },
     },
   });
+  const linePlugin = {
+    messaging: {
+      resolveInboundConversation: ({
+        conversationId,
+        to,
+      }: {
+        conversationId?: string;
+        to?: string;
+      }) => {
+        const source = (conversationId ?? to ?? "").trim();
+        const normalized =
+          source.match(/^line:(?:(?:user|group|room):)?(.+)$/i)?.[1]?.trim() ?? source;
+        return normalized ? { conversationId: normalized } : undefined;
+      },
+    },
+  };
+  hoisted.getChannelPluginMock.mockImplementation((channelId: string) =>
+    channelId === "line" ? linePlugin : undefined,
+  );
+  hoisted.getLoadedChannelPluginMock.mockImplementation((channelId: string) =>
+    channelId === "line" ? linePlugin : undefined,
+  );
   registerSessionBindingAdapter({
     channel: "line",
     accountId: "default",
@@ -336,10 +436,45 @@ function enableTelegramCurrentConversationBindings(): void {
       },
     },
   });
+  const telegramPlugin = {
+    messaging: {
+      resolveInboundConversation: ({
+        conversationId,
+        to,
+        threadId,
+      }: {
+        conversationId?: string;
+        to?: string;
+        threadId?: string | number;
+      }) => {
+        const source = (conversationId ?? to ?? "").trim();
+        const normalized = source.replace(/^telegram:(?:group:|channel:|direct:)?/i, "");
+        const explicitThreadId = threadId == null ? "" : String(threadId).trim();
+        if (/^-?\d+$/.test(normalized) && /^\d+$/.test(explicitThreadId)) {
+          return { conversationId: `${normalized}:topic:${explicitThreadId}` };
+        }
+        const topicMatch = /^(-?\d+):topic:(\d+)$/i.exec(normalized);
+        if (topicMatch?.[1] && topicMatch[2]) {
+          return { conversationId: `${topicMatch[1]}:topic:${topicMatch[2]}` };
+        }
+        return /^-?\d+$/.test(normalized) ? { conversationId: normalized } : undefined;
+      },
+    },
+  };
+  hoisted.getChannelPluginMock.mockImplementation((channelId: string) =>
+    channelId === "telegram" ? telegramPlugin : undefined,
+  );
+  hoisted.getLoadedChannelPluginMock.mockImplementation((channelId: string) =>
+    channelId === "telegram" ? telegramPlugin : undefined,
+  );
   registerSessionBindingAdapter({
     channel: "telegram",
     accountId: "default",
-    capabilities: createSessionBindingCapabilities(),
+    capabilities: {
+      bindSupported: true,
+      unbindSupported: true,
+      placements: ["current"] satisfies SessionBindingPlacement[],
+    },
     bind: async (input) => await hoisted.sessionBindingBindMock(input),
     listBySession: (targetSessionKey) => hoisted.sessionBindingListBySessionMock(targetSessionKey),
     resolveByConversation: (ref) => hoisted.sessionBindingResolveByConversationMock(ref),
@@ -350,9 +485,11 @@ function enableTelegramCurrentConversationBindings(): void {
 describe("spawnAcpDirect", () => {
   beforeEach(() => {
     replaceSpawnConfig(createDefaultSpawnConfig());
-    resetTaskRegistryForTests();
     hoisted.areHeartbeatsEnabledMock.mockReset().mockReturnValue(true);
-    getChannelPluginSpy.mockReset().mockReturnValue(undefined);
+    hoisted.getChannelPluginMock.mockReset().mockReturnValue(undefined);
+    hoisted.getLoadedChannelPluginMock.mockReset().mockReturnValue(undefined);
+    hoisted.cleanupFailedAcpSpawnMock.mockReset().mockResolvedValue(undefined);
+    hoisted.createRunningTaskRunMock.mockReset().mockReturnValue(undefined);
 
     hoisted.callGatewayMock.mockReset();
     hoisted.callGatewayMock.mockImplementation(async (argsUnknown: unknown) => {
@@ -368,26 +505,16 @@ describe("spawnAcpDirect", () => {
       }
       return {};
     });
-    callGatewaySpy.mockReset().mockImplementation(async (argsUnknown: unknown) => {
-      return await hoisted.callGatewayMock(argsUnknown);
-    });
 
     hoisted.closeSessionMock.mockReset().mockResolvedValue({
       runtimeClosed: true,
       metaCleared: false,
     });
-    getAcpSessionManagerSpy.mockReset().mockReturnValue({
-      initializeSession: async (
-        params: Parameters<
-          ReturnType<typeof acpSessionManager.getAcpSessionManager>["initializeSession"]
-        >[0],
-      ) => await hoisted.initializeSessionMock(params),
-      closeSession: async (
-        params: Parameters<
-          ReturnType<typeof acpSessionManager.getAcpSessionManager>["closeSession"]
-        >[0],
-      ) => await hoisted.closeSessionMock(params),
-    } as unknown as ReturnType<typeof acpSessionManager.getAcpSessionManager>);
+    hoisted.getAcpSessionManagerMock.mockReset().mockReturnValue({
+      initializeSession: async (params: AcpInitializeSessionInput) =>
+        await hoisted.initializeSessionMock(params),
+      closeSession: async (params: unknown) => await hoisted.closeSessionMock(params),
+    });
     hoisted.initializeSessionMock.mockReset().mockImplementation(async (argsUnknown: unknown) => {
       const args = argsUnknown as AcpInitializeSessionInput;
       const runtimeSessionName = `${args.sessionKey}:runtime`;
@@ -464,19 +591,10 @@ describe("spawnAcpDirect", () => {
     hoisted.startAcpSpawnParentStreamRelayMock
       .mockReset()
       .mockImplementation(() => createRelayHandle());
-    startAcpSpawnParentStreamRelaySpy
-      .mockReset()
-      .mockImplementation((...args) => hoisted.startAcpSpawnParentStreamRelayMock(...args));
     hoisted.resolveAcpSpawnStreamLogPathMock
       .mockReset()
       .mockReturnValue("/tmp/sess-main.acp-stream.jsonl");
-    resolveAcpSpawnStreamLogPathSpy
-      .mockReset()
-      .mockImplementation((...args) => hoisted.resolveAcpSpawnStreamLogPathMock(...args));
     hoisted.resolveStorePathMock.mockReset().mockReturnValue("/tmp/codex-sessions.json");
-    resolveStorePathSpy
-      .mockReset()
-      .mockImplementation((store, opts) => hoisted.resolveStorePathMock(store, opts));
     hoisted.loadSessionStoreMock.mockReset().mockImplementation(() => {
       const store: Record<string, { sessionId: string; updatedAt: number }> = {};
       return new Proxy(store, {
@@ -488,9 +606,6 @@ describe("spawnAcpDirect", () => {
         },
       });
     });
-    loadSessionStoreSpy
-      .mockReset()
-      .mockImplementation((storePath) => hoisted.loadSessionStoreMock(storePath));
     hoisted.resolveSessionTranscriptFileMock
       .mockReset()
       .mockImplementation(async (params: unknown) => {
@@ -507,16 +622,9 @@ describe("spawnAcpDirect", () => {
           },
         };
       });
-    resolveSessionTranscriptFileSpy
-      .mockReset()
-      .mockImplementation(async (params) => await hoisted.resolveSessionTranscriptFileMock(params));
-    areHeartbeatsEnabledSpy
-      .mockReset()
-      .mockImplementation(() => hoisted.areHeartbeatsEnabledMock());
   });
 
   afterEach(() => {
-    resetTaskRegistryForTests();
     sessionBindingServiceTesting.resetSessionBindingAdaptersForTests();
     clearRuntimeConfigSnapshot();
   });
@@ -1004,6 +1112,116 @@ describe("spawnAcpDirect", () => {
       threadId: undefined,
     });
     expect(findAgentGatewayCall()?.params?.accountId).toBe("work");
+  });
+
+  it("uses the target agent's bound account for cross-agent ACP thread spawns", async () => {
+    const boundRoom = "!room:example.org";
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      acp: {
+        ...hoisted.state.cfg.acp,
+        allowedAgents: ["codex", "bot-alpha"],
+      },
+      channels: {
+        ...hoisted.state.cfg.channels,
+        matrix: {
+          threadBindings: {
+            enabled: true,
+            spawnAcpSessions: true,
+          },
+          accounts: {
+            "bot-alpha": {
+              threadBindings: {
+                enabled: true,
+                spawnAcpSessions: true,
+              },
+            },
+          },
+        },
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "bot-alpha",
+          match: {
+            channel: "matrix",
+            peer: {
+              kind: "channel",
+              id: boundRoom,
+            },
+            accountId: "bot-alpha",
+          },
+        },
+      ],
+    });
+    registerSessionBindingAdapter({
+      channel: "matrix",
+      accountId: "bot-alpha",
+      capabilities: createSessionBindingCapabilities(),
+      bind: async (input) => await hoisted.sessionBindingBindMock(input),
+      listBySession: (targetSessionKey) =>
+        hoisted.sessionBindingListBySessionMock(targetSessionKey),
+      resolveByConversation: (ref) => hoisted.sessionBindingResolveByConversationMock(ref),
+      unbind: async (input) => await hoisted.sessionBindingUnbindMock(input),
+    });
+    hoisted.sessionBindingBindMock.mockImplementationOnce(
+      async (input: {
+        targetSessionKey: string;
+        conversation: {
+          accountId: string;
+          conversationId: string;
+          parentConversationId?: string;
+        };
+        metadata?: Record<string, unknown>;
+      }) =>
+        createSessionBinding({
+          targetSessionKey: input.targetSessionKey,
+          conversation: {
+            channel: "matrix",
+            accountId: input.conversation.accountId,
+            conversationId: input.conversation.conversationId,
+            parentConversationId: input.conversation.parentConversationId,
+          },
+          metadata: {
+            boundBy:
+              typeof input.metadata?.boundBy === "string" ? input.metadata.boundBy : "system",
+            agentId: "bot-alpha",
+          },
+        }),
+    );
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "bot-alpha",
+        mode: "session",
+        thread: true,
+      },
+      {
+        agentSessionKey: "agent:main:matrix:room:requester",
+        agentChannel: "matrix",
+        agentAccountId: "bot-beta",
+        agentTo: `room:${boundRoom}`,
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "child",
+        conversation: expect.objectContaining({
+          channel: "matrix",
+          accountId: "bot-alpha",
+          conversationId: boundRoom,
+        }),
+      }),
+    );
+    expect(findAgentGatewayCall()?.params).toMatchObject({
+      deliver: true,
+      channel: "matrix",
+      accountId: "bot-alpha",
+      to: `room:${boundRoom}`,
+    });
   });
 
   it.each([

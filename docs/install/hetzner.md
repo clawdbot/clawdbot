@@ -134,18 +134,21 @@ For the generic Docker flow, see [Docker](/install/docker).
 
     ```bash
     OPENCLAW_IMAGE=openclaw:latest
-    OPENCLAW_GATEWAY_TOKEN=change-me-now
+    OPENCLAW_GATEWAY_TOKEN=
     OPENCLAW_GATEWAY_BIND=lan
     OPENCLAW_GATEWAY_PORT=18789
 
     OPENCLAW_CONFIG_DIR=/root/.openclaw
     OPENCLAW_WORKSPACE_DIR=/root/.openclaw/workspace
 
-    GOG_KEYRING_PASSWORD=change-me-now
+    GOG_KEYRING_PASSWORD=
     XDG_CONFIG_HOME=/home/node/.openclaw
     ```
 
-    Generate strong secrets:
+    Leave `OPENCLAW_GATEWAY_TOKEN` blank unless you explicitly want to
+    manage it through `.env`; OpenClaw writes a random gateway token to
+    config on first start. Generate a keyring password and paste it into
+    `GOG_KEYRING_PASSWORD`:
 
     ```bash
     openssl rand -hex 32

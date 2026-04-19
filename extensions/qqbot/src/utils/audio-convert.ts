@@ -728,10 +728,19 @@ function ffmpegToPCM(
   });
 }
 
+type MpegDecoderConstructor = typeof import("mpg123-decoder").MPEGDecoder;
+
+let mpegDecoderConstructorPromise: Promise<MpegDecoderConstructor> | null = null;
+
+async function loadMpegDecoderConstructor(): Promise<MpegDecoderConstructor> {
+  mpegDecoderConstructorPromise ??= import("mpg123-decoder").then(({ MPEGDecoder }) => MPEGDecoder);
+  return mpegDecoderConstructorPromise;
+}
+
 /** Decode MP3 into PCM through mpg123-decoder when ffmpeg is unavailable. */
 async function wasmDecodeMp3ToPCM(buf: Buffer, targetRate: number): Promise<Buffer | null> {
   try {
-    const { MPEGDecoder } = await import("mpg123-decoder");
+    const MPEGDecoder = await loadMpegDecoderConstructor();
     debugLog(`[audio-convert] WASM MP3 decode: size=${buf.length} bytes`);
     const decoder = new MPEGDecoder();
     await decoder.ready;

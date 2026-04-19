@@ -343,6 +343,18 @@ describe("browser config", () => {
     });
   });
 
+  it("keeps configured profile cdpUrls out of the shared browser SSRF policy", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        remote: {
+          color: "#123456",
+          cdpUrl: "http://172.29.128.1:9223",
+        },
+      },
+    });
+    expect(resolved.ssrfPolicy).toEqual({});
+  });
+
   it("resolves existing-session profiles without cdpPort or cdpUrl", () => {
     const resolved = resolveBrowserConfig({
       profiles: {

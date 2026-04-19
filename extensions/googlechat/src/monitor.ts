@@ -14,6 +14,7 @@ import {
   downloadGoogleChatMedia,
   deleteGoogleChatMessage,
   sendGoogleChatMessage,
+  uploadGoogleChatAttachment,
   updateGoogleChatMessage,
 } from "./api.js";
 import { type GoogleChatAudienceType } from "./auth.js";
@@ -451,7 +452,6 @@ async function uploadAttachmentForReply(params: {
   filename: string;
 }) {
   const { account, spaceId, buffer, contentType, filename } = params;
-  const { uploadGoogleChatAttachment } = await import("./api.js");
   return await uploadGoogleChatAttachment({
     account,
     space: spaceId,

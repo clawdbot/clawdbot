@@ -9,6 +9,7 @@ import {
   normalizeGoogleProviderConfig,
   resolveGoogleGenerativeAiTransport,
 } from "./provider-policy.js";
+import { createGoogleGenerativeAiTransportStreamFn } from "./transport-stream.js";
 
 export function buildGoogleProvider(): ProviderPlugin {
   return {
@@ -48,6 +49,10 @@ export function buildGoogleProvider(): ProviderPlugin {
         providerId: ctx.provider,
         ctx,
       }),
+    createStreamFn: ({ model }) =>
+      model.api === "google-generative-ai"
+        ? createGoogleGenerativeAiTransportStreamFn()
+        : undefined,
     ...GOOGLE_GEMINI_PROVIDER_HOOKS,
     isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
   };

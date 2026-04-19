@@ -396,20 +396,24 @@ export function createImageGenerateTool(options?: {
       const action = resolveAction(params);
       if (action === "list") {
         const runtimeProviders = listRuntimeImageGenerationProviders({ config: effectiveCfg });
-        const providers = runtimeProviders.map((provider) => ({
-          id: provider.id,
-          ...(provider.label ? { label: provider.label } : {}),
-          ...(provider.defaultModel ? { defaultModel: provider.defaultModel } : {}),
-          models: provider.models ?? (provider.defaultModel ? [provider.defaultModel] : []),
-          configured: isCapabilityProviderConfigured({
-            providers: runtimeProviders,
-            provider,
-            cfg: effectiveCfg,
-            agentDir: options?.agentDir,
-          }),
-          authEnvVars: getImageGenerationProviderAuthEnvVars(provider.id),
-          capabilities: provider.capabilities,
-        }));
+        const providers = runtimeProviders.map((provider) =>
+          Object.assign(
+            { id: provider.id },
+            provider.label ? { label: provider.label } : {},
+            provider.defaultModel ? { defaultModel: provider.defaultModel } : {},
+            {
+              models: provider.models ?? (provider.defaultModel ? [provider.defaultModel] : []),
+              configured: isCapabilityProviderConfigured({
+                providers: runtimeProviders,
+                provider,
+                cfg: effectiveCfg,
+                agentDir: options?.agentDir,
+              }),
+              authEnvVars: getImageGenerationProviderAuthEnvVars(provider.id),
+              capabilities: provider.capabilities,
+            },
+          ),
+        );
         const lines = providers.flatMap((provider) => {
           const caps: string[] = [];
           if (provider.capabilities.edit.enabled) {

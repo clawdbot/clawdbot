@@ -1,3 +1,4 @@
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper preserves plugin-specific hook API type.
 export function registerHookHandlersForTest<TApi>(params: {
   config: Record<string, unknown>;
   register: (api: TApi) => void;

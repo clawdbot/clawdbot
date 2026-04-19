@@ -2,6 +2,7 @@ import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ResolvedSlackAccount } from "../accounts.js";
 import type { SlackMessageEvent } from "../types.js";
 import { stripSlackMentionsForCommandDetection } from "./commands.js";
@@ -189,7 +190,7 @@ export function createSlackMessageHandler(params: {
       }
     },
     onError: (err) => {
-      ctx.runtime.error?.(`slack inbound debounce flush failed: ${String(err)}`);
+      ctx.runtime.error?.(`slack inbound debounce flush failed: ${formatErrorMessage(err)}`);
     },
   });
   const threadTsResolver = createSlackThreadTsResolver({ client: ctx.app.client });

@@ -24,6 +24,35 @@ describe("buildAuthHealthSummary", () => {
   const profileReasonCodes = (summary: ReturnType<typeof buildAuthHealthSummary>) =>
     Object.fromEntries(summary.profiles.map((profile) => [profile.profileId, profile.reasonCode]));
 
+  function mockFreshCodexCliCredentials() {
+    readCodexCliCredentialsCachedMock.mockReturnValue({
+      type: "oauth",
+      provider: "openai-codex",
+      access: "fresh-cli-access",
+      refresh: "fresh-cli-refresh",
+      expires: now + DEFAULT_OAUTH_WARN_MS + 60_000,
+      accountId: "acct-cli",
+    });
+  }
+
+  function buildOpenAiCodexOAuthStore(params: {
+    access: string;
+    refresh: string;
+    expires: number;
+    accountId?: string;
+  }) {
+    return {
+      version: 1,
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth" as const,
+          provider: "openai-codex",
+          ...params,
+        },
+      },
+    };
+  }
+
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -108,28 +137,15 @@ describe("buildAuthHealthSummary", () => {
     expect(statuses["google:no-refresh"]).toBe("expired");
   });
 
-  it("prefers fresher imported external OAuth credentials when reporting health", () => {
+  it("does not let fresh .codex state override expired canonical health", () => {
     vi.spyOn(Date, "now").mockReturnValue(now);
-    readCodexCliCredentialsCachedMock.mockReturnValue({
-      type: "oauth",
-      provider: "openai-codex",
-      access: "fresh-cli-access",
-      refresh: "fresh-cli-refresh",
-      expires: now + DEFAULT_OAUTH_WARN_MS + 60_000,
+    mockFreshCodexCliCredentials();
+    const store = buildOpenAiCodexOAuthStore({
+      access: "expired-access",
+      refresh: "expired-refresh",
+      expires: now - 10_000,
       accountId: "acct-cli",
     });
-    const store = {
-      version: 1,
-      profiles: {
-        "openai-codex:default": {
-          type: "oauth" as const,
-          provider: "openai-codex",
-          access: "expired-access",
-          refresh: "expired-refresh",
-          expires: now - 10_000,
-        },
-      },
-    };
 
     const summary = buildAuthHealthSummary({
       store,
@@ -137,7 +153,7 @@ describe("buildAuthHealthSummary", () => {
     });
 
     const statuses = profileStatuses(summary);
-    expect(statuses["openai-codex:default"]).toBe("ok");
+    expect(statuses["openai-codex:default"]).toBe("expired");
   });
 
   it("keeps healthy local oauth over fresher imported Codex CLI credentials in health status", () => {
@@ -197,28 +213,14 @@ describe("buildAuthHealthSummary", () => {
     expect(profile?.status).toBe("expiring");
   });
 
-  it("prefers fresher imported external OAuth when the local credential is near expiry", () => {
+  it("does not let fresh .codex state override near-expiry canonical health", () => {
     vi.spyOn(Date, "now").mockReturnValue(now);
-    readCodexCliCredentialsCachedMock.mockReturnValue({
-      type: "oauth",
-      provider: "openai-codex",
-      access: "fresh-cli-access",
-      refresh: "fresh-cli-refresh",
-      expires: now + DEFAULT_OAUTH_WARN_MS + 60_000,
-      accountId: "acct-cli",
+    mockFreshCodexCliCredentials();
+    const store = buildOpenAiCodexOAuthStore({
+      access: "near-expiry-local-access",
+      refresh: "near-expiry-local-refresh",
+      expires: now + 2 * 60_000,
     });
-    const store = {
-      version: 1,
-      profiles: {
-        "openai-codex:default": {
-          type: "oauth" as const,
-          provider: "openai-codex",
-          access: "near-expiry-local-access",
-          refresh: "near-expiry-local-refresh",
-          expires: now + 2 * 60_000,
-        },
-      },
-    };
 
     const summary = buildAuthHealthSummary({
       store,
@@ -226,8 +228,8 @@ describe("buildAuthHealthSummary", () => {
     });
 
     const profile = summary.profiles.find((entry) => entry.profileId === "openai-codex:default");
-    expect(profile?.status).toBe("ok");
-    expect(profile?.expiresAt).toBe(now + DEFAULT_OAUTH_WARN_MS + 60_000);
+    expect(profile?.status).toBe("expiring");
+    expect(profile?.expiresAt).toBe(now + 2 * 60_000);
   });
 
   it("marks token profiles with invalid expires as missing with reason code", () => {

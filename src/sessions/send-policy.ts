@@ -5,6 +5,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
+import { deriveSessionChatType } from "./session-chat-type.js";
 
 export type SessionSendPolicyDecision = "allow" | "deny";
 
@@ -63,17 +64,9 @@ function deriveChatTypeFromKey(key?: string): SessionChatType | undefined {
   if (tokens.has("direct") || tokens.has("dm")) {
     return "direct";
   }
-  if (/^group:[^:]+$/u.test(normalizedKey)) {
-    return "group";
-  }
-  if (/^[0-9]+(?:-[0-9]+)*@g\.us$/u.test(normalizedKey)) {
-    return "group";
-  }
-  if (/^whatsapp:(?!.*:group:).+@g\.us$/u.test(normalizedKey)) {
-    return "group";
-  }
-  if (/^discord:(?:[^:]+:)?guild-[^:]+:channel-[^:]+$/u.test(normalizedKey)) {
-    return "channel";
+  const derived = deriveSessionChatType(normalizedKey);
+  if (derived !== "unknown") {
+    return derived;
   }
   return undefined;
 }
@@ -95,18 +88,26 @@ export function resolveSendPolicy(params: {
     return "allow";
   }
 
-  const channel =
-    normalizeMatchValue(params.channel) ??
-    normalizeMatchValue(params.entry?.channel) ??
-    normalizeMatchValue(params.entry?.lastChannel) ??
-    deriveChannelFromKey(params.sessionKey);
-  const chatType =
-    normalizeChatType(params.chatType ?? params.entry?.chatType) ??
-    normalizeChatType(deriveChatTypeFromKey(params.sessionKey));
   const rawSessionKey = params.sessionKey ?? "";
   const strippedSessionKey = stripAgentSessionKeyPrefix(rawSessionKey) ?? "";
   const rawSessionKeyNorm = normalizeLowercaseStringOrEmpty(rawSessionKey);
   const strippedSessionKeyNorm = normalizeLowercaseStringOrEmpty(strippedSessionKey);
+  let channel: string | undefined;
+  let chatType: SessionChatType | undefined;
+  const getChannel = () => {
+    channel ??=
+      normalizeMatchValue(params.channel) ??
+      normalizeMatchValue(params.entry?.channel) ??
+      normalizeMatchValue(params.entry?.lastChannel) ??
+      deriveChannelFromKey(params.sessionKey);
+    return channel;
+  };
+  const getChatType = () => {
+    chatType ??=
+      normalizeChatType(params.chatType ?? params.entry?.chatType) ??
+      normalizeChatType(deriveChatTypeFromKey(params.sessionKey));
+    return chatType;
+  };
 
   let allowedMatch = false;
   for (const rule of policy.rules ?? []) {
@@ -120,10 +121,10 @@ export function resolveSendPolicy(params: {
     const matchPrefix = normalizeMatchValue(match.keyPrefix);
     const matchRawPrefix = normalizeMatchValue(match.rawKeyPrefix);
 
-    if (matchChannel && matchChannel !== channel) {
+    if (matchChannel && matchChannel !== getChannel()) {
       continue;
     }
-    if (matchChatType && matchChatType !== chatType) {
+    if (matchChatType && matchChatType !== getChatType()) {
       continue;
     }
     if (matchRawPrefix && !rawSessionKeyNorm.startsWith(matchRawPrefix)) {

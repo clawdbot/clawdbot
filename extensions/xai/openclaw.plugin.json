@@ -2,6 +2,13 @@
   "id": "xai",
   "enabledByDefault": true,
   "providers": ["xai"],
+  "providerEndpoints": [
+    {
+      "endpointClass": "xai-native",
+      "hosts": ["api.x.ai", "api.grok.x.ai"]
+    }
+  ],
+  "syntheticAuthRefs": ["xai"],
   "providerAuthEnvVars": {
     "xai": ["XAI_API_KEY"]
   },

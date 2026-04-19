@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MUSIC_GENERATION_TASK_KIND } from "../music-generation-task-status.js";
 import {
   announceDeliveryMocks,
+  createMediaCompletionFixture,
   expectDirectMediaSend,
   expectFallbackMediaAnnouncement,
   expectQueuedTaskRun,
@@ -83,21 +84,12 @@ describe("music generate background helpers", () => {
     });
 
     await wakeMusicGenerationTaskCompletion({
-      handle: {
-        taskId: "task-123",
+      ...createMediaCompletionFixture({
         runId: "tool:music_generate:abc",
-        requesterSessionKey: "agent:main:discord:direct:123",
-        requesterOrigin: {
-          channel: "discord",
-          to: "channel:1",
-          threadId: "thread-1",
-        },
         taskLabel: "night-drive synthwave",
-      },
-      status: "ok",
-      statusLabel: "completed successfully",
-      result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
-      mediaUrls: ["/tmp/generated-night-drive.mp3"],
+        result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
+        mediaUrls: ["/tmp/generated-night-drive.mp3"],
+      }),
     });
 
     expect(taskDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
@@ -111,21 +103,12 @@ describe("music generate background helpers", () => {
     });
 
     await wakeMusicGenerationTaskCompletion({
-      config: { tools: { media: { asyncCompletion: { directSend: true } } } },
-      handle: {
-        taskId: "task-123",
+      ...createMediaCompletionFixture({
+        directSend: true,
         runId: "tool:music_generate:abc",
-        requesterSessionKey: "agent:main:discord:direct:123",
-        requesterOrigin: {
-          channel: "discord",
-          to: "channel:1",
-          threadId: "thread-1",
-        },
         taskLabel: "night-drive synthwave",
-      },
-      status: "ok",
-      statusLabel: "completed successfully",
-      result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
+        result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
+      }),
     });
 
     expectDirectMediaSend({
@@ -147,22 +130,13 @@ describe("music generate background helpers", () => {
     });
 
     await wakeMusicGenerationTaskCompletion({
-      config: { tools: { media: { asyncCompletion: { directSend: true } } } },
-      handle: {
-        taskId: "task-123",
+      ...createMediaCompletionFixture({
+        directSend: true,
         runId: "tool:music_generate:abc",
-        requesterSessionKey: "agent:main:discord:direct:123",
-        requesterOrigin: {
-          channel: "discord",
-          to: "channel:1",
-          threadId: "thread-1",
-        },
         taskLabel: "night-drive synthwave",
-      },
-      status: "ok",
-      statusLabel: "completed successfully",
-      result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
-      mediaUrls: ["/tmp/generated-night-drive.mp3"],
+        result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
+        mediaUrls: ["/tmp/generated-night-drive.mp3"],
+      }),
     });
 
     expectFallbackMediaAnnouncement({

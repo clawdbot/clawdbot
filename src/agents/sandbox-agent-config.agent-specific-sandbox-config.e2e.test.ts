@@ -12,43 +12,43 @@ type SpawnCall = {
 
 const spawnCalls: SpawnCall[] = [];
 
-vi.mock("node:child_process", async () => {
-  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  return {
-    ...actual,
-    spawn: (command: string, args: string[]) => {
-      spawnCalls.push({ command, args });
-      const child = new EventEmitter() as {
-        stdout?: Readable;
-        stderr?: Readable;
-        on: (event: string, cb: (...args: unknown[]) => void) => void;
-        emit: (event: string, ...args: unknown[]) => boolean;
-      };
-      child.stdout = new Readable({ read() {} });
-      child.stderr = new Readable({ read() {} });
+vi.mock("node:child_process", () => ({
+  execFile: (...args: unknown[]) => {
+    const callback = args.findLast(
+      (arg): arg is (error: null, stdout: string, stderr: string) => void =>
+        typeof arg === "function",
+    );
+    queueMicrotask(() => callback?.(null, "", ""));
+    return new EventEmitter();
+  },
+  spawn: (command: string, args: string[]) => {
+    spawnCalls.push({ command, args });
+    const child = new EventEmitter() as {
+      stdout?: Readable;
+      stderr?: Readable;
+      on: (event: string, cb: (...args: unknown[]) => void) => void;
+      emit: (event: string, ...args: unknown[]) => boolean;
+    };
+    child.stdout = new Readable({ read() {} });
+    child.stderr = new Readable({ read() {} });
 
-      const dockerArgs = command === "docker" ? args : [];
-      const shouldFailContainerInspect =
-        dockerArgs[0] === "inspect" &&
-        dockerArgs[1] === "-f" &&
-        dockerArgs[2] === "{{.State.Running}}";
-      const shouldSucceedImageInspect = dockerArgs[0] === "image" && dockerArgs[1] === "inspect";
+    const dockerArgs = command === "docker" ? args : [];
+    const shouldFailContainerInspect =
+      dockerArgs[0] === "inspect" &&
+      dockerArgs[1] === "-f" &&
+      dockerArgs[2] === "{{.State.Running}}";
+    const shouldSucceedImageInspect = dockerArgs[0] === "image" && dockerArgs[1] === "inspect";
 
-      queueMicrotask(() =>
-        child.emit("close", shouldFailContainerInspect && !shouldSucceedImageInspect ? 1 : 0),
-      );
-      return child;
-    },
-  };
-});
+    queueMicrotask(() =>
+      child.emit("close", shouldFailContainerInspect && !shouldSucceedImageInspect ? 1 : 0),
+    );
+    return child;
+  },
+}));
 
-vi.mock("./skills.js", async () => {
-  const actual = await vi.importActual<typeof import("./skills.js")>("./skills.js");
-  return {
-    ...actual,
-    syncSkillsToWorkspace: vi.fn(async () => undefined),
-  };
-});
+vi.mock("./skills.js", () => ({
+  syncSkillsToWorkspace: vi.fn(async () => undefined),
+}));
 
 let resolveSandboxContext: typeof import("./sandbox/context.js").resolveSandboxContext;
 let resolveSandboxConfigForAgent: typeof import("./sandbox/config.js").resolveSandboxConfigForAgent;

@@ -10,6 +10,31 @@ import {
 } from "./context-window-guard.js";
 
 describe("context-window-guard", () => {
+  function openRouterModelConfig(params: { contextWindow: number; contextTokens?: number }) {
+    return {
+      models: {
+        providers: {
+          openrouter: {
+            baseUrl: "http://localhost",
+            apiKey: "x",
+            models: [
+              {
+                id: "tiny",
+                name: "tiny",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: params.contextWindow,
+                contextTokens: params.contextTokens,
+                maxTokens: 256,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+  }
+
   it("blocks below 16k (model metadata)", () => {
     const info = resolveContextWindowInfo({
       cfg: undefined,
@@ -53,27 +78,7 @@ describe("context-window-guard", () => {
   });
 
   it("uses models.providers.*.models[].contextWindow when present", () => {
-    const cfg = {
-      models: {
-        providers: {
-          openrouter: {
-            baseUrl: "http://localhost",
-            apiKey: "x",
-            models: [
-              {
-                id: "tiny",
-                name: "tiny",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 12_000,
-                maxTokens: 256,
-              },
-            ],
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
+    const cfg = openRouterModelConfig({ contextWindow: 12_000 });
 
     const info = resolveContextWindowInfo({
       cfg,
@@ -88,28 +93,7 @@ describe("context-window-guard", () => {
   });
 
   it("prefers models.providers.*.models[].contextTokens over contextWindow", () => {
-    const cfg = {
-      models: {
-        providers: {
-          openrouter: {
-            baseUrl: "http://localhost",
-            apiKey: "x",
-            models: [
-              {
-                id: "tiny",
-                name: "tiny",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 1_050_000,
-                contextTokens: 12_000,
-                maxTokens: 256,
-              },
-            ],
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
+    const cfg = openRouterModelConfig({ contextWindow: 1_050_000, contextTokens: 12_000 });
 
     const info = resolveContextWindowInfo({
       cfg,

@@ -67,6 +67,9 @@ import type {
 import type { VideoGenerationProvider } from "../video-generation/types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type {
+  CliBackendAuthEpochMode,
+  CliBackendPreparedExecution,
+  CliBackendPrepareExecutionContext,
   CliBackendPlugin,
   CliBundleMcpMode,
   PluginTextReplacement,
@@ -141,6 +144,9 @@ export type {
   PluginConversationBindingResolutionDecision,
 } from "./conversation-binding.types.js";
 export type {
+  CliBackendAuthEpochMode,
+  CliBackendPreparedExecution,
+  CliBackendPrepareExecutionContext,
   CliBackendPlugin,
   CliBundleMcpMode,
   PluginTextReplacement,

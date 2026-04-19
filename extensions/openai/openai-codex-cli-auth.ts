@@ -22,6 +22,7 @@ export const OPENAI_CODEX_DEFAULT_PROFILE_ID = `${PROVIDER_ID}:default`;
 type CodexCliAuthFile = {
   auth_mode?: unknown;
   tokens?: {
+    id_token?: unknown;
     access_token?: unknown;
     refresh_token?: unknown;
     account_id?: unknown;
@@ -76,7 +77,8 @@ function oauthCredentialMatches(a: OAuthCredential, b: OAuthCredential): boolean
     a.displayName === b.displayName &&
     a.enterpriseUrl === b.enterpriseUrl &&
     a.projectId === b.projectId &&
-    a.accountId === b.accountId
+    a.accountId === b.accountId &&
+    a.idToken === b.idToken
   );
 }
 
@@ -89,29 +91,30 @@ function normalizeAuthEmailToken(value: string | undefined): string | undefined 
   return normalizeAuthIdentityToken(value)?.toLowerCase();
 }
 
-// Keep this overwrite guard aligned with the canonical OAuth identity-copy rule
-// in src/agents/auth-profiles/oauth.ts without widening the plugin SDK surface.
-function isSafeToReplaceStoredIdentity(
-  existing: Pick<OAuthCredential, "accountId" | "email">,
-  incoming: Pick<OAuthCredential, "accountId" | "email">,
+function hasIdentityContinuity(
+  existing: Pick<OAuthCredential, "accountId" | "email"> | undefined,
+  incoming: OAuthCredential,
 ): boolean {
+  if (!existing) {
+    return true;
+  }
+  if (oauthCredentialMatches(existing as OAuthCredential, incoming)) {
+    return true;
+  }
+
   const existingAccountId = normalizeAuthIdentityToken(existing.accountId);
   const incomingAccountId = normalizeAuthIdentityToken(incoming.accountId);
-  const existingEmail = normalizeAuthEmailToken(existing.email);
-  const incomingEmail = normalizeAuthEmailToken(incoming.email);
-
   if (existingAccountId !== undefined && incomingAccountId !== undefined) {
     return existingAccountId === incomingAccountId;
   }
+
+  const existingEmail = normalizeAuthEmailToken(existing.email);
+  const incomingEmail = normalizeAuthEmailToken(incoming.email);
   if (existingEmail !== undefined && incomingEmail !== undefined) {
     return existingEmail === incomingEmail;
   }
 
-  const existingHasIdentity = existingAccountId !== undefined || existingEmail !== undefined;
-  if (existingHasIdentity) {
-    return false;
-  }
-  return true;
+  return false;
 }
 
 export function readOpenAICodexCliOAuthProfile(params: {
@@ -130,6 +133,7 @@ export function readOpenAICodexCliOAuthProfile(params: {
   }
 
   const accountId = trimNonEmptyString(authFile.tokens?.account_id);
+  const idToken = trimNonEmptyString(authFile.tokens?.id_token);
   const identity = resolveCodexAuthIdentity({ accessToken: access });
   const credential: OAuthCredential = {
     type: "oauth",
@@ -138,6 +142,7 @@ export function readOpenAICodexCliOAuthProfile(params: {
     refresh,
     expires: resolveCodexAccessTokenExpiry(access) ?? 0,
     ...(accountId ? { accountId } : {}),
+    ...(idToken ? { idToken } : {}),
     ...(identity.email ? { email: identity.email } : {}),
     ...(identity.profileName ? { displayName: identity.profileName } : {}),
   };
@@ -152,17 +157,13 @@ export function readOpenAICodexCliOAuthProfile(params: {
     });
     return null;
   }
-  if (
-    existingOAuth &&
-    hasUsableOAuthCredential(existingOAuth) &&
-    !oauthCredentialMatches(existingOAuth, credential)
-  ) {
+  if (!hasIdentityContinuity(existingOAuth, credential)) {
     return null;
   }
   if (
     existingOAuth &&
-    !oauthCredentialMatches(existingOAuth, credential) &&
-    !isSafeToReplaceStoredIdentity(existingOAuth, credential)
+    hasUsableOAuthCredential(existingOAuth) &&
+    !oauthCredentialMatches(existingOAuth, credential)
   ) {
     return null;
   }

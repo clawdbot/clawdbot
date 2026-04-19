@@ -40,22 +40,22 @@ describe("memory embedding provider registration", () => {
     registerVirtualTestPlugin({
       registry,
       config,
-      id: "ollama",
-      name: "Ollama",
+      id: "external-vector",
+      name: "External Vector",
       contracts: {
-        memoryEmbeddingProviders: ["ollama"],
+        memoryEmbeddingProviders: ["external-vector"],
       },
       register(api) {
         api.registerMemoryEmbeddingProvider({
-          id: "ollama",
+          id: "external-vector",
           create: async () => ({ provider: null }),
         });
       },
     });
 
-    expect(getRegisteredMemoryEmbeddingProvider("ollama")).toEqual({
-      adapter: expect.objectContaining({ id: "ollama" }),
-      ownerPluginId: "ollama",
+    expect(getRegisteredMemoryEmbeddingProvider("external-vector")).toEqual({
+      adapter: expect.objectContaining({ id: "external-vector" }),
+      ownerPluginId: "external-vector",
     });
   });
 

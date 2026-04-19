@@ -1,7 +1,17 @@
+import { readNumberParam, readStringParam } from "openclaw/plugin-sdk/param-readers";
 import {
   createWebSearchProviderContractFields,
   type WebSearchProviderPlugin,
 } from "openclaw/plugin-sdk/provider-web-search-contract";
+
+type DuckDuckGoClientModule = typeof import("./ddg-client.js");
+
+let duckDuckGoClientModulePromise: Promise<DuckDuckGoClientModule> | undefined;
+
+function loadDuckDuckGoClientModule(): Promise<DuckDuckGoClientModule> {
+  duckDuckGoClientModulePromise ??= import("./ddg-client.js");
+  return duckDuckGoClientModulePromise;
+}
 
 const DuckDuckGoSearchSchema = {
   type: "object",
@@ -47,10 +57,7 @@ export function createDuckDuckGoWebSearchProvider(): WebSearchProviderPlugin {
         "Search the web using DuckDuckGo. Returns titles, URLs, and snippets with no API key required.",
       parameters: DuckDuckGoSearchSchema,
       execute: async (args) => {
-        const [{ runDuckDuckGoSearch }, { readNumberParam, readStringParam }] = await Promise.all([
-          import("./ddg-client.js"),
-          import("openclaw/plugin-sdk/provider-web-search"),
-        ]);
+        const { runDuckDuckGoSearch } = await loadDuckDuckGoClientModule();
         return await runDuckDuckGoSearch({
           config: ctx.config,
           query: readStringParam(args, "query", { required: true }),

@@ -143,14 +143,17 @@ describe("browser server-context loopback direct WebSocket profiles", () => {
     await openclaw.closeTab("T2");
   });
 
-  it("blocks direct WebSocket tab operations when strict SSRF policy rejects the cdpUrl", async () => {
+  it("blocks direct WebSocket tab operations when strict SSRF hostname allowlist rejects the cdpUrl", async () => {
     const fetchMock = vi.fn(async () => {
       throw new Error("unexpected fetch");
     });
 
     global.fetch = withFetchPreconnect(fetchMock);
     const state = makeState("openclaw");
-    state.resolved.ssrfPolicy = { dangerouslyAllowPrivateNetwork: false };
+    state.resolved.ssrfPolicy = {
+      dangerouslyAllowPrivateNetwork: false,
+      hostnameAllowlist: ["browserless.example.com"],
+    };
     state.resolved.profiles.openclaw = {
       cdpUrl: "ws://10.0.0.42:18800/devtools/browser/SESSION?token=abc",
       color: "#FF4500",

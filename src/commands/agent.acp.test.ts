@@ -10,6 +10,7 @@ import * as configIoModule from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { agentCommand } from "./agent.js";
+import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 
 const agentEventMocks = vi.hoisted(() => {
   type AgentEvent = { stream: string; data?: Record<string, unknown>; runId?: string };
@@ -113,13 +114,7 @@ const loadConfigSpy = vi.spyOn(configIoModule, "loadConfig");
 const runEmbeddedPiAgentSpy = vi.spyOn(embeddedModule, "runEmbeddedPiAgent");
 const getAcpSessionManagerSpy = vi.spyOn(acpManagerModule, "getAcpSessionManager");
 
-const runtime: RuntimeEnv = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(() => {
-    throw new Error("exit");
-  }),
-};
+const runtime = createThrowingTestRuntime();
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, { prefix: "openclaw-agent-acp-" });

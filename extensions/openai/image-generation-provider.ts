@@ -152,12 +152,14 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
             if (!entry.b64_json) {
               return null;
             }
-            return {
-              buffer: Buffer.from(entry.b64_json, "base64"),
-              mimeType: DEFAULT_OUTPUT_MIME,
-              fileName: `image-${index + 1}.png`,
-              ...(entry.revised_prompt ? { revisedPrompt: entry.revised_prompt } : {}),
-            };
+            return Object.assign(
+              {
+                buffer: Buffer.from(entry.b64_json, `base64`),
+                mimeType: DEFAULT_OUTPUT_MIME,
+                fileName: `image-${index + 1}.png`,
+              },
+              entry.revised_prompt ? { revisedPrompt: entry.revised_prompt } : {},
+            );
           })
           .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
 

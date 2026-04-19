@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { expectGeneratedTokenPersistedToGatewayAuth } from "../test-utils/auth-token-assertions.js";
+import { KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS } from "./known-weak-gateway-secrets.js";
 import {
   assertGatewayAuthNotKnownWeak,
   assertHooksTokenSeparateFromGatewayAuth,
@@ -404,34 +405,40 @@ describe("ensureGatewayStartupAuth", () => {
     ).rejects.toThrow(/hooks\.token must not match gateway auth token/i);
   });
 
-  it("rejects the .env.example placeholder token supplied via environment", async () => {
-    await expect(
-      ensureGatewayStartupAuth({
-        cfg: {},
-        env: {
-          OPENCLAW_GATEWAY_TOKEN: "change-me-to-a-long-random-token",
-        } as NodeJS.ProcessEnv,
-      }),
-    ).rejects.toThrow(/example placeholder/i);
-    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-  });
+  it.each(KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS)(
+    "rejects the published placeholder token %s supplied via environment",
+    async (token) => {
+      await expect(
+        ensureGatewayStartupAuth({
+          cfg: {},
+          env: {
+            OPENCLAW_GATEWAY_TOKEN: token,
+          } as NodeJS.ProcessEnv,
+        }),
+      ).rejects.toThrow(/example placeholder/i);
+      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    },
+  );
 
-  it("rejects the .env.example placeholder token supplied via config", async () => {
-    await expect(
-      ensureGatewayStartupAuth({
-        cfg: {
-          gateway: {
-            auth: {
-              mode: "token",
-              token: "change-me-to-a-long-random-token",
+  it.each(KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS)(
+    "rejects the published placeholder token %s supplied via config",
+    async (token) => {
+      await expect(
+        ensureGatewayStartupAuth({
+          cfg: {
+            gateway: {
+              auth: {
+                mode: "token",
+                token,
+              },
             },
           },
-        },
-        env: {} as NodeJS.ProcessEnv,
-      }),
-    ).rejects.toThrow(/example placeholder/i);
-    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-  });
+          env: {} as NodeJS.ProcessEnv,
+        }),
+      ).rejects.toThrow(/example placeholder/i);
+      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects the .env.example placeholder password supplied via config", async () => {
     await expect(
@@ -472,16 +479,19 @@ describe("assertGatewayAuthNotKnownWeak", () => {
     mocks.replaceConfigFile.mockClear();
   });
 
-  it("throws on the known-weak token sentinel", () => {
-    expect(() =>
-      assertGatewayAuthNotKnownWeak({
-        mode: "token",
-        modeSource: "config",
-        token: "change-me-to-a-long-random-token",
-        allowTailscale: false,
-      }),
-    ).toThrow(/example placeholder/i);
-  });
+  it.each(KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS)(
+    "throws on the known-weak token sentinel %s",
+    (token) => {
+      expect(() =>
+        assertGatewayAuthNotKnownWeak({
+          mode: "token",
+          modeSource: "config",
+          token,
+          allowTailscale: false,
+        }),
+      ).toThrow(/example placeholder/i);
+    },
+  );
 
   it("throws on the known-weak password sentinel", () => {
     expect(() =>
@@ -494,16 +504,19 @@ describe("assertGatewayAuthNotKnownWeak", () => {
     ).toThrow(/example placeholder/i);
   });
 
-  it("ignores whitespace-padded placeholder tokens (trimmed match)", () => {
-    expect(() =>
-      assertGatewayAuthNotKnownWeak({
-        mode: "token",
-        modeSource: "config",
-        token: "  change-me-to-a-long-random-token  ",
-        allowTailscale: false,
-      }),
-    ).toThrow(/example placeholder/i);
-  });
+  it.each(KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS)(
+    "rejects whitespace-padded placeholder token %s after trimming",
+    (token) => {
+      expect(() =>
+        assertGatewayAuthNotKnownWeak({
+          mode: "token",
+          modeSource: "config",
+          token: `  ${token}  `,
+          allowTailscale: false,
+        }),
+      ).toThrow(/example placeholder/i);
+    },
+  );
 
   it("does not throw on an empty token (falls through to generation path)", () => {
     expect(() =>

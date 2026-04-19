@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createSanitizeSessionHistoryHelpersMock,
   createSanitizeSessionHistoryProviderHookRuntimeMock,
@@ -39,7 +39,7 @@ vi.mock("../plugins/provider-hook-runtime.js", () =>
 describe("sanitizeSessionHistory openai tool id preservation", () => {
   let sanitizeSessionHistory: SanitizeSessionHistoryHarness["sanitizeSessionHistory"];
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     const harness = await loadSanitizeSessionHistoryWithCleanMocks();
     sanitizeSessionHistory = harness.sanitizeSessionHistory;
   });

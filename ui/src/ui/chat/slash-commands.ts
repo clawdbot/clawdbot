@@ -369,11 +369,13 @@ function normalizeCommandEntry(
       choices: getArgChoices(arg).slice(0, MAX_REMOTE_CHOICES),
     }))
     .filter((arg) => arg.name.length > 0)
-    .map((arg) => ({
-      name: arg.name,
-      ...(arg.required ? { required: true } : {}),
-      ...(arg.choices.length > 0 ? { choices: arg.choices } : {}),
-    }));
+    .map((arg) =>
+      Object.assign(
+        { name: arg.name },
+        arg.required ? { required: true } : {},
+        arg.choices.length > 0 ? { choices: arg.choices } : {},
+      ),
+    );
   return {
     key: primaryName,
     name: primaryName,

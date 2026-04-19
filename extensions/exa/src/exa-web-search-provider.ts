@@ -8,6 +8,15 @@ const EXA_SEARCH_TYPES = ["auto", "neural", "fast", "deep", "deep-reasoning", "i
 const EXA_FRESHNESS_VALUES = ["day", "week", "month", "year"] as const;
 const EXA_MAX_SEARCH_COUNT = 100;
 
+type ExaWebSearchRuntime = typeof import("./exa-web-search-provider.runtime.js");
+
+let exaWebSearchRuntimePromise: Promise<ExaWebSearchRuntime> | undefined;
+
+function loadExaWebSearchRuntime(): Promise<ExaWebSearchRuntime> {
+  exaWebSearchRuntimePromise ??= import("./exa-web-search-provider.runtime.js");
+  return exaWebSearchRuntimePromise;
+}
+
 const ExaSearchSchema = {
   type: "object",
   properties: {
@@ -81,8 +90,7 @@ export function createExaWebSearchProvider(): WebSearchProviderPlugin {
         "Search the web using Exa AI. Supports neural or keyword search, publication date filters, and optional highlights or text extraction.",
       parameters: ExaSearchSchema,
       execute: async (args) => {
-        const { executeExaWebSearchProviderTool } =
-          await import("./exa-web-search-provider.runtime.js");
+        const { executeExaWebSearchProviderTool } = await loadExaWebSearchRuntime();
         return await executeExaWebSearchProviderTool(ctx, args);
       },
     }),

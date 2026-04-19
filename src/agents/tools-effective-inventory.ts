@@ -157,13 +157,15 @@ export function resolveEffectiveToolInventory(
     effectiveTools
       .map((tool) => {
         const source = resolveEffectiveToolSource(tool);
-        return {
-          id: tool.name,
-          label: resolveEffectiveToolLabel(tool),
-          description: summarizeToolDescription(tool),
-          rawDescription: resolveRawToolDescription(tool) || summarizeToolDescription(tool),
-          ...source,
-        } satisfies EffectiveToolInventoryEntry;
+        return Object.assign(
+          {
+            id: tool.name,
+            label: resolveEffectiveToolLabel(tool),
+            description: summarizeToolDescription(tool),
+            rawDescription: resolveRawToolDescription(tool) || summarizeToolDescription(tool),
+          },
+          source,
+        ) satisfies EffectiveToolInventoryEntry;
       })
       .toSorted((a, b) => a.label.localeCompare(b.label)),
   );

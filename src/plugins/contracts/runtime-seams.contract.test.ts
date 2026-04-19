@@ -89,7 +89,7 @@ afterEach(() => {
   } else {
     Reflect.deleteProperty(globalThis as object, "fetch");
   }
-  for (const dir of tempDirs.splice(0, tempDirs.length)) {
+  for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

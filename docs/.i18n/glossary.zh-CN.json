@@ -60,6 +60,14 @@
     "target": "Feishu"
   },
   {
+    "source": "WeChat",
+    "target": "微信"
+  },
+  {
+    "source": "Weixin",
+    "target": "微信"
+  },
+  {
     "source": "Mattermost",
     "target": "Mattermost"
   },

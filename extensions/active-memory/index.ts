@@ -633,7 +633,7 @@ function normalizePluginConfig(pluginConfig: unknown): ResolvedActiveRecallPlugi
       parseOptionalPositiveInt(raw.timeoutMs, DEFAULT_TIMEOUT_MS),
       DEFAULT_TIMEOUT_MS,
       250,
-      60_000,
+      120_000,
     ),
     queryMode:
       raw.queryMode === "message" || raw.queryMode === "recent" || raw.queryMode === "full"

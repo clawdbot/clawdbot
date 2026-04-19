@@ -50,6 +50,7 @@ describe("buildDiscordNativeCommandContext", () => {
       interactionId: "interaction-1",
       channelId: "chan-1",
       threadParentId: "parent-1",
+      memberRoleIds: ["admin"],
       guildName: "Ops",
       channelTopic: "Production alerts only",
       channelConfig: {
@@ -82,6 +83,8 @@ describe("buildDiscordNativeCommandContext", () => {
     expect(ctx.ChatType).toBe("channel");
     expect(ctx.ConversationLabel).toBe("chan-1");
     expect(ctx.GroupSubject).toBe("Ops");
+    expect(ctx.GroupSpace).toBe("guild-1");
+    expect(ctx.MemberRoleIds).toEqual(["admin"]);
     expect(ctx.GroupSystemPrompt).toBe("Use the runbook.");
     expect(ctx.OwnerAllowFrom).toEqual(["user-1"]);
     expect(ctx.MessageThreadId).toBe("chan-1");

@@ -9,25 +9,21 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  return {
-    ...actual,
-    loadConfig: () => ({
-      session: {
-        mainKey: "main",
-        scope: "per-sender",
-        agentToAgent: { maxPingPongTurns: 2 },
-      },
-      tools: {
-        // Keep sessions tools permissive in this suite; dedicated visibility tests cover defaults.
-        sessions: { visibility: "all" },
-        agentToAgent: { enabled: true },
-      },
-    }),
-    resolveGatewayPort: () => 18789,
-  };
-});
+vi.mock("../config/config.js", () => ({
+  loadConfig: () => ({
+    session: {
+      mainKey: "main",
+      scope: "per-sender",
+      agentToAgent: { maxPingPongTurns: 2 },
+    },
+    tools: {
+      // Keep sessions tools permissive in this suite; dedicated visibility tests cover defaults.
+      sessions: { visibility: "all" },
+      agentToAgent: { enabled: true },
+    },
+  }),
+  resolveGatewayPort: () => 18789,
+}));
 
 import "./test-helpers/fast-openclaw-tools-sessions.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -762,7 +758,7 @@ describe("sessions tools", () => {
     expect(agentCalls).toHaveLength(8);
     for (const call of agentCalls) {
       expect(call.params).toMatchObject({
-        lane: "nested",
+        lane: expect.stringMatching(/^nested(?::|$)/),
         channel: "webchat",
         inputProvenance: { kind: "inter_session" },
       });
@@ -942,7 +938,7 @@ describe("sessions tools", () => {
     expect(agentCalls).toHaveLength(4);
     for (const call of agentCalls) {
       expect(call.params).toMatchObject({
-        lane: "nested",
+        lane: expect.stringMatching(/^nested(?::|$)/),
         channel: "webchat",
         inputProvenance: { kind: "inter_session" },
       });

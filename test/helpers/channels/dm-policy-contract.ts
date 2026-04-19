@@ -1,10 +1,16 @@
-import type { SignalSender } from "@openclaw/signal/contract-api.js";
 import { resolveRelativeBundledPluginPublicModuleId } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 
-type SignalContractApiSurface = Pick<
-  typeof import("@openclaw/signal/contract-api.js"),
-  "isSignalSenderAllowed"
->;
+export type SignalSender = {
+  kind: string;
+  raw: string;
+  e164?: string;
+  uuid?: string;
+  username?: string;
+};
+
+type SignalContractApiSurface = {
+  isSignalSenderAllowed: (...args: unknown[]) => boolean;
+};
 
 let signalContractSurface: Promise<SignalContractApiSurface> | undefined;
 
@@ -18,4 +24,3 @@ export function getSignalContractSurface(): Promise<SignalContractApiSurface> {
   ) as Promise<SignalContractApiSurface>;
   return signalContractSurface;
 }
-export type { SignalSender };

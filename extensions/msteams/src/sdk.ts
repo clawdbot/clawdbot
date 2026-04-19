@@ -67,19 +67,24 @@ type AzureIdentityModule = {
 
 const AZURE_IDENTITY_MODULE = "@azure/identity";
 
+let azureIdentityModulePromise: Promise<AzureIdentityModule> | null = null;
+
 async function loadAzureIdentity(): Promise<AzureIdentityModule> {
-  return (await import(AZURE_IDENTITY_MODULE)) as AzureIdentityModule;
+  azureIdentityModulePromise ??= import(AZURE_IDENTITY_MODULE) as Promise<AzureIdentityModule>;
+  return azureIdentityModulePromise;
 }
 
+let msTeamsSdkPromise: Promise<MSTeamsTeamsSdk> | null = null;
+
 export async function loadMSTeamsSdk(): Promise<MSTeamsTeamsSdk> {
-  const [appsModule, apiModule] = await Promise.all([
+  msTeamsSdkPromise ??= Promise.all([
     import("@microsoft/teams.apps"),
     import("@microsoft/teams.api"),
-  ]);
-  return {
+  ]).then(([appsModule, apiModule]) => ({
     App: appsModule.App,
     Client: apiModule.Client,
-  };
+  }));
+  return msTeamsSdkPromise;
 }
 
 /**
@@ -653,6 +658,20 @@ const BOT_FRAMEWORK_ISSUERS: ReadonlyArray<{
   },
 ];
 
+type BotFrameworkJwtDeps = {
+  jwt: typeof import("jsonwebtoken");
+  JwksClient: typeof import("jwks-rsa").JwksClient;
+};
+
+let botFrameworkJwtDepsPromise: Promise<BotFrameworkJwtDeps> | null = null;
+
+async function loadBotFrameworkJwtDeps(): Promise<BotFrameworkJwtDeps> {
+  botFrameworkJwtDepsPromise ??= Promise.all([import("jsonwebtoken"), import("jwks-rsa")]).then(
+    ([jwt, { JwksClient }]) => ({ jwt, JwksClient }),
+  );
+  return botFrameworkJwtDepsPromise;
+}
+
 /**
  * Create a Bot Framework JWT validator using jsonwebtoken + jwks-rsa directly.
  *
@@ -670,8 +689,7 @@ const BOT_FRAMEWORK_ISSUERS: ReadonlyArray<{
 export async function createBotFrameworkJwtValidator(creds: MSTeamsCredentials): Promise<{
   validate: (authHeader: string) => Promise<boolean>;
 }> {
-  const jwt = await import("jsonwebtoken");
-  const { JwksClient } = await import("jwks-rsa");
+  const { jwt, JwksClient } = await loadBotFrameworkJwtDeps();
 
   const allowedAudiences: [string, ...string[]] = [
     creds.appId,

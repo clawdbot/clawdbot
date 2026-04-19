@@ -127,6 +127,18 @@ describe("streamWithIdleTimeout", () => {
     };
   }
 
+  function createNeverYieldingStream(): AsyncIterable<unknown> {
+    return {
+      [Symbol.asyncIterator]() {
+        return {
+          async next() {
+            return new Promise<IteratorResult<unknown>>(() => {});
+          },
+        };
+      },
+    };
+  }
+
   it("wraps stream function", () => {
     const mockStream = createMockAsyncIterable([]);
     const baseFn = vi.fn().mockReturnValue(mockStream);
@@ -150,18 +162,7 @@ describe("streamWithIdleTimeout", () => {
 
   it("throws on idle timeout", async () => {
     vi.useFakeTimers();
-    // Create a stream that never yields
-    const slowStream: AsyncIterable<unknown> = {
-      [Symbol.asyncIterator]() {
-        return {
-          async next() {
-            // Never resolves - simulates hung LLM
-            return new Promise<IteratorResult<unknown>>(() => {});
-          },
-        };
-      },
-    };
-
+    const slowStream = createNeverYieldingStream();
     const baseFn = vi.fn().mockReturnValue(slowStream);
     const wrapped = streamWithIdleTimeout(baseFn, 50); // 50ms timeout
 
@@ -242,18 +243,7 @@ describe("streamWithIdleTimeout", () => {
 
   it("calls timeout hook on idle timeout", async () => {
     vi.useFakeTimers();
-    // Create a stream that never yields
-    const slowStream: AsyncIterable<unknown> = {
-      [Symbol.asyncIterator]() {
-        return {
-          async next() {
-            // Never resolves - simulates hung LLM
-            return new Promise<IteratorResult<unknown>>(() => {});
-          },
-        };
-      },
-    };
-
+    const slowStream = createNeverYieldingStream();
     const baseFn = vi.fn().mockReturnValue(slowStream);
     const onIdleTimeout = vi.fn();
     const wrapped = streamWithIdleTimeout(baseFn, 50, onIdleTimeout); // 50ms timeout

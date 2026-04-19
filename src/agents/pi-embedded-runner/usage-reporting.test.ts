@@ -1,54 +1,14 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
   mockedEnsureRuntimePluginsLoaded,
   mockedRunEmbeddedAttempt,
 } from "./run.overflow-compaction.harness.js";
-import { buildAttemptReplayMetadata } from "./run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
-
-function makeAttemptResult(
-  overrides: Partial<EmbeddedRunAttemptResult> = {},
-): EmbeddedRunAttemptResult {
-  const toolMetas = overrides.toolMetas ?? [];
-  const didSendViaMessagingTool = overrides.didSendViaMessagingTool ?? false;
-  const successfulCronAdds = overrides.successfulCronAdds;
-  return {
-    aborted: false,
-    externalAbort: false,
-    timedOut: false,
-    idleTimedOut: false,
-    timedOutDuringCompaction: false,
-    promptError: null,
-    promptErrorSource: null,
-    sessionIdUsed: "test-session",
-    messagesSnapshot: [],
-    assistantTexts: [],
-    toolMetas,
-    lastAssistant: undefined,
-    replayMetadata:
-      overrides.replayMetadata ??
-      buildAttemptReplayMetadata({
-        toolMetas,
-        didSendViaMessagingTool,
-        successfulCronAdds,
-      }),
-    itemLifecycle: {
-      startedCount: 0,
-      completedCount: 0,
-      activeCount: 0,
-    },
-    didSendViaMessagingTool,
-    messagingToolSentTexts: [],
-    messagingToolSentMediaUrls: [],
-    messagingToolSentTargets: [],
-    cloudCodeAssistFormatError: false,
-    ...overrides,
-  };
-}
 
 function makeAssistantMessage(
   overrides: Partial<AssistantMessage> = {},

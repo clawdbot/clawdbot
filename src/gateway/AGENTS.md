@@ -14,6 +14,13 @@ runtime when they only need plugin-owned static descriptors.
   just to answer static questions.
 - If adding a new plugin-owned Gateway descriptor, add the core resolver,
   plugin artifact, and mirrored full-plugin export in the same change.
+- In Gateway server tests, reuse suite-level servers, authenticated contexts,
+  and clients when the behavior under test does not require a fresh
+  connect/auth handshake. Reset runtime state explicitly instead of restarting
+  the whole server per case.
+- Keep schedulers, pollers, and background loops disabled in manual-RPC tests
+  unless the test is specifically proving automatic scheduling or lifecycle
+  behavior.
 
 ## Verification
 

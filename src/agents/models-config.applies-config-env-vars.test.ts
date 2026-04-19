@@ -48,27 +48,36 @@ async function resolveProvidersForConfigEnvTest(params: {
   );
 }
 
+function createConfigEnvVarsConfig(): OpenClawConfig {
+  return {
+    models: { providers: {} },
+    env: {
+      vars: {
+        OPENROUTER_API_KEY: "from-config", // pragma: allowlist secret
+        [TEST_ENV_VAR]: "from-config",
+      },
+    },
+  };
+}
+
+async function resolveProvidersAndCaptureDiscoveryEnv(cfg: OpenClawConfig) {
+  let discoveryEnv: NodeJS.ProcessEnv | undefined;
+  const providers = await resolveProvidersForConfigEnvTest({
+    cfg,
+    onResolveImplicitProviders: (env) => {
+      discoveryEnv = env;
+    },
+  });
+  return { discoveryEnv, providers };
+}
+
 describe("models-config", () => {
   it("uses config env.vars entries for implicit provider discovery without mutating process.env", async () => {
     await withTempEnv(["OPENROUTER_API_KEY", TEST_ENV_VAR], async () => {
       unsetEnv(["OPENROUTER_API_KEY", TEST_ENV_VAR]);
-      const cfg: OpenClawConfig = {
-        models: { providers: {} },
-        env: {
-          vars: {
-            OPENROUTER_API_KEY: "from-config", // pragma: allowlist secret
-            [TEST_ENV_VAR]: "from-config",
-          },
-        },
-      };
-
-      let discoveryEnv: NodeJS.ProcessEnv | undefined;
-      const providers = await resolveProvidersForConfigEnvTest({
-        cfg,
-        onResolveImplicitProviders: (env) => {
-          discoveryEnv = env;
-        },
-      });
+      const { discoveryEnv, providers } = await resolveProvidersAndCaptureDiscoveryEnv(
+        createConfigEnvVarsConfig(),
+      );
 
       expect(process.env.OPENROUTER_API_KEY).toBeUndefined();
       expect(process.env[TEST_ENV_VAR]).toBeUndefined();
@@ -82,23 +91,9 @@ describe("models-config", () => {
     await withTempEnv(["OPENROUTER_API_KEY", TEST_ENV_VAR], async () => {
       process.env.OPENROUTER_API_KEY = "from-host"; // pragma: allowlist secret
       process.env[TEST_ENV_VAR] = "from-host";
-      const cfg: OpenClawConfig = {
-        models: { providers: {} },
-        env: {
-          vars: {
-            OPENROUTER_API_KEY: "from-config", // pragma: allowlist secret
-            [TEST_ENV_VAR]: "from-config",
-          },
-        },
-      };
-
-      let discoveryEnv: NodeJS.ProcessEnv | undefined;
-      const providers = await resolveProvidersForConfigEnvTest({
-        cfg,
-        onResolveImplicitProviders: (env) => {
-          discoveryEnv = env;
-        },
-      });
+      const { discoveryEnv, providers } = await resolveProvidersAndCaptureDiscoveryEnv(
+        createConfigEnvVarsConfig(),
+      );
 
       expect(discoveryEnv?.OPENROUTER_API_KEY).toBe("from-host");
       expect(discoveryEnv?.[TEST_ENV_VAR]).toBe("from-host");

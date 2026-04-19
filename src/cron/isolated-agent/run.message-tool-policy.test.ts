@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { CronDeliveryMode } from "../types.js";
 import {
   clearFastTestEnv,
   dispatchCronDeliveryMock,
@@ -36,7 +37,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
 
   async function expectMessageToolDisabledForPlan(plan: {
     requested: boolean;
-    mode: "none" | "announce";
+    mode: CronDeliveryMode;
     channel?: string;
     to?: string;
   }) {
@@ -45,6 +46,19 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     await runCronIsolatedAgentTurn(makeParams());
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
     expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.disableMessageTool).toBe(true);
+  }
+
+  async function expectMessageToolEnabledForPlan(plan: {
+    requested: boolean;
+    mode: CronDeliveryMode;
+    channel?: string;
+    to?: string;
+  }) {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue(plan);
+    await runCronIsolatedAgentTurn(makeParams());
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.disableMessageTool).toBe(false);
   }
 
   beforeEach(() => {
@@ -63,8 +77,8 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     restoreFastTestEnv(previousFastTestEnv);
   });
 
-  it('disables the message tool when delivery.mode is "none"', async () => {
-    await expectMessageToolDisabledForPlan({
+  it('keeps the message tool enabled when delivery.mode is "none"', async () => {
+    await expectMessageToolEnabledForPlan({
       requested: false,
       mode: "none",
     });
@@ -76,6 +90,14 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       mode: "announce",
       channel: "telegram",
       to: "123",
+    });
+  });
+
+  it("disables the message tool when webhook delivery is active", async () => {
+    await expectMessageToolDisabledForPlan({
+      requested: false,
+      mode: "webhook",
+      to: "https://example.invalid/cron",
     });
   });
 

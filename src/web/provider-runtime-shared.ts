@@ -12,10 +12,10 @@ type ProviderWithCredential = {
   requiresCredential?: boolean;
 };
 
-export function resolveWebProviderConfig<
-  TKind extends "search" | "fetch",
-  TConfig extends Record<string, unknown>,
->(cfg: OpenClawConfig | undefined, kind: TKind): TConfig | undefined {
+export function resolveWebProviderConfig(
+  cfg: OpenClawConfig | undefined,
+  kind: "search" | "fetch",
+): Record<string, unknown> | undefined {
   const webConfig = cfg?.tools?.web;
   if (!webConfig || typeof webConfig !== "object") {
     return undefined;
@@ -24,7 +24,7 @@ export function resolveWebProviderConfig<
   if (!toolConfig || typeof toolConfig !== "object") {
     return undefined;
   }
-  return toolConfig as TConfig;
+  return toolConfig as Record<string, unknown>;
 }
 
 export function readWebProviderEnvValue(

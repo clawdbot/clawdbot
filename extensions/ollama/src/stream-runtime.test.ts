@@ -10,6 +10,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 
 import {
   buildOllamaChatRequest,
+  createConfiguredOllamaCompatStreamWrapper,
   createConfiguredOllamaStreamFn,
   createOllamaStreamFn,
   convertToOllamaMessages,
@@ -53,6 +54,46 @@ describe("buildOllamaChatRequest", () => {
       }),
     ).toMatchObject({
       model: "qwen3:14b-q8_0",
+    });
+  });
+});
+
+describe("createConfiguredOllamaCompatStreamWrapper", () => {
+  it("adds Moonshot thinking config for Ollama cloud Kimi compat requests", async () => {
+    let patchedPayload: Record<string, unknown> | undefined;
+    const baseStreamFn = vi.fn((_model, _context, options) => {
+      options?.onPayload?.({ tool_choice: "auto" });
+      return (async function* () {})();
+    });
+    const model = {
+      api: "openai-completions",
+      provider: "ollama",
+      id: "kimi-k2.5:cloud",
+      contextWindow: 262144,
+    };
+
+    const wrapped = createConfiguredOllamaCompatStreamWrapper({
+      provider: "ollama",
+      modelId: "kimi-k2.5:cloud",
+      model,
+      streamFn: baseStreamFn,
+      thinkingLevel: "high",
+      extraParams: {},
+    } as never);
+
+    await wrapped?.(
+      model as never,
+      { messages: [] } as never,
+      {
+        onPayload: (payload: unknown) => {
+          patchedPayload = payload as Record<string, unknown>;
+        },
+      } as never,
+    );
+
+    expect(patchedPayload).toMatchObject({
+      thinking: { type: "enabled" },
+      options: { num_ctx: 262144 },
     });
   });
 });

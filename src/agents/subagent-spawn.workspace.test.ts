@@ -71,6 +71,20 @@ function getRegisteredRun() {
     | undefined;
 }
 
+function findLastSessionDeleteCall() {
+  return hoisted.callGatewayMock.mock.calls.findLast(
+    ([request]) => (request as { method?: string }).method === "sessions.delete",
+  )?.[0] as
+    | {
+        params?: {
+          key?: string;
+          deleteTranscript?: boolean;
+          emitLifecycleHooks?: boolean;
+        };
+      }
+    | undefined;
+}
+
 async function expectAcceptedWorkspace(params: { agentId: string; expectedWorkspaceDir: string }) {
   const result = await spawnSubagentDirect(
     {
@@ -223,18 +237,7 @@ describe("spawnSubagentDirect workspace inheritance", () => {
     expect(result.childSessionKey).toMatch(/^agent:main:subagent:/);
     expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
 
-    const deleteCall = hoisted.callGatewayMock.mock.calls.find(
-      ([request]) => (request as { method?: string }).method === "sessions.delete",
-    )?.[0] as
-      | {
-          params?: {
-            key?: string;
-            deleteTranscript?: boolean;
-            emitLifecycleHooks?: boolean;
-          };
-        }
-      | undefined;
-
+    const deleteCall = findLastSessionDeleteCall();
     expect(deleteCall?.params).toMatchObject({
       key: result.childSessionKey,
       deleteTranscript: true,
@@ -291,18 +294,7 @@ describe("spawnSubagentDirect workspace inheritance", () => {
       runId: "run-thread-register-fail",
     });
 
-    const deleteCall = hoisted.callGatewayMock.mock.calls.findLast(
-      ([request]) => (request as { method?: string }).method === "sessions.delete",
-    )?.[0] as
-      | {
-          params?: {
-            key?: string;
-            deleteTranscript?: boolean;
-            emitLifecycleHooks?: boolean;
-          };
-        }
-      | undefined;
-
+    const deleteCall = findLastSessionDeleteCall();
     expect(deleteCall?.params).toMatchObject({
       key: result.childSessionKey,
       deleteTranscript: true,

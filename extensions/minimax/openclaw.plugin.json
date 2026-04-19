@@ -4,6 +4,7 @@
   "legacyPluginIds": ["minimax-portal-auth"],
   "providers": ["minimax", "minimax-portal"],
   "autoEnableWhenConfiguredProviders": ["minimax", "minimax-portal"],
+  "nonSecretAuthMarkers": ["minimax-oauth"],
   "providerAuthEnvVars": {
     "minimax": ["MINIMAX_API_KEY"],
     "minimax-portal": ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"]

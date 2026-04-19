@@ -135,6 +135,11 @@ type ResolvedSkillsLimits = {
   maxSkillFileBytes: number;
 };
 
+type LoadedSkillRecord = {
+  skill: Skill;
+  frontmatter?: ParsedSkillFrontmatter;
+};
+
 function resolveSkillsLimits(config?: OpenClawConfig, agentId?: string): ResolvedSkillsLimits {
   const limits = config?.skills?.limits;
   const agentSkillsLimits = resolveEffectiveAgentSkillsLimits(config, agentId);
@@ -283,13 +288,13 @@ function resolveContainedSkillPath(params: {
   return null;
 }
 
-function filterLoadedSkillsInsideRoot(params: {
-  skills: Skill[];
+function filterLoadedSkillRecordsInsideRoot(params: {
+  records: LoadedSkillRecord[];
   source: string;
   rootDir: string;
   rootRealPath: string;
-}): Skill[] {
-  return params.skills.filter((skill) => {
+}): LoadedSkillRecord[] {
+  return params.records.filter(({ skill }) => {
     const baseDirRealPath = resolveContainedSkillPath({
       source: params.source,
       rootDir: params.rootDir,
@@ -339,14 +344,22 @@ function resolveNestedSkillsRoot(
   return { baseDir: dir };
 }
 
-function unwrapLoadedSkills(loaded: unknown): Skill[] {
+function unwrapLoadedSkillRecords(loaded: unknown): LoadedSkillRecord[] {
   if (Array.isArray(loaded)) {
-    return loaded as Skill[];
+    return (loaded as Skill[]).map((skill) => ({ skill }));
   }
   if (loaded && typeof loaded === "object" && "skills" in loaded) {
     const skills = (loaded as { skills?: unknown }).skills;
     if (Array.isArray(skills)) {
-      return skills as Skill[];
+      const loadedResult = loaded as { frontmatterByFilePath?: unknown };
+      const frontmatterByFilePath =
+        loadedResult.frontmatterByFilePath instanceof Map
+          ? (loadedResult.frontmatterByFilePath as ReadonlyMap<string, ParsedSkillFrontmatter>)
+          : undefined;
+      return (skills as Skill[]).map((skill) => ({
+        skill,
+        frontmatter: frontmatterByFilePath?.get(skill.filePath),
+      }));
     }
   }
   return [];
@@ -363,8 +376,11 @@ function loadSkillEntries(
 ): SkillEntry[] {
   const limits = resolveSkillsLimits(opts?.config, opts?.agentId);
 
-  const loadSkills = (params: { dir: string; source: string }): Skill[] => {
+  const loadSkills = (params: { dir: string; source: string }): LoadedSkillRecord[] => {
     const rootDir = path.resolve(params.dir);
+    if (!fs.existsSync(rootDir)) {
+      return [];
+    }
     const rootRealPath = tryRealpath(rootDir) ?? rootDir;
     const resolved = resolveNestedSkillsRoot(params.dir, {
       maxEntriesToScan: limits.maxCandidatesPerRoot,
@@ -412,8 +428,8 @@ function loadSkillEntries(
         source: params.source,
         maxBytes: limits.maxSkillFileBytes,
       });
-      return filterLoadedSkillsInsideRoot({
-        skills: unwrapLoadedSkills(loaded),
+      return filterLoadedSkillRecordsInsideRoot({
+        records: unwrapLoadedSkillRecords(loaded),
         source: params.source,
         rootDir,
         rootRealPath: baseDirRealPath,
@@ -443,7 +459,7 @@ function loadSkillEntries(
       });
     }
 
-    const loadedSkills: Skill[] = [];
+    const loadedSkills: LoadedSkillRecord[] = [];
 
     // Only consider immediate subfolders that look like skills (have SKILL.md) and are under size cap.
     for (const name of limitedChildren) {
@@ -491,8 +507,8 @@ function loadSkillEntries(
         maxBytes: limits.maxSkillFileBytes,
       });
       loadedSkills.push(
-        ...filterLoadedSkillsInsideRoot({
-          skills: unwrapLoadedSkills(loaded),
+        ...filterLoadedSkillRecordsInsideRoot({
+          records: unwrapLoadedSkillRecords(loaded),
           source: params.source,
           rootDir,
           rootRealPath: baseDirRealPath,
@@ -507,7 +523,7 @@ function loadSkillEntries(
     if (loadedSkills.length > limits.maxSkillsLoadedPerSource) {
       return loadedSkills
         .slice()
-        .sort((a, b) => a.name.localeCompare(b.name, "en"))
+        .sort((a, b) => a.skill.name.localeCompare(b.skill.name, "en"))
         .slice(0, limits.maxSkillsLoadedPerSource);
     }
 
@@ -560,36 +576,39 @@ function loadSkillEntries(
     source: "openclaw-workspace",
   });
 
-  const merged = new Map<string, Skill>();
+  const merged = new Map<string, LoadedSkillRecord>();
   // Precedence: extra < bundled < managed < agents-skills-personal < agents-skills-project < workspace
-  for (const skill of extraSkills) {
-    merged.set(skill.name, skill);
+  for (const record of extraSkills) {
+    merged.set(record.skill.name, record);
   }
-  for (const skill of bundledSkills) {
-    merged.set(skill.name, skill);
+  for (const record of bundledSkills) {
+    merged.set(record.skill.name, record);
   }
-  for (const skill of managedSkills) {
-    merged.set(skill.name, skill);
+  for (const record of managedSkills) {
+    merged.set(record.skill.name, record);
   }
-  for (const skill of personalAgentsSkills) {
-    merged.set(skill.name, skill);
+  for (const record of personalAgentsSkills) {
+    merged.set(record.skill.name, record);
   }
-  for (const skill of projectAgentsSkills) {
-    merged.set(skill.name, skill);
+  for (const record of projectAgentsSkills) {
+    merged.set(record.skill.name, record);
   }
-  for (const skill of workspaceSkills) {
-    merged.set(skill.name, skill);
+  for (const record of workspaceSkills) {
+    merged.set(record.skill.name, record);
   }
 
   const skillEntries: SkillEntry[] = Array.from(merged.values())
-    .sort((a, b) => a.name.localeCompare(b.name, "en"))
-    .map((skill) => {
+    .sort((a, b) => a.skill.name.localeCompare(b.skill.name, "en"))
+    .map((record) => {
+      const skill = record.skill;
       const frontmatter =
+        record.frontmatter ??
         readSkillFrontmatterSafe({
           rootDir: skill.baseDir,
           filePath: skill.filePath,
           maxBytes: limits.maxSkillFileBytes,
-        }) ?? ({} as ParsedSkillFrontmatter);
+        }) ??
+        ({} as ParsedSkillFrontmatter);
       const invocation = resolveSkillInvocationPolicy(frontmatter);
       return {
         skill,

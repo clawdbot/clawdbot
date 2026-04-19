@@ -1,4 +1,8 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  normalizeCommandDescription,
+  normalizeSlashCommandName,
+  resolveCustomCommands,
+} from "../shared/custom-command-config.js";
 
 export type TelegramCustomCommandInput = {
   command?: string | null;
@@ -11,18 +15,18 @@ export type TelegramCustomCommandIssue = {
   message: string;
 };
 const TELEGRAM_COMMAND_NAME_PATTERN_VALUE = /^[a-z0-9_]{1,32}$/;
+const TELEGRAM_CUSTOM_COMMAND_CONFIG = {
+  label: "Telegram",
+  pattern: TELEGRAM_COMMAND_NAME_PATTERN_VALUE,
+  patternDescription: "use a-z, 0-9, underscore; max 32 chars",
+} as const;
 
 function normalizeTelegramCommandNameImpl(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
-  }
-  const withoutSlash = trimmed.startsWith("/") ? trimmed.slice(1) : trimmed;
-  return normalizeLowercaseStringOrEmpty(withoutSlash).replace(/-/g, "_");
+  return normalizeSlashCommandName(value);
 }
 
 function normalizeTelegramCommandDescriptionImpl(value: string): string {
-  return value.trim();
+  return normalizeCommandDescription(value);
 }
 
 function resolveTelegramCustomCommandsImpl(params: {
@@ -34,65 +38,10 @@ function resolveTelegramCustomCommandsImpl(params: {
   commands: Array<{ command: string; description: string }>;
   issues: TelegramCustomCommandIssue[];
 } {
-  const entries = Array.isArray(params.commands) ? params.commands : [];
-  const reserved = params.reservedCommands ?? new Set<string>();
-  const checkReserved = params.checkReserved !== false;
-  const checkDuplicates = params.checkDuplicates !== false;
-  const seen = new Set<string>();
-  const resolved: Array<{ command: string; description: string }> = [];
-  const issues: TelegramCustomCommandIssue[] = [];
-
-  for (let index = 0; index < entries.length; index += 1) {
-    const entry = entries[index];
-    const normalized = normalizeTelegramCommandNameImpl(entry?.command ?? "");
-    if (!normalized) {
-      issues.push({
-        index,
-        field: "command",
-        message: "Telegram custom command is missing a command name.",
-      });
-      continue;
-    }
-    if (!TELEGRAM_COMMAND_NAME_PATTERN_VALUE.test(normalized)) {
-      issues.push({
-        index,
-        field: "command",
-        message: `Telegram custom command "/${normalized}" is invalid (use a-z, 0-9, underscore; max 32 chars).`,
-      });
-      continue;
-    }
-    if (checkReserved && reserved.has(normalized)) {
-      issues.push({
-        index,
-        field: "command",
-        message: `Telegram custom command "/${normalized}" conflicts with a native command.`,
-      });
-      continue;
-    }
-    if (checkDuplicates && seen.has(normalized)) {
-      issues.push({
-        index,
-        field: "command",
-        message: `Telegram custom command "/${normalized}" is duplicated.`,
-      });
-      continue;
-    }
-    const description = normalizeTelegramCommandDescriptionImpl(entry?.description ?? "");
-    if (!description) {
-      issues.push({
-        index,
-        field: "description",
-        message: `Telegram custom command "/${normalized}" is missing a description.`,
-      });
-      continue;
-    }
-    if (checkDuplicates) {
-      seen.add(normalized);
-    }
-    resolved.push({ command: normalized, description });
-  }
-
-  return { commands: resolved, issues };
+  return resolveCustomCommands({
+    ...params,
+    config: TELEGRAM_CUSTOM_COMMAND_CONFIG,
+  });
 }
 
 export function getTelegramCommandNamePattern(): RegExp {

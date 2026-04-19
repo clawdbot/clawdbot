@@ -1,20 +1,16 @@
 import type { OpenClawConfig } from "../config/types.js";
 import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
+import { resolveImageCapableConfigProviderIds } from "./config-provider-models.js";
 import { describeImageWithModel, describeImagesWithModel } from "./image-runtime.js";
 import { normalizeMediaProviderId } from "./provider-id.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
-type ConfigProvider = NonNullable<
-  NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string]
->;
-
-type ConfigProviderModel = NonNullable<ConfigProvider["models"]>[number];
-
 function mergeProviderIntoRegistry(
   registry: Map<string, MediaUnderstandingProvider>,
   provider: MediaUnderstandingProvider,
+  registryKey = provider.id,
 ) {
-  const normalizedKey = normalizeMediaProviderId(provider.id);
+  const normalizedKey = normalizeMediaProviderId(registryKey);
   const existing = registry.get(normalizedKey);
   const merged = existing
     ? {
@@ -43,46 +39,19 @@ export function buildMediaUnderstandingRegistry(
     mergeProviderIntoRegistry(registry, provider);
   }
   // Auto-register media-understanding for config providers with image-capable models (#51392)
-  const configProviders = cfg?.models?.providers;
-  if (configProviders && typeof configProviders === "object") {
-    for (const [providerKey, providerCfg] of Object.entries(configProviders)) {
-      if (!providerKey?.trim()) {
-        continue;
-      }
-      const normalizedKey = normalizeMediaProviderId(providerKey);
-      if (registry.has(normalizedKey)) {
-        continue;
-      }
-      const models = providerCfg.models ?? [];
-      const hasImageModel = models.some(
-        (m: ConfigProviderModel) => Array.isArray(m?.input) && m.input.includes("image"),
-      );
-      if (hasImageModel) {
-        const autoProvider: MediaUnderstandingProvider = {
-          id: normalizedKey,
-          capabilities: ["image"],
-          describeImage: describeImageWithModel,
-          describeImages: describeImagesWithModel,
-        };
-        mergeProviderIntoRegistry(registry, autoProvider);
-      }
+  for (const normalizedKey of resolveImageCapableConfigProviderIds(cfg)) {
+    if (!registry.has(normalizedKey)) {
+      mergeProviderIntoRegistry(registry, {
+        id: normalizedKey,
+        capabilities: ["image"],
+        describeImage: describeImageWithModel,
+        describeImages: describeImagesWithModel,
+      });
     }
   }
   if (overrides) {
     for (const [key, provider] of Object.entries(overrides)) {
-      const normalizedKey = normalizeMediaProviderId(key);
-      const existing = registry.get(normalizedKey);
-      const merged = existing
-        ? {
-            ...existing,
-            ...provider,
-            capabilities: provider.capabilities ?? existing.capabilities,
-            defaultModels: provider.defaultModels ?? existing.defaultModels,
-            autoPriority: provider.autoPriority ?? existing.autoPriority,
-            nativeDocumentInputs: provider.nativeDocumentInputs ?? existing.nativeDocumentInputs,
-          }
-        : provider;
-      registry.set(normalizedKey, merged);
+      mergeProviderIntoRegistry(registry, provider, key);
     }
   }
   return registry;

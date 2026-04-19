@@ -7,6 +7,7 @@ import {
   backupVerifyCommandMock,
   createBackupTestRuntime,
   mockStateOnlyBackupPlan,
+  resetBackupTempHome,
   tarCreateMock,
 } from "./backup.test-support.js";
 
@@ -15,18 +16,12 @@ const { backupCreateCommand } = await import("./backup.js");
 describe("backupCreateCommand atomic archive write", () => {
   let tempHome: TempHomeEnv;
 
-  async function resetTempHome() {
-    await fs.rm(tempHome.home, { recursive: true, force: true });
-    await fs.mkdir(path.join(tempHome.home, ".openclaw"), { recursive: true });
-    delete process.env.OPENCLAW_CONFIG_PATH;
-  }
-
   beforeAll(async () => {
     tempHome = await createTempHomeEnv("openclaw-backup-atomic-test-");
   });
 
   beforeEach(async () => {
-    await resetTempHome();
+    await resetBackupTempHome(tempHome);
     tarCreateMock.mockReset();
     backupVerifyCommandMock.mockReset();
   });

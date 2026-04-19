@@ -20,7 +20,8 @@ import {
   scheduleDetachedLaunchdRestartHandoff,
 } from "./launchd-restart-handoff.js";
 import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
-import { resolveGatewayStateDir, resolveHomeDir } from "./paths.js";
+import { resolveHomeDir } from "./paths.js";
+import { resolveGatewayLogPaths } from "./restart-logs.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
@@ -63,21 +64,6 @@ function resolveLaunchAgentPlistPathForLabel(
 export function resolveLaunchAgentPlistPath(env: GatewayServiceEnv): string {
   const label = resolveLaunchAgentLabel({ env });
   return resolveLaunchAgentPlistPathForLabel(env, label);
-}
-
-export function resolveGatewayLogPaths(env: GatewayServiceEnv): {
-  logDir: string;
-  stdoutPath: string;
-  stderrPath: string;
-} {
-  const stateDir = resolveGatewayStateDir(env);
-  const logDir = path.join(stateDir, "logs");
-  const prefix = env.OPENCLAW_LOG_PREFIX?.trim() || "gateway";
-  return {
-    logDir,
-    stdoutPath: path.join(logDir, `${prefix}.log`),
-    stderrPath: path.join(logDir, `${prefix}.err.log`),
-  };
 }
 
 export async function readLaunchAgentProgramArguments(
@@ -357,74 +343,6 @@ export async function repairLaunchAgentBootstrap(args: {
     };
   }
   return { ok: true, status: repairStatus };
-}
-
-export type LegacyLaunchAgent = {
-  label: string;
-  plistPath: string;
-  loaded: boolean;
-  exists: boolean;
-};
-
-export async function findLegacyLaunchAgents(env: GatewayServiceEnv): Promise<LegacyLaunchAgent[]> {
-  const domain = resolveGuiDomain();
-  const results: LegacyLaunchAgent[] = [];
-  for (const label of resolveLegacyGatewayLaunchAgentLabels(env.OPENCLAW_PROFILE)) {
-    const plistPath = resolveLaunchAgentPlistPathForLabel(env, label);
-    const res = await execLaunchctl(["print", `${domain}/${label}`]);
-    const loaded = res.code === 0;
-    let exists = false;
-    try {
-      await fs.access(plistPath);
-      exists = true;
-    } catch {
-      // ignore
-    }
-    if (loaded || exists) {
-      results.push({ label, plistPath, loaded, exists });
-    }
-  }
-  return results;
-}
-
-export async function uninstallLegacyLaunchAgents({
-  env,
-  stdout,
-}: GatewayServiceManageArgs): Promise<LegacyLaunchAgent[]> {
-  const domain = resolveGuiDomain();
-  const agents = await findLegacyLaunchAgents(env);
-  if (agents.length === 0) {
-    return agents;
-  }
-
-  const home = toPosixPath(resolveHomeDir(env));
-  const trashDir = path.posix.join(home, ".Trash");
-  try {
-    await fs.mkdir(trashDir, { recursive: true });
-  } catch {
-    // ignore
-  }
-
-  for (const agent of agents) {
-    await execLaunchctl(["bootout", domain, agent.plistPath]);
-    await execLaunchctl(["unload", agent.plistPath]);
-
-    try {
-      await fs.access(agent.plistPath);
-    } catch {
-      continue;
-    }
-
-    const dest = path.join(trashDir, `${agent.label}.plist`);
-    try {
-      await fs.rename(agent.plistPath, dest);
-      stdout.write(`${formatLine("Moved legacy LaunchAgent to Trash", dest)}\n`);
-    } catch {
-      stdout.write(`Legacy LaunchAgent remains at ${agent.plistPath} (could not move)\n`);
-    }
-  }
-
-  return agents;
 }
 
 export async function uninstallLaunchAgent({

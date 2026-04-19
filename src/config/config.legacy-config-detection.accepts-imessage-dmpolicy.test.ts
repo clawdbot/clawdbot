@@ -1,4 +1,9 @@
 import { describe, expect, it } from "vitest";
+import {
+  expectSchemaConfigValue,
+  expectSchemaValid,
+  expectSchemaValidationIssue,
+} from "./legacy-config-detection.test-support.js";
 import { AudioSchema, BindingsSchema } from "./zod-schema.agents.js";
 import { OpenClawSchema } from "./zod-schema.js";
 import {
@@ -7,46 +12,6 @@ import {
   MSTeamsConfigSchema,
   SlackConfigSchema,
 } from "./zod-schema.providers-core.js";
-
-function expectSchemaConfigValue(params: {
-  schema: { safeParse: (value: unknown) => { success: true; data: unknown } | { success: false } };
-  config: unknown;
-  readValue: (config: unknown) => unknown;
-  expectedValue: unknown;
-}) {
-  const res = params.schema.safeParse(params.config);
-  expect(res.success).toBe(true);
-  if (!res.success) {
-    throw new Error("expected schema config to be valid");
-  }
-  expect(params.readValue(res.data)).toBe(params.expectedValue);
-}
-
-function expectSchemaValid(
-  schema: {
-    safeParse: (value: unknown) => { success: true } | { success: false };
-  },
-  config: unknown,
-) {
-  const res = schema.safeParse(config);
-  expect(res.success).toBe(true);
-}
-
-function expectInvalidSchemaIssuePath(params: {
-  schema: {
-    safeParse: (
-      value: unknown,
-    ) => { success: true } | { success: false; error: { issues: Array<{ path: PropertyKey[] }> } };
-  };
-  config: unknown;
-  expectedPath: string;
-}) {
-  const res = params.schema.safeParse(params.config);
-  expect(res.success).toBe(false);
-  if (!res.success) {
-    expect(res.error.issues[0]?.path.join(".")).toBe(params.expectedPath);
-  }
-}
 
 function expectOpenClawSchemaInvalidPreservesField(params: {
   config: unknown;
@@ -121,7 +86,7 @@ describe("legacy config detection", () => {
     expectSchemaConfigValue({ schema, config, readValue, expectedValue });
   });
   it("rejects unsafe executable config values", () => {
-    expectInvalidSchemaIssuePath({
+    expectSchemaValidationIssue({
       schema: IMessageConfigSchema,
       config: { cliPath: "imsg; rm -rf /" },
       expectedPath: "cliPath",
@@ -163,7 +128,7 @@ describe("legacy config detection", () => {
       "allowFrom",
     ],
   ])("rejects: %s", (_name, schema, config, expectedPath) => {
-    expectInvalidSchemaIssuePath({ schema, config, expectedPath });
+    expectSchemaValidationIssue({ schema, config, expectedPath });
   });
 
   it.each([

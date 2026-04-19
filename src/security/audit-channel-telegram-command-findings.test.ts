@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { collectTelegramSecurityAuditFindings } from "../../test/helpers/channels/security-audit-contract.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { collectTelegramSecurityAuditFindings } from "../plugin-sdk/telegram.js";
 import { withChannelSecurityStateDir } from "./audit-channel-security.test-helpers.js";
 
 type TelegramAuditParams = Parameters<typeof collectTelegramSecurityAuditFindings>[0];

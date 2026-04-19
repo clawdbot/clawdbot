@@ -15,6 +15,22 @@ import type { ChannelChoice } from "../onboard-types.js";
 import { applyAccountName, applyChannelAccountConfig } from "./add-mutators.js";
 import { channelLabel, requireValidConfigFileSnapshot, shouldUseWizard } from "./shared.js";
 
+type ChannelSetupPluginInstallModule = typeof import("../channel-setup/plugin-install.js");
+type OnboardChannelsModule = typeof import("../onboard-channels.js");
+
+let channelSetupPluginInstallPromise: Promise<ChannelSetupPluginInstallModule> | undefined;
+let onboardChannelsPromise: Promise<OnboardChannelsModule> | undefined;
+
+function loadChannelSetupPluginInstall(): Promise<ChannelSetupPluginInstallModule> {
+  channelSetupPluginInstallPromise ??= import("../channel-setup/plugin-install.js");
+  return channelSetupPluginInstallPromise;
+}
+
+function loadOnboardChannels(): Promise<OnboardChannelsModule> {
+  onboardChannelsPromise ??= import("../onboard-channels.js");
+  return onboardChannelsPromise;
+}
+
 export type ChannelsAddOptions = {
   channel?: string;
   account?: string;
@@ -57,7 +73,7 @@ export async function channelsAddCommand(
   if (useWizard) {
     const [{ buildAgentSummaries }, onboardChannels] = await Promise.all([
       import("../agents.config.js"),
-      import("../onboard-channels.js"),
+      loadOnboardChannels(),
     ]);
     const prompter = createClackPrompter();
     const postWriteHooks = onboardChannels.createChannelOnboardingPostWriteHookCollector();
@@ -206,7 +222,7 @@ export async function channelsAddCommand(
       return existing;
     }
     const { loadChannelSetupPluginRegistrySnapshotForChannel } =
-      await import("../channel-setup/plugin-install.js");
+      await loadChannelSetupPluginInstall();
     const snapshot = loadChannelSetupPluginRegistrySnapshotForChannel({
       cfg: nextConfig,
       runtime,
@@ -230,8 +246,7 @@ export async function channelsAddCommand(
         workspaceDir,
       })
     ) {
-      const { ensureChannelSetupPluginInstalled } =
-        await import("../channel-setup/plugin-install.js");
+      const { ensureChannelSetupPluginInstalled } = await loadChannelSetupPluginInstall();
       const prompter = createClackPrompter();
       const result = await ensureChannelSetupPluginInstalled({
         cfg: nextConfig,
@@ -360,7 +375,7 @@ export async function channelsAddCommand(
   runtime.log(`Added ${channelLabel(channel)} account "${accountId}".`);
   const afterAccountConfigWritten = plugin.setup?.afterAccountConfigWritten;
   if (afterAccountConfigWritten) {
-    const { runCollectedChannelOnboardingPostWriteHooks } = await import("../onboard-channels.js");
+    const { runCollectedChannelOnboardingPostWriteHooks } = await loadOnboardChannels();
     await runCollectedChannelOnboardingPostWriteHooks({
       hooks: [
         {

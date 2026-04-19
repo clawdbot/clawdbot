@@ -10,14 +10,12 @@ export type CommandDescriptorCatalog<TDescriptor extends NamedCommandDescriptor>
   getCommandsWithSubcommands: () => string[];
 };
 
-export function getCommandDescriptorNames<TDescriptor extends CommandDescriptorLike>(
-  descriptors: readonly TDescriptor[],
-): string[] {
+export function getCommandDescriptorNames(descriptors: readonly CommandDescriptorLike[]): string[] {
   return descriptors.map((descriptor) => descriptor.name);
 }
 
-export function getCommandsWithSubcommands<TDescriptor extends NamedCommandDescriptor>(
-  descriptors: readonly TDescriptor[],
+export function getCommandsWithSubcommands(
+  descriptors: readonly NamedCommandDescriptor[],
 ): string[] {
   return descriptors
     .filter((descriptor) => descriptor.hasSubcommands)
@@ -52,9 +50,9 @@ export function defineCommandDescriptorCatalog<TDescriptor extends NamedCommandD
   };
 }
 
-export function addCommandDescriptorsToProgram<TDescriptor extends CommandDescriptorLike>(
+export function addCommandDescriptorsToProgram(
   program: Command,
-  descriptors: readonly TDescriptor[],
+  descriptors: readonly CommandDescriptorLike[],
   existingCommands: Set<string> = new Set(),
 ): Set<string> {
   for (const descriptor of descriptors) {

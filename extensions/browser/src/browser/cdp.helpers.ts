@@ -13,6 +13,7 @@ import { getDirectAgentForCdp, withNoProxyForCdpUrl } from "./cdp-proxy-bypass.j
 import { CDP_HTTP_REQUEST_TIMEOUT_MS, CDP_WS_HANDSHAKE_TIMEOUT_MS } from "./cdp-timeouts.js";
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
 import { resolveBrowserRateLimitMessage } from "./rate-limit-message.js";
+import { withAllowedHostname } from "./ssrf-policy-helpers.js";
 
 export { isLoopbackHost };
 
@@ -70,12 +71,7 @@ export async function assertCdpEndpointAllowed(
   }
   try {
     const policy = isLoopbackHost(parsed.hostname)
-      ? {
-          ...ssrfPolicy,
-          allowedHostnames: Array.from(
-            new Set([...(ssrfPolicy?.allowedHostnames ?? []), parsed.hostname]),
-          ),
-        }
+      ? withAllowedHostname(ssrfPolicy, parsed.hostname)
       : ssrfPolicy;
     await resolvePinnedHostnameWithPolicy(parsed.hostname, {
       policy,
@@ -273,12 +269,7 @@ export async function fetchCdpChecked(
     const res = await withNoProxyForCdpUrl(url, async () => {
       const parsedUrl = new URL(url);
       const policy = isLoopbackHost(parsedUrl.hostname)
-        ? {
-            ...ssrfPolicy,
-            allowedHostnames: Array.from(
-              new Set([...(ssrfPolicy?.allowedHostnames ?? []), parsedUrl.hostname]),
-            ),
-          }
+        ? withAllowedHostname(ssrfPolicy, parsedUrl.hostname)
         : (ssrfPolicy ?? { allowPrivateNetwork: true });
       const guarded = await fetchWithSsrFGuard({
         url,

@@ -120,10 +120,9 @@ async function runGeminiSearch(params: {
       for (let index = 0; index < rawCitations.length; index += 10) {
         const batch = rawCitations.slice(index, index + 10);
         const resolved = await Promise.all(
-          batch.map(async (citation) => ({
-            ...citation,
-            url: await resolveCitationRedirectUrl(citation.url),
-          })),
+          batch.map(async (citation) =>
+            Object.assign({}, citation, { url: await resolveCitationRedirectUrl(citation.url) }),
+          ),
         );
         citations.push(...resolved);
       }

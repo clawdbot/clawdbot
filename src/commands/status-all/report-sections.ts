@@ -51,7 +51,7 @@ export function buildStatusChannelsSection(params: {
     width: params.width,
     renderTable: params.renderTable,
     columns: statusChannelsTableColumns.map((column) =>
-      column.key === "Detail" ? { ...column, minWidth: 28 } : column,
+      column.key === "Detail" ? Object.assign({}, column, { minWidth: 28 }) : column,
     ),
     rows: buildStatusChannelsTableRows({
       rows: params.rows,

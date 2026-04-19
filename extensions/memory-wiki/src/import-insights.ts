@@ -403,19 +403,21 @@ export async function listMemoryWikiImportInsights(
       const updatedAt = sortedItems
         .map((item) => item.updatedAt ?? item.createdAt)
         .find((value): value is string => typeof value === "string" && value.length > 0);
-      return {
-        key,
-        label: sortedItems[0]?.topicLabel ?? humanizeLabelSuffix(key),
-        itemCount: sortedItems.length,
-        highRiskCount: sortedItems.filter((item) => item.riskLevel === "high").length,
-        withheldCount: sortedItems.filter((item) => item.digestStatus === "withheld").length,
-        preferenceSignalCount: sortedItems.reduce(
-          (sum, item) => sum + item.preferenceSignals.length,
-          0,
-        ),
-        ...(updatedAt ? { updatedAt } : {}),
-        items: sortedItems,
-      } satisfies MemoryWikiImportInsightCluster;
+      return Object.assign(
+        {
+          key,
+          label: sortedItems[0]?.topicLabel ?? humanizeLabelSuffix(key),
+          itemCount: sortedItems.length,
+          highRiskCount: sortedItems.filter((item) => item.riskLevel === `high`).length,
+          withheldCount: sortedItems.filter((item) => item.digestStatus === `withheld`).length,
+          preferenceSignalCount: sortedItems.reduce(
+            (sum, item) => sum + item.preferenceSignals.length,
+            0,
+          ),
+        },
+        updatedAt ? { updatedAt } : {},
+        { items: sortedItems },
+      ) satisfies MemoryWikiImportInsightCluster;
     })
     .toSorted((left, right) => {
       const leftKey = left.updatedAt ?? "";

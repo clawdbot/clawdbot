@@ -147,8 +147,8 @@ describe("prepareModelForSimpleCompletion", () => {
 
     const result = prepareModelForSimpleCompletion({ model });
 
-    expect(prepareTransportAwareSimpleModel).toHaveBeenCalledWith(model);
-    expect(buildTransportAwareSimpleStreamFn).toHaveBeenCalledWith(model);
+    expect(prepareTransportAwareSimpleModel).toHaveBeenCalledWith(model, { cfg: undefined });
+    expect(buildTransportAwareSimpleStreamFn).toHaveBeenCalledWith(model, { cfg: undefined });
     expect(ensureCustomApiRegistered).toHaveBeenCalledWith(
       "openclaw-openai-responses-transport",
       "transport-stream",

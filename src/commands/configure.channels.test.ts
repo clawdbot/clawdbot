@@ -28,6 +28,39 @@ import { removeChannelConfigWizard } from "./configure.channels.js";
 const channelChoice = (id: string) => ({ kind: "channel" as const, id });
 const doneChoice = { kind: "done" as const };
 
+async function removeUnsafeChannelConfig(unsafeChannel: string) {
+  select.mockResolvedValueOnce(channelChoice(unsafeChannel)).mockResolvedValueOnce(doneChoice);
+
+  return removeChannelConfigWizard(
+    {
+      channels: {
+        [unsafeChannel]: { token: "secret" },
+        telegram: { token: "secret" },
+      },
+    } as never,
+    {} as never,
+  );
+}
+
+function expectUnknownChannelRemovalPrompt(unsafeChannel: string, label: string) {
+  expect(select).toHaveBeenCalledWith(
+    expect.objectContaining({
+      options: expect.arrayContaining([
+        expect.objectContaining({ value: channelChoice(unsafeChannel), label }),
+      ]),
+    }),
+  );
+  expect(confirm).toHaveBeenCalledWith(
+    expect.objectContaining({
+      message: `Delete ${label} configuration from ~/.openclaw/openclaw.json?`,
+    }),
+  );
+  expect(note).toHaveBeenCalledWith(
+    `${label} removed from config.\nNote: credentials/sessions on disk are unchanged.`,
+    "Channel removed",
+  );
+}
+
 describe("removeChannelConfigWizard", () => {
   beforeEach(() => {
     vi.resetAllMocks();
@@ -198,70 +231,17 @@ describe("removeChannelConfigWizard", () => {
 
   it("sanitizes unknown channel keys before rendering prompts", async () => {
     const unsafeChannel = "bad\u001B[31m\nkey\u0007";
-    select.mockResolvedValueOnce(channelChoice(unsafeChannel)).mockResolvedValueOnce(doneChoice);
+    const next = await removeUnsafeChannelConfig(unsafeChannel);
 
-    const next = await removeChannelConfigWizard(
-      {
-        channels: {
-          [unsafeChannel]: { token: "secret" },
-          telegram: { token: "secret" },
-        },
-      } as never,
-      {} as never,
-    );
-
-    expect(select).toHaveBeenCalledWith(
-      expect.objectContaining({
-        options: expect.arrayContaining([
-          expect.objectContaining({ value: channelChoice(unsafeChannel), label: "bad\\nkey" }),
-        ]),
-      }),
-    );
-    expect(confirm).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "Delete bad\\nkey configuration from ~/.openclaw/openclaw.json?",
-      }),
-    );
+    expectUnknownChannelRemovalPrompt(unsafeChannel, "bad\\nkey");
     expect(next.channels).toEqual({ telegram: { token: "secret" } });
-    expect(note).toHaveBeenCalledWith(
-      "bad\\nkey removed from config.\nNote: credentials/sessions on disk are unchanged.",
-      "Channel removed",
-    );
   });
 
   it("uses a placeholder when an unknown channel key sanitizes to empty", async () => {
     const unsafeChannel = "\u001B[31m\u0007";
-    select.mockResolvedValueOnce(channelChoice(unsafeChannel)).mockResolvedValueOnce(doneChoice);
+    const next = await removeUnsafeChannelConfig(unsafeChannel);
 
-    const next = await removeChannelConfigWizard(
-      {
-        channels: {
-          [unsafeChannel]: { token: "secret" },
-          telegram: { token: "secret" },
-        },
-      } as never,
-      {} as never,
-    );
-
-    expect(select).toHaveBeenCalledWith(
-      expect.objectContaining({
-        options: expect.arrayContaining([
-          expect.objectContaining({
-            value: channelChoice(unsafeChannel),
-            label: "<invalid channel key>",
-          }),
-        ]),
-      }),
-    );
-    expect(confirm).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "Delete <invalid channel key> configuration from ~/.openclaw/openclaw.json?",
-      }),
-    );
+    expectUnknownChannelRemovalPrompt(unsafeChannel, "<invalid channel key>");
     expect(next.channels).toEqual({ telegram: { token: "secret" } });
-    expect(note).toHaveBeenCalledWith(
-      "<invalid channel key> removed from config.\nNote: credentials/sessions on disk are unchanged.",
-      "Channel removed",
-    );
   });
 });

@@ -1,12 +1,27 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolvePiCredentialMapFromStore } from "./pi-auth-credentials.js";
 import {
   addEnvBackedPiCredentials,
   scrubLegacyStaticAuthJsonEntriesForDiscovery,
 } from "./pi-model-discovery.js";
+
+vi.mock("./model-auth-env-vars.js", () => ({
+  resolveProviderEnvApiKeyCandidates: () => ({
+    mistral: ["MISTRAL_API_KEY"],
+  }),
+}));
+
+vi.mock("./model-auth-env.js", () => ({
+  resolveEnvApiKey: (provider: string, env: NodeJS.ProcessEnv) => {
+    if (provider !== "mistral" || !env.MISTRAL_API_KEY?.trim()) {
+      return null;
+    }
+    return { apiKey: env.MISTRAL_API_KEY, source: "env: MISTRAL_API_KEY" };
+  },
+}));
 
 async function createAgentDir(): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-auth-storage-"));

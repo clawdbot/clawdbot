@@ -7,11 +7,6 @@ import { defaultRuntime } from "../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { theme } from "../terminal/theme.js";
 
-export {
-  extractInstalledNpmHookPackageName,
-  extractInstalledNpmPackageName,
-} from "./plugins-install-records.js";
-
 type HookInternalEntryLike = Record<string, unknown> & { enabled?: boolean };
 
 export function resolveFileNpmSpecToLocalPath(

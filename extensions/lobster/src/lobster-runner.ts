@@ -1,3 +1,4 @@
+import { stat } from "node:fs/promises";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import {
@@ -177,7 +178,6 @@ function throwOnErrorEnvelope(envelope: LobsterEnvelope): Extract<LobsterEnvelop
 }
 
 async function resolveWorkflowFile(candidate: string, cwd: string) {
-  const { stat } = await import("node:fs/promises");
   const resolved = path.isAbsolute(candidate) ? candidate : path.resolve(cwd, candidate);
   const fileStat = await stat(resolved);
   if (!fileStat.isFile()) {

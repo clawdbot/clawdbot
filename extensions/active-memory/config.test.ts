@@ -21,4 +21,32 @@ describe("active-memory manifest config schema", () => {
 
     expect(result.ok).toBe(true);
   });
+
+  it("accepts timeoutMs values at the runtime ceiling", () => {
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "active-memory.manifest.timeout-ceiling",
+      value: {
+        enabled: true,
+        agents: ["main"],
+        timeoutMs: 120_000,
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects timeoutMs values above the runtime ceiling", () => {
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "active-memory.manifest.timeout-above-ceiling",
+      value: {
+        enabled: true,
+        agents: ["main"],
+        timeoutMs: 120_001,
+      },
+    });
+
+    expect(result.ok).toBe(false);
+  });
 });

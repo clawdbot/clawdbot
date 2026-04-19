@@ -346,6 +346,24 @@ describe("installContextEngineLoopHook", () => {
     });
   }
 
+  async function callAfterInitialToolResult(
+    agent: ReturnType<typeof makeGuardableAgent>,
+    options: { includeSecondUser?: boolean; firstResultText?: string } = {},
+  ): Promise<{ initial: AgentMessage[]; withNew: AgentMessage[]; transformed: unknown }> {
+    const initial = [
+      makeUser("first"),
+      makeToolResult("call_1", options.firstResultText ?? "result"),
+    ];
+    await callTransform(agent, initial);
+
+    const withNew =
+      options.includeSecondUser === false
+        ? [...initial, makeToolResult("call_2", "r2")]
+        : [...initial, makeUser("second"), makeToolResult("call_2", "r2")];
+    const transformed = await callTransform(agent, withNew);
+    return { initial, withNew, transformed };
+  }
+
   it("returns early when the current messages match the pre-prompt baseline", async () => {
     const agent = makeGuardableAgent();
     const engine = makeMockEngine();
@@ -483,11 +501,10 @@ describe("installContextEngineLoopHook", () => {
     });
     installHook(agent, engine);
 
-    const initial = [makeUser("first"), makeToolResult("call_1", "r")];
-    await callTransform(agent, initial);
-
-    const withNew = [...initial, makeToolResult("call_2", "r2")];
-    const transformed = await callTransform(agent, withNew);
+    const { transformed } = await callAfterInitialToolResult(agent, {
+      includeSecondUser: false,
+      firstResultText: "r",
+    });
 
     expect(transformed).toBe(compactedView);
   });
@@ -500,11 +517,10 @@ describe("installContextEngineLoopHook", () => {
     });
     installHook(agent, engine);
 
-    const initial = [makeUser("first"), makeToolResult("call_1", "r")];
-    await callTransform(agent, initial);
-
-    const withNew = [...initial, makeToolResult("call_2", "r2")];
-    const transformed = await callTransform(agent, withNew);
+    const { transformed } = await callAfterInitialToolResult(agent, {
+      includeSecondUser: false,
+      firstResultText: "r",
+    });
 
     // Same count (2) but different array reference — engine's view should be used
     expect(transformed).toBe(rewrittenView);
@@ -515,11 +531,7 @@ describe("installContextEngineLoopHook", () => {
     const engine = makeMockEngine();
     installHook(agent, engine);
 
-    const initial = [makeUser("first"), makeToolResult("call_1", "result")];
-    await callTransform(agent, initial);
-
-    const withNew = [...initial, makeUser("second"), makeToolResult("call_2", "r2")];
-    const transformed = await callTransform(agent, withNew);
+    const { transformed, withNew } = await callAfterInitialToolResult(agent);
 
     expect(transformed).toBe(withNew);
   });
@@ -589,11 +601,7 @@ describe("installContextEngineLoopHook", () => {
     });
     installHook(agent, engine);
 
-    const initial = [makeUser("first"), makeToolResult("call_1", "result")];
-    await callTransform(agent, initial);
-
-    const withNew = [...initial, makeUser("second"), makeToolResult("call_2", "r2")];
-    const transformed = await callTransform(agent, withNew);
+    const { transformed, withNew } = await callAfterInitialToolResult(agent);
 
     expect(transformed).toBe(withNew);
   });
@@ -607,11 +615,7 @@ describe("installContextEngineLoopHook", () => {
     });
     installHook(agent, engine);
 
-    const initial = [makeUser("first"), makeToolResult("call_1", "result")];
-    await callTransform(agent, initial);
-
-    const withNew = [...initial, makeUser("second"), makeToolResult("call_2", "r2")];
-    const transformed = await callTransform(agent, withNew);
+    const { transformed, withNew } = await callAfterInitialToolResult(agent);
 
     expect(transformed).toBe(withNew);
   });
@@ -654,11 +658,10 @@ describe("installContextEngineLoopHook", () => {
     });
     installHook(agent, engine);
 
-    const initial = [makeUser("first"), makeToolResult("call_1", "r")];
-    await callTransform(agent, initial);
-
-    const withNew = [...initial, makeToolResult("call_2", "r2")];
-    const firstResult = await callTransform(agent, withNew);
+    const { withNew, transformed: firstResult } = await callAfterInitialToolResult(agent, {
+      includeSecondUser: false,
+      firstResultText: "r",
+    });
     expect(firstResult).toBe(compactedView);
 
     // Retry with same messages: should return cached assembled view, not raw

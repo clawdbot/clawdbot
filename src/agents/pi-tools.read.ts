@@ -126,10 +126,7 @@ function withToolResultText(
       (block as { type?: unknown }).type === "text"
     ) {
       replaced = true;
-      return {
-        ...(block as TextContentBlock),
-        text,
-      };
+      return Object.assign({}, block as TextContentBlock, { text });
     }
     return block;
   });
@@ -332,7 +329,7 @@ async function normalizeReadImageResult(
   const nextContent = content.map((block) => {
     if (block && typeof block === "object" && (block as { type?: unknown }).type === "image") {
       const b = block as ImageContentBlock & { mimeType: string };
-      return { ...b, mimeType: sniffed } satisfies ImageContentBlock;
+      return Object.assign({}, b, { mimeType: sniffed }) satisfies ImageContentBlock;
     }
     if (
       block &&
@@ -341,10 +338,9 @@ async function normalizeReadImageResult(
       typeof (block as { text?: unknown }).text === "string"
     ) {
       const b = block as TextContentBlock & { text: string };
-      return {
-        ...b,
+      return Object.assign({}, b, {
         text: rewriteReadImageHeader(b.text, sniffed),
-      } satisfies TextContentBlock;
+      }) satisfies TextContentBlock;
     }
     return block;
   });

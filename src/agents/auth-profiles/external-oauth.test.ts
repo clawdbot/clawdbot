@@ -124,12 +124,13 @@ describe("auth external oauth helpers", () => {
     expect(shouldPersist).toBe(true);
   });
 
-  it("overlays external CLI OAuth only when the stored credential is no longer usable", () => {
+  it("does not use Codex CLI OAuth as a runtime overlay source", () => {
     readCodexCliCredentialsCachedMock.mockReturnValue(
       createCredential({
         access: "fresh-cli-access-token",
         refresh: "fresh-cli-refresh-token",
         expires: createUsableOAuthExpiry(),
+        accountId: "acct-cli",
       }),
     );
 
@@ -139,14 +140,15 @@ describe("auth external oauth helpers", () => {
           access: "stale-store-access-token",
           refresh: "stale-store-refresh-token",
           expires: Date.now() - 60_000,
+          accountId: "acct-cli",
         }),
       }),
     );
 
     expect(overlaid.profiles["openai-codex:default"]).toMatchObject({
-      access: "fresh-cli-access-token",
-      refresh: "fresh-cli-refresh-token",
-      expires: expect.any(Number),
+      access: "stale-store-access-token",
+      refresh: "stale-store-refresh-token",
+      accountId: "acct-cli",
     });
   });
 

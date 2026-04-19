@@ -26,6 +26,29 @@ const mockReadWindowsProcessArgsResult = vi.hoisted(() =>
     (_pid: number, _timeoutMs?: number) => ({ ok: true, args: null }),
   ),
 );
+// Drives the Linux `/proc/<pid>/status` ancestor walk inside
+// `getSelfAndAncestorPidsSync`. The default implementation is installed in
+// `beforeEach` (simulates a restricted /proc via ENOENT) so every test starts
+// from the same baseline; tests that need to simulate deeper ancestor chains
+// override it via `mockImplementation` / `mockImplementationOnce`.
+const mockReadFileSync = vi.hoisted(() => vi.fn());
+
+vi.mock("node:fs", async () => {
+  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:fs")>("node:fs"),
+    (actual) => ({
+      // `readFileSync` is an overloaded function; a single arrow expression
+      // cannot match every overload (no-encoding → NonSharedBuffer, encoded →
+      // string, etc.), which tsgo flags as TS2322. Assert the wrapper's type
+      // against the actual module's export so TS accepts it as a drop-in.
+      // The test only exercises the string-returning overload (encoded /proc
+      // reads); the cast is a precise retype, not `any`.
+      readFileSync: ((path: unknown, encoding?: unknown) =>
+        mockReadFileSync(path, encoding)) as typeof actual.readFileSync,
+    }),
+  );
+});
 
 vi.mock("node:child_process", async () => {
   const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
@@ -143,6 +166,14 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
     mockReadWindowsListeningPidsResult.mockReset();
     mockReadWindowsProcessArgs.mockReset();
     mockReadWindowsProcessArgsResult.mockReset();
+    mockReadFileSync.mockReset();
+    mockReadFileSync.mockImplementation(() => {
+      // Default: simulate /proc unavailable. Walks that reach this mock
+      // degrade silently and return whatever set they collected so far.
+      const error: NodeJS.ErrnoException = new Error("ENOENT: test default");
+      error.code = "ENOENT";
+      throw error;
+    });
     mockResolveGatewayPort.mockReturnValue(18789);
     mockReadWindowsListeningPids.mockReturnValue([]);
     mockReadWindowsListeningPidsResult.mockReturnValue({ ok: true, pids: [] });
@@ -156,6 +187,24 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
     __testing.setDateNowOverride(null);
     vi.restoreAllMocks();
   });
+
+  // Temporarily rewrites `process.ppid` for a block of test code. Used by the
+  // ancestor-exclusion tests to drive the real `getSelfAndAncestorPidsSync`
+  // walk without installing a runtime-reachable override on the module. Node
+  // always exposes `process.ppid` as an own property so the captured
+  // descriptor is non-null in practice; the `if (orig)` guard is defensive
+  // against a broken environment, not a reachable branch.
+  function withStubbedPpid<T>(ppid: number, fn: () => T): T {
+    const orig = Object.getOwnPropertyDescriptor(process, "ppid");
+    Object.defineProperty(process, "ppid", { value: ppid, configurable: true });
+    try {
+      return fn();
+    } finally {
+      if (orig) {
+        Object.defineProperty(process, "ppid", orig);
+      }
+    }
+  }
 
   // -------------------------------------------------------------------------
   // findGatewayPidsOnPortSync
@@ -202,6 +251,142 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       expect(pids).toContain(stalePid);
       expect(pids).not.toContain(process.pid);
     });
+
+    it("excludes ancestor pids so a sidecar cannot kill its parent gateway — regression for #68451", () => {
+      // Regression: openclaw-weixin sidecar (child of the gateway) invoked
+      // cleanStaleGatewayProcessesSync during init. lsof reported the parent
+      // gateway on port 18789, its PID was not process.pid, so the cleanup
+      // SIGTERM'd it — the supervisor restarted the gateway, re-spawned the
+      // sidecar, the cleanup ran again: infinite restart loop.
+      //
+      // Fix: parsePidsFromLsofOutput now excludes process.pid AND its
+      // ancestor chain (see getSelfAndAncestorPidsSync). This test stubs
+      // process.ppid to the synthetic parent gateway pid so the real walk
+      // adds it to the exclusion set; the default /proc mock throws ENOENT
+      // so the walk stops after the direct parent.
+      const parentGatewayPid = process.pid + 2001;
+      const unrelatedStalePid = process.pid + 2002;
+      mockSpawnSync.mockReturnValue({
+        error: null,
+        status: 0,
+        stdout: lsofOutput([
+          { pid: parentGatewayPid, cmd: "openclaw-gateway" },
+          { pid: unrelatedStalePid, cmd: "openclaw-gateway" },
+        ]),
+        stderr: "",
+      });
+      const pids = withStubbedPpid(parentGatewayPid, () => findGatewayPidsOnPortSync(18789));
+      // Parent gateway must be excluded; an unrelated stale PID must still be
+      // reported so the supervisor-path cleanup continues to work.
+      expect(pids).not.toContain(parentGatewayPid);
+      expect(pids).toContain(unrelatedStalePid);
+    });
+
+    it.skipIf(process.platform !== "linux")(
+      "excludes the full ancestor chain, not just the direct parent — deeper nesting",
+      () => {
+        // The ancestor-exclusion invariant is transitive: killing any
+        // ancestor cascades to the caller the same way killing the direct
+        // parent does. Drive the real Linux /proc walk by stubbing
+        // process.ppid to the direct parent and mocking readFileSync to
+        // return synthetic PPid lines for each ancestor hop; the mock ends
+        // the chain with "PPid: 0" so the walk terminates without touching
+        // the real /proc.
+        const directParentPid = process.pid + 2003;
+        const grandparentPid = process.pid + 2004;
+        const benignStalePid = process.pid + 2005;
+        mockReadFileSync.mockImplementation((path: unknown): string => {
+          if (path === `/proc/${directParentPid}/status`) {
+            return `Name:\topenclaw-gateway\nPid:\t${directParentPid}\nPPid:\t${grandparentPid}\n`;
+          }
+          if (path === `/proc/${grandparentPid}/status`) {
+            return `Name:\tsystemd\nPid:\t${grandparentPid}\nPPid:\t0\n`;
+          }
+          const error: NodeJS.ErrnoException = new Error("ENOENT");
+          error.code = "ENOENT";
+          throw error;
+        });
+        mockSpawnSync.mockReturnValue({
+          error: null,
+          status: 0,
+          stdout: lsofOutput([
+            { pid: directParentPid, cmd: "openclaw-gateway" },
+            { pid: grandparentPid, cmd: "openclaw-gateway" },
+            { pid: benignStalePid, cmd: "openclaw-gateway" },
+          ]),
+          stderr: "",
+        });
+        const pids = withStubbedPpid(directParentPid, () => findGatewayPidsOnPortSync(18789));
+        expect(pids).not.toContain(directParentPid);
+        expect(pids).not.toContain(grandparentPid);
+        expect(pids).toContain(benignStalePid);
+      },
+    );
+
+    it("excludes PID 1 when the direct parent gateway is the container entrypoint — container topology", () => {
+      // Codex P1: in container deployments the gateway is the container
+      // entrypoint and therefore runs as PID 1 of its namespace. A sidecar
+      // spawned by that gateway has process.ppid === 1. An earlier revision
+      // guarded the exclusion with `immediateParent > 1`, which dropped PID 1
+      // and reopened the #68451 restart loop on every containerised install.
+      // The current `> 0` check admits PID 1 into the exclusion set; this
+      // test exercises the real walk by stubbing process.ppid to 1.
+      const benignStalePid = process.pid + 2050;
+      mockSpawnSync.mockReturnValue({
+        error: null,
+        status: 0,
+        stdout: lsofOutput([
+          { pid: 1, cmd: "openclaw-gateway" },
+          { pid: benignStalePid, cmd: "openclaw-gateway" },
+        ]),
+        stderr: "",
+      });
+      const pids = withStubbedPpid(1, () => findGatewayPidsOnPortSync(18789));
+      expect(pids).not.toContain(1);
+      expect(pids).toContain(benignStalePid);
+    });
+
+    it.skipIf(process.platform !== "linux")(
+      "leaves the gateway grandparent in the kill list when /proc truncates the walk — documented degradation on hidepid/gVisor hosts",
+      () => {
+        // Pins the known-partial coverage the PR description and the
+        // `readParentPidFromProc` comment call out: in hardened Linux
+        // containers (hidepid=2, gVisor, AppArmor-locked namespaces) the
+        // ancestor walk cannot traverse /proc/<other_pid>/status beyond
+        // the caller, so it stops at `process.ppid`. For the direct-child
+        // topology #68451 reports (gateway→sidecar), this is fine — ppid
+        // is captured unconditionally via Node's syscall. For a 3-level
+        // chain (gateway→plugin-host→sidecar), the gateway grandparent
+        // falls outside the exclusion set and is still killable.
+        //
+        // This test locks that degraded outcome in place so a future
+        // refactor cannot silently regress further (for example, by
+        // skipping `process.ppid` as well) without at least failing this
+        // assertion first. A fuller fix (macOS/Windows ancestor walk,
+        // pidfd-based Linux walk, or privileged cmdline probe) belongs
+        // in a separate change.
+        const pluginHostPid = process.pid + 3001;
+        const gatewayGrandparentPid = process.pid + 3002;
+        // Default mockReadFileSync throws ENOENT for every /proc path —
+        // the same view a non-privileged process has under hidepid=2.
+        mockSpawnSync.mockReturnValue({
+          error: null,
+          status: 0,
+          stdout: lsofOutput([
+            { pid: pluginHostPid, cmd: "openclaw-gateway" },
+            { pid: gatewayGrandparentPid, cmd: "openclaw-gateway" },
+          ]),
+          stderr: "",
+        });
+        const pids = withStubbedPpid(pluginHostPid, () => findGatewayPidsOnPortSync(18789));
+        // Direct parent (plugin-host) must still be excluded — process.ppid
+        // is captured with no /proc dependency, so hidepid cannot mask it.
+        expect(pids).not.toContain(pluginHostPid);
+        // Grandparent IS returned — documented partial coverage, tracked
+        // separately from #68451.
+        expect(pids).toContain(gatewayGrandparentPid);
+      },
+    );
 
     it("excludes pids whose command does not include 'openclaw'", () => {
       const otherPid = process.pid + 2;
@@ -262,6 +447,33 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
         expect(findGatewayPidsOnPortSync(18789)).toEqual([stalePid]);
         expect(mockReadWindowsListeningPids).toHaveBeenCalledWith(18789, undefined);
         expect(mockReadWindowsProcessArgs).toHaveBeenCalledWith(stalePid, undefined);
+      } finally {
+        if (origDescriptor) {
+          Object.defineProperty(process, "platform", origDescriptor);
+        }
+      }
+    });
+
+    it("excludes ancestor pids on Windows too — #68451 regression mirror for the win32 path", () => {
+      // The #68451 invariant must hold on every code path the cleanup can take.
+      // The Windows filter (filterVerifiedWindowsGatewayPids) shares the same
+      // exclusion source, so the direct-parent gateway PID must be dropped
+      // before the argv-verification step runs. Drive the real walk on the
+      // win32 branch (which stops at process.ppid — no /proc lookup) by
+      // stubbing process.ppid to the synthetic parent pid.
+      const origDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+      const parentGatewayPid = process.pid + 2101;
+      const unrelatedStalePid = process.pid + 2102;
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      try {
+        mockReadWindowsListeningPids.mockReturnValue([parentGatewayPid, unrelatedStalePid]);
+        mockReadWindowsProcessArgs.mockReturnValue(["openclaw", "gateway"]);
+        const pids = withStubbedPpid(parentGatewayPid, () => findGatewayPidsOnPortSync(18789));
+        expect(pids).not.toContain(parentGatewayPid);
+        expect(pids).toContain(unrelatedStalePid);
+        // argv verification must never have been asked about the parent, because
+        // exclusion happens before the per-PID inspection step.
+        expect(mockReadWindowsProcessArgs).not.toHaveBeenCalledWith(parentGatewayPid, undefined);
       } finally {
         if (origDescriptor) {
           Object.defineProperty(process, "platform", origDescriptor);

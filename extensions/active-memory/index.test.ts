@@ -1140,6 +1140,50 @@ describe("active-memory plugin", () => {
     ).toBe(true);
   });
 
+  it("honors configured timeoutMs values above the former 60 000 ms ceiling", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 90_000,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    await hooks.before_prompt_build(
+      { prompt: "what wings should i order? high timeout", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:high-timeout",
+        messageProvider: "webchat",
+      },
+    );
+
+    const passedTimeoutMs = runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.timeoutMs;
+    expect(passedTimeoutMs).toBe(90_000);
+  });
+
+  it("clamps timeoutMs above the 120 000 ms ceiling to the ceiling", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 200_000,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    await hooks.before_prompt_build(
+      { prompt: "what wings should i order? capped timeout", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:capped-timeout",
+        messageProvider: "webchat",
+      },
+    );
+
+    const passedTimeoutMs = runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.timeoutMs;
+    expect(passedTimeoutMs).toBe(120_000);
+  });
+
   it("sanitizes active-memory log fields onto a single line", async () => {
     api.pluginConfig = {
       agents: ["main"],

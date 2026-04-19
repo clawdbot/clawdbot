@@ -35,30 +35,37 @@ beforeEach(() => {
   resetSystemEventsForTest();
 });
 
+function createHeartbeatTelegramConfig(): OpenClawConfig {
+  return {
+    agents: {
+      defaults: {
+        heartbeat: { every: "30m" },
+        model: { primary: "test/model" },
+      },
+    },
+    channels: {
+      telegram: {
+        enabled: true,
+        token: "fake",
+        allowFrom: ["123"],
+      },
+    },
+  } as unknown as OpenClawConfig;
+}
+
+async function seedHeartbeatTelegramSession(storePath: string, cfg: OpenClawConfig) {
+  return seedMainSessionStore(storePath, cfg, {
+    lastChannel: "telegram",
+    lastProvider: "telegram",
+    lastTo: "123",
+  });
+}
+
 describe("heartbeat runner skips when target session lane is busy", () => {
   it("returns requests-in-flight when session lane has queued work", async () => {
     await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            heartbeat: { every: "30m" },
-            model: { primary: "test/model" },
-          },
-        },
-        channels: {
-          telegram: {
-            enabled: true,
-            token: "fake",
-            allowFrom: ["123"],
-          },
-        },
-      } as unknown as OpenClawConfig;
-
-      const sessionKey = await seedMainSessionStore(storePath, cfg, {
-        lastChannel: "telegram",
-        lastProvider: "telegram",
-        lastTo: "123",
-      });
+      const cfg = createHeartbeatTelegramConfig();
+      const sessionKey = await seedHeartbeatTelegramSession(storePath, cfg);
 
       enqueueSystemEvent("Exec completed (test-id, code 0) :: test output", {
         sessionKey,
@@ -94,27 +101,8 @@ describe("heartbeat runner skips when target session lane is busy", () => {
 
   it("proceeds normally when session lane is idle", async () => {
     await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            heartbeat: { every: "30m" },
-            model: { primary: "test/model" },
-          },
-        },
-        channels: {
-          telegram: {
-            enabled: true,
-            token: "fake",
-            allowFrom: ["123"],
-          },
-        },
-      } as unknown as OpenClawConfig;
-
-      await seedMainSessionStore(storePath, cfg, {
-        lastChannel: "telegram",
-        lastProvider: "telegram",
-        lastTo: "123",
-      });
+      const cfg = createHeartbeatTelegramConfig();
+      await seedHeartbeatTelegramSession(storePath, cfg);
 
       // Both lanes idle
       const getQueueSize = vi.fn((_lane?: string) => 0);

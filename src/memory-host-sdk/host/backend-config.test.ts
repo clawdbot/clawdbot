@@ -7,6 +7,12 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { resolveMemoryBackendConfig } from "./backend-config.js";
 import { isQmdScopeAllowed } from "./qmd-scope.js";
 
+type QmdPathFixture = {
+  path: string;
+  name?: string;
+  pattern?: string;
+};
+
 const resolveComparablePath = (value: string, workspaceDir = "/workspace/root"): string =>
   path.isAbsolute(value) ? path.resolve(value) : path.resolve(workspaceDir, value);
 
@@ -22,6 +28,25 @@ function resolveCustomCollectionPathsForAgent(cfg: OpenClawConfig, agentId: stri
   return (resolveMemoryBackendConfig({ cfg, agentId }).qmd?.collections ?? [])
     .filter((collection) => collection.kind === "custom")
     .map((collection) => collection.path);
+}
+
+function qmdMultiAgentConfig(paths: QmdPathFixture[]) {
+  return {
+    agents: {
+      defaults: { workspace: "/workspace/root" },
+      list: [
+        { id: "main", default: true, workspace: "/workspace/root" },
+        { id: "dev", workspace: "/workspace/dev" },
+      ],
+    },
+    memory: {
+      backend: "qmd",
+      qmd: {
+        includeDefaultMemory: true,
+        paths,
+      },
+    },
+  } as OpenClawConfig;
 }
 
 describe("resolveMemoryBackendConfig", () => {
@@ -130,22 +155,7 @@ describe("resolveMemoryBackendConfig", () => {
   });
 
   it("scopes qmd collection names per agent", () => {
-    const cfg = {
-      agents: {
-        defaults: { workspace: "/workspace/root" },
-        list: [
-          { id: "main", default: true, workspace: "/workspace/root" },
-          { id: "dev", workspace: "/workspace/dev" },
-        ],
-      },
-      memory: {
-        backend: "qmd",
-        qmd: {
-          includeDefaultMemory: true,
-          paths: [{ path: "notes", name: "workspace", pattern: "**/*.md" }],
-        },
-      },
-    } as OpenClawConfig;
+    const cfg = qmdMultiAgentConfig([{ path: "notes", name: "workspace", pattern: "**/*.md" }]);
     const mainNames = resolveCollectionNamesForAgent(cfg, "main");
     const devNames = resolveCollectionNamesForAgent(cfg, "dev");
     expect(mainNames.has("memory-dir-main")).toBe(true);
@@ -203,22 +213,9 @@ describe("resolveMemoryBackendConfig", () => {
   });
 
   it("preserves explicit custom collection names for paths outside the workspace", () => {
-    const cfg = {
-      agents: {
-        defaults: { workspace: "/workspace/root" },
-        list: [
-          { id: "main", default: true, workspace: "/workspace/root" },
-          { id: "dev", workspace: "/workspace/dev" },
-        ],
-      },
-      memory: {
-        backend: "qmd",
-        qmd: {
-          includeDefaultMemory: true,
-          paths: [{ path: "/shared/notion-mirror", name: "notion-mirror", pattern: "**/*.md" }],
-        },
-      },
-    } as OpenClawConfig;
+    const cfg = qmdMultiAgentConfig([
+      { path: "/shared/notion-mirror", name: "notion-mirror", pattern: "**/*.md" },
+    ]);
     const mainNames = resolveCollectionNamesForAgent(cfg, "main");
     const devNames = resolveCollectionNamesForAgent(cfg, "dev");
     expect(mainNames.has("memory-dir-main")).toBe(true);

@@ -531,10 +531,7 @@ export function normalizeLegacyMistralModelMaxTokens(
       changes.push(
         `Normalized models.providers.${providerId}.models[${index}].maxTokens (${maxTokens} → ${normalizedMaxTokens}) to avoid Mistral context-window rejects.`,
       );
-      return {
-        ...model,
-        maxTokens: normalizedMaxTokens,
-      };
+      return Object.assign({}, model, { maxTokens: normalizedMaxTokens });
     });
 
     if (!modelsChanged) {

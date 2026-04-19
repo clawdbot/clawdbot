@@ -313,6 +313,7 @@ describe("channels command", () => {
     setMinimalChannelsCommandRegistryForTests();
   });
 
+  // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe written config shape.
   function getWrittenConfig<T>(): T {
     expect(configMocks.writeConfigFile).toHaveBeenCalledTimes(1);
     return configMocks.writeConfigFile.mock.calls[0]?.[0] as T;

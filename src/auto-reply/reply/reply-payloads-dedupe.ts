@@ -57,11 +57,10 @@ export function filterMessagingToolMediaDuplicates(params: {
     if (!stripSingle && (!mediaUrls || filteredUrls?.length === mediaUrls.length)) {
       return payload;
     }
-    return {
-      ...payload,
+    return Object.assign({}, payload, {
       mediaUrl: stripSingle ? undefined : mediaUrl,
       mediaUrls: filteredUrls?.length ? filteredUrls : undefined,
-    };
+    });
   });
 }
 

@@ -16,6 +16,7 @@ export function createRuntimeEnv(options?: { throwOnExit?: boolean }): OutputRun
   };
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets plugin suites ascribe runtime extension shape.
 export function createTypedRuntimeEnv<TRuntime>(options?: { throwOnExit?: boolean }): TRuntime {
   return createRuntimeEnv(options) as TRuntime;
 }
@@ -24,6 +25,7 @@ export function createNonExitingRuntimeEnv(): OutputRuntimeEnv {
   return createRuntimeEnv({ throwOnExit: false });
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets plugin suites ascribe runtime extension shape.
 export function createNonExitingTypedRuntimeEnv<TRuntime>(): TRuntime {
   return createTypedRuntimeEnv<TRuntime>({ throwOnExit: false });
 }

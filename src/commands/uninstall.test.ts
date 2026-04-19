@@ -1,45 +1,18 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createNonExitingRuntime } from "../runtime.js";
-
-const resolveCleanupPlanFromDisk = vi.fn();
-const removePath = vi.fn();
-const removeStateAndLinkedPaths = vi.fn();
-const removeWorkspaceDirs = vi.fn();
-
-vi.mock("../config/config.js", () => ({
-  isNixMode: false,
-}));
-
-vi.mock("./cleanup-plan.js", () => ({
-  resolveCleanupPlanFromDisk,
-}));
-
-vi.mock("./cleanup-utils.js", () => ({
-  removePath,
-  removeStateAndLinkedPaths,
-  removeWorkspaceDirs,
-}));
+import { beforeEach, describe, expect, it } from "vitest";
+import {
+  createCleanupCommandRuntime,
+  resetCleanupCommandMocks,
+  silenceCleanupCommandRuntime,
+} from "./cleanup-command.test-support.js";
 
 const { uninstallCommand } = await import("./uninstall.js");
 
 describe("uninstallCommand", () => {
-  const runtime = createNonExitingRuntime();
+  const runtime = createCleanupCommandRuntime();
 
   beforeEach(() => {
-    vi.clearAllMocks();
-    resolveCleanupPlanFromDisk.mockReturnValue({
-      stateDir: "/tmp/.openclaw",
-      configPath: "/tmp/.openclaw/openclaw.json",
-      oauthDir: "/tmp/.openclaw/credentials",
-      configInsideState: true,
-      oauthInsideState: true,
-      workspaceDirs: ["/tmp/.openclaw/workspace"],
-    });
-    removePath.mockResolvedValue({ ok: true });
-    removeStateAndLinkedPaths.mockResolvedValue(undefined);
-    removeWorkspaceDirs.mockResolvedValue(undefined);
-    vi.spyOn(runtime, "log").mockImplementation(() => {});
-    vi.spyOn(runtime, "error").mockImplementation(() => {});
+    resetCleanupCommandMocks();
+    silenceCleanupCommandRuntime(runtime);
   });
 
   it("recommends creating a backup before removing state or workspaces", async () => {

@@ -379,6 +379,25 @@ describe("collectForbiddenPackedPathErrors", () => {
       rmSync(rootDir, { recursive: true, force: true });
     }
   });
+
+  it("allows legacy QA compatibility paths in the generated dist inventory", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "openclaw-pack-inventory-"));
+
+    try {
+      mkdirSync(join(rootDir, "dist"), { recursive: true });
+      writeFileSync(
+        join(rootDir, PACKAGE_DIST_INVENTORY_RELATIVE_PATH),
+        JSON.stringify(["dist/extensions/qa-lab/runtime-api.js"]),
+        "utf8",
+      );
+
+      expect(
+        collectForbiddenPackedContentErrors([PACKAGE_DIST_INVENTORY_RELATIVE_PATH], rootDir),
+      ).toEqual([]);
+    } finally {
+      rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("collectPackedTestCargoErrors", () => {

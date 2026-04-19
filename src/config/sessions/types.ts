@@ -409,11 +409,21 @@ export function mergeSessionEntryPreserveActivity(
   });
 }
 
-export function resolveFreshSessionTotalTokens(
+export function resolveSessionTotalTokens(
   entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh"> | null,
 ): number | undefined {
   const total = entry?.totalTokens;
   if (typeof total !== "number" || !Number.isFinite(total) || total < 0) {
+    return undefined;
+  }
+  return total;
+}
+
+export function resolveFreshSessionTotalTokens(
+  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh"> | null,
+): number | undefined {
+  const total = resolveSessionTotalTokens(entry);
+  if (total === undefined) {
     return undefined;
   }
   if (entry?.totalTokensFresh === false) {

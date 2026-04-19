@@ -241,6 +241,50 @@ describe("resolveDeliveryTarget", () => {
     expect(result.accountId).toBe("account-b");
   });
 
+  it("preserves binding order when peerless delivery falls back to a bound accountId", async () => {
+    setMainSessionEntry(undefined);
+    const cfg = makeCfg({
+      bindings: [
+        {
+          agentId: AGENT_ID,
+          match: {
+            channel: "telegram",
+            peer: { kind: "channel", id: "123456" },
+            accountId: "peer-first",
+          },
+        },
+        {
+          agentId: AGENT_ID,
+          match: { channel: "telegram", accountId: "channel-second" },
+        },
+      ],
+    });
+
+    const result = await resolveForAgent({ cfg });
+
+    expect(result.accountId).toBe("peer-first");
+  });
+
+  it("does not infer scoped bound accountId for peerless cron delivery", async () => {
+    setMainSessionEntry(undefined);
+    const cfg = makeCfg({
+      bindings: [
+        {
+          agentId: AGENT_ID,
+          match: {
+            channel: "telegram",
+            guildId: "guild-1",
+            accountId: "tenant-account",
+          },
+        },
+      ],
+    });
+
+    const result = await resolveForAgent({ cfg });
+
+    expect(result.accountId).toBeUndefined();
+  });
+
   it("preserves session lastAccountId when present", async () => {
     setMainSessionEntry({
       sessionId: "sess-1",

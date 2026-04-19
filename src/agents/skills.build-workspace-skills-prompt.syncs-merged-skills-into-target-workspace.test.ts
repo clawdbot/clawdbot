@@ -1,10 +1,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
-import { buildWorkspaceSkillsPrompt, syncSkillsToWorkspace } from "./skills.js";
+import { buildWorkspaceSkillsPrompt, syncSkillsToWorkspace } from "./skills/workspace.js";
+
+vi.mock("./skills/plugin-skills.js", () => ({
+  resolvePluginSkillDirs: () => [],
+}));
 
 async function pathExists(filePath: string): Promise<boolean> {
   try {
@@ -26,14 +30,12 @@ async function createCaseDir(prefix: string): Promise<string> {
 }
 
 async function syncSourceSkillsToTarget(sourceWorkspace: string, targetWorkspace: string) {
-  await withEnv({ HOME: sourceWorkspace, PATH: "" }, () =>
-    syncSkillsToWorkspace({
-      sourceWorkspaceDir: sourceWorkspace,
-      targetWorkspaceDir: targetWorkspace,
-      bundledSkillsDir: path.join(sourceWorkspace, ".bundled"),
-      managedSkillsDir: path.join(sourceWorkspace, ".managed"),
-    }),
-  );
+  await syncSkillsToWorkspace({
+    sourceWorkspaceDir: sourceWorkspace,
+    targetWorkspaceDir: targetWorkspace,
+    bundledSkillsDir: path.join(sourceWorkspace, ".bundled"),
+    managedSkillsDir: path.join(sourceWorkspace, ".managed"),
+  });
 }
 
 async function expectSyncedSkillConfinement(params: {
@@ -86,7 +88,13 @@ describe("buildWorkspaceSkillsPrompt", () => {
     workspaceDir: string,
     opts?: Parameters<typeof buildWorkspaceSkillsPrompt>[1],
   ) =>
-    withEnv({ HOME: workspaceDir, PATH: "" }, () => buildWorkspaceSkillsPrompt(workspaceDir, opts));
+    withEnv({ HOME: workspaceDir }, () =>
+      buildWorkspaceSkillsPrompt(workspaceDir, {
+        bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+        managedSkillsDir: path.join(workspaceDir, ".managed"),
+        ...opts,
+      }),
+    );
 
   const cloneSourceTemplate = async () => {
     const sourceWorkspace = await createCaseDir("source");
@@ -110,15 +118,13 @@ describe("buildWorkspaceSkillsPrompt", () => {
       "export {}",
     );
 
-    await withEnv({ HOME: sourceWorkspace, PATH: "" }, () =>
-      syncSkillsToWorkspace({
-        sourceWorkspaceDir: sourceWorkspace,
-        targetWorkspaceDir: targetWorkspace,
-        config: { skills: { load: { extraDirs: [extraDir] } } },
-        bundledSkillsDir: bundledDir,
-        managedSkillsDir: managedDir,
-      }),
-    );
+    await syncSkillsToWorkspace({
+      sourceWorkspaceDir: sourceWorkspace,
+      targetWorkspaceDir: targetWorkspace,
+      config: { skills: { load: { extraDirs: [extraDir] } } },
+      bundledSkillsDir: bundledDir,
+      managedSkillsDir: managedDir,
+    });
 
     const prompt = buildPrompt(targetWorkspace, {
       bundledSkillsDir: path.join(targetWorkspace, ".bundled"),
@@ -152,23 +158,21 @@ describe("buildWorkspaceSkillsPrompt", () => {
       description: "Dot variant",
     });
 
-    await withEnv({ HOME: sourceWorkspace, PATH: "" }, () =>
-      syncSkillsToWorkspace({
-        sourceWorkspaceDir: sourceWorkspace,
-        targetWorkspaceDir: targetWorkspace,
-        agentId: "alpha",
-        config: {
-          agents: {
-            defaults: {
-              skills: ["foo_bar", "foo.dot"],
-            },
-            list: [{ id: "alpha", skills: ["foo_bar"] }],
+    await syncSkillsToWorkspace({
+      sourceWorkspaceDir: sourceWorkspace,
+      targetWorkspaceDir: targetWorkspace,
+      agentId: "alpha",
+      config: {
+        agents: {
+          defaults: {
+            skills: ["foo_bar", "foo.dot"],
           },
+          list: [{ id: "alpha", skills: ["foo_bar"] }],
         },
-        bundledSkillsDir: path.join(sourceWorkspace, ".bundled"),
-        managedSkillsDir: path.join(sourceWorkspace, ".managed"),
-      }),
-    );
+      },
+      bundledSkillsDir: path.join(sourceWorkspace, ".bundled"),
+      managedSkillsDir: path.join(sourceWorkspace, ".managed"),
+    });
 
     const prompt = buildPrompt(targetWorkspace, {
       bundledSkillsDir: path.join(targetWorkspace, ".bundled"),
@@ -325,31 +329,29 @@ describe("buildWorkspaceSkillsPrompt", () => {
       metadata: '{"openclaw":{"requires":{"anyBins":["missingbin","sandboxbin"]}}}',
     });
 
-    await withEnv({ HOME: sourceWorkspace, PATH: "" }, () =>
-      syncSkillsToWorkspace({
-        sourceWorkspaceDir: sourceWorkspace,
-        targetWorkspaceDir: targetWorkspace,
-        agentId: "alpha",
-        config: {
-          agents: {
-            defaults: {
-              skills: ["remote-only"],
-            },
-            list: [{ id: "alpha" }],
+    await syncSkillsToWorkspace({
+      sourceWorkspaceDir: sourceWorkspace,
+      targetWorkspaceDir: targetWorkspace,
+      agentId: "alpha",
+      config: {
+        agents: {
+          defaults: {
+            skills: ["remote-only"],
           },
+          list: [{ id: "alpha" }],
         },
-        eligibility: {
-          remote: {
-            platforms: ["linux"],
-            hasBin: () => false,
-            hasAnyBin: (bins: string[]) => bins.includes("sandboxbin"),
-            note: "sandbox",
-          },
+      },
+      eligibility: {
+        remote: {
+          platforms: ["linux"],
+          hasBin: () => false,
+          hasAnyBin: (bins: string[]) => bins.includes("sandboxbin"),
+          note: "sandbox",
         },
-        bundledSkillsDir: path.join(sourceWorkspace, ".bundled"),
-        managedSkillsDir: path.join(sourceWorkspace, ".managed"),
-      }),
-    );
+      },
+      bundledSkillsDir: path.join(sourceWorkspace, ".bundled"),
+      managedSkillsDir: path.join(sourceWorkspace, ".managed"),
+    });
 
     expect(await pathExists(path.join(targetWorkspace, "skills", "remote-only", "SKILL.md"))).toBe(
       true,

@@ -773,6 +773,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       ChatType: isDirectMessage ? "direct" : isChannel ? "channel" : "group",
       ConversationLabel: envelopeFrom,
       GroupSubject: !isDirectMessage ? conversationType : undefined,
+      GroupSpace: teamId,
       SenderName: senderName,
       SenderId: senderId,
       Provider: "msteams" as const,
