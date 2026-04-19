@@ -249,13 +249,17 @@ function mergeExecutionTrace(params: {
   runner: "embedded" | "cli";
 }): TraceExecutionView | undefined {
   const attempts: TraceAttemptView[] = [
-    ...(params.fallbackAttempts ?? []).map((attempt) => ({
-      provider: attempt.provider,
-      model: attempt.model,
-      result: inferFallbackAttemptResult(attempt),
-      ...(attempt.reason ? { reason: attempt.reason } : {}),
-      ...(typeof attempt.status === "number" ? { status: attempt.status } : {}),
-    })),
+    ...(params.fallbackAttempts ?? []).map((attempt) =>
+      Object.assign(
+        {
+          provider: attempt.provider,
+          model: attempt.model,
+          result: inferFallbackAttemptResult(attempt),
+        },
+        attempt.reason ? { reason: attempt.reason } : {},
+        typeof attempt.status === `number` ? { status: attempt.status } : {},
+      ),
+    ),
     ...(params.executionTrace?.attempts ?? []),
   ];
   const winnerProvider =

@@ -1,6 +1,13 @@
 import { loadBundledPluginContractApiSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 
-type AnthropicContractSurface = typeof import("@openclaw/anthropic/contract-api.js");
+type AnthropicContractSurface = {
+  createAnthropicBetaHeadersWrapper: (...args: unknown[]) => unknown;
+  createAnthropicFastModeWrapper: (...args: unknown[]) => unknown;
+  createAnthropicServiceTierWrapper: (...args: unknown[]) => unknown;
+  resolveAnthropicBetas: (...args: unknown[]) => unknown;
+  resolveAnthropicFastMode: (...args: unknown[]) => unknown;
+  resolveAnthropicServiceTier: (...args: unknown[]) => unknown;
+};
 
 let anthropicContractSurface: AnthropicContractSurface | undefined;
 

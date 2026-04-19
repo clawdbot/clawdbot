@@ -12,6 +12,7 @@ export type OAuthCredentials = {
   enterpriseUrl?: string;
   projectId?: string;
   accountId?: string;
+  idToken?: string;
 };
 
 export type ApiKeyCredential = {

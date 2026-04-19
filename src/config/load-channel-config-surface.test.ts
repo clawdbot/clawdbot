@@ -59,31 +59,50 @@ async function importLoaderWithFailingJitiAndWorkingBun() {
   }
 }
 
+function expectedOkSchema(type: string) {
+  return {
+    schema: {
+      type: "object",
+      properties: {
+        ok: { type },
+      },
+    },
+  };
+}
+
+function createDemoConfigSchemaModule(repoRoot: string, sourceLines?: string[]) {
+  const packageRoot = path.join(repoRoot, "extensions", "demo");
+  const modulePath = path.join(packageRoot, "src", "config-schema.js");
+
+  fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
+  fs.writeFileSync(
+    path.join(packageRoot, "package.json"),
+    JSON.stringify({ name: "@openclaw/demo", type: "module" }, null, 2),
+    "utf8",
+  );
+  fs.writeFileSync(
+    modulePath,
+    [
+      ...(sourceLines ?? [
+        "export const DemoChannelConfigSchema = {",
+        "  schema: {",
+        "    type: 'object',",
+        "    properties: { ok: { type: 'string' } },",
+        "  },",
+        "};",
+      ]),
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+
+  return { packageRoot, modulePath };
+}
+
 describe("loadChannelConfigSurfaceModule", () => {
   it("prefers the source-aware loader over bun when both succeed", async () => {
     await withTempDir({ prefix: "openclaw-config-surface-" }, async (repoRoot) => {
-      const packageRoot = path.join(repoRoot, "extensions", "demo");
-      const modulePath = path.join(packageRoot, "src", "config-schema.js");
-
-      fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
-      fs.writeFileSync(
-        path.join(packageRoot, "package.json"),
-        JSON.stringify({ name: "@openclaw/demo", type: "module" }, null, 2),
-        "utf8",
-      );
-      fs.writeFileSync(
-        modulePath,
-        [
-          "export const DemoChannelConfigSchema = {",
-          "  schema: {",
-          "    type: 'object',",
-          "    properties: { ok: { type: 'string' } },",
-          "  },",
-          "};",
-          "",
-        ].join("\n"),
-        "utf8",
-      );
+      const { modulePath } = createDemoConfigSchemaModule(repoRoot);
 
       const spawnSync = vi.fn(() => ({
         error: undefined,
@@ -107,14 +126,7 @@ describe("loadChannelConfigSurfaceModule", () => {
 
         await expect(
           imported.loadChannelConfigSurfaceModule(modulePath, { repoRoot }),
-        ).resolves.toMatchObject({
-          schema: {
-            type: "object",
-            properties: {
-              ok: { type: "string" },
-            },
-          },
-        });
+        ).resolves.toMatchObject(expectedOkSchema("string"));
         expect(spawnSync).not.toHaveBeenCalled();
       } finally {
         vi.doUnmock("node:child_process");
@@ -124,68 +136,21 @@ describe("loadChannelConfigSurfaceModule", () => {
 
   it("does not require bun when the source-aware loader succeeds", async () => {
     await withTempDir({ prefix: "openclaw-config-surface-" }, async (repoRoot) => {
-      const packageRoot = path.join(repoRoot, "extensions", "demo");
-      const modulePath = path.join(packageRoot, "src", "config-schema.js");
-
-      fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
-      fs.writeFileSync(
-        path.join(packageRoot, "package.json"),
-        JSON.stringify({ name: "@openclaw/demo", type: "module" }, null, 2),
-        "utf8",
-      );
-      fs.writeFileSync(
-        modulePath,
-        [
-          "export const DemoChannelConfigSchema = {",
-          "  schema: {",
-          "    type: 'object',",
-          "    properties: { ok: { type: 'string' } },",
-          "  },",
-          "};",
-          "",
-        ].join("\n"),
-        "utf8",
-      );
+      const { modulePath } = createDemoConfigSchemaModule(repoRoot);
 
       const { loadChannelConfigSurfaceModule: loadWithMissingBun, spawnSync } =
         await importLoaderWithMissingBun();
 
-      await expect(loadWithMissingBun(modulePath, { repoRoot })).resolves.toMatchObject({
-        schema: {
-          type: "object",
-          properties: {
-            ok: { type: "string" },
-          },
-        },
-      });
+      await expect(loadWithMissingBun(modulePath, { repoRoot })).resolves.toMatchObject(
+        expectedOkSchema("string"),
+      );
       expect(spawnSync).not.toHaveBeenCalled();
     });
   });
 
   it("falls back to bun when the source-aware loader fails", async () => {
     await withTempDir({ prefix: "openclaw-config-surface-" }, async (repoRoot) => {
-      const packageRoot = path.join(repoRoot, "extensions", "demo");
-      const modulePath = path.join(packageRoot, "src", "config-schema.js");
-
-      fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
-      fs.writeFileSync(
-        path.join(packageRoot, "package.json"),
-        JSON.stringify({ name: "@openclaw/demo", type: "module" }, null, 2),
-        "utf8",
-      );
-      fs.writeFileSync(
-        modulePath,
-        [
-          "export const DemoChannelConfigSchema = {",
-          "  schema: {",
-          "    type: 'object',",
-          "    properties: { ok: { type: 'string' } },",
-          "  },",
-          "};",
-          "",
-        ].join("\n"),
-        "utf8",
-      );
+      const { modulePath } = createDemoConfigSchemaModule(repoRoot);
 
       const {
         loadChannelConfigSurfaceModule: loadWithFailingJiti,
@@ -193,14 +158,9 @@ describe("loadChannelConfigSurfaceModule", () => {
         createJiti,
       } = await importLoaderWithFailingJitiAndWorkingBun();
 
-      await expect(loadWithFailingJiti(modulePath, { repoRoot })).resolves.toMatchObject({
-        schema: {
-          type: "object",
-          properties: {
-            ok: { type: "number" },
-          },
-        },
-      });
+      await expect(loadWithFailingJiti(modulePath, { repoRoot })).resolves.toMatchObject(
+        expectedOkSchema("number"),
+      );
       expect(createJiti).toHaveBeenCalled();
       expect(spawnSync).toHaveBeenCalledWith("bun", expect.any(Array), expect.any(Object));
     });
@@ -208,29 +168,15 @@ describe("loadChannelConfigSurfaceModule", () => {
 
   it("retries from an isolated package copy when extension-local node_modules is broken", async () => {
     await withTempDir({ prefix: "openclaw-config-surface-" }, async (repoRoot) => {
-      const packageRoot = path.join(repoRoot, "extensions", "demo");
-      const modulePath = path.join(packageRoot, "src", "config-schema.js");
-
-      fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
-      fs.writeFileSync(
-        path.join(packageRoot, "package.json"),
-        JSON.stringify({ name: "@openclaw/demo", type: "module" }, null, 2),
-        "utf8",
-      );
-      fs.writeFileSync(
-        modulePath,
-        [
-          "import { z } from 'zod';",
-          "export const DemoChannelConfigSchema = {",
-          "  schema: {",
-          "    type: 'object',",
-          "    properties: { ok: { type: z.object({}).shape ? 'string' : 'string' } },",
-          "  },",
-          "};",
-          "",
-        ].join("\n"),
-        "utf8",
-      );
+      const { packageRoot, modulePath } = createDemoConfigSchemaModule(repoRoot, [
+        "import { z } from 'zod';",
+        "export const DemoChannelConfigSchema = {",
+        "  schema: {",
+        "    type: 'object',",
+        "    properties: { ok: { type: z.object({}).shape ? 'string' : 'string' } },",
+        "  },",
+        "};",
+      ]);
 
       fs.mkdirSync(path.join(repoRoot, "node_modules", "zod"), { recursive: true });
       fs.writeFileSync(
@@ -265,14 +211,7 @@ describe("loadChannelConfigSurfaceModule", () => {
       );
 
       await expect(loadChannelConfigSurfaceModule(modulePath, { repoRoot })).resolves.toMatchObject(
-        {
-          schema: {
-            type: "object",
-            properties: {
-              ok: { type: "string" },
-            },
-          },
-        },
+        expectedOkSchema("string"),
       );
     });
   });

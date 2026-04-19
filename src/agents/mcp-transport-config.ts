@@ -10,8 +10,6 @@ import {
   resolveStdioMcpServerLaunchConfig,
 } from "./mcp-stdio.js";
 
-export type McpTransportType = "stdio" | HttpMcpTransportType;
-
 type ResolvedBaseMcpTransportConfig = {
   description: string;
   connectionTimeoutMs: number;

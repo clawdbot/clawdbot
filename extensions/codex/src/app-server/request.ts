@@ -8,6 +8,7 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
   requestParams?: JsonValue;
   timeoutMs?: number;
   startOptions?: CodexAppServerStartOptions;
+  authProfileId?: string;
 }): Promise<T> {
   const timeoutMs = params.timeoutMs ?? 60_000;
   return await withTimeout(
@@ -15,6 +16,7 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
       const client = await getSharedCodexAppServerClient({
         startOptions: params.startOptions,
         timeoutMs,
+        authProfileId: params.authProfileId,
       });
       return await client.request<T>(params.method, params.requestParams, { timeoutMs });
     })(),

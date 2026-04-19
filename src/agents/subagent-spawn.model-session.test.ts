@@ -1,5 +1,5 @@
 import os from "node:os";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSubagentSpawnTestConfig,
   expectPersistedRuntimeModel,
@@ -16,7 +16,7 @@ let resetSubagentRegistryForTests: typeof import("./subagent-registry.js").reset
 let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
 
 describe("spawnSubagentDirect runtime model persistence", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
       callGatewayMock,
       loadConfig: () => createSubagentSpawnTestConfig(os.tmpdir()),
@@ -24,6 +24,9 @@ describe("spawnSubagentDirect runtime model persistence", () => {
       pruneLegacyStoreKeysMock,
       workspaceDir: os.tmpdir(),
     }));
+  });
+
+  beforeEach(() => {
     resetSubagentRegistryForTests();
     callGatewayMock.mockReset();
     updateSessionStoreMock.mockReset();

@@ -205,3 +205,12 @@ export function expectWhatsAppWorkAccountAccessNote(harness: WizardPromptHarness
     WHATSAPP_ACCESS_NOTE_TITLE,
   );
 }
+
+export function expectWhatsAppDefaultAccountAccessNote(harness: WizardPromptHarness): void {
+  expect(harness.note).toHaveBeenCalledWith(
+    expect.stringContaining(
+      "`channels.whatsapp.accounts.default.dmPolicy` + `channels.whatsapp.accounts.default.allowFrom`",
+    ),
+    WHATSAPP_ACCESS_NOTE_TITLE,
+  );
+}

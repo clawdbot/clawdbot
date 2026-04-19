@@ -26,9 +26,13 @@ export const DISCORD_TEXT_CHUNK_LIMIT = 2000;
 type DiscordSendRuntime = typeof import("./send.js");
 type DiscordSendFn = DiscordSendRuntime["sendMessageDiscord"];
 type DiscordComponentSendFn = typeof import("./send.components.js").sendDiscordComponentMessage;
+type DiscordSharedInteractiveModule = typeof import("./shared-interactive.js");
+type DiscordThreadBindingsModule = typeof import("./monitor/thread-bindings.js");
 
 let discordSendRuntimePromise: Promise<DiscordSendRuntime> | undefined;
 let discordComponentSendPromise: Promise<DiscordComponentSendFn> | undefined;
+let discordSharedInteractivePromise: Promise<DiscordSharedInteractiveModule> | undefined;
+let discordThreadBindingsPromise: Promise<DiscordThreadBindingsModule> | undefined;
 
 async function loadDiscordSendRuntime(): Promise<DiscordSendRuntime> {
   discordSendRuntimePromise ??= import("./send.js");
@@ -44,6 +48,16 @@ async function sendDiscordComponentMessageLazy(
   return await (
     await discordComponentSendPromise
   )(...args);
+}
+
+function loadDiscordSharedInteractive(): Promise<DiscordSharedInteractiveModule> {
+  discordSharedInteractivePromise ??= import("./shared-interactive.js");
+  return discordSharedInteractivePromise;
+}
+
+function loadDiscordThreadBindings(): Promise<DiscordThreadBindingsModule> {
+  discordThreadBindingsPromise ??= import("./monitor/thread-bindings.js");
+  return discordThreadBindingsPromise;
 }
 
 function hasApprovalChannelData(payload: { channelData?: unknown }): boolean {
@@ -113,7 +127,7 @@ async function maybeSendDiscordWebhookText(params: {
   if (!threadId) {
     return null;
   }
-  const { getThreadBindingManager } = await import("./monitor/thread-bindings.js");
+  const { getThreadBindingManager } = await loadDiscordThreadBindings();
   const manager = getThreadBindingManager(params.accountId ?? undefined);
   if (!manager) {
     return null;
@@ -158,7 +172,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
     const rawComponentSpec =
       discordData?.components ??
       (payload.interactive
-        ? (await import("./shared-interactive.js")).buildDiscordInteractiveComponents(
+        ? (await loadDiscordSharedInteractive()).buildDiscordInteractiveComponents(
             payload.interactive,
           )
         : undefined);

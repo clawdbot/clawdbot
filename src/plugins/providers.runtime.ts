@@ -275,10 +275,9 @@ export function resolvePluginProviders(params: {
       return [];
     }
     const registry = loadOpenClawPlugins(loadState.loadOptions);
-    return registry.providers.map((entry) => ({
-      ...entry.provider,
-      pluginId: entry.pluginId,
-    }));
+    return registry.providers.map((entry) =>
+      Object.assign({}, entry.provider, { pluginId: entry.pluginId }),
+    );
   }
   const loadState = resolveRuntimeProviderPluginLoadState(params, base);
   const registry = resolveRuntimePluginRegistry(loadState.loadOptions);
@@ -286,8 +285,7 @@ export function resolvePluginProviders(params: {
     return [];
   }
 
-  return registry.providers.map((entry) => ({
-    ...entry.provider,
-    pluginId: entry.pluginId,
-  }));
+  return registry.providers.map((entry) =>
+    Object.assign({}, entry.provider, { pluginId: entry.pluginId }),
+  );
 }

@@ -10,6 +10,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { Readable } from "node:stream";
 import type { MattermostConfig } from "../types.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import type { OpenClawPluginApi } from "./runtime-api.js";
@@ -284,7 +285,6 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
     const matchedHandler = match.handler!;
 
     // Replay: create a synthetic readable that re-emits the buffered body
-    const { Readable } = await import("node:stream");
     const syntheticReq = new Readable({
       read() {
         this.push(Buffer.from(bodyStr, "utf8"));

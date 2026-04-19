@@ -6,6 +6,7 @@ export type CodexAppServerThreadBinding = {
   threadId: string;
   sessionFile: string;
   cwd: string;
+  authProfileId?: string;
   model?: string;
   modelProvider?: string;
   dynamicToolsFingerprint?: string;
@@ -41,6 +42,7 @@ export async function readCodexAppServerBinding(
       threadId: parsed.threadId,
       sessionFile,
       cwd: typeof parsed.cwd === "string" ? parsed.cwd : "",
+      authProfileId: typeof parsed.authProfileId === "string" ? parsed.authProfileId : undefined,
       model: typeof parsed.model === "string" ? parsed.model : undefined,
       modelProvider: typeof parsed.modelProvider === "string" ? parsed.modelProvider : undefined,
       dynamicToolsFingerprint:
@@ -71,6 +73,7 @@ export async function writeCodexAppServerBinding(
     sessionFile,
     threadId: binding.threadId,
     cwd: binding.cwd,
+    authProfileId: binding.authProfileId,
     model: binding.model,
     modelProvider: binding.modelProvider,
     dynamicToolsFingerprint: binding.dynamicToolsFingerprint,

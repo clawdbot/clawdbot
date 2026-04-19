@@ -111,12 +111,17 @@ function ensureOpenClawExtensionAlias(params) {
       "./plugin-sdk/*": "./plugin-sdk/*.js",
     },
   });
-  ensureSymlink(
-    relativeSymlinkTarget(pluginSdkDir, pluginSdkAliasPath),
-    pluginSdkAliasPath,
-    symlinkType(),
-    pluginSdkDir,
-  );
+  removePathIfExists(pluginSdkAliasPath);
+  fs.mkdirSync(pluginSdkAliasPath, { recursive: true });
+  for (const dirent of fs.readdirSync(pluginSdkDir, { withFileTypes: true })) {
+    if (!dirent.isFile() || path.extname(dirent.name) !== ".js") {
+      continue;
+    }
+    writeRuntimeModuleWrapper(
+      path.join(pluginSdkDir, dirent.name),
+      path.join(pluginSdkAliasPath, dirent.name),
+    );
+  }
 }
 
 function shouldWrapRuntimeJsFile(sourcePath) {

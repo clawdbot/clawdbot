@@ -2,6 +2,7 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import { DEFAULT_LLM_IDLE_TIMEOUT_SECONDS } from "../../../config/agent-timeout-defaults.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
 import type { EmbeddedRunTrigger } from "./params.js";
 
 /**
@@ -100,13 +101,14 @@ export function streamWithIdleTimeout(
             }
           };
 
-          return {
-            async next() {
+          return createStreamIteratorWrapper({
+            iterator,
+            next: async (streamIterator) => {
               clearTimer();
 
               try {
                 // Race between the actual next() and the timeout
-                const result = await Promise.race([iterator.next(), createTimeoutPromise()]);
+                const result = await Promise.race([streamIterator.next(), createTimeoutPromise()]);
 
                 if (result.done) {
                   clearTimer();
@@ -120,17 +122,15 @@ export function streamWithIdleTimeout(
                 throw error;
               }
             },
-
-            return() {
+            onReturn(streamIterator) {
               clearTimer();
-              return iterator.return?.() ?? Promise.resolve({ done: true, value: undefined });
+              return streamIterator.return?.() ?? Promise.resolve({ done: true, value: undefined });
             },
-
-            throw(error?: unknown) {
+            onThrow(streamIterator, error) {
               clearTimer();
-              return iterator.throw?.(error) ?? Promise.reject(error);
+              return streamIterator.throw?.(error) ?? Promise.reject(error);
             },
-          };
+          });
         };
 
       return stream;

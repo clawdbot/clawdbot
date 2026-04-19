@@ -194,11 +194,10 @@ export async function enrichOllamaModelsWithContext(
     const batchResults = await Promise.all(
       batch.map(async (model) => {
         const showInfo = await queryOllamaModelShowInfoCached(apiBase, model);
-        return {
-          ...model,
+        return Object.assign({}, model, {
           contextWindow: showInfo.contextWindow,
           capabilities: showInfo.capabilities,
-        };
+        });
       }),
     );
     enriched.push(...batchResults);

@@ -11,7 +11,13 @@ import {
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { resolveTargetIdFromTabs } from "../target-id.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
-import { getProfileContext, jsonError, toNumber, toStringOrEmpty } from "./utils.js";
+import {
+  asyncBrowserRoute,
+  getProfileContext,
+  jsonError,
+  toNumber,
+  toStringOrEmpty,
+} from "./utils.js";
 
 function resolveTabsProfileContext(
   req: BrowserRequest,
@@ -138,165 +144,180 @@ async function runTabTargetMutation(params: {
 }
 
 export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: BrowserRouteContext) {
-  app.get("/tabs", async (req, res) => {
-    await withTabsProfileRoute({
-      req,
-      res,
-      ctx,
-      run: async (profileCtx) => {
-        const reachable = await profileCtx.isReachable(300);
-        if (!reachable) {
-          return res.json({ running: false, tabs: [] as unknown[] });
-        }
-        const tabs = await redactBlockedTabUrls({
-          tabs: await profileCtx.listTabs(),
-          ssrfPolicy: ctx.state().resolved.ssrfPolicy,
-        });
-        res.json({ running: true, tabs });
-      },
-    });
-  });
-
-  app.post("/tabs/open", async (req, res) => {
-    const url = toStringOrEmpty((req.body as { url?: unknown })?.url);
-    if (!url) {
-      return jsonError(res, 400, "url is required");
-    }
-
-    await withTabsProfileRoute({
-      req,
-      res,
-      ctx,
-      mapTabError: true,
-      run: async (profileCtx) => {
-        await assertBrowserNavigationAllowed({
-          url,
-          ...withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy),
-        });
-        await profileCtx.ensureBrowserAvailable();
-        const tab = await profileCtx.openTab(url);
-        res.json(tab);
-      },
-    });
-  });
-
-  app.post("/tabs/focus", async (req, res) => {
-    const targetId = parseRequiredTargetId(res, (req.body as { targetId?: unknown })?.targetId);
-    if (!targetId) {
-      return;
-    }
-    await runTabTargetMutation({
-      req,
-      res,
-      ctx,
-      targetId,
-      mutate: async (profileCtx, id) => {
-        const tabs = await profileCtx.listTabs();
-        const resolved = resolveTargetIdFromTabs(id, tabs);
-        if (!resolved.ok) {
-          if (resolved.reason === "ambiguous") {
-            throw new BrowserTargetAmbiguousError();
-          }
-          throw new BrowserTabNotFoundError();
-        }
-        const tab = tabs.find((currentTab) => currentTab.targetId === resolved.targetId);
-        if (!tab) {
-          throw new BrowserTabNotFoundError();
-        }
-        const ssrfPolicyOpts = withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy);
-        if (ssrfPolicyOpts.ssrfPolicy) {
-          await assertBrowserNavigationResultAllowed({
-            url: tab.url,
-            ...ssrfPolicyOpts,
-          });
-        }
-        await profileCtx.focusTab(resolved.targetId);
-      },
-    });
-  });
-
-  app.delete("/tabs/:targetId", async (req, res) => {
-    const targetId = parseRequiredTargetId(res, req.params.targetId);
-    if (!targetId) {
-      return;
-    }
-    await runTabTargetMutation({
-      req,
-      res,
-      ctx,
-      targetId,
-      mutate: async (profileCtx, id) => {
-        await profileCtx.closeTab(id);
-      },
-    });
-  });
-
-  app.post("/tabs/action", async (req, res) => {
-    const action = toStringOrEmpty((req.body as { action?: unknown })?.action);
-    const index = toNumber((req.body as { index?: unknown })?.index);
-
-    await withTabsProfileRoute({
-      req,
-      res,
-      ctx,
-      mapTabError: true,
-      run: async (profileCtx) => {
-        if (action === "list") {
+  app.get(
+    "/tabs",
+    asyncBrowserRoute(async (req, res) => {
+      await withTabsProfileRoute({
+        req,
+        res,
+        ctx,
+        run: async (profileCtx) => {
           const reachable = await profileCtx.isReachable(300);
           if (!reachable) {
-            return res.json({ ok: true, tabs: [] as unknown[] });
+            return res.json({ running: false, tabs: [] as unknown[] });
           }
           const tabs = await redactBlockedTabUrls({
             tabs: await profileCtx.listTabs(),
             ssrfPolicy: ctx.state().resolved.ssrfPolicy,
           });
-          return res.json({ ok: true, tabs });
-        }
+          res.json({ running: true, tabs });
+        },
+      });
+    }),
+  );
 
-        if (action === "new") {
+  app.post(
+    "/tabs/open",
+    asyncBrowserRoute(async (req, res) => {
+      const url = toStringOrEmpty((req.body as { url?: unknown })?.url);
+      if (!url) {
+        return jsonError(res, 400, "url is required");
+      }
+
+      await withTabsProfileRoute({
+        req,
+        res,
+        ctx,
+        mapTabError: true,
+        run: async (profileCtx) => {
+          await assertBrowserNavigationAllowed({
+            url,
+            ...withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy),
+          });
           await profileCtx.ensureBrowserAvailable();
-          const tab = await profileCtx.openTab("about:blank");
-          return res.json({ ok: true, tab });
-        }
+          const tab = await profileCtx.openTab(url);
+          res.json(tab);
+        },
+      });
+    }),
+  );
 
-        if (action === "close") {
-          if (!(await ensureBrowserRunning(profileCtx, res))) {
-            return;
-          }
+  app.post(
+    "/tabs/focus",
+    asyncBrowserRoute(async (req, res) => {
+      const targetId = parseRequiredTargetId(res, (req.body as { targetId?: unknown })?.targetId);
+      if (!targetId) {
+        return;
+      }
+      await runTabTargetMutation({
+        req,
+        res,
+        ctx,
+        targetId,
+        mutate: async (profileCtx, id) => {
           const tabs = await profileCtx.listTabs();
-          const target = resolveIndexedTab(tabs, index);
-          if (!target) {
+          const resolved = resolveTargetIdFromTabs(id, tabs);
+          if (!resolved.ok) {
+            if (resolved.reason === "ambiguous") {
+              throw new BrowserTargetAmbiguousError();
+            }
             throw new BrowserTabNotFoundError();
           }
-          await profileCtx.closeTab(target.targetId);
-          return res.json({ ok: true, targetId: target.targetId });
-        }
-
-        if (action === "select") {
-          if (typeof index !== "number") {
-            return jsonError(res, 400, "index is required");
-          }
-          if (!(await ensureBrowserRunning(profileCtx, res))) {
-            return;
-          }
-          const tabs = await profileCtx.listTabs();
-          const target = tabs[index];
-          if (!target) {
+          const tab = tabs.find((currentTab) => currentTab.targetId === resolved.targetId);
+          if (!tab) {
             throw new BrowserTabNotFoundError();
           }
           const ssrfPolicyOpts = withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy);
           if (ssrfPolicyOpts.ssrfPolicy) {
             await assertBrowserNavigationResultAllowed({
-              url: target.url,
+              url: tab.url,
               ...ssrfPolicyOpts,
             });
           }
-          await profileCtx.focusTab(target.targetId);
-          return res.json({ ok: true, targetId: target.targetId });
-        }
+          await profileCtx.focusTab(resolved.targetId);
+        },
+      });
+    }),
+  );
 
-        return jsonError(res, 400, "unknown tab action");
-      },
-    });
-  });
+  app.delete(
+    "/tabs/:targetId",
+    asyncBrowserRoute(async (req, res) => {
+      const targetId = parseRequiredTargetId(res, req.params.targetId);
+      if (!targetId) {
+        return;
+      }
+      await runTabTargetMutation({
+        req,
+        res,
+        ctx,
+        targetId,
+        mutate: async (profileCtx, id) => {
+          await profileCtx.closeTab(id);
+        },
+      });
+    }),
+  );
+
+  app.post(
+    "/tabs/action",
+    asyncBrowserRoute(async (req, res) => {
+      const action = toStringOrEmpty((req.body as { action?: unknown })?.action);
+      const index = toNumber((req.body as { index?: unknown })?.index);
+
+      await withTabsProfileRoute({
+        req,
+        res,
+        ctx,
+        mapTabError: true,
+        run: async (profileCtx) => {
+          if (action === "list") {
+            const reachable = await profileCtx.isReachable(300);
+            if (!reachable) {
+              return res.json({ ok: true, tabs: [] as unknown[] });
+            }
+            const tabs = await redactBlockedTabUrls({
+              tabs: await profileCtx.listTabs(),
+              ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+            });
+            return res.json({ ok: true, tabs });
+          }
+
+          if (action === "new") {
+            await profileCtx.ensureBrowserAvailable();
+            const tab = await profileCtx.openTab("about:blank");
+            return res.json({ ok: true, tab });
+          }
+
+          if (action === "close") {
+            if (!(await ensureBrowserRunning(profileCtx, res))) {
+              return;
+            }
+            const tabs = await profileCtx.listTabs();
+            const target = resolveIndexedTab(tabs, index);
+            if (!target) {
+              throw new BrowserTabNotFoundError();
+            }
+            await profileCtx.closeTab(target.targetId);
+            return res.json({ ok: true, targetId: target.targetId });
+          }
+
+          if (action === "select") {
+            if (typeof index !== "number") {
+              return jsonError(res, 400, "index is required");
+            }
+            if (!(await ensureBrowserRunning(profileCtx, res))) {
+              return;
+            }
+            const tabs = await profileCtx.listTabs();
+            const target = tabs[index];
+            if (!target) {
+              throw new BrowserTabNotFoundError();
+            }
+            const ssrfPolicyOpts = withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy);
+            if (ssrfPolicyOpts.ssrfPolicy) {
+              await assertBrowserNavigationResultAllowed({
+                url: target.url,
+                ...ssrfPolicyOpts,
+              });
+            }
+            await profileCtx.focusTab(target.targetId);
+            return res.json({ ok: true, targetId: target.targetId });
+          }
+
+          return jsonError(res, 400, "unknown tab action");
+        },
+      });
+    }),
+  );
 }

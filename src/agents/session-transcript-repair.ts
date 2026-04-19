@@ -5,11 +5,15 @@ import {
   readStringValue,
 } from "../shared/string-coerce.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
+import {
+  REDACTED_SESSIONS_SPAWN_ATTACHMENT_CONTENT,
+  SESSIONS_SPAWN_ATTACHMENT_METADATA_KEYS,
+  isAllowedToolCallName,
+  isRedactedSessionsSpawnAttachment,
+  normalizeAllowedToolNames,
+} from "./tool-call-shared.js";
 
-const TOOL_CALL_NAME_MAX_CHARS = 64;
-const TOOL_CALL_NAME_RE = /^[A-Za-z0-9_:.-]+$/;
-const REDACTED_SESSIONS_SPAWN_ATTACHMENT_CONTENT = "__OPENCLAW_REDACTED__";
-const SESSIONS_SPAWN_ATTACHMENT_METADATA_KEYS = ["name", "encoding", "mimeType"] as const;
+export { isRedactedSessionsSpawnAttachment } from "./tool-call-shared.js";
 
 type RawToolCallBlock = {
   type?: unknown;
@@ -53,40 +57,6 @@ function hasToolCallId(block: RawToolCallBlock): boolean {
   return hasNonEmptyStringField(block.id);
 }
 
-function normalizeAllowedToolNames(allowedToolNames?: Iterable<string>): Set<string> | null {
-  if (!allowedToolNames) {
-    return null;
-  }
-  const normalized = new Set<string>();
-  for (const name of allowedToolNames) {
-    if (typeof name !== "string") {
-      continue;
-    }
-    const trimmed = name.trim();
-    if (trimmed) {
-      normalized.add(normalizeLowercaseStringOrEmpty(trimmed));
-    }
-  }
-  return normalized.size > 0 ? normalized : null;
-}
-
-function hasToolCallName(block: RawToolCallBlock, allowedToolNames: Set<string> | null): boolean {
-  if (typeof block.name !== "string") {
-    return false;
-  }
-  const trimmed = block.name.trim();
-  if (!trimmed) {
-    return false;
-  }
-  if (trimmed.length > TOOL_CALL_NAME_MAX_CHARS || !TOOL_CALL_NAME_RE.test(trimmed)) {
-    return false;
-  }
-  if (!allowedToolNames) {
-    return true;
-  }
-  return allowedToolNames.has(normalizeLowercaseStringOrEmpty(trimmed));
-}
-
 function redactSessionsSpawnAttachmentsArgs(value: unknown): unknown {
   if (!value || typeof value !== "object") {
     return value;
@@ -125,28 +95,6 @@ function redactSessionsSpawnAttachment(item: unknown): Record<string, unknown> {
     }
   }
   return next;
-}
-
-export function isRedactedSessionsSpawnAttachment(item: unknown): boolean {
-  if (!item || typeof item !== "object") {
-    return false;
-  }
-  const attachment = item as Record<string, unknown>;
-  if (attachment.content !== REDACTED_SESSIONS_SPAWN_ATTACHMENT_CONTENT) {
-    return false;
-  }
-  for (const key of Object.keys(attachment)) {
-    if (key === "content") {
-      continue;
-    }
-    if (!(SESSIONS_SPAWN_ATTACHMENT_METADATA_KEYS as readonly string[]).includes(key)) {
-      return false;
-    }
-    if (typeof attachment[key] !== "string" || attachment[key].trim().length === 0) {
-      return false;
-    }
-  }
-  return true;
 }
 
 function sanitizeToolCallBlock(block: RawToolCallBlock): RawToolCallBlock {
@@ -212,7 +160,7 @@ function isReplaySafeThinkingAssistantTurn(
       !hasToolCallInput(block) ||
       !toolCallId ||
       seenToolCallIds.has(toolCallId) ||
-      !hasToolCallName(block, allowedToolNames)
+      !isAllowedToolCallName(block.name, allowedToolNames)
     ) {
       return false;
     }
@@ -364,7 +312,7 @@ export function repairToolCallInputs(
         isRawToolCallBlock(block) &&
         (!hasToolCallInput(block) ||
           !hasToolCallId(block) ||
-          !hasToolCallName(block, allowedToolNames))
+          !isAllowedToolCallName((block as RawToolCallBlock).name, allowedToolNames))
       ) {
         droppedToolCalls += 1;
         droppedInMessage += 1;

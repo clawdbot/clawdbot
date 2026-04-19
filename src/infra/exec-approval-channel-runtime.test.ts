@@ -35,6 +35,29 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
+type GatewayEventClientParams = { onEvent?: (evt: { event: string; payload: unknown }) => void };
+
+function lastGatewayEventClientParams(): GatewayEventClientParams | undefined {
+  return mockCreateOperatorApprovalsGatewayClient.mock.calls[0]?.[0] as
+    | GatewayEventClientParams
+    | undefined;
+}
+
+function emitPluginApprovalRequested(clientParams = lastGatewayEventClientParams()) {
+  clientParams?.onEvent?.({
+    event: "plugin.approval.requested",
+    payload: {
+      id: "plugin:abc",
+      request: {
+        title: "Plugin approval",
+        description: "Let plugin proceed",
+      },
+      createdAtMs: 1000,
+      expiresAtMs: 2000,
+    },
+  });
+}
+
 beforeEach(() => {
   mockGatewayClientStarts.mockReset();
   mockGatewayClientStops.mockReset();
@@ -282,22 +305,7 @@ describe("createExecApprovalChannelRuntime", () => {
     });
 
     await runtime.start();
-    const clientParams = mockCreateOperatorApprovalsGatewayClient.mock.calls[0]?.[0] as
-      | { onEvent?: (evt: { event: string; payload: unknown }) => void }
-      | undefined;
-
-    clientParams?.onEvent?.({
-      event: "plugin.approval.requested",
-      payload: {
-        id: "plugin:abc",
-        request: {
-          title: "Plugin approval",
-          description: "Let plugin proceed",
-        },
-        createdAtMs: 1000,
-        expiresAtMs: 2000,
-      },
-    });
+    emitPluginApprovalRequested();
 
     await vi.waitFor(() => {
       expect(loggerMocks.error).toHaveBeenCalledWith(
@@ -362,23 +370,10 @@ describe("createExecApprovalChannelRuntime", () => {
     });
 
     await runtime.start();
-    const clientParams = mockCreateOperatorApprovalsGatewayClient.mock.calls[0]?.[0] as
-      | { onEvent?: (evt: { event: string; payload: unknown }) => void }
-      | undefined;
+    const clientParams = lastGatewayEventClientParams();
     expect(clientParams?.onEvent).toBeTypeOf("function");
 
-    clientParams?.onEvent?.({
-      event: "plugin.approval.requested",
-      payload: {
-        id: "plugin:abc",
-        request: {
-          title: "Plugin approval",
-          description: "Let plugin proceed",
-        },
-        createdAtMs: 1000,
-        expiresAtMs: 2000,
-      },
-    });
+    emitPluginApprovalRequested(clientParams);
     await vi.waitFor(() => {
       expect(deliverRequested).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -475,21 +470,7 @@ describe("createExecApprovalChannelRuntime", () => {
     });
 
     await runtime.start();
-    const clientParams = mockCreateOperatorApprovalsGatewayClient.mock.calls[0]?.[0] as
-      | { onEvent?: (evt: { event: string; payload: unknown }) => void }
-      | undefined;
-    clientParams?.onEvent?.({
-      event: "plugin.approval.requested",
-      payload: {
-        id: "plugin:abc",
-        request: {
-          title: "Plugin approval",
-          description: "Let plugin proceed",
-        },
-        createdAtMs: 1000,
-        expiresAtMs: 2000,
-      },
-    });
+    emitPluginApprovalRequested();
     await Promise.resolve();
 
     expect(deliverRequested).toHaveBeenCalledTimes(1);

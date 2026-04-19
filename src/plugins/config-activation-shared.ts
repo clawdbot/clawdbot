@@ -12,25 +12,20 @@ type EnableStateParamsLike = {
 
 type PluginKindLike = string | readonly string[] | undefined;
 
-export function toEnableStateResult<TState extends EnableStateLike>(
-  state: TState,
-): { enabled: boolean; reason?: string } {
+export function toEnableStateResult(state: EnableStateLike): { enabled: boolean; reason?: string } {
   return state.enabled ? { enabled: true } : { enabled: false, reason: state.reason };
 }
 
-export function resolveEnableStateResult<TParams, TState extends EnableStateLike>(
+export function resolveEnableStateResult<TParams>(
   params: TParams,
-  resolveState: (params: TParams) => TState,
+  resolveState: (params: TParams) => EnableStateLike,
 ): { enabled: boolean; reason?: string } {
   return toEnableStateResult(resolveState(params));
 }
 
-export function resolveEnableStateShared<
-  TParams extends EnableStateParamsLike,
-  TState extends EnableStateLike,
->(
+export function resolveEnableStateShared<TParams extends EnableStateParamsLike>(
   params: TParams,
-  resolveState: (params: TParams) => TState,
+  resolveState: (params: TParams) => EnableStateLike,
 ): { enabled: boolean; reason?: string } {
   return resolveEnableStateResult(params, resolveState);
 }

@@ -141,7 +141,7 @@ function normalizeProviderModels(
       return model;
     }
     mutated = true;
-    return { ...model, id: nextId };
+    return Object.assign({}, model, { id: nextId });
   });
 
   return mutated ? { ...provider, models: nextModels } : provider;

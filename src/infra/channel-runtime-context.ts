@@ -48,6 +48,7 @@ export function registerChannelRuntimeContext(
   });
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Runtime context values are caller-typed by key.
 export function getChannelRuntimeContext<T = unknown>(
   params: ChannelRuntimeContextKey & {
     channelRuntime?: ChannelRuntimeSurface;

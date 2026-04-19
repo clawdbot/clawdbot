@@ -17,25 +17,23 @@ vi.mock("../plugins/provider-runtime.js", async () => {
     ...actual,
     buildProviderMissingAuthMessageWithPlugin: () => undefined,
     resolveExternalAuthProfilesWithPlugins: () => [],
-    shouldDeferProviderSyntheticProfileAuthWithPlugin: (params: {
-      provider: string;
-      context: { resolvedApiKey?: string };
-    }) => params.provider === "ollama" && params.context.resolvedApiKey?.trim() === "ollama-local",
+    shouldDeferProviderSyntheticProfileAuthWithPlugin: () => false,
     resolveProviderSyntheticAuthWithPlugin: (params: {
       provider: string;
       config?: {
         plugins?: {
           enabled?: boolean;
-          entries?: {
-            xai?: {
+          entries?: Record<
+            string,
+            {
               enabled?: boolean;
               config?: {
                 webSearch?: {
                   apiKey?: unknown;
                 };
               };
-            };
-          };
+            }
+          >;
         };
         tools?: {
           web?: {
@@ -49,56 +47,39 @@ vi.mock("../plugins/provider-runtime.js", async () => {
       };
       context: { providerConfig?: { api?: string; baseUrl?: string; models?: unknown[] } };
     }) => {
-      if (params.provider === "xai") {
+      if (params.provider === "plugin-web") {
         if (
           params.config?.plugins?.enabled === false ||
-          params.config?.plugins?.entries?.xai?.enabled === false
+          params.config?.plugins?.entries?.["plugin-web"]?.enabled === false
         ) {
           return undefined;
         }
-        const pluginApiKey = params.config?.plugins?.entries?.xai?.config?.webSearch?.apiKey;
+        const pluginApiKey =
+          params.config?.plugins?.entries?.["plugin-web"]?.config?.webSearch?.apiKey;
         if (typeof pluginApiKey === "string" && pluginApiKey.trim()) {
           return {
             apiKey: pluginApiKey.trim(),
-            source: "plugins.entries.xai.config.webSearch.apiKey",
+            source: "plugins.entries.plugin-web.config.webSearch.apiKey",
             mode: "api-key" as const,
           };
         }
         if (pluginApiKey && typeof pluginApiKey === "object") {
           return {
             apiKey: NON_ENV_SECRETREF_MARKER,
-            source: "plugins.entries.xai.config.webSearch.apiKey",
+            source: "plugins.entries.plugin-web.config.webSearch.apiKey",
             mode: "api-key" as const,
           };
         }
         return undefined;
       }
-      if (params.provider === "claude-cli") {
+      if (params.provider === "native-cli") {
         return {
-          apiKey: "claude-cli-access-token",
-          source: "Claude CLI native auth",
+          apiKey: "native-cli-access-token",
+          source: "Native CLI auth",
           mode: "oauth" as const,
         };
       }
-      if (params.provider !== "ollama") {
-        return undefined;
-      }
-      const providerConfig = params.context.providerConfig;
-      const hasMeaningfulOllamaConfig =
-        (Array.isArray(providerConfig?.models) && providerConfig.models.length > 0) ||
-        Boolean(providerConfig?.api?.trim() && providerConfig.api.trim() !== "ollama") ||
-        Boolean(
-          providerConfig?.baseUrl?.trim() &&
-          providerConfig.baseUrl.trim().replace(/\/+$/, "") !== "http://127.0.0.1:11434",
-        );
-      if (!hasMeaningfulOllamaConfig) {
-        return undefined;
-      }
-      return {
-        apiKey: "ollama-local",
-        source: "models.providers.ollama (synthetic local key)",
-        mode: "api-key" as const,
-      };
+      return undefined;
     },
   };
 });
@@ -626,17 +607,17 @@ describe("resolveUsableCustomProviderApiKey", () => {
 });
 
 describe("resolveApiKeyForProvider", () => {
-  it("reuses the xai plugin web search key without models.providers.xai", async () => {
-    const resolved = await withoutEnv("XAI_API_KEY", () =>
+  it("reuses plugin fallback auth without a models.providers entry", async () => {
+    const resolved = await withoutEnv("PLUGIN_WEB_API_KEY", () =>
       resolveApiKeyForProvider({
-        provider: "xai",
+        provider: "plugin-web",
         cfg: {
           plugins: {
             entries: {
-              xai: {
+              "plugin-web": {
                 config: {
                   webSearch: {
-                    apiKey: "xai-plugin-fallback-key", // pragma: allowlist secret
+                    apiKey: "plugin-web-fallback-key", // pragma: allowlist secret
                   },
                 },
               },
@@ -648,20 +629,20 @@ describe("resolveApiKeyForProvider", () => {
     );
 
     expect(resolved).toMatchObject({
-      apiKey: "xai-plugin-fallback-key",
-      source: "plugins.entries.xai.config.webSearch.apiKey",
+      apiKey: "plugin-web-fallback-key",
+      source: "plugins.entries.plugin-web.config.webSearch.apiKey",
       mode: "api-key",
     });
   });
 
-  it("prefers the active runtime snapshot for SecretRef-backed xai fallback auth", async () => {
+  it("prefers the active runtime snapshot for SecretRef-backed plugin fallback auth", async () => {
     const sourceConfig = {
       plugins: {
         entries: {
-          xai: {
+          "plugin-web": {
             config: {
               webSearch: {
-                apiKey: { source: "file", provider: "vault", id: "/xai/api-key" },
+                apiKey: { source: "file", provider: "vault", id: "/plugin-web/api-key" },
               },
             },
           },
@@ -671,10 +652,10 @@ describe("resolveApiKeyForProvider", () => {
     const runtimeConfig = {
       plugins: {
         entries: {
-          xai: {
+          "plugin-web": {
             config: {
               webSearch: {
-                apiKey: "xai-runtime-key", // pragma: allowlist secret
+                apiKey: "plugin-web-runtime-key", // pragma: allowlist secret
               },
             },
           },
@@ -683,34 +664,34 @@ describe("resolveApiKeyForProvider", () => {
     };
     setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
 
-    const resolved = await withoutEnv("XAI_API_KEY", () =>
+    const resolved = await withoutEnv("PLUGIN_WEB_API_KEY", () =>
       resolveApiKeyForProvider({
-        provider: "xai",
+        provider: "plugin-web",
         cfg: sourceConfig,
         store: { version: 1, profiles: {} },
       }),
     );
 
     expect(resolved).toMatchObject({
-      apiKey: "xai-runtime-key",
-      source: "plugins.entries.xai.config.webSearch.apiKey",
+      apiKey: "plugin-web-runtime-key",
+      source: "plugins.entries.plugin-web.config.webSearch.apiKey",
       mode: "api-key",
     });
   });
 
-  it("does not reuse xai fallback auth when the xai plugin is disabled", async () => {
+  it("does not reuse plugin fallback auth when the plugin is disabled", async () => {
     await expect(
-      withoutEnv("XAI_API_KEY", () =>
+      withoutEnv("PLUGIN_WEB_API_KEY", () =>
         resolveApiKeyForProvider({
-          provider: "xai",
+          provider: "plugin-web",
           cfg: {
             plugins: {
               entries: {
-                xai: {
+                "plugin-web": {
                   enabled: false,
                   config: {
                     webSearch: {
-                      apiKey: "xai-plugin-fallback-key", // pragma: allowlist secret
+                      apiKey: "plugin-web-fallback-key", // pragma: allowlist secret
                     },
                   },
                 },
@@ -720,17 +701,17 @@ describe("resolveApiKeyForProvider", () => {
           store: { version: 1, profiles: {} },
         }),
       ),
-    ).rejects.toThrow('No API key found for provider "xai"');
+    ).rejects.toThrow('No API key found for provider "plugin-web"');
   });
 
-  it("reuses native Claude CLI auth for the claude-cli provider", async () => {
+  it("reuses plugin-owned native CLI auth", async () => {
     const resolved = await resolveApiKeyForProvider({
-      provider: "claude-cli",
+      provider: "native-cli",
       cfg: {
         agents: {
           defaults: {
             model: {
-              primary: "claude-cli/claude-sonnet-4-6",
+              primary: "native-cli/demo-model",
             },
           },
         },
@@ -739,8 +720,8 @@ describe("resolveApiKeyForProvider", () => {
     });
 
     expect(resolved).toEqual({
-      apiKey: "claude-cli-access-token",
-      source: "Claude CLI native auth",
+      apiKey: "native-cli-access-token",
+      source: "Native CLI auth",
       mode: "oauth",
     });
   });

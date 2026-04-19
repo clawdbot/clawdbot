@@ -25,15 +25,6 @@ export function isBinaryThinkingProvider(provider?: string | null): boolean {
   return false;
 }
 
-export function supportsBuiltInXHighThinking(
-  provider?: string | null,
-  model?: string | null,
-): boolean {
-  void provider;
-  void model;
-  return false;
-}
-
 // Normalize user-provided thinking level strings to the canonical enum.
 export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined {
   const key = normalizeOptionalLowercaseString(raw);

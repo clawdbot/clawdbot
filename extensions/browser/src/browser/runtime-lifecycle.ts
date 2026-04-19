@@ -1,4 +1,5 @@
 import type { Server } from "node:http";
+import { getPwAiModule } from "./pw-ai-module.js";
 import { isPwAiLoaded } from "./pw-ai-state.js";
 import type { BrowserServerState } from "./server-context.js";
 import { ensureExtensionRelayForProfiles, stopKnownBrowserProfiles } from "./server-lifecycle.js";
@@ -52,8 +53,8 @@ export async function stopBrowserRuntime(params: {
     return;
   }
   try {
-    const mod = await import("./pw-ai.js");
-    await mod.closePlaywrightBrowserConnection();
+    const mod = await getPwAiModule({ mode: "soft" });
+    await mod?.closePlaywrightBrowserConnection();
   } catch {
     // ignore
   }

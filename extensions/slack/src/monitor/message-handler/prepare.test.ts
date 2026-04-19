@@ -196,6 +196,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
     expect(prepared).toBeTruthy();
     expectInboundContextContract(prepared!.ctxPayload as any);
+    expect(prepared!.ctxPayload.GroupSpace).toBe("T1");
   });
 
   it("does not enable Slack status reactions when the message timestamp is missing", async () => {

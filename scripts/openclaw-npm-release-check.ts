@@ -553,6 +553,9 @@ export function collectForbiddenPackedContentErrors(
   const textPathPattern = /\.(?:[cm]?js|d\.ts|json|md|mjs|cjs)$/u;
   const errors: string[] = [];
   for (const packedPath of paths) {
+    if (packedPath === PACKAGE_DIST_INVENTORY_RELATIVE_PATH) {
+      continue;
+    }
     if (
       !FORBIDDEN_PRIVATE_QA_CONTENT_SCAN_PREFIXES.some((prefix) => packedPath.startsWith(prefix))
     ) {

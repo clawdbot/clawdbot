@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@create-markdown/preview": "^2.0.3",
-    "@noble/ed25519": "3.0.1",
+    "@noble/ed25519": "3.1.0",
     "dompurify": "^3.4.0",
     "lit": "^3.3.2",
     "markdown-it": "^14.1.1",

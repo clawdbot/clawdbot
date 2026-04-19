@@ -978,7 +978,10 @@ function resolveLegacyConfigForRead(
     listPluginDoctorLegacyConfigRules({ pluginIds }),
   );
   if (!resolvedConfigRaw || typeof resolvedConfigRaw !== "object") {
-    return { effectiveConfigRaw: resolvedConfigRaw, sourceLegacyIssues };
+    return {
+      effectiveConfigRaw: resolvedConfigRaw,
+      sourceLegacyIssues,
+    };
   }
   const compat = applyRuntimeLegacyConfigMigrations(resolvedConfigRaw);
   return {
@@ -1466,6 +1469,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         runtimeConfig: snapshot.config,
         sourceConfig: snapshot.resolved,
         nextConfig: cfg,
+        rootAuthoredConfig: snapshot.parsed,
       });
       try {
         const resolvedIncludes = resolveConfigIncludes(snapshot.parsed, configPath, {

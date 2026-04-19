@@ -47,6 +47,41 @@ const createWatchHarness = () => {
   return { child, spawn, watcher, createWatcher, fakeProcess };
 };
 
+const createAutoExitChild = () => {
+  const child = Object.assign(new EventEmitter(), {
+    kill: vi.fn(),
+  });
+  child.kill.mockImplementation(() => {
+    queueMicrotask(() => child.emit("exit", 0, null));
+  });
+  return child;
+};
+
+const startWatchRun = ({
+  args = ["gateway", "--force"],
+  env,
+  spawn,
+}: {
+  args?: string[];
+  env?: WatchRunParams["env"];
+  spawn: NonNullable<WatchRunParams["spawn"]>;
+}) => {
+  const watcher = Object.assign(new EventEmitter(), {
+    close: vi.fn(async () => {}),
+  });
+  const createWatcher = vi.fn(() => watcher);
+  const fakeProcess = createFakeProcess();
+  const runPromise = runWatch({
+    args,
+    createWatcher,
+    env,
+    lockDisabled: true,
+    process: fakeProcess,
+    spawn,
+  });
+  return { watcher, createWatcher, fakeProcess, runPromise };
+};
+
 describe("watch-node script", () => {
   it("wires chokidar watch to run-node with watched source/config paths", async () => {
     const { child, spawn, watcher, createWatcher, fakeProcess } = createWatchHarness();
@@ -190,19 +225,7 @@ describe("watch-node script", () => {
       kill: vi.fn(() => {}),
     });
     const spawn = vi.fn().mockReturnValueOnce(childA).mockReturnValueOnce(childB);
-    const watcher = Object.assign(new EventEmitter(), {
-      close: vi.fn(async () => {}),
-    });
-    const createWatcher = vi.fn(() => watcher);
-    const fakeProcess = createFakeProcess();
-
-    const runPromise = runWatch({
-      args: ["gateway", "--force"],
-      createWatcher,
-      lockDisabled: true,
-      process: fakeProcess,
-      spawn,
-    });
+    const { watcher, fakeProcess, runPromise } = startWatchRun({ spawn });
 
     childA.emit("exit", 143, null);
     await new Promise((resolve) => setImmediate(resolve));
@@ -249,21 +272,9 @@ describe("watch-node script", () => {
   });
 
   it("ignores test-only changes and restarts on non-test source changes", async () => {
-    const childA = Object.assign(new EventEmitter(), {
-      kill: vi.fn(function () {
-        queueMicrotask(() => childA.emit("exit", 0, null));
-      }),
-    });
-    const childB = Object.assign(new EventEmitter(), {
-      kill: vi.fn(function () {
-        queueMicrotask(() => childB.emit("exit", 0, null));
-      }),
-    });
-    const childC = Object.assign(new EventEmitter(), {
-      kill: vi.fn(function () {
-        queueMicrotask(() => childC.emit("exit", 0, null));
-      }),
-    });
+    const childA = createAutoExitChild();
+    const childB = createAutoExitChild();
+    const childC = createAutoExitChild();
     const childD = Object.assign(new EventEmitter(), {
       kill: vi.fn(() => {}),
     });
@@ -273,19 +284,7 @@ describe("watch-node script", () => {
       .mockReturnValueOnce(childB)
       .mockReturnValueOnce(childC)
       .mockReturnValueOnce(childD);
-    const watcher = Object.assign(new EventEmitter(), {
-      close: vi.fn(async () => {}),
-    });
-    const createWatcher = vi.fn(() => watcher);
-    const fakeProcess = createFakeProcess();
-
-    const runPromise = runWatch({
-      args: ["gateway", "--force"],
-      createWatcher,
-      lockDisabled: true,
-      process: fakeProcess,
-      spawn,
-    });
+    const { watcher, fakeProcess, runPromise } = startWatchRun({ spawn });
 
     watcher.emit("change", "src/infra/watch-node.test.ts");
     await new Promise((resolve) => setImmediate(resolve));

@@ -39,7 +39,7 @@ const coreTools = [
 ];
 
 vi.mock("../openclaw-tools.js", () => ({
-  createOpenClawTools: () => coreTools.map((tool) => ({ ...tool })),
+  createOpenClawTools: () => coreTools.map((tool) => Object.assign({}, tool)),
   __testing: {
     setDepsForTest: () => {},
   },

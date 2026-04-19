@@ -290,6 +290,8 @@ type FallbackRunnerParams = {
   run: (provider: string, model: string) => Promise<unknown>;
 };
 
+type ModelSwitchOptions = ConstructorParameters<typeof LiveSessionModelSwitchError>[0];
+
 function makeSuccessResult(provider: string, model: string) {
   return {
     payloads: [{ text: "ok" }],
@@ -300,6 +302,42 @@ function makeSuccessResult(provider: string, model: string) {
       agentMeta: { provider, model },
     },
   };
+}
+
+function setupModelSwitchRetry(switchOptions: ModelSwitchOptions) {
+  let invocation = 0;
+  state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+    invocation += 1;
+    if (invocation === 1) {
+      throw new LiveSessionModelSwitchError(switchOptions);
+    }
+    const result = await params.run(params.provider, params.model);
+    return {
+      result,
+      provider: params.provider,
+      model: params.model,
+      attempts: [],
+    };
+  });
+}
+
+async function runBasicAgentCommand() {
+  const agentCommand = await getAgentCommand();
+  await agentCommand({
+    message: "hello",
+    to: "+1234567890",
+    senderIsOwner: true,
+  });
+}
+
+function expectFallbackOverrideCalls(first: boolean, second: boolean) {
+  expect(state.resolveEffectiveModelFallbacksMock).toHaveBeenCalledTimes(2);
+  expect(state.resolveEffectiveModelFallbacksMock.mock.calls[0][0]).toMatchObject({
+    hasSessionModelOverride: first,
+  });
+  expect(state.resolveEffectiveModelFallbacksMock.mock.calls[1][0]).toMatchObject({
+    hasSessionModelOverride: second,
+  });
 }
 
 describe("agentCommand – LiveSessionModelSwitchError retry", () => {
@@ -314,32 +352,14 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
   });
 
   it("retries with the switched provider/model when LiveSessionModelSwitchError is thrown", async () => {
-    let invocation = 0;
-    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
-      invocation += 1;
-      if (invocation === 1) {
-        throw new LiveSessionModelSwitchError({
-          provider: "openai",
-          model: "gpt-5.4",
-        });
-      }
-      const result = await params.run(params.provider, params.model);
-      return {
-        result,
-        provider: params.provider,
-        model: params.model,
-        attempts: [],
-      };
+    setupModelSwitchRetry({
+      provider: "openai",
+      model: "gpt-5.4",
     });
 
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
 
-    const agentCommand = await getAgentCommand();
-    await agentCommand({
-      message: "hello",
-      to: "+1234567890",
-      senderIsOwner: true,
-    });
+    await runBasicAgentCommand();
 
     expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(2);
 
@@ -348,24 +368,15 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       | undefined;
     expect(secondCall?.provider).toBe("openai");
     expect(secondCall?.model).toBe("gpt-5.4");
+
+    const lifecycleEndCalls = state.emitAgentEventMock.mock.calls.filter((call: unknown[]) => {
+      const arg = call[0] as { stream?: string; data?: { phase?: string } };
+      return arg?.stream === "lifecycle" && arg?.data?.phase === "end";
+    });
+    expect(lifecycleEndCalls.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("propagates non-LiveSessionModelSwitchError errors without retrying", async () => {
-    state.runWithModelFallbackMock.mockRejectedValueOnce(new Error("some other failure"));
-
-    const agentCommand = await getAgentCommand();
-    await expect(
-      agentCommand({
-        message: "hello",
-        to: "+1234567890",
-        senderIsOwner: true,
-      }),
-    ).rejects.toThrow("some other failure");
-
-    expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("emits lifecycle error event for non-switch errors", async () => {
+  it("propagates non-switch errors without retrying and emits lifecycle error", async () => {
     state.runWithModelFallbackMock.mockRejectedValueOnce(new Error("provider down"));
 
     const agentCommand = await getAgentCommand();
@@ -377,6 +388,8 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       }),
     ).rejects.toThrow("provider down");
 
+    expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(1);
+
     const lifecycleErrorCalls = state.emitAgentEventMock.mock.calls.filter((call: unknown[]) => {
       const arg = call[0] as { stream?: string; data?: { phase?: string } };
       return arg?.stream === "lifecycle" && arg?.data?.phase === "error";
@@ -384,61 +397,13 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(lifecycleErrorCalls.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("resets lifecycleEnded flag between retry iterations", async () => {
-    let invocation = 0;
-    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
-      invocation += 1;
-      if (invocation === 1) {
-        throw new LiveSessionModelSwitchError({
-          provider: "openai",
-          model: "gpt-5.4",
-        });
-      }
-      const result = await params.run(params.provider, params.model);
-      return {
-        result,
-        provider: params.provider,
-        model: params.model,
-        attempts: [],
-      };
-    });
-
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
-
-    const agentCommand = await getAgentCommand();
-    await agentCommand({
-      message: "hello",
-      to: "+1234567890",
-      senderIsOwner: true,
-    });
-
-    const lifecycleEndCalls = state.emitAgentEventMock.mock.calls.filter((call: unknown[]) => {
-      const arg = call[0] as { stream?: string; data?: { phase?: string } };
-      return arg?.stream === "lifecycle" && arg?.data?.phase === "end";
-    });
-    expect(lifecycleEndCalls.length).toBeGreaterThanOrEqual(1);
-  });
-
   it("propagates authProfileId from the switch error to the retried session entry", async () => {
-    let invocation = 0;
     let capturedAuthProfileProvider: string | undefined;
-    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
-      invocation += 1;
-      if (invocation === 1) {
-        throw new LiveSessionModelSwitchError({
-          provider: "openai",
-          model: "gpt-5.4",
-          authProfileId: "profile-openai-prod",
-          authProfileIdSource: "user",
-        });
-      }
-      const result = await params.run(params.provider, params.model);
-      return {
-        result,
-        provider: params.provider,
-        model: params.model,
-        attempts: [],
-      };
+    setupModelSwitchRetry({
+      provider: "openai",
+      model: "gpt-5.4",
+      authProfileId: "profile-openai-prod",
+      authProfileIdSource: "user",
     });
 
     state.runAgentAttemptMock.mockImplementation(async (...args: unknown[]) => {
@@ -447,130 +412,53 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       return makeSuccessResult("openai", "gpt-5.4");
     });
 
-    const agentCommand = await getAgentCommand();
-    await agentCommand({
-      message: "hello",
-      to: "+1234567890",
-      senderIsOwner: true,
-    });
+    await runBasicAgentCommand();
 
     expect(capturedAuthProfileProvider).toBe("openai");
     expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(2);
   });
 
   it("updates hasSessionModelOverride for fallback resolution after switch", async () => {
-    let invocation = 0;
-    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
-      invocation += 1;
-      if (invocation === 1) {
-        throw new LiveSessionModelSwitchError({
-          provider: "openai",
-          model: "gpt-5.4",
-        });
-      }
-      const result = await params.run(params.provider, params.model);
-      return {
-        result,
-        provider: params.provider,
-        model: params.model,
-        attempts: [],
-      };
+    setupModelSwitchRetry({
+      provider: "openai",
+      model: "gpt-5.4",
     });
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
 
     state.resolveEffectiveModelFallbacksMock.mockClear();
 
-    const agentCommand = await getAgentCommand();
-    await agentCommand({
-      message: "hello",
-      to: "+1234567890",
-      senderIsOwner: true,
-    });
+    await runBasicAgentCommand();
 
-    expect(state.resolveEffectiveModelFallbacksMock).toHaveBeenCalledTimes(2);
-    expect(state.resolveEffectiveModelFallbacksMock.mock.calls[0][0]).toMatchObject({
-      hasSessionModelOverride: false,
-    });
-    expect(state.resolveEffectiveModelFallbacksMock.mock.calls[1][0]).toMatchObject({
-      hasSessionModelOverride: true,
-    });
+    expectFallbackOverrideCalls(false, true);
   });
 
   it("does not flip hasSessionModelOverride on auth-only switch with same model", async () => {
-    let invocation = 0;
-    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
-      invocation += 1;
-      if (invocation === 1) {
-        throw new LiveSessionModelSwitchError({
-          provider: "anthropic",
-          model: "claude",
-          authProfileId: "profile-99",
-          authProfileIdSource: "user",
-        });
-      }
-      const result = await params.run(params.provider, params.model);
-      return {
-        result,
-        provider: params.provider,
-        model: params.model,
-        attempts: [],
-      };
+    setupModelSwitchRetry({
+      provider: "anthropic",
+      model: "claude",
+      authProfileId: "profile-99",
+      authProfileIdSource: "user",
     });
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude"));
 
     state.resolveEffectiveModelFallbacksMock.mockClear();
 
-    const agentCommand = await getAgentCommand();
-    await agentCommand({
-      message: "hello",
-      to: "+1234567890",
-      senderIsOwner: true,
-    });
+    await runBasicAgentCommand();
 
-    expect(state.resolveEffectiveModelFallbacksMock).toHaveBeenCalledTimes(2);
-    expect(state.resolveEffectiveModelFallbacksMock.mock.calls[0][0]).toMatchObject({
-      hasSessionModelOverride: false,
-    });
-    expect(state.resolveEffectiveModelFallbacksMock.mock.calls[1][0]).toMatchObject({
-      hasSessionModelOverride: false,
-    });
+    expectFallbackOverrideCalls(false, false);
   });
 
   it("flips hasSessionModelOverride on provider-only switch with same model", async () => {
-    let invocation = 0;
-    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
-      invocation += 1;
-      if (invocation === 1) {
-        throw new LiveSessionModelSwitchError({
-          provider: "openai",
-          model: "claude",
-        });
-      }
-      const result = await params.run(params.provider, params.model);
-      return {
-        result,
-        provider: params.provider,
-        model: params.model,
-        attempts: [],
-      };
+    setupModelSwitchRetry({
+      provider: "openai",
+      model: "claude",
     });
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "claude"));
 
     state.resolveEffectiveModelFallbacksMock.mockClear();
 
-    const agentCommand = await getAgentCommand();
-    await agentCommand({
-      message: "hello",
-      to: "+1234567890",
-      senderIsOwner: true,
-    });
+    await runBasicAgentCommand();
 
-    expect(state.resolveEffectiveModelFallbacksMock).toHaveBeenCalledTimes(2);
-    expect(state.resolveEffectiveModelFallbacksMock.mock.calls[0][0]).toMatchObject({
-      hasSessionModelOverride: false,
-    });
-    expect(state.resolveEffectiveModelFallbacksMock.mock.calls[1][0]).toMatchObject({
-      hasSessionModelOverride: true,
-    });
+    expectFallbackOverrideCalls(false, true);
   });
 });

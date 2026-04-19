@@ -983,9 +983,10 @@ describe("slack slash command session metadata", () => {
     expect(recordSessionMetaFromInboundMock).toHaveBeenCalledTimes(1);
     const call = recordSessionMetaFromInboundMock.mock.calls[0]?.[0] as {
       sessionKey?: string;
-      ctx?: { OriginatingChannel?: string };
+      ctx?: { GroupSpace?: string; OriginatingChannel?: string };
     };
     expect(call.ctx?.OriginatingChannel).toBe("slack");
+    expect(call.ctx?.GroupSpace).toBe("T1");
     expect(call.sessionKey).toBeDefined();
   });
 

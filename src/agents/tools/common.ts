@@ -364,15 +364,18 @@ export function parseAvailableTags(raw: unknown): AvailableTag[] | undefined {
       (t): t is Record<string, unknown> =>
         typeof t === "object" && t !== null && typeof t.name === "string",
     )
-    .map((t) => ({
-      ...(t.id !== undefined && typeof t.id === "string" ? { id: t.id } : {}),
-      name: t.name as string,
-      ...(typeof t.moderated === "boolean" ? { moderated: t.moderated } : {}),
-      ...(t.emoji_id === null || typeof t.emoji_id === "string" ? { emoji_id: t.emoji_id } : {}),
-      ...(t.emoji_name === null || typeof t.emoji_name === "string"
-        ? { emoji_name: t.emoji_name }
-        : {}),
-    }));
+    .map((t) =>
+      Object.assign(
+        {},
+        t.id !== undefined && typeof t.id === `string` ? { id: t.id } : {},
+        { name: t.name as string },
+        typeof t.moderated === `boolean` ? { moderated: t.moderated } : {},
+        t.emoji_id === null || typeof t.emoji_id === `string` ? { emoji_id: t.emoji_id } : {},
+        t.emoji_name === null || typeof t.emoji_name === `string`
+          ? { emoji_name: t.emoji_name }
+          : {},
+      ),
+    );
   // Return undefined instead of empty array to avoid accidentally clearing all tags
   return result.length ? result : undefined;
 }

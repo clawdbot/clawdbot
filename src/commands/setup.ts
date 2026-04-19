@@ -32,8 +32,31 @@ type SetupCommandDeps = {
   writeConfigFile?: (config: OpenClawConfig) => Promise<void>;
 };
 
+type AgentWorkspaceModule = typeof import("../agents/workspace.js");
+type ConfigIOModule = typeof import("../config/io.js");
+type ConfigLoggingModule = typeof import("../config/logging.js");
+
+let agentWorkspaceModulePromise: Promise<AgentWorkspaceModule> | undefined;
+let configIOModulePromise: Promise<ConfigIOModule> | undefined;
+let configLoggingModulePromise: Promise<ConfigLoggingModule> | undefined;
+
+function loadAgentWorkspaceModule(): Promise<AgentWorkspaceModule> {
+  agentWorkspaceModulePromise ??= import("../agents/workspace.js");
+  return agentWorkspaceModulePromise;
+}
+
+function loadConfigIOModule(): Promise<ConfigIOModule> {
+  configIOModulePromise ??= import("../config/io.js");
+  return configIOModulePromise;
+}
+
+function loadConfigLoggingModule(): Promise<ConfigLoggingModule> {
+  configLoggingModulePromise ??= import("../config/logging.js");
+  return configLoggingModulePromise;
+}
+
 async function createDefaultConfigIO(): Promise<ConfigIO> {
-  const { createConfigIO } = await import("../config/io.js");
+  const { createConfigIO } = await loadConfigIOModule();
   return createConfigIO();
 }
 
@@ -45,24 +68,24 @@ async function resolveDefaultAgentWorkspaceDir(deps: SetupCommandDeps): Promise<
   if (typeof override === "function") {
     return await override();
   }
-  const { DEFAULT_AGENT_WORKSPACE_DIR } = await import("../agents/workspace.js");
+  const { DEFAULT_AGENT_WORKSPACE_DIR } = await loadAgentWorkspaceModule();
   return DEFAULT_AGENT_WORKSPACE_DIR;
 }
 
 async function ensureDefaultAgentWorkspace(
   params: Parameters<EnsureAgentWorkspace>[0],
 ): ReturnType<EnsureAgentWorkspace> {
-  const { ensureAgentWorkspace } = await import("../agents/workspace.js");
+  const { ensureAgentWorkspace } = await loadAgentWorkspaceModule();
   return ensureAgentWorkspace(params);
 }
 
 async function writeDefaultConfigFile(config: OpenClawConfig): Promise<void> {
-  const { writeConfigFile } = await import("../config/io.js");
+  const { writeConfigFile } = await loadConfigIOModule();
   await writeConfigFile(config);
 }
 
 async function formatDefaultConfigPath(configPath: string): Promise<string> {
-  const { formatConfigPath } = await import("../config/logging.js");
+  const { formatConfigPath } = await loadConfigLoggingModule();
   return formatConfigPath(configPath);
 }
 
@@ -70,7 +93,7 @@ async function logDefaultConfigUpdated(
   runtime: RuntimeEnv,
   opts: { path?: string; suffix?: string },
 ): Promise<void> {
-  const { logConfigUpdated } = await import("../config/logging.js");
+  const { logConfigUpdated } = await loadConfigLoggingModule();
   logConfigUpdated(runtime, opts);
 }
 

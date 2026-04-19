@@ -74,6 +74,30 @@ function emitOpenAiResponsesFinalMessageEnd(params: {
   });
 }
 
+async function emitSuppressedCommentary(params: {
+  emit: TextEndBlockReplyHarness["emit"];
+  text: string;
+}) {
+  params.emit({ type: "message_start", message: { role: "assistant" } });
+  emitOpenAiResponsesTextDeltaAndEnd({
+    emit: params.emit,
+    text: params.text,
+    id: "item_commentary",
+    phase: "commentary",
+  });
+  await Promise.resolve();
+}
+
+function expectSingleBlockReplyText(params: {
+  onBlockReply: ReturnType<typeof vi.fn>;
+  subscription: TextEndBlockReplyHarness["subscription"];
+  text: string;
+}) {
+  expect(params.onBlockReply).toHaveBeenCalledTimes(1);
+  expect(params.onBlockReply.mock.calls[0]?.[0]?.text).toBe(params.text);
+  expect(params.subscription.assistantTexts).toEqual([params.text]);
+}
+
 describe("subscribeEmbeddedPiSession", () => {
   it("emits block replies on text_end and does not duplicate on message_end", async () => {
     const onBlockReply = vi.fn();
@@ -167,14 +191,7 @@ describe("subscribeEmbeddedPiSession", () => {
     const onBlockReply = vi.fn();
     const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
 
-    emit({ type: "message_start", message: { role: "assistant" } });
-    emitOpenAiResponsesTextDeltaAndEnd({
-      emit,
-      text: "Working...",
-      id: "item_commentary",
-      phase: "commentary",
-    });
-    await Promise.resolve();
+    await emitSuppressedCommentary({ emit, text: "Working..." });
 
     expect(onBlockReply).not.toHaveBeenCalled();
     expect(subscription.assistantTexts).toEqual([]);
@@ -189,9 +206,7 @@ describe("subscribeEmbeddedPiSession", () => {
 
     emitOpenAiResponsesFinalMessageEnd({ emit, commentaryText: "Working...", finalText: "Done." });
 
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply.mock.calls[0]?.[0]?.text).toBe("Done.");
-    expect(subscription.assistantTexts).toEqual(["Done."]);
+    expectSingleBlockReplyText({ onBlockReply, subscription, text: "Done." });
   });
 
   it("emits the full final answer on text_end when it extends suppressed commentary", async () => {
@@ -253,19 +268,10 @@ describe("subscribeEmbeddedPiSession", () => {
     const onBlockReply = vi.fn();
     const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
 
-    emit({ type: "message_start", message: { role: "assistant" } });
-    emitOpenAiResponsesTextDeltaAndEnd({
-      emit,
-      text: "Working...",
-      id: "item_commentary",
-      phase: "commentary",
-    });
-    await Promise.resolve();
+    await emitSuppressedCommentary({ emit, text: "Working..." });
 
     emitOpenAiResponsesFinalMessageEnd({ emit, commentaryText: "Working...", finalText: "Done." });
 
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply.mock.calls[0]?.[0]?.text).toBe("Done.");
-    expect(subscription.assistantTexts).toEqual(["Done."]);
+    expectSingleBlockReplyText({ onBlockReply, subscription, text: "Done." });
   });
 });

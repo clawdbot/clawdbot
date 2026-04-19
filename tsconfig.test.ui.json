@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.test.json",
+  "include": [
+    "src/**/*.d.ts",
+    "ui/**/*.d.ts",
+    "ui/**/*.test.ts",
+    "ui/**/*.test.tsx",
+    "extensions/**/*.d.ts",
+    "packages/**/*.d.ts"
+  ]
+}

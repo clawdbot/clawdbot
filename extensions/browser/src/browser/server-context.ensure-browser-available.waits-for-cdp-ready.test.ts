@@ -5,6 +5,7 @@ import {
   PROFILE_HTTP_REACHABILITY_TIMEOUT_MS,
 } from "./cdp-timeouts.js";
 import * as chromeModule from "./chrome.js";
+import { BrowserProfileUnavailableError } from "./errors.js";
 import { createBrowserRouteContext } from "./server-context.js";
 import { makeBrowserServerState, mockLaunchedChrome } from "./server-context.test-harness.js";
 
@@ -54,8 +55,12 @@ describe("browser server-context ensureBrowserAvailable", () => {
 
     const promise = profile.ensureBrowserAvailable();
     const rejected = expect(promise).rejects.toThrow("not reachable after start");
+    const diagnosticRejected = expect(promise).rejects.toThrow(
+      "CDP diagnostic: websocket_health_command_timeout; mock CDP diagnostic.",
+    );
     await vi.advanceTimersByTimeAsync(8100);
     await rejected;
+    await diagnosticRejected;
 
     expect(launchOpenClawChrome).toHaveBeenCalledTimes(1);
     expect(stopOpenClawChrome).toHaveBeenCalledTimes(1);
@@ -172,6 +177,96 @@ describe("browser server-context ensureBrowserAvailable", () => {
       state.resolved.remoteCdpHandshakeTimeoutMs,
       undefined,
     );
+    expect(launchOpenClawChrome).not.toHaveBeenCalled();
+    expect(stopOpenClawChrome).not.toHaveBeenCalled();
+  });
+
+  it("resolves for attachOnly loopback profile with a bare ws:// cdpUrl when CDP is reachable (#68027)", async () => {
+    // Regression for #68027: a bare `ws://host:port` cdpUrl on a loopback
+    // attachOnly profile must not surface as
+    //   `Browser attachOnly is enabled and profile "<name>" is not running.`
+    // when the underlying CDP endpoint is actually healthy. The low-level
+    // fix lives in chrome.ts/cdp.ts (see chrome.test.ts #68027 tests); this
+    // higher-level test locks the user-facing symptom at
+    // ensureBrowserAvailable() so future refactors of the availability flow
+    // cannot silently reintroduce the bug by munging/short-circuiting bare
+    // ws:// URLs before they reach the helpers.
+    const { launchOpenClawChrome, stopOpenClawChrome } = setupEnsureBrowserAvailableHarness();
+    const isChromeReachable = vi.mocked(chromeModule.isChromeReachable);
+    const isChromeCdpReady = vi.mocked(chromeModule.isChromeCdpReady);
+
+    const state = makeBrowserServerState({
+      profile: {
+        name: "manual-cdp",
+        cdpUrl: "ws://127.0.0.1:9222",
+        cdpHost: "127.0.0.1",
+        cdpIsLoopback: true,
+        cdpPort: 9222,
+        color: "#00AA00",
+        driver: "openclaw",
+        attachOnly: true,
+      },
+      resolvedOverrides: {
+        defaultProfile: "manual-cdp",
+        ssrfPolicy: {},
+      },
+    });
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const profile = ctx.forProfile("manual-cdp");
+
+    isChromeReachable.mockResolvedValueOnce(true);
+    isChromeCdpReady.mockResolvedValueOnce(true);
+
+    await expect(profile.ensureBrowserAvailable()).resolves.toBeUndefined();
+
+    // The bare ws:// URL must pass through unchanged — the helpers own the
+    // discovery-first-then-fallback strategy for bare ws roots.
+    expect(isChromeReachable).toHaveBeenCalledWith(
+      "ws://127.0.0.1:9222",
+      state.resolved.remoteCdpTimeoutMs,
+      undefined,
+    );
+    expect(isChromeCdpReady).toHaveBeenCalledWith(
+      "ws://127.0.0.1:9222",
+      state.resolved.remoteCdpTimeoutMs,
+      state.resolved.remoteCdpHandshakeTimeoutMs,
+      undefined,
+    );
+    expect(launchOpenClawChrome).not.toHaveBeenCalled();
+    expect(stopOpenClawChrome).not.toHaveBeenCalled();
+  });
+
+  it("redacts credentials in remote CDP availability errors", async () => {
+    const { launchOpenClawChrome, stopOpenClawChrome } = setupEnsureBrowserAvailableHarness();
+    const isChromeReachable = vi.mocked(chromeModule.isChromeReachable);
+
+    const state = makeBrowserServerState({
+      profile: {
+        name: "remote",
+        cdpUrl: "https://user:pass@browserless.example.com?token=supersecret123",
+        cdpHost: "browserless.example.com",
+        cdpIsLoopback: false,
+        cdpPort: 443,
+        color: "#00AA00",
+        driver: "openclaw",
+        attachOnly: false,
+      },
+      resolvedOverrides: {
+        defaultProfile: "remote",
+        ssrfPolicy: {},
+      },
+    });
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const profile = ctx.forProfile("remote");
+
+    isChromeReachable.mockResolvedValue(false);
+
+    const promise = profile.ensureBrowserAvailable();
+    await expect(promise).rejects.toThrow(BrowserProfileUnavailableError);
+    await expect(promise).rejects.toThrow(
+      'Remote CDP for profile "remote" is not reachable at https://browserless.example.com/?token=***.',
+    );
+
     expect(launchOpenClawChrome).not.toHaveBeenCalled();
     expect(stopOpenClawChrome).not.toHaveBeenCalled();
   });

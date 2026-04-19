@@ -1,5 +1,8 @@
 import { normalizeAnyChannelId } from "../channels/registry.js";
-import type { OutboundSendDeps } from "../infra/outbound/send-deps.js";
+import {
+  resolveLegacyOutboundSendDepKeys,
+  type OutboundSendDeps,
+} from "../infra/outbound/send-deps.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 /**
@@ -27,23 +30,6 @@ function resolveChannelIdFromLegacySourceKey(key: string): string | undefined {
   return normalizeAnyChannelId(normalizedStem) ?? (normalizedStem || undefined);
 }
 
-function resolveLegacyDepKeysForChannel(channelId: string): string[] {
-  const compact = channelId.replace(/[^a-z0-9]+/gi, "");
-  if (!compact) {
-    return [];
-  }
-  const pascal = compact.charAt(0).toUpperCase() + compact.slice(1);
-  const keys = new Set<string>();
-  keys.add(`send${pascal}`);
-  if (pascal.startsWith("I") && pascal.length > 1) {
-    keys.add(`sendI${pascal.slice(1)}`);
-  }
-  if (pascal.startsWith("Ms") && pascal.length > 2) {
-    keys.add(`sendMS${pascal.slice(2)}`);
-  }
-  return [...keys];
-}
-
 /**
  * Pass CLI send sources through as-is — both CliOutboundSendSource and
  * OutboundSendDeps are now channel-ID-keyed records.
@@ -67,7 +53,7 @@ export function createOutboundSendDepsFromCliSource(deps: CliOutboundSendSource)
     if (sourceValue === undefined) {
       continue;
     }
-    for (const legacyDepKey of resolveLegacyDepKeysForChannel(channelId)) {
+    for (const legacyDepKey of resolveLegacyOutboundSendDepKeys(channelId)) {
       if (outbound[legacyDepKey] === undefined) {
         outbound[legacyDepKey] = sourceValue;
       }

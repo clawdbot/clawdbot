@@ -146,6 +146,25 @@ export function createStatusLastHeartbeat(): HeartbeatEventPayload {
   };
 }
 
+export function createStatusHealth() {
+  return {
+    ok: true as const,
+    ts: Date.now(),
+    durationMs: 42,
+    channels: {},
+    channelOrder: [],
+    channelLabels: {},
+    heartbeatSeconds: 60,
+    defaultAgentId: "main",
+    agents: [],
+    sessions: {
+      path: "store.json",
+      count: 2,
+      recent: [{ key: "session-key", updatedAt: 1, age: 5_000 }],
+    },
+  };
+}
+
 export const statusTestDecorators = {
   ok: (value: string) => `ok(${value})`,
   warn: (value: string) => `warn(${value})`,
@@ -186,22 +205,7 @@ export function createStatusCommandOverviewRowsParams(
     surface: baseStatusOverviewSurface,
     osLabel: "macOS",
     summary: baseStatusSummary,
-    health: {
-      ok: true,
-      ts: Date.now(),
-      durationMs: 42,
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-      heartbeatSeconds: 60,
-      defaultAgentId: "main",
-      agents: [],
-      sessions: {
-        path: "store.json",
-        count: 2,
-        recent: [{ key: "session-key", updatedAt: 1, age: 5_000 }],
-      },
-    },
+    health: createStatusHealth(),
     lastHeartbeat: createStatusLastHeartbeat(),
     agentStatus: baseStatusAgentStatus,
     memory: baseStatusMemory,
@@ -235,22 +239,7 @@ export function createStatusCommandReportDataParams(
         },
       ],
     },
-    health: {
-      ok: true,
-      ts: Date.now(),
-      durationMs: 42,
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-      heartbeatSeconds: 60,
-      defaultAgentId: "main",
-      agents: [],
-      sessions: {
-        path: "store.json",
-        count: 2,
-        recent: [{ key: "session-key", updatedAt: 1, age: 5_000 }],
-      },
-    },
+    health: createStatusHealth(),
     usageLines: ["usage line"],
     lastHeartbeat: createStatusLastHeartbeat(),
     agentStatus: baseStatusAgentStatus,

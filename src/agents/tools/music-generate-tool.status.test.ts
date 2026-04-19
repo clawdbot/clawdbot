@@ -12,13 +12,15 @@ const taskRuntimeInternalMocks = vi.hoisted(() => ({
 
 vi.mock("../../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
 
+function resetMusicStatusMocks() {
+  vi.restoreAllMocks();
+  vi.spyOn(musicGenerationRuntime, "listRuntimeMusicGenerationProviders").mockReturnValue([]);
+  taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
+  taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
+}
+
 describe("createMusicGenerateTool status actions", () => {
-  beforeEach(() => {
-    vi.restoreAllMocks();
-    vi.spyOn(musicGenerationRuntime, "listRuntimeMusicGenerationProviders").mockReturnValue([]);
-    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
-    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
-  });
+  beforeEach(resetMusicStatusMocks);
 
   afterEach(() => {
     vi.unstubAllEnvs();

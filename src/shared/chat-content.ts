@@ -1,3 +1,28 @@
+export function coerceChatContentText(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value == null) {
+    return "";
+  }
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint" ||
+    typeof value === "symbol"
+  ) {
+    return String(value);
+  }
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value) ?? "";
+    } catch {
+      return "";
+    }
+  }
+  return "";
+}
+
 export function extractTextFromChatContent(
   content: unknown,
   opts?: {
@@ -8,36 +33,13 @@ export function extractTextFromChatContent(
 ): string | null {
   const normalizeText = opts?.normalizeText ?? ((text: string) => text.replace(/\s+/g, " ").trim());
   const joinWith = opts?.joinWith ?? " ";
-  const coerceText = (value: unknown): string => {
-    if (typeof value === "string") {
-      return value;
-    }
-    if (value == null) {
-      return "";
-    }
-    if (
-      typeof value === "number" ||
-      typeof value === "boolean" ||
-      typeof value === "bigint" ||
-      typeof value === "symbol"
-    ) {
-      return String(value);
-    }
-    if (typeof value === "object") {
-      try {
-        return JSON.stringify(value) ?? "";
-      } catch {
-        return "";
-      }
-    }
-    return "";
-  };
   const sanitize = (text: unknown): string => {
-    const raw = coerceText(text);
+    const raw = coerceChatContentText(text);
     const sanitized = opts?.sanitizeText ? opts.sanitizeText(raw) : raw;
-    return coerceText(sanitized);
+    return coerceChatContentText(sanitized);
   };
-  const normalize = (text: unknown): string => coerceText(normalizeText(coerceText(text)));
+  const normalize = (text: unknown): string =>
+    coerceChatContentText(normalizeText(coerceChatContentText(text)));
 
   if (typeof content === "string") {
     const value = sanitize(content);

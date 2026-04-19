@@ -97,9 +97,9 @@ export function ensureObject(
   return next;
 }
 
-export function normalizeKnownProvider<TProvider extends { id: string }>(
+export function normalizeKnownProvider(
   value: unknown,
-  providers: TProvider[],
+  providers: Array<{ id: string }>,
 ): string | undefined {
   const normalized = normalizeOptionalLowercaseString(value);
   if (!normalized) {

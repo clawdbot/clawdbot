@@ -354,17 +354,11 @@ function hasPluginEntries(cfg: OpenClawConfig): boolean {
   return !!entries && typeof entries === "object" && Object.keys(entries).length > 0;
 }
 
-function configMayNeedPluginManifestRegistry(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
-  const pluginEntries = cfg.plugins?.entries;
-  if (Array.isArray(cfg.plugins?.allow) && cfg.plugins.allow.length > 0 && hasPluginEntries(cfg)) {
-    return true;
-  }
-  if (
-    pluginEntries &&
-    Object.values(pluginEntries).some((entry) => isRecord(entry) && isRecord(entry.config))
-  ) {
-    return true;
-  }
+function hasPluginAllowlistWithEntries(cfg: OpenClawConfig): boolean {
+  return Array.isArray(cfg.plugins?.allow) && cfg.plugins.allow.length > 0 && hasPluginEntries(cfg);
+}
+
+function hasConfiguredProviderModelOrHarness(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
   if (cfg.auth?.profiles && Object.keys(cfg.auth.profiles).length > 0) {
     return true;
   }
@@ -374,7 +368,17 @@ function configMayNeedPluginManifestRegistry(cfg: OpenClawConfig, env: NodeJS.Pr
   if (collectModelRefs(cfg).length > 0) {
     return true;
   }
-  if (hasConfiguredEmbeddedHarnessRuntime(cfg, env)) {
+  return hasConfiguredEmbeddedHarnessRuntime(cfg, env);
+}
+
+function configMayNeedPluginManifestRegistry(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
+  if (hasPluginAllowlistWithEntries(cfg)) {
+    return true;
+  }
+  if (hasConfiguredPluginConfigEntry(cfg)) {
+    return true;
+  }
+  if (hasConfiguredProviderModelOrHarness(cfg, env)) {
     return true;
   }
   const configuredChannels = cfg.channels as Record<string, unknown> | undefined;
@@ -396,7 +400,7 @@ export function configMayNeedPluginAutoEnable(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): boolean {
-  if (Array.isArray(cfg.plugins?.allow) && cfg.plugins.allow.length > 0 && hasPluginEntries(cfg)) {
+  if (hasPluginAllowlistWithEntries(cfg)) {
     return true;
   }
   if (hasConfiguredPluginConfigEntry(cfg)) {
@@ -405,16 +409,7 @@ export function configMayNeedPluginAutoEnable(
   if (hasPotentialConfiguredChannels(cfg, env)) {
     return true;
   }
-  if (cfg.auth?.profiles && Object.keys(cfg.auth.profiles).length > 0) {
-    return true;
-  }
-  if (cfg.models?.providers && Object.keys(cfg.models.providers).length > 0) {
-    return true;
-  }
-  if (collectModelRefs(cfg).length > 0) {
-    return true;
-  }
-  if (hasConfiguredEmbeddedHarnessRuntime(cfg, env)) {
+  if (hasConfiguredProviderModelOrHarness(cfg, env)) {
     return true;
   }
   if (hasConfiguredWebSearchPluginEntry(cfg) || hasConfiguredWebFetchPluginEntry(cfg)) {

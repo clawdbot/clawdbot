@@ -96,6 +96,7 @@ function writeTempJsonFile(pathname: string, payload: string) {
   }
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- JSON loading helper lets callers ascribe the expected payload type.
 export function loadJsonFile<T = unknown>(pathname: string): T | undefined {
   try {
     const raw = fs.readFileSync(pathname, "utf8");

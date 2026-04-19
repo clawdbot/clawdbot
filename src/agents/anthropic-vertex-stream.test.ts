@@ -63,6 +63,61 @@ function makeModel(params: { id: string; maxTokens?: number }): Model<"anthropic
   } as Model<"anthropic-messages">;
 }
 
+const CACHE_BOUNDARY_PROMPT = `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`;
+
+type PayloadHook = (payload: unknown, payloadModel: unknown) => Promise<unknown>;
+
+function captureCacheBoundaryPayloadHook(onPayload: PayloadHook) {
+  const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5");
+  const model = makeModel({ id: "claude-sonnet-4-6", maxTokens: 64000 });
+
+  void streamFn(
+    model,
+    {
+      systemPrompt: CACHE_BOUNDARY_PROMPT,
+      messages: [{ role: "user", content: "Hello" }],
+    } as never,
+    {
+      cacheRetention: "short",
+      onPayload,
+    } as never,
+  );
+
+  const transportOptions = hoisted.streamAnthropicMock.mock.calls[0]?.[2] as {
+    onPayload?: PayloadHook;
+  };
+
+  return { model, onPayload: transportOptions.onPayload };
+}
+
+function buildExpectedCacheBoundaryPayload(messageText: string) {
+  return {
+    system: [
+      {
+        type: "text",
+        text: "Stable prefix",
+        cache_control: { type: "ephemeral" },
+      },
+      {
+        type: "text",
+        text: "Dynamic suffix",
+      },
+    ],
+    messages: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: messageText,
+            cache_control: { type: "ephemeral" },
+          },
+        ],
+      },
+    ],
+  };
+}
+
 describe("createAnthropicVertexStreamFn", () => {
   beforeAll(async () => {
     ({ createAnthropicVertexStreamFn, createAnthropicVertexStreamFnForModel } =
@@ -163,127 +218,44 @@ describe("createAnthropicVertexStreamFn", () => {
   });
 
   it("applies Anthropic cache-boundary shaping before forwarding payload hooks", async () => {
-    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5");
-    const model = makeModel({ id: "claude-sonnet-4-6", maxTokens: 64000 });
     const onPayload = vi.fn(async (payload: unknown) => payload);
-
-    void streamFn(
-      model,
-      {
-        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
-        messages: [{ role: "user", content: "Hello" }],
-      } as never,
-      {
-        cacheRetention: "short",
-        onPayload,
-      } as never,
-    );
-
-    const transportOptions = hoisted.streamAnthropicMock.mock.calls[0]?.[2] as {
-      onPayload?: (payload: unknown, payloadModel: unknown) => Promise<unknown>;
-    };
+    const { model, onPayload: transportPayloadHook } = captureCacheBoundaryPayloadHook(onPayload);
     const payload = {
       system: [
         {
           type: "text",
-          text: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+          text: CACHE_BOUNDARY_PROMPT,
           cache_control: { type: "ephemeral" },
         },
       ],
       messages: [{ role: "user", content: "Hello" }],
     };
 
-    const nextPayload = await transportOptions.onPayload?.(payload, model);
+    const nextPayload = await transportPayloadHook?.(payload, model);
 
-    expect(onPayload).toHaveBeenCalledWith(
-      {
-        system: [
-          {
-            type: "text",
-            text: "Stable prefix",
-            cache_control: { type: "ephemeral" },
-          },
-          {
-            type: "text",
-            text: "Dynamic suffix",
-          },
-        ],
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: "Hello",
-                cache_control: { type: "ephemeral" },
-              },
-            ],
-          },
-        ],
-      },
-      model,
-    );
-    expect(nextPayload).toEqual({
-      system: [
-        {
-          type: "text",
-          text: "Stable prefix",
-          cache_control: { type: "ephemeral" },
-        },
-        {
-          type: "text",
-          text: "Dynamic suffix",
-        },
-      ],
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: "Hello",
-              cache_control: { type: "ephemeral" },
-            },
-          ],
-        },
-      ],
-    });
+    const expectedPayload = buildExpectedCacheBoundaryPayload("Hello");
+    expect(onPayload).toHaveBeenCalledWith(expectedPayload, model);
+    expect(nextPayload).toEqual(expectedPayload);
   });
 
   it("reapplies Anthropic cache-boundary shaping when payload hooks return a fresh payload", async () => {
-    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5");
-    const model = makeModel({ id: "claude-sonnet-4-6", maxTokens: 64000 });
     const onPayload = vi.fn(async () => ({
       system: [
         {
           type: "text",
-          text: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+          text: CACHE_BOUNDARY_PROMPT,
         },
       ],
       messages: [{ role: "user", content: "Hello again" }],
     }));
+    const { model, onPayload: transportPayloadHook } = captureCacheBoundaryPayloadHook(onPayload);
 
-    void streamFn(
-      model,
-      {
-        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
-        messages: [{ role: "user", content: "Hello" }],
-      } as never,
-      {
-        cacheRetention: "short",
-        onPayload,
-      } as never,
-    );
-
-    const transportOptions = hoisted.streamAnthropicMock.mock.calls[0]?.[2] as {
-      onPayload?: (payload: unknown, payloadModel: unknown) => Promise<unknown>;
-    };
-    const nextPayload = await transportOptions.onPayload?.(
+    const nextPayload = await transportPayloadHook?.(
       {
         system: [
           {
             type: "text",
-            text: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+            text: CACHE_BOUNDARY_PROMPT,
           },
         ],
         messages: [{ role: "user", content: "Hello" }],
@@ -291,31 +263,7 @@ describe("createAnthropicVertexStreamFn", () => {
       model,
     );
 
-    expect(nextPayload).toEqual({
-      system: [
-        {
-          type: "text",
-          text: "Stable prefix",
-          cache_control: { type: "ephemeral" },
-        },
-        {
-          type: "text",
-          text: "Dynamic suffix",
-        },
-      ],
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: "Hello again",
-              cache_control: { type: "ephemeral" },
-            },
-          ],
-        },
-      ],
-    });
+    expect(nextPayload).toEqual(buildExpectedCacheBoundaryPayload("Hello again"));
   });
 
   it("omits maxTokens when neither the model nor request provide a finite limit", () => {

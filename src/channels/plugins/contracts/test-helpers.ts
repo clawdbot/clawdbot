@@ -4,6 +4,7 @@ import { normalizeChatType } from "../../chat-type.js";
 import { resolveConversationLabel } from "../../conversation-label.js";
 import { validateSenderIdentity } from "../../sender-identity.js";
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper preserves channel send mock arg types.
 export function primeChannelOutboundSendMock<TArgs extends unknown[]>(
   sendMock: Mock<(...args: TArgs) => Promise<unknown>>,
   fallbackResult: Record<string, unknown>,

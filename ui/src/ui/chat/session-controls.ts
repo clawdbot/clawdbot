@@ -276,12 +276,7 @@ function patchSessionThinkingLevel(
   state.sessionsResult = {
     ...current,
     sessions: current.sessions.map((row) =>
-      row.key === sessionKey
-        ? {
-            ...row,
-            thinkingLevel,
-          }
-        : row,
+      row.key === sessionKey ? Object.assign({}, row, { thinkingLevel }) : row,
     ),
   };
 }

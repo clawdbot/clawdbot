@@ -65,10 +65,45 @@ export function resolvePersistCandidateForWrite(params: {
   runtimeConfig: unknown;
   sourceConfig: unknown;
   nextConfig: unknown;
+  rootAuthoredConfig?: unknown;
 }): unknown {
   const patch = createMergePatch(params.runtimeConfig, params.nextConfig);
   const projectedSource = projectSourceOntoRuntimeShape(params.sourceConfig, params.runtimeConfig);
-  return applyMergePatch(projectedSource, patch);
+  const persisted = applyMergePatch(projectedSource, patch);
+  return preserveRootSchemaUri({
+    rootAuthoredConfig: params.rootAuthoredConfig ?? params.sourceConfig,
+    nextConfig: params.nextConfig,
+    persistedCandidate: persisted,
+  });
+}
+
+function readRootSchemaUri(value: unknown): string | undefined {
+  if (!isRecord(value) || typeof value.$schema !== "string") {
+    return undefined;
+  }
+  return value.$schema;
+}
+
+function hasOwnRootSchemaKey(value: unknown): boolean {
+  return isRecord(value) && Object.prototype.hasOwnProperty.call(value, "$schema");
+}
+
+function preserveRootSchemaUri(params: {
+  rootAuthoredConfig: unknown;
+  nextConfig: unknown;
+  persistedCandidate: unknown;
+}): unknown {
+  if (hasOwnRootSchemaKey(params.nextConfig)) {
+    return params.persistedCandidate;
+  }
+  const sourceSchema = readRootSchemaUri(params.rootAuthoredConfig);
+  if (sourceSchema === undefined || !isRecord(params.persistedCandidate)) {
+    return params.persistedCandidate;
+  }
+  return {
+    ...params.persistedCandidate,
+    $schema: sourceSchema,
+  };
 }
 
 export function formatConfigValidationFailure(pathLabel: string, issueMessage: string): string {

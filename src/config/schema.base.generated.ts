@@ -2819,6 +2819,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           requiresStringContent: {
                             type: "boolean",
                           },
+                          visibleReasoningDetailTypes: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                              minLength: 1,
+                            },
+                          },
                           maxTokensField: {
                             anyOf: [
                               {
@@ -23522,7 +23529,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "browser.cdpUrl": {
       label: "Browser CDP URL",
       help: "Remote CDP websocket URL used to attach to an externally managed browser instance. Use this for centralized browser hosts and keep URL access restricted to trusted network paths.",
-      tags: ["advanced"],
+      tags: ["advanced", "url-secret"],
     },
     "browser.color": {
       label: "Browser Accent Color",
@@ -23572,7 +23579,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "browser.profiles.*.cdpUrl": {
       label: "Browser Profile CDP URL",
       help: "Per-profile CDP websocket URL used for explicit remote browser routing by profile name. Use this when profile connections terminate on remote hosts or tunnels.",
-      tags: ["storage"],
+      tags: ["storage", "url-secret"],
     },
     "browser.profiles.*.userDataDir": {
       label: "Browser Profile User Data Dir",
@@ -27464,6 +27471,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.4.16",
+  version: "2026.4.19-beta.2",
   generatedAt: "2026-03-22T21:17:33.302Z",
 };

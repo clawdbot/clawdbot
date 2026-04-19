@@ -211,15 +211,14 @@ export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
           return model;
         }
         providerMutated = true;
-        return {
-          ...raw,
+        return Object.assign({}, raw, {
           reasoning,
           input,
           cost,
           contextWindow,
           maxTokens,
           api,
-        } as ModelDefinitionConfig;
+        }) as ModelDefinitionConfig;
       });
 
       if (!providerMutated) {
@@ -339,8 +338,37 @@ export function applyLoggingDefaults(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
+function hasAnthropicDefaultSignal(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
+  if (env.ANTHROPIC_API_KEY?.trim() || env.ANTHROPIC_OAUTH_TOKEN?.trim()) {
+    return true;
+  }
+  const profiles = cfg.auth?.profiles;
+  if (profiles) {
+    for (const profile of Object.values(profiles)) {
+      const provider = normalizeProviderId(profile?.provider);
+      if (provider === "anthropic" || provider === "claude-cli") {
+        return true;
+      }
+    }
+  }
+  const order = cfg.auth?.order;
+  if (!order) {
+    return false;
+  }
+  return Object.keys(order).some((provider) => {
+    const normalizedProvider = normalizeProviderId(provider);
+    if (normalizedProvider !== "anthropic" && normalizedProvider !== "claude-cli") {
+      return false;
+    }
+    return (order as Record<string, unknown>)[provider] !== undefined;
+  });
+}
+
 export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig {
   if (!cfg.agents?.defaults) {
+    return cfg;
+  }
+  if (!hasAnthropicDefaultSignal(cfg, process.env)) {
     return cfg;
   }
   return (

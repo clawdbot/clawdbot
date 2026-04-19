@@ -49,6 +49,15 @@ type FinalizeOnboardingOptions = {
   runtime: RuntimeEnv;
 };
 
+type OnboardSearchModule = typeof import("../commands/onboard-search.js");
+
+let onboardSearchModulePromise: Promise<OnboardSearchModule> | undefined;
+
+function loadOnboardSearchModule(): Promise<OnboardSearchModule> {
+  onboardSearchModulePromise ??= import("../commands/onboard-search.js");
+  return onboardSearchModulePromise;
+}
+
 export async function finalizeSetupWizard(
   options: FinalizeOnboardingOptions,
 ): Promise<{ launchedTui: boolean }> {
@@ -522,8 +531,7 @@ export async function finalizeSetupWizard(
   const webSearchEnabled = nextConfig.tools?.web?.search?.enabled;
   const configuredSearchProviders = listConfiguredWebSearchProviders({ config: nextConfig });
   if (webSearchProvider) {
-    const { resolveExistingKey, hasExistingKey, hasKeyInEnv } =
-      await import("../commands/onboard-search.js");
+    const { resolveExistingKey, hasExistingKey, hasKeyInEnv } = await loadOnboardSearchModule();
     const entry = configuredSearchProviders.find((e) => e.id === webSearchProvider);
     const label = entry?.label ?? webSearchProvider;
     const storedKey = entry ? resolveExistingKey(nextConfig, webSearchProvider) : undefined;
@@ -585,7 +593,7 @@ export async function finalizeSetupWizard(
   } else {
     // Legacy configs may have a working key (e.g. apiKey or BRAVE_API_KEY) without
     // an explicit provider. Runtime auto-detects these, so avoid saying "skipped".
-    const { hasExistingKey, hasKeyInEnv } = await import("../commands/onboard-search.js");
+    const { hasExistingKey, hasKeyInEnv } = await loadOnboardSearchModule();
     const legacyDetected = configuredSearchProviders.find(
       (e) => hasExistingKey(nextConfig, e.id) || hasKeyInEnv(e),
     );

@@ -96,13 +96,6 @@ function visitDiagnosticPayload(
 }
 
 /**
- * Redacts image/base64 payload data from diagnostic objects before persistence.
- */
-export function redactImageDataForDiagnostics(value: unknown): unknown {
-  return visitDiagnosticPayload(value);
-}
-
-/**
  * Removes credential-like fields and image/base64 payload data from diagnostic
  * objects before persistence.
  */

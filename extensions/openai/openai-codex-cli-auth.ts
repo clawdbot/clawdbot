@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { AuthProfileStore, OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
-import { resolveRequiredHomeDir } from "openclaw/plugin-sdk/provider-auth";
+import {
+  hasUsableOAuthCredential,
+  resolveRequiredHomeDir,
+  type AuthProfileStore,
+  type OAuthCredential,
+} from "openclaw/plugin-sdk/provider-auth";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   resolveCodexAccessTokenExpiry,
@@ -18,6 +22,7 @@ export const OPENAI_CODEX_DEFAULT_PROFILE_ID = `${PROVIDER_ID}:default`;
 type CodexCliAuthFile = {
   auth_mode?: unknown;
   tokens?: {
+    id_token?: unknown;
     access_token?: unknown;
     refresh_token?: unknown;
     account_id?: unknown;
@@ -72,8 +77,44 @@ function oauthCredentialMatches(a: OAuthCredential, b: OAuthCredential): boolean
     a.displayName === b.displayName &&
     a.enterpriseUrl === b.enterpriseUrl &&
     a.projectId === b.projectId &&
-    a.accountId === b.accountId
+    a.accountId === b.accountId &&
+    a.idToken === b.idToken
   );
+}
+
+function normalizeAuthIdentityToken(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function normalizeAuthEmailToken(value: string | undefined): string | undefined {
+  return normalizeAuthIdentityToken(value)?.toLowerCase();
+}
+
+function hasIdentityContinuity(
+  existing: Pick<OAuthCredential, "accountId" | "email"> | undefined,
+  incoming: OAuthCredential,
+): boolean {
+  if (!existing) {
+    return true;
+  }
+  if (oauthCredentialMatches(existing as OAuthCredential, incoming)) {
+    return true;
+  }
+
+  const existingAccountId = normalizeAuthIdentityToken(existing.accountId);
+  const incomingAccountId = normalizeAuthIdentityToken(incoming.accountId);
+  if (existingAccountId !== undefined && incomingAccountId !== undefined) {
+    return existingAccountId === incomingAccountId;
+  }
+
+  const existingEmail = normalizeAuthEmailToken(existing.email);
+  const incomingEmail = normalizeAuthEmailToken(incoming.email);
+  if (existingEmail !== undefined && incomingEmail !== undefined) {
+    return existingEmail === incomingEmail;
+  }
+
+  return false;
 }
 
 export function readOpenAICodexCliOAuthProfile(params: {
@@ -92,6 +133,7 @@ export function readOpenAICodexCliOAuthProfile(params: {
   }
 
   const accountId = trimNonEmptyString(authFile.tokens?.account_id);
+  const idToken = trimNonEmptyString(authFile.tokens?.id_token);
   const identity = resolveCodexAuthIdentity({ accessToken: access });
   const credential: OAuthCredential = {
     type: "oauth",
@@ -100,11 +142,29 @@ export function readOpenAICodexCliOAuthProfile(params: {
     refresh,
     expires: resolveCodexAccessTokenExpiry(access) ?? 0,
     ...(accountId ? { accountId } : {}),
+    ...(idToken ? { idToken } : {}),
     ...(identity.email ? { email: identity.email } : {}),
     ...(identity.profileName ? { displayName: identity.profileName } : {}),
   };
   const existing = params.store.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID];
-  if (existing && (existing.type !== "oauth" || !oauthCredentialMatches(existing, credential))) {
+  const existingOAuth =
+    existing?.type === "oauth" && existing.provider === PROVIDER_ID ? existing : undefined;
+  if (existing && !existingOAuth) {
+    log.debug("kept explicit local auth over Codex CLI bootstrap", {
+      profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
+      localType: existing.type,
+      localProvider: existing.provider,
+    });
+    return null;
+  }
+  if (!hasIdentityContinuity(existingOAuth, credential)) {
+    return null;
+  }
+  if (
+    existingOAuth &&
+    hasUsableOAuthCredential(existingOAuth) &&
+    !oauthCredentialMatches(existingOAuth, credential)
+  ) {
     return null;
   }
 

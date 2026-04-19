@@ -294,6 +294,9 @@ export function collectForbiddenPackContentPaths(
   const textPathPattern = /\.(?:[cm]?js|d\.ts|json|md|mjs|cjs)$/u;
   return [...paths]
     .filter((packedPath) => {
+      if (packedPath === PACKAGE_DIST_INVENTORY_RELATIVE_PATH) {
+        return false;
+      }
       if (!forbiddenPrivateQaContentScanPrefixes.some((prefix) => packedPath.startsWith(prefix))) {
         return false;
       }

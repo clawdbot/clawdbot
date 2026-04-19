@@ -75,7 +75,7 @@ export function createRunRegistry(options?: { maxExitedRecords?: number }): RunR
   };
 
   const list: RunRegistry["list"] = () => {
-    return Array.from(records.values()).map((record) => ({ ...record }));
+    return Array.from(records.values()).map((record) => Object.assign({}, record));
   };
 
   const listByScope: RunRegistry["listByScope"] = (scopeKey) => {
@@ -84,7 +84,7 @@ export function createRunRegistry(options?: { maxExitedRecords?: number }): RunR
     }
     return Array.from(records.values())
       .filter((record) => record.scopeKey === scopeKey)
-      .map((record) => ({ ...record }));
+      .map((record) => Object.assign({}, record));
   };
 
   const updateState: RunRegistry["updateState"] = (runId, state, patch) => {

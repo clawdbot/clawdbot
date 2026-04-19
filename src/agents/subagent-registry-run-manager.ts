@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import { createRunningTaskRun } from "../tasks/task-executor.js";
+import { createRunningTaskRun } from "../tasks/detached-task-runtime.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { waitForAgentRun } from "./run-wait.js";
 import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
@@ -30,6 +30,26 @@ const log = createSubsystemLogger("agents/subagent-registry");
 function shouldDeleteAttachments(entry: SubagentRunRecord) {
   return entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
 }
+
+export type RegisterSubagentRunParams = {
+  runId: string;
+  childSessionKey: string;
+  controllerSessionKey?: string;
+  requesterSessionKey: string;
+  requesterOrigin?: DeliveryContext;
+  requesterDisplayKey: string;
+  task: string;
+  cleanup: "delete" | "keep";
+  label?: string;
+  model?: string;
+  workspaceDir?: string;
+  runTimeoutSeconds?: number;
+  expectsCompletionMessage?: boolean;
+  spawnMode?: "run" | "session";
+  attachmentsDir?: string;
+  attachmentsRootDir?: string;
+  retainAttachmentsOnKeep?: boolean;
+};
 
 export function createSubagentRunManager(params: {
   runs: Map<string, SubagentRunRecord>;
@@ -261,25 +281,7 @@ export function createSubagentRunManager(params: {
     return true;
   };
 
-  const registerSubagentRun = (registerParams: {
-    runId: string;
-    childSessionKey: string;
-    controllerSessionKey?: string;
-    requesterSessionKey: string;
-    requesterOrigin?: DeliveryContext;
-    requesterDisplayKey: string;
-    task: string;
-    cleanup: "delete" | "keep";
-    label?: string;
-    model?: string;
-    workspaceDir?: string;
-    runTimeoutSeconds?: number;
-    expectsCompletionMessage?: boolean;
-    spawnMode?: "run" | "session";
-    attachmentsDir?: string;
-    attachmentsRootDir?: string;
-    retainAttachmentsOnKeep?: boolean;
-  }) => {
+  const registerSubagentRun = (registerParams: RegisterSubagentRunParams) => {
     const runId = registerParams.runId.trim();
     const childSessionKey = registerParams.childSessionKey.trim();
     const requesterSessionKey = registerParams.requesterSessionKey.trim();

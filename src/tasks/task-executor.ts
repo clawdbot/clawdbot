@@ -82,7 +82,7 @@ function ensureSingleTaskFlow(params: {
   }
 }
 
-export function createQueuedTaskRun(params: {
+type TaskRunCreateParams = {
   runtime: TaskRuntime;
   taskKind?: string;
   sourceId?: string;
@@ -100,7 +100,15 @@ export function createQueuedTaskRun(params: {
   preferMetadata?: boolean;
   notifyPolicy?: TaskNotifyPolicy;
   deliveryStatus?: TaskDeliveryStatus;
-}): TaskRecord {
+};
+
+type RunningTaskRunCreateParams = TaskRunCreateParams & {
+  startedAt?: number;
+  lastEventAt?: number;
+  progressSummary?: string | null;
+};
+
+export function createQueuedTaskRun(params: TaskRunCreateParams): TaskRecord {
   const task = createTaskRecord({
     ...params,
     status: "queued",
@@ -115,28 +123,7 @@ export function getFlowTaskSummary(flowId: string): TaskRegistrySummary {
   return summarizeTaskRecords(listTasksForFlowId(flowId));
 }
 
-export function createRunningTaskRun(params: {
-  runtime: TaskRuntime;
-  taskKind?: string;
-  sourceId?: string;
-  requesterSessionKey?: string;
-  ownerKey?: string;
-  scopeKind?: TaskScopeKind;
-  requesterOrigin?: TaskDeliveryState["requesterOrigin"];
-  parentFlowId?: string;
-  childSessionKey?: string;
-  parentTaskId?: string;
-  agentId?: string;
-  runId?: string;
-  label?: string;
-  task: string;
-  notifyPolicy?: TaskNotifyPolicy;
-  deliveryStatus?: TaskDeliveryStatus;
-  preferMetadata?: boolean;
-  startedAt?: number;
-  lastEventAt?: number;
-  progressSummary?: string | null;
-}): TaskRecord {
+export function createRunningTaskRun(params: RunningTaskRunCreateParams): TaskRecord {
   const task = createTaskRecord({
     ...params,
     status: "running",
@@ -146,6 +133,25 @@ export function createRunningTaskRun(params: {
     requesterOrigin: params.requesterOrigin,
   });
 }
+
+type RunTaskInFlowParams = {
+  flowId: string;
+  runtime: TaskRuntime;
+  sourceId?: string;
+  childSessionKey?: string;
+  parentTaskId?: string;
+  agentId?: string;
+  runId?: string;
+  label?: string;
+  task: string;
+  notifyPolicy?: TaskNotifyPolicy;
+  deliveryStatus?: TaskDeliveryStatus;
+  preferMetadata?: boolean;
+  status?: "queued" | "running";
+  startedAt?: number;
+  lastEventAt?: number;
+  progressSummary?: string | null;
+};
 
 export function startTaskRunByRunId(params: {
   runId: string;
@@ -485,24 +491,7 @@ function mapRunTaskInFlowCreateError(params: {
   throw params.error;
 }
 
-export function runTaskInFlow(params: {
-  flowId: string;
-  runtime: TaskRuntime;
-  sourceId?: string;
-  childSessionKey?: string;
-  parentTaskId?: string;
-  agentId?: string;
-  runId?: string;
-  label?: string;
-  task: string;
-  preferMetadata?: boolean;
-  notifyPolicy?: TaskNotifyPolicy;
-  deliveryStatus?: TaskDeliveryStatus;
-  status?: "queued" | "running";
-  startedAt?: number;
-  lastEventAt?: number;
-  progressSummary?: string | null;
-}): RunTaskInFlowResult {
+export function runTaskInFlow(params: RunTaskInFlowParams): RunTaskInFlowResult {
   const flow = getTaskFlowById(params.flowId);
   if (!flow) {
     return {
@@ -579,25 +568,9 @@ export function runTaskInFlow(params: {
   };
 }
 
-export function runTaskInFlowForOwner(params: {
-  flowId: string;
-  callerOwnerKey: string;
-  runtime: TaskRuntime;
-  sourceId?: string;
-  childSessionKey?: string;
-  parentTaskId?: string;
-  agentId?: string;
-  runId?: string;
-  label?: string;
-  task: string;
-  preferMetadata?: boolean;
-  notifyPolicy?: TaskNotifyPolicy;
-  deliveryStatus?: TaskDeliveryStatus;
-  status?: "queued" | "running";
-  startedAt?: number;
-  lastEventAt?: number;
-  progressSummary?: string | null;
-}): RunTaskInFlowResult {
+export function runTaskInFlowForOwner(
+  params: RunTaskInFlowParams & { callerOwnerKey: string },
+): RunTaskInFlowResult {
   const flow = getTaskFlowByIdForOwner({
     flowId: params.flowId,
     callerOwnerKey: params.callerOwnerKey,

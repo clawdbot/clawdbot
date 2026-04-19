@@ -86,6 +86,61 @@ describe("createMatrixClient", () => {
     });
   });
 
+  it("derives ssrfPolicy from allowPrivateNetwork when no explicit policy is provided", async () => {
+    await createMatrixClient({
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      accessToken: "tok",
+      persistStorage: false,
+      allowPrivateNetwork: true,
+    });
+
+    expect(MatrixClientMock).toHaveBeenCalledWith(
+      "https://matrix.example.org",
+      "tok",
+      expect.objectContaining({
+        ssrfPolicy: { allowPrivateNetwork: true },
+      }),
+    );
+  });
+
+  it("prefers explicit ssrfPolicy over allowPrivateNetwork", async () => {
+    const explicitPolicy = { allowPrivateNetwork: true, customField: "test" };
+    await createMatrixClient({
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      accessToken: "tok",
+      persistStorage: false,
+      allowPrivateNetwork: false,
+      ssrfPolicy: explicitPolicy as never,
+    });
+
+    expect(MatrixClientMock).toHaveBeenCalledWith(
+      "https://matrix.example.org",
+      "tok",
+      expect.objectContaining({
+        ssrfPolicy: explicitPolicy,
+      }),
+    );
+  });
+
+  it("leaves ssrfPolicy undefined when allowPrivateNetwork is falsy and no explicit policy", async () => {
+    await createMatrixClient({
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      accessToken: "tok",
+      persistStorage: false,
+    });
+
+    expect(MatrixClientMock).toHaveBeenCalledWith(
+      "https://matrix.example.org",
+      "tok",
+      expect.objectContaining({
+        ssrfPolicy: undefined,
+      }),
+    );
+  });
+
   it("skips persistent storage wiring when persistence is disabled", async () => {
     await createMatrixClient({
       homeserver: "https://matrix.example.org",

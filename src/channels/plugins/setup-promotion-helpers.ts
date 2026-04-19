@@ -1,7 +1,7 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { getBundledChannelPlugin } from "./bundled.js";
-import { getChannelPlugin } from "./registry.js";
+import { getLoadedChannelPlugin } from "./registry.js";
 
 type ChannelSectionBase = {
   defaultAccount?: string;
@@ -59,8 +59,13 @@ type ChannelSetupPromotionSurface = {
   }) => string | undefined;
 };
 
-function getChannelSetupPromotionSurface(channelKey: string): ChannelSetupPromotionSurface | null {
-  const setup = getChannelPlugin(channelKey)?.setup ?? getBundledChannelPlugin(channelKey)?.setup;
+function getChannelSetupPromotionSurface(
+  channelKey: string,
+  opts?: { loadBundledFallback?: boolean },
+): ChannelSetupPromotionSurface | null {
+  const setup =
+    getLoadedChannelPlugin(channelKey)?.setup ??
+    (opts?.loadBundledFallback ? getBundledChannelPlugin(channelKey)?.setup : undefined);
   if (!setup || typeof setup !== "object") {
     return null;
   }
@@ -81,7 +86,9 @@ export function shouldMoveSingleAccountChannelKey(params: {
   if (isStaticSingleAccountPromotionKey(params.channelKey, params.key)) {
     return true;
   }
-  const contractKeys = getChannelSetupPromotionSurface(params.channelKey)?.singleAccountKeysToMove;
+  const contractKeys = getChannelSetupPromotionSurface(params.channelKey, {
+    loadBundledFallback: true,
+  })?.singleAccountKeysToMove;
   if (contractKeys?.includes(params.key)) {
     return true;
   }
@@ -104,7 +111,9 @@ export function resolveSingleAccountKeysToMove(params: {
 
   let setupSurface: ChannelSetupPromotionSurface | null | undefined;
   const resolveSetupSurface = () => {
-    setupSurface ??= getChannelSetupPromotionSurface(params.channelKey);
+    setupSurface ??= getChannelSetupPromotionSurface(params.channelKey, {
+      loadBundledFallback: true,
+    });
     return setupSurface;
   };
 
@@ -119,7 +128,8 @@ export function resolveSingleAccountKeysToMove(params: {
   }
 
   const namedAccountPromotionKeys =
-    resolveSetupSurface()?.namedAccountPromotionKeys ??
+    setupSurface?.namedAccountPromotionKeys ??
+    getChannelSetupPromotionSurface(params.channelKey)?.namedAccountPromotionKeys ??
     BUNDLED_NAMED_ACCOUNT_PROMOTION_FALLBACKS[params.channelKey];
   if (!namedAccountPromotionKeys) {
     return keysToMove;
@@ -139,7 +149,9 @@ export function resolveSingleAccountPromotionTarget(params: {
     );
     return matchedAccountId ?? normalizedTargetAccountId;
   };
-  const surface = getChannelSetupPromotionSurface(params.channelKey);
+  const surface = getChannelSetupPromotionSurface(params.channelKey, {
+    loadBundledFallback: true,
+  });
   const resolved = surface?.resolveSingleAccountPromotionTarget?.({
     channel: params.channel,
   });

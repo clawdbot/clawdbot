@@ -446,7 +446,7 @@ export async function handleSlackAction(
             (pin.message as { ts?: unknown }).ts,
           )
         : pin.message;
-      return message ? { ...pin, message } : pin;
+      return message ? Object.assign({}, pin, { message }) : pin;
     });
     return jsonResult({ ok: true, pins: normalizedPins });
   }

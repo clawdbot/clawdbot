@@ -40,23 +40,6 @@ const isBuildRelevantSourcePath = (relativePath) => {
   return extensionSourceFilePattern.test(normalizedPath) && !isIgnoredSourcePath(normalizedPath);
 };
 
-export const isBuildRelevantRunNodePath = (repoPath) => {
-  const normalizedPath = normalizePath(repoPath).replace(/^\.\/+/, "");
-  if (ignoredRunNodeRepoPaths.has(normalizedPath)) {
-    return false;
-  }
-  if (runNodeConfigFiles.includes(normalizedPath)) {
-    return true;
-  }
-  if (normalizedPath.startsWith("src/")) {
-    return !isIgnoredSourcePath(normalizedPath.slice("src/".length));
-  }
-  if (normalizedPath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
-    return isBuildRelevantSourcePath(normalizedPath.slice(BUNDLED_PLUGIN_PATH_PREFIX.length));
-  }
-  return false;
-};
-
 const isRestartRelevantExtensionPath = (relativePath) => {
   const normalizedPath = normalizePath(relativePath);
   if (extensionRestartMetadataFiles.has(path.posix.basename(normalizedPath))) {
@@ -65,7 +48,7 @@ const isRestartRelevantExtensionPath = (relativePath) => {
   return isBuildRelevantSourcePath(normalizedPath);
 };
 
-export const isRestartRelevantRunNodePath = (repoPath) => {
+const isRelevantRunNodePath = (repoPath, isRelevantBundledPluginPath) => {
   const normalizedPath = normalizePath(repoPath).replace(/^\.\/+/, "");
   if (ignoredRunNodeRepoPaths.has(normalizedPath)) {
     return false;
@@ -77,10 +60,16 @@ export const isRestartRelevantRunNodePath = (repoPath) => {
     return !isIgnoredSourcePath(normalizedPath.slice("src/".length));
   }
   if (normalizedPath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
-    return isRestartRelevantExtensionPath(normalizedPath.slice(BUNDLED_PLUGIN_PATH_PREFIX.length));
+    return isRelevantBundledPluginPath(normalizedPath.slice(BUNDLED_PLUGIN_PATH_PREFIX.length));
   }
   return false;
 };
+
+export const isBuildRelevantRunNodePath = (repoPath) =>
+  isRelevantRunNodePath(repoPath, isBuildRelevantSourcePath);
+
+export const isRestartRelevantRunNodePath = (repoPath) =>
+  isRelevantRunNodePath(repoPath, isRestartRelevantExtensionPath);
 
 const statMtime = (filePath, fsImpl = fs) => {
   try {

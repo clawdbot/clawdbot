@@ -2,8 +2,11 @@ import { resolveProviderAuthAliasMap } from "../agents/provider-auth-aliases.js"
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import {
+  isWorkspacePluginAllowedByConfig,
+  normalizePluginConfigId,
+} from "../plugins/plugin-config-trust.js";
 import { hasKind } from "../plugins/slots.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
@@ -25,59 +28,17 @@ export type ProviderEnvVarLookupParams = {
   includeUntrustedWorkspacePlugins?: boolean;
 };
 
-type PluginEntriesConfig = NonNullable<NonNullable<OpenClawConfig["plugins"]>["entries"]>;
-
-function normalizePluginConfigId(id: unknown): string {
-  return normalizeOptionalLowercaseString(id) ?? "";
-}
-
-function hasPluginId(list: unknown, pluginId: string): boolean {
-  return Array.isArray(list) && list.some((entry) => normalizePluginConfigId(entry) === pluginId);
-}
-
-function findPluginEntry(
-  entries: PluginEntriesConfig | undefined,
-  pluginId: string,
-): { enabled?: boolean } | undefined {
-  if (!entries || typeof entries !== "object" || Array.isArray(entries)) {
-    return undefined;
-  }
-  for (const [key, value] of Object.entries(entries)) {
-    if (normalizePluginConfigId(key) !== pluginId) {
-      continue;
-    }
-    return value && typeof value === "object" && !Array.isArray(value)
-      ? (value as { enabled?: boolean })
-      : {};
-  }
-  return undefined;
-}
-
 function isWorkspacePluginTrustedForProviderEnvVars(
   plugin: PluginManifestRecord,
   config: OpenClawConfig | undefined,
 ): boolean {
-  const pluginsConfig = config?.plugins;
-  if (pluginsConfig?.enabled === false) {
-    return false;
-  }
-
-  const pluginId = normalizePluginConfigId(plugin.id);
-  if (!pluginId || hasPluginId(pluginsConfig?.deny, pluginId)) {
-    return false;
-  }
-
-  const entry = findPluginEntry(pluginsConfig?.entries, pluginId);
-  if (entry?.enabled === false) {
-    return false;
-  }
-  if (entry?.enabled === true || hasPluginId(pluginsConfig?.allow, pluginId)) {
-    return true;
-  }
-  return (
-    hasKind(plugin.kind, "context-engine") &&
-    normalizePluginConfigId(pluginsConfig?.slots?.contextEngine) === pluginId
-  );
+  return isWorkspacePluginAllowedByConfig({
+    config,
+    isImplicitlyAllowed: (pluginId) =>
+      hasKind(plugin.kind, "context-engine") &&
+      normalizePluginConfigId(config?.plugins?.slots?.contextEngine) === pluginId,
+    plugin,
+  });
 }
 
 function shouldUsePluginProviderEnvVars(

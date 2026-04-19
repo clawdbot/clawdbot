@@ -7,7 +7,6 @@ import {
   resolveRequiredHomeDir,
 } from "./infra/home-dir.js";
 import { isPlainObject } from "./infra/plain-object.js";
-import { formatTerminalLink } from "./terminal/terminal-link.js";
 
 export async function ensureDir(dir: string) {
   await fs.promises.mkdir(dir, { recursive: true });
@@ -46,6 +45,7 @@ export function escapeRegExp(value: string): string {
 /**
  * Safely parse JSON, returning null on error instead of throwing.
  */
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- JSON parsing helper lets callers ascribe the expected payload type.
 export function safeParseJson<T>(raw: string): T | null {
   try {
     return JSON.parse(raw) as T;
@@ -54,7 +54,7 @@ export function safeParseJson<T>(raw: string): T | null {
   }
 }
 
-export { formatTerminalLink, isPlainObject };
+export { isPlainObject };
 
 /**
  * Type guard for Record<string, unknown> (less strict than isPlainObject).

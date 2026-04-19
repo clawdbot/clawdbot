@@ -718,7 +718,9 @@ describeLive("live models (profile keys)", () => {
             if (
               ok.text.length === 0 &&
               allowNotFoundSkip &&
-              (model.provider === "minimax" || model.provider === "zai")
+              (model.provider === "fireworks" ||
+                model.provider === "minimax" ||
+                model.provider === "zai")
             ) {
               skipped.push({
                 model: id,

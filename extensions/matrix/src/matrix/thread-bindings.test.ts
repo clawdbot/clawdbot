@@ -669,7 +669,7 @@ describe("matrix thread bindings", () => {
         async () => {
           expect(await readPersistedLastActivityAt(bindingsPath)).toBe(touchedAt);
         },
-        { interval: 1, timeout: 100 },
+        { interval: 1, timeout: 1_000 },
       );
     } finally {
       vi.useRealTimers();

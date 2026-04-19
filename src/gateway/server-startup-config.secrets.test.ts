@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import type { PreparedSecretsRuntimeSnapshot, SecretResolverWarning } from "../secrets/runtime.js";
+import { KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS } from "./known-weak-gateway-secrets.js";
 import {
   createRuntimeSecretsActivator,
   prepareGatewayStartupConfig,
@@ -156,6 +157,56 @@ describe("gateway startup config secret preflight", () => {
     );
     expect(emitStateEvent).not.toHaveBeenCalled();
   });
+
+  it.each(KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS)(
+    "rejects known weak gateway tokens resolved during secret activation: %s",
+    async (token) => {
+      const sourceConfig = gatewayTokenConfig({
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+        gateway: {
+          auth: {
+            mode: "token",
+            token: { source: "env", provider: "default", id: "GATEWAY_TOKEN_REF" },
+          },
+        },
+      });
+      const prepareRuntimeSecretsSnapshot = vi.fn(async () =>
+        preparedSnapshot({
+          ...sourceConfig,
+          gateway: {
+            ...sourceConfig.gateway,
+            auth: {
+              ...sourceConfig.gateway?.auth,
+              token,
+            },
+          },
+        }),
+      );
+      const activateRuntimeSecretsSnapshot = vi.fn();
+      const activateRuntimeSecrets = createRuntimeSecretsActivator({
+        logSecrets: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+        },
+        emitStateEvent: vi.fn(),
+        prepareRuntimeSecretsSnapshot,
+        activateRuntimeSecretsSnapshot,
+      });
+
+      await expect(
+        activateRuntimeSecrets(sourceConfig, {
+          reason: "reload",
+          activate: true,
+        }),
+      ).rejects.toThrow(/published example placeholder/);
+      expect(activateRuntimeSecretsSnapshot).not.toHaveBeenCalled();
+    },
+  );
 
   it("prunes channel refs from startup secret preflight when channels are skipped", async () => {
     process.env.OPENCLAW_SKIP_CHANNELS = "1";

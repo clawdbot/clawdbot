@@ -63,15 +63,6 @@ function resolveProviderDocsById(params?: {
   );
 }
 
-export function resolveProviderSetupFlowOptions(params?: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  scope?: ProviderFlowScope;
-}): ProviderSetupFlowOption[] {
-  return resolveProviderSetupFlowContributions(params).map((contribution) => contribution.option);
-}
-
 export function resolveProviderSetupFlowContributions(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -83,33 +74,37 @@ export function resolveProviderSetupFlowContributions(params?: {
   return sortFlowContributionsByLabel(
     resolveProviderWizardOptions(params ?? {})
       .filter((option) => includesProviderFlowScope(option.onboardingScopes, scope))
-      .map((option) => ({
-        id: `provider:setup:${option.value}`,
-        kind: "provider" as const,
-        surface: "setup" as const,
-        providerId: option.groupId,
-        option: {
-          value: option.value,
-          label: option.label,
-          ...(option.hint ? { hint: option.hint } : {}),
-          ...(option.assistantPriority !== undefined
-            ? { assistantPriority: option.assistantPriority }
-            : {}),
-          ...(option.assistantVisibility
-            ? { assistantVisibility: option.assistantVisibility }
-            : {}),
-          group: {
-            id: option.groupId,
-            label: option.groupLabel,
-            ...(option.groupHint ? { hint: option.groupHint } : {}),
+      .map((option) =>
+        Object.assign(
+          {
+            id: `provider:setup:${option.value}`,
+            kind: `provider` as const,
+            surface: `setup` as const,
+            providerId: option.groupId,
+            option: {
+              value: option.value,
+              label: option.label,
+              ...(option.hint ? { hint: option.hint } : {}),
+              ...(option.assistantPriority !== undefined
+                ? { assistantPriority: option.assistantPriority }
+                : {}),
+              ...(option.assistantVisibility
+                ? { assistantVisibility: option.assistantVisibility }
+                : {}),
+              group: {
+                id: option.groupId,
+                label: option.groupLabel,
+                ...(option.groupHint ? { hint: option.groupHint } : {}),
+              },
+              ...(docsByProvider.get(option.groupId)
+                ? { docs: { path: docsByProvider.get(option.groupId)! } }
+                : {}),
+            },
           },
-          ...(docsByProvider.get(option.groupId)
-            ? { docs: { path: docsByProvider.get(option.groupId)! } }
-            : {}),
-        },
-        ...(option.onboardingScopes ? { onboardingScopes: [...option.onboardingScopes] } : {}),
-        source: "runtime" as const,
-      })),
+          option.onboardingScopes ? { onboardingScopes: [...option.onboardingScopes] } : {},
+          { source: `runtime` as const },
+        ),
+      ),
   );
 }
 

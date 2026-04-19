@@ -1,5 +1,7 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { prepareRestartScript, runRestartScript } from "./restart-helper.js";
 
@@ -25,7 +27,45 @@ describe("restart-helper", () => {
   }
 
   async function cleanupScript(scriptPath: string) {
-    await fs.unlink(scriptPath);
+    await fs.unlink(scriptPath).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    });
+  }
+
+  async function makeTempDir(prefix: string) {
+    return await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  }
+
+  async function writeFakeLaunchctl(
+    fakeBinDir: string,
+    content = `#!/bin/sh
+echo "launchctl $*" >&2
+case "$1" in
+  kickstart) exit 0 ;;
+  enable|bootstrap) exit 0 ;;
+esac
+exit 0
+`,
+  ) {
+    const launchctlPath = path.join(fakeBinDir, "launchctl");
+    await fs.writeFile(launchctlPath, content, { mode: 0o755 });
+  }
+
+  async function executeScript(scriptPath: string, env: Record<string, string>) {
+    return await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve) => {
+      execFile(
+        "/bin/sh",
+        [scriptPath],
+        { env: { ...process.env, ...env } },
+        (error, stdout, stderr) => {
+          const execError = error as (Error & { code?: number | string }) | null;
+          const code = typeof execError?.code === "number" ? execError.code : null;
+          resolve({ code, stdout, stderr });
+        },
+      );
+    });
   }
 
   function expectWindowsRestartWaitOrdering(content: string, port = 18789) {
@@ -35,7 +75,7 @@ describe("restart-helper", () => {
     const pollAttemptIncrement = "set /a attempts+=1";
     const pollNetstatCheck = `netstat -ano | findstr /R /C:":${port} .*LISTENING" >nul`;
     const forceKillLabel = ":force_kill_listener";
-    const forceKillCommand = "taskkill /F /PID %%P >nul 2>&1";
+    const forceKillCommand = "taskkill /F /PID %%P >>";
     const portReleasedLabel = ":port_released";
     const runCommand = 'schtasks /Run /TN "';
     const endIndex = content.indexOf(endCommand);
@@ -111,6 +151,139 @@ describe("restart-helper", () => {
       await cleanupScript(scriptPath);
     });
 
+    it("captures macOS launchctl stderr to ~/.openclaw/logs/gateway-restart.log (#68486)", async () => {
+      // Silent failure in macOS update restart helper: previously every
+      // launchctl call redirected stderr to /dev/null and the final kickstart
+      // was chained with `|| true`, so bootstrap/kickstart failures were
+      // invisible and the gateway stayed offline while the updater reported
+      // success. The script should now route stderr to a durable log file and
+      // stop swallowing the final exit code.
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      process.getuid = () => 501;
+
+      const { scriptPath, content } = await prepareAndReadScript({
+        OPENCLAW_PROFILE: "default",
+        HOME: "/Users/testuser",
+      });
+      expect(content).toContain("exec >>'/Users/testuser/.openclaw/logs/gateway-restart.log' 2>&1");
+      // Every launchctl call should allow output through now (no `2>/dev/null`)
+      // and the final kickstart must not swallow its exit code.
+      expect(content).not.toMatch(/launchctl[^\n]*2>\/dev\/null/);
+      expect(content).not.toMatch(/launchctl kickstart[^\n]*\|\| true/);
+      await cleanupScript(scriptPath);
+    });
+
+    it("uses OPENCLAW_STATE_DIR for the macOS update restart log", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      process.getuid = () => 501;
+
+      const { scriptPath, content } = await prepareAndReadScript({
+        OPENCLAW_PROFILE: "default",
+        HOME: "/Users/testuser",
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-state",
+      });
+
+      expect(content).toContain(
+        "if mkdir -p '/tmp/openclaw-state/logs' 2>/dev/null && : >>'/tmp/openclaw-state/logs/gateway-restart.log' 2>/dev/null; then",
+      );
+      expect(content).toContain("exec >>'/tmp/openclaw-state/logs/gateway-restart.log' 2>&1");
+      await cleanupScript(scriptPath);
+    });
+
+    it("returns the final macOS launchctl kickstart failure after logging cleanup", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      process.getuid = () => 501;
+      const tmpDir = await makeTempDir("openclaw-restart-helper-");
+      const fakeBinDir = path.join(tmpDir, "bin");
+      const stateDir = path.join(tmpDir, "state");
+      await fs.mkdir(fakeBinDir, { recursive: true });
+      await writeFakeLaunchctl(
+        fakeBinDir,
+        `#!/bin/sh
+echo "launchctl $*" >&2
+case "$1" in
+  kickstart) exit 42 ;;
+  enable|bootstrap) exit 0 ;;
+esac
+exit 0
+`,
+      );
+
+      const { scriptPath } = await prepareAndReadScript({
+        OPENCLAW_PROFILE: "default",
+        HOME: path.join(tmpDir, "home"),
+        OPENCLAW_STATE_DIR: stateDir,
+      });
+
+      const result = await executeScript(scriptPath, {
+        PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
+      });
+      const log = await fs.readFile(path.join(stateDir, "logs", "gateway-restart.log"), "utf-8");
+
+      expect(result.code).toBe(42);
+      expect(log).toContain("openclaw restart attempt source=update target=ai.openclaw.gateway");
+      expect(log).toContain("launchctl kickstart -k gui/501/ai.openclaw.gateway");
+      expect(log).toContain("openclaw restart failed source=update status=42");
+      expect(log).not.toContain("openclaw restart done source=update");
+    });
+
+    it("continues the macOS restart path when log setup fails", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      process.getuid = () => 501;
+      const tmpDir = await makeTempDir("openclaw-restart-helper-");
+      const fakeBinDir = path.join(tmpDir, "bin");
+      const stateFile = path.join(tmpDir, "state-file");
+      const markerPath = path.join(tmpDir, "launchctl-ran");
+      await fs.mkdir(fakeBinDir, { recursive: true });
+      await fs.writeFile(stateFile, "not a directory");
+      await writeFakeLaunchctl(
+        fakeBinDir,
+        `#!/bin/sh
+printf ran > "$LAUNCHCTL_MARKER"
+exit 0
+`,
+      );
+
+      const { scriptPath } = await prepareAndReadScript({
+        OPENCLAW_PROFILE: "default",
+        HOME: path.join(tmpDir, "home"),
+        OPENCLAW_STATE_DIR: stateFile,
+      });
+
+      const result = await executeScript(scriptPath, {
+        LAUNCHCTL_MARKER: markerPath,
+        PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
+      });
+
+      expect(result.code).toBeNull();
+      await expect(fs.readFile(markerPath, "utf-8")).resolves.toBe("ran");
+    });
+
+    it("logs custom macOS launchd labels without shell expansion", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      process.getuid = () => 501;
+      const tmpDir = await makeTempDir("openclaw-restart-helper-");
+      const fakeBinDir = path.join(tmpDir, "bin");
+      const stateDir = path.join(tmpDir, "state");
+      await fs.mkdir(fakeBinDir, { recursive: true });
+      await writeFakeLaunchctl(fakeBinDir);
+
+      const { scriptPath } = await prepareAndReadScript({
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.$(echo injected)",
+        HOME: path.join(tmpDir, "home"),
+        OPENCLAW_STATE_DIR: stateDir,
+      });
+
+      const result = await executeScript(scriptPath, {
+        PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
+      });
+      const log = await fs.readFile(path.join(stateDir, "logs", "gateway-restart.log"), "utf-8");
+
+      expect(result.code).toBeNull();
+      expect(log).toContain("target=ai.openclaw.$(echo injected)");
+      expect(log).not.toContain("target=ai.openclaw.injected");
+    });
+
     it("uses OPENCLAW_LAUNCHD_LABEL override on macOS", async () => {
       Object.defineProperty(process, "platform", { value: "darwin" });
       process.getuid = () => 501;
@@ -131,8 +304,10 @@ describe("restart-helper", () => {
       });
       expect(scriptPath.endsWith(".bat")).toBe(true);
       expect(content).toContain("@echo off");
+      expect(content).toContain("gateway-restart.log");
+      expect(content).toContain("openclaw restart attempt source=update target=OpenClaw Gateway");
       expect(content).toContain('schtasks /End /TN "OpenClaw Gateway"');
-      expect(content).toContain('schtasks /Run /TN "OpenClaw Gateway"');
+      expect(content).toContain('schtasks /Run /TN "OpenClaw Gateway" >>');
       expectWindowsRestartWaitOrdering(content);
       // Batch self-cleanup
       expect(content).toContain('del "%~f0"');

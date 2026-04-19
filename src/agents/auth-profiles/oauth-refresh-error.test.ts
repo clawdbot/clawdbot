@@ -1,4 +1,9 @@
 import { describe, expect, it } from "vitest";
+import {
+  makeSeededRandom,
+  randomAsciiString as randomJunk,
+  randomlyCased,
+} from "./oauth-test-utils.js";
 import { isRefreshTokenReusedError } from "./oauth.js";
 
 // Direct tests for the refresh_token_reused classifier. This is the gate that
@@ -94,33 +99,6 @@ describe("isRefreshTokenReusedError", () => {
   });
 
   describe("fuzz: random noisy messages", () => {
-    function makeSeededRandom(seed: number): () => number {
-      let t = seed >>> 0;
-      return () => {
-        t = (t + 0x6d2b79f5) >>> 0;
-        let r = t;
-        r = Math.imul(r ^ (r >>> 15), r | 1);
-        r ^= r + Math.imul(r ^ (r >>> 7), r | 61);
-        return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
-      };
-    }
-
-    function randomJunk(rng: () => number, maxLen: number): string {
-      const len = Math.floor(rng() * maxLen);
-      const chars: string[] = [];
-      for (let i = 0; i < len; i += 1) {
-        chars.push(String.fromCodePoint(32 + Math.floor(rng() * 95)));
-      }
-      return chars.join("");
-    }
-
-    function randomlyCased(s: string, rng: () => number): string {
-      return s
-        .split("")
-        .map((c) => (rng() < 0.5 ? c.toUpperCase() : c.toLowerCase()))
-        .join("");
-    }
-
     it("always detects the marker when embedded at random positions with noise", () => {
       const rng = makeSeededRandom(0xabad1dea);
       const markers = [

@@ -60,6 +60,34 @@ const REMINDER_CONTEXT_PER_MESSAGE_MAX = 220;
 const REMINDER_CONTEXT_TOTAL_MAX = 700;
 const REMINDER_CONTEXT_MARKER = "\n\nRecent context:\n";
 
+function isMissingOrEmptyObject(value: unknown): boolean {
+  return !value || (isRecord(value) && Object.keys(value).length === 0);
+}
+
+function recoverCronObjectFromFlatParams(params: Record<string, unknown>): {
+  found: boolean;
+  value: Record<string, unknown>;
+} {
+  const value: Record<string, unknown> = {};
+  let found = false;
+  for (const key of Object.keys(params)) {
+    if (CRON_RECOVERABLE_OBJECT_KEYS.has(key) && params[key] !== undefined) {
+      value[key] = params[key];
+      found = true;
+    }
+  }
+  return { found, value };
+}
+
+function hasCronCreateSignal(value: Record<string, unknown>): boolean {
+  return (
+    value.schedule !== undefined ||
+    value.payload !== undefined ||
+    value.message !== undefined ||
+    value.text !== undefined
+  );
+}
+
 function nullableStringSchema(description: string) {
   return Type.Optional(Type.String({ description }));
 }
@@ -486,31 +514,13 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           // them inside `job`. When `params.job` is missing or empty, reconstruct
           // a synthetic job object from any recognised top-level job fields.
           // See: https://github.com/openclaw/openclaw/issues/11310
-          if (
-            !params.job ||
-            (typeof params.job === "object" &&
-              params.job !== null &&
-              Object.keys(params.job as Record<string, unknown>).length === 0)
-          ) {
-            const synthetic: Record<string, unknown> = {};
-            let found = false;
-            for (const key of Object.keys(params)) {
-              if (CRON_RECOVERABLE_OBJECT_KEYS.has(key) && params[key] !== undefined) {
-                synthetic[key] = params[key];
-                found = true;
-              }
-            }
+          if (isMissingOrEmptyObject(params.job)) {
+            const synthetic = recoverCronObjectFromFlatParams(params);
             // Only use the synthetic job if at least one meaningful field is present
             // (schedule, payload, message, or text are the minimum signals that the
             // LLM intended to create a job).
-            if (
-              found &&
-              (synthetic.schedule !== undefined ||
-                synthetic.payload !== undefined ||
-                synthetic.message !== undefined ||
-                synthetic.text !== undefined)
-            ) {
-              params.job = synthetic;
+            if (synthetic.found && hasCronCreateSignal(synthetic.value)) {
+              params.job = synthetic.value;
             }
           }
 
@@ -615,22 +625,10 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
 
           // Flat-params recovery for patch
           let recoveredFlatPatch = false;
-          if (
-            !params.patch ||
-            (typeof params.patch === "object" &&
-              params.patch !== null &&
-              Object.keys(params.patch as Record<string, unknown>).length === 0)
-          ) {
-            const synthetic: Record<string, unknown> = {};
-            let found = false;
-            for (const key of Object.keys(params)) {
-              if (CRON_RECOVERABLE_OBJECT_KEYS.has(key) && params[key] !== undefined) {
-                synthetic[key] = params[key];
-                found = true;
-              }
-            }
-            if (found) {
-              params.patch = synthetic;
+          if (isMissingOrEmptyObject(params.patch)) {
+            const synthetic = recoverCronObjectFromFlatParams(params);
+            if (synthetic.found) {
+              params.patch = synthetic.value;
               recoveredFlatPatch = true;
             }
           }

@@ -247,6 +247,22 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
+  it("returns a contention-specific message for OAuth refresh lock timeouts", () => {
+    const msg = makeAssistantError("file lock timeout for /tmp/openclaw-oauth-refresh.lock");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "Authentication refresh is already in progress elsewhere and this attempt timed out waiting for it. Retry in a moment.",
+    );
+  });
+
+  it("returns a timeout-specific message for OAuth refresh hard timeouts", () => {
+    const msg = makeAssistantError(
+      'OAuth refresh call "refreshProviderOAuthCredentialWithPlugin(openai-codex)" exceeded hard timeout (120000ms)',
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "Authentication refresh timed out before the provider completed. Retry in a moment; re-authenticate only if it keeps failing.",
+    );
+  });
+
   it("returns a missing-scope message for OpenAI Codex scope failures", () => {
     const msg = makeAssistantError(
       '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write model.request"}}',

@@ -202,10 +202,7 @@ function createSessionStatusRows() {
     >;
     const recent = Object.entries(store).map(([key, entry]) => {
       const contextTokens = typeof entry.contextTokens === "number" ? entry.contextTokens : null;
-      const freshTotal =
-        typeof entry.totalTokens === "number" && (entry.totalTokensFresh ?? true)
-          ? entry.totalTokens
-          : null;
+      const total = typeof entry.totalTokens === "number" ? entry.totalTokens : null;
       return {
         agentId: agent.id,
         key,
@@ -217,18 +214,14 @@ function createSessionStatusRows() {
         verboseLevel: entry.verboseLevel,
         inputTokens: entry.inputTokens,
         outputTokens: entry.outputTokens,
-        totalTokens: freshTotal,
-        totalTokensFresh: freshTotal !== null,
+        totalTokens: total,
+        totalTokensFresh: typeof entry.totalTokens === "number" ? entry.totalTokensFresh : false,
         cacheRead: entry.cacheRead,
         cacheWrite: entry.cacheWrite,
         remainingTokens:
-          freshTotal !== null && contextTokens !== null
-            ? Math.max(0, contextTokens - freshTotal)
-            : null,
+          total !== null && contextTokens !== null ? Math.max(0, contextTokens - total) : null,
         percentUsed:
-          freshTotal !== null && contextTokens
-            ? Math.round((freshTotal / contextTokens) * 100)
-            : null,
+          total !== null && contextTokens ? Math.round((total / contextTokens) * 100) : null,
         model: typeof entry.model === "string" ? entry.model : null,
         contextTokens,
         flags: [
@@ -264,11 +257,11 @@ async function createMockStatusScanResult(params: { includePluginCompatibility?:
     ...mocks.listGatewayAgentsBasic(),
     bootstrapPendingCount: 0,
     totalSessions: 1,
-    agents: mocks.listGatewayAgentsBasic().agents.map((agent: { id: string; name?: string }) => ({
-      ...agent,
-      bootstrapPending: false,
-      activeSessions: 1,
-    })),
+    agents: mocks
+      .listGatewayAgentsBasic()
+      .agents.map((agent: { id: string; name?: string }) =>
+        Object.assign({}, agent, { bootstrapPending: false, activeSessions: 1 }),
+      ),
   };
   const sessions = createSessionStatusRows();
   const channelIssues = gatewayReachable
@@ -530,6 +523,9 @@ vi.mock("../config/sessions/store-read.js", () => ({
   readSessionStoreReadOnly: mocks.loadSessionStore,
 }));
 vi.mock("../config/sessions/types.js", () => ({
+  resolveSessionTotalTokens: vi.fn((entry?: { totalTokens?: number }) =>
+    typeof entry?.totalTokens === "number" ? entry.totalTokens : undefined,
+  ),
   resolveFreshSessionTotalTokens: vi.fn(
     (entry?: { totalTokens?: number; totalTokensFresh?: boolean }) =>
       typeof entry?.totalTokens === "number" && entry?.totalTokensFresh !== false
@@ -1018,6 +1014,25 @@ describe("statusCommand", () => {
       expect(payload.sessions.recent[0].percentUsed).toBeNull();
       expect(payload.sessions.recent[0].remainingTokens).toBeNull();
     });
+  });
+
+  it("surfaces stale usage when totalTokens is preserved but not fresh", async () => {
+    mocks.loadSessionStore.mockReturnValue({
+      "+1000": {
+        updatedAt: Date.now() - 60_000,
+        totalTokens: 5_000,
+        totalTokensFresh: false,
+        contextTokens: 10_000,
+        model: "pi:opus",
+      },
+    });
+    runtimeLogMock.mockClear();
+    await statusCommand({ json: true }, runtime as never);
+    const payload = JSON.parse(String(runtimeLogMock.mock.calls.at(-1)?.[0]));
+    expect(payload.sessions.recent[0].totalTokens).toBe(5000);
+    expect(payload.sessions.recent[0].totalTokensFresh).toBe(false);
+    expect(payload.sessions.recent[0].percentUsed).toBe(50);
+    expect(payload.sessions.recent[0].remainingTokens).toBe(5000);
   });
 
   it("prints formatted lines with verbose cache details", async () => {

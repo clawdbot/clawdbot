@@ -70,7 +70,7 @@ function fitTelegramCommandsWithinTextBudget(
       const description = truncateTelegramCommandText(command.description, descriptionCap);
       if (description !== command.description) {
         descriptionTrimmed = true;
-        return { ...command, description };
+        return Object.assign({}, command, { description });
       }
       return command;
     });

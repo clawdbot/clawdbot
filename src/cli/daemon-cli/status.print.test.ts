@@ -28,11 +28,13 @@ vi.mock("../../daemon/inspect.js", () => ({
   renderGatewayServiceCleanupHints: () => [],
 }));
 
-vi.mock("../../daemon/launchd.js", () => ({
+vi.mock("../../daemon/restart-logs.js", () => ({
   resolveGatewayLogPaths: () => ({
+    logDir: "/tmp",
     stdoutPath: "/tmp/gateway.out.log",
     stderrPath: "/tmp/gateway.err.log",
   }),
+  resolveGatewayRestartLogPath: () => "/tmp/gateway-restart.log",
 }));
 
 vi.mock("../../daemon/systemd-hints.js", () => ({

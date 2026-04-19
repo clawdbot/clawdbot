@@ -1,6 +1,6 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
+import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { getPluginRegistryState } from "./runtime-state.js";
-const BUNDLED_SYNTHETIC_AUTH_PROVIDER_REFS = ["claude-cli", "ollama", "xai"] as const;
 
 function uniqueProviderRefs(values: readonly string[]): string[] {
   const seen = new Set<string>();
@@ -15,6 +15,14 @@ function uniqueProviderRefs(values: readonly string[]): string[] {
     next.push(trimmed);
   }
   return next;
+}
+
+function resolveManifestSyntheticAuthProviderRefs(): string[] {
+  return uniqueProviderRefs(
+    loadPluginManifestRegistry({ cache: true }).plugins.flatMap(
+      (plugin) => plugin.syntheticAuthRefs ?? [],
+    ),
+  );
 }
 
 export function resolveRuntimeSyntheticAuthProviderRefs(): string[] {
@@ -37,5 +45,5 @@ export function resolveRuntimeSyntheticAuthProviderRefs(): string[] {
         .map((entry) => entry.backend.id),
     ]);
   }
-  return uniqueProviderRefs(BUNDLED_SYNTHETIC_AUTH_PROVIDER_REFS);
+  return resolveManifestSyntheticAuthProviderRefs();
 }

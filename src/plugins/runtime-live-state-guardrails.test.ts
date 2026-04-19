@@ -19,29 +19,38 @@ const LIVE_RUNTIME_STATE_GUARDS: Record<
   },
 };
 
-function guardAssertions() {
-  return Object.entries(LIVE_RUNTIME_STATE_GUARDS).flatMap(([relativePath, guard]) => [
-    ...guard.required.map((needle) => ({
-      relativePath,
-      type: "required" as const,
-      needle,
-      message: `${relativePath} missing ${needle}`,
-    })),
-    ...guard.forbidden.map((needle) => ({
-      relativePath,
-      type: "forbidden" as const,
-      needle,
-      message: `${relativePath} must not contain ${needle}`,
-    })),
-  ]);
-}
-
-function expectGuardState(params: {
-  source: string;
+type GuardAssertion = {
+  relativePath: string;
   type: "required" | "forbidden";
   needle: string;
   message: string;
-}) {
+};
+
+function guardAssertions(): GuardAssertion[] {
+  return Object.entries(LIVE_RUNTIME_STATE_GUARDS).flatMap(([relativePath, guard]) =>
+    guard.required
+      .map<GuardAssertion>((needle) => ({
+        relativePath,
+        type: "required",
+        needle,
+        message: `${relativePath} missing ${needle}`,
+      }))
+      .concat(
+        guard.forbidden.map<GuardAssertion>((needle) => ({
+          relativePath,
+          type: "forbidden",
+          needle,
+          message: `${relativePath} must not contain ${needle}`,
+        })),
+      ),
+  );
+}
+
+function expectGuardState(
+  params: {
+    source: string;
+  } & Pick<GuardAssertion, "message" | "needle" | "type">,
+) {
   if (params.type === "required") {
     expect(params.source, params.message).toContain(params.needle);
     return;

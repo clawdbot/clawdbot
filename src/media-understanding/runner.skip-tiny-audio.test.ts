@@ -1,33 +1,24 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { MIN_AUDIO_FILE_BYTES } from "./defaults.js";
-import { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
+import type {
+  createMediaAttachmentCache,
+  normalizeMediaAttachments,
+} from "./runner.attachments.js";
 import { buildProviderRegistry, runCapability } from "./runner.js";
+import { withMediaFixture } from "./runner.test-utils.js";
 import type { AudioTranscriptionRequest } from "./types.js";
 
-const modelAuthMocks = vi.hoisted(() => ({
-  hasAvailableAuthForProvider: vi.fn(() => true),
-  resolveApiKeyForProvider: vi.fn(async () => ({
-    apiKey: "test-key",
-    source: "test",
-    mode: "api-key",
-  })),
-  requireApiKey: vi.fn((auth: { apiKey?: string }) => auth.apiKey ?? "test-key"),
-}));
+vi.mock("../agents/model-auth.js", async () => {
+  const { createAvailableModelAuthMockModule } = await import("./runner.test-mocks.js");
+  return createAvailableModelAuthMockModule();
+});
 
-vi.mock("../agents/model-auth.js", () => ({
-  hasAvailableAuthForProvider: modelAuthMocks.hasAvailableAuthForProvider,
-  resolveApiKeyForProvider: modelAuthMocks.resolveApiKeyForProvider,
-  requireApiKey: modelAuthMocks.requireApiKey,
-}));
-
-vi.mock("../plugins/capability-provider-runtime.js", () => ({
-  resolvePluginCapabilityProviders: () => [],
-}));
+vi.mock("../plugins/capability-provider-runtime.js", async () => {
+  const { createEmptyCapabilityProviderMockModule } = await import("./runner.test-mocks.js");
+  return createEmptyCapabilityProviderMockModule();
+});
 
 async function withAudioFixture(params: {
   filePrefix: string;
@@ -40,29 +31,15 @@ async function withAudioFixture(params: {
     cache: ReturnType<typeof createMediaAttachmentCache>;
   }) => Promise<void>;
 }) {
-  const originalPath = process.env.PATH;
-  process.env.PATH = "/usr/bin:/bin";
-
-  const tmpPath = path.join(
-    os.tmpdir(),
-    `${params.filePrefix}-${Date.now().toString()}.${params.extension}`,
+  await withMediaFixture(
+    {
+      filePrefix: params.filePrefix,
+      extension: params.extension,
+      mediaType: params.mediaType,
+      fileContents: params.fileContents,
+    },
+    params.run,
   );
-  await fs.writeFile(tmpPath, params.fileContents);
-
-  const ctx: MsgContext = { MediaPath: tmpPath, MediaType: params.mediaType };
-  const media = normalizeMediaAttachments(ctx);
-  const cache = createMediaAttachmentCache(media, {
-    localPathRoots: [path.dirname(tmpPath)],
-    includeDefaultLocalPathRoots: false,
-  });
-
-  try {
-    await params.run({ ctx, media, cache });
-  } finally {
-    process.env.PATH = originalPath;
-    await cache.cleanup();
-    await fs.unlink(tmpPath).catch(() => {});
-  }
 }
 
 const AUDIO_CAPABILITY_CFG = {

@@ -243,6 +243,8 @@ export function createSessionsSpawnTool(
             agentTo: opts?.agentTo,
             agentThreadId: opts?.agentThreadId,
             agentGroupId: opts?.agentGroupId ?? undefined,
+            agentGroupSpace: opts?.agentGroupSpace,
+            agentMemberRoleIds: opts?.agentMemberRoleIds,
             sandboxed: opts?.sandboxed,
           },
         );
@@ -337,6 +339,7 @@ export function createSessionsSpawnTool(
           agentGroupId: opts?.agentGroupId,
           agentGroupChannel: opts?.agentGroupChannel,
           agentGroupSpace: opts?.agentGroupSpace,
+          agentMemberRoleIds: opts?.agentMemberRoleIds,
           requesterAgentIdOverride: opts?.requesterAgentIdOverride,
           workspaceDir: opts?.workspaceDir,
         },

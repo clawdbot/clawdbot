@@ -43,6 +43,36 @@ function createImageSourceLimits(allowedMimes: string[], allowUrl = false) {
   };
 }
 
+function mockUrlFetchResponse(params: {
+  source: Parameters<typeof extractImageContentFromSource>[0];
+  fetchedUrl?: string;
+  fetchedContentType?: string;
+  fetchedBody?: Uint8Array;
+}) {
+  if (params.source.type !== "url") {
+    return null;
+  }
+
+  const release = vi.fn(async () => {});
+  const responseBody = Uint8Array.from(params.fetchedBody ?? Buffer.from("url-source"));
+  fetchWithSsrFGuardMock.mockResolvedValueOnce({
+    response: new Response(
+      responseBody.buffer.slice(
+        responseBody.byteOffset,
+        responseBody.byteOffset + responseBody.byteLength,
+      ),
+      {
+        status: 200,
+        headers: { "content-type": params.fetchedContentType ?? "application/octet-stream" },
+      },
+    ),
+    release,
+    finalUrl: params.fetchedUrl ?? params.source.url,
+  });
+
+  return release;
+}
+
 async function expectRejectedImageMimeCase(params: {
   source: Parameters<typeof extractImageContentFromSource>[0];
   limits: Parameters<typeof extractImageContentFromSource>[1];
@@ -51,28 +81,11 @@ async function expectRejectedImageMimeCase(params: {
   fetchedContentType?: string;
   fetchedBody?: Uint8Array;
 }) {
-  const release = vi.fn(async () => {});
-  if (params.source.type === "url") {
-    const responseBody = Uint8Array.from(params.fetchedBody ?? Buffer.from("url-source"));
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(
-        responseBody.buffer.slice(
-          responseBody.byteOffset,
-          responseBody.byteOffset + responseBody.byteLength,
-        ),
-        {
-          status: 200,
-          headers: { "content-type": params.fetchedContentType ?? "application/octet-stream" },
-        },
-      ),
-      release,
-      finalUrl: params.fetchedUrl ?? params.source.url,
-    });
-  }
+  const release = mockUrlFetchResponse(params);
   await expect(extractImageContentFromSource(params.source, params.limits)).rejects.toThrow(
     params.expectedError,
   );
-  if (params.source.type === "url") {
+  if (release) {
     expect(release).toHaveBeenCalledTimes(1);
   }
 }
@@ -89,24 +102,7 @@ async function expectResolvedImageContentCase(params: {
   fetchedBody?: Uint8Array;
   expectedImage: Awaited<ReturnType<typeof extractImageContentFromSource>>;
 }) {
-  const release = vi.fn(async () => {});
-  if (params.source.type === "url") {
-    const responseBody = Uint8Array.from(params.fetchedBody ?? Buffer.from("url-source"));
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(
-        responseBody.buffer.slice(
-          responseBody.byteOffset,
-          responseBody.byteOffset + responseBody.byteLength,
-        ),
-        {
-          status: 200,
-          headers: { "content-type": params.fetchedContentType ?? "application/octet-stream" },
-        },
-      ),
-      release,
-      finalUrl: params.fetchedUrl ?? params.source.url,
-    });
-  }
+  const release = mockUrlFetchResponse(params);
   detectMimeMock.mockResolvedValueOnce(params.detectedMime);
   if (params.convertedBytes) {
     convertHeicToJpegMock.mockResolvedValueOnce(params.convertedBytes);
@@ -117,7 +113,7 @@ async function expectResolvedImageContentCase(params: {
   expect(image).toEqual(params.expectedImage);
   expect(detectMimeMock).toHaveBeenCalledTimes(1);
   expect(convertHeicToJpegMock).toHaveBeenCalledTimes(params.convertedBytes ? 1 : 0);
-  if (params.source.type === "url") {
+  if (release) {
     expect(release).toHaveBeenCalledTimes(1);
   }
 }

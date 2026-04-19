@@ -762,7 +762,7 @@ export async function loadSessionCostSummary(params: {
       if (!stats) {
         return null;
       }
-      return { date, ...stats };
+      return Object.assign({ date }, stats);
     })
     .filter((entry): entry is SessionDailyLatency => Boolean(entry))
     .toSorted((a, b) => a.date.localeCompare(b.date));

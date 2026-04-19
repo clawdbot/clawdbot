@@ -98,10 +98,9 @@ describe("plugin shape compatibility matrix", () => {
       workspaceDir: "/virtual-workspace",
       ...registry.registry,
     };
-    const inspect = report.plugins.map((plugin) => ({
-      plugin,
-      ...buildPluginShapeSummary({ plugin, report }),
-    }));
+    const inspect = report.plugins.map((plugin) =>
+      Object.assign({ plugin }, buildPluginShapeSummary({ plugin, report })),
+    );
 
     expect(
       inspect.map((entry) => ({

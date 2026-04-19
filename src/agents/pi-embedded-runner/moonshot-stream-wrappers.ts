@@ -1,8 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import { resolveProviderRequestCapabilities } from "../provider-attribution.js";
-import { normalizeProviderId } from "../provider-id.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 export {
@@ -19,21 +17,6 @@ export function shouldApplySiliconFlowThinkingOffCompat(params: {
     params.provider === "siliconflow" &&
     params.thinkingLevel === "off" &&
     params.modelId.startsWith("Pro/")
-  );
-}
-
-export function shouldApplyMoonshotPayloadCompat(params: {
-  provider: string;
-  modelId: string;
-}): boolean {
-  const normalizedProvider = normalizeProviderId(params.provider);
-  return (
-    resolveProviderRequestCapabilities({
-      provider: normalizedProvider,
-      modelId: params.modelId,
-      capability: "llm",
-      transport: "stream",
-    }).compatibilityFamily === "moonshot"
   );
 }
 

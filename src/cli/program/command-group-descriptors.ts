@@ -46,8 +46,8 @@ export function resolveCommandGroupEntries<TDescriptor extends NamedCommandDescr
   }));
 }
 
-export function buildCommandGroupEntries<TDescriptor extends NamedCommandDescriptor, TRegister>(
-  descriptors: readonly TDescriptor[],
+export function buildCommandGroupEntries<TRegister>(
+  descriptors: readonly NamedCommandDescriptor[],
   specs: readonly CommandGroupDescriptorSpec<TRegister>[],
   mapRegister: (register: TRegister) => CommandGroupEntry["register"],
 ): CommandGroupEntry[] {

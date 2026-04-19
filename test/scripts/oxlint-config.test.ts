@@ -10,8 +10,8 @@ type OxlintTsconfig = {
   exclude?: string[];
 };
 
-function readJson<T>(path: string): T {
-  return JSON.parse(fs.readFileSync(path, "utf8")) as T;
+function readJson(path: string): unknown {
+  return JSON.parse(fs.readFileSync(path, "utf8")) as unknown;
 }
 
 describe("oxlint config", () => {

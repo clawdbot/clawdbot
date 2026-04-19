@@ -504,6 +504,28 @@ function Stop-OpenClawGatewayProcesses {
   Start-Sleep -Seconds 2
 }
 
+function Complete-WorkspaceSetup {
+  $workspace = $env:OPENCLAW_WORKSPACE_DIR
+  if (-not $workspace) {
+    $workspace = Join-Path $env:USERPROFILE '.openclaw\workspace'
+  }
+  $stateDir = Join-Path $workspace '.openclaw'
+  New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
+  @'
+# Identity
+
+- Name: OpenClaw
+- Purpose: Parallels npm update smoke test assistant.
+'@ | Set-Content -Path (Join-Path $workspace 'IDENTITY.md') -Encoding UTF8
+  @'
+{
+  "version": 1,
+  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
+}
+'@ | Set-Content -Path (Join-Path $stateDir 'workspace-state.json') -Encoding UTF8
+  Remove-Item (Join-Path $workspace 'BOOTSTRAP.md') -Force -ErrorAction SilentlyContinue
+}
+
 function Restart-GatewayWithRecovery {
   param(
     [Parameter(Mandatory = $true)][string]$OpenClawPath
@@ -586,6 +608,7 @@ try {
   # an explicit start only if the RPC endpoint never returns.
   Write-ProgressLog 'update.restart-gateway'
   Restart-GatewayWithRecovery -OpenClawPath $openclaw
+  Complete-WorkspaceSetup
   Write-ProgressLog 'update.agent-turn'
   Invoke-CaptureLogged 'openclaw agent' { & $openclaw agent --agent main --session-id $SessionId --message 'Reply with exact ASCII text OK only.' --json } | Out-Null
   $exitCode = $LASTEXITCODE
@@ -709,6 +732,21 @@ if [ "\$gateway_ready" != "1" ]; then
   echo "gateway did not become RPC-ready after transport recovery" >&2
   exit 1
 fi
+workspace="\${OPENCLAW_WORKSPACE_DIR:-\$HOME/.openclaw/workspace}"
+mkdir -p "\$workspace/.openclaw"
+cat > "\$workspace/IDENTITY.md" <<'IDENTITY_EOF'
+# Identity
+
+- Name: OpenClaw
+- Purpose: Parallels npm update smoke test assistant.
+IDENTITY_EOF
+cat > "\$workspace/.openclaw/workspace-state.json" <<'STATE_EOF'
+{
+  "version": 1,
+  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
+}
+STATE_EOF
+rm -f "\$workspace/BOOTSTRAP.md"
 /opt/homebrew/bin/openclaw models set "$MODEL_ID"
 /opt/homebrew/bin/openclaw agent --agent main --session-id "parallels-npm-update-macos-transport-recovery-$expected_needle" --message "Reply with exact ASCII text OK only." --json
 EOF
@@ -784,6 +822,25 @@ if (-not \$gatewayReady) {
 \$providerValue = [Text.Encoding]::UTF8.GetString(\$providerBytes)
 Set-Item -Path ('Env:' + '$API_KEY_ENV') -Value \$providerValue
 & \$openclaw models set '$MODEL_ID'
+\$workspace = \$env:OPENCLAW_WORKSPACE_DIR
+if (-not \$workspace) {
+  \$workspace = Join-Path \$env:USERPROFILE '.openclaw\\workspace'
+}
+\$stateDir = Join-Path \$workspace '.openclaw'
+New-Item -ItemType Directory -Path \$stateDir -Force | Out-Null
+@'
+# Identity
+
+- Name: OpenClaw
+- Purpose: Parallels npm update smoke test assistant.
+'@ | Set-Content -Path (Join-Path \$workspace 'IDENTITY.md') -Encoding UTF8
+@'
+{
+  "version": 1,
+  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
+}
+'@ | Set-Content -Path (Join-Path \$stateDir 'workspace-state.json') -Encoding UTF8
+Remove-Item (Join-Path \$workspace 'BOOTSTRAP.md') -Force -ErrorAction SilentlyContinue
 & \$openclaw agent --agent main --session-id 'parallels-npm-update-windows-transport-recovery-$expected_needle' --message 'Reply with exact ASCII text OK only.' --json
 EOF
   )"
@@ -1189,6 +1246,21 @@ if [ "\$gateway_ready" != "1" ]; then
   tail -n 120 /tmp/openclaw-parallels-npm-update-macos-gateway.log 2>/dev/null || true
 fi
 /opt/homebrew/bin/openclaw gateway status --deep --require-rpc
+workspace="\${OPENCLAW_WORKSPACE_DIR:-\$HOME/.openclaw/workspace}"
+mkdir -p "\$workspace/.openclaw"
+cat > "\$workspace/IDENTITY.md" <<'IDENTITY_EOF'
+# Identity
+
+- Name: OpenClaw
+- Purpose: Parallels npm update smoke test assistant.
+IDENTITY_EOF
+cat > "\$workspace/.openclaw/workspace-state.json" <<'STATE_EOF'
+{
+  "version": 1,
+  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
+}
+STATE_EOF
+rm -f "\$workspace/BOOTSTRAP.md"
 /opt/homebrew/bin/openclaw agent --agent main --session-id parallels-npm-update-macos-$expected_needle --message "Reply with exact ASCII text OK only." --json
 EOF
   macos_desktop_user_exec /bin/bash /tmp/openclaw-main-update.sh
@@ -1249,6 +1321,21 @@ if [ -n "$expected_needle" ]; then
 fi
 openclaw update status --json
 openclaw models set "$MODEL_ID"
+workspace="\${OPENCLAW_WORKSPACE_DIR:-\$HOME/.openclaw/workspace}"
+mkdir -p "\$workspace/.openclaw"
+cat > "\$workspace/IDENTITY.md" <<'IDENTITY_EOF'
+# Identity
+
+- Name: OpenClaw
+- Purpose: Parallels npm update smoke test assistant.
+IDENTITY_EOF
+cat > "\$workspace/.openclaw/workspace-state.json" <<'STATE_EOF'
+{
+  "version": 1,
+  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
+}
+STATE_EOF
+rm -f "\$workspace/BOOTSTRAP.md"
 openclaw agent --local --agent main --session-id parallels-npm-update-linux-$expected_needle --message "Reply with exact ASCII text OK only." --json
 EOF
   prlctl exec "$LINUX_VM" /usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" /bin/bash /tmp/openclaw-main-update.sh

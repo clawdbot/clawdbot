@@ -5,9 +5,16 @@ import {
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { registerMatrixCliMetadata } from "./cli-metadata.js";
 
+type MatrixHandlersRuntimeModule = typeof import("./plugin-entry.handlers.runtime.js");
 type MatrixSubagentHooksModule = typeof import("./src/matrix/subagent-hooks.js");
 
+let matrixHandlersRuntimePromise: Promise<MatrixHandlersRuntimeModule> | null = null;
 let matrixSubagentHooksPromise: Promise<MatrixSubagentHooksModule> | null = null;
+
+function loadMatrixHandlersRuntimeModule() {
+  matrixHandlersRuntimePromise ??= import("./plugin-entry.handlers.runtime.js");
+  return matrixHandlersRuntimePromise;
+}
 
 function loadMatrixSubagentHooksModule() {
   matrixSubagentHooksPromise ??= import("./src/matrix/subagent-hooks.js");
@@ -15,7 +22,7 @@ function loadMatrixSubagentHooksModule() {
 }
 
 export function registerMatrixFullRuntime(api: OpenClawPluginApi): void {
-  void import("./plugin-entry.handlers.runtime.js")
+  void loadMatrixHandlersRuntimeModule()
     .then(({ ensureMatrixCryptoRuntime }) =>
       ensureMatrixCryptoRuntime({ log: api.logger.info }).catch((err: unknown) => {
         const message = formatErrorMessage(err);
@@ -28,17 +35,17 @@ export function registerMatrixFullRuntime(api: OpenClawPluginApi): void {
     });
 
   api.registerGatewayMethod("matrix.verify.recoveryKey", async (ctx) => {
-    const { handleVerifyRecoveryKey } = await import("./plugin-entry.handlers.runtime.js");
+    const { handleVerifyRecoveryKey } = await loadMatrixHandlersRuntimeModule();
     await handleVerifyRecoveryKey(ctx);
   });
 
   api.registerGatewayMethod("matrix.verify.bootstrap", async (ctx) => {
-    const { handleVerificationBootstrap } = await import("./plugin-entry.handlers.runtime.js");
+    const { handleVerificationBootstrap } = await loadMatrixHandlersRuntimeModule();
     await handleVerificationBootstrap(ctx);
   });
 
   api.registerGatewayMethod("matrix.verify.status", async (ctx) => {
-    const { handleVerificationStatus } = await import("./plugin-entry.handlers.runtime.js");
+    const { handleVerificationStatus } = await loadMatrixHandlersRuntimeModule();
     await handleVerificationStatus(ctx);
   });
 

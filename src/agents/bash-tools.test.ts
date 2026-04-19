@@ -13,7 +13,15 @@ import {
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
 import { captureEnv } from "../test-utils/env.js";
-import { getFinishedSession, resetProcessRegistryForTests } from "./bash-process-registry.js";
+import {
+  addSession,
+  appendOutput,
+  getFinishedSession,
+  markBackgrounded,
+  markExited,
+  resetProcessRegistryForTests,
+  type ProcessSession,
+} from "./bash-process-registry.js";
 import { createExecTool, createProcessTool } from "./bash-tools.js";
 import { resolveShellFromPath, sanitizeBinaryOutput } from "./shell-utils.js";
 
@@ -24,7 +32,7 @@ const defaultShell = isWin
 // PowerShell: Start-Sleep for delays, ; for command separation, $null for null device
 const shortDelayCmd = isWin ? "Start-Sleep -Milliseconds 4" : "sleep 0.004";
 const yieldDelayCmd = isWin ? "Start-Sleep -Milliseconds 16" : "sleep 0.016";
-const POLL_INTERVAL_MS = 15;
+const POLL_INTERVAL_MS = isWin ? 15 : 2;
 const BACKGROUND_POLL_TIMEOUT_MS = isWin ? 8000 : 1200;
 const NOTIFY_EVENT_TIMEOUT_MS = isWin ? 12_000 : 5_000;
 const BACKGROUND_POLL_OPTIONS = {
@@ -45,6 +53,7 @@ const OUTPUT_NOPE = "nope";
 const OUTPUT_EXEC_COMPLETED = "Exec completed";
 const OUTPUT_EXIT_CODE_1 = "Command exited with code 1";
 const shellEcho = (message: string) => (isWin ? `Write-Output ${message}` : `echo ${message}`);
+const COMMAND_NOOP = isWin ? "$null" : ":";
 const COMMAND_ECHO_HELLO = shellEcho("hello");
 const COMMAND_PRINT_PATH = isWin ? "Write-Output $env:PATH" : "echo $PATH";
 const COMMAND_EXIT_WITH_ERROR = "exit 1";
@@ -98,8 +107,6 @@ const withLabel = <T extends object>(label: string, fields: T): T & LabeledCase 
 });
 // Both PowerShell and bash use ; for command separation
 const joinCommands = (commands: string[]) => commands.join("; ");
-const echoAfterDelay = (message: string) => joinCommands([shortDelayCmd, shellEcho(message)]);
-const echoLines = (lines: string[]) => joinCommands(lines.map((line) => shellEcho(line)));
 const normalizeText = (value?: string) =>
   sanitizeBinaryOutput(value ?? "")
     .replace(/\r\n/g, "\n")
@@ -238,7 +245,7 @@ async function expectNotifyOnExitWake(tool: ExecToolInstance, expected: Record<s
     wakeHandler as unknown as Parameters<typeof setHeartbeatWakeHandler>[0],
   );
   try {
-    await startBackgroundCommand(tool, echoAfterDelay("notify"));
+    await startBackgroundCommand(tool, shellEcho("notify"));
     await expect.poll(() => wakeHandler.mock.calls[0]?.[0], NOTIFY_POLL_OPTIONS).toEqual(expected);
   } finally {
     dispose();
@@ -401,7 +408,7 @@ const readBackgroundLogSnapshot = async (
   lines: string[],
   options: ProcessLogWindow = {},
 ): Promise<ProcessLogSnapshot> => {
-  const { sessionId } = await runBackgroundCommandToCompletion(execTool, echoLines(lines));
+  const sessionId = seedFinishedLogSession(lines);
   const log = await readProcessLog(sessionId, options);
   return {
     text: readTextContent(log.content) ?? "",
@@ -409,6 +416,31 @@ const readBackgroundLogSnapshot = async (
     lines: readTrimmedLines(log.content),
     totalLines: readTotalLines(log.details),
   };
+};
+const seedFinishedLogSession = (lines: string[]) => {
+  const session: ProcessSession = {
+    id: `seeded-log-${nextCallId()}`,
+    command: "seeded log",
+    startedAt: Date.now(),
+    maxOutputChars: 100_000,
+    pendingMaxOutputChars: 100_000,
+    pendingStdout: [],
+    pendingStderr: [],
+    pendingStdoutChars: 0,
+    pendingStderrChars: 0,
+    totalOutputChars: 0,
+    aggregated: "",
+    tail: "",
+    exited: false,
+    truncated: false,
+    backgrounded: false,
+    cursorKeyMode: "unknown",
+  };
+  addSession(session);
+  appendOutput(session, "stdout", lines.join("\n"));
+  markBackgrounded(session);
+  markExited(session, 0, null, PROCESS_STATUS_COMPLETED);
+  return session.id;
 };
 const runLongLogExpectationCase = async ({
   options,
@@ -434,7 +466,7 @@ const runNotifyNoopCase = async ({ label, notifyOnExitEmptySuccess }: NotifyNoop
     notifyOnExitEmptySuccess ? { notifyOnExitEmptySuccess: true } : {},
   );
 
-  const { status } = await runBackgroundCommandToCompletion(tool, shortDelayCmd);
+  const { status } = await runBackgroundCommandToCompletion(tool, COMMAND_NOOP);
   expect(status).toBe(PROCESS_STATUS_COMPLETED);
   const events = peekSystemEvents(DEFAULT_NOTIFY_SESSION_KEY);
   expectNotifyNoopEvents(events, notifyOnExitEmptySuccess, label);
@@ -578,7 +610,7 @@ describe("exec notifyOnExit", () => {
   it("enqueues a system event when a backgrounded exec exits", async () => {
     const tool = createNotifyOnExitExecTool();
 
-    const sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify"));
+    const sessionId = await startBackgroundCommand(tool, shellEcho("notify"));
 
     const { finished, hasEvent } = await waitForNotifyEvent(sessionId);
     const queuedEvent = peekSystemEventEntries(DEFAULT_NOTIFY_SESSION_KEY).find((event) =>
@@ -601,7 +633,7 @@ describe("exec notifyOnExit", () => {
       currentThreadTs: "47",
     });
 
-    const sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify"));
+    const sessionId = await startBackgroundCommand(tool, shellEcho("notify"));
 
     await waitForNotifyEvent(sessionId, sessionKey);
     const queuedEvent = peekSystemEventEntries(sessionKey).find((event) =>
@@ -724,7 +756,7 @@ describe("exec backgrounded onUpdate suppression", () => {
     async () => {
       const onUpdateSpy = vi.fn();
       const tool = createTestExecTool({ allowBackground: true, backgroundMs: 0 });
-      const command = joinCommands([shellEcho("before"), yieldDelayCmd, shellEcho("after")]);
+      const command = joinCommands([shellEcho("before"), shortDelayCmd, shellEcho("after")]);
       const result = await tool.execute(
         nextCallId(),
         { command, background: true },

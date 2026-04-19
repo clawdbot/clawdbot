@@ -7,6 +7,12 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
  * See #26905.
  */
 const DEFAULT_PARENT_FORK_MAX_TOKENS = 100_000;
+let sessionForkRuntimePromise: Promise<typeof import("./session-fork.runtime.js")> | null = null;
+
+function loadSessionForkRuntime(): Promise<typeof import("./session-fork.runtime.js")> {
+  sessionForkRuntimePromise ??= import("./session-fork.runtime.js");
+  return sessionForkRuntimePromise;
+}
 
 export function resolveParentForkMaxTokens(cfg: OpenClawConfig): number {
   const configured = cfg.session?.parentForkMaxTokens;
@@ -21,6 +27,6 @@ export async function forkSessionFromParent(params: {
   agentId: string;
   sessionsDir: string;
 }): Promise<{ sessionId: string; sessionFile: string } | null> {
-  const runtime = await import("./session-fork.runtime.js");
+  const runtime = await loadSessionForkRuntime();
   return runtime.forkSessionFromParentRuntime(params);
 }

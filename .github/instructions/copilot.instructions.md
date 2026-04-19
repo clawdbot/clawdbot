@@ -50,13 +50,13 @@
 - Keep files under ~700 LOC - extract helpers when larger
 - Colocated tests: `*.test.ts` next to source files
 - Run `pnpm check` before commits (lint + format)
-- Run `pnpm tsgo` for type checking
+- Run `pnpm tsgo` for production type checking, or `pnpm tsgo:all` for production plus test types
 
 ## Stack & Commands
 
 - **Package manager**: pnpm (`pnpm install`)
 - **Dev**: `pnpm openclaw ...` or `pnpm dev`
-- **Type-check**: `pnpm tsgo`
+- **Type-check**: `pnpm tsgo` (production), `pnpm tsgo:all` (production plus tests)
 - **Lint/format**: `pnpm check`
 - **Tests**: `pnpm test`
 - **Build**: `pnpm build`

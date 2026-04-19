@@ -9,29 +9,29 @@ import type { LineProbeResult } from "../../../src/plugin-sdk/line.js";
 import { resolveRelativeBundledPluginPublicModuleId } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import { withEnvAsync } from "../../../src/test-utils/env.js";
 
-type DiscordDirectoryContractApiSurface = Pick<
-  typeof import("@openclaw/discord/directory-contract-api.js"),
-  "listDiscordDirectoryPeersFromConfig" | "listDiscordDirectoryGroupsFromConfig"
->;
-type DiscordProbe = import("@openclaw/discord/api.js").DiscordProbe;
-type DiscordTokenResolution = import("@openclaw/discord/api.js").DiscordTokenResolution;
-type IMessageProbe = import("@openclaw/imessage/runtime-api.js").IMessageProbe;
-type SignalProbe = import("@openclaw/signal/api.js").SignalProbe;
-type SlackDirectoryContractApiSurface = Pick<
-  typeof import("@openclaw/slack/directory-contract-api.js"),
-  "listSlackDirectoryPeersFromConfig" | "listSlackDirectoryGroupsFromConfig"
->;
-type SlackProbe = import("@openclaw/slack/api.js").SlackProbe;
-type TelegramDirectoryContractApiSurface = Pick<
-  typeof import("@openclaw/telegram/directory-contract-api.js"),
-  "listTelegramDirectoryPeersFromConfig" | "listTelegramDirectoryGroupsFromConfig"
->;
-type TelegramProbe = import("@openclaw/telegram/api.js").TelegramProbe;
-type TelegramTokenResolution = import("@openclaw/telegram/api.js").TelegramTokenResolution;
-type WhatsAppDirectoryContractApiSurface = Pick<
-  typeof import("@openclaw/whatsapp/directory-contract-api.js"),
-  "listWhatsAppDirectoryPeersFromConfig" | "listWhatsAppDirectoryGroupsFromConfig"
->;
+type DiscordDirectoryContractApiSurface = {
+  listDiscordDirectoryPeersFromConfig: DirectoryListFn;
+  listDiscordDirectoryGroupsFromConfig: DirectoryListFn;
+};
+type DiscordProbe = BaseProbeResult;
+type DiscordTokenResolution = BaseTokenResolution;
+type IMessageProbe = BaseProbeResult;
+type SignalProbe = BaseProbeResult;
+type SlackDirectoryContractApiSurface = {
+  listSlackDirectoryPeersFromConfig: DirectoryListFn;
+  listSlackDirectoryGroupsFromConfig: DirectoryListFn;
+};
+type SlackProbe = BaseProbeResult;
+type TelegramDirectoryContractApiSurface = {
+  listTelegramDirectoryPeersFromConfig: DirectoryListFn;
+  listTelegramDirectoryGroupsFromConfig: DirectoryListFn;
+};
+type TelegramProbe = BaseProbeResult;
+type TelegramTokenResolution = BaseTokenResolution;
+type WhatsAppDirectoryContractApiSurface = {
+  listWhatsAppDirectoryPeersFromConfig: DirectoryListFn;
+  listWhatsAppDirectoryGroupsFromConfig: DirectoryListFn;
+};
 
 let discordDirectoryContractApi: Promise<DiscordDirectoryContractApiSurface> | undefined;
 let slackDirectoryContractApi: Promise<SlackDirectoryContractApiSurface> | undefined;

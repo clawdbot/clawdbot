@@ -5,6 +5,7 @@ const OPENAI_BASE_URL = "https://api.openai.com/v1";
 const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 const OPENAI_CODEX_LEGACY_BASE_URL = "https://chatgpt.com/backend-api/v1";
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+const OPENROUTER_LEGACY_BASE_URL = "https://openrouter.ai/v1";
 const ANTHROPIC_BASE_URL = "https://api.anthropic.com";
 const XAI_BASE_URL = "https://api.x.ai/v1";
 const ZAI_BASE_URL = "https://api.z.ai/api/paas/v4";
@@ -69,7 +70,28 @@ function isNativeOpenAICodexBaseUrl(baseUrl?: string): boolean {
   return baseUrl === OPENAI_CODEX_BASE_URL || baseUrl === OPENAI_CODEX_LEGACY_BASE_URL;
 }
 
+function normalizeOpenRouterBaseUrl(baseUrl?: string): string | undefined {
+  const normalized = typeof baseUrl === "string" ? baseUrl.trim().replace(/\/+$/, "") : "";
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized === OPENROUTER_BASE_URL || normalized === OPENROUTER_LEGACY_BASE_URL) {
+    return OPENROUTER_BASE_URL;
+  }
+  return undefined;
+}
+
 function normalizeDynamicModel(params: { provider: string; model: ResolvedModelLike }) {
+  if (params.provider === "openrouter") {
+    const baseUrl =
+      typeof params.model.baseUrl === "string"
+        ? normalizeOpenRouterBaseUrl(params.model.baseUrl)
+        : undefined;
+    if (baseUrl && baseUrl !== params.model.baseUrl) {
+      return { ...params.model, baseUrl };
+    }
+    return undefined;
+  }
   if (params.provider !== "openai-codex") {
     return undefined;
   }
@@ -133,6 +155,13 @@ function normalizeTransport(params: {
     return {
       api: "openai-codex-responses",
       baseUrl: OPENAI_CODEX_BASE_URL,
+    };
+  }
+  const normalizedOpenRouterBaseUrl = normalizeOpenRouterBaseUrl(params.context.baseUrl);
+  if (normalizedOpenRouterBaseUrl && normalizedOpenRouterBaseUrl !== params.context.baseUrl) {
+    return {
+      api: params.context.api,
+      baseUrl: normalizedOpenRouterBaseUrl,
     };
   }
   return undefined;

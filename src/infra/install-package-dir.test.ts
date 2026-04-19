@@ -92,6 +92,37 @@ async function withInstallBaseReboundOnRealpathCall<T>(params: {
   }
 }
 
+async function createExistingInstallFixture(fixtureRoot: string) {
+  const installBaseDir = path.join(fixtureRoot, "plugins");
+  const sourceDir = path.join(fixtureRoot, "source");
+  const targetDir = path.join(installBaseDir, "demo");
+  await fs.mkdir(sourceDir, { recursive: true });
+  await fs.mkdir(targetDir, { recursive: true });
+  await fs.writeFile(path.join(sourceDir, "marker.txt"), "new");
+  await fs.writeFile(path.join(targetDir, "marker.txt"), "old");
+  return { installBaseDir, sourceDir, targetDir };
+}
+
+async function createReboundInstallFixture(params: {
+  fixtureRoot: string;
+  withExistingInstall?: boolean;
+}) {
+  const sourceDir = path.join(params.fixtureRoot, "source");
+  const installBaseDir = path.join(params.fixtureRoot, "plugins");
+  const preservedInstallRoot = path.join(params.fixtureRoot, "plugins-preserved");
+  const outsideInstallRoot = path.join(params.fixtureRoot, "outside-plugins");
+  const targetDir = path.join(installBaseDir, "demo");
+  await fs.mkdir(sourceDir, { recursive: true });
+  await fs.mkdir(installBaseDir, { recursive: true });
+  await fs.mkdir(outsideInstallRoot, { recursive: true });
+  if (params.withExistingInstall) {
+    await fs.mkdir(targetDir, { recursive: true });
+    await fs.writeFile(path.join(targetDir, "marker.txt"), "old");
+  }
+  await fs.writeFile(path.join(sourceDir, "marker.txt"), "new");
+  return { installBaseDir, outsideInstallRoot, preservedInstallRoot, sourceDir, targetDir };
+}
+
 describe("installPackageDir", () => {
   const fixtureRootTracker = createSuiteTempRootTracker({
     prefix: "openclaw-install-package-dir-",
@@ -105,13 +136,8 @@ describe("installPackageDir", () => {
   it("keeps the existing install in place when staged validation fails", async () => {
     await fixtureRootTracker.setup();
     const fixtureRoot = await fixtureRootTracker.make("case");
-    const installBaseDir = path.join(fixtureRoot, "plugins");
-    const sourceDir = path.join(fixtureRoot, "source");
-    const targetDir = path.join(installBaseDir, "demo");
-    await fs.mkdir(sourceDir, { recursive: true });
-    await fs.mkdir(targetDir, { recursive: true });
-    await fs.writeFile(path.join(sourceDir, "marker.txt"), "new");
-    await fs.writeFile(path.join(targetDir, "marker.txt"), "old");
+    const { installBaseDir, sourceDir, targetDir } =
+      await createExistingInstallFixture(fixtureRoot);
 
     const result = await installPackageDir({
       sourceDir,
@@ -146,13 +172,8 @@ describe("installPackageDir", () => {
   it("restores the original install if publish rename fails", async () => {
     await fixtureRootTracker.setup();
     const fixtureRoot = await fixtureRootTracker.make("case");
-    const installBaseDir = path.join(fixtureRoot, "plugins");
-    const sourceDir = path.join(fixtureRoot, "source");
-    const targetDir = path.join(installBaseDir, "demo");
-    await fs.mkdir(sourceDir, { recursive: true });
-    await fs.mkdir(targetDir, { recursive: true });
-    await fs.writeFile(path.join(sourceDir, "marker.txt"), "new");
-    await fs.writeFile(path.join(targetDir, "marker.txt"), "old");
+    const { installBaseDir, sourceDir, targetDir } =
+      await createExistingInstallFixture(fixtureRoot);
 
     const realRename = fs.rename.bind(fs);
     let renameCalls = 0;
@@ -189,15 +210,8 @@ describe("installPackageDir", () => {
   it("aborts without outside writes when the install base is rebound before publish", async () => {
     await fixtureRootTracker.setup();
     const fixtureRoot = await fixtureRootTracker.make("case");
-    const sourceDir = path.join(fixtureRoot, "source");
-    const installBaseDir = path.join(fixtureRoot, "plugins");
-    const preservedInstallRoot = path.join(fixtureRoot, "plugins-preserved");
-    const outsideInstallRoot = path.join(fixtureRoot, "outside-plugins");
-    const targetDir = path.join(installBaseDir, "demo");
-    await fs.mkdir(sourceDir, { recursive: true });
-    await fs.mkdir(installBaseDir, { recursive: true });
-    await fs.mkdir(outsideInstallRoot, { recursive: true });
-    await fs.writeFile(path.join(sourceDir, "marker.txt"), "new");
+    const { installBaseDir, outsideInstallRoot, preservedInstallRoot, sourceDir, targetDir } =
+      await createReboundInstallFixture({ fixtureRoot });
 
     const warnings: string[] = [];
     await withInstallBaseReboundOnRealpathCall({
@@ -237,17 +251,8 @@ describe("installPackageDir", () => {
   it("warns and leaves the backup in place when the install base changes before backup cleanup", async () => {
     await fixtureRootTracker.setup();
     const fixtureRoot = await fixtureRootTracker.make("case");
-    const sourceDir = path.join(fixtureRoot, "source");
-    const installBaseDir = path.join(fixtureRoot, "plugins");
-    const preservedInstallRoot = path.join(fixtureRoot, "plugins-preserved");
-    const outsideInstallRoot = path.join(fixtureRoot, "outside-plugins");
-    const targetDir = path.join(installBaseDir, "demo");
-    await fs.mkdir(sourceDir, { recursive: true });
-    await fs.mkdir(installBaseDir, { recursive: true });
-    await fs.mkdir(outsideInstallRoot, { recursive: true });
-    await fs.mkdir(path.join(installBaseDir, "demo"), { recursive: true });
-    await fs.writeFile(path.join(installBaseDir, "demo", "marker.txt"), "old");
-    await fs.writeFile(path.join(sourceDir, "marker.txt"), "new");
+    const { installBaseDir, outsideInstallRoot, preservedInstallRoot, sourceDir, targetDir } =
+      await createReboundInstallFixture({ fixtureRoot, withExistingInstall: true });
 
     const warnings: string[] = [];
     const result = await withInstallBaseReboundOnRealpathCall({

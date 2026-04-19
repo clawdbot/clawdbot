@@ -18,8 +18,8 @@ async function readSessionStore(storePath: string): Promise<Record<string, unkno
   return JSON.parse(raw) as Record<string, unknown>;
 }
 
-function pickFirstStoreEntry<T>(store: Record<string, unknown>): T | undefined {
-  const entries = Object.values(store) as T[];
+function pickFirstStoreEntry(store: Record<string, unknown>): unknown {
+  const entries = Object.values(store);
   return entries[0];
 }
 
@@ -145,7 +145,7 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
         expect(replyText(r3)).toContain("Usage footer: tokens");
 
         const finalStore = await readSessionStore(usageStorePath);
-        expect(pickFirstStoreEntry<{ responseUsage?: string }>(finalStore)?.responseUsage).toBe(
+        expect((pickFirstStoreEntry(finalStore) as { responseUsage?: string })?.responseUsage).toBe(
           "tokens",
         );
         expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();

@@ -3,7 +3,7 @@ import {
   buildEmbeddedPiSettingsSnapshot,
   DEFAULT_EMBEDDED_PI_PROJECT_SETTINGS_POLICY,
   resolveEmbeddedPiProjectSettingsPolicy,
-} from "./pi-project-settings.js";
+} from "./pi-project-settings-snapshot.js";
 
 type EmbeddedPiSettingsArgs = Parameters<typeof buildEmbeddedPiSettingsSnapshot>[0];
 

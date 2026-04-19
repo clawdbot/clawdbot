@@ -2,6 +2,15 @@ import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-r
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatMatrixErrorMessage } from "./matrix/errors.js";
 
+type MatrixVerificationRuntime = typeof import("./matrix/actions/verification.js");
+
+let matrixVerificationRuntimePromise: Promise<MatrixVerificationRuntime> | undefined;
+
+function loadMatrixVerificationRuntime(): Promise<MatrixVerificationRuntime> {
+  matrixVerificationRuntimePromise ??= import("./matrix/actions/verification.js");
+  return matrixVerificationRuntimePromise;
+}
+
 function sendError(respond: (ok: boolean, payload?: unknown) => void, err: unknown) {
   respond(false, { error: formatMatrixErrorMessage(err) });
 }
@@ -18,7 +27,7 @@ export async function handleVerifyRecoveryKey({
   respond,
 }: GatewayRequestHandlerOptions): Promise<void> {
   try {
-    const { verifyMatrixRecoveryKey } = await import("./matrix/actions/verification.js");
+    const { verifyMatrixRecoveryKey } = await loadMatrixVerificationRuntime();
     const key = normalizeOptionalString(params?.key);
     if (!key) {
       respond(false, { error: "key required" });
@@ -37,7 +46,7 @@ export async function handleVerificationBootstrap({
   respond,
 }: GatewayRequestHandlerOptions): Promise<void> {
   try {
-    const { bootstrapMatrixVerification } = await import("./matrix/actions/verification.js");
+    const { bootstrapMatrixVerification } = await loadMatrixVerificationRuntime();
     const accountId = normalizeOptionalString(params?.accountId);
     const recoveryKey = typeof params?.recoveryKey === "string" ? params.recoveryKey : undefined;
     const forceResetCrossSigning = params?.forceResetCrossSigning === true;
@@ -57,7 +66,7 @@ export async function handleVerificationStatus({
   respond,
 }: GatewayRequestHandlerOptions): Promise<void> {
   try {
-    const { getMatrixVerificationStatus } = await import("./matrix/actions/verification.js");
+    const { getMatrixVerificationStatus } = await loadMatrixVerificationRuntime();
     const accountId = normalizeOptionalString(params?.accountId);
     const includeRecoveryKey = params?.includeRecoveryKey === true;
     const status = await getMatrixVerificationStatus({ accountId, includeRecoveryKey });

@@ -33,9 +33,13 @@ export const AUTH_STORE_LOCK_OPTIONS = {
 // so a legitimate refresh's critical section always finishes well before
 // peers would treat the lock as reclaimable. Violating this invariant re-
 // introduces the `refresh_token_reused` race the lock is meant to prevent.
+//
+// Retry budget note: keep the MINIMUM cumulative retry window comfortably
+// above OAUTH_REFRESH_CALL_TIMEOUT_MS so waiters do not give up while a
+// legitimate slow refresh is still within its allowed runtime budget.
 export const OAUTH_REFRESH_LOCK_OPTIONS = {
   retries: {
-    retries: 10,
+    retries: 20,
     factor: 2,
     minTimeout: 100,
     maxTimeout: 10_000,

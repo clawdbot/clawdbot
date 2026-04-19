@@ -7,7 +7,7 @@ import {
   completeTaskRunByRunId,
   failTaskRunByRunId,
   setDetachedTaskDeliveryStatusByRunId,
-} from "../tasks/task-executor.js";
+} from "../tasks/detached-task-runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import {
   captureSubagentCompletionReply,

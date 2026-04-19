@@ -1,6 +1,49 @@
 // Manual facade. Keep loader boundary explicit.
-type FacadeModule = typeof import("@openclaw/matrix/api.js");
+import type { OpenClawConfig } from "../config/config.js";
 import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
+
+export type MatrixScopedEnvVarNames = {
+  homeserver: string;
+  userId: string;
+  accessToken: string;
+  password: string;
+  deviceId: string;
+  deviceName: string;
+};
+
+export type MatrixAccountStorageRoot = {
+  rootDir: string;
+  accountKey: string;
+  tokenHash: string;
+};
+
+export type MatrixLegacyFlatStoragePaths = {
+  rootDir: string;
+  storagePath: string;
+  cryptoPath: string;
+};
+
+type FacadeModule = {
+  findMatrixAccountEntry: (
+    cfg: OpenClawConfig,
+    accountId: string,
+  ) => Record<string, unknown> | null;
+  getMatrixScopedEnvVarNames: (accountId: string) => MatrixScopedEnvVarNames;
+  requiresExplicitMatrixDefaultAccount: (cfg: OpenClawConfig, env?: NodeJS.ProcessEnv) => boolean;
+  resolveConfiguredMatrixAccountIds: (cfg: OpenClawConfig, env?: NodeJS.ProcessEnv) => string[];
+  resolveMatrixAccountStorageRoot: (params: {
+    stateDir: string;
+    homeserver: string;
+    userId: string;
+    accessToken: string;
+    accountId?: string | null;
+  }) => MatrixAccountStorageRoot;
+  resolveMatrixChannelConfig: (cfg: OpenClawConfig) => Record<string, unknown> | null;
+  resolveMatrixCredentialsDir: (stateDir: string) => string;
+  resolveMatrixCredentialsPath: (params: { stateDir: string; accountId?: string | null }) => string;
+  resolveMatrixDefaultOrOnlyAccountId: (cfg: OpenClawConfig, env?: NodeJS.ProcessEnv) => string;
+  resolveMatrixLegacyFlatStoragePaths: (stateDir: string) => MatrixLegacyFlatStoragePaths;
+};
 
 function loadFacadeModule(): FacadeModule {
   return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({

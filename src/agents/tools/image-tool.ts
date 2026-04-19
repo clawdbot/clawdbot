@@ -524,10 +524,12 @@ export function createImageTool(options?: {
                 : {}),
             }
           : {
-              images: loadedImages.map((img) => ({
-                image: img.resolvedImage,
-                ...(img.rewrittenFrom ? { rewrittenFrom: img.rewrittenFrom } : {}),
-              })),
+              images: loadedImages.map((img) =>
+                Object.assign(
+                  { image: img.resolvedImage },
+                  img.rewrittenFrom ? { rewrittenFrom: img.rewrittenFrom } : {},
+                ),
+              ),
             };
 
       return buildTextToolResult(result, imageDetails);

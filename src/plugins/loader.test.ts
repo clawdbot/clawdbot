@@ -2822,12 +2822,13 @@ module.exports = { id: "throws-after-import", register() {} };`,
     ] as const;
 
     runSinglePluginRegistryScenarios(
-      scenarios.map((scenario) => ({
-        ...scenario,
-        body: `module.exports = { id: "${scenario.pluginId}", register(api) {
+      scenarios.map((scenario) =>
+        Object.assign({}, scenario, {
+          body: `module.exports = { id: "${scenario.pluginId}", register(api) {
   api.registerHttpRoute(${scenario.routeOptions});
 } };`,
-      })),
+        }),
+      ),
     );
   });
 

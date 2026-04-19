@@ -5,7 +5,6 @@ import path from "node:path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { ensurePortAvailable } from "../infra/ports.js";
-import { rawDataToString } from "../infra/ws.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CONFIG_DIR } from "../utils.js";
 import {
@@ -20,13 +19,20 @@ import {
   CHROME_WS_READY_TIMEOUT_MS,
 } from "./cdp-timeouts.js";
 import {
-  appendCdpPath,
   assertCdpEndpointAllowed,
-  fetchCdpChecked,
+  isDirectCdpWebSocketEndpoint,
   isWebSocketUrl,
+  normalizeCdpHttpBaseForJsonEndpoints,
   openCdpWebSocket,
 } from "./cdp.helpers.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
+import {
+  diagnoseChromeCdp,
+  formatChromeCdpDiagnostic,
+  type ChromeVersion,
+  readChromeVersion,
+  safeChromeCdpErrorMessage,
+} from "./chrome.diagnostics.js";
 import {
   type BrowserExecutable,
   resolveBrowserExecutableForPlatform,
@@ -45,6 +51,12 @@ import {
 const log = createSubsystemLogger("browser").child("chrome");
 
 export type { BrowserExecutable } from "./chrome.executables.js";
+export {
+  diagnoseChromeCdp,
+  formatChromeCdpDiagnostic,
+  type ChromeCdpDiagnostic,
+  type ChromeCdpDiagnosticCode,
+} from "./chrome.diagnostics.js";
 export {
   findChromeExecutableLinux,
   findChromeExecutableMac,
@@ -127,15 +139,24 @@ export function buildOpenClawChromeLaunchArgs(params: {
 async function canOpenWebSocket(url: string, timeoutMs: number): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
     const ws = openCdpWebSocket(url, { handshakeTimeoutMs: timeoutMs });
+    let settled = false;
+    const finish = (value: boolean) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve(value);
+    };
     ws.once("open", () => {
       try {
         ws.close();
       } catch {
         // ignore
       }
-      resolve(true);
+      finish(true);
     });
-    ws.once("error", () => resolve(false));
+    ws.once("error", () => finish(false));
+    ws.once("close", () => finish(false));
   });
 }
 
@@ -146,51 +167,40 @@ export async function isChromeReachable(
 ): Promise<boolean> {
   try {
     await assertCdpEndpointAllowed(cdpUrl, ssrfPolicy);
-    if (isWebSocketUrl(cdpUrl)) {
-      // Direct WebSocket endpoint — probe via WS handshake.
+    if (isDirectCdpWebSocketEndpoint(cdpUrl)) {
+      // Handshake-ready direct WS endpoint — probe via WS handshake.
       return await canOpenWebSocket(cdpUrl, timeoutMs);
     }
-    const version = await fetchChromeVersion(cdpUrl, timeoutMs, ssrfPolicy);
-    return Boolean(version);
+    // Either an http(s) discovery URL or a bare ws/wss root. Try
+    // /json/version discovery first. For bare ws/wss URLs, fall back to a
+    // direct WS handshake when discovery is unavailable — some providers
+    // (e.g. Browserless/Browserbase) expose a direct WebSocket root without
+    // a /json/version endpoint.
+    const discoveryUrl = isWebSocketUrl(cdpUrl)
+      ? normalizeCdpHttpBaseForJsonEndpoints(cdpUrl)
+      : cdpUrl;
+    const version = await fetchChromeVersion(discoveryUrl, timeoutMs, ssrfPolicy);
+    if (version) {
+      return true;
+    }
+    if (isWebSocketUrl(cdpUrl)) {
+      return await canOpenWebSocket(cdpUrl, timeoutMs);
+    }
+    return false;
   } catch {
     return false;
   }
 }
-
-type ChromeVersion = {
-  webSocketDebuggerUrl?: string;
-  Browser?: string;
-  "User-Agent"?: string;
-};
 
 async function fetchChromeVersion(
   cdpUrl: string,
   timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
   ssrfPolicy?: SsrFPolicy,
 ): Promise<ChromeVersion | null> {
-  const ctrl = new AbortController();
-  const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
   try {
-    const versionUrl = appendCdpPath(cdpUrl, "/json/version");
-    const { response, release } = await fetchCdpChecked(
-      versionUrl,
-      timeoutMs,
-      { signal: ctrl.signal },
-      ssrfPolicy,
-    );
-    try {
-      const data = (await response.json()) as ChromeVersion;
-      if (!data || typeof data !== "object") {
-        return null;
-      }
-      return data;
-    } finally {
-      await release();
-    }
+    return await readChromeVersion(cdpUrl, timeoutMs, ssrfPolicy);
   } catch {
     return null;
-  } finally {
-    clearTimeout(t);
   }
 }
 
@@ -200,93 +210,33 @@ export async function getChromeWebSocketUrl(
   ssrfPolicy?: SsrFPolicy,
 ): Promise<string | null> {
   await assertCdpEndpointAllowed(cdpUrl, ssrfPolicy);
-  if (isWebSocketUrl(cdpUrl)) {
-    // Direct WebSocket endpoint — the cdpUrl is already the WebSocket URL.
+  if (isDirectCdpWebSocketEndpoint(cdpUrl)) {
+    // Handshake-ready direct WebSocket endpoint — the cdpUrl is already
+    // the WebSocket URL.
     return cdpUrl;
   }
-  const version = await fetchChromeVersion(cdpUrl, timeoutMs, ssrfPolicy);
+  // Either an http(s) endpoint or a bare ws/wss root; discover the
+  // actual WebSocket URL via /json/version. Normalise the scheme so
+  // fetch() can reach the endpoint.
+  const discoveryUrl = isWebSocketUrl(cdpUrl)
+    ? normalizeCdpHttpBaseForJsonEndpoints(cdpUrl)
+    : cdpUrl;
+  const version = await fetchChromeVersion(discoveryUrl, timeoutMs, ssrfPolicy);
   const wsUrl = normalizeOptionalString(version?.webSocketDebuggerUrl) ?? "";
   if (!wsUrl) {
+    // /json/version unavailable or returned no WebSocket URL. For bare
+    // ws/wss inputs, the URL itself may be a direct WebSocket endpoint
+    // (e.g. Browserless/Browserbase-style providers without /json/version).
+    // The SSRF check on cdpUrl was already performed at the start of this
+    // function, so we can return it directly.
+    if (isWebSocketUrl(cdpUrl)) {
+      return cdpUrl;
+    }
     return null;
   }
-  const normalizedWsUrl = normalizeCdpWsUrl(wsUrl, cdpUrl);
+  const normalizedWsUrl = normalizeCdpWsUrl(wsUrl, discoveryUrl);
   await assertCdpEndpointAllowed(normalizedWsUrl, ssrfPolicy);
   return normalizedWsUrl;
-}
-
-async function canRunCdpHealthCommand(
-  wsUrl: string,
-  timeoutMs = CHROME_WS_READY_TIMEOUT_MS,
-): Promise<boolean> {
-  return await new Promise<boolean>((resolve) => {
-    const ws = openCdpWebSocket(wsUrl, {
-      handshakeTimeoutMs: timeoutMs,
-    });
-    let settled = false;
-    const onMessage = (raw: Parameters<typeof rawDataToString>[0]) => {
-      if (settled) {
-        return;
-      }
-      let parsed: { id?: unknown; result?: unknown } | null = null;
-      try {
-        parsed = JSON.parse(rawDataToString(raw)) as { id?: unknown; result?: unknown };
-      } catch {
-        return;
-      }
-      if (parsed?.id !== 1) {
-        return;
-      }
-      finish(Boolean(parsed.result && typeof parsed.result === "object"));
-    };
-
-    const finish = (value: boolean) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      ws.off("message", onMessage);
-      try {
-        ws.close();
-      } catch {
-        // ignore
-      }
-      resolve(value);
-    };
-    const timer = setTimeout(
-      () => {
-        try {
-          ws.terminate();
-        } catch {
-          // ignore
-        }
-        finish(false);
-      },
-      Math.max(50, timeoutMs + 25),
-    );
-
-    ws.once("open", () => {
-      try {
-        ws.send(
-          JSON.stringify({
-            id: 1,
-            method: "Browser.getVersion",
-          }),
-        );
-      } catch {
-        finish(false);
-      }
-    });
-
-    ws.on("message", onMessage);
-
-    ws.once("error", () => {
-      finish(false);
-    });
-    ws.once("close", () => {
-      finish(false);
-    });
-  });
 }
 
 export async function isChromeCdpReady(
@@ -295,11 +245,11 @@ export async function isChromeCdpReady(
   handshakeTimeoutMs = CHROME_WS_READY_TIMEOUT_MS,
   ssrfPolicy?: SsrFPolicy,
 ): Promise<boolean> {
-  const wsUrl = await getChromeWebSocketUrl(cdpUrl, timeoutMs, ssrfPolicy).catch(() => null);
-  if (!wsUrl) {
-    return false;
+  const diagnostic = await diagnoseChromeCdp(cdpUrl, timeoutMs, handshakeTimeoutMs, ssrfPolicy);
+  if (!diagnostic.ok) {
+    log.debug(formatChromeCdpDiagnostic(diagnostic));
   }
-  return await canRunCdpHealthCommand(wsUrl, handshakeTimeoutMs);
+  return diagnostic.ok;
 }
 
 export async function launchOpenClawChrome(
@@ -418,6 +368,9 @@ export async function launchOpenClawChrome(
   }
 
   if (!(await isChromeReachable(profile.cdpUrl))) {
+    const diagnosticText = await diagnoseChromeCdp(profile.cdpUrl)
+      .then(formatChromeCdpDiagnostic)
+      .catch((err) => `CDP diagnostic failed: ${safeChromeCdpErrorMessage(err)}.`);
     const stderrOutput =
       normalizeOptionalString(Buffer.concat(stderrChunks).toString("utf8")) ?? "";
     const stderrHint = stderrOutput
@@ -433,7 +386,7 @@ export async function launchOpenClawChrome(
       // ignore
     }
     throw new Error(
-      `Failed to start Chrome CDP on port ${profile.cdpPort} for profile "${profile.name}".${sandboxHint}${stderrHint}`,
+      `Failed to start Chrome CDP on port ${profile.cdpPort} for profile "${profile.name}". ${diagnosticText}${sandboxHint}${stderrHint}`,
     );
   }
 

@@ -34,6 +34,13 @@ type PtyModule = {
 
 export type PtyAdapter = SpawnProcessAdapter;
 
+let ptyModulePromise: Promise<PtyModule> | null = null;
+
+async function loadPtyModule(): Promise<PtyModule> {
+  ptyModulePromise ??= import("@lydell/node-pty") as Promise<unknown> as Promise<PtyModule>;
+  return ptyModulePromise;
+}
+
 export async function createPtyAdapter(params: {
   shell: string;
   args: string[];
@@ -43,7 +50,7 @@ export async function createPtyAdapter(params: {
   rows?: number;
   name?: string;
 }): Promise<PtyAdapter> {
-  const module = (await import("@lydell/node-pty")) as unknown as PtyModule;
+  const module = await loadPtyModule();
   const spawn = module.spawn ?? module.default?.spawn;
   if (!spawn) {
     throw new Error("PTY support is unavailable (node-pty spawn not found).");

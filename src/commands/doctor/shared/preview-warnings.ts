@@ -1,5 +1,14 @@
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 
+type ChannelDoctorModule = typeof import("./channel-doctor.js");
+
+let channelDoctorModulePromise: Promise<ChannelDoctorModule> | undefined;
+
+function loadChannelDoctorModule(): Promise<ChannelDoctorModule> {
+  channelDoctorModulePromise ??= import("./channel-doctor.js");
+  return channelDoctorModulePromise;
+}
+
 function hasRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -89,7 +98,7 @@ export async function collectDoctorPreviewWarnings(params: {
   }
 
   if (hasChannelConfig) {
-    const { collectChannelDoctorPreviewWarnings } = await import("./channel-doctor.js");
+    const { collectChannelDoctorPreviewWarnings } = await loadChannelDoctorModule();
     const channelDoctorWarnings = await collectChannelDoctorPreviewWarnings({
       cfg: params.cfg,
       doctorFixCommand: params.doctorFixCommand,
@@ -144,7 +153,7 @@ export async function collectDoctorPreviewWarnings(params: {
   }
 
   if (hasChannelConfig) {
-    const { collectChannelDoctorEmptyAllowlistExtraWarnings } = await import("./channel-doctor.js");
+    const { collectChannelDoctorEmptyAllowlistExtraWarnings } = await loadChannelDoctorModule();
     const { scanEmptyAllowlistPolicyWarnings } = await import("./empty-allowlist-scan.js");
     const emptyAllowlistWarnings = scanEmptyAllowlistPolicyWarnings(params.cfg, {
       doctorFixCommand: params.doctorFixCommand,

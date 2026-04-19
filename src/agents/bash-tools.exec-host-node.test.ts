@@ -1,5 +1,8 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+type StrictInlineEvalBoundary =
+  typeof import("./bash-tools.exec-host-shared.js").enforceStrictInlineEvalApprovalBoundary;
+
 const INLINE_EVAL_HIT = {
   executable: "python3",
   normalizedExecutable: "python3",
@@ -53,15 +56,10 @@ const createExecApprovalDecisionStateMock = vi.hoisted(() =>
 const buildExecApprovalPendingToolResultMock = vi.hoisted(() => vi.fn());
 const sendExecApprovalFollowupResultMock = vi.hoisted(() => vi.fn(async () => undefined));
 const enforceStrictInlineEvalApprovalBoundaryMock = vi.hoisted(() =>
-  vi.fn(
-    (value: {
-      approvedByAsk: boolean;
-      deniedReason: string | null;
-    }): {
-      approvedByAsk: boolean;
-      deniedReason: string | null;
-    } => value,
-  ),
+  vi.fn<StrictInlineEvalBoundary>((value) => ({
+    approvedByAsk: value.approvedByAsk,
+    deniedReason: value.deniedReason,
+  })),
 );
 const registerExecApprovalRequestForHostOrThrowMock = vi.hoisted(() =>
   vi.fn(async () => undefined),
@@ -229,9 +227,10 @@ describe("executeNodeHostCommand", () => {
     });
     sendExecApprovalFollowupResultMock.mockReset();
     enforceStrictInlineEvalApprovalBoundaryMock.mockReset();
-    enforceStrictInlineEvalApprovalBoundaryMock.mockImplementation(
-      (value: { approvedByAsk: boolean; deniedReason: string | null }) => value,
-    );
+    enforceStrictInlineEvalApprovalBoundaryMock.mockImplementation((value) => ({
+      approvedByAsk: value.approvedByAsk,
+      deniedReason: value.deniedReason,
+    }));
     detectInterpreterInlineEvalArgvMock.mockReset();
     detectInterpreterInlineEvalArgvMock.mockReturnValue(null);
     registerExecApprovalRequestForHostOrThrowMock.mockReset();

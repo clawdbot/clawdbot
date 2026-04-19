@@ -1221,7 +1221,7 @@ describe("applyExtraParamsToAgent", () => {
     });
   });
 
-  it("keeps valid Google thinkingBudget unchanged", () => {
+  it("rewrites Gemini 3 thinkingBudget to thinkingLevel", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {
@@ -1252,7 +1252,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads[0]?.config).toEqual({
       thinkingConfig: {
         includeThoughts: true,
-        thinkingBudget: 2048,
+        thinkingLevel: "HIGH",
       },
     });
   });

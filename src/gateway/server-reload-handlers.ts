@@ -50,7 +50,12 @@ type GatewayHotReloadState = {
   channelHealthMonitor: ChannelHealthMonitor | null;
 };
 
-export function createGatewayReloadHandlers(params: {
+type GatewayReloadLog = {
+  info: (msg: string) => void;
+  warn: (msg: string) => void;
+};
+
+type GatewayReloadHandlerParams = {
   deps: CliDeps;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   getState: () => GatewayHotReloadState;
@@ -64,9 +69,31 @@ export function createGatewayReloadHandlers(params: {
   };
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   logCron: { error: (msg: string) => void };
-  logReload: { info: (msg: string) => void; warn: (msg: string) => void };
+  logReload: GatewayReloadLog;
   createHealthMonitor: (config: OpenClawConfig) => ChannelHealthMonitor | null;
-}) {
+};
+
+type ManagedGatewayConfigReloaderParams = Omit<
+  GatewayReloadHandlerParams,
+  "createHealthMonitor" | "logReload"
+> & {
+  minimalTestGateway: boolean;
+  initialConfig: OpenClawConfig;
+  initialInternalWriteHash: string | null;
+  watchPath: string;
+  readSnapshot: typeof import("../config/config.js").readConfigFileSnapshot;
+  subscribeToWrites: typeof import("../config/config.js").registerConfigWriteListener;
+  logReload: GatewayReloadLog & {
+    error: (msg: string) => void;
+  };
+  channelManager: GatewayChannelManager;
+  activateRuntimeSecrets: ActivateRuntimeSecrets;
+  resolveSharedGatewaySessionGenerationForConfig: (config: OpenClawConfig) => string | undefined;
+  sharedGatewaySessionGenerationState: SharedGatewaySessionGenerationState;
+  clients: Iterable<SharedGatewayAuthClient>;
+};
+
+export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) {
   const applyHotReload = async (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => {
     setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
     const state = params.getState();
@@ -246,37 +273,7 @@ export function createGatewayReloadHandlers(params: {
   return { applyHotReload, requestGatewayRestart };
 }
 
-export function startManagedGatewayConfigReloader(params: {
-  minimalTestGateway: boolean;
-  initialConfig: OpenClawConfig;
-  initialInternalWriteHash: string | null;
-  watchPath: string;
-  readSnapshot: typeof import("../config/config.js").readConfigFileSnapshot;
-  subscribeToWrites: typeof import("../config/config.js").registerConfigWriteListener;
-  deps: CliDeps;
-  broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
-  getState: () => GatewayHotReloadState;
-  setState: (state: GatewayHotReloadState) => void;
-  startChannel: (name: ChannelKind) => Promise<void>;
-  stopChannel: (name: ChannelKind) => Promise<void>;
-  logHooks: {
-    info: (msg: string) => void;
-    warn: (msg: string) => void;
-    error: (msg: string) => void;
-  };
-  logChannels: { info: (msg: string) => void; error: (msg: string) => void };
-  logCron: { error: (msg: string) => void };
-  logReload: {
-    info: (msg: string) => void;
-    warn: (msg: string) => void;
-    error: (msg: string) => void;
-  };
-  channelManager: GatewayChannelManager;
-  activateRuntimeSecrets: ActivateRuntimeSecrets;
-  resolveSharedGatewaySessionGenerationForConfig: (config: OpenClawConfig) => string | undefined;
-  sharedGatewaySessionGenerationState: SharedGatewaySessionGenerationState;
-  clients: Iterable<SharedGatewayAuthClient>;
-}) {
+export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigReloaderParams) {
   if (params.minimalTestGateway) {
     return { stop: async () => {} };
   }

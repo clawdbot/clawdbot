@@ -8,9 +8,11 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { WebSocketServer } from "ws";
 import {
   decorateOpenClawProfile,
+  diagnoseChromeCdp,
   ensureProfileCleanExit,
   findChromeExecutableMac,
   findChromeExecutableWindows,
+  formatChromeCdpDiagnostic,
   getChromeWebSocketUrl,
   isChromeCdpReady,
   isChromeReachable,
@@ -312,6 +314,22 @@ describe("browser chrome helpers", () => {
     await expect(isChromeReachable("http://127.0.0.1:12345", 50)).resolves.toBe(false);
   });
 
+  it("diagnoses /json/version responses that omit the websocket URL", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ Browser: "Chrome/Mock" }),
+      } as unknown as Response),
+    );
+
+    await expect(diagnoseChromeCdp("http://127.0.0.1:12345", 50, 50)).resolves.toMatchObject({
+      ok: false,
+      code: "missing_websocket_debugger_url",
+      cdpUrl: "http://127.0.0.1:12345",
+    });
+  });
+
   it("allows loopback CDP probes while still blocking non-loopback private targets in strict SSRF mode", async () => {
     const fetchSpy = vi
       .fn()
@@ -417,14 +435,117 @@ describe("browser chrome helpers", () => {
     });
   });
 
-  it("probes WebSocket URLs via handshake instead of HTTP", async () => {
-    // For ws:// URLs, isChromeReachable should NOT call fetch at all —
-    // it should attempt a WebSocket handshake instead.
+  it("diagnoses stale websocket command channels with the discovered websocket URL", async () => {
+    await withMockChromeCdpServer({
+      wsPath: "/devtools/browser/stale-diagnostic",
+      onConnection: (wss) => wss.on("connection", (_ws) => {}),
+      run: async (baseUrl) => {
+        const diagnostic = await diagnoseChromeCdp(baseUrl, 300, 150);
+        expect(diagnostic).toMatchObject({
+          ok: false,
+          code: "websocket_health_command_timeout",
+        });
+        expect(diagnostic.wsUrl).toMatch(/\/devtools\/browser\/stale-diagnostic$/);
+      },
+    });
+  });
+
+  it("formats diagnostics with redacted CDP credentials", () => {
+    const formatted = formatChromeCdpDiagnostic({
+      ok: false,
+      code: "websocket_handshake_failed",
+      cdpUrl: "https://user:pass@browserless.example.com?token=supersecret123",
+      wsUrl: "wss://user:pass@browserless.example.com/devtools/browser/1?token=supersecret123",
+      message: "connect ECONNREFUSED browserless.example.com",
+      elapsedMs: 12,
+    });
+
+    expect(formatted).toContain("websocket_handshake_failed");
+    expect(formatted).toContain("https://browserless.example.com/?token=***");
+    expect(formatted).toContain("wss://browserless.example.com/devtools/browser/1?token=***");
+    expect(formatted).not.toContain("user");
+    expect(formatted).not.toContain("pass");
+    expect(formatted).not.toContain("supersecret123");
+  });
+
+  it("probes direct ws:// CDP URLs (with /devtools/ path) via handshake instead of HTTP", async () => {
+    // A direct WS endpoint like ws://host/devtools/browser/<uuid> is already
+    // the handshake target — isChromeReachable must NOT hit /json/version.
     const fetchSpy = vi.fn().mockRejectedValue(new Error("should not be called"));
     vi.stubGlobal("fetch", fetchSpy);
     // No WS server listening → handshake fails → not reachable
-    await expect(isChromeReachable("ws://127.0.0.1:19999", 50)).resolves.toBe(false);
+    await expect(isChromeReachable("ws://127.0.0.1:19999/devtools/browser/ABC", 50)).resolves.toBe(
+      false,
+    );
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("falls back to HTTP /json/version discovery for a bare ws:// CDP URL (issue #68027)", async () => {
+    // A user-supplied cdpUrl of `ws://host:port` without a /devtools/ path
+    // points at Chrome's debug root; Chrome only accepts WS upgrades on the
+    // specific path returned by `GET /json/version`. The reachability probe
+    // must normalise the ws scheme to http for discovery, not attempt a
+    // handshake at the bare root.
+    await withMockChromeCdpServer({
+      wsPath: "/devtools/browser/DISCOVERED",
+      run: async (baseUrl) => {
+        const url = new URL(baseUrl);
+        const wsOnlyBase = `ws://${url.host}`;
+        await expect(isChromeReachable(wsOnlyBase, 300)).resolves.toBe(true);
+        await expect(getChromeWebSocketUrl(wsOnlyBase, 300)).resolves.toBe(
+          `ws://${url.host}/devtools/browser/DISCOVERED`,
+        );
+      },
+    });
+  });
+
+  it("reports unreachable when a bare ws:// CDP URL points at a server with no /json/version and refuses WS", async () => {
+    // Negative counterpart to the #68027 happy path — a bare ws URL
+    // pointed at a port that neither serves /json/version nor accepts
+    // WS upgrades must resolve false without hanging.
+    const fetchSpy = vi.fn().mockRejectedValue(new Error("connection refused"));
+    vi.stubGlobal("fetch", fetchSpy);
+    // Port 19998 is not listening; the WS fallback probe will also fail.
+    await expect(isChromeReachable("ws://127.0.0.1:19998", 50)).resolves.toBe(false);
+    // fetch() must have been invoked — HTTP discovery is always tried first.
+    expect(fetchSpy).toHaveBeenCalled();
+  });
+
+  it("falls back to a direct WS probe when /json/version is unavailable for a bare ws:// URL", async () => {
+    // Covers the WS-fallback path in isChromeReachable: /json/version returns
+    // nothing (simulated by empty response) but the WS socket IS accepting
+    // connections (Browserless/Browserbase-style provider).
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({}), // empty — no webSocketDebuggerUrl
+      } as unknown as Response),
+    );
+    // A real WS server accepts the handshake.
+    const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+    await new Promise<void>((resolve) => wss.once("listening", () => resolve()));
+    const port = (wss.address() as AddressInfo).port;
+    try {
+      await expect(isChromeReachable(`ws://127.0.0.1:${port}`, 500)).resolves.toBe(true);
+    } finally {
+      await new Promise<void>((resolve) => wss.close(() => resolve()));
+    }
+  });
+
+  it("returns the original ws:// URL from getChromeWebSocketUrl when /json/version provides no debugger URL", async () => {
+    // Covers the getChromeWebSocketUrl WS-fallback: discovery succeeds but
+    // webSocketDebuggerUrl is absent — the original URL is returned as-is.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({}),
+      } as unknown as Response),
+    );
+    await expect(getChromeWebSocketUrl("ws://127.0.0.1:12345", 50)).resolves.toBe(
+      "ws://127.0.0.1:12345",
+    );
   });
 
   it("stopOpenClawChrome no-ops when process is already killed", async () => {

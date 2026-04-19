@@ -5,6 +5,7 @@ import type { FileHandle } from "node:fs/promises";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
 import { logWarn } from "../logger.js";
 import { resolveBoundaryPath } from "./boundary-path.js";
 import { sameFileIdentity } from "./file-identity.js";
@@ -1107,9 +1108,7 @@ async function copyFileWithinRootLegacy(
     targetStream.once("close", () => {
       tempClosedByStream = true;
     });
-    await import("node:stream/promises").then(({ pipeline }) =>
-      pipeline(sourceStream, targetStream),
-    );
+    await pipeline(sourceStream, targetStream);
     const writtenStat = await fs.stat(tempPath);
     if (!tempClosedByStream) {
       await tempHandle.close().catch(() => {});

@@ -14,6 +14,24 @@ type StageBundledPluginRuntimeDeps = (params?: {
   installPluginRuntimeDepsImpl?: (params: StageRuntimeDepsInstallParams) => void;
 }) => void;
 
+type BaileysHotfixParams = {
+  chmodSync?: (path: string, mode: number) => void;
+  packageRoot?: string;
+  createTempPath?: (targetPath: string) => string;
+  writeFileSync?: (pathOrFd: string | number, value: string, encoding?: string) => void;
+};
+
+type BaileysHotfixResult = {
+  applied: boolean;
+  reason: string;
+  targetPath?: string;
+  error?: string;
+};
+
+type PostinstallBundledPluginsModule = {
+  applyBaileysEncryptedStreamFinishHotfix: (params?: BaileysHotfixParams) => BaileysHotfixResult;
+};
+
 async function loadStageBundledPluginRuntimeDeps(): Promise<StageBundledPluginRuntimeDeps> {
   const moduleUrl = new URL("../../scripts/stage-bundled-plugin-runtime-deps.mjs", import.meta.url);
   const loaded = (await import(moduleUrl.href)) as {
@@ -22,33 +40,9 @@ async function loadStageBundledPluginRuntimeDeps(): Promise<StageBundledPluginRu
   return loaded.stageBundledPluginRuntimeDeps;
 }
 
-async function loadPostinstallBundledPluginsModule(): Promise<{
-  applyBaileysEncryptedStreamFinishHotfix: (params?: {
-    chmodSync?: (path: string, mode: number) => void;
-    packageRoot?: string;
-    createTempPath?: (targetPath: string) => string;
-    writeFileSync?: (pathOrFd: string | number, value: string, encoding?: string) => void;
-  }) => {
-    applied: boolean;
-    reason: string;
-    targetPath?: string;
-    error?: string;
-  };
-}> {
+async function loadPostinstallBundledPluginsModule(): Promise<PostinstallBundledPluginsModule> {
   const moduleUrl = new URL("../../scripts/postinstall-bundled-plugins.mjs", import.meta.url);
-  return (await import(moduleUrl.href)) as {
-    applyBaileysEncryptedStreamFinishHotfix: (params?: {
-      chmodSync?: (path: string, mode: number) => void;
-      packageRoot?: string;
-      createTempPath?: (targetPath: string) => string;
-      writeFileSync?: (pathOrFd: string | number, value: string, encoding?: string) => void;
-    }) => {
-      applied: boolean;
-      reason: string;
-      targetPath?: string;
-      error?: string;
-    };
-  };
+  return (await import(moduleUrl.href)) as PostinstallBundledPluginsModule;
 }
 
 const tempDirs: string[] = [];

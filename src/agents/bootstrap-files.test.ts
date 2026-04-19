@@ -60,6 +60,18 @@ function registerMalformedBootstrapFileHook() {
   });
 }
 
+async function createHeartbeatAgentsWorkspace() {
+  const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+  await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "check inbox", "utf8");
+  await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "repo rules", "utf8");
+  return workspaceDir;
+}
+
+function expectHeartbeatExcludedAndAgentsKept(files: WorkspaceBootstrapFile[]) {
+  expect(files.some((file) => file.name === "HEARTBEAT.md")).toBe(false);
+  expect(files.some((file) => file.name === "AGENTS.md")).toBe(true);
+}
+
 describe("resolveBootstrapFilesForRun", () => {
   beforeEach(() => clearInternalHooks());
   afterEach(() => clearInternalHooks());
@@ -148,9 +160,7 @@ describe("resolveBootstrapContextForRun", () => {
   });
 
   it("drops HEARTBEAT.md for non-heartbeat runs when the heartbeat prompt section is disabled", async () => {
-    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
-    await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "check inbox", "utf8");
-    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "repo rules", "utf8");
+    const workspaceDir = await createHeartbeatAgentsWorkspace();
 
     const files = await resolveBootstrapFilesForRun({
       workspaceDir,
@@ -166,14 +176,11 @@ describe("resolveBootstrapContextForRun", () => {
       },
     });
 
-    expect(files.some((file) => file.name === "HEARTBEAT.md")).toBe(false);
-    expect(files.some((file) => file.name === "AGENTS.md")).toBe(true);
+    expectHeartbeatExcludedAndAgentsKept(files);
   });
 
   it("drops HEARTBEAT.md for non-heartbeat runs when the heartbeat cadence is disabled", async () => {
-    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
-    await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "check inbox", "utf8");
-    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "repo rules", "utf8");
+    const workspaceDir = await createHeartbeatAgentsWorkspace();
 
     const files = await resolveBootstrapFilesForRun({
       workspaceDir,
@@ -189,8 +196,7 @@ describe("resolveBootstrapContextForRun", () => {
       },
     });
 
-    expect(files.some((file) => file.name === "HEARTBEAT.md")).toBe(false);
-    expect(files.some((file) => file.name === "AGENTS.md")).toBe(true);
+    expectHeartbeatExcludedAndAgentsKept(files);
   });
 
   it("keeps HEARTBEAT.md for actual heartbeat runs even when the prompt section is disabled", async () => {

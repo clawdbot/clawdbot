@@ -256,11 +256,9 @@ describe("createTelegramBot channel_post media", () => {
     });
     sendMessageSpy.mockClear();
     replySpy.mockClear();
-    const fetchSpy = vi
-      .spyOn(globalThis, "fetch")
-      .mockImplementation(async () =>
-        Promise.reject(new Error("MediaFetchError: Failed to fetch media")),
-      );
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      throw new Error("MediaFetchError: Failed to fetch media");
+    });
 
     try {
       createTelegramBot({ token: "tok" });

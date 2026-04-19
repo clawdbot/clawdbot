@@ -27,6 +27,42 @@ function trimPromptText(value: string | null | undefined): string {
   return value?.trim() ?? "";
 }
 
+function isDefaultWhatsAppAccountKey(accountId: string): boolean {
+  return accountId.trim().toLowerCase() === DEFAULT_ACCOUNT_ID;
+}
+
+function shouldWriteDefaultWhatsAppAccountConfigAtAccountScope(cfg: OpenClawConfig): boolean {
+  const accounts = cfg.channels?.whatsapp?.accounts;
+  if (!accounts) {
+    return false;
+  }
+  if (accounts.default) {
+    return true;
+  }
+  return Object.keys(accounts).some((accountId) => !isDefaultWhatsAppAccountKey(accountId));
+}
+
+function resolveDefaultWhatsAppAccountWriteKey(cfg: OpenClawConfig): string {
+  const accounts = cfg.channels?.whatsapp?.accounts;
+  if (!accounts) {
+    return DEFAULT_ACCOUNT_ID;
+  }
+  const match = Object.keys(accounts).find((accountId) => isDefaultWhatsAppAccountKey(accountId));
+  return match ?? DEFAULT_ACCOUNT_ID;
+}
+
+function resolveWhatsAppConfigPathPrefix(cfg: OpenClawConfig, accountId: string): string {
+  if (
+    accountId === DEFAULT_ACCOUNT_ID &&
+    shouldWriteDefaultWhatsAppAccountConfigAtAccountScope(cfg)
+  ) {
+    return `channels.whatsapp.accounts.${resolveDefaultWhatsAppAccountWriteKey(cfg)}`;
+  }
+  return accountId === DEFAULT_ACCOUNT_ID
+    ? "channels.whatsapp"
+    : `channels.whatsapp.accounts.${accountId}`;
+}
+
 function mergeWhatsAppConfig(
   cfg: OpenClawConfig,
   accountId: string,
@@ -35,7 +71,8 @@ function mergeWhatsAppConfig(
 ): OpenClawConfig {
   const channelConfig: WhatsAppConfig = { ...cfg.channels?.whatsapp };
   const mutableChannelConfig = channelConfig as Record<string, unknown>;
-  if (accountId === DEFAULT_ACCOUNT_ID) {
+  const targetPathPrefix = resolveWhatsAppConfigPathPrefix(cfg, accountId);
+  if (targetPathPrefix === "channels.whatsapp") {
     for (const [key, value] of Object.entries(patch)) {
       if (value === undefined) {
         if (options?.unsetOnUndefined?.includes(key)) {
@@ -56,7 +93,16 @@ function mergeWhatsAppConfig(
   const accounts = {
     ...(channelConfig.accounts as Record<string, WhatsAppAccountConfig> | undefined),
   };
-  const nextAccount: WhatsAppAccountConfig = { ...accounts[accountId] };
+  const targetAccountId =
+    accountId === DEFAULT_ACCOUNT_ID ? resolveDefaultWhatsAppAccountWriteKey(cfg) : accountId;
+  const lowerDefaultAccount =
+    accountId === DEFAULT_ACCOUNT_ID && targetAccountId !== DEFAULT_ACCOUNT_ID
+      ? accounts[DEFAULT_ACCOUNT_ID]
+      : undefined;
+  const nextAccount: WhatsAppAccountConfig = {
+    ...accounts[targetAccountId],
+    ...lowerDefaultAccount,
+  };
   const mutableNextAccount = nextAccount as Record<string, unknown>;
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined) {
@@ -67,7 +113,10 @@ function mergeWhatsAppConfig(
     }
     mutableNextAccount[key] = value;
   }
-  accounts[accountId] = nextAccount;
+  accounts[targetAccountId] = nextAccount;
+  if (lowerDefaultAccount) {
+    delete accounts[DEFAULT_ACCOUNT_ID];
+  }
   return {
     ...cfg,
     channels: {
@@ -204,14 +253,9 @@ async function promptWhatsAppDmAccess(params: {
   const existingPolicy = account.dmPolicy ?? "pairing";
   const existingAllowFrom = account.allowFrom ?? [];
   const existingLabel = existingAllowFrom.length > 0 ? existingAllowFrom.join(", ") : "unset";
-  const policyKey =
-    accountId === DEFAULT_ACCOUNT_ID
-      ? "channels.whatsapp.dmPolicy"
-      : `channels.whatsapp.accounts.${accountId}.dmPolicy`;
-  const allowFromKey =
-    accountId === DEFAULT_ACCOUNT_ID
-      ? "channels.whatsapp.allowFrom"
-      : `channels.whatsapp.accounts.${accountId}.allowFrom`;
+  const configPathPrefix = resolveWhatsAppConfigPathPrefix(params.cfg, accountId);
+  const policyKey = `${configPathPrefix}.dmPolicy`;
+  const allowFromKey = `${configPathPrefix}.allowFrom`;
 
   if (params.forceAllowFrom) {
     return await applyWhatsAppOwnerAllowlist({

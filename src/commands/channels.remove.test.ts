@@ -8,8 +8,8 @@ import {
 } from "./channel-setup/plugin-install.js";
 import { configMocks } from "./channels.mock-harness.js";
 import {
-  createMSTeamsCatalogEntry,
-  createMSTeamsDeletePlugin,
+  createExternalChatCatalogEntry,
+  createExternalChatDeletePlugin,
 } from "./channels.plugin-install.test-helpers.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -86,22 +86,22 @@ describe("channelsRemoveCommand", () => {
       ...baseConfigSnapshot,
       config: {
         channels: {
-          msteams: {
+          "external-chat": {
             enabled: true,
-            tenantId: "tenant-1",
+            token: "token-1",
           },
         },
       },
     });
-    const catalogEntry: ChannelPluginCatalogEntry = createMSTeamsCatalogEntry();
+    const catalogEntry: ChannelPluginCatalogEntry = createExternalChatCatalogEntry();
     catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([catalogEntry]);
-    const scopedPlugin = createMSTeamsDeletePlugin();
+    const scopedPlugin = createExternalChatDeletePlugin();
     vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel)
       .mockReturnValueOnce(createTestRegistry())
       .mockReturnValueOnce(
         createTestRegistry([
           {
-            pluginId: "@openclaw/msteams-plugin",
+            pluginId: "@vendor/external-chat-plugin",
             plugin: scopedPlugin,
             source: "test",
           },
@@ -110,7 +110,7 @@ describe("channelsRemoveCommand", () => {
 
     await channelsRemoveCommand(
       {
-        channel: "msteams",
+        channel: "external-chat",
         account: "default",
         delete: true,
       },
@@ -125,7 +125,7 @@ describe("channelsRemoveCommand", () => {
     expect(configMocks.writeConfigFile).toHaveBeenCalledWith(
       expect.not.objectContaining({
         channels: expect.objectContaining({
-          msteams: expect.anything(),
+          "external-chat": expect.anything(),
         }),
       }),
     );

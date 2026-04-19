@@ -24,6 +24,7 @@ import type { ReplyToMode } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
+import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { OpenClawPluginApi } from "../plugins/types.js";
@@ -227,11 +228,22 @@ export type ChannelOutboundSessionRouteParams = Parameters<
   NonNullable<ChannelMessagingAdapter["resolveOutboundSessionRoute"]>
 >[0];
 
-var cachedSdkChatChannelMeta: ReturnType<typeof buildChatChannelMetaById> | undefined;
+var cachedSdkChatChannelMeta:
+  | {
+      cacheKey: string;
+      metaById: ReturnType<typeof buildChatChannelMetaById>;
+    }
+  | undefined;
 
 function resolveSdkChatChannelMeta(id: string) {
-  cachedSdkChatChannelMeta ??= buildChatChannelMetaById();
-  return cachedSdkChatChannelMeta[id];
+  const cacheKey = resolveBundledPluginsDir(process.env) ?? "";
+  if (cachedSdkChatChannelMeta?.cacheKey !== cacheKey) {
+    cachedSdkChatChannelMeta = {
+      cacheKey,
+      metaById: buildChatChannelMetaById(),
+    };
+  }
+  return cachedSdkChatChannelMeta.metaById[id];
 }
 
 export function getChatChannelMeta(id: ChatChannelId): ChannelMeta {
@@ -435,6 +447,7 @@ type ChatChannelSecurityOptions<TResolvedAccount extends { accountId?: string | 
     approveChannelId?: string;
     approveHint?: string;
     normalizeEntry?: (raw: string) => string;
+    inheritSharedDefaultsFromDefaultAccount?: boolean;
   };
   collectWarnings?: ChannelSecurityAdapter<TResolvedAccount>["collectWarnings"];
   collectAuditFindings?: ChannelSecurityAdapter<TResolvedAccount>["collectAuditFindings"];
@@ -543,6 +556,8 @@ function resolveChatChannelSecurity<TResolvedAccount extends { accountId?: strin
         approveChannelId: security.dm.approveChannelId,
         approveHint: security.dm.approveHint,
         normalizeEntry: security.dm.normalizeEntry,
+        inheritSharedDefaultsFromDefaultAccount:
+          security.dm.inheritSharedDefaultsFromDefaultAccount,
       }),
     ...(security.collectWarnings ? { collectWarnings: security.collectWarnings } : {}),
     ...(security.collectAuditFindings

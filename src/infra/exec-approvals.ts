@@ -854,13 +854,12 @@ export function recordAllowlistUse(
   const nextAllowlist = allowlist.map((item) =>
     item.pattern === entry.pattern &&
     (item.argPattern ?? undefined) === (entry.argPattern ?? undefined)
-      ? {
-          ...item,
+      ? Object.assign({}, item, {
           id: item.id ?? crypto.randomUUID(),
           lastUsedAt: Date.now(),
           lastUsedCommand: command,
           lastResolvedPath: resolvedPath,
-        }
+        })
       : item,
   );
   agents[target] = { ...existing, allowlist: nextAllowlist };

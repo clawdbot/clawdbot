@@ -1,9 +1,9 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
+import { liveProvidersShareOwningPlugin } from "./live-provider-owner.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 type ModelTarget = {
@@ -51,38 +51,6 @@ function parseModelTarget(raw: string): ModelTarget | null {
   };
 }
 
-function hasSharedOwner(
-  left: string,
-  right: string,
-  params: {
-    config?: OpenClawConfig;
-    workspaceDir?: string;
-    env?: NodeJS.ProcessEnv;
-    ownerCache: Map<string, readonly string[]>;
-  },
-): boolean {
-  const resolveOwners = (provider: string): readonly string[] => {
-    const normalized = normalizeProviderId(provider);
-    const cached = params.ownerCache.get(normalized);
-    if (cached) {
-      return cached;
-    }
-    const owners =
-      resolveOwningPluginIdsForProvider({
-        provider: normalized,
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        env: params.env,
-      }) ?? [];
-    params.ownerCache.set(normalized, owners);
-    return owners;
-  };
-
-  const leftOwners = resolveOwners(left);
-  const rightOwners = resolveOwners(right);
-  return leftOwners.some((owner) => rightOwners.includes(owner));
-}
-
 export function createLiveTargetMatcher(params: {
   providerFilter: Set<string> | null;
   modelFilter: Set<string> | null;
@@ -108,7 +76,7 @@ export function createLiveTargetMatcher(params: {
           return true;
         }
         if (
-          hasSharedOwner(normalizedRequested, normalizedProvider, {
+          liveProvidersShareOwningPlugin(normalizedRequested, normalizedProvider, {
             config: params.config,
             workspaceDir: params.workspaceDir,
             env: params.env,
@@ -144,7 +112,7 @@ export function createLiveTargetMatcher(params: {
           return true;
         }
         if (
-          hasSharedOwner(target.provider, normalizedProvider, {
+          liveProvidersShareOwningPlugin(target.provider, normalizedProvider, {
             config: params.config,
             workspaceDir: params.workspaceDir,
             env: params.env,

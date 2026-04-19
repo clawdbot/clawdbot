@@ -449,10 +449,11 @@ export function discoverBundledPluginRuntimeDeps(params = {}) {
   }
 
   return [...deps.values()]
-    .map((dep) => ({
-      ...dep,
-      pluginIds: [...dep.pluginIds].toSorted((a, b) => a.localeCompare(b)),
-    }))
+    .map((dep) =>
+      Object.assign({}, dep, {
+        pluginIds: [...dep.pluginIds].toSorted((a, b) => a.localeCompare(b)),
+      }),
+    )
     .toSorted((a, b) => a.name.localeCompare(b.name));
 }
 

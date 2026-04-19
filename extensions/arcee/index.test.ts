@@ -164,4 +164,48 @@ describe("arcee provider plugin", () => {
       } as never),
     ).toBeUndefined();
   });
+
+  it("canonicalizes stale OpenRouter /v1 config and transport metadata", async () => {
+    const provider = await registerSingleProviderPlugin(arceePlugin);
+
+    expect(
+      provider.normalizeConfig?.({
+        provider: "arcee",
+        providerConfig: {
+          api: "openai-completions",
+          baseUrl: "https://openrouter.ai/v1/",
+          models: [],
+        },
+      } as never),
+    ).toMatchObject({
+      baseUrl: "https://openrouter.ai/api/v1",
+    });
+
+    expect(
+      provider.normalizeResolvedModel?.({
+        modelId: "arcee/trinity-large-thinking",
+        model: {
+          provider: "arcee",
+          id: "trinity-large-thinking",
+          name: "Trinity Large Thinking",
+          api: "openai-completions",
+          baseUrl: "https://openrouter.ai/v1",
+        },
+      } as never),
+    ).toMatchObject({
+      id: "arcee/trinity-large-thinking",
+      baseUrl: "https://openrouter.ai/api/v1",
+    });
+
+    expect(
+      provider.normalizeTransport?.({
+        provider: "arcee",
+        api: "openai-completions",
+        baseUrl: "https://openrouter.ai/v1",
+      } as never),
+    ).toEqual({
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
+    });
+  });
 });

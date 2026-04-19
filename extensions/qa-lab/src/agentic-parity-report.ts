@@ -369,13 +369,20 @@ export function buildQaAgenticParityComparison(params: {
     .map((name) => {
       const candidate = candidateByName.get(name);
       const baseline = baselineByName.get(name);
-      return {
+      const candidateStatus = candidate ? normalizeScenarioStatus(candidate.status) : "missing";
+      const baselineStatus = baseline ? normalizeScenarioStatus(baseline.status) : "missing";
+      const comparison: QaAgenticParityScenarioComparison = {
         name,
-        candidateStatus: candidate ? normalizeScenarioStatus(candidate.status) : "missing",
-        baselineStatus: baseline ? normalizeScenarioStatus(baseline.status) : "missing",
-        ...(candidate?.details ? { candidateDetails: candidate.details } : {}),
-        ...(baseline?.details ? { baselineDetails: baseline.details } : {}),
-      } satisfies QaAgenticParityScenarioComparison;
+        candidateStatus,
+        baselineStatus,
+      };
+      if (candidate?.details) {
+        comparison.candidateDetails = candidate.details;
+      }
+      if (baseline?.details) {
+        comparison.baselineDetails = baseline.details;
+      }
+      return comparison;
     });
 
   const failures: string[] = [];

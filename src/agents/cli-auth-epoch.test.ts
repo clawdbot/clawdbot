@@ -141,4 +141,55 @@ describe("resolveCliAuthEpoch", () => {
     expect(second).not.toBe(first);
     expect(third).not.toBe(second);
   });
+
+  it("can ignore local codex state when the backend is profile-owned", async () => {
+    let localAccess = "local-access-a";
+    let profileRefresh = "profile-refresh-a";
+    setCliAuthEpochTestDeps({
+      readCodexCliCredentialsCached: () => ({
+        type: "oauth",
+        provider: "openai-codex",
+        access: localAccess,
+        refresh: "local-refresh",
+        expires: 1,
+        accountId: "acct-1",
+      }),
+      loadAuthProfileStoreForRuntime: () => ({
+        version: 1,
+        profiles: {
+          "openai-codex:default": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "profile-access",
+            refresh: profileRefresh,
+            expires: 1,
+            accountId: "acct-1",
+          },
+        },
+      }),
+    });
+
+    const first = await resolveCliAuthEpoch({
+      provider: "codex-cli",
+      authProfileId: "openai-codex:default",
+      skipLocalCredential: true,
+    });
+    localAccess = "local-access-b";
+    const second = await resolveCliAuthEpoch({
+      provider: "codex-cli",
+      authProfileId: "openai-codex:default",
+      skipLocalCredential: true,
+    });
+    profileRefresh = "profile-refresh-b";
+    const third = await resolveCliAuthEpoch({
+      provider: "codex-cli",
+      authProfileId: "openai-codex:default",
+      skipLocalCredential: true,
+    });
+
+    expect(first).toBeDefined();
+    expect(second).toBe(first);
+    expect(third).toBeDefined();
+    expect(third).not.toBe(second);
+  });
 });

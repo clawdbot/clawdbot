@@ -10,7 +10,7 @@ import {
   createRunningTaskRun,
   failTaskRunByRunId,
   recordTaskRunProgressByRunId,
-} from "../../tasks/task-executor.js";
+} from "../../tasks/detached-task-runtime.js";
 import { sendMessage } from "../../tasks/task-registry-delivery-runtime.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";

@@ -1,6 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { createAssistantMessageEventStream, streamSimple } from "@mariozechner/pi-ai";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
 import { buildStreamErrorAssistantMessage } from "../../stream-message-shared.js";
 
 const UNHANDLED_STOP_REASON_RE = /^Unhandled stop reason:\s*(.+)$/i;
@@ -90,14 +91,15 @@ function wrapStreamHandleUnhandledStopReason(
     function () {
       const iterator = originalAsyncIterator();
       let emittedSyntheticTerminal = false;
-      return {
-        async next() {
+      return createStreamIteratorWrapper({
+        iterator,
+        next: async (streamIterator) => {
           if (emittedSyntheticTerminal) {
             return { done: true as const, value: undefined };
           }
 
           try {
-            const result = await iterator.next();
+            const result = await streamIterator.next();
             if (!result.done && result.value && typeof result.value === "object") {
               const event = result.value as { error?: unknown };
               patchUnhandledStopReasonInAssistantMessage(event.error);
@@ -126,16 +128,7 @@ function wrapStreamHandleUnhandledStopReason(
             };
           }
         },
-        async return(value?: unknown) {
-          return iterator.return?.(value) ?? { done: true as const, value: undefined };
-        },
-        async throw(error?: unknown) {
-          return iterator.throw?.(error) ?? { done: true as const, value: undefined };
-        },
-        [Symbol.asyncIterator]() {
-          return this;
-        },
-      };
+      });
     };
 
   return stream;

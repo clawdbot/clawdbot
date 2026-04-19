@@ -1,4 +1,3 @@
-import { Container, Separator, TextDisplay } from "@buape/carbon";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -8,7 +7,17 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { getChannelMessageAdapter } from "./channel-adapters.js";
 
-class TestDiscordUiContainer extends Container {}
+class TestTextDisplay {
+  constructor(readonly content: string) {}
+}
+
+class TestSeparator {
+  constructor(readonly options: { divider: boolean; spacing: string }) {}
+}
+
+class TestDiscordUiContainer {
+  constructor(readonly components: Array<TestTextDisplay | TestSeparator>) {}
+}
 
 const discordCrossContextPlugin: Pick<
   ChannelPlugin,
@@ -18,12 +27,12 @@ const discordCrossContextPlugin: Pick<
   messaging: {
     buildCrossContextComponents: ({ originLabel, message, cfg, accountId }) => {
       const trimmed = message.trim();
-      const components: Array<TextDisplay | Separator> = [];
+      const components: Array<TestTextDisplay | TestSeparator> = [];
       if (trimmed) {
-        components.push(new TextDisplay(message));
-        components.push(new Separator({ divider: true, spacing: "small" }));
+        components.push(new TestTextDisplay(message));
+        components.push(new TestSeparator({ divider: true, spacing: "small" }));
       }
-      components.push(new TextDisplay(`*From ${originLabel}*`));
+      components.push(new TestTextDisplay(`*From ${originLabel}*`));
       void cfg;
       void accountId;
       return [new TestDiscordUiContainer(components)];
@@ -68,9 +77,9 @@ describe("getChannelMessageAdapter", () => {
     expect(components).toHaveLength(1);
     expect(container).toBeInstanceOf(TestDiscordUiContainer);
     expect(container?.components).toEqual([
-      expect.any(TextDisplay),
-      expect.any(Separator),
-      expect.any(TextDisplay),
+      expect.any(TestTextDisplay),
+      expect.any(TestSeparator),
+      expect.any(TestTextDisplay),
     ]);
   });
 
@@ -79,12 +88,16 @@ describe("getChannelMessageAdapter", () => {
       message: "Hello from chat",
       originLabel: "Telegram",
       accountId: "primary",
-      expectedComponents: [expect.any(TextDisplay), expect.any(Separator), expect.any(TextDisplay)],
+      expectedComponents: [
+        expect.any(TestTextDisplay),
+        expect.any(TestSeparator),
+        expect.any(TestTextDisplay),
+      ],
     },
     {
       message: "   ",
       originLabel: "Signal",
-      expectedComponents: [expect.any(TextDisplay)],
+      expectedComponents: [expect.any(TestTextDisplay)],
     },
   ])(
     "builds cross-context components for %j",

@@ -341,11 +341,9 @@ describe("pairing store", () => {
         requests?: Array<Record<string, unknown>>;
       };
       const expiredAt = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
-      const requests = (parsed.requests ?? []).map((entry) => ({
-        ...entry,
-        createdAt: expiredAt,
-        lastSeenAt: expiredAt,
-      }));
+      const requests = (parsed.requests ?? []).map((entry) =>
+        Object.assign({}, entry, { createdAt: expiredAt, lastSeenAt: expiredAt }),
+      );
       await writeJsonFixture(filePath, { version: 1, requests });
       expect(await listChannelPairingRequests("demo-pairing-b")).toHaveLength(0);
       const next = await upsertChannelPairingRequest({

@@ -32,6 +32,17 @@ import from this tree directly.
 - For core discovery paths used by Gateway or agent tools, prefer lightweight
   bundled-plugin artifacts first and full channel plugin loading only as a
   fallback.
+- When a caller only needs already-registered plugin fixtures in a test, offer a
+  loaded-plugin-only mode instead of silently falling back to bundled runtime
+  materialization.
+- Put target parsing, thread-binding hints, native command descriptors, message
+  tool descriptors, gateway auth bypass paths, and setup-promotion hints in
+  small plugin-owned helpers reused by both the full channel plugin and any
+  lightweight artifact.
+- If a helper is called repeatedly by tests, install/reset the test plugin
+  registry in the same lifecycle scope as the runtime reset. A `beforeAll`
+  registry with `afterEach` runtime reset is a signal that later tests may fall
+  through to bundled/default runtime loading.
 - Do not mix static and dynamic imports for the same heavy module family across
   a channel boundary change. If the path should stay lazy, keep it lazy end to
   end.

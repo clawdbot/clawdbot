@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createSlackTurnDeliveryTracker,
   isSlackStreamingEnabled,
+  resolveSlackStreamRecipientTeamId,
   resolveSlackStreamingThreadHint,
   shouldEnableSlackPreviewStreaming,
   shouldInitializeSlackDraftStream,
@@ -17,6 +18,79 @@ describe("slack native streaming defaults", () => {
     expect(isSlackStreamingEnabled({ mode: "block", nativeStreaming: true })).toBe(false);
     expect(isSlackStreamingEnabled({ mode: "progress", nativeStreaming: true })).toBe(false);
     expect(isSlackStreamingEnabled({ mode: "off", nativeStreaming: true })).toBe(false);
+  });
+});
+
+describe("slack native streaming recipient team", () => {
+  it("resolves the recipient team through users.info", async () => {
+    const usersInfo = vi.fn(async () => ({
+      user: { team_id: "T_LOOKUP" },
+    }));
+
+    expect(
+      await resolveSlackStreamRecipientTeamId({
+        client: {
+          users: {
+            info: usersInfo,
+          },
+        } as never,
+        token: "xoxb-test",
+        userId: "U_REMOTE",
+        fallbackTeamId: "T_LOCAL",
+      }),
+    ).toBe("T_LOOKUP");
+    expect(usersInfo).toHaveBeenCalledWith({
+      token: "xoxb-test",
+      user: "U_REMOTE",
+    });
+  });
+
+  it("falls back to profile.team when users.info omits user.team_id", async () => {
+    expect(
+      await resolveSlackStreamRecipientTeamId({
+        client: {
+          users: {
+            info: vi.fn(async () => ({
+              user: { profile: { team: "T_PROFILE" } },
+            })),
+          },
+        } as never,
+        token: "xoxb-test",
+        userId: "U_REMOTE",
+        fallbackTeamId: "T_LOCAL",
+      }),
+    ).toBe("T_PROFILE");
+  });
+
+  it("falls back to the monitor team when users.info cannot resolve a team", async () => {
+    expect(
+      await resolveSlackStreamRecipientTeamId({
+        client: {
+          users: {
+            info: vi.fn(async () => {
+              throw new Error("user_not_found");
+            }),
+          },
+        } as never,
+        token: "xoxb-test",
+        userId: "U_REMOTE",
+        fallbackTeamId: "T_LOCAL",
+      }),
+    ).toBe("T_LOCAL");
+  });
+
+  it("falls back to the monitor team when no user id is available", async () => {
+    expect(
+      await resolveSlackStreamRecipientTeamId({
+        client: {
+          users: {
+            info: vi.fn(),
+          },
+        } as never,
+        token: "xoxb-test",
+        fallbackTeamId: "T_LOCAL",
+      }),
+    ).toBe("T_LOCAL");
   });
 });
 

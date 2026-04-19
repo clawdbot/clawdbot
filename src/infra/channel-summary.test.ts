@@ -4,6 +4,14 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { buildChannelSummary } from "./channel-summary.js";
 
+const isFixtureAccountConfigured = (account: unknown) =>
+  Boolean((account as { configured?: boolean }).configured);
+const isFixtureAccountEnabled = (account: unknown) =>
+  Boolean((account as { enabled?: boolean }).enabled);
+const summaryPluginActions = {
+  describeMessageTool: () => ({ actions: ["send"] as const }),
+};
+
 function makeSlackHttpSummaryPlugin(): ChannelPlugin {
   return {
     id: "slack",
@@ -53,12 +61,10 @@ function makeSlackHttpSummaryPlugin(): ChannelPlugin {
         botTokenSource: "config",
         botTokenStatus: "available",
       }),
-      isConfigured: (account) => Boolean((account as { configured?: boolean }).configured),
+      isConfigured: isFixtureAccountConfigured,
       isEnabled: () => true,
     },
-    actions: {
-      describeMessageTool: () => ({ actions: ["send"] }),
-    },
+    actions: summaryPluginActions,
   };
 }
 
@@ -69,6 +75,17 @@ function makeTelegramSummaryPlugin(params: {
   authAgeMs?: number;
   allowFrom?: string[];
 }): ChannelPlugin {
+  const getAccount = () => ({
+    accountId: "primary",
+    name: "Main Bot",
+    enabled: params.enabled,
+    configured: params.configured,
+    linked: params.linked,
+    allowFrom: params.allowFrom ?? [],
+    dmPolicy: "mutuals",
+    tokenSource: "env",
+  });
+
   return {
     id: "telegram",
     meta: {
@@ -82,28 +99,10 @@ function makeTelegramSummaryPlugin(params: {
     config: {
       listAccountIds: () => ["primary"],
       defaultAccountId: () => "primary",
-      inspectAccount: () => ({
-        accountId: "primary",
-        name: "Main Bot",
-        enabled: params.enabled,
-        configured: params.configured,
-        linked: params.linked,
-        allowFrom: params.allowFrom ?? [],
-        dmPolicy: "mutuals",
-        tokenSource: "env",
-      }),
-      resolveAccount: () => ({
-        accountId: "primary",
-        name: "Main Bot",
-        enabled: params.enabled,
-        configured: params.configured,
-        linked: params.linked,
-        allowFrom: params.allowFrom ?? [],
-        dmPolicy: "mutuals",
-        tokenSource: "env",
-      }),
-      isConfigured: (account) => Boolean((account as { configured?: boolean }).configured),
-      isEnabled: (account) => Boolean((account as { enabled?: boolean }).enabled),
+      inspectAccount: getAccount,
+      resolveAccount: getAccount,
+      isConfigured: isFixtureAccountConfigured,
+      isEnabled: isFixtureAccountEnabled,
       formatAllowFrom: () => ["alice", "bob", "carol"],
     },
     status: {
@@ -114,13 +113,23 @@ function makeTelegramSummaryPlugin(params: {
         self: { e164: "+15551234567" },
       }),
     },
-    actions: {
-      describeMessageTool: () => ({ actions: ["send"] }),
-    },
+    actions: summaryPluginActions,
   };
 }
 
 function makeSignalSummaryPlugin(params: { enabled: boolean; configured: boolean }): ChannelPlugin {
+  const getAccount = () => ({
+    accountId: "desktop",
+    name: "Desktop",
+    enabled: params.enabled,
+    configured: params.configured,
+    appTokenSource: "env",
+    baseUrl: "https://signal.example.test",
+    port: 31337,
+    cliPath: "/usr/local/bin/signal-cli",
+    dbPath: "/tmp/signal.db",
+  });
+
   return {
     id: "signal",
     meta: {
@@ -134,34 +143,12 @@ function makeSignalSummaryPlugin(params: { enabled: boolean; configured: boolean
     config: {
       listAccountIds: () => ["desktop"],
       defaultAccountId: () => "desktop",
-      inspectAccount: () => ({
-        accountId: "desktop",
-        name: "Desktop",
-        enabled: params.enabled,
-        configured: params.configured,
-        appTokenSource: "env",
-        baseUrl: "https://signal.example.test",
-        port: 31337,
-        cliPath: "/usr/local/bin/signal-cli",
-        dbPath: "/tmp/signal.db",
-      }),
-      resolveAccount: () => ({
-        accountId: "desktop",
-        name: "Desktop",
-        enabled: params.enabled,
-        configured: params.configured,
-        appTokenSource: "env",
-        baseUrl: "https://signal.example.test",
-        port: 31337,
-        cliPath: "/usr/local/bin/signal-cli",
-        dbPath: "/tmp/signal.db",
-      }),
-      isConfigured: (account) => Boolean((account as { configured?: boolean }).configured),
-      isEnabled: (account) => Boolean((account as { enabled?: boolean }).enabled),
+      inspectAccount: getAccount,
+      resolveAccount: getAccount,
+      isConfigured: isFixtureAccountConfigured,
+      isEnabled: isFixtureAccountEnabled,
     },
-    actions: {
-      describeMessageTool: () => ({ actions: ["send"] }),
-    },
+    actions: summaryPluginActions,
   };
 }
 
@@ -171,6 +158,12 @@ function makeFallbackSummaryPlugin(params: {
   accountIds?: string[];
   defaultAccountId?: string;
 }): ChannelPlugin {
+  const getAccount = (_cfg: unknown, accountId?: string | null) => ({
+    accountId,
+    enabled: params.enabled,
+    configured: params.configured,
+  });
+
   return {
     id: "fallback-plugin",
     meta: {
@@ -184,22 +177,12 @@ function makeFallbackSummaryPlugin(params: {
     config: {
       listAccountIds: () => params.accountIds ?? [],
       defaultAccountId: () => params.defaultAccountId ?? "default",
-      inspectAccount: (_cfg, accountId) => ({
-        accountId,
-        enabled: params.enabled,
-        configured: params.configured,
-      }),
-      resolveAccount: (_cfg, accountId) => ({
-        accountId,
-        enabled: params.enabled,
-        configured: params.configured,
-      }),
-      isConfigured: (account) => Boolean((account as { configured?: boolean }).configured),
-      isEnabled: (account) => Boolean((account as { enabled?: boolean }).enabled),
+      inspectAccount: getAccount,
+      resolveAccount: getAccount,
+      isConfigured: isFixtureAccountConfigured,
+      isEnabled: isFixtureAccountEnabled,
     },
-    actions: {
-      describeMessageTool: () => ({ actions: ["send"] }),
-    },
+    actions: summaryPluginActions,
   };
 }
 

@@ -28,3 +28,21 @@ ${body ?? `# ${name}\n`}
     "utf-8",
   );
 }
+
+export async function writeWorkspaceSkills(
+  workspaceDir: string,
+  skills: ReadonlyArray<{
+    name: string;
+    description: string;
+    metadata?: string;
+    body?: string;
+    frontmatterExtra?: string;
+  }>,
+) {
+  for (const skill of skills) {
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", skill.name),
+      ...skill,
+    });
+  }
+}

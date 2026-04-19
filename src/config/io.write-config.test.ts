@@ -80,6 +80,26 @@ describe("config io write", () => {
     return persisted.commands;
   };
 
+  const createFastConfigIO = (home: string) =>
+    createConfigIO({
+      env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+      homedir: () => home,
+      logger: silentLogger,
+    });
+
+  const writeGatewayPortAndReadConfig = async (home: string, configPath: string) => {
+    const io = createFastConfigIO(home);
+
+    await io.writeConfigFile({
+      gateway: { mode: "local", port: 18789 },
+    });
+
+    return JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+      $schema?: string;
+      gateway?: { mode?: string; port?: number };
+    };
+  };
+
   it.runIf(process.platform !== "win32")(
     "tightens world-writable state dir when writing the default config",
     async () => {
@@ -187,6 +207,51 @@ describe("config io write", () => {
         (call) => typeof call[0] === "string" && call[0].startsWith("Config overwrite:"),
       );
       expect(overwriteLogs).toHaveLength(0);
+    });
+  });
+
+  it("preserves root $schema during partial writes", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify(
+          {
+            $schema: "https://openclaw.ai/config.json",
+            gateway: { mode: "local" },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      const persisted = await writeGatewayPortAndReadConfig(home, configPath);
+      expect(persisted.$schema).toBe("https://openclaw.ai/config.json");
+      expect(persisted.gateway).toEqual({ mode: "local", port: 18789 });
+    });
+  });
+
+  it("does not inject include-only $schema into the root config during partial writes", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const includePath = path.join(home, ".openclaw", "extra.json5");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        includePath,
+        `${JSON.stringify({ $schema: "https://openclaw.ai/config-from-include.json" }, null, 2)}\n`,
+        "utf-8",
+      );
+      await fs.writeFile(
+        configPath,
+        `{\n  "$include": "./extra.json5",\n  "gateway": { "mode": "local" }\n}\n`,
+        "utf-8",
+      );
+
+      const persisted = await writeGatewayPortAndReadConfig(home, configPath);
+      expect(persisted).not.toHaveProperty("$schema");
+      expect(persisted.gateway).toEqual({ mode: "local", port: 18789 });
     });
   });
 

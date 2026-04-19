@@ -275,6 +275,22 @@ function isEmptyResponseAssistantTurn(params: {
   return true;
 }
 
+function shouldSkipPlanningOnlyRetry(params: {
+  aborted: boolean;
+  timedOut: boolean;
+  attempt: IncompleteTurnAttempt;
+}): boolean {
+  return Boolean(
+    params.aborted ||
+    params.timedOut ||
+    params.attempt.clientToolCall ||
+    params.attempt.yieldDetected ||
+    params.attempt.didSendDeterministicApprovalPrompt ||
+    params.attempt.lastToolError ||
+    params.attempt.replayMetadata.hadPotentialSideEffects,
+  );
+}
+
 export function resolveReasoningOnlyRetryInstruction(params: {
   provider?: string;
   modelId?: string;
@@ -282,15 +298,7 @@ export function resolveReasoningOnlyRetryInstruction(params: {
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): string | null {
-  if (
-    params.aborted ||
-    params.timedOut ||
-    params.attempt.clientToolCall ||
-    params.attempt.yieldDetected ||
-    params.attempt.didSendDeterministicApprovalPrompt ||
-    params.attempt.lastToolError ||
-    params.attempt.replayMetadata.hadPotentialSideEffects
-  ) {
+  if (shouldSkipPlanningOnlyRetry(params)) {
     return null;
   }
 
@@ -325,15 +333,7 @@ export function resolveEmptyResponseRetryInstruction(params: {
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): string | null {
-  if (
-    params.aborted ||
-    params.timedOut ||
-    params.attempt.clientToolCall ||
-    params.attempt.yieldDetected ||
-    params.attempt.didSendDeterministicApprovalPrompt ||
-    params.attempt.lastToolError ||
-    params.attempt.replayMetadata.hadPotentialSideEffects
-  ) {
+  if (shouldSkipPlanningOnlyRetry(params)) {
     return null;
   }
 

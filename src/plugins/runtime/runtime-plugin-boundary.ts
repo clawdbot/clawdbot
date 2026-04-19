@@ -127,6 +127,7 @@ export function getPluginBoundaryJiti(modulePath: string, loaders: PluginJitiLoa
   });
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic plugin boundary loaders use caller-supplied module types.
 export function loadPluginBoundaryModuleWithJiti<TModule>(
   modulePath: string,
   loaders: PluginJitiLoaderCache,
@@ -134,6 +135,7 @@ export function loadPluginBoundaryModuleWithJiti<TModule>(
   return getPluginBoundaryJiti(modulePath, loaders)(modulePath) as TModule;
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic plugin boundary loaders use caller-supplied module types.
 export function createCachedPluginBoundaryModuleLoader<TModule>(
   params: CachedPluginBoundaryLoaderParams,
 ): () => TModule | null {

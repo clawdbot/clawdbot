@@ -48,9 +48,33 @@ function prettifyInstanceName(name: string) {
   return normalized.replace(/\s+\(OpenClaw\)\s*$/i, "").trim() || normalized;
 }
 
-type BonjourService = import("@homebridge/ciao").CiaoService;
-type BonjourResponder = import("@homebridge/ciao").Responder;
-type BonjourServiceState = BonjourService["serviceState"];
+type BonjourService = {
+  serviceState?: unknown;
+  advertise: () => Promise<void>;
+  destroy: () => Promise<void>;
+  getFQDN: () => string;
+  getHostname: () => string;
+  getPort: () => number;
+  on: (event: "name-change" | "hostname-change", listener: (value: unknown) => void) => unknown;
+};
+
+type BonjourResponder = {
+  createService: (options: {
+    name: string;
+    type: string;
+    protocol: unknown;
+    port: number;
+    domain: string;
+    hostname: string;
+    txt: Record<string, string>;
+  }) => BonjourService;
+  shutdown: () => Promise<void>;
+};
+
+type CiaoModule = {
+  getResponder: () => BonjourResponder;
+  Protocol: { TCP: unknown };
+};
 
 type BonjourCycle = {
   responder: BonjourResponder;
@@ -59,7 +83,7 @@ type BonjourCycle = {
 };
 
 type ServiceStateTracker = {
-  state: BonjourServiceState | "unknown";
+  state: string;
   sinceMs: number;
 };
 
@@ -68,7 +92,7 @@ type ConsoleLogFn = (...args: unknown[]) => void;
 const WATCHDOG_INTERVAL_MS = 5_000;
 const REPAIR_DEBOUNCE_MS = 30_000;
 const STUCK_ANNOUNCING_MS = 8_000;
-const BONJOUR_ANNOUNCED_STATE = "announced" as BonjourServiceState;
+const BONJOUR_ANNOUNCED_STATE = "announced";
 const CIAO_SELF_PROBE_RETRY_FRAGMENT =
   "failed probing with reason: Error: Can't probe for a service which is announced already.";
 
@@ -95,7 +119,7 @@ function serviceSummary(label: string, svc: BonjourService): string {
   return `${label} fqdn=${fqdn} host=${hostname} port=${port} state=${state}`;
 }
 
-function isAnnouncedState(state: BonjourServiceState | "unknown") {
+function isAnnouncedState(state: string) {
   return state === BONJOUR_ANNOUNCED_STATE;
 }
 
@@ -136,6 +160,14 @@ function installCiaoConsoleNoiseFilter(): () => void {
   };
 }
 
+const CIAO_MODULE_ID = "@homebridge/ciao";
+let ciaoModulePromise: Promise<CiaoModule> | null = null;
+
+async function loadCiaoModule(): Promise<CiaoModule> {
+  ciaoModulePromise ??= import(CIAO_MODULE_ID) as Promise<CiaoModule>;
+  return ciaoModulePromise;
+}
+
 export async function startGatewayBonjourAdvertiser(
   opts: GatewayBonjourAdvertiseOpts,
 ): Promise<GatewayBonjourAdvertiser> {
@@ -143,7 +175,7 @@ export async function startGatewayBonjourAdvertiser(
     return { stop: async () => {} };
   }
 
-  const { getResponder, Protocol } = await import("@homebridge/ciao");
+  const { getResponder, Protocol } = await loadCiaoModule();
   const restoreConsoleLog = installCiaoConsoleNoiseFilter();
   try {
     // mDNS service instance names are single DNS labels; dots in hostnames (like
@@ -312,8 +344,7 @@ export async function startGatewayBonjourAdvertiser(
     const updateStateTrackers = (services: Array<{ label: string; svc: BonjourService }>) => {
       const now = Date.now();
       for (const { label, svc } of services) {
-        const nextState: BonjourServiceState | "unknown" =
-          typeof svc.serviceState === "string" ? svc.serviceState : "unknown";
+        const nextState = typeof svc.serviceState === "string" ? svc.serviceState : "unknown";
         const current = stateTracker.get(label);
         const nextEnteredAt =
           current && !isAnnouncedState(current.state) && !isAnnouncedState(nextState)

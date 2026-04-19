@@ -13,6 +13,7 @@ import {
   immediateEnqueue,
   makeEmbeddedRunnerAttempt,
 } from "./test-helpers/pi-embedded-runner-e2e-fixtures.js";
+import { installEmbeddedRunnerBaseE2eMocks } from "./test-helpers/pi-embedded-runner-e2e-mocks.js";
 
 const runEmbeddedAttemptMock = vi.fn();
 const disposeSessionMcpRuntimeMock = vi.fn<(sessionId: string) => Promise<void>>(async () => {
@@ -82,24 +83,7 @@ vi.mock("@mariozechner/pi-ai", async () => {
 });
 
 const installRunEmbeddedMocks = () => {
-  vi.doMock("../plugins/hook-runner-global.js", () => ({
-    getGlobalHookRunner: vi.fn(() => undefined),
-    getGlobalPluginRegistry: vi.fn(() => null),
-    hasGlobalHooks: vi.fn(() => false),
-    initializeGlobalHookRunner: vi.fn(),
-    resetGlobalHookRunner: vi.fn(),
-  }));
-  vi.doMock("../context-engine/init.js", () => ({
-    ensureContextEnginesInitialized: vi.fn(),
-  }));
-  vi.doMock("../context-engine/registry.js", () => ({
-    resolveContextEngine: vi.fn(async () => ({
-      dispose: async () => undefined,
-    })),
-  }));
-  vi.doMock("./runtime-plugins.js", () => ({
-    ensureRuntimePluginsLoaded: vi.fn(),
-  }));
+  installEmbeddedRunnerBaseE2eMocks({ hookRunner: "full" });
   vi.doMock("./command/session.js", async () => {
     const actual =
       await vi.importActual<typeof import("./command/session.js")>("./command/session.js");

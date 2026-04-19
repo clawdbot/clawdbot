@@ -41,6 +41,47 @@ describe("assertRequiredParams", () => {
     ).rejects.toThrow(/\(received: file_path\)/);
   });
 
+  it("enforces canonical path/content at runtime", async () => {
+    const execute = vi.fn(async (_id, args) => args);
+    const tool = wrapToolParamValidation(
+      {
+        name: "write",
+        label: "write",
+        description: "test",
+        parameters: {},
+        execute,
+      },
+      REQUIRED_PARAM_GROUPS.write,
+    );
+
+    await tool.execute("tool-1", { path: "foo.txt", content: "x" });
+    expect(execute).toHaveBeenCalledWith(
+      "tool-1",
+      { path: "foo.txt", content: "x" },
+      undefined,
+      undefined,
+    );
+
+    await expect(tool.execute("tool-2", { content: "x" })).rejects.toThrow(
+      /Missing required parameter/,
+    );
+    await expect(tool.execute("tool-2", { content: "x" })).rejects.toThrow(
+      /Supply correct parameters before retrying\./,
+    );
+    await expect(tool.execute("tool-3", { path: "   ", content: "x" })).rejects.toThrow(
+      /Missing required parameter/,
+    );
+    await expect(tool.execute("tool-3", { path: "   ", content: "x" })).rejects.toThrow(
+      /Supply correct parameters before retrying\./,
+    );
+    await expect(tool.execute("tool-4", {})).rejects.toThrow(
+      /Missing required parameters: path, content/,
+    );
+    await expect(tool.execute("tool-4", {})).rejects.toThrow(
+      /Supply correct parameters before retrying\./,
+    );
+  });
+
   it("excludes null and undefined values from received hint", () => {
     expect(() =>
       assertRequiredParams(

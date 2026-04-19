@@ -712,13 +712,15 @@ describe("provider attribution", () => {
 
     expect(
       resolveProviderRequestCapabilities({
-        provider: "ollama",
-        modelId: "kimi-k2.5:cloud",
+        provider: "custom-local",
+        api: "openai-completions",
+        baseUrl: "http://127.0.0.1:11434/v1",
         capability: "llm",
         transport: "stream",
       }),
     ).toMatchObject({
-      compatibilityFamily: "moonshot",
+      endpointClass: "local",
+      supportsNativeStreamingUsageCompat: false,
     });
   });
 

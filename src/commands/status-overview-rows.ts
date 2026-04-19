@@ -1,6 +1,5 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
-import type { Tone } from "../memory-host-sdk/status.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import { VERSION } from "../version.js";
 import type { HealthSummary } from "./health.js";
@@ -23,47 +22,38 @@ import {
   buildStatusLastHeartbeatValue,
   buildStatusMemoryValue,
   buildStatusTasksValue,
+  type StatusMemoryStateResolvers,
 } from "./status.command-sections.js";
 import type { MemoryPluginStatus, MemoryStatusSnapshot } from "./status.scan.shared.js";
 import type { StatusSummary } from "./status.types.js";
 
-export function buildStatusCommandOverviewRows(params: {
-  opts: {
-    deep?: boolean;
-  };
-  surface: StatusOverviewSurface;
-  osLabel: string;
-  summary: StatusSummary;
-  health?: HealthSummary;
-  lastHeartbeat: HeartbeatEventPayload | null;
-  agentStatus: {
-    defaultId?: string | null;
-    bootstrapPendingCount: number;
-    totalSessions: number;
-    agents: AgentLocalStatus[];
-  };
-  memory: MemoryStatusSnapshot | null;
-  memoryPlugin: MemoryPluginStatus;
-  pluginCompatibility: PluginCompatibilityNotice[];
-  ok: (value: string) => string;
-  warn: (value: string) => string;
-  muted: (value: string) => string;
-  formatTimeAgo: (ageMs: number) => string;
-  formatKTokens: (value: number) => string;
-  resolveMemoryVectorState: (value: NonNullable<MemoryStatusSnapshot["vector"]>) => {
-    state: string;
-    tone: Tone;
-  };
-  resolveMemoryFtsState: (value: NonNullable<MemoryStatusSnapshot["fts"]>) => {
-    state: string;
-    tone: Tone;
-  };
-  resolveMemoryCacheSummary: (value: NonNullable<MemoryStatusSnapshot["cache"]>) => {
-    text: string;
-    tone: Tone;
-  };
-  updateValue?: string;
-}) {
+export function buildStatusCommandOverviewRows(
+  params: {
+    opts: {
+      deep?: boolean;
+    };
+    surface: StatusOverviewSurface;
+    osLabel: string;
+    summary: StatusSummary;
+    health?: HealthSummary;
+    lastHeartbeat: HeartbeatEventPayload | null;
+    agentStatus: {
+      defaultId?: string | null;
+      bootstrapPendingCount: number;
+      totalSessions: number;
+      agents: AgentLocalStatus[];
+    };
+    memory: MemoryStatusSnapshot | null;
+    memoryPlugin: MemoryPluginStatus;
+    pluginCompatibility: PluginCompatibilityNotice[];
+    ok: (value: string) => string;
+    warn: (value: string) => string;
+    muted: (value: string) => string;
+    formatTimeAgo: (ageMs: number) => string;
+    formatKTokens: (value: number) => string;
+    updateValue?: string;
+  } & StatusMemoryStateResolvers,
+) {
   const agentsValue = buildStatusAgentsValue({
     agentStatus: params.agentStatus,
     formatTimeAgo: params.formatTimeAgo,

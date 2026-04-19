@@ -193,6 +193,7 @@ export const ModelCompatSchema = z
     supportsTools: z.boolean().optional(),
     supportsStrictMode: z.boolean().optional(),
     requiresStringContent: z.boolean().optional(),
+    visibleReasoningDetailTypes: z.array(z.string().min(1)).optional(),
     maxTokensField: z
       .union([z.literal("max_completion_tokens"), z.literal("max_tokens")])
       .optional(),

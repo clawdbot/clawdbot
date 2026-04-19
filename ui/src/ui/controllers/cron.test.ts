@@ -163,6 +163,48 @@ describe("cron controller", () => {
     });
   });
 
+  it('omits delivery.channel when the form still uses the "last" sentinel', async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.add") {
+        return { id: "job-last-add" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 0, nextWakeAtMs: null };
+      }
+      return {};
+    });
+
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronForm: {
+        ...DEFAULT_CRON_FORM,
+        name: "implicit channel",
+        scheduleKind: "cron",
+        cronExpr: "0 * * * *",
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payloadKind: "agentTurn",
+        payloadText: "run this",
+        deliveryMode: "announce",
+        deliveryChannel: "last",
+      },
+    });
+
+    await addCronJob(state);
+
+    const addCall = request.mock.calls.find(([method]) => method === "cron.add");
+    expect(addCall).toBeDefined();
+    expect(addCall?.[1]).toMatchObject({
+      delivery: { mode: "announce" },
+    });
+    expect(
+      (addCall?.[1] as { delivery?: { channel?: string } } | undefined)?.delivery?.channel,
+    ).toBeUndefined();
+  });
+
   it("forwards lightContext in cron payload", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "cron.add") {
@@ -485,6 +527,97 @@ describe("cron controller", () => {
     expect(state.cronForm.deliveryAccountId).toBe("bot-2");
   });
 
+  it('keeps implicit announce delivery implicit when editing a job that shows "last" in the form', async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.update") {
+        return { id: "job-implicit-delivery" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [{ id: "job-implicit-delivery" }] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1, nextWakeAtMs: null };
+      }
+      return {};
+    });
+    const job = {
+      id: "job-implicit-delivery",
+      name: "Implicit delivery",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "cron" as const, expr: "0 * * * *" },
+      sessionTarget: "isolated" as const,
+      wakeMode: "next-heartbeat" as const,
+      payload: { kind: "agentTurn" as const, message: "run" },
+      delivery: { mode: "announce" as const, to: "123" },
+      state: {},
+    };
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronJobs: [job],
+    });
+
+    startCronEdit(state, job);
+    await addCronJob(state);
+
+    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
+    expect(updateCall).toBeDefined();
+    expect(updateCall?.[1]).toMatchObject({
+      id: "job-implicit-delivery",
+      patch: {
+        delivery: { mode: "announce", to: "123" },
+      },
+    });
+    expect(
+      (updateCall?.[1] as { patch?: { delivery?: { channel?: string } } } | undefined)?.patch
+        ?.delivery?.channel,
+    ).toBeUndefined();
+  });
+
+  it('sends delivery.channel="last" when editing clears an explicit channel back to implicit-last', async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.update") {
+        return { id: "job-clear-delivery-channel" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [{ id: "job-clear-delivery-channel" }] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1, nextWakeAtMs: null };
+      }
+      return {};
+    });
+    const job = {
+      id: "job-clear-delivery-channel",
+      name: "Clear delivery channel",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "cron" as const, expr: "0 * * * *" },
+      sessionTarget: "isolated" as const,
+      wakeMode: "next-heartbeat" as const,
+      payload: { kind: "agentTurn" as const, message: "run" },
+      delivery: { mode: "announce" as const, channel: "telegram", to: "123" },
+      state: {},
+    };
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronJobs: [job],
+    });
+
+    startCronEdit(state, job);
+    state.cronForm.deliveryChannel = "last";
+    await addCronJob(state);
+
+    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
+    expect(updateCall).toBeDefined();
+    expect(
+      (updateCall?.[1] as { patch?: { delivery?: { channel?: string } } } | undefined)?.patch
+        ?.delivery?.channel,
+    ).toBe("last");
+  });
+
   it("includes model/thinking/stagger/bestEffort in cron.update patch", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "cron.update") {
@@ -682,6 +815,103 @@ describe("cron controller", () => {
         },
       },
     });
+  });
+
+  it('keeps implicit failure alert delivery implicit when editing a job that shows "last" in the form', async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.update") {
+        return { id: "job-alert-implicit-channel" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [{ id: "job-alert-implicit-channel" }] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1, nextWakeAtMs: null };
+      }
+      return {};
+    });
+    const job = {
+      id: "job-alert-implicit-channel",
+      name: "Implicit failure alert",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "cron" as const, expr: "0 * * * *" },
+      sessionTarget: "isolated" as const,
+      wakeMode: "next-heartbeat" as const,
+      payload: { kind: "agentTurn" as const, message: "run" },
+      delivery: { mode: "announce" as const, channel: "telegram", to: "123" },
+      failureAlert: { after: 2, to: "123" },
+      state: {},
+    };
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronJobs: [job],
+    });
+
+    startCronEdit(state, job);
+    await addCronJob(state);
+
+    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
+    expect(updateCall).toBeDefined();
+    expect(updateCall?.[1]).toMatchObject({
+      id: "job-alert-implicit-channel",
+      patch: {
+        failureAlert: {
+          after: 2,
+          to: "123",
+          mode: "announce",
+        },
+      },
+    });
+    expect(
+      (updateCall?.[1] as { patch?: { failureAlert?: { channel?: string } } } | undefined)?.patch
+        ?.failureAlert?.channel,
+    ).toBeUndefined();
+  });
+
+  it('sends failureAlert.channel="last" when editing clears an explicit failure channel back to implicit-last', async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.update") {
+        return { id: "job-clear-failure-channel" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [{ id: "job-clear-failure-channel" }] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1, nextWakeAtMs: null };
+      }
+      return {};
+    });
+    const job = {
+      id: "job-clear-failure-channel",
+      name: "Clear failure channel",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "cron" as const, expr: "0 * * * *" },
+      sessionTarget: "isolated" as const,
+      wakeMode: "next-heartbeat" as const,
+      payload: { kind: "agentTurn" as const, message: "run" },
+      delivery: { mode: "announce" as const, channel: "telegram", to: "123" },
+      failureAlert: { after: 2, channel: "telegram", to: "123" },
+      state: {},
+    };
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronJobs: [job],
+    });
+
+    startCronEdit(state, job);
+    state.cronForm.failureAlertChannel = "last";
+    await addCronJob(state);
+
+    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
+    expect(updateCall).toBeDefined();
+    expect(
+      (updateCall?.[1] as { patch?: { failureAlert?: { channel?: string } } } | undefined)?.patch
+        ?.failureAlert?.channel,
+    ).toBe("last");
   });
 
   it("omits failureAlert.cooldownMs when custom cooldown is left blank", async () => {

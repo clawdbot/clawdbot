@@ -1,6 +1,102 @@
 // Manual facade. Keep loader boundary explicit.
-type FacadeModule = typeof import("@openclaw/lmstudio/runtime-api.js");
+import type {
+  ModelDefinitionConfig,
+  ModelProviderConfig,
+  OpenClawConfig,
+} from "../config/types.js";
 import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
+
+type LmstudioReasoningCapabilityWire = {
+  allowed_options?: unknown;
+  default?: unknown;
+};
+
+export type LmstudioModelWire = {
+  type?: "llm" | "embedding";
+  key?: string;
+  display_name?: string;
+  max_context_length?: number;
+  format?: "gguf" | "mlx" | null;
+  capabilities?: {
+    vision?: boolean;
+    trained_for_tool_use?: boolean;
+    reasoning?: LmstudioReasoningCapabilityWire;
+  };
+  loaded_instances?: Array<{
+    id?: string;
+    config?: {
+      context_length?: number;
+    } | null;
+  } | null>;
+};
+
+export type LmstudioModelBase = {
+  id: string;
+  displayName: string;
+  format: "gguf" | "mlx" | null;
+  vision: boolean;
+  trainedForToolUse: boolean;
+  loaded: boolean;
+  reasoning: boolean;
+  input: ModelDefinitionConfig["input"];
+  cost: ModelDefinitionConfig["cost"];
+  contextWindow: number;
+  contextTokens: number;
+  maxTokens: number;
+};
+
+type FacadeModule = {
+  LMSTUDIO_DEFAULT_BASE_URL: string;
+  LMSTUDIO_DEFAULT_INFERENCE_BASE_URL: string;
+  LMSTUDIO_DEFAULT_EMBEDDING_MODEL: string;
+  LMSTUDIO_PROVIDER_LABEL: string;
+  LMSTUDIO_DEFAULT_API_KEY_ENV_VAR: string;
+  LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER: string;
+  LMSTUDIO_MODEL_PLACEHOLDER: string;
+  LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH: number;
+  LMSTUDIO_DEFAULT_MODEL_ID: string;
+  LMSTUDIO_PROVIDER_ID: string;
+  resolveLmstudioReasoningCapability: (entry: Pick<LmstudioModelWire, "capabilities">) => boolean;
+  resolveLoadedContextWindow: (entry: Pick<LmstudioModelWire, "loaded_instances">) => number | null;
+  resolveLmstudioServerBase: (configuredBaseUrl?: string) => string;
+  resolveLmstudioInferenceBase: (configuredBaseUrl?: string) => string;
+  normalizeLmstudioProviderConfig: (provider: ModelProviderConfig) => ModelProviderConfig;
+  fetchLmstudioModels: (params?: {
+    baseUrl?: string;
+    apiKey?: string;
+    headers?: Record<string, string>;
+  }) => Promise<unknown>;
+  mapLmstudioWireEntry: (entry: LmstudioModelWire) => LmstudioModelBase | null;
+  discoverLmstudioModels: (params?: {
+    config?: OpenClawConfig;
+    baseUrl?: string;
+    apiKey?: string;
+    headers?: Record<string, string>;
+  }) => Promise<ModelDefinitionConfig[]>;
+  ensureLmstudioModelLoaded: (params: Record<string, unknown>) => Promise<unknown>;
+  buildLmstudioAuthHeaders: (params: {
+    apiKey?: string;
+    json?: boolean;
+    headers?: Record<string, string>;
+  }) => Record<string, string> | undefined;
+  resolveLmstudioConfiguredApiKey: (params: {
+    config?: OpenClawConfig;
+    env?: NodeJS.ProcessEnv;
+    path?: string;
+  }) => Promise<string | undefined>;
+  resolveLmstudioProviderHeaders: (params: {
+    config?: OpenClawConfig;
+    env?: NodeJS.ProcessEnv;
+    headers?: unknown;
+    path?: string;
+  }) => Promise<Record<string, string> | undefined>;
+  resolveLmstudioRuntimeApiKey: (params: {
+    config?: OpenClawConfig;
+    agentDir?: string;
+    env?: NodeJS.ProcessEnv;
+    headers?: unknown;
+  }) => Promise<string | undefined>;
+};
 
 function loadFacadeModule(): FacadeModule {
   return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({
@@ -8,9 +104,6 @@ function loadFacadeModule(): FacadeModule {
     artifactBasename: "runtime-api.js",
   });
 }
-
-export type LmstudioModelWire = Parameters<FacadeModule["mapLmstudioWireEntry"]>[0];
-export type LmstudioModelBase = Exclude<ReturnType<FacadeModule["mapLmstudioWireEntry"]>, null>;
 
 // Keep defaults inline so importing the runtime facade stays cold until a helper
 // is actually used. These values are part of the public LM Studio contract.

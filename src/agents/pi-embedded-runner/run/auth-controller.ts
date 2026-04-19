@@ -115,6 +115,31 @@ export function createEmbeddedRunAuthController(params: {
 
   const nextRuntimeAuthGeneration = () => (params.getRuntimeAuthState()?.generation ?? 0) + 1;
 
+  const prepareRuntimeAuthForModel = async (prepareParams: {
+    runtimeModel: Model<Api>;
+    apiKey: string;
+    authMode: string;
+    profileId?: string;
+  }) =>
+    prepareProviderRuntimeAuth({
+      provider: prepareParams.runtimeModel.provider,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: process.env,
+      context: {
+        config: params.config,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+        env: process.env,
+        provider: prepareParams.runtimeModel.provider,
+        modelId: params.getModelId(),
+        model: prepareParams.runtimeModel,
+        apiKey: prepareParams.apiKey,
+        authMode: prepareParams.authMode,
+        profileId: prepareParams.profileId,
+      },
+    });
+
   const clearRuntimeAuthRefreshTimer = () => {
     const runtimeAuthState = params.getRuntimeAuthState();
     if (!runtimeAuthState?.refreshTimer) {
@@ -152,23 +177,11 @@ export function createEmbeddedRunAuthController(params: {
       }
       const runtimeModel = params.getRuntimeModel();
       params.log.debug(`Refreshing runtime auth for ${runtimeModel.provider} (${reason})...`);
-      const preparedAuth = await prepareProviderRuntimeAuth({
-        provider: runtimeModel.provider,
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        env: process.env,
-        context: {
-          config: params.config,
-          agentDir: params.agentDir,
-          workspaceDir: params.workspaceDir,
-          env: process.env,
-          provider: runtimeModel.provider,
-          modelId: params.getModelId(),
-          model: runtimeModel,
-          apiKey: sourceApiKey,
-          authMode: currentRuntimeAuthState?.authMode ?? "unknown",
-          profileId: currentRuntimeAuthState?.profileId,
-        },
+      const preparedAuth = await prepareRuntimeAuthForModel({
+        runtimeModel,
+        apiKey: sourceApiKey,
+        authMode: currentRuntimeAuthState?.authMode ?? "unknown",
+        profileId: currentRuntimeAuthState?.profileId,
       });
       if (!preparedAuth?.apiKey) {
         throw new Error(
@@ -360,23 +373,11 @@ export function createEmbeddedRunAuthController(params: {
     }
     let runtimeAuthHandled = false;
     const runtimeModel = params.getRuntimeModel();
-    const preparedAuth = await prepareProviderRuntimeAuth({
-      provider: runtimeModel.provider,
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: process.env,
-      context: {
-        config: params.config,
-        agentDir: params.agentDir,
-        workspaceDir: params.workspaceDir,
-        env: process.env,
-        provider: runtimeModel.provider,
-        modelId: params.getModelId(),
-        model: runtimeModel,
-        apiKey: apiKeyInfo.apiKey,
-        authMode: apiKeyInfo.mode,
-        profileId: apiKeyInfo.profileId,
-      },
+    const preparedAuth = await prepareRuntimeAuthForModel({
+      runtimeModel,
+      apiKey: apiKeyInfo.apiKey,
+      authMode: apiKeyInfo.mode,
+      profileId: apiKeyInfo.profileId,
     });
     applyPreparedRuntimeRequestOverrides({ runtimeModel, preparedAuth: preparedAuth ?? {} });
     if (preparedAuth?.apiKey) {

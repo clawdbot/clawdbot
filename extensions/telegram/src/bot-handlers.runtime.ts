@@ -674,6 +674,12 @@ export const registerTelegramHandlers = ({
     }
   }
 
+  const TELEGRAM_PERMANENT_CALLBACK_EDIT_ERROR_RE =
+    /400:\s*Bad Request:\s*message to edit not found|400:\s*Bad Request:\s*there is no text in the message to edit|MESSAGE_ID_INVALID|400:\s*Bad Request:\s*message can't be edited/i;
+
+  const isPermanentTelegramCallbackEditError = (err: unknown): boolean =>
+    TELEGRAM_PERMANENT_CALLBACK_EDIT_ERROR_RE.test(String(err));
+
   const resolveTelegramEventAuthorizationContext = async (params: {
     chatId: number;
     isGroup: boolean;
@@ -1672,10 +1678,15 @@ export const registerTelegramHandlers = ({
         messageIdOverride: callback.id,
       });
     } catch (err) {
-      runtime.error?.(danger(`callback handler failed: ${String(err)}`));
       if (err instanceof TelegramRetryableCallbackError) {
+        if (isPermanentTelegramCallbackEditError(err.cause)) {
+          logVerbose(`telegram: swallowing permanent callback edit error: ${String(err.cause)}`);
+          return;
+        }
+        runtime.error?.(danger(`callback handler failed: ${String(err)}`));
         throw err.cause;
       }
+      runtime.error?.(danger(`callback handler failed: ${String(err)}`));
     }
   });
 

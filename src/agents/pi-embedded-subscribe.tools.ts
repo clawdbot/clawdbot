@@ -105,14 +105,14 @@ export function sanitizeToolResult(result: unknown): unknown {
     const entry = item as Record<string, unknown>;
     const type = readStringValue(entry.type);
     if (type === "text" && typeof entry.text === "string") {
-      return { ...entry, text: truncateToolText(entry.text) };
+      return Object.assign({}, entry, { text: truncateToolText(entry.text) });
     }
     if (type === "image") {
       const data = readStringValue(entry.data);
       const bytes = data ? data.length : undefined;
       const cleaned = { ...entry };
       delete cleaned.data;
-      return { ...cleaned, bytes, omitted: true };
+      return Object.assign({}, cleaned, { bytes, omitted: true });
     }
     return entry;
   });

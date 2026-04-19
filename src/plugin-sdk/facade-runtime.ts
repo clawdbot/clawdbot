@@ -239,6 +239,7 @@ function buildFacadeActivationCheckParams(
   };
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic facade loaders use caller-supplied module surface types.
 export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(
   params: BundledPluginPublicSurfaceParams,
 ): T {
@@ -269,6 +270,7 @@ export function canLoadActivatedBundledPluginPublicSurface(params: {
   ).allowed;
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic facade loaders use caller-supplied module surface types.
 export function loadActivatedBundledPluginPublicSurfaceModuleSync<T extends object>(params: {
   dirName: string;
   artifactBasename: string;
@@ -280,6 +282,7 @@ export function loadActivatedBundledPluginPublicSurfaceModuleSync<T extends obje
   return loadBundledPluginPublicSurfaceModuleSync<T>(params);
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic facade loaders use caller-supplied module surface types.
 export function tryLoadActivatedBundledPluginPublicSurfaceModuleSync<T extends object>(params: {
   dirName: string;
   artifactBasename: string;

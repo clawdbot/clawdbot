@@ -221,7 +221,9 @@ type MockConfig = {
 };
 
 function getAgentList(cfg: unknown): MockAgentEntry[] {
-  return ((cfg as MockConfig | undefined)?.agents?.list ?? []).map((entry) => ({ ...entry }));
+  return ((cfg as MockConfig | undefined)?.agents?.list ?? []).map((entry) =>
+    Object.assign({}, entry),
+  );
 }
 
 function mergeAgentConfig(cfg: unknown, opts: unknown): MockConfig {

@@ -32,6 +32,49 @@ describe("gateway codex harness live helpers", () => {
     expect(isExpectedCodexModelsCommandText(text)).toBe(true);
   });
 
+  it("accepts sandbox namespace failures with current-session model fallback", () => {
+    const text = [
+      "I can’t enumerate `/codex models` from this sandbox because the local `codex` CLI fails to start here with a user-namespace restriction (`bwrap: No permissions to create a new namespace`).",
+      "",
+      "What I can confirm from the current session is that it’s running on `codex/gpt-5.4`.",
+    ].join("\n");
+
+    expect(isExpectedCodexModelsCommandText(text)).toBe(true);
+  });
+
+  it("accepts the interactive TUI current-model summary", () => {
+    const text = [
+      "`codex models` didn’t return a plain list in this environment; it dropped into the interactive TUI instead.",
+      "",
+      "What I could confirm from that session is:",
+      "- Codex CLI version: `v0.118.0`",
+      "- Current selected model: `local-default-model`",
+      "- The UI indicates `/model` is the command to change models",
+    ].join("\n");
+
+    expect(
+      EXPECTED_CODEX_MODELS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+    ).toBe(true);
+    expect(isExpectedCodexModelsCommandText(text)).toBe(true);
+  });
+
+  it("accepts the local Codex model-cache summary", () => {
+    const text = [
+      "Available models in this Codex install, from the local cache fetched on `2026-04-18`, are:",
+      "",
+      "- `gpt-5.4`",
+      "- `local-default-model`",
+      "- `gpt-5.4-mini`",
+      "",
+      "This session is currently running `codex/gpt-5.4` with `low` reasoning according to `/codex status`.",
+    ].join("\n");
+
+    expect(
+      EXPECTED_CODEX_MODELS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+    ).toBe(true);
+    expect(isExpectedCodexModelsCommandText(text)).toBe(false);
+  });
+
   it("rejects unrelated codex command output", () => {
     expect(isExpectedCodexModelsCommandText("Codex is healthy.")).toBe(false);
   });

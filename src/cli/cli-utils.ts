@@ -48,6 +48,7 @@ export async function runCommandWithRuntime(
   }
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Commander option values are typed by the caller.
 export function resolveOptionFromCommand<T>(
   command: Command | undefined,
   key: string,

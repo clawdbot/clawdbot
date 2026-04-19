@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { captureFullEnv } from "../test-utils/env.js";
+import { captureEnv } from "../test-utils/env.js";
 import { resolveSandboxContext } from "./sandbox/context.js";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
 
@@ -20,23 +20,34 @@ vi.mock("./sandbox/prune.js", () => ({
 }));
 
 describe("sandbox skill mirroring", () => {
-  let envSnapshot: ReturnType<typeof captureFullEnv>;
+  let envSnapshot: ReturnType<typeof captureEnv>;
+  let tempRoot = "";
+
+  beforeAll(async () => {
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-skills-"));
+  });
 
   beforeEach(() => {
-    envSnapshot = captureFullEnv();
+    envSnapshot = captureEnv(["OPENCLAW_BUNDLED_SKILLS_DIR"]);
   });
 
   afterEach(() => {
     envSnapshot.restore();
   });
 
+  afterAll(async () => {
+    if (tempRoot) {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   const runContext = async (workspaceAccess: "none" | "ro") => {
-    const bundledDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bundled-skills-"));
+    const bundledDir = await fs.mkdtemp(path.join(tempRoot, "bundled-"));
     await fs.mkdir(bundledDir, { recursive: true });
 
     process.env.OPENCLAW_BUNDLED_SKILLS_DIR = bundledDir;
 
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
+    const workspaceDir = await fs.mkdtemp(path.join(tempRoot, "workspace-"));
     await writeSkill({
       dir: path.join(workspaceDir, "skills", "demo-skill"),
       name: "demo-skill",

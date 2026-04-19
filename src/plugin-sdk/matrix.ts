@@ -7,7 +7,11 @@ import {
   loadBundledPluginPublicSurfaceModuleSync,
 } from "./facade-loader.js";
 
-type MatrixFacadeModule = typeof import("@openclaw/matrix/contract-api.js");
+type MatrixFacadeModule = {
+  singleAccountKeysToMove: readonly string[];
+  namedAccountPromotionKeys: readonly string[];
+  resolveSingleAccountPromotionTarget: (params: { channel: Record<string, unknown> }) => string;
+};
 
 function loadMatrixFacadeModule(): MatrixFacadeModule {
   return loadBundledPluginPublicSurfaceModuleSync<MatrixFacadeModule>({

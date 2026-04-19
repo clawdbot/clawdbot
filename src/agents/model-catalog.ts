@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -116,7 +117,6 @@ export async function loadModelCatalog(params?: {
       const agentDir = resolveOpenClawAgentDir();
       const { shouldSuppressBuiltInModel } = await loadModelSuppression();
       logStage("catalog-deps-ready");
-      const { join } = await import("node:path");
       const authStorage = piSdk.discoverAuthStorage(agentDir);
       logStage("auth-storage-ready");
       const registry = instantiatePiModelRegistry(

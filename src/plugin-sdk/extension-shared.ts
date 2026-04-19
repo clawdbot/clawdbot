@@ -56,9 +56,7 @@ export function buildPassiveProbedChannelStatusSummary<TExtra extends object>(
   };
 }
 
-export function buildTrafficStatusSummary<TSnapshot extends TrafficStatusSnapshot>(
-  snapshot?: TSnapshot | null,
-) {
+export function buildTrafficStatusSummary(snapshot?: TrafficStatusSnapshot | null) {
   return {
     lastInboundAt: snapshot?.lastInboundAt ?? null,
     lastOutboundAt: snapshot?.lastOutboundAt ?? null,
@@ -136,6 +134,13 @@ export function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
+let proxyAgentConstructorPromise: Promise<typeof import("proxy-agent").ProxyAgent> | null = null;
+
+async function loadProxyAgentConstructor(): Promise<typeof import("proxy-agent").ProxyAgent> {
+  proxyAgentConstructorPromise ??= import("proxy-agent").then(({ ProxyAgent }) => ProxyAgent);
+  return proxyAgentConstructorPromise;
+}
+
 export async function resolveAmbientNodeProxyAgent<TAgent>(params?: {
   onError?: (error: unknown) => void;
   onUsingProxy?: () => void;
@@ -145,7 +150,7 @@ export async function resolveAmbientNodeProxyAgent<TAgent>(params?: {
     return undefined;
   }
   try {
-    const { ProxyAgent } = await import("proxy-agent");
+    const ProxyAgent = await loadProxyAgentConstructor();
     params?.onUsingProxy?.();
     return new ProxyAgent() as TAgent;
   } catch (error) {

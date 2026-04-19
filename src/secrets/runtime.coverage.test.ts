@@ -38,15 +38,14 @@ function loadCoverageRegistryEntries(): SecretRegistryEntry[] {
     "secretref-user-supplied-credentials-matrix.json",
   );
   const matrix = JSON.parse(fs.readFileSync(matrixPath, "utf8")) as SecretRefCredentialMatrix;
-  return matrix.entries.map((entry) => ({
-    id: entry.id,
-    configFile: entry.configFile,
-    pathPattern: entry.path,
-    ...(entry.refPath ? { refPathPattern: entry.refPath } : {}),
-    secretShape: entry.secretShape,
-    expectedResolvedValue: "string",
-    ...(entry.when?.type ? { authProfileType: entry.when.type } : {}),
-  }));
+  return matrix.entries.map((entry) =>
+    Object.assign(
+      { id: entry.id, configFile: entry.configFile, pathPattern: entry.path },
+      entry.refPath ? { refPathPattern: entry.refPath } : {},
+      { secretShape: entry.secretShape, expectedResolvedValue: "string" as const },
+      entry.when?.type ? { authProfileType: entry.when.type } : {},
+    ),
+  );
 }
 
 const COVERAGE_REGISTRY_ENTRIES = loadCoverageRegistryEntries();

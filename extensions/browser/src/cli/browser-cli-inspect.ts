@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
@@ -101,7 +102,6 @@ export function registerBrowserInspectCommands(
         );
 
         if (opts.out) {
-          const fs = await import("node:fs/promises");
           if (result.format === "ai") {
             await fs.writeFile(opts.out, result.snapshot, "utf8");
           } else {

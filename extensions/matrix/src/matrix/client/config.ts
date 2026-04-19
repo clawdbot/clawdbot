@@ -44,12 +44,15 @@ type MatrixCredentialsReadDeps = {
   credentialsMatchConfig: typeof import("../credentials-read.js").credentialsMatchConfig;
 };
 
+type MatrixCredentialsWriteRuntime = typeof import("../credentials-write.runtime.js");
+
 type MatrixSecretInputDeps = {
   resolveConfiguredSecretInputString: typeof import("./config-secret-input.runtime.js").resolveConfiguredSecretInputString;
 };
 
 let matrixAuthClientDepsPromise: Promise<MatrixAuthClientDeps> | undefined;
 let matrixCredentialsReadDepsPromise: Promise<MatrixCredentialsReadDeps> | undefined;
+let matrixCredentialsWriteRuntimePromise: Promise<MatrixCredentialsWriteRuntime> | undefined;
 let matrixSecretInputDepsPromise: Promise<MatrixSecretInputDeps> | undefined;
 let matrixAuthClientDepsForTest: MatrixAuthClientDeps | undefined;
 
@@ -85,6 +88,11 @@ async function loadMatrixCredentialsReadDeps(): Promise<MatrixCredentialsReadDep
     }),
   );
   return await matrixCredentialsReadDepsPromise;
+}
+
+async function loadMatrixCredentialsWriteRuntime(): Promise<MatrixCredentialsWriteRuntime> {
+  matrixCredentialsWriteRuntimePromise ??= import("../credentials-write.runtime.js");
+  return await matrixCredentialsWriteRuntimePromise;
 }
 
 async function loadMatrixSecretInputDeps(): Promise<MatrixSecretInputDeps> {
@@ -740,12 +748,6 @@ export async function resolveMatrixAuth(params?: {
   const homeserver = await resolveValidatedMatrixHomeserverUrl(resolved.homeserver, {
     dangerouslyAllowPrivateNetwork: resolved.allowPrivateNetwork,
   });
-  let credentialsWriter: typeof import("../credentials-write.runtime.js") | undefined;
-  const loadCredentialsWriter = async () => {
-    credentialsWriter ??= await import("../credentials-write.runtime.js");
-    return credentialsWriter;
-  };
-
   const { loadMatrixCredentials, credentialsMatchConfig } = await loadMatrixCredentialsReadDeps();
   const cached = loadMatrixCredentials(env, accountId);
   const cachedCredentials =
@@ -790,7 +792,7 @@ export async function resolveMatrixAuth(params?: {
       cachedCredentials.userId !== userId ||
       (cachedCredentials.deviceId || undefined) !== knownDeviceId;
     if (shouldRefreshCachedCredentials) {
-      const { saveMatrixCredentials } = await loadCredentialsWriter();
+      const { saveMatrixCredentials } = await loadMatrixCredentialsWriteRuntime();
       await saveMatrixCredentials(
         {
           homeserver,
@@ -802,7 +804,7 @@ export async function resolveMatrixAuth(params?: {
         accountId,
       );
     } else if (hasMatchingCachedToken) {
-      const { touchMatrixCredentials } = await loadCredentialsWriter();
+      const { touchMatrixCredentials } = await loadMatrixCredentialsWriteRuntime();
       await touchMatrixCredentials(env, accountId);
     }
     return {
@@ -823,7 +825,7 @@ export async function resolveMatrixAuth(params?: {
   }
 
   if (cachedCredentials) {
-    const { touchMatrixCredentials } = await loadCredentialsWriter();
+    const { touchMatrixCredentials } = await loadMatrixCredentialsWriteRuntime();
     await touchMatrixCredentials(env, accountId);
     return {
       accountId,
@@ -905,7 +907,7 @@ export async function resolveMatrixAuth(params?: {
     }),
   };
 
-  const { saveMatrixCredentials } = await loadCredentialsWriter();
+  const { saveMatrixCredentials } = await loadMatrixCredentialsWriteRuntime();
   await saveMatrixCredentials(
     {
       homeserver: auth.homeserver,
@@ -974,7 +976,7 @@ export async function backfillMatrixAuthDeviceIdAfterStartup(params: {
     return undefined;
   }
 
-  const credentialsWriter = await import("../credentials-write.runtime.js");
+  const credentialsWriter = await loadMatrixCredentialsWriteRuntime();
   const saved = await credentialsWriter.saveBackfilledMatrixDeviceId(
     {
       homeserver: params.auth.homeserver,

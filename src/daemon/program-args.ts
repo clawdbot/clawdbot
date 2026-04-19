@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -157,7 +158,6 @@ async function resolveNodePath(): Promise<string> {
 }
 
 async function resolveBinaryPath(binary: string): Promise<string> {
-  const { execFileSync } = await import("node:child_process");
   const cmd = process.platform === "win32" ? "where" : "which";
   try {
     const output = execFileSync(cmd, [binary], { encoding: "utf8" }).trim();

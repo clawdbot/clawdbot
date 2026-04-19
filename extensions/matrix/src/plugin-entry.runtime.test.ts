@@ -16,6 +16,10 @@ const PLUGIN_SDK_ROOT = ["openclaw", "plugin-sdk"].join("/");
 const SCOPED_PLUGIN_SDK_ROOT = ["@openclaw", "plugin-sdk"].join("/");
 const GROUP_ACCESS_SUBPATH = `${PLUGIN_SDK_ROOT}/group-access`;
 const SCOPED_GROUP_ACCESS_SUBPATH = `${SCOPED_PLUGIN_SDK_ROOT}/group-access`;
+const MATRIX_RUNTIME_WRAPPER_SOURCE = fs.readFileSync(
+  path.join(REPO_ROOT, "extensions", "matrix", "src", "plugin-entry.runtime.js"),
+  "utf8",
+);
 const PACKAGED_RUNTIME_STUB = [
   "export async function ensureMatrixCryptoRuntime() {}",
   "export async function handleVerifyRecoveryKey() {}",
@@ -140,21 +144,21 @@ function writeTrustedOpenClawBinFixture(
 }
 
 afterEach(() => {
-  for (const dir of tempDirs.splice(0, tempDirs.length)) {
+  for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
 it("loads the source-checkout runtime wrapper through native ESM import", async () => {
   const fixtureRoot = makeFixtureRoot(".tmp-matrix-source-runtime-");
-  const wrapperSource = fs.readFileSync(
-    path.join(REPO_ROOT, "extensions", "matrix", "src", "plugin-entry.runtime.js"),
-    "utf8",
-  );
 
   writeOpenClawPackageFixture(fixtureRoot);
   writeJitiFixture(fixtureRoot);
-  writeFixtureFile(fixtureRoot, "extensions/matrix/src/plugin-entry.runtime.js", wrapperSource);
+  writeFixtureFile(
+    fixtureRoot,
+    "extensions/matrix/src/plugin-entry.runtime.js",
+    MATRIX_RUNTIME_WRAPPER_SOURCE,
+  );
   writeFixtureFile(
     fixtureRoot,
     "extensions/matrix/plugin-entry.handlers.runtime.js",
@@ -176,14 +180,14 @@ it("loads the source-checkout runtime wrapper through native ESM import", async 
 
 it("loads the packaged runtime wrapper without recursing through the stable root alias", async () => {
   const fixtureRoot = makeFixtureRoot(".tmp-matrix-runtime-");
-  const wrapperSource = fs.readFileSync(
-    path.join(REPO_ROOT, "extensions", "matrix", "src", "plugin-entry.runtime.js"),
-    "utf8",
-  );
 
   writeOpenClawPackageFixture(fixtureRoot);
   writeJitiFixture(fixtureRoot);
-  writeFixtureFile(fixtureRoot, "dist/plugin-entry.runtime-C88YIa_v.js", wrapperSource);
+  writeFixtureFile(
+    fixtureRoot,
+    "dist/plugin-entry.runtime-C88YIa_v.js",
+    MATRIX_RUNTIME_WRAPPER_SOURCE,
+  );
   writeFixtureFile(
     fixtureRoot,
     "dist/plugin-entry.runtime.js",
@@ -210,15 +214,15 @@ it("loads the packaged runtime wrapper without recursing through the stable root
 
 it("builds scoped and unscoped plugin-sdk aliases for the wrapper jiti loader", async () => {
   const fixtureRoot = makeFixtureRoot(".tmp-matrix-runtime-aliases-");
-  const wrapperSource = fs.readFileSync(
-    path.join(REPO_ROOT, "extensions", "matrix", "src", "plugin-entry.runtime.js"),
-    "utf8",
-  );
 
   delete matrixWrapperGlobal.__openclawMatrixWrapperJitiOptions;
   writeOpenClawAliasFixture(fixtureRoot);
   writeCapturingJitiFixture(fixtureRoot);
-  writeFixtureFile(fixtureRoot, "extensions/matrix/src/plugin-entry.runtime.js", wrapperSource);
+  writeFixtureFile(
+    fixtureRoot,
+    "extensions/matrix/src/plugin-entry.runtime.js",
+    MATRIX_RUNTIME_WRAPPER_SOURCE,
+  );
   writeFixtureFile(
     fixtureRoot,
     "extensions/matrix/plugin-entry.handlers.runtime.js",
@@ -242,16 +246,16 @@ it("builds scoped and unscoped plugin-sdk aliases for the wrapper jiti loader", 
 
 it("resolves extension-api aliases through the same source extension family", async () => {
   const fixtureRoot = makeFixtureRoot(".tmp-matrix-runtime-extension-api-");
-  const wrapperSource = fs.readFileSync(
-    path.join(REPO_ROOT, "extensions", "matrix", "src", "plugin-entry.runtime.js"),
-    "utf8",
-  );
 
   delete matrixWrapperGlobal.__openclawMatrixWrapperJitiOptions;
   writeOpenClawAliasFixture(fixtureRoot);
   writeFixtureFile(fixtureRoot, "src/extensionAPI.mts", "export {};\n");
   writeCapturingJitiFixture(fixtureRoot);
-  writeFixtureFile(fixtureRoot, "extensions/matrix/src/plugin-entry.runtime.js", wrapperSource);
+  writeFixtureFile(
+    fixtureRoot,
+    "extensions/matrix/src/plugin-entry.runtime.js",
+    MATRIX_RUNTIME_WRAPPER_SOURCE,
+  );
   writeFixtureFile(
     fixtureRoot,
     "extensions/matrix/plugin-entry.handlers.runtime.js",
@@ -272,10 +276,6 @@ it("resolves extension-api aliases through the same source extension family", as
 
 it("keeps wrapper plugin-sdk aliases deterministic and ignores unsafe subpaths", async () => {
   const fixtureRoot = makeFixtureRoot(".tmp-matrix-runtime-alias-order-");
-  const wrapperSource = fs.readFileSync(
-    path.join(REPO_ROOT, "extensions", "matrix", "src", "plugin-entry.runtime.js"),
-    "utf8",
-  );
 
   delete matrixWrapperGlobal.__openclawMatrixWrapperJitiOptions;
   writeOpenClawAliasFixture(fixtureRoot, {
@@ -286,7 +286,11 @@ it("keeps wrapper plugin-sdk aliases deterministic and ignores unsafe subpaths",
   writeFixtureFile(fixtureRoot, "src/plugin-sdk/alpha.ts", "export {};\n");
   writeFixtureFile(fixtureRoot, "src/plugin-sdk/zeta.ts", "export {};\n");
   writeCapturingJitiFixture(fixtureRoot);
-  writeFixtureFile(fixtureRoot, "extensions/matrix/src/plugin-entry.runtime.js", wrapperSource);
+  writeFixtureFile(
+    fixtureRoot,
+    "extensions/matrix/src/plugin-entry.runtime.js",
+    MATRIX_RUNTIME_WRAPPER_SOURCE,
+  );
   writeFixtureFile(
     fixtureRoot,
     "extensions/matrix/plugin-entry.handlers.runtime.js",
@@ -319,10 +323,6 @@ it("keeps wrapper plugin-sdk aliases deterministic and ignores unsafe subpaths",
 
 it("ignores nearby untrusted openclaw package stubs when resolving the wrapper root", async () => {
   const fixtureRoot = makeFixtureRoot(".tmp-matrix-runtime-trusted-root-");
-  const wrapperSource = fs.readFileSync(
-    path.join(REPO_ROOT, "extensions", "matrix", "src", "plugin-entry.runtime.js"),
-    "utf8",
-  );
 
   delete matrixWrapperGlobal.__openclawMatrixWrapperJitiOptions;
   writeOpenClawAliasFixture(fixtureRoot);
@@ -349,7 +349,11 @@ it("ignores nearby untrusted openclaw package stubs when resolving the wrapper r
   );
   writeFixtureFile(fixtureRoot, "extensions/src/plugin-sdk/group-access.ts", "export {};\n");
   writeCapturingJitiFixture(fixtureRoot);
-  writeFixtureFile(fixtureRoot, "extensions/matrix/src/plugin-entry.runtime.js", wrapperSource);
+  writeFixtureFile(
+    fixtureRoot,
+    "extensions/matrix/src/plugin-entry.runtime.js",
+    MATRIX_RUNTIME_WRAPPER_SOURCE,
+  );
   writeFixtureFile(
     fixtureRoot,
     "extensions/matrix/plugin-entry.handlers.runtime.js",
@@ -373,15 +377,15 @@ it("ignores nearby untrusted openclaw package stubs when resolving the wrapper r
 
 it("treats string bin hints case-insensitively when trusting wrapper package roots", async () => {
   const fixtureRoot = makeFixtureRoot(".tmp-matrix-runtime-bin-root-");
-  const wrapperSource = fs.readFileSync(
-    path.join(REPO_ROOT, "extensions", "matrix", "src", "plugin-entry.runtime.js"),
-    "utf8",
-  );
 
   delete matrixWrapperGlobal.__openclawMatrixWrapperJitiOptions;
   writeTrustedOpenClawBinFixture(fixtureRoot, "OpenClaw.MJS");
   writeCapturingJitiFixture(fixtureRoot);
-  writeFixtureFile(fixtureRoot, "extensions/matrix/src/plugin-entry.runtime.js", wrapperSource);
+  writeFixtureFile(
+    fixtureRoot,
+    "extensions/matrix/src/plugin-entry.runtime.js",
+    MATRIX_RUNTIME_WRAPPER_SOURCE,
+  );
   writeFixtureFile(
     fixtureRoot,
     "extensions/matrix/plugin-entry.handlers.runtime.js",

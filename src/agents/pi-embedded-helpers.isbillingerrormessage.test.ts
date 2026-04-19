@@ -923,6 +923,9 @@ describe("classifyFailoverReasonFromHttpStatus – 402 temporary limits", () => 
     expect(classifyFailoverReasonFromHttpStatus(402, undefined)).toBe("billing");
     expect(classifyFailoverReasonFromHttpStatus(402, "")).toBe("billing");
     expect(classifyFailoverReasonFromHttpStatus(402, "Payment required")).toBe("billing");
+    expect(classifyFailoverReasonFromHttpStatus(402, "402 custom proxy billing failure")).toBe(
+      "billing",
+    );
   });
 
   it("matches raw 402 wrappers and status-split payloads for the same message", () => {
@@ -938,6 +941,9 @@ describe("classifyFailoverReasonFromHttpStatus – 402 temporary limits", () => 
 
   it("keeps explicit 402 rate-limit messages in the rate_limit lane", () => {
     const transientMessage = "rate limit exceeded";
+    expect(classifyFailoverReasonFromHttpStatus(402, `402: ${transientMessage}`)).toBe(
+      "rate_limit",
+    );
     expect(classifyFailoverReason(`HTTP 402 Payment Required: ${transientMessage}`)).toBe(
       "rate_limit",
     );
@@ -1014,6 +1020,14 @@ describe("classifyFailoverReason", () => {
         "402 You've used up your points! Visit https://poe.com/api/keys to get more.",
       ),
     ).toBe("billing");
+    // Third-party proxy 402 with non-standard wording (#45774)
+    expect(
+      classifyFailoverReason(
+        "402 No available asset for API access, please purchase a subscription",
+      ),
+    ).toBe("billing");
+    expect(classifyFailoverReason("402 items found in the database")).toBeNull();
+    expect(classifyFailoverReason("402 room is available")).toBeNull();
     expect(classifyFailoverReason(INSUFFICIENT_QUOTA_PAYLOAD)).toBe("billing");
     expect(classifyFailoverReason("deadline exceeded")).toBe("timeout");
     expect(classifyFailoverReason("request ended without sending any chunks")).toBe("timeout");
@@ -1226,6 +1240,37 @@ describe("classifyProviderRuntimeFailureKind", () => {
         "OAuth token refresh failed for openai-codex: invalid_grant. Please try again or re-authenticate.",
       ),
     ).toBe("auth_refresh");
+  });
+
+  it("classifies OAuth refresh timeouts and lock contention distinctly", () => {
+    expect(
+      classifyProviderRuntimeFailureKind(
+        'OAuth refresh call "refreshProviderOAuthCredentialWithPlugin(openai-codex)" exceeded hard timeout (120000ms)',
+      ),
+    ).toBe("refresh_timeout");
+    expect(
+      classifyProviderRuntimeFailureKind("file lock timeout for /tmp/openclaw-oauth-refresh.lock"),
+    ).toBe("refresh_contention");
+    expect(
+      classifyProviderRuntimeFailureKind({
+        code: "refresh_contention",
+        message:
+          "OAuth token refresh failed for openai-codex: OAuth refresh failed (refresh_contention): another process is already refreshing openai-codex for openai-codex:default. Please wait for the in-flight refresh to finish and retry.",
+      }),
+    ).toBe("refresh_contention");
+    expect(
+      classifyProviderRuntimeFailureKind(
+        "OAuth token refresh failed for openai-codex: file lock timeout for /tmp/agent/auth-profiles.json. Please try again or re-authenticate.",
+      ),
+    ).toBe("auth_refresh");
+  });
+
+  it("classifies wrapped OpenAI Codex callback validation failures distinctly", () => {
+    expect(
+      classifyProviderRuntimeFailureKind(
+        "OpenAI Codex OAuth failed (callback_validation_failed): State mismatch",
+      ),
+    ).toBe("callback_validation");
   });
 
   it("classifies HTML 403 auth failures", () => {

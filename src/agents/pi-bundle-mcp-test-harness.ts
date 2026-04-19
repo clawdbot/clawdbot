@@ -8,7 +8,6 @@ import {
   writeClaudeBundle,
   writeExecutable,
 } from "./bundle-mcp-shared.test-harness.js";
-import { __testing } from "./pi-bundle-mcp-tools.js";
 
 const require = createRequire(import.meta.url);
 const SDK_SERVER_MCP_PATH = require.resolve("@modelcontextprotocol/sdk/server/mcp.js");
@@ -17,10 +16,9 @@ const SDK_SERVER_SSE_PATH = require.resolve("@modelcontextprotocol/sdk/server/ss
 const tempDirs: string[] = [];
 
 export async function cleanupBundleMcpHarness(): Promise<void> {
+  const { __testing } = await import("./pi-bundle-mcp-tools.js");
   await __testing.resetSessionMcpRuntimeManager();
-  await Promise.all(
-    tempDirs.splice(0, tempDirs.length).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-  );
+  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 }
 
 export async function makeTempDir(prefix: string): Promise<string> {

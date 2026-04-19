@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
+import {
+  getDetachedTaskLifecycleRuntime,
+  resetDetachedTaskLifecycleRuntimeForTests,
+  setDetachedTaskLifecycleRuntime,
+} from "../../tasks/detached-task-runtime.js";
 import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import { agentHandlers } from "./agent.js";
@@ -327,6 +332,7 @@ describe("gateway agent handler", () => {
     } else {
       process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
     }
+    resetDetachedTaskLifecycleRuntimeForTests();
     resetTaskRegistryForTests();
     mocks.resolveBareResetBootstrapFileAccess.mockReset().mockReturnValue(true);
   });
@@ -983,6 +989,49 @@ describe("gateway agent handler", () => {
       );
 
       expect(findTaskByRunId("task-registry-agent-run")).toMatchObject({
+        runtime: "cli",
+        childSessionKey: "agent:main:main",
+        status: "running",
+      });
+    });
+  });
+
+  it("dispatches async gateway agent task creation through the detached task runtime seam", async () => {
+    await withTempDir({ prefix: "openclaw-gateway-agent-seam-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      primeMainAgentRun();
+
+      const defaultRuntime = getDetachedTaskLifecycleRuntime();
+      const createRunningTaskRunSpy = vi.fn(
+        (...args: Parameters<typeof defaultRuntime.createRunningTaskRun>) =>
+          defaultRuntime.createRunningTaskRun(...args),
+      );
+
+      setDetachedTaskLifecycleRuntime({
+        ...defaultRuntime,
+        createRunningTaskRun: createRunningTaskRunSpy,
+      });
+
+      await invokeAgent(
+        {
+          message: "background cli seam task",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "task-registry-agent-seam",
+        },
+        { reqId: "task-registry-agent-seam" },
+      );
+
+      expect(createRunningTaskRunSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtime: "cli",
+          runId: "task-registry-agent-seam",
+          childSessionKey: "agent:main:main",
+          sourceId: "task-registry-agent-seam",
+          task: expect.stringContaining("background cli seam task"),
+        }),
+      );
+      expect(findTaskByRunId("task-registry-agent-seam")).toMatchObject({
         runtime: "cli",
         childSessionKey: "agent:main:main",
         status: "running",

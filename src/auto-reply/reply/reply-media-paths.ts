@@ -82,6 +82,7 @@ function resolveReplyMediaMaxBytes(params: {
 export function createReplyMediaPathNormalizer(params: {
   cfg: OpenClawConfig;
   sessionKey?: string;
+  agentId?: string;
   workspaceDir: string;
   messageProvider?: string;
   accountId?: string;
@@ -93,9 +94,14 @@ export function createReplyMediaPathNormalizer(params: {
   requesterSenderUsername?: string;
   requesterSenderE164?: string;
 }): (payload: ReplyPayload) => Promise<ReplyPayload> {
-  const agentId = params.sessionKey
-    ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
-    : undefined;
+  // Prefer an explicit agentId so callers without a resolved sessionKey (e.g.
+  // `openclaw agent --deliver` with `--reply-channel/--reply-to`) still get
+  // the stricter agent-scoped file-read policy applied during staging.
+  const agentId =
+    params.agentId ??
+    (params.sessionKey
+      ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
+      : undefined);
   const maxBytes = resolveReplyMediaMaxBytes({
     cfg: params.cfg,
     channel: params.messageProvider,

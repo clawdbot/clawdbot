@@ -3,7 +3,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import { resolvePluginSetupCliBackend } from "../plugins/setup-registry.js";
 import { resolveRuntimeTextTransforms } from "../plugins/text-transforms.runtime.js";
-import type { CliBundleMcpMode, CliBackendPlugin, PluginTextTransforms } from "../plugins/types.js";
+import type {
+  CliBackendAuthEpochMode,
+  CliBundleMcpMode,
+  CliBackendPlugin,
+  PluginTextTransforms,
+} from "../plugins/types.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { normalizeProviderId } from "./model-selection.js";
 import { mergePluginTextTransforms } from "./plugin-text-transforms.js";
@@ -28,6 +33,9 @@ export type ResolvedCliBackend = {
   pluginId?: string;
   transformSystemPrompt?: CliBackendPlugin["transformSystemPrompt"];
   textTransforms?: PluginTextTransforms;
+  defaultAuthProfileId?: string;
+  authEpochMode?: CliBackendAuthEpochMode;
+  prepareExecution?: CliBackendPlugin["prepareExecution"];
 };
 
 export type ResolvedCliBackendLiveTest = {
@@ -38,11 +46,6 @@ export type ResolvedCliBackendLiveTest = {
   dockerBinaryName?: string;
 };
 
-export function normalizeClaudeBackendConfig(config: CliBackendConfig): CliBackendConfig {
-  const normalizeConfig = resolveFallbackCliBackendPolicy("claude-cli")?.normalizeConfig;
-  return normalizeConfig ? normalizeConfig(config) : config;
-}
-
 type FallbackCliBackendPolicy = {
   bundleMcp: boolean;
   bundleMcpMode?: CliBundleMcpMode;
@@ -50,6 +53,9 @@ type FallbackCliBackendPolicy = {
   normalizeConfig?: (config: CliBackendConfig) => CliBackendConfig;
   transformSystemPrompt?: CliBackendPlugin["transformSystemPrompt"];
   textTransforms?: PluginTextTransforms;
+  defaultAuthProfileId?: string;
+  authEpochMode?: CliBackendAuthEpochMode;
+  prepareExecution?: CliBackendPlugin["prepareExecution"];
 };
 
 const FALLBACK_CLI_BACKEND_POLICIES: Record<string, FallbackCliBackendPolicy> = {};
@@ -83,6 +89,9 @@ function resolveSetupCliBackendPolicy(provider: string): FallbackCliBackendPolic
     normalizeConfig: entry.backend.normalizeConfig,
     transformSystemPrompt: entry.backend.transformSystemPrompt,
     textTransforms: entry.backend.textTransforms,
+    defaultAuthProfileId: entry.backend.defaultAuthProfileId,
+    authEpochMode: entry.backend.authEpochMode,
+    prepareExecution: entry.backend.prepareExecution,
   };
 }
 
@@ -156,18 +165,6 @@ function mergeBackendConfig(base: CliBackendConfig, override?: CliBackendConfig)
   };
 }
 
-export function resolveCliBackendIds(cfg?: OpenClawConfig): Set<string> {
-  const ids = new Set<string>();
-  for (const backend of cliBackendsDeps.resolveRuntimeCliBackends()) {
-    ids.add(normalizeBackendKey(backend.id));
-  }
-  const configured = cfg?.agents?.defaults?.cliBackends ?? {};
-  for (const key of Object.keys(configured)) {
-    ids.add(normalizeBackendKey(key));
-  }
-  return ids;
-}
-
 export function resolveCliBackendLiveTest(provider: string): ResolvedCliBackendLiveTest | null {
   const normalized = normalizeBackendKey(provider);
   const entry =
@@ -215,6 +212,9 @@ export function resolveCliBackendConfig(
       pluginId: registered.pluginId,
       transformSystemPrompt: registered.transformSystemPrompt,
       textTransforms: mergePluginTextTransforms(runtimeTextTransforms, registered.textTransforms),
+      defaultAuthProfileId: registered.defaultAuthProfileId,
+      authEpochMode: registered.authEpochMode,
+      prepareExecution: registered.prepareExecution,
     };
   }
 
@@ -240,6 +240,9 @@ export function resolveCliBackendConfig(
         runtimeTextTransforms,
         fallbackPolicy.textTransforms,
       ),
+      defaultAuthProfileId: fallbackPolicy.defaultAuthProfileId,
+      authEpochMode: fallbackPolicy.authEpochMode,
+      prepareExecution: fallbackPolicy.prepareExecution,
     };
   }
   const mergedFallback = fallbackPolicy?.baseConfig
@@ -262,6 +265,9 @@ export function resolveCliBackendConfig(
       runtimeTextTransforms,
       fallbackPolicy?.textTransforms,
     ),
+    defaultAuthProfileId: fallbackPolicy?.defaultAuthProfileId,
+    authEpochMode: fallbackPolicy?.authEpochMode,
+    prepareExecution: fallbackPolicy?.prepareExecution,
   };
 }
 

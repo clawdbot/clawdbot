@@ -36,6 +36,15 @@ export type {
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
+type ConfigModule = typeof import("../config/config.js");
+
+let configModulePromise: Promise<ConfigModule> | undefined;
+
+function loadConfigModule(): Promise<ConfigModule> {
+  configModulePromise ??= import("../config/config.js");
+  return configModulePromise;
+}
+
 const debugHealth = (...args: unknown[]) => {
   if (isTruthyEnvValue(process.env.OPENCLAW_DEBUG_HEALTH)) {
     console.warn("[health:debug]", ...args);
@@ -208,7 +217,7 @@ export async function getHealthSnapshot(params?: {
   probe?: boolean;
 }): Promise<HealthSummary> {
   const timeoutMs = params?.timeoutMs;
-  const { loadConfig } = await import("../config/config.js");
+  const { loadConfig } = await loadConfigModule();
   const cfg = loadConfig();
   const { defaultAgentId, ordered } = resolveAgentOrder(cfg);
   const channelBindings = buildChannelAccountBindings(cfg);
@@ -636,6 +645,6 @@ export async function healthCommand(
 }
 
 async function readBestEffortHealthConfig(): Promise<OpenClawConfig> {
-  const { readBestEffortConfig } = await import("../config/config.js");
+  const { readBestEffortConfig } = await loadConfigModule();
   return await readBestEffortConfig();
 }

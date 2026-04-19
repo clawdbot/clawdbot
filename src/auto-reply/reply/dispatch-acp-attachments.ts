@@ -33,7 +33,9 @@ export async function resolveAcpAttachments(params: {
   const mediaAttachments = runtime
     .normalizeAttachments(params.ctx)
     .map((attachment) =>
-      normalizeOptionalString(attachment.path) ? { ...attachment, url: undefined } : attachment,
+      normalizeOptionalString(attachment.path)
+        ? Object.assign({}, attachment, { url: undefined })
+        : attachment,
     );
   const cache = new runtime.MediaAttachmentCache(mediaAttachments, {
     localPathRoots: runtime.resolveMediaAttachmentLocalRoots({

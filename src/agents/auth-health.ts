@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  DEFAULT_OAUTH_REFRESH_MARGIN_MS,
   type AuthCredentialReasonCode,
   evaluateStoredCredentialEligibility,
   resolveTokenExpiryState,
@@ -79,16 +80,22 @@ export function formatRemainingShort(
 function resolveOAuthStatus(
   expiresAt: number | undefined,
   now: number,
-  warnAfterMs: number,
+  expiringWithinMs: number,
 ): { status: AuthProfileHealthStatus; remainingMs?: number } {
   if (!expiresAt || !Number.isFinite(expiresAt) || expiresAt <= 0) {
     return { status: "missing" };
   }
   const remainingMs = expiresAt - now;
-  if (remainingMs <= 0) {
+  const expiryState = resolveTokenExpiryState(expiresAt, now, {
+    expiringWithinMs,
+  });
+  if (expiryState === "invalid_expires" || expiryState === "missing") {
+    return { status: "missing" };
+  }
+  if (expiryState === "expired") {
     return { status: "expired", remainingMs };
   }
-  if (remainingMs <= warnAfterMs) {
+  if (expiryState === "expiring") {
     return { status: "expiring", remainingMs };
   }
   return { status: "ok", remainingMs };
@@ -166,10 +173,11 @@ function buildProfileHealth(params: {
     profileId,
     credential,
   });
+  const oauthWarnAfterMs = Math.max(warnAfterMs, DEFAULT_OAUTH_REFRESH_MARGIN_MS);
   const { status: rawStatus, remainingMs } = resolveOAuthStatus(
     effectiveCredential.expires,
     now,
-    warnAfterMs,
+    oauthWarnAfterMs,
   );
   return {
     profileId,

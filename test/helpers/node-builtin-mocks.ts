@@ -9,8 +9,8 @@ function resolveMockOverrides<TModule extends object>(
   return typeof factory === "function" ? factory(actual) : factory;
 }
 
-function resolveDefaultBase<TModule extends object>(actual: TModule): Record<string, unknown> {
-  const defaultExport = (actual as TModule & { default?: unknown }).default;
+function resolveDefaultBase(actual: object): Record<string, unknown> {
+  const defaultExport = (actual as { default?: unknown }).default;
   if (defaultExport && typeof defaultExport === "object") {
     return defaultExport as Record<string, unknown>;
   }

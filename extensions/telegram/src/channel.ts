@@ -85,12 +85,19 @@ import { resolveTelegramToken } from "./token.js";
 import { parseTelegramTopicConversation } from "./topic-conversation.js";
 
 type TelegramSendFn = typeof import("./send.js").sendMessageTelegram;
+type TelegramUpdateOffsetRuntime = typeof import("../update-offset-runtime-api.js");
 
 let telegramSendModulePromise: Promise<typeof import("./send.js")> | undefined;
+let telegramUpdateOffsetRuntimePromise: Promise<TelegramUpdateOffsetRuntime> | undefined;
 
 async function loadTelegramSendModule() {
   telegramSendModulePromise ??= import("./send.js");
   return await telegramSendModulePromise;
+}
+
+async function loadTelegramUpdateOffsetRuntime() {
+  telegramUpdateOffsetRuntimePromise ??= import("../update-offset-runtime-api.js");
+  return await telegramUpdateOffsetRuntimePromise;
 }
 
 type TelegramSendOptions = NonNullable<Parameters<TelegramSendFn>[2]>;
@@ -734,12 +741,12 @@ export const telegramPlugin = createChatChannelPlugin({
         const previousToken = resolveTelegramAccount({ cfg: prevCfg, accountId }).token.trim();
         const nextToken = resolveTelegramAccount({ cfg: nextCfg, accountId }).token.trim();
         if (previousToken !== nextToken) {
-          const { deleteTelegramUpdateOffset } = await import("../update-offset-runtime-api.js");
+          const { deleteTelegramUpdateOffset } = await loadTelegramUpdateOffsetRuntime();
           await deleteTelegramUpdateOffset({ accountId });
         }
       },
       onAccountRemoved: async ({ accountId }) => {
-        const { deleteTelegramUpdateOffset } = await import("../update-offset-runtime-api.js");
+        const { deleteTelegramUpdateOffset } = await loadTelegramUpdateOffsetRuntime();
         await deleteTelegramUpdateOffset({ accountId });
       },
     },

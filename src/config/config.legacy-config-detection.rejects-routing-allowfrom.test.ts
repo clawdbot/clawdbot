@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import {
+  expectSchemaConfigValue,
+  expectSchemaValidationIssue,
+} from "./legacy-config-detection.test-support.js";
 import { validateConfigObject } from "./validation.js";
 import {
   DiscordConfigSchema,
@@ -9,41 +13,6 @@ import {
   TelegramConfigSchema,
 } from "./zod-schema.providers-core.js";
 import { WhatsAppConfigSchema } from "./zod-schema.providers-whatsapp.js";
-
-function expectSchemaConfigValue(params: {
-  schema: { safeParse: (value: unknown) => { success: true; data: unknown } | { success: false } };
-  config: unknown;
-  readValue: (config: unknown) => unknown;
-  expectedValue: unknown;
-}) {
-  const res = params.schema.safeParse(params.config);
-  expect(res.success).toBe(true);
-  if (!res.success) {
-    throw new Error("expected schema config to be valid");
-  }
-  expect(params.readValue(res.data)).toBe(params.expectedValue);
-}
-
-function expectSchemaValidationIssue(params: {
-  schema: {
-    safeParse: (
-      value: unknown,
-    ) =>
-      | { success: true; data: unknown }
-      | { success: false; error: { issues: Array<{ path: PropertyKey[]; message: string }> } };
-  };
-  config: unknown;
-  expectedPath: string;
-  expectedMessage: string;
-}) {
-  const res = params.schema.safeParse(params.config);
-  expect(res.success).toBe(false);
-  if (!res.success) {
-    const issue = res.error.issues[0];
-    expect(issue?.path.join(".")).toBe(params.expectedPath);
-    expect(issue?.message).toContain(params.expectedMessage);
-  }
-}
 
 describe("legacy config detection", () => {
   it.each([

@@ -140,7 +140,8 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENCLAW_CONTROL_UI_I18N_MODEL: gpt-5.4
           OPENCLAW_CONTROL_UI_I18N_THINKING: low
-        run: node --import tsx scripts/control-ui-i18n.ts sync --locale "${{ matrix.locale }}" --write
+          LOCALE: ${{ matrix.locale }}
+        run: node --import tsx scripts/control-ui-i18n.ts sync --locale "${LOCALE}" --write
 
       - name: Commit and push locale updates
         env:

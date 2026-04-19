@@ -147,6 +147,7 @@ async function runDaemonCommand(args: string[]) {
   await daemonProgram.parseAsync(args, { from: "user" });
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe logged JSON shape.
 function parseFirstJsonRuntimeLine<T>() {
   const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
   return JSON.parse(jsonLine ?? "{}") as T;

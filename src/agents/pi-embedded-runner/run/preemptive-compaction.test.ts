@@ -1,38 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import "../../test-helpers/pi-coding-agent-token-mock.js";
 import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
-
-const piCodingAgentMocks = vi.hoisted(() => ({
-  estimateTokens: vi.fn((message: unknown) => estimateTokenish(message)),
-}));
-
-function readText(value: unknown): string {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    return value.map(readText).join("");
-  }
-  if (value && typeof value === "object") {
-    const record = value as { text?: unknown; content?: unknown };
-    return `${readText(record.text)}${readText(record.content)}`;
-  }
-  return "";
-}
-
-function estimateTokenish(message: unknown): number {
-  return Math.max(1, Math.ceil(readText(message).length / 4));
-}
-
-vi.mock("@mariozechner/pi-coding-agent", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-coding-agent")>(
-    "@mariozechner/pi-coding-agent",
-  );
-  return {
-    ...actual,
-    estimateTokens: piCodingAgentMocks.estimateTokens,
-  };
-});
 
 let PREEMPTIVE_OVERFLOW_ERROR_TEXT: typeof import("./preemptive-compaction.js").PREEMPTIVE_OVERFLOW_ERROR_TEXT;
 let estimatePrePromptTokens: typeof import("./preemptive-compaction.js").estimatePrePromptTokens;

@@ -1,6 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { OAUTH_REFRESH_CALL_TIMEOUT_MS, OAUTH_REFRESH_LOCK_OPTIONS } from "./constants.js";
 
+function computeMinimumRetryBudgetMs(): number {
+  let total = 0;
+  for (let attempt = 0; attempt < OAUTH_REFRESH_LOCK_OPTIONS.retries.retries; attempt += 1) {
+    total += Math.min(
+      OAUTH_REFRESH_LOCK_OPTIONS.retries.maxTimeout,
+      Math.max(
+        OAUTH_REFRESH_LOCK_OPTIONS.retries.minTimeout,
+        OAUTH_REFRESH_LOCK_OPTIONS.retries.minTimeout *
+          OAUTH_REFRESH_LOCK_OPTIONS.retries.factor ** attempt,
+      ),
+    );
+  }
+  return total;
+}
+
 // Invariant tests for the two constants that together bound the OAuth
 // refresh critical section. Behavioural tests for the inner `setTimeout`
 // mechanics are deliberately omitted: the implementation is a thin
@@ -40,5 +55,11 @@ describe("OAuth refresh call timeout (invariants)", () => {
     // refresh ceiling (60s) so waiting agents never prematurely reclaim a
     // lock during a legitimate slow-but-successful refresh.
     expect(OAUTH_REFRESH_LOCK_OPTIONS.stale).toBeGreaterThan(60_000);
+  });
+
+  it("OAUTH_REFRESH_LOCK_OPTIONS retry budget outlasts the refresh call timeout", () => {
+    // Waiters should not exhaust their retry budget while a legitimate slow
+    // refresh is still within its allowed runtime budget.
+    expect(computeMinimumRetryBudgetMs()).toBeGreaterThan(OAUTH_REFRESH_CALL_TIMEOUT_MS);
   });
 });

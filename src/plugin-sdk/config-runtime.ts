@@ -4,6 +4,7 @@
 export { resolveDefaultAgentId } from "../agents/agent-scope.js";
 export {
   clearRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
   getRuntimeConfigSnapshot,
   loadConfig,
   readConfigFileSnapshotForWrite,

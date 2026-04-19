@@ -40,22 +40,13 @@ type SignalTarget =
   | { type: "group"; groupId: string }
   | { type: "username"; username: string };
 
-let signalConfigRuntimePromise:
-  | Promise<typeof import("openclaw/plugin-sdk/config-runtime")>
-  | undefined;
-
-async function loadSignalConfigRuntime() {
-  signalConfigRuntimePromise ??= import("openclaw/plugin-sdk/config-runtime");
-  return await signalConfigRuntimePromise;
-}
-
 async function resolveSignalRpcAccountInfo(
   opts: Pick<SignalSendOpts, "cfg" | "baseUrl" | "account" | "accountId">,
 ) {
   if (opts.baseUrl?.trim() && opts.account?.trim()) {
     return undefined;
   }
-  const cfg = opts.cfg ?? (await loadSignalConfigRuntime()).loadConfig();
+  const cfg = opts.cfg ?? loadConfig();
   return resolveSignalAccount({
     cfg,
     accountId: opts.accountId,

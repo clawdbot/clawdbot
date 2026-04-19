@@ -60,6 +60,7 @@ type CronUpdatePatch = {
       model?: string;
       thinking?: string;
       lightContext?: boolean;
+      toolsAllow?: string[];
     };
     delivery?: {
       mode?: string;
@@ -73,7 +74,12 @@ type CronUpdatePatch = {
 
 type CronAddParams = {
   schedule?: { kind?: string; staggerMs?: number };
-  payload?: { model?: string; thinking?: string; lightContext?: boolean };
+  payload?: {
+    model?: string;
+    thinking?: string;
+    lightContext?: boolean;
+    toolsAllow?: string[];
+  };
   delivery?: { mode?: string; accountId?: string };
   deleteAfterRun?: boolean;
   agentId?: string;
@@ -147,6 +153,7 @@ function mockCronEditJobLookup(schedule: unknown): void {
   );
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets each assertion ascribe expected RPC params.
 function getGatewayCallParams<T>(method: string): T {
   const call = callGatewayFromCli.mock.calls.find((entry) => entry[0] === method);
   return (call?.[2] ?? {}) as T;
@@ -417,6 +424,23 @@ describe("cron cli", () => {
     expect(params?.payload?.lightContext).toBe(true);
   });
 
+  it("splits PowerShell-style space-separated --tools on cron add", async () => {
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "Tools",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "isolated",
+      "--message",
+      "hello",
+      "--tools",
+      "exec read write",
+    ]);
+
+    expect(params?.payload?.toolsAllow).toEqual(["exec", "read", "write"]);
+  });
+
   it.each([
     {
       label: "omits empty model and thinking",
@@ -434,6 +458,17 @@ describe("cron cli", () => {
     const patch = await runCronEditAndGetPatch(args);
     expect(patch?.patch?.payload?.model).toBe(expectedModel);
     expect(patch?.patch?.payload?.thinking).toBe(expectedThinking);
+  });
+
+  it("splits PowerShell-style space-separated --tools on cron edit", async () => {
+    const patch = await runCronEditAndGetPatch([
+      "--message",
+      "hello",
+      "--tools",
+      "exec read write",
+    ]);
+
+    expect(patch?.patch?.payload?.toolsAllow).toEqual(["exec", "read", "write"]);
   });
 
   it("sets and clears agent id on cron edit", async () => {

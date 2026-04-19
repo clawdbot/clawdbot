@@ -5,6 +5,7 @@ import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
+import { coerceChatContentText } from "../shared/chat-content.js";
 import {
   parseAssistantTextSignature,
   resolveAssistantMessagePhase,
@@ -45,31 +46,6 @@ const stripTrailingDirective = (text: string): string => {
     return text;
   }
   return text.slice(0, openIndex);
-};
-
-const coerceText = (value: unknown): string => {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (value == null) {
-    return "";
-  }
-  if (
-    typeof value === "number" ||
-    typeof value === "boolean" ||
-    typeof value === "bigint" ||
-    typeof value === "symbol"
-  ) {
-    return String(value);
-  }
-  if (typeof value === "object") {
-    try {
-      return JSON.stringify(value) ?? "";
-    } catch {
-      return "";
-    }
-  }
-  return "";
 };
 
 function shouldSuppressAssistantVisibleOutput(message: AgentMessage | undefined): boolean {
@@ -189,12 +165,12 @@ export function resolveSilentReplyFallbackText(params: {
   text: unknown;
   messagingToolSentTexts: string[];
 }): string {
-  const text = coerceText(params.text);
+  const text = coerceChatContentText(params.text);
   const trimmed = text.trim();
   if (trimmed !== SILENT_REPLY_TOKEN) {
     return text;
   }
-  const fallback = coerceText(params.messagingToolSentTexts.at(-1)).trim();
+  const fallback = coerceChatContentText(params.messagingToolSentTexts.at(-1)).trim();
   if (!fallback) {
     return text;
   }
@@ -397,7 +373,9 @@ export function handleMessageUpdate(
   if (deliveryPhase === "commentary") {
     return;
   }
-  const phaseAwareVisibleText = coerceText(extractAssistantVisibleText(partialAssistant)).trim();
+  const phaseAwareVisibleText = coerceChatContentText(
+    extractAssistantVisibleText(partialAssistant),
+  ).trim();
   const shouldUsePhaseAwareBlockReply = Boolean(deliveryPhase);
 
   if (chunk) {
@@ -543,8 +521,8 @@ export function handleMessageEnd(
   }
   promoteThinkingTagsToBlocks(assistantMessage);
 
-  const rawText = coerceText(extractAssistantText(assistantMessage));
-  const rawVisibleText = coerceText(extractAssistantVisibleText(assistantMessage));
+  const rawText = coerceChatContentText(extractAssistantText(assistantMessage));
+  const rawVisibleText = coerceChatContentText(extractAssistantVisibleText(assistantMessage));
   appendRawStream({
     ts: Date.now(),
     event: "assistant_message_end",

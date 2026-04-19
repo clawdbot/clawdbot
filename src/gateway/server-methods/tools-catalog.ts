@@ -120,10 +120,9 @@ function buildPluginGroups(params: {
     groups.set(groupId, existing);
   }
   return [...groups.values()]
-    .map((group) => ({
-      ...group,
-      tools: group.tools.toSorted((a, b) => a.id.localeCompare(b.id)),
-    }))
+    .map((group) =>
+      Object.assign({}, group, { tools: group.tools.toSorted((a, b) => a.id.localeCompare(b.id)) }),
+    )
     .toSorted((a, b) => a.label.localeCompare(b.label));
 }
 

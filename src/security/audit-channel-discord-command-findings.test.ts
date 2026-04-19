@@ -53,7 +53,7 @@ describe("security audit discord command findings", () => {
             discord: DiscordAccountConfig;
           };
         },
-        account: createDiscordAccount(cfg.channels!.discord!),
+        account: createDiscordAccount(cfg.channels!.discord),
         accountId: "default",
         orderedAccountIds: ["default"],
         hasExplicitAccountPath: false,

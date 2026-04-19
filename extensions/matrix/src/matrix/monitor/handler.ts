@@ -78,6 +78,8 @@ let acpBindingRuntimePromise:
 let sessionBindingRuntimePromise:
   | Promise<typeof import("openclaw/plugin-sdk/session-binding-runtime")>
   | undefined;
+let matrixReactionEventsPromise: Promise<typeof import("./reaction-events.js")> | undefined;
+let matrixDraftStreamPromise: Promise<typeof import("../draft-stream.js")> | undefined;
 
 function loadMatrixSendModule(): Promise<typeof import("../send.js")> {
   matrixSendModulePromise ??= import("../send.js");
@@ -97,6 +99,17 @@ function loadSessionBindingRuntime(): Promise<
   sessionBindingRuntimePromise ??= import("openclaw/plugin-sdk/session-binding-runtime");
   return sessionBindingRuntimePromise;
 }
+
+function loadMatrixReactionEvents(): Promise<typeof import("./reaction-events.js")> {
+  matrixReactionEventsPromise ??= import("./reaction-events.js");
+  return matrixReactionEventsPromise;
+}
+
+function loadMatrixDraftStream(): Promise<typeof import("../draft-stream.js")> {
+  matrixDraftStreamPromise ??= import("../draft-stream.js");
+  return matrixDraftStreamPromise;
+}
+
 const MAX_TRACKED_PAIRING_REPLY_SENDERS = 512;
 const MAX_TRACKED_SHARED_DM_CONTEXT_NOTICES = 512;
 type MatrixAllowBotsMode = "off" | "mentions" | "all";
@@ -739,7 +752,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
 
         if (isReactionEvent) {
           const senderName = await getSenderName();
-          const { handleInboundMatrixReaction } = await import("./reaction-events.js");
+          const { handleInboundMatrixReaction } = await loadMatrixReactionEvents();
           await handleInboundMatrixReaction({
             client,
             core,
@@ -1366,7 +1379,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const quietDraftStreaming = streaming === "quiet";
       const draftReplyToId = replyToMode !== "off" && !threadTarget ? _messageId : undefined;
       const draftStream: MatrixDraftStreamHandle | undefined = draftStreamingEnabled
-        ? await import("../draft-stream.js").then(({ createMatrixDraftStream }) =>
+        ? await loadMatrixDraftStream().then(({ createMatrixDraftStream }) =>
             createMatrixDraftStream({
               roomId,
               client,

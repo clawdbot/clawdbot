@@ -10,7 +10,7 @@ import {
   type GatewayMessageChannel,
   INTERNAL_MESSAGE_CHANNEL,
 } from "../../utils/message-channel.js";
-import { AGENT_LANE_NESTED } from "../lanes.js";
+import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import {
   readLatestAssistantReplySnapshot,
   waitForAgentRunAndReadUpdatedAssistantReply,
@@ -276,7 +276,7 @@ export function createSessionsSendTool(opts?: {
         idempotencyKey,
         deliver: false,
         channel: INTERNAL_MESSAGE_CHANNEL,
-        lane: AGENT_LANE_NESTED,
+        lane: resolveNestedAgentLaneForSession(resolvedKey),
         extraSystemPrompt: agentMessageContext,
         inputProvenance: {
           kind: "inter_session",

@@ -71,6 +71,43 @@ type FallbackAnnouncementExpectation = {
   mediaUrls: string[];
 };
 
+type CompletionFixtureParams = {
+  directSend?: boolean;
+  mediaUrls?: string[];
+  result: string;
+  runId: string;
+  taskLabel: string;
+};
+
+export function createMediaCompletionFixture({
+  directSend,
+  mediaUrls,
+  result,
+  runId,
+  taskLabel,
+}: CompletionFixtureParams) {
+  return {
+    ...(directSend
+      ? { config: { tools: { media: { asyncCompletion: { directSend: true } } } } }
+      : {}),
+    handle: {
+      taskId: "task-123",
+      runId,
+      requesterSessionKey: "agent:main:discord:direct:123",
+      requesterOrigin: {
+        channel: "discord",
+        to: "channel:1",
+        threadId: "thread-1",
+      },
+      taskLabel,
+    },
+    status: "ok" as const,
+    statusLabel: "completed successfully",
+    result,
+    ...(mediaUrls ? { mediaUrls } : {}),
+  };
+}
+
 export function resetMediaBackgroundMocks({
   taskExecutorMocks,
   taskDeliveryRuntimeMocks,

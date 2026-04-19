@@ -2,29 +2,16 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { resolveCodexNativeWebSearchConfig } from "./codex-native-web-search.shared.js";
+import type { CodexNativeSearchMode } from "./codex-native-web-search.shared.js";
 import { resolveDefaultModelForAgent } from "./model-selection.js";
 export {
+  type CodexNativeSearchContextSize,
+  type CodexNativeSearchMode,
+  type CodexNativeSearchUserLocation,
   describeCodexNativeWebSearch,
+  type ResolvedCodexNativeWebSearchConfig,
   resolveCodexNativeWebSearchConfig,
 } from "./codex-native-web-search.shared.js";
-
-export type CodexNativeSearchMode = "cached" | "live";
-export type CodexNativeSearchContextSize = "low" | "medium" | "high";
-
-export type CodexNativeSearchUserLocation = {
-  country?: string;
-  region?: string;
-  city?: string;
-  timezone?: string;
-};
-
-export type ResolvedCodexNativeWebSearchConfig = {
-  enabled: boolean;
-  mode: CodexNativeSearchMode;
-  allowedDomains?: string[];
-  contextSize?: CodexNativeSearchContextSize;
-  userLocation?: CodexNativeSearchUserLocation;
-};
 
 export type CodexNativeSearchActivation = {
   globalWebSearchEnabled: boolean;

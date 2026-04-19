@@ -1,6 +1,9 @@
 import { loadBundledPluginContractApiSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 
-type MatrixContractSurface = typeof import("@openclaw/matrix/contract-api.js");
+type MatrixContractSurface = {
+  matrixSetupAdapter: Record<string, unknown>;
+  matrixSetupWizard: Record<string, unknown>;
+};
 
 let matrixContractSurface: MatrixContractSurface | undefined;
 

@@ -5,6 +5,15 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search-config-contract";
 
 const KIMI_CREDENTIAL_PATH = "plugins.entries.moonshot.config.webSearch.apiKey";
+type KimiWebSearchProviderRuntime = typeof import("./kimi-web-search-provider.runtime.js");
+
+let kimiWebSearchProviderRuntimePromise: Promise<KimiWebSearchProviderRuntime> | undefined;
+
+function loadKimiWebSearchProviderRuntime(): Promise<KimiWebSearchProviderRuntime> {
+  kimiWebSearchProviderRuntimePromise ??= import("./kimi-web-search-provider.runtime.js");
+  return kimiWebSearchProviderRuntimePromise;
+}
+
 const KimiSearchSchema = {
   type: "object",
   properties: {
@@ -26,7 +35,7 @@ const KimiSearchSchema = {
 async function runKimiSearchProviderSetup(
   ctx: WebSearchProviderSetupContext,
 ): Promise<WebSearchProviderSetupContext["config"]> {
-  const runtime = await import("./kimi-web-search-provider.runtime.js");
+  const runtime = await loadKimiWebSearchProviderRuntime();
   return await runtime.runKimiSearchProviderSetup(ctx);
 }
 
@@ -54,8 +63,7 @@ export function createKimiWebSearchProvider(): WebSearchProviderPlugin {
         "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search.",
       parameters: KimiSearchSchema,
       execute: async (args) => {
-        const { executeKimiWebSearchProviderTool } =
-          await import("./kimi-web-search-provider.runtime.js");
+        const { executeKimiWebSearchProviderTool } = await loadKimiWebSearchProviderRuntime();
         return await executeKimiWebSearchProviderTool(ctx, args);
       },
     }),

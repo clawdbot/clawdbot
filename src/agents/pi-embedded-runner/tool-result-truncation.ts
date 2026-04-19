@@ -288,13 +288,12 @@ export function truncateToolResultMessage(
       1,
       Math.min(maxChars, Math.max(minKeepChars + defaultSuffix.length, proportionalBudget)),
     );
-    return {
-      ...textBlock,
+    return Object.assign({}, textBlock, {
       text: truncateToolResultText(textBlock.text, blockBudget, {
         suffix: suffixFactory,
         minKeepChars,
       }),
-    };
+    });
   });
 
   return { ...msg, content: newContent } as AgentMessage;

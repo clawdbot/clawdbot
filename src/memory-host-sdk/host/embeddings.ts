@@ -1,8 +1,12 @@
-import type { Llama, LlamaEmbeddingContext, LlamaModel } from "node-llama-cpp";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { sanitizeAndNormalizeEmbedding } from "./embedding-vectors.js";
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.types.js";
-import { importNodeLlamaCpp } from "./node-llama.js";
+import {
+  importNodeLlamaCpp,
+  type Llama,
+  type LlamaEmbeddingContext,
+  type LlamaModel,
+} from "./node-llama.js";
 
 export type {
   EmbeddingProvider,

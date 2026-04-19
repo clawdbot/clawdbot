@@ -161,10 +161,10 @@ export function resolveSelectedCapabilityProvider<T extends CapabilityProvider>(
   });
 }
 
-export function resolveCapabilityModelCandidatesForTool<T extends CapabilityProvider>(params: {
+export function resolveCapabilityModelCandidatesForTool(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
-  providers: T[];
+  providers: CapabilityProvider[];
 }): string[] {
   const providerDefaults = new Map<string, string>();
   for (const provider of params.providers) {
@@ -206,11 +206,11 @@ export function resolveCapabilityModelCandidatesForTool<T extends CapabilityProv
   return orderedRefs;
 }
 
-export function resolveCapabilityModelConfigForTool<T extends CapabilityProvider>(params: {
+export function resolveCapabilityModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
   modelConfig?: AgentModelConfig;
-  providers: T[];
+  providers: CapabilityProvider[];
 }): ToolModelConfig | null {
   const explicit = coerceToolModelConfig(params.modelConfig);
   if (hasToolModelConfig(explicit)) {

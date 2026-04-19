@@ -2,8 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { loadConfig } from "./config.js";
 import { createConfigIO } from "./io.js";
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
+import { withTempHomeConfig } from "./test-helpers.js";
 
 async function withTempHome(run: (home: string) => Promise<void>): Promise<void> {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-"));
@@ -111,5 +113,36 @@ describe("config io paths", () => {
       },
     });
     expect(cfg.agents?.list?.[0]?.tools?.exec?.safeBinTrustedDirs).toEqual(["/ops/bin"]);
+  });
+
+  it("moves WhatsApp shared access defaults into accounts.default during loadConfig() runtime compat", async () => {
+    await withTempHomeConfig(
+      {
+        channels: {
+          whatsapp: {
+            enabled: true,
+            dmPolicy: "allowlist",
+            allowFrom: ["+15550001111"],
+            groupPolicy: "open",
+            groupAllowFrom: [],
+            accounts: {
+              work: {
+                enabled: true,
+                authDir: "/tmp/wa-work",
+              },
+            },
+          },
+        },
+      },
+      async () => {
+        const loaded = loadConfig();
+        expect(loaded.channels?.whatsapp?.accounts?.default).toMatchObject({
+          dmPolicy: "allowlist",
+          allowFrom: ["+15550001111"],
+          groupPolicy: "open",
+          groupAllowFrom: [],
+        });
+      },
+    );
   });
 });

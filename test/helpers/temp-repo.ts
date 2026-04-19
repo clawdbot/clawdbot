@@ -14,7 +14,7 @@ export function writeJsonFile(filePath: string, value: unknown): void {
 }
 
 export function cleanupTempDirs(tempDirs: string[]): void {
-  for (const dir of tempDirs.splice(0, tempDirs.length)) {
+  for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }

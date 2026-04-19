@@ -3,6 +3,7 @@
   "enabledByDefault": true,
   "providers": ["anthropic-vertex"],
   "providerDiscoveryEntry": "./provider-discovery.ts",
+  "nonSecretAuthMarkers": ["gcp-vertex-credentials"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

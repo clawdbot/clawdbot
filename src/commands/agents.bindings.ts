@@ -9,6 +9,8 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 import type { ChannelChoice } from "./onboard-types.js";
 
+export { describeBinding } from "./agents.binding-format.js";
+
 function bindingMatchKey(match: AgentRouteBinding["match"]) {
   const accountId = normalizeOptionalString(match.accountId) || DEFAULT_ACCOUNT_ID;
   const identityKey = bindingMatchIdentityKey(match);
@@ -47,24 +49,6 @@ function canUpgradeBindingAccountScope(params: {
     bindingMatchIdentityKey(params.existing.match) ===
     bindingMatchIdentityKey(params.incoming.match)
   );
-}
-
-export function describeBinding(binding: AgentRouteBinding) {
-  const match = binding.match;
-  const parts = [match.channel];
-  if (match.accountId) {
-    parts.push(`accountId=${match.accountId}`);
-  }
-  if (match.peer) {
-    parts.push(`peer=${match.peer.kind}:${match.peer.id}`);
-  }
-  if (match.guildId) {
-    parts.push(`guild=${match.guildId}`);
-  }
-  if (match.teamId) {
-    parts.push(`team=${match.teamId}`);
-  }
-  return parts.join(" ");
 }
 
 export function applyAgentBindings(

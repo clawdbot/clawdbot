@@ -28,7 +28,7 @@
         "type": "string",
         "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"]
       },
-      "timeoutMs": { "type": "integer", "minimum": 250 },
+      "timeoutMs": { "type": "integer", "minimum": 250, "maximum": 120000 },
       "queryMode": {
         "type": "string",
         "enum": ["message", "recent", "full"]

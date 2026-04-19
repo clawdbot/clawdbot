@@ -651,10 +651,10 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
           timeoutMs: judgeTimeoutMs,
         });
         rankings = parseJudgeReply(rawReply, new Set(judgePrompt.labelToModel.keys())).map(
-          (ranking) => ({
-            ...ranking,
-            model: judgePrompt.labelToModel.get(ranking.model) ?? ranking.model,
-          }),
+          (ranking) =>
+            Object.assign({}, ranking, {
+              model: judgePrompt.labelToModel.get(ranking.model) ?? ranking.model,
+            }),
         );
       } catch (error) {
         judgeError = formatErrorMessage(error);

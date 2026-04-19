@@ -126,7 +126,7 @@ vi.mock("@mariozechner/pi-ai", async () => {
       context: { messages?: Array<{ role?: string; content?: unknown }> },
     ) => {
       streamCallCount += 1;
-      const messages = (context.messages ?? []).map((message) => ({ ...message }));
+      const messages = (context.messages ?? []).map((message) => Object.assign({}, message));
       observedContexts.push(messages);
       const stream = actual.createAssistantMessageEventStream();
       queueMicrotask(() => {

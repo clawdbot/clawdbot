@@ -66,7 +66,11 @@ async function waitForSandboxCdp(params: { cdpPort: number; timeoutMs: number })
     } catch {
       // ignore
     }
-    await new Promise((r) => setTimeout(r, 150));
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      break;
+    }
+    await new Promise((r) => setTimeout(r, Math.min(150, remainingMs)));
   }
   return false;
 }

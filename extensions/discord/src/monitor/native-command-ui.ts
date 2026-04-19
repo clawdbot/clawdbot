@@ -254,7 +254,7 @@ async function resolveDiscordModelPickerRouteState(params: {
       client: interaction.client,
       threadChannel: {
         id: rawChannelId,
-        name: "name" in channel ? (channel.name as string | undefined) : undefined,
+        name: "name" in channel ? channel.name : undefined,
         parentId: "parentId" in channel ? (channel.parentId ?? undefined) : undefined,
         parent: undefined,
       },

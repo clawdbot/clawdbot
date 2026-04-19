@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import { formatUnknownError } from "./errors.js";
@@ -388,10 +390,8 @@ async function handleFeedbackInvoke(
     const storePath = core.channel.session.resolveStorePath(deps.cfg.session?.store, {
       agentId: route.agentId,
     });
-    const fs = await import("node:fs/promises");
-    const pathMod = await import("node:path");
     const safeKey = route.sessionKey.replace(/[^a-zA-Z0-9_-]/g, "_");
-    const transcriptFile = pathMod.join(storePath, `${safeKey}.jsonl`);
+    const transcriptFile = path.join(storePath, `${safeKey}.jsonl`);
     await fs.appendFile(transcriptFile, JSON.stringify(feedbackEvent) + "\n", "utf-8").catch(() => {
       // Best effort — transcript dir may not exist yet
     });

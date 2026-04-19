@@ -137,13 +137,17 @@ export async function runTavilySearch(
   );
 
   const rawResults = Array.isArray(payload.results) ? payload.results : [];
-  const results = rawResults.map((r: Record<string, unknown>) => ({
-    title: typeof r.title === "string" ? wrapWebContent(r.title, "web_search") : "",
-    url: typeof r.url === "string" ? r.url : "",
-    snippet: typeof r.content === "string" ? wrapWebContent(r.content, "web_search") : "",
-    score: typeof r.score === "number" ? r.score : undefined,
-    ...(typeof r.published_date === "string" ? { published: r.published_date } : {}),
-  }));
+  const results = rawResults.map((r: Record<string, unknown>) =>
+    Object.assign(
+      {
+        title: typeof r.title === `string` ? wrapWebContent(r.title, `web_search`) : ``,
+        url: typeof r.url === `string` ? r.url : ``,
+        snippet: typeof r.content === `string` ? wrapWebContent(r.content, `web_search`) : ``,
+        score: typeof r.score === `number` ? r.score : undefined,
+      },
+      typeof r.published_date === `string` ? { published: r.published_date } : {},
+    ),
+  );
 
   const result: Record<string, unknown> = {
     query: params.query,
@@ -227,23 +231,29 @@ export async function runTavilyExtract(
   );
 
   const rawResults = Array.isArray(payload.results) ? payload.results : [];
-  const results = rawResults.map((r: Record<string, unknown>) => ({
-    url: typeof r.url === "string" ? r.url : "",
-    rawContent:
-      typeof r.raw_content === "string"
-        ? wrapExternalContent(r.raw_content, { source: "web_fetch", includeWarning: false })
-        : "",
-    ...(typeof r.content === "string"
-      ? { content: wrapExternalContent(r.content, { source: "web_fetch", includeWarning: false }) }
-      : {}),
-    ...(Array.isArray(r.images)
-      ? {
-          images: (r.images as string[]).map((img) =>
-            wrapExternalContent(img, { source: "web_fetch", includeWarning: false }),
-          ),
-        }
-      : {}),
-  }));
+  const results = rawResults.map((r: Record<string, unknown>) =>
+    Object.assign(
+      {
+        url: typeof r.url === `string` ? r.url : ``,
+        rawContent:
+          typeof r.raw_content === `string`
+            ? wrapExternalContent(r.raw_content, { source: `web_fetch`, includeWarning: false })
+            : ``,
+      },
+      typeof r.content === `string`
+        ? {
+            content: wrapExternalContent(r.content, { source: `web_fetch`, includeWarning: false }),
+          }
+        : {},
+      Array.isArray(r.images)
+        ? {
+            images: (r.images as string[]).map((img) =>
+              wrapExternalContent(img, { source: `web_fetch`, includeWarning: false }),
+            ),
+          }
+        : {},
+    ),
+  );
 
   const failedResults = Array.isArray(payload.failed_results) ? payload.failed_results : [];
 

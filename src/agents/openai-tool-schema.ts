@@ -119,8 +119,8 @@ function isStrictOpenAIJsonSchemaCompatibleRecursive(schema: unknown): boolean {
   });
 }
 
-export function resolveOpenAIStrictToolFlagForInventory<T extends ToolWithParameters>(
-  tools: readonly T[],
+export function resolveOpenAIStrictToolFlagForInventory(
+  tools: readonly ToolWithParameters[],
   strict: boolean | null | undefined,
 ): boolean | undefined {
   if (strict !== true) {

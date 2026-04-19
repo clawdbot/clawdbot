@@ -6,7 +6,7 @@ import {
 import { formatUnknownError } from "./errors.js";
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { readAccessToken } from "./token-response.js";
-import { resolveMSTeamsCredentials } from "./token.js";
+import { loadDelegatedTokens, resolveMSTeamsCredentials } from "./token.js";
 
 export type ProbeMSTeamsResult = BaseProbeResult<string> & {
   appId?: string;
@@ -100,7 +100,6 @@ export async function probeMSTeams(cfg?: MSTeamsConfig): Promise<ProbeMSTeamsRes
     let delegatedAuth: ProbeMSTeamsResult["delegatedAuth"];
     if (cfg?.delegatedAuth?.enabled) {
       try {
-        const { loadDelegatedTokens } = await import("./token.js");
         const tokens = loadDelegatedTokens();
         if (tokens) {
           const isExpired = tokens.expiresAt <= Date.now();

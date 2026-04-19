@@ -168,7 +168,7 @@ export function applyFinalEffectiveToolPolicy(
     }),
     { policy: params.sandboxToolPolicy, label: "sandbox tools.allow" },
     { policy: subagentPolicy, label: "subagent tools.allow" },
-  ].map((step) => ({ ...step, suppressUnavailableCoreToolWarning: true }));
+  ].map((step) => Object.assign({}, step, { suppressUnavailableCoreToolWarning: true }));
   return applyToolPolicyPipeline({
     tools: ownerFiltered,
     toolMeta: (tool) => getPluginToolMeta(tool),

@@ -47,6 +47,16 @@ describe("$schema key in config (#14998)", () => {
     });
     expect(result.ok).toBe(true);
   });
+
+  it("preserves $schema through validateConfigObject round-trip", () => {
+    const res = validateConfigObject({
+      $schema: "https://openclaw.ai/config.json",
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.$schema).toBe("https://openclaw.ai/config.json");
+    }
+  });
 });
 
 describe("plugins.slots.contextEngine", () => {

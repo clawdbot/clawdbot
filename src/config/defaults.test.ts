@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
 import {
   applyAgentDefaults,
@@ -21,6 +21,12 @@ vi.mock("./provider-policy.js", () => ({
 describe("config defaults", () => {
   beforeEach(() => {
     mocks.applyProviderConfigDefaultsForConfig.mockReset();
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    vi.stubEnv("ANTHROPIC_OAUTH_TOKEN", "");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("skips provider defaults when agent defaults are absent", () => {
@@ -38,8 +44,24 @@ describe("config defaults", () => {
     expect(mocks.applyProviderConfigDefaultsForConfig).not.toHaveBeenCalled();
   });
 
-  it("uses anthropic provider defaults when agent defaults exist", () => {
+  it("skips provider defaults when agent defaults have no Anthropic auth signal", () => {
     const cfg = {
+      agents: {
+        defaults: {},
+      },
+    };
+
+    expect(applyContextPruningDefaults(cfg as never)).toBe(cfg);
+    expect(mocks.applyProviderConfigDefaultsForConfig).not.toHaveBeenCalled();
+  });
+
+  it("uses anthropic provider defaults when agent defaults and auth signal exist", () => {
+    const cfg = {
+      auth: {
+        profiles: {
+          anthropic: { provider: "anthropic", mode: "api_key" },
+        },
+      },
       agents: {
         defaults: {},
       },

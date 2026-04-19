@@ -127,7 +127,7 @@ The `fetch-content` output for `discussion_comment` includes `comment_node_id` a
 The recreated comment should follow this format:
 
 ```
-> **Note from maintainer (@<LOGIN>):** The original comment by @<AUTHOR> has been removed due to secret leakage. Below is the redacted version of the original content.
+> **Note:** The original comment by @<AUTHOR> has been removed due to secret leakage. Below is the redacted version of the original content.
 
 ---
 

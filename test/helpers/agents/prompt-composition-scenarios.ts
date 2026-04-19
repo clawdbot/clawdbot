@@ -155,7 +155,7 @@ function buildToolRichSystemPrompt(params: {
     "web_search",
     "x_search",
     "web_fetch",
-  ].map((name) => ({ ...createStubTool(name), description: `${name} tool` }));
+  ].map((name) => Object.assign({}, createStubTool(name), { description: `${name} tool` }));
   return buildEmbeddedSystemPrompt({
     workspaceDir: params.workspaceDir,
     reasoningTagHint: false,

@@ -52,10 +52,7 @@ const providerConfig = {
 };
 
 const PACKAGE_DIST_INVENTORY_RELATIVE_PATH = "dist/postinstall-inventory.json";
-const PACKAGED_QA_RUNTIME_PATHS = new Set([
-  "dist/extensions/qa-channel/runtime-api.js",
-  "dist/extensions/qa-lab/runtime-api.js",
-]);
+const PACKAGED_QA_RUNTIME_PATHS = new Set(["dist/extensions/qa-channel/runtime-api.js"]);
 const OMITTED_QA_EXTENSION_PREFIXES = [
   "dist/extensions/qa-channel/",
   "dist/extensions/qa-lab/",
@@ -167,12 +164,13 @@ export function resolveRunnerMatrix(params) {
   ];
   return {
     include: runners.flatMap((runner) =>
-      suites.map((suite) => ({
-        ...runner,
-        suite,
-        suite_label: formatSuiteLabel(suite),
-        lane: suite.includes("upgrade") || suite === "dev-update" ? "upgrade" : "fresh",
-      })),
+      suites.map((suite) =>
+        Object.assign({}, runner, {
+          suite,
+          suite_label: formatSuiteLabel(suite),
+          lane: suite.includes(`upgrade`) || suite === `dev-update` ? `upgrade` : `fresh`,
+        }),
+      ),
     ),
   };
 }

@@ -17,11 +17,3 @@ export function formatHelpExamples(examples: ReadonlyArray<HelpExample>, inline 
   const formatter = inline ? formatHelpExampleLine : formatHelpExample;
   return examples.map(([command, description]) => formatter(command, description)).join("\n");
 }
-
-export function formatHelpExampleGroup(
-  label: string,
-  examples: ReadonlyArray<HelpExample>,
-  inline = false,
-) {
-  return `${theme.muted(label)}\n${formatHelpExamples(examples, inline)}`;
-}

@@ -18,26 +18,9 @@ import {
   hasGatewayTokenEnvCandidate,
   trimToUndefined,
 } from "./credentials.js";
+import { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
 
-/**
- * Placeholder credentials that have ever shipped in `.env.example` or been
- * used as copy-paste examples in onboarding docs. If any of these ever
- * becomes the resolved gateway credential at startup, reject the launch —
- * the operator almost certainly copied an example file verbatim without
- * replacing the sentinel, which would otherwise leave the gateway protected
- * by a publicly-known credential.
- *
- * This is a belt-and-suspenders complement to keeping `.env.example` blank:
- * the example file alone does not protect users who follow an older doc
- * snippet or copy a tutorial command line.
- */
-const KNOWN_WEAK_GATEWAY_TOKENS: ReadonlySet<string> = new Set([
-  "change-me-to-a-long-random-token",
-]);
-
-const KNOWN_WEAK_GATEWAY_PASSWORDS: ReadonlySet<string> = new Set([
-  "change-me-to-a-strong-password", // pragma: allowlist secret
-]);
+export { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
 
 export function mergeGatewayAuthConfig(
   base?: GatewayAuthConfig,
@@ -262,31 +245,6 @@ export async function ensureGatewayStartupAuth(params: {
     generatedToken,
     persistedGeneratedToken: persist,
   };
-}
-
-export function assertGatewayAuthNotKnownWeak(auth: ResolvedGatewayAuth): void {
-  if (auth.mode === "token") {
-    const token = auth.token?.trim() ?? "";
-    if (token && KNOWN_WEAK_GATEWAY_TOKENS.has(token)) {
-      throw new Error(
-        "Invalid config: gateway auth token is set to the example placeholder " +
-          "from .env.example. Generate a real secret (e.g. `openssl rand -hex 32`) " +
-          "and set OPENCLAW_GATEWAY_TOKEN or gateway.auth.token before starting " +
-          "the gateway.",
-      );
-    }
-    return;
-  }
-  if (auth.mode === "password") {
-    const password = auth.password?.trim() ?? "";
-    if (password && KNOWN_WEAK_GATEWAY_PASSWORDS.has(password)) {
-      throw new Error(
-        "Invalid config: gateway auth password is set to the example placeholder " +
-          "from .env.example. Choose a real password and set OPENCLAW_GATEWAY_PASSWORD " +
-          "or gateway.auth.password before starting the gateway.",
-      );
-    }
-  }
 }
 
 export function assertHooksTokenSeparateFromGatewayAuth(params: {

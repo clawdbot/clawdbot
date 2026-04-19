@@ -75,6 +75,8 @@ export function buildMoonshotProvider(): ModelProviderConfig {
   return {
     baseUrl: MOONSHOT_BASE_URL,
     api: "openai-completions",
-    models: MOONSHOT_MODEL_CATALOG.map((model) => ({ ...model, input: [...model.input] })),
+    models: MOONSHOT_MODEL_CATALOG.map((model) =>
+      Object.assign({}, model, { input: [...model.input] }),
+    ),
   };
 }

@@ -13,7 +13,7 @@ export function makeTempDir(tempDirs: string[] | Set<string>, prefix: string): s
 }
 
 export function cleanupTempDirs(tempDirs: string[] | Set<string>): void {
-  const dirs = Array.isArray(tempDirs) ? tempDirs.splice(0, tempDirs.length) : [...tempDirs];
+  const dirs = Array.isArray(tempDirs) ? tempDirs.splice(0) : [...tempDirs];
   for (const dir of dirs) {
     fs.rmSync(dir, { recursive: true, force: true });
   }

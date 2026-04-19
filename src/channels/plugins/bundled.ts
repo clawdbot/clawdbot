@@ -13,6 +13,7 @@ import {
 import { unwrapDefaultModuleExport } from "../../plugins/module-export.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import { resolveBundledChannelRootScope, type BundledChannelRootScope } from "./bundled-root.js";
+import { normalizeChannelMeta } from "./meta-normalization.js";
 import { isJavaScriptModulePath, loadChannelPluginModule } from "./module-loader.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
@@ -439,9 +440,18 @@ function getBundledChannelPluginForRoot(
   }
   cacheContext.pluginLoadInProgressIds.add(id);
   try {
+    const metadata = resolveBundledChannelMetadata(id, rootScope);
     const plugin = entry.loadChannelPlugin();
-    cacheContext.lazyPluginsById.set(id, plugin);
-    return plugin;
+    const normalizedPlugin = {
+      ...plugin,
+      meta: normalizeChannelMeta({
+        id: plugin.id,
+        meta: plugin.meta,
+        existing: metadata?.packageManifest?.channel,
+      }),
+    };
+    cacheContext.lazyPluginsById.set(id, normalizedPlugin);
+    return normalizedPlugin;
   } finally {
     cacheContext.pluginLoadInProgressIds.delete(id);
   }

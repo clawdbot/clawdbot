@@ -364,7 +364,9 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
           return entries.map((entry) => {
             const raw = entry.id.startsWith("user:") ? entry.id.slice("user:".length) : entry.id;
             const incomplete = !raw.startsWith("@") || !raw.includes(":");
-            return incomplete ? { ...entry, name: "incomplete id; expected @user:server" } : entry;
+            return incomplete
+              ? Object.assign({}, entry, { name: `incomplete id; expected @user:server` })
+              : entry;
           });
         },
         listGroups: async (params) => await listMatrixDirectoryGroupsFromConfig(params),

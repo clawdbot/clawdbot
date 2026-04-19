@@ -42,6 +42,15 @@ const ZERO_USAGE: Usage = {
   },
 };
 
+const CURRENT_TOKEN_USAGE_KEYS = [
+  "last",
+  "current",
+  "lastCall",
+  "lastCallUsage",
+  "lastTokenUsage",
+  "last_token_usage",
+] as const;
+
 export class CodexAppServerEventProjector {
   private readonly assistantTextByItem = new Map<string, string>();
   private readonly assistantItemOrder: string[] = [];
@@ -327,16 +336,16 @@ export class CodexAppServerEventProjector {
 
   private handleTokenUsage(params: JsonObject): void {
     const tokenUsage = isJsonObject(params.tokenUsage) ? params.tokenUsage : undefined;
-    const total = tokenUsage && isJsonObject(tokenUsage.total) ? tokenUsage.total : undefined;
-    if (!total) {
+    const current =
+      (tokenUsage ? readFirstJsonObject(tokenUsage, CURRENT_TOKEN_USAGE_KEYS) : undefined) ??
+      readFirstJsonObject(params, CURRENT_TOKEN_USAGE_KEYS);
+    if (!current) {
       return;
     }
-    this.tokenUsage = normalizeUsage({
-      input: readNumber(total, "inputTokens"),
-      output: readNumber(total, "outputTokens"),
-      cacheRead: readNumber(total, "cachedInputTokens"),
-      total: readNumber(total, "totalTokens"),
-    });
+    const usage = normalizeCodexTokenUsage(current);
+    if (usage) {
+      this.tokenUsage = usage;
+    }
   }
 
   private async handleTurnCompleted(params: JsonObject): Promise<void> {
@@ -522,6 +531,48 @@ function readNullableString(record: JsonObject, key: string): string | null | un
 function readNumber(record: JsonObject, key: string): number | undefined {
   const value = record[key];
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readFirstJsonObject(record: JsonObject, keys: readonly string[]): JsonObject | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (isJsonObject(value)) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function readNumberAlias(record: JsonObject, keys: readonly string[]): number | undefined {
+  for (const key of keys) {
+    const value = readNumber(record, key);
+    if (value !== undefined) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function normalizeCodexTokenUsage(record: JsonObject): NormalizedUsage | undefined {
+  return normalizeUsage({
+    input: readNumberAlias(record, ["inputTokens", "input_tokens", "input", "promptTokens"]),
+    output: readNumberAlias(record, ["outputTokens", "output_tokens", "output"]),
+    cacheRead: readNumberAlias(record, [
+      "cachedInputTokens",
+      "cached_input_tokens",
+      "cacheRead",
+      "cache_read",
+      "cache_read_input_tokens",
+      "cached_tokens",
+    ]),
+    cacheWrite: readNumberAlias(record, [
+      "cacheWrite",
+      "cache_write",
+      "cacheCreationInputTokens",
+      "cache_creation_input_tokens",
+    ]),
+    total: readNumberAlias(record, ["totalTokens", "total_tokens", "total"]),
+  });
 }
 
 function splitPlanText(text: string): string[] {

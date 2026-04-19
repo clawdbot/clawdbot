@@ -52,7 +52,7 @@ export async function runPreparedCliAgent(
         },
         requestShaping: {
           ...(params.thinkLevel ? { thinking: params.thinkLevel } : {}),
-          ...(params.authProfileId ? { authMode: "auth-profile" } : {}),
+          ...(context.effectiveAuthProfileId ? { authMode: "auth-profile" } : {}),
         },
         completion: {
           finishReason: "stop",
@@ -68,7 +68,9 @@ export async function runPreparedCliAgent(
             ? {
                 cliSessionBinding: {
                   sessionId: resultParams.effectiveCliSessionId,
-                  ...(params.authProfileId ? { authProfileId: params.authProfileId } : {}),
+                  ...(context.effectiveAuthProfileId
+                    ? { authProfileId: context.effectiveAuthProfileId }
+                    : {}),
                   ...(context.authEpoch ? { authEpoch: context.authEpoch } : {}),
                   ...(context.extraSystemPromptHash
                     ? { extraSystemPromptHash: context.extraSystemPromptHash }

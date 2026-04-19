@@ -8,6 +8,16 @@ import {
 import { resolveGeminiApiKey, resolveGeminiModel } from "./gemini-web-search-provider.shared.js";
 
 const GEMINI_CREDENTIAL_PATH = "plugins.entries.google.config.webSearch.apiKey";
+
+type GeminiWebSearchRuntime = typeof import("./gemini-web-search-provider.runtime.js");
+
+let geminiWebSearchRuntimePromise: Promise<GeminiWebSearchRuntime> | undefined;
+
+function loadGeminiWebSearchRuntime(): Promise<GeminiWebSearchRuntime> {
+  geminiWebSearchRuntimePromise ??= import("./gemini-web-search-provider.runtime.js");
+  return geminiWebSearchRuntimePromise;
+}
+
 const GEMINI_TOOL_PARAMETERS = {
   type: "object",
   properties: {
@@ -35,7 +45,7 @@ function createGeminiToolDefinition(
       "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search.",
     parameters: GEMINI_TOOL_PARAMETERS,
     execute: async (args) => {
-      const { executeGeminiSearch } = await import("./gemini-web-search-provider.runtime.js");
+      const { executeGeminiSearch } = await loadGeminiWebSearchRuntime();
       return await executeGeminiSearch(args, searchConfig);
     },
   };

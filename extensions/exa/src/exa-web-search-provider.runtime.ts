@@ -497,15 +497,17 @@ export async function executeExaWebSearchProviderTool(
         typeof entry.publishedDate === "string" && entry.publishedDate
           ? entry.publishedDate
           : undefined;
-      return {
-        title: title ? wrapWebContent(title, "web_search") : "",
-        url,
-        description: description ? wrapWebContent(description, "web_search") : "",
-        published,
-        siteName: resolveSiteName(url) || undefined,
-        ...(summary ? { summary: wrapWebContent(summary, "web_search") } : {}),
-        ...(highlightScores.length > 0 ? { highlightScores } : {}),
-      };
+      return Object.assign(
+        {
+          title: title ? wrapWebContent(title, `web_search`) : ``,
+          url,
+          description: description ? wrapWebContent(description, `web_search`) : ``,
+          published,
+          siteName: resolveSiteName(url) || undefined,
+        },
+        summary ? { summary: wrapWebContent(summary, `web_search`) } : {},
+        highlightScores.length > 0 ? { highlightScores } : {},
+      );
     }),
   };
 

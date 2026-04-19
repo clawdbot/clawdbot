@@ -299,7 +299,7 @@ for (let i = 0; i < visibleEntries.length; i += PER_LINE) {
   markdownLines.push(parts.join(" "));
 }
 
-const block = `${CLAWTRIBUTORS_START}\n${markdownLines.join("\n\n")}\n${CLAWTRIBUTORS_END}`;
+const block = `${CLAWTRIBUTORS_START}\n${markdownLines.join("\n")}\n${CLAWTRIBUTORS_END}`;
 const hiddenBlock = buildHiddenReadmeBlock(entries, visibleEntries);
 const hiddenRange = findHiddenReadmeRange(currentReadme);
 const readmeWithoutMeta = hiddenRange

@@ -6,6 +6,16 @@ import type {
 import { createWebSearchProviderContractFields } from "openclaw/plugin-sdk/provider-web-search-config-contract";
 
 const BRAVE_CREDENTIAL_PATH = "plugins.entries.brave.config.webSearch.apiKey";
+
+type BraveWebSearchRuntime = typeof import("./brave-web-search-provider.runtime.js");
+
+let braveWebSearchRuntimePromise: Promise<BraveWebSearchRuntime> | undefined;
+
+function loadBraveWebSearchRuntime(): Promise<BraveWebSearchRuntime> {
+  braveWebSearchRuntimePromise ??= import("./brave-web-search-provider.runtime.js");
+  return braveWebSearchRuntimePromise;
+}
+
 const BraveSearchSchema = {
   type: "object",
   properties: {
@@ -111,7 +121,7 @@ function createBraveToolDefinition(
         : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.",
     parameters: BraveSearchSchema,
     execute: async (args) => {
-      const { executeBraveSearch } = await import("./brave-web-search-provider.runtime.js");
+      const { executeBraveSearch } = await loadBraveWebSearchRuntime();
       return await executeBraveSearch(args, searchConfig);
     },
   };

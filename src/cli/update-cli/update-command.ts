@@ -14,6 +14,7 @@ import {
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
+import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import {
@@ -715,6 +716,9 @@ async function maybeRestartService(params: {
           for (const line of renderRestartDiagnostics(health)) {
             defaultRuntime.log(theme.muted(line));
           }
+          defaultRuntime.log(
+            theme.muted(`Restart log: ${resolveGatewayRestartLogPath(process.env)}`),
+          );
           defaultRuntime.log(
             theme.muted(
               `Run \`${replaceCliName(formatCliCommand("openclaw gateway status --deep"), CLI_NAME)}\` for details.`,

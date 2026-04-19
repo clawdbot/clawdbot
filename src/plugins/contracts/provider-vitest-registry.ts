@@ -8,9 +8,12 @@ export type ProviderContractEntry = {
 
 let providerContractRegistryCache: ProviderContractEntry[] | null = null;
 
-type AnthropicApiSurface = typeof import("../../../extensions/anthropic/api.js");
-type GoogleApiSurface = typeof import("../../../extensions/google/api.js");
-type OpenAIApiSurface = typeof import("../../../extensions/openai/api.js");
+type ProviderApiSurface<TFactoryName extends string> = Record<TFactoryName, () => ProviderPlugin>;
+type AnthropicApiSurface = ProviderApiSurface<"buildAnthropicProvider">;
+type GoogleApiSurface = ProviderApiSurface<"buildGoogleProvider" | "buildGoogleGeminiCliProvider">;
+type OpenAIApiSurface = ProviderApiSurface<
+  "buildOpenAIProvider" | "buildOpenAICodexProviderPlugin"
+>;
 
 export function loadVitestProviderContractRegistry(): ProviderContractEntry[] {
   const anthropicApi = loadBundledPluginApiSync<AnthropicApiSurface>("anthropic");

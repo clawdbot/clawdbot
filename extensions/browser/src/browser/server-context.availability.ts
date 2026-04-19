@@ -7,12 +7,15 @@ import {
   PROFILE_POST_RESTART_WS_TIMEOUT_MS,
   resolveCdpReachabilityTimeouts,
 } from "./cdp-timeouts.js";
+import { redactCdpUrl } from "./cdp.helpers.js";
 import {
   closeChromeMcpSession,
   ensureChromeMcpAvailable,
   listChromeMcpTabs,
 } from "./chrome-mcp.js";
 import {
+  diagnoseChromeCdp,
+  formatChromeCdpDiagnostic,
   isChromeCdpReady,
   isChromeReachable,
   launchOpenClawChrome,
@@ -59,6 +62,7 @@ export function createProfileAvailability({
   getProfileState,
   setProfileRunning,
 }: AvailabilityDeps): AvailabilityOps {
+  const redactedProfileCdpUrl = redactCdpUrl(profile.cdpUrl) ?? profile.cdpUrl;
   const capabilities = getBrowserProfileCapabilities(profile);
   const resolveTimeouts = (timeoutMs: number | undefined) =>
     resolveCdpReachabilityTimeouts({
@@ -92,6 +96,17 @@ export function createProfileAvailability({
     }
     const { httpTimeoutMs } = resolveTimeouts(timeoutMs);
     return await isChromeReachable(profile.cdpUrl, httpTimeoutMs, getCdpReachabilityPolicy());
+  };
+
+  const describeCdpFailure = async (timeoutMs?: number): Promise<string> => {
+    const { httpTimeoutMs, wsTimeoutMs } = resolveTimeouts(timeoutMs);
+    const diagnostic = await diagnoseChromeCdp(
+      profile.cdpUrl,
+      httpTimeoutMs,
+      wsTimeoutMs,
+      getCdpReachabilityPolicy(),
+    );
+    return formatChromeCdpDiagnostic(diagnostic);
   };
 
   const attachRunning = (running: NonNullable<ProfileRuntimeState["running"]>) => {
@@ -148,7 +163,9 @@ export function createProfileAvailability({
       await new Promise((r) => setTimeout(r, CDP_READY_AFTER_LAUNCH_POLL_MS));
     }
     throw new Error(
-      `Chrome CDP websocket for profile "${profile.name}" is not reachable after start.`,
+      `Chrome CDP websocket for profile "${profile.name}" is not reachable after start. ${await describeCdpFailure(
+        CDP_READY_AFTER_LAUNCH_MAX_TIMEOUT_MS,
+      )}`,
     );
   };
 
@@ -210,7 +227,7 @@ export function createProfileAvailability({
       if (attachOnly || remoteCdp) {
         throw new BrowserProfileUnavailableError(
           remoteCdp
-            ? `Remote CDP for profile "${profile.name}" is not reachable at ${profile.cdpUrl}.`
+            ? `Remote CDP for profile "${profile.name}" is not reachable at ${redactedProfileCdpUrl}.`
             : `Browser attachOnly is enabled and profile "${profile.name}" is not running.`,
         );
       }
@@ -243,18 +260,20 @@ export function createProfileAvailability({
       if (remoteCdp && (await isReachable(PROFILE_ATTACH_RETRY_TIMEOUT_MS))) {
         return;
       }
+      const detail = await describeCdpFailure(PROFILE_ATTACH_RETRY_TIMEOUT_MS);
       throw new BrowserProfileUnavailableError(
         remoteCdp
-          ? `Remote CDP websocket for profile "${profile.name}" is not reachable.`
-          : `Browser attachOnly is enabled and CDP websocket for profile "${profile.name}" is not reachable.`,
+          ? `Remote CDP websocket for profile "${profile.name}" is not reachable. ${detail}`
+          : `Browser attachOnly is enabled and CDP websocket for profile "${profile.name}" is not reachable. ${detail}`,
       );
     }
 
     // HTTP responds but WebSocket fails - port in use by something else.
     if (!profileState.running) {
+      const detail = await describeCdpFailure(PROFILE_ATTACH_RETRY_TIMEOUT_MS);
       throw new BrowserProfileUnavailableError(
         `Port ${profile.cdpPort} is in use for profile "${profile.name}" but not by openclaw. ` +
-          `Run action=reset-profile profile=${profile.name} to kill the process.`,
+          `Run action=reset-profile profile=${profile.name} to kill the process. ${detail}`,
       );
     }
 
@@ -266,7 +285,9 @@ export function createProfileAvailability({
 
     if (!(await isReachable(PROFILE_POST_RESTART_WS_TIMEOUT_MS))) {
       throw new Error(
-        `Chrome CDP websocket for profile "${profile.name}" is not reachable after restart.`,
+        `Chrome CDP websocket for profile "${profile.name}" is not reachable after restart. ${await describeCdpFailure(
+          PROFILE_POST_RESTART_WS_TIMEOUT_MS,
+        )}`,
       );
     }
   };

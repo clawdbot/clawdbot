@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../../test/helpers/import-fresh.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TemplateContext } from "../templating.js";
+import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 const mocks = vi.hoisted(() => ({
@@ -32,133 +32,142 @@ function makeTypingController() {
   };
 }
 
-async function loadResolveReplyDirectivesForTest() {
-  vi.resetModules();
-  vi.doMock("../../agents/agent-scope.js", () => ({
-    listAgentEntries: vi.fn(() => []),
-  }));
-  vi.doMock("../../agents/defaults.js", () => ({
-    DEFAULT_CONTEXT_TOKENS: 8192,
-  }));
-  vi.doMock("../../agents/fast-mode.js", () => ({
-    resolveFastModeState: (...args: unknown[]) => mocks.resolveFastModeState(...args),
-  }));
-  vi.doMock("../../agents/sandbox/runtime-status.js", () => ({
-    resolveSandboxRuntimeStatus: vi.fn(() => ({ sandboxed: false })),
-  }));
-  vi.doMock("../../routing/session-key.js", () => ({
-    normalizeAgentId: (value: string) => value,
-  }));
-  vi.doMock("../commands-text-routing.js", () => ({
-    shouldHandleTextCommands: vi.fn(() => false),
-  }));
-  vi.doMock("./commands-context.js", () => ({
-    buildCommandContext: vi.fn(() => ({
-      surface: "whatsapp",
-      channel: "whatsapp",
-      channelId: "whatsapp",
-      ownerList: [],
-      senderIsOwner: false,
-      isAuthorizedSender: false,
-      senderId: undefined,
-      abortKey: "abort-key",
-      rawBodyNormalized: "hello",
-      commandBodyNormalized: "hello",
-      from: "whatsapp:+1000",
-      to: "whatsapp:+2000",
-    })),
-  }));
-  vi.doMock("./directive-handling.parse.js", () => ({
-    parseInlineDirectives: vi.fn((body: string) => {
-      const normalized = body.trim();
-      if (normalized === "/trace on") {
-        return {
-          cleaned: "",
-          hasThinkDirective: false,
-          hasVerboseDirective: false,
-          hasTraceDirective: true,
-          traceLevel: "on",
-          rawTraceLevel: "on",
-          hasFastDirective: false,
-          hasReasoningDirective: false,
-          hasElevatedDirective: false,
-          hasExecDirective: false,
-          hasModelDirective: false,
-          hasQueueDirective: false,
-          hasStatusDirective: false,
-          queueReset: false,
-          thinkLevel: undefined,
-          verboseLevel: undefined,
-          fastMode: undefined,
-          reasoningLevel: undefined,
-          elevatedLevel: undefined,
-          rawElevatedLevel: undefined,
-          rawModelDirective: undefined,
-          execSecurity: undefined,
-        };
-      }
-      return {
-        cleaned: body,
-        hasThinkDirective: false,
-        hasVerboseDirective: false,
-        hasTraceDirective: false,
-        traceLevel: undefined,
-        rawTraceLevel: undefined,
-        hasFastDirective: false,
-        hasReasoningDirective: false,
-        hasElevatedDirective: false,
-        hasExecDirective: false,
-        hasModelDirective: false,
-        hasQueueDirective: false,
-        hasStatusDirective: false,
-        queueReset: false,
-        thinkLevel: undefined,
-        verboseLevel: undefined,
-        fastMode: undefined,
-        reasoningLevel: undefined,
-        elevatedLevel: undefined,
-        rawElevatedLevel: undefined,
-        rawModelDirective: undefined,
-        execSecurity: undefined,
-      };
-    }),
-  }));
-  vi.doMock("./get-reply-directive-aliases.js", () => ({
-    reserveSkillCommandNames: vi.fn(),
-    resolveConfiguredDirectiveAliases: vi.fn(() => []),
-  }));
-  vi.doMock("./get-reply-directives-apply.js", () => ({
-    applyInlineDirectiveOverrides: (...args: unknown[]) =>
-      mocks.applyInlineDirectiveOverrides(...args),
-  }));
-  vi.doMock("./get-reply-exec-overrides.js", () => ({
-    resolveReplyExecOverrides: (...args: unknown[]) => mocks.resolveReplyExecOverrides(...args),
-  }));
-  vi.doMock("./get-reply-fast-path.js", () => ({
-    shouldUseReplyFastTestRuntime: vi.fn(() => false),
-  }));
-  vi.doMock("./groups.js", () => ({
-    defaultGroupActivation: vi.fn(() => "always"),
-    resolveGroupRequireMention: vi.fn(async () => false),
-  }));
-  vi.doMock("./model-selection.js", () => ({
-    createFastTestModelSelectionState: vi.fn(),
-    createModelSelectionState: (...args: unknown[]) => mocks.createModelSelectionState(...args),
-    resolveContextTokens: vi.fn(() => 4096),
-  }));
-  vi.doMock("./reply-elevated.js", () => ({
-    formatElevatedUnavailableMessage: vi.fn(() => "elevated unavailable"),
-    resolveElevatedPermissions: vi.fn(() => ({
-      enabled: true,
-      allowed: true,
-      failures: [],
-    })),
-  }));
-  return await importFreshModule<typeof import("./get-reply-directives.js")>(
-    import.meta.url,
-    "./get-reply-directives.js",
-  );
+function parseInlineDirectivesForTest(body: string) {
+  const normalized = body.trim();
+  if (normalized === "/trace on") {
+    return {
+      cleaned: "",
+      hasThinkDirective: false,
+      hasVerboseDirective: false,
+      hasTraceDirective: true,
+      traceLevel: "on",
+      rawTraceLevel: "on",
+      hasFastDirective: false,
+      hasReasoningDirective: false,
+      hasElevatedDirective: false,
+      hasExecDirective: false,
+      hasModelDirective: false,
+      hasQueueDirective: false,
+      hasStatusDirective: false,
+      queueReset: false,
+      thinkLevel: undefined,
+      verboseLevel: undefined,
+      fastMode: undefined,
+      reasoningLevel: undefined,
+      elevatedLevel: undefined,
+      rawElevatedLevel: undefined,
+      rawModelDirective: undefined,
+      execSecurity: undefined,
+    };
+  }
+  return {
+    cleaned: body,
+    hasThinkDirective: false,
+    hasVerboseDirective: false,
+    hasTraceDirective: false,
+    traceLevel: undefined,
+    rawTraceLevel: undefined,
+    hasFastDirective: false,
+    hasReasoningDirective: false,
+    hasElevatedDirective: false,
+    hasExecDirective: false,
+    hasModelDirective: false,
+    hasQueueDirective: false,
+    hasStatusDirective: false,
+    queueReset: false,
+    thinkLevel: undefined,
+    verboseLevel: undefined,
+    fastMode: undefined,
+    reasoningLevel: undefined,
+    elevatedLevel: undefined,
+    rawElevatedLevel: undefined,
+    rawModelDirective: undefined,
+    execSecurity: undefined,
+  };
 }
+
+vi.mock("../../agents/agent-scope.js", () => ({
+  listAgentEntries: vi.fn(() => []),
+}));
+
+vi.mock("../../agents/defaults.js", () => ({
+  DEFAULT_CONTEXT_TOKENS: 8192,
+}));
+
+vi.mock("../../agents/fast-mode.js", () => ({
+  resolveFastModeState: (...args: unknown[]) => mocks.resolveFastModeState(...args),
+}));
+
+vi.mock("../../agents/sandbox/runtime-status.js", () => ({
+  resolveSandboxRuntimeStatus: vi.fn(() => ({ sandboxed: false })),
+}));
+
+vi.mock("../../routing/session-key.js", () => ({
+  normalizeAgentId: (value: string) => value,
+}));
+
+vi.mock("../commands-text-routing.js", () => ({
+  shouldHandleTextCommands: vi.fn(() => false),
+}));
+
+vi.mock("./commands-context.js", () => ({
+  buildCommandContext: vi.fn(() => ({
+    surface: "whatsapp",
+    channel: "whatsapp",
+    channelId: "whatsapp",
+    ownerList: [],
+    senderIsOwner: false,
+    isAuthorizedSender: false,
+    senderId: undefined,
+    abortKey: "abort-key",
+    rawBodyNormalized: "hello",
+    commandBodyNormalized: "hello",
+    from: "whatsapp:+1000",
+    to: "whatsapp:+2000",
+  })),
+}));
+
+vi.mock("./directive-handling.parse.js", () => ({
+  parseInlineDirectives: vi.fn(parseInlineDirectivesForTest),
+}));
+
+vi.mock("./get-reply-directive-aliases.js", () => ({
+  reserveSkillCommandNames: vi.fn(),
+  resolveConfiguredDirectiveAliases: vi.fn(() => []),
+}));
+
+vi.mock("./get-reply-directives-apply.js", () => ({
+  applyInlineDirectiveOverrides: (...args: unknown[]) =>
+    mocks.applyInlineDirectiveOverrides(...args),
+}));
+
+vi.mock("./get-reply-exec-overrides.js", () => ({
+  resolveReplyExecOverrides: (...args: unknown[]) => mocks.resolveReplyExecOverrides(...args),
+}));
+
+vi.mock("./get-reply-fast-path.js", () => ({
+  shouldUseReplyFastTestRuntime: vi.fn(() => false),
+}));
+
+vi.mock("./groups.js", () => ({
+  defaultGroupActivation: vi.fn(() => "always"),
+  resolveGroupRequireMention: vi.fn(async () => false),
+}));
+
+vi.mock("./model-selection.js", () => ({
+  createFastTestModelSelectionState: vi.fn(),
+  createModelSelectionState: (...args: unknown[]) => mocks.createModelSelectionState(...args),
+  resolveContextTokens: vi.fn(() => 4096),
+}));
+
+vi.mock("./reply-elevated.js", () => ({
+  formatElevatedUnavailableMessage: vi.fn(() => "elevated unavailable"),
+  resolveElevatedPermissions: vi.fn(() => ({
+    enabled: true,
+    allowed: true,
+    failures: [],
+  })),
+}));
 
 describe("resolveReplyDirectives", () => {
   beforeEach(() => {
@@ -190,7 +199,6 @@ describe("resolveReplyDirectives", () => {
   });
 
   it("prefers the target session entry from sessionStore for directive state", async () => {
-    const { resolveReplyDirectives } = await loadResolveReplyDirectivesForTest();
     const wrapperSessionEntry = makeSessionEntry({
       sessionId: "wrapper-session",
       thinkingLevel: "low",
@@ -297,7 +305,6 @@ describe("resolveReplyDirectives", () => {
         text: "⚙️ Trace enabled. Warning: trace output may contain sensitive information.",
       },
     });
-    const { resolveReplyDirectives } = await loadResolveReplyDirectivesForTest();
 
     const result = await resolveReplyDirectives({
       ctx: buildTestCtx({
@@ -360,7 +367,6 @@ describe("resolveReplyDirectives", () => {
       resolveDefaultThinkingLevel,
       resolveDefaultReasoningLevel,
     });
-    const { resolveReplyDirectives } = await loadResolveReplyDirectivesForTest();
 
     const result = await resolveReplyDirectives({
       ctx: buildTestCtx({
@@ -421,7 +427,6 @@ describe("resolveReplyDirectives", () => {
       resolveDefaultThinkingLevel,
       resolveDefaultReasoningLevel,
     });
-    const { resolveReplyDirectives } = await loadResolveReplyDirectivesForTest();
 
     const result = await resolveReplyDirectives({
       ctx: buildTestCtx({

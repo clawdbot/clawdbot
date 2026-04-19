@@ -1,3 +1,13 @@
+import type { OpenClawConfig } from "../config/types.js";
+import type {
+  ProviderAuthMethodNonInteractiveContext,
+  ProviderAuthResult,
+  ProviderCatalogContext,
+  ProviderPrepareDynamicModelContext,
+  ProviderRuntimeModel,
+} from "../plugins/types.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
+
 export type {
   OpenClawPluginApi,
   ProviderAuthContext,
@@ -8,7 +18,6 @@ export type {
   ProviderPrepareDynamicModelContext,
   ProviderRuntimeModel,
 } from "../plugins/types.js";
-
 export type { LmstudioModelBase, LmstudioModelWire } from "./lmstudio-runtime.js";
 export {
   LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
@@ -36,8 +45,36 @@ export {
   resolveLmstudioServerBase,
 } from "./lmstudio-runtime.js";
 
-type FacadeModule = typeof import("@openclaw/lmstudio/api.js");
 import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
+
+type LmstudioInteractiveParams = {
+  config: OpenClawConfig;
+  prompter?: WizardPrompter;
+  secretInputMode?: unknown;
+  allowSecretRefPrompt?: boolean;
+  promptText?: (params: {
+    message: string;
+    initialValue?: string;
+    placeholder?: string;
+    validate?: (value: string | undefined) => string | undefined;
+  }) => Promise<string | undefined>;
+  note?: (message: string, title?: string) => Promise<void> | void;
+};
+
+type FacadeModule = {
+  promptAndConfigureLmstudioInteractive: (
+    params: LmstudioInteractiveParams,
+  ) => Promise<ProviderAuthResult>;
+  configureLmstudioNonInteractive: (
+    ctx: ProviderAuthMethodNonInteractiveContext,
+  ) => Promise<OpenClawConfig | null>;
+  discoverLmstudioProvider: (
+    ctx: ProviderCatalogContext,
+  ) => Promise<{ provider: import("../config/types.js").ModelProviderConfig } | null>;
+  prepareLmstudioDynamicModels: (
+    ctx: ProviderPrepareDynamicModelContext,
+  ) => Promise<ProviderRuntimeModel[]>;
+};
 
 function loadFacadeModule(): FacadeModule {
   return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({

@@ -157,6 +157,62 @@ describe("gateway config methods", () => {
     expect(res.payload?.config).toBeTruthy();
   });
 
+  it("redacts browser cdpUrl credentials from config.get responses", async () => {
+    const { createConfigIO, resetConfigRuntimeState } = await import("../config/config.js");
+    const configPath = createConfigIO().configPath;
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    try {
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify(
+          {
+            browser: {
+              cdpUrl: "https://user:pass@chrome.browserless.io?token=supersecret123",
+              profiles: {
+                remote: {
+                  cdpUrl: "https://alice:secret@chrome.remote.example.com?token=profile-secret",
+                },
+                local: {
+                  cdpUrl: "ws://127.0.0.1:9222",
+                },
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+      resetConfigRuntimeState();
+
+      const after = await rpcReq<{
+        raw?: string | null;
+        config?: {
+          browser?: {
+            cdpUrl?: string;
+            profiles?: Record<string, { cdpUrl?: string }>;
+          };
+        };
+      }>(requireWs(), "config.get", {});
+      expect(after.ok).toBe(true);
+      expect(after.payload?.config?.browser?.cdpUrl).toBe("__OPENCLAW_REDACTED__");
+      expect(after.payload?.config?.browser?.profiles?.remote?.cdpUrl).toBe(
+        "__OPENCLAW_REDACTED__",
+      );
+      expect(after.payload?.config?.browser?.profiles?.local?.cdpUrl).toBe("ws://127.0.0.1:9222");
+      if (typeof after.payload?.raw === "string") {
+        expect(after.payload.raw).toContain("__OPENCLAW_REDACTED__");
+        expect(after.payload.raw).not.toContain("supersecret123");
+        expect(after.payload.raw).not.toContain("user:pass@");
+        expect(after.payload.raw).not.toContain("profile-secret");
+        expect(after.payload.raw).not.toContain("alice:secret@");
+      }
+    } finally {
+      await fs.rm(configPath, { force: true });
+      resetConfigRuntimeState();
+    }
+  });
+
   it("does not reject config.set for unresolved auth-profile refs outside submitted config", async () => {
     const missingEnvVar = `OPENCLAW_MISSING_AUTH_PROFILE_REF_${Date.now()}`;
     await writeUnresolvedAuthProfileTokenRef(missingEnvVar);

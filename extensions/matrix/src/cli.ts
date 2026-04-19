@@ -26,6 +26,21 @@ import { matrixSetupAdapter } from "./setup-core.js";
 import type { CoreConfig } from "./types.js";
 
 let matrixCliExitScheduled = false;
+type MatrixActionClientModule = typeof import("./matrix/actions/client.js");
+type MatrixDirectManagementModule = typeof import("./matrix/direct-management.js");
+
+let matrixActionClientModulePromise: Promise<MatrixActionClientModule> | undefined;
+let matrixDirectManagementModulePromise: Promise<MatrixDirectManagementModule> | undefined;
+
+function loadMatrixActionClientModule(): Promise<MatrixActionClientModule> {
+  matrixActionClientModulePromise ??= import("./matrix/actions/client.js");
+  return matrixActionClientModulePromise;
+}
+
+function loadMatrixDirectManagementModule(): Promise<MatrixDirectManagementModule> {
+  matrixDirectManagementModulePromise ??= import("./matrix/direct-management.js");
+  return matrixDirectManagementModulePromise;
+}
 
 export function resetMatrixCliStateForTests(): void {
   matrixCliExitScheduled = false;
@@ -332,8 +347,8 @@ async function inspectMatrixDirectRoom(params: {
   userId: string;
 }): Promise<MatrixCliDirectRoomInspection> {
   const [{ withResolvedActionClient }, { inspectMatrixDirectRooms }] = await Promise.all([
-    import("./matrix/actions/client.js"),
-    import("./matrix/direct-management.js"),
+    loadMatrixActionClientModule(),
+    loadMatrixDirectManagementModule(),
   ]);
   return await withResolvedActionClient(
     { accountId: params.accountId },
@@ -363,8 +378,8 @@ async function repairMatrixDirectRoom(params: {
   const cfg = getMatrixRuntime().config.loadConfig() as CoreConfig;
   const account = resolveMatrixAccount({ cfg, accountId: params.accountId });
   const [{ withStartedActionClient }, { repairMatrixDirectRooms }] = await Promise.all([
-    import("./matrix/actions/client.js"),
-    import("./matrix/direct-management.js"),
+    loadMatrixActionClientModule(),
+    loadMatrixDirectManagementModule(),
   ]);
   return await withStartedActionClient({ accountId: params.accountId }, async (client) => {
     const repaired = await repairMatrixDirectRooms({

@@ -10,14 +10,14 @@ const taskRuntimeInternalMocks = vi.hoisted(() => ({
 }));
 
 const taskExecutorMocks = vi.hoisted(() => ({
-  createRunningTaskRun: vi.fn(),
-  completeTaskRunByRunId: vi.fn(),
-  failTaskRunByRunId: vi.fn(),
   recordTaskRunProgressByRunId: vi.fn(),
+  failTaskRunByRunId: vi.fn(),
+  completeTaskRunByRunId: vi.fn(),
+  createRunningTaskRun: vi.fn(),
 }));
 
 vi.mock("../../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
-vi.mock("../../tasks/task-executor.js", () => taskExecutorMocks);
+vi.mock("../../tasks/detached-task-runtime.js", () => taskExecutorMocks);
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
@@ -70,17 +70,19 @@ function mockSavedVideoResult(fileName = "out.mp4") {
   return generateSpy;
 }
 
+function resetVideoGenerateMocks() {
+  vi.restoreAllMocks();
+  vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([]);
+  taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
+  taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
+  taskExecutorMocks.createRunningTaskRun.mockReset();
+  taskExecutorMocks.completeTaskRunByRunId.mockReset();
+  taskExecutorMocks.failTaskRunByRunId.mockReset();
+  taskExecutorMocks.recordTaskRunProgressByRunId.mockReset();
+}
+
 describe("createVideoGenerateTool", () => {
-  beforeEach(() => {
-    vi.restoreAllMocks();
-    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([]);
-    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
-    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
-    taskExecutorMocks.createRunningTaskRun.mockReset();
-    taskExecutorMocks.completeTaskRunByRunId.mockReset();
-    taskExecutorMocks.failTaskRunByRunId.mockReset();
-    taskExecutorMocks.recordTaskRunProgressByRunId.mockReset();
-  });
+  beforeEach(resetVideoGenerateMocks);
 
   afterEach(() => {
     vi.unstubAllEnvs();

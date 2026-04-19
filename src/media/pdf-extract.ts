@@ -1,12 +1,50 @@
-type CanvasModule = typeof import("@napi-rs/canvas");
-type PdfJsModule = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
+type CanvasLike = {
+  toBuffer(type: "image/png"): Buffer;
+};
+
+type CanvasModule = {
+  createCanvas(width: number, height: number): CanvasLike;
+};
+
+type PdfTextItem = {
+  str: string;
+};
+
+type PdfTextContent = {
+  items: Array<PdfTextItem | object>;
+};
+
+type PdfViewport = {
+  width: number;
+  height: number;
+};
+
+type PdfPage = {
+  getTextContent(): Promise<PdfTextContent>;
+  getViewport(params: { scale: number }): PdfViewport;
+  render(params: { canvas: unknown; viewport: PdfViewport }): { promise: Promise<void> };
+};
+
+type PdfDocument = {
+  numPages: number;
+  getPage(pageNumber: number): Promise<PdfPage>;
+};
+
+type PdfJsModule = {
+  getDocument(params: { data: Uint8Array; disableWorker?: boolean }): {
+    promise: Promise<PdfDocument>;
+  };
+};
+
+const CANVAS_MODULE = "@napi-rs/canvas";
+const PDFJS_MODULE = "pdfjs-dist/legacy/build/pdf.mjs";
 
 let canvasModulePromise: Promise<CanvasModule> | null = null;
 let pdfJsModulePromise: Promise<PdfJsModule> | null = null;
 
 async function loadCanvasModule(): Promise<CanvasModule> {
   if (!canvasModulePromise) {
-    canvasModulePromise = import("@napi-rs/canvas").catch((err) => {
+    canvasModulePromise = (import(CANVAS_MODULE) as Promise<CanvasModule>).catch((err) => {
       canvasModulePromise = null;
       throw new Error(
         `Optional dependency @napi-rs/canvas is required for PDF image extraction: ${String(err)}`,
@@ -18,7 +56,7 @@ async function loadCanvasModule(): Promise<CanvasModule> {
 
 async function loadPdfJsModule(): Promise<PdfJsModule> {
   if (!pdfJsModulePromise) {
-    pdfJsModulePromise = import("pdfjs-dist/legacy/build/pdf.mjs").catch((err) => {
+    pdfJsModulePromise = (import(PDFJS_MODULE) as Promise<PdfJsModule>).catch((err) => {
       pdfJsModulePromise = null;
       throw new Error(
         `Optional dependency pdfjs-dist is required for PDF extraction: ${String(err)}`,
@@ -48,8 +86,9 @@ export async function extractPdfContent(params: {
   onImageExtractionError?: (error: unknown) => void;
 }): Promise<PdfExtractedContent> {
   const { buffer, maxPages, maxPixels, minTextChars, pageNumbers, onImageExtractionError } = params;
-  const { getDocument } = await loadPdfJsModule();
-  const pdf = await getDocument({ data: new Uint8Array(buffer), disableWorker: true }).promise;
+  const pdfJsModule = await loadPdfJsModule();
+  const pdf = await pdfJsModule.getDocument({ data: new Uint8Array(buffer), disableWorker: true })
+    .promise;
 
   const effectivePages: number[] = pageNumbers
     ? pageNumbers.filter((p) => p >= 1 && p <= pdf.numPages).slice(0, maxPages)
@@ -81,7 +120,6 @@ export async function extractPdfContent(params: {
     return { text, images: [] };
   }
 
-  const { createCanvas } = canvasModule;
   const images: PdfExtractedImage[] = [];
   const pixelBudget = Math.max(1, maxPixels);
 
@@ -91,7 +129,7 @@ export async function extractPdfContent(params: {
     const pagePixels = viewport.width * viewport.height;
     const scale = Math.min(1, Math.sqrt(pixelBudget / Math.max(1, pagePixels)));
     const scaled = page.getViewport({ scale: Math.max(0.1, scale) });
-    const canvas = createCanvas(Math.ceil(scaled.width), Math.ceil(scaled.height));
+    const canvas = canvasModule.createCanvas(Math.ceil(scaled.width), Math.ceil(scaled.height));
     await page.render({
       canvas: canvas as unknown as HTMLCanvasElement,
       viewport: scaled,

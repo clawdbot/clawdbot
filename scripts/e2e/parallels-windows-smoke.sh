@@ -45,7 +45,7 @@ TIMEOUT_UPDATE_S=300
 TIMEOUT_UPDATE_POLL_GRACE_S=60
 TIMEOUT_VERIFY_S=120
 TIMEOUT_ONBOARD_S=240
-TIMEOUT_ONBOARD_PHASE_S=$((TIMEOUT_ONBOARD_S + 60))
+TIMEOUT_ONBOARD_PHASE_S=$((TIMEOUT_ONBOARD_S + 120))
 # verify_gateway_reachable runs six 30s probes plus short retry sleeps.
 TIMEOUT_GATEWAY_S=240
 TIMEOUT_AGENT_S=180
@@ -1997,8 +1997,10 @@ param(
 
 try {
   \$openclaw = Join-Path \$env:APPDATA 'npm\openclaw.cmd'
-  \$cmdLine = ('"{0}" onboard --non-interactive --mode local --auth-choice ${AUTH_CHOICE} --secret-input-mode ref --gateway-port 18789 --gateway-bind loopback --install-daemon --skip-skills --skip-health --accept-risk --json > "{1}" 2>&1' -f \$openclaw, \$LogPath)
+  Set-Content -Path \$LogPath -Value 'onboard.start'
+  \$cmdLine = ('"{0}" onboard --non-interactive --mode local --auth-choice ${AUTH_CHOICE} --secret-input-mode ref --gateway-port 18789 --gateway-bind loopback --install-daemon --skip-skills --skip-health --accept-risk --json >> "{1}" 2>&1' -f \$openclaw, \$LogPath)
   & cmd.exe /d /s /c \$cmdLine
+  Add-Content -Path \$LogPath -Value ('onboard.exit={0}' -f \$LASTEXITCODE)
   Set-Content -Path \$DonePath -Value ([string]\$LASTEXITCODE)
 } catch {
   if (Test-Path \$LogPath) {
@@ -2015,6 +2017,7 @@ run_ref_onboard() {
   local api_key_env_q api_key_value_q script_url
   local runner_name log_name done_name done_status launcher_state
   local poll_rc state_rc log_rc start_seconds poll_deadline startup_checked
+  local guest_log log_state_path
   api_key_env_q="$(ps_single_quote "$API_KEY_ENV")"
   api_key_value_q="$(ps_single_quote "$API_KEY_VALUE")"
   write_onboard_runner_script
@@ -2025,6 +2028,8 @@ run_ref_onboard() {
   start_seconds="$SECONDS"
   poll_deadline=$((SECONDS + TIMEOUT_ONBOARD_S + 60))
   startup_checked=0
+  log_state_path="$(mktemp "${TMPDIR:-/tmp}/openclaw-onboard-log-state.XXXXXX")"
+  : >"$log_state_path"
 
   guest_powershell "$(cat <<EOF
 \$runner = Join-Path \$env:TEMP '$runner_name'
@@ -2036,6 +2041,34 @@ curl.exe -fsSL '$script_url' -o \$runner
 Start-Process powershell.exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', \$runner, '-LogPath', \$log, '-DonePath', \$done) -WindowStyle Hidden | Out-Null
 EOF
 )"
+
+  stream_windows_onboard_log() {
+    set +e
+    guest_log="$(
+      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
+    )"
+    log_rc=$?
+    set -e
+    if [[ $log_rc -ne 0 ]] || [[ -z "$guest_log" ]]; then
+      return "$log_rc"
+    fi
+    GUEST_LOG="$guest_log" python3 - "$log_state_path" <<'PY'
+import os
+import pathlib
+import sys
+
+state_path = pathlib.Path(sys.argv[1])
+previous = state_path.read_text(encoding="utf-8", errors="replace")
+current = os.environ["GUEST_LOG"].replace("\r\n", "\n").replace("\r", "\n")
+
+if current.startswith(previous):
+    sys.stdout.write(current[len(previous):])
+else:
+    sys.stdout.write(current)
+
+state_path.write_text(current, encoding="utf-8")
+PY
+  }
 
   while :; do
     set +e
@@ -2049,19 +2082,24 @@ EOF
       warn "windows onboard helper poll failed; retrying"
       if (( SECONDS >= poll_deadline )); then
         warn "windows onboard helper timed out while polling done file"
+        rm -f "$log_state_path"
         return 1
       fi
       sleep 2
       continue
     fi
+    set +e
+    stream_windows_onboard_log
+    log_rc=$?
+    set -e
+    if [[ $log_rc -ne 0 ]]; then
+      warn "windows onboard helper live log poll failed; retrying"
+    fi
     if [[ -n "$done_status" ]]; then
-      set +e
-      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
-      log_rc=$?
-      set -e
-      if [[ $log_rc -ne 0 ]]; then
+      if ! stream_windows_onboard_log; then
         warn "windows onboard helper log drain failed after completion"
       fi
+      rm -f "$log_state_path"
       [[ "$done_status" == "0" ]]
       return $?
     fi
@@ -2076,18 +2114,16 @@ EOF
       startup_checked=1
       if [[ $state_rc -eq 0 && "$launcher_state" == *"runner=False"* && "$launcher_state" == *"log=False"* && "$launcher_state" == *"done=False"* ]]; then
         warn "windows onboard helper failed to materialize guest files"
+        rm -f "$log_state_path"
         return 1
       fi
     fi
     if (( SECONDS >= poll_deadline )); then
-      set +e
-      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
-      log_rc=$?
-      set -e
-      if [[ $log_rc -ne 0 ]]; then
+      if ! stream_windows_onboard_log; then
         warn "windows onboard helper log drain failed after timeout"
       fi
       warn "windows onboard helper timed out waiting for done file"
+      rm -f "$log_state_path"
       return 1
     fi
     sleep 2
@@ -2313,6 +2349,7 @@ run_fresh_main_lane() {
   FRESH_MAIN_VERSION="$(extract_last_version "$(phase_log_path "$install_log_phase")")"
   phase_run "fresh.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version || return $?
   phase_run "fresh.onboard-ref" "$TIMEOUT_ONBOARD_PHASE_S" run_ref_onboard || return $?
+  phase_run "fresh.gateway-restart" "$TIMEOUT_GATEWAY_S" restart_gateway || return $?
   phase_run "fresh.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway_reachable || return $?
   FRESH_GATEWAY_STATUS="pass"
   phase_run "fresh.first-agent-turn" "$TIMEOUT_AGENT_S" verify_turn || return $?

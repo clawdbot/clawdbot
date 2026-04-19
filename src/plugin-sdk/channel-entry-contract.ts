@@ -335,6 +335,7 @@ function loadBundledEntryModuleSync(importMetaUrl: string, specifier: string): u
   return loaded;
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic entry export loaders use caller-supplied export types.
 export function loadBundledEntryExportSync<T>(
   importMetaUrl: string,
   reference: BundledEntryModuleRef,
