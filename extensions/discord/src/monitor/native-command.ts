@@ -66,6 +66,7 @@ import {
   resolveDiscordOwnerAccess,
   resolveGroupDmAllow,
 } from "./allow-list.js";
+import { resolveDiscordChannelNameSafe, resolveDiscordChannelTopicSafe } from "./channel-access.js";
 import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
 import { handleDiscordDmCommandDecision } from "./dm-command-decision.js";
 import { resolveDiscordChannelInfo } from "./message-utils.js";
@@ -412,7 +413,7 @@ async function resolveDiscordNativeAutocompleteAuthorized(params: {
     channelType === ChannelType.PublicThread ||
     channelType === ChannelType.PrivateThread ||
     channelType === ChannelType.AnnouncementThread;
-  const channelName = channel && "name" in channel ? (channel.name as string) : undefined;
+  const channelName = resolveDiscordChannelNameSafe(channel);
   const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
   const rawChannelId = channel?.id ?? "";
   const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
@@ -801,7 +802,7 @@ async function dispatchDiscordCommandInteraction(params: {
     channelType === ChannelType.PublicThread ||
     channelType === ChannelType.PrivateThread ||
     channelType === ChannelType.AnnouncementThread;
-  const channelName = channel && "name" in channel ? (channel.name as string) : undefined;
+  const channelName = resolveDiscordChannelNameSafe(channel);
   const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
   const rawChannelId = channel?.id ?? "";
   const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
@@ -1186,7 +1187,7 @@ async function dispatchDiscordCommandInteraction(params: {
     memberRoleIds,
     guildId: interaction.guild?.id,
     guildName: interaction.guild?.name,
-    channelTopic: channel && "topic" in channel ? (channel.topic ?? undefined) : undefined,
+    channelTopic: resolveDiscordChannelTopicSafe(channel),
     channelConfig,
     guildInfo,
     allowNameMatching,

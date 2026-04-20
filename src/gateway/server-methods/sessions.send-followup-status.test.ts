@@ -69,6 +69,7 @@ describe("sessions.send completed subagent follow-up status", () => {
     };
 
     loadSessionEntryMock.mockReturnValue({
+      cfg: {},
       canonicalKey: childSessionKey,
       storePath: "/tmp/sessions.json",
       entry: { sessionId: "sess-followup" },

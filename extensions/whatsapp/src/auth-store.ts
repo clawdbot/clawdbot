@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -8,9 +9,28 @@ import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import { defaultRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOAuthDir } from "./auth-store.runtime.js";
 import { hasWebCredsSync, resolveWebCredsBackupPath, resolveWebCredsPath } from "./creds-files.js";
+import {
+  waitForCredsSaveQueueWithTimeout,
+  type CredsQueueWaitResult,
+} from "./creds-persistence.js";
 import { resolveComparableIdentity, type WhatsAppSelfIdentity } from "./identity.js";
 import { resolveUserPath, type WebChannel } from "./text-runtime.js";
 export { hasWebCredsSync, resolveWebCredsBackupPath, resolveWebCredsPath };
+
+export const WHATSAPP_AUTH_UNSTABLE_CODE = "whatsapp-auth-unstable";
+
+const authStoreLogger = getChildLogger({ module: "web-auth-store" });
+const emptyWebSelfId = () => ({ e164: null, jid: null, lid: null }) as const;
+export type WhatsAppWebAuthState = "linked" | "not-linked" | "unstable";
+
+export class WhatsAppAuthUnstableError extends Error {
+  readonly code = WHATSAPP_AUTH_UNSTABLE_CODE;
+
+  constructor(message = "WhatsApp auth state is still stabilizing; retry shortly.") {
+    super(message);
+    this.name = "WhatsAppAuthUnstableError";
+  }
+}
 
 export function resolveDefaultWebAuthDir(): string {
   return path.join(resolveOAuthDir(), "whatsapp", DEFAULT_ACCOUNT_ID);
@@ -33,8 +53,26 @@ export function readCredsJsonRaw(filePath: string): string | null {
   }
 }
 
-export function maybeRestoreCredsFromBackup(authDir: string): void {
+async function waitForWebAuthBarrier(
+  authDir: string,
+  context: string,
+): Promise<CredsQueueWaitResult> {
+  const result = await waitForCredsSaveQueueWithTimeout(authDir);
+  if (result === "timed_out") {
+    authStoreLogger.warn(
+      {
+        authDir,
+        context,
+      },
+      "timed out waiting for queued WhatsApp creds save before auth read",
+    );
+  }
+  return result;
+}
+
+export async function restoreCredsFromBackupIfNeeded(authDir: string): Promise<boolean> {
   const logger = getChildLogger({ module: "web-session" });
+  let tempRestorePath: string | null = null;
   try {
     const credsPath = resolveWebCredsPath(authDir);
     const backupPath = resolveWebCredsBackupPath(authDir);
@@ -42,31 +80,44 @@ export function maybeRestoreCredsFromBackup(authDir: string): void {
     if (raw) {
       // Validate that creds.json is parseable.
       JSON.parse(raw);
-      return;
+      return false;
     }
 
     const backupRaw = readCredsJsonRaw(backupPath);
     if (!backupRaw) {
-      return;
+      return false;
+    }
+    const backupStats = await fs.lstat(backupPath).catch(() => null);
+    if (!backupStats?.isFile()) {
+      return false;
     }
 
     // Ensure backup is parseable before restoring.
     JSON.parse(backupRaw);
-    fsSync.copyFileSync(backupPath, credsPath);
-    try {
-      fsSync.chmodSync(credsPath, 0o600);
-    } catch {
-      // best-effort on platforms that support it
-    }
+    tempRestorePath = path.join(authDir, `.creds.restore-${randomUUID()}.tmp`);
+    await fs.writeFile(tempRestorePath, backupRaw, {
+      encoding: "utf-8",
+      mode: 0o600,
+      flag: "wx",
+    });
+    await fs.rename(tempRestorePath, credsPath);
+    tempRestorePath = null;
     logger.warn({ credsPath }, "restored corrupted WhatsApp creds.json from backup");
+    return true;
   } catch {
     // ignore
+  } finally {
+    if (tempRestorePath) {
+      await fs.rm(tempRestorePath, { force: true }).catch(() => {
+        // best-effort temp cleanup
+      });
+    }
   }
+  return false;
 }
 
 export async function webAuthExists(authDir: string = resolveDefaultWebAuthDir()) {
   const resolvedAuthDir = resolveUserPath(authDir);
-  maybeRestoreCredsFromBackup(resolvedAuthDir);
   const credsPath = resolveWebCredsPath(resolvedAuthDir);
   try {
     await fs.access(resolvedAuthDir);
@@ -84,6 +135,89 @@ export async function webAuthExists(authDir: string = resolveDefaultWebAuthDir()
   } catch {
     return false;
   }
+}
+
+function resolveWebAuthState(params: {
+  linked: boolean;
+  barrierResult: CredsQueueWaitResult;
+}): WhatsAppWebAuthState {
+  if (params.barrierResult === "timed_out") {
+    return "unstable";
+  }
+  return params.linked ? "linked" : "not-linked";
+}
+
+async function readWebAuthStateCore(
+  authDir: string,
+  context: string,
+): Promise<{ authDir: string; linked: boolean; state: WhatsAppWebAuthState }> {
+  const resolvedAuthDir = resolveUserPath(authDir);
+  const barrierResult = await waitForWebAuthBarrier(resolvedAuthDir, context);
+  const linked = await webAuthExists(resolvedAuthDir);
+  return {
+    authDir: resolvedAuthDir,
+    linked,
+    state: resolveWebAuthState({ linked, barrierResult }),
+  };
+}
+
+export function formatWhatsAppWebAuthStatusState(state: WhatsAppWebAuthState): string {
+  switch (state) {
+    case "linked":
+      return "linked";
+    case "not-linked":
+      return "not linked";
+    case "unstable":
+      return "auth stabilizing";
+  }
+  const exhaustive: never = state;
+  return exhaustive;
+}
+
+export async function readWebAuthState(
+  authDir: string = resolveDefaultWebAuthDir(),
+): Promise<WhatsAppWebAuthState> {
+  return (await readWebAuthStateCore(authDir, "readWebAuthState")).state;
+}
+
+export async function readWebAuthSnapshot(authDir: string = resolveDefaultWebAuthDir()) {
+  const auth = await readWebAuthStateCore(authDir, "readWebAuthSnapshot");
+  return {
+    state: auth.state,
+    authAgeMs: auth.state === "linked" ? getWebAuthAgeMs(auth.authDir) : null,
+    selfId: auth.state === "linked" ? readWebSelfId(auth.authDir) : emptyWebSelfId(),
+  } as const;
+}
+
+export async function readWebAuthExistsBestEffort(authDir: string = resolveDefaultWebAuthDir()) {
+  const state = await readWebAuthState(authDir);
+  return {
+    exists: state === "linked",
+    timedOut: state === "unstable",
+  } as const;
+}
+
+export async function readWebAuthExistsForDecision(
+  authDir: string = resolveDefaultWebAuthDir(),
+): Promise<{ outcome: "stable"; exists: boolean } | { outcome: "unstable" }> {
+  const state = await readWebAuthState(authDir);
+  if (state === "unstable") {
+    return { outcome: "unstable" };
+  }
+  return {
+    outcome: "stable",
+    exists: state === "linked",
+  };
+}
+
+export async function readWebAuthSnapshotBestEffort(authDir: string = resolveDefaultWebAuthDir()) {
+  const snapshot = await readWebAuthSnapshot(authDir);
+  return {
+    linked: snapshot.state === "linked",
+    timedOut: snapshot.state === "unstable",
+    authAgeMs: snapshot.authAgeMs,
+    selfId: snapshot.selfId,
+  } as const;
 }
 
 async function clearLegacyBaileysAuthState(authDir: string) {
@@ -113,6 +247,45 @@ async function clearLegacyBaileysAuthState(authDir: string) {
   );
 }
 
+async function shouldClearOnLogout(authDir: string, isLegacyAuthDir: boolean): Promise<boolean> {
+  try {
+    const stats = await fs.stat(authDir);
+    if (!stats.isDirectory()) {
+      return true;
+    }
+    if (isLegacyAuthDir) {
+      const entries = await fs.readdir(authDir, { withFileTypes: true });
+      return entries.some((entry) => {
+        if (!entry.isFile()) {
+          return false;
+        }
+        if (entry.name === "oauth.json") {
+          return false;
+        }
+        if (entry.name === "creds.json" || entry.name === "creds.json.bak") {
+          return true;
+        }
+        return entry.name.endsWith(".json")
+          ? /^(app-state-sync|session|sender-key|pre-key)-/.test(entry.name)
+          : false;
+      });
+    }
+    const credsStats = await fs.stat(resolveWebCredsPath(authDir)).catch(() => null);
+    if (credsStats?.isFile()) {
+      return true;
+    }
+    const backupStats = await fs.stat(resolveWebCredsBackupPath(authDir)).catch(() => null);
+    return backupStats?.isFile() === true;
+  } catch (error) {
+    const codeValue =
+      error && typeof error === "object" && "code" in error
+        ? (error as { code?: unknown }).code
+        : undefined;
+    const code = typeof codeValue === "string" ? codeValue : "";
+    return code !== "ENOENT";
+  }
+}
+
 export async function logoutWeb(params: {
   authDir?: string;
   isLegacyAuthDir?: boolean;
@@ -120,8 +293,13 @@ export async function logoutWeb(params: {
 }) {
   const runtime = params.runtime ?? defaultRuntime;
   const resolvedAuthDir = resolveUserPath(params.authDir ?? resolveDefaultWebAuthDir());
-  const exists = await webAuthExists(resolvedAuthDir);
-  if (!exists) {
+  const barrierResult = await waitForWebAuthBarrier(resolvedAuthDir, "logoutWeb");
+  if (barrierResult === "timed_out") {
+    runtime.log(
+      info("WhatsApp auth state is still stabilizing; clearing cached credentials anyway."),
+    );
+  }
+  if (!(await shouldClearOnLogout(resolvedAuthDir, Boolean(params.isLegacyAuthDir)))) {
     runtime.log(info("No WhatsApp Web session found; nothing to delete."));
     return false;
   }
@@ -139,7 +317,7 @@ export function readWebSelfId(authDir: string = resolveDefaultWebAuthDir()) {
   try {
     const credsPath = resolveWebCredsPath(resolveUserPath(authDir));
     if (!fsSync.existsSync(credsPath)) {
-      return { e164: null, jid: null, lid: null } as const;
+      return emptyWebSelfId();
     }
     const raw = fsSync.readFileSync(credsPath, "utf-8");
     const parsed = JSON.parse(raw) as { me?: { id?: string; lid?: string } } | undefined;
@@ -156,7 +334,7 @@ export function readWebSelfId(authDir: string = resolveDefaultWebAuthDir()) {
       lid: identity.lid ?? null,
     } as const;
   } catch {
-    return { e164: null, jid: null, lid: null } as const;
+    return emptyWebSelfId();
   }
 }
 
@@ -165,7 +343,6 @@ export async function readWebSelfIdentity(
   fallback?: { id?: string | null; lid?: string | null } | null,
 ): Promise<WhatsAppSelfIdentity> {
   const resolvedAuthDir = resolveUserPath(authDir);
-  maybeRestoreCredsFromBackup(resolvedAuthDir);
   try {
     const raw = await fs.readFile(resolveWebCredsPath(resolvedAuthDir), "utf-8");
     const parsed = JSON.parse(raw) as { me?: { id?: string; lid?: string } } | undefined;
@@ -185,6 +362,21 @@ export async function readWebSelfIdentity(
       resolvedAuthDir,
     );
   }
+}
+
+export async function readWebSelfIdentityForDecision(
+  authDir: string = resolveDefaultWebAuthDir(),
+  fallback?: { id?: string | null; lid?: string | null } | null,
+): Promise<{ outcome: "stable"; identity: WhatsAppSelfIdentity } | { outcome: "unstable" }> {
+  const resolvedAuthDir = resolveUserPath(authDir);
+  const result = await waitForWebAuthBarrier(resolvedAuthDir, "readWebSelfIdentityForDecision");
+  if (result === "timed_out") {
+    return { outcome: "unstable" };
+  }
+  return {
+    outcome: "stable",
+    identity: await readWebSelfIdentity(resolvedAuthDir, fallback),
+  };
 }
 
 /**
@@ -223,8 +415,11 @@ export async function pickWebChannel(
   authDir: string = resolveDefaultWebAuthDir(),
 ): Promise<WebChannel> {
   const choice: WebChannel = pref === "auto" ? "web" : pref;
-  const hasWeb = await webAuthExists(authDir);
-  if (!hasWeb) {
+  const auth = await readWebAuthExistsForDecision(authDir);
+  if (auth.outcome === "unstable") {
+    throw new WhatsAppAuthUnstableError();
+  }
+  if (!auth.exists) {
     throw new Error(
       `No WhatsApp Web session found. Run \`${formatCliCommand("openclaw channels login --channel whatsapp --verbose")}\` to link.`,
     );

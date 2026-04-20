@@ -59,7 +59,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { createRunningTaskRun } from "../tasks/task-executor.js";
+import { createRunningTaskRun } from "../tasks/detached-task-runtime.js";
 import {
   deliveryContextFromSession,
   formatConversationTarget,

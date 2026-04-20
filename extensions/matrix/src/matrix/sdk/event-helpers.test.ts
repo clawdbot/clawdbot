@@ -1,4 +1,4 @@
-import type { MatrixEvent } from "matrix-js-sdk";
+import type { MatrixEvent } from "matrix-js-sdk/lib/matrix.js";
 import { describe, expect, it } from "vitest";
 import { buildHttpError, matrixEventToRaw, parseMxc } from "./event-helpers.js";
 

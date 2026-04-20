@@ -28,8 +28,8 @@ Good output in one line:
 
 - `openclaw status` → shows configured channels and no obvious auth errors.
 - `openclaw status --all` → full report is present and shareable.
-- `openclaw gateway probe` → expected gateway target is reachable (`Reachable: yes`). `RPC: limited - missing scope: operator.read` is degraded diagnostics, not a connect failure.
-- `openclaw gateway status` → `Runtime: running` and `RPC probe: ok`.
+- `openclaw gateway probe` → expected gateway target is reachable (`Reachable: yes`). `Capability: ...` tells you what auth level the probe could prove, and `Read probe: limited - missing scope: operator.read` is degraded diagnostics, not a connect failure.
+- `openclaw gateway status` → `Runtime: running`, `Connectivity probe: ok`, and a plausible `Capability: ...` line. Use `--require-rpc` if you need read-scope RPC proof too.
 - `openclaw doctor` → no blocking config/service errors.
 - `openclaw channels status --probe` → reachable gateway returns live per-account
   transport state plus probe/audit results such as `works` or `audit ok`; if the
@@ -117,7 +117,8 @@ flowchart TD
     Good output looks like:
 
     - `Runtime: running`
-    - `RPC probe: ok`
+    - `Connectivity probe: ok`
+    - `Capability: read-only`, `write-capable`, or `admin-capable`
     - Your channel shows transport connected and, where supported, `works` or `audit ok` in `channels status --probe`
     - Sender appears approved (or DM policy is open/allowlist)
 
@@ -147,7 +148,8 @@ flowchart TD
     Good output looks like:
 
     - `Dashboard: http://...` is shown in `openclaw gateway status`
-    - `RPC probe: ok`
+    - `Connectivity probe: ok`
+    - `Capability: read-only`, `write-capable`, or `admin-capable`
     - No auth loop in logs
 
     Common log signatures:
@@ -189,7 +191,8 @@ flowchart TD
 
     - `Service: ... (loaded)`
     - `Runtime: running`
-    - `RPC probe: ok`
+    - `Connectivity probe: ok`
+    - `Capability: read-only`, `write-capable`, or `admin-capable`
 
     Common log signatures:
 

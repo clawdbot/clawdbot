@@ -1,3 +1,4 @@
+import { resolveDiscordChannelNameSafe } from "./channel-access.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.types.js";
 
 type DiscordInboundJobRuntimeField =
@@ -108,7 +109,7 @@ function normalizeDiscordThreadChannel(
     parent: threadChannel.parent
       ? {
           id: threadChannel.parent.id,
-          name: threadChannel.parent.name,
+          name: resolveDiscordChannelNameSafe(threadChannel.parent),
         }
       : undefined,
     ownerId: threadChannel.ownerId,

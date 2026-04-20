@@ -316,15 +316,29 @@ Notes:
 ## Direct WebSocket CDP providers
 
 Some hosted browser services expose a **direct WebSocket** endpoint rather than
-the standard HTTP-based CDP discovery (`/json/version`). OpenClaw supports both:
+the standard HTTP-based CDP discovery (`/json/version`). OpenClaw accepts three
+CDP URL shapes and picks the right connection strategy automatically:
 
-- **HTTP(S) endpoints** — OpenClaw calls `/json/version` to discover the
-  WebSocket debugger URL, then connects.
-- **WebSocket endpoints** (`ws://` / `wss://`) — OpenClaw connects directly,
-  skipping `/json/version`. Use this for services like
-  [Browserless](https://browserless.io),
-  [Browserbase](https://www.browserbase.com), or any provider that hands you a
-  WebSocket URL.
+- **HTTP(S) discovery** — `http://host[:port]` or `https://host[:port]`.
+  OpenClaw calls `/json/version` to discover the WebSocket debugger URL, then
+  connects. No WebSocket fallback.
+- **Direct WebSocket endpoints** — `ws://host[:port]/devtools/<kind>/<id>` or
+  `wss://...` with a `/devtools/browser|page|worker|shared_worker|service_worker/<id>`
+  path. OpenClaw connects directly via a WebSocket handshake and skips
+  `/json/version` entirely.
+- **Bare WebSocket roots** — `ws://host[:port]` or `wss://host[:port]` with no
+  `/devtools/...` path (e.g. [Browserless](https://browserless.io),
+  [Browserbase](https://www.browserbase.com)). OpenClaw tries HTTP
+  `/json/version` discovery first (normalising the scheme to `http`/`https`);
+  if discovery returns a `webSocketDebuggerUrl` it is used, otherwise OpenClaw
+  falls back to a direct WebSocket handshake at the bare root. This covers
+  both Chrome-style remote debug ports and WebSocket-only providers.
+
+Plain `ws://host:port` / `wss://host:port` without a `/devtools/...` path
+pointed at a local Chrome instance is supported via the discovery-first
+fallback — Chrome only accepts WebSocket upgrades on the specific per-browser
+or per-target path returned by `/json/version`, so a bare-root handshake alone
+would fail.
 
 ### Browserbase
 
@@ -518,8 +532,9 @@ Notes:
 - Existing-session dialog hooks do not support timeout overrides.
 - Some features still require the managed browser path, including batch
   actions, PDF export, download interception, and `responsebody`.
-- Existing-session is host-local. If Chrome lives on a different machine or a
-  different network namespace, use remote CDP or a node host instead.
+- Existing-session can attach on the selected host or through a connected
+  browser node. If Chrome lives elsewhere and no browser node is connected, use
+  remote CDP or a node host instead.
 
 ## Isolation guarantees
 

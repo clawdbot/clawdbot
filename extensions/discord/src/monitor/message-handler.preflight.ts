@@ -32,6 +32,7 @@ import {
   resolveDiscordShouldRequireMention,
   resolveGroupDmAllow,
 } from "./allow-list.js";
+import { resolveDiscordChannelNameSafe } from "./channel-access.js";
 import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
 import { handleDiscordDmCommandDecision } from "./dm-command-decision.js";
 import {
@@ -575,9 +576,7 @@ export async function preflightDiscordMessage(
   // Resolve thread parent early for binding inheritance
   const channelName =
     channelInfo?.name ??
-    ((isGuildMessage || isGroupDm) && message.channel && "name" in message.channel
-      ? message.channel.name
-      : undefined);
+    (isGuildMessage || isGroupDm ? resolveDiscordChannelNameSafe(message.channel) : undefined);
   const { resolveDiscordThreadChannel, resolveDiscordThreadParentInfo } =
     await loadDiscordThreadingRuntime();
   const earlyThreadChannel = resolveDiscordThreadChannel({

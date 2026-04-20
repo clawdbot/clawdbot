@@ -20,6 +20,25 @@ describe("collectWhatsAppStatusIssues", () => {
     ]);
   });
 
+  it("reports auth reads that are still stabilizing", () => {
+    const issues = collectWhatsAppStatusIssues([
+      {
+        accountId: "default",
+        enabled: true,
+        statusState: "unstable",
+      },
+    ]);
+
+    expect(issues).toEqual([
+      expect.objectContaining({
+        channel: "whatsapp",
+        accountId: "default",
+        kind: "auth",
+        message: "Auth state is still stabilizing.",
+      }),
+    ]);
+  });
+
   it("reports linked but disconnected runtime state", () => {
     const issues = collectWhatsAppStatusIssues([
       {

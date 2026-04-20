@@ -11,9 +11,9 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { defaultRuntime } from "../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { type SubagentRunOutcome } from "./subagent-announce-output.js";
+import { withSubagentOutcomeTiming } from "./subagent-announce-output.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
-import { runOutcomesEqual } from "./subagent-registry-completion.js";
+import { shouldUpdateRunOutcome } from "./subagent-registry-completion.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   getSubagentSessionRuntimeMs,
@@ -219,11 +219,17 @@ export function reconcileOrphanedRun(params: {
     params.entry.endedAt = now;
     changed = true;
   }
-  const orphanOutcome: SubagentRunOutcome = {
-    status: "error",
-    error: `orphaned subagent run (${params.reason})`,
-  };
-  if (!runOutcomesEqual(params.entry.outcome, orphanOutcome)) {
+  const orphanOutcome = withSubagentOutcomeTiming(
+    {
+      status: "error",
+      error: `orphaned subagent run (${params.reason})`,
+    },
+    {
+      startedAt: params.entry.startedAt,
+      endedAt: params.entry.endedAt,
+    },
+  );
+  if (shouldUpdateRunOutcome(params.entry.outcome, orphanOutcome)) {
     params.entry.outcome = orphanOutcome;
     changed = true;
   }

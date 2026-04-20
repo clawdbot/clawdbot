@@ -317,6 +317,7 @@ export type ChannelLogoutResult = {
 export type ChannelLoginWithQrStartResult = {
   qrDataUrl?: string;
   message: string;
+  connected?: boolean;
 };
 
 export type ChannelLoginWithQrWaitResult = {

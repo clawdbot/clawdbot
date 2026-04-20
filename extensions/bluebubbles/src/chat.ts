@@ -1,15 +1,9 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
-import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
-import { assertMultipartActionOk, postMultipartFormData } from "./multipart.js";
+import { createBlueBubblesClient, type BlueBubblesClient } from "./client.js";
+import { assertMultipartActionOk } from "./multipart.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import type { OpenClawConfig } from "./runtime-api.js";
-import { blueBubblesFetchWithTimeout, buildBlueBubblesApiUrl } from "./types.js";
-
-function blueBubblesPolicy(allowPrivateNetwork: boolean): SsrFPolicy {
-  return allowPrivateNetwork ? { allowPrivateNetwork: true } : {};
-}
 
 export type BlueBubblesChatOpts = {
   serverUrl?: string;
@@ -19,8 +13,8 @@ export type BlueBubblesChatOpts = {
   cfg?: OpenClawConfig;
 };
 
-function resolveAccount(params: BlueBubblesChatOpts) {
-  return resolveBlueBubblesServerAccount(params);
+function clientFromOpts(params: BlueBubblesChatOpts): BlueBubblesClient {
+  return createBlueBubblesClient(params);
 }
 
 function assertPrivateApiEnabled(accountId: string, feature: string): void {
@@ -46,21 +40,15 @@ async function sendBlueBubblesChatEndpointRequest(params: {
   if (!trimmed) {
     return;
   }
-  const { baseUrl, password, accountId, allowPrivateNetwork } = resolveAccount(params.opts);
-  if (getCachedBlueBubblesPrivateApiStatus(accountId) === false) {
+  const client = clientFromOpts(params.opts);
+  if (getCachedBlueBubblesPrivateApiStatus(client.accountId) === false) {
     return;
   }
-  const url = buildBlueBubblesApiUrl({
-    baseUrl,
+  const res = await client.request({
+    method: params.method,
     path: `/api/v1/chat/${encodeURIComponent(trimmed)}/${params.endpoint}`,
-    password,
+    timeoutMs: params.opts.timeoutMs,
   });
-  const res = await blueBubblesFetchWithTimeout(
-    url,
-    { method: params.method },
-    params.opts.timeoutMs,
-    blueBubblesPolicy(allowPrivateNetwork),
-  );
   await assertMultipartActionOk(res, params.action);
 }
 
@@ -72,26 +60,14 @@ async function sendPrivateApiJsonRequest(params: {
   method: "POST" | "PUT" | "DELETE";
   payload?: unknown;
 }): Promise<void> {
-  const { baseUrl, password, accountId, allowPrivateNetwork } = resolveAccount(params.opts);
-  assertPrivateApiEnabled(accountId, params.feature);
-  const url = buildBlueBubblesApiUrl({
-    baseUrl,
+  const client = clientFromOpts(params.opts);
+  assertPrivateApiEnabled(client.accountId, params.feature);
+  const res = await client.request({
+    method: params.method,
     path: params.path,
-    password,
+    body: params.payload,
+    timeoutMs: params.opts.timeoutMs,
   });
-
-  const request: RequestInit = { method: params.method };
-  if (params.payload !== undefined) {
-    request.headers = { "Content-Type": "application/json" };
-    request.body = JSON.stringify(params.payload);
-  }
-
-  const res = await blueBubblesFetchWithTimeout(
-    url,
-    request,
-    params.opts.timeoutMs,
-    blueBubblesPolicy(allowPrivateNetwork),
-  );
   await assertMultipartActionOk(res, params.action);
 }
 
@@ -293,13 +269,8 @@ export async function setGroupIconBlueBubbles(
     throw new Error("BlueBubbles setGroupIcon requires image buffer");
   }
 
-  const { baseUrl, password, accountId, allowPrivateNetwork } = resolveAccount(opts);
-  assertPrivateApiEnabled(accountId, "setGroupIcon");
-  const url = buildBlueBubblesApiUrl({
-    baseUrl,
-    path: `/api/v1/chat/${encodeURIComponent(trimmedGuid)}/icon`,
-    password,
-  });
+  const client = clientFromOpts(opts);
+  assertPrivateApiEnabled(client.accountId, "setGroupIcon");
 
   // Build multipart form-data
   const boundary = `----BlueBubblesFormBoundary${crypto.randomUUID().replace(/-/g, "")}`;
@@ -323,12 +294,11 @@ export async function setGroupIconBlueBubbles(
   // Close multipart body
   parts.push(encoder.encode(`--${boundary}--\r\n`));
 
-  const res = await postMultipartFormData({
-    url,
+  const res = await client.requestMultipart({
+    path: `/api/v1/chat/${encodeURIComponent(trimmedGuid)}/icon`,
     boundary,
     parts,
     timeoutMs: opts.timeoutMs ?? 60_000, // longer timeout for file uploads
-    ssrfPolicy: blueBubblesPolicy(allowPrivateNetwork),
   });
 
   await assertMultipartActionOk(res, "setGroupIcon");

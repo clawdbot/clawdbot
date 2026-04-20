@@ -16,6 +16,7 @@ import { maybeRepairBundledPluginRuntimeDeps } from "../commands/doctor-bundled-
 import { noteClaudeCliHealth } from "../commands/doctor-claude-cli.js";
 import { doctorShellCompletion } from "../commands/doctor-completion.js";
 import { maybeRepairLegacyCronStore } from "../commands/doctor-cron.js";
+import { noteDevicePairingHealth } from "../commands/doctor-device-pairing.js";
 import { maybeRepairGatewayDaemon } from "../commands/doctor-gateway-daemon-flow.js";
 import { checkGatewayHealth, probeGatewayMemoryStatus } from "../commands/doctor-gateway-health.js";
 import {
@@ -425,6 +426,13 @@ async function runMemorySearchHealthContribution(ctx: DoctorHealthFlowContext): 
   await noteMemoryRecallHealth(ctx.cfg);
 }
 
+async function runDevicePairingHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  await noteDevicePairingHealth({
+    cfg: ctx.cfg,
+    healthOk: ctx.healthOk ?? false,
+  });
+}
+
 async function runGatewayDaemonHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   await maybeRepairGatewayDaemon({
     cfg: ctx.cfg,
@@ -596,6 +604,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:memory-search",
       label: "Memory search",
       run: runMemorySearchHealthContribution,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:device-pairing",
+      label: "Device pairing",
+      run: runDevicePairingHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:gateway-daemon",

@@ -341,8 +341,12 @@ describe("downloadBlueBubblesAttachment", () => {
       },
     });
 
+    // Default-deny policy via the guard, NOT unguarded fetch. Aisle #68234
+    // flagged the previous `undefined` fallback as a real SSRF bypass because
+    // `blueBubblesFetchWithTimeout` treats `undefined` as "skip the SSRF
+    // guard entirely", exactly when the user asked us to block private nets.
     const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<string, unknown>;
-    expect(fetchMediaArgs.ssrfPolicy).toBeUndefined();
+    expect(fetchMediaArgs.ssrfPolicy).toEqual({});
   });
 
   it("allowlists public serverUrl hostname when allowPrivateNetwork is not set", async () => {

@@ -4,11 +4,11 @@ import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plug
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
+import { createBlueBubblesClientFromParts } from "./client.js";
 import { warmupBlueBubblesInboundDedupe } from "./inbound-dedupe.js";
 import { asRecord, normalizeWebhookMessage } from "./monitor-normalize.js";
 import { processMessage } from "./monitor-processing.js";
 import type { WebhookTarget } from "./monitor-shared.js";
-import { blueBubblesFetchWithTimeout, buildBlueBubblesApiUrl } from "./types.js";
 
 // When the gateway is down, restarting, or wedged, inbound webhook POSTs from
 // BB Server fail with ECONNRESET/ECONNREFUSED. BB's WebhookService does not
@@ -236,32 +236,27 @@ export async function fetchBlueBubblesMessagesSince(
   limit: number,
   opts: FetchOpts,
 ): Promise<BlueBubblesCatchupFetchResult> {
-  const ssrfPolicy = opts.allowPrivateNetwork ? { allowPrivateNetwork: true } : {};
-  const url = buildBlueBubblesApiUrl({
+  const client = createBlueBubblesClientFromParts({
     baseUrl: opts.baseUrl,
-    path: "/api/v1/message/query",
     password: opts.password,
-  });
-  const body = JSON.stringify({
-    limit,
-    sort: "ASC",
-    after: sinceMs,
-    // `with` mirrors what bb-catchup.sh uses and what the normal webhook
-    // payload carries, so normalizeWebhookMessage has the same fields to
-    // read during replay as it does on live dispatch.
-    with: ["chat", "chat.participants", "attachment"],
+    allowPrivateNetwork: opts.allowPrivateNetwork,
+    timeoutMs: opts.timeoutMs ?? FETCH_TIMEOUT_MS,
   });
   try {
-    const res = await blueBubblesFetchWithTimeout(
-      url,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body,
+    const res = await client.request({
+      method: "POST",
+      path: "/api/v1/message/query",
+      body: {
+        limit,
+        sort: "ASC",
+        after: sinceMs,
+        // `with` mirrors what bb-catchup.sh uses and what the normal webhook
+        // payload carries, so normalizeWebhookMessage has the same fields to
+        // read during replay as it does on live dispatch.
+        with: ["chat", "chat.participants", "attachment"],
       },
-      opts.timeoutMs ?? FETCH_TIMEOUT_MS,
-      ssrfPolicy,
-    );
+      timeoutMs: opts.timeoutMs ?? FETCH_TIMEOUT_MS,
+    });
     if (!res.ok) {
       return { resolved: false, messages: [] };
     }

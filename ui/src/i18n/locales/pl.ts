@@ -196,10 +196,17 @@ export const pl: TranslationMap = {
       wsUrl: "URL WebSocket",
       token: "Token Gateway",
       password: "Hasło (nie jest przechowywane)",
+      passwordPlaceholder: "hasło systemowe lub współdzielone",
       sessionKey: "Domyślny klucz sesji",
       language: "Język",
       connectHint: "Kliknij Połącz, aby zastosować zmiany połączenia.",
       trustedProxy: "Uwierzytelniono przez zaufany serwer proxy.",
+      showToken: "Pokaż token",
+      hideToken: "Ukryj token",
+      toggleTokenVisibility: "Przełącz widoczność tokenu",
+      showPassword: "Pokaż hasło",
+      hidePassword: "Ukryj hasło",
+      togglePasswordVisibility: "Przełącz widoczność hasła",
     },
     snapshot: {
       title: "Migawka",
@@ -237,8 +244,19 @@ export const pl: TranslationMap = {
     },
     pairing: {
       hint: "To urządzenie wymaga zatwierdzenia parowania przez host Gateway.",
+      scopeUpgradeTitle: "Rozszerzenie zakresu oczekuje na zatwierdzenie.",
+      scopeUpgradeSummary:
+        "To urządzenie jest już sparowane, ale żądane rozszerzenie zakresu oczekuje na zatwierdzenie.",
+      roleUpgradeTitle: "Zmiana roli oczekuje na zatwierdzenie.",
+      roleUpgradeSummary:
+        "To urządzenie jest już sparowane, ale żądana zmiana roli oczekuje na zatwierdzenie.",
+      metadataUpgradeTitle: "Zmiana metadanych urządzenia oczekuje na zatwierdzenie.",
+      metadataUpgradeSummary:
+        "To urządzenie jest już sparowane, ale zmiana metadanych oczekuje na zatwierdzenie.",
       mobileHint:
         "Na urządzeniu mobilnym? Skopiuj pełny URL (w tym #token=...) z openclaw dashboard --no-open na komputerze.",
+      docsTitle: "Dokumentacja parowania urządzeń (otwiera się w nowej karcie)",
+      docsLink: "Dokumentacja: Parowanie urządzeń",
     },
     insecure: {
       hint: "Ta strona używa HTTP, więc przeglądarka blokuje tożsamość urządzenia. Użyj HTTPS (Tailscale Serve) lub otwórz {url} na hoście Gateway.",
@@ -252,6 +270,12 @@ export const pl: TranslationMap = {
       step4: "Lub wygeneruj token wielokrotnego użytku:",
       docsHint: "Do zdalnego dostępu zalecany jest Tailscale Serve. ",
       docsLink: "Przeczytaj dokumentację →",
+      authDocsTitle: "Dokumentacja uwierzytelniania Control UI (otwiera się w nowej karcie)",
+      authDocsLink: "Dokumentacja: Uwierzytelnianie Control UI",
+      tailscaleDocsTitle: "Dokumentacja Tailscale Serve (otwiera się w nowej karcie)",
+      tailscaleDocsLink: "Dokumentacja: Tailscale Serve",
+      insecureHttpDocsTitle: "Dokumentacja niezabezpieczonego HTTP (otwiera się w nowej karcie)",
+      insecureHttpDocsLink: "Dokumentacja: Niezabezpieczone HTTP",
     },
     cards: {
       cost: "Koszt",
@@ -626,6 +650,12 @@ export const pl: TranslationMap = {
   login: {
     subtitle: "Panel Gateway",
     passwordPlaceholder: "opcjonalne",
+    showToken: "Pokaż token",
+    hideToken: "Ukryj token",
+    toggleTokenVisibility: "Przełącz widoczność tokenu",
+    showPassword: "Pokaż hasło",
+    hidePassword: "Ukryj hasło",
+    togglePasswordVisibility: "Przełącz widoczność hasła",
   },
   chat: {
     disconnected: "Rozłączono z Gateway.",

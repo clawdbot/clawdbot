@@ -7,8 +7,9 @@ import {
   completeTaskRunByRunId,
   failTaskRunByRunId,
   setDetachedTaskDeliveryStatusByRunId,
-} from "../tasks/task-executor.js";
+} from "../tasks/detached-task-runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { withSubagentOutcomeTiming } from "./subagent-announce-output.js";
 import {
   captureSubagentCompletionReply,
   runSubagentAnnounceFlow,
@@ -22,7 +23,7 @@ import {
   resolveCleanupCompletionReason,
   resolveDeferredCleanupDecision,
 } from "./subagent-registry-cleanup.js";
-import { runOutcomesEqual } from "./subagent-registry-completion.js";
+import { shouldUpdateRunOutcome } from "./subagent-registry-completion.js";
 import {
   ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
   ANNOUNCE_EXPIRY_MS,
@@ -589,8 +590,12 @@ export function createSubagentRegistryLifecycleController(params: {
       entry.endedAt = endedAt;
       mutated = true;
     }
-    if (!runOutcomesEqual(entry.outcome, completeParams.outcome)) {
-      entry.outcome = completeParams.outcome;
+    const outcome = withSubagentOutcomeTiming(completeParams.outcome, {
+      startedAt: entry.startedAt,
+      endedAt,
+    });
+    if (shouldUpdateRunOutcome(entry.outcome, outcome)) {
+      entry.outcome = outcome;
       mutated = true;
     }
     if (entry.endedReason !== completeParams.reason) {
@@ -607,7 +612,7 @@ export function createSubagentRegistryLifecycleController(params: {
     }
     safeFinalizeSubagentTaskRun({
       entry,
-      outcome: completeParams.outcome,
+      outcome,
     });
 
     try {

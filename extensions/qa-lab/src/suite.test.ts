@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { runQaSuite } from "./suite.js";
+import { qaSuiteProgressTesting, runQaSuite } from "./suite.js";
 
 describe("qa suite", () => {
   it("rejects unsupported transport ids before starting the lab", async () => {
@@ -13,5 +13,59 @@ describe("qa suite", () => {
     ).rejects.toThrow("unsupported QA transport: qa-nope");
 
     expect(startLab).not.toHaveBeenCalled();
+  });
+
+  it("parses progress env booleans", () => {
+    expect(qaSuiteProgressTesting.parseQaSuiteBooleanEnv("true")).toBe(true);
+    expect(qaSuiteProgressTesting.parseQaSuiteBooleanEnv("on")).toBe(true);
+    expect(qaSuiteProgressTesting.parseQaSuiteBooleanEnv("false")).toBe(false);
+    expect(qaSuiteProgressTesting.parseQaSuiteBooleanEnv("off")).toBe(false);
+    expect(qaSuiteProgressTesting.parseQaSuiteBooleanEnv("maybe")).toBeUndefined();
+  });
+
+  it("defaults progress logging from CI when no override is set", () => {
+    expect(qaSuiteProgressTesting.shouldLogQaSuiteProgress({ CI: "true" })).toBe(true);
+    expect(qaSuiteProgressTesting.shouldLogQaSuiteProgress({ CI: "false" })).toBe(false);
+  });
+
+  it("applies OPENCLAW_QA_SUITE_PROGRESS override and falls back on invalid values", () => {
+    expect(
+      qaSuiteProgressTesting.shouldLogQaSuiteProgress({
+        CI: "false",
+        OPENCLAW_QA_SUITE_PROGRESS: "true",
+      }),
+    ).toBe(true);
+    expect(
+      qaSuiteProgressTesting.shouldLogQaSuiteProgress({
+        CI: "true",
+        OPENCLAW_QA_SUITE_PROGRESS: "false",
+      }),
+    ).toBe(false);
+    expect(
+      qaSuiteProgressTesting.shouldLogQaSuiteProgress({
+        CI: "false",
+        OPENCLAW_QA_SUITE_PROGRESS: "on",
+      }),
+    ).toBe(true);
+    expect(
+      qaSuiteProgressTesting.shouldLogQaSuiteProgress({
+        CI: "true",
+        OPENCLAW_QA_SUITE_PROGRESS: "off",
+      }),
+    ).toBe(false);
+    expect(
+      qaSuiteProgressTesting.shouldLogQaSuiteProgress({
+        CI: "true",
+        OPENCLAW_QA_SUITE_PROGRESS: "definitely",
+      }),
+    ).toBe(true);
+  });
+
+  it("sanitizes scenario ids for progress logs", () => {
+    expect(qaSuiteProgressTesting.sanitizeQaSuiteProgressValue("scenario-id")).toBe("scenario-id");
+    expect(qaSuiteProgressTesting.sanitizeQaSuiteProgressValue("scenario\nid\tvalue")).toBe(
+      "scenario id value",
+    );
+    expect(qaSuiteProgressTesting.sanitizeQaSuiteProgressValue("\u0000\u0001")).toBe("<empty>");
   });
 });

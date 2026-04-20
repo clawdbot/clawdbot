@@ -21,8 +21,9 @@ openclaw devices list
 openclaw devices list --json
 ```
 
-Pending request output includes the requested role and scopes so approvals can
-be reviewed before you approve.
+Pending request output shows the requested access next to the device's current
+approved access when the device is already paired. This makes scope/role
+upgrades explicit instead of looking like the pairing was lost.
 
 ### `openclaw devices remove <deviceId>`
 
@@ -58,6 +59,12 @@ Note: if a device retries pairing with changed auth details (role/scopes/public
 key), OpenClaw supersedes the previous pending entry and issues a new
 `requestId`. Run `openclaw devices list` right before approval to use the
 current ID.
+
+If the device is already paired and asks for broader scopes or a broader role,
+OpenClaw keeps the existing approval in place and creates a new pending upgrade
+request. Review the `Requested` vs `Approved` columns in `openclaw devices list`
+or use `openclaw devices approve --latest` to preview the exact upgrade before
+approving it.
 
 ```
 openclaw devices approve

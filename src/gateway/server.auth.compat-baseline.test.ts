@@ -61,6 +61,36 @@ async function expectSharedOperatorScopesCleared(
   }
 }
 
+async function expectLocalBackendGatewayClientScopesPreserved(
+  port: number,
+  auth: { token?: string; password?: string },
+) {
+  const ws = await openWs(port);
+  try {
+    const res = await connectReq(ws, {
+      ...auth,
+      client: { ...BACKEND_GATEWAY_CLIENT },
+      scopes: ["operator.admin"],
+      device: null,
+    });
+    expect(res.ok).toBe(true);
+
+    const helloOk = res.payload as
+      | {
+          auth?: {
+            scopes?: unknown;
+          };
+        }
+      | undefined;
+    expect(helloOk?.auth?.scopes).toEqual(["operator.admin"]);
+
+    const adminRes = await rpcReq(ws, "set-heartbeats", { enabled: false });
+    expect(adminRes.ok).toBe(true);
+  } finally {
+    ws.close();
+  }
+}
+
 describe("gateway auth compatibility baseline", () => {
   describe("token mode", () => {
     let server: Awaited<ReturnType<typeof startGatewayServer>>;
@@ -92,6 +122,10 @@ describe("gateway auth compatibility baseline", () => {
 
     test("clears requested scopes for shared-token operator connects without device identity", async () => {
       await expectSharedOperatorScopesCleared(port, { token: "secret" });
+    });
+
+    test("preserves scopes for direct-local backend shared-token connects without device identity", async () => {
+      await expectLocalBackendGatewayClientScopesPreserved(port, { token: "secret" });
     });
 
     test("returns stable token-missing details for control ui without token", async () => {
@@ -261,6 +295,10 @@ describe("gateway auth compatibility baseline", () => {
 
     test("clears requested scopes for shared-password operator connects without device identity", async () => {
       await expectSharedOperatorScopesCleared(port, { password: "secret" });
+    });
+
+    test("preserves scopes for direct-local backend shared-password connects without device identity", async () => {
+      await expectLocalBackendGatewayClientScopesPreserved(port, { password: "secret" });
     });
   });
 

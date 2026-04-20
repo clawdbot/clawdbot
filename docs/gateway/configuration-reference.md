@@ -2967,7 +2967,8 @@ See [Plugins](/tools/plugin).
 - `profiles.*.cdpUrl` accepts `http://`, `https://`, `ws://`, and `wss://`.
   Use HTTP(S) when you want OpenClaw to discover `/json/version`; use WS(S)
   when your provider gives you a direct DevTools WebSocket URL.
-- `existing-session` profiles are host-only and use Chrome MCP instead of CDP.
+- `existing-session` profiles use Chrome MCP instead of CDP and can attach on
+  the selected host or through a connected browser node.
 - `existing-session` profiles can set `userDataDir` to target a specific
   Chromium-based browser profile such as Brave or Edge.
 - `existing-session` profiles keep the current Chrome MCP route limits:

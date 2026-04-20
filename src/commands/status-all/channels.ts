@@ -11,6 +11,7 @@ import {
 } from "../../channels/account-summary.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
+import { formatChannelStatusState } from "../../channels/plugins/status-state.js";
 import type {
   ChannelAccountSnapshot,
   ChannelId,
@@ -188,16 +189,18 @@ const buildAccountNotes = (params: {
 };
 
 function resolveLinkFields(summary: unknown): {
+  statusState: string | null;
   linked: boolean | null;
   authAgeMs: number | null;
   selfE164: string | null;
 } {
   const rec = asRecord(summary);
+  const statusState = typeof rec.statusState === "string" ? rec.statusState : null;
   const linked = typeof rec.linked === "boolean" ? rec.linked : null;
   const authAgeMs = typeof rec.authAgeMs === "number" ? rec.authAgeMs : null;
   const self = asRecord(rec.self);
   const selfE164 = typeof self.e164 === "string" && self.e164.trim() ? self.e164.trim() : null;
-  return { linked, authAgeMs, selfE164 };
+  return { statusState, linked, authAgeMs, selfE164 };
 }
 
 function collectMissingPaths(accounts: ChannelAccountRow[]): string[] {
@@ -311,6 +314,9 @@ export async function buildChannelsTable(
       if (unavailableConfiguredAccounts.length > 0) {
         return "warn";
       }
+      if (link.statusState === "unstable") {
+        return "warn";
+      }
       if (link.linked === false) {
         return "setup";
       }
@@ -338,6 +344,24 @@ export async function buildChannelsTable(
       }
       if (issues.length > 0) {
         return issues[0]?.message ?? "misconfigured";
+      }
+      if (link.statusState) {
+        if (link.statusState === "linked") {
+          const extra: string[] = [];
+          if (link.selfE164) {
+            extra.push(link.selfE164);
+          }
+          if (link.authAgeMs != null && link.authAgeMs >= 0) {
+            extra.push(`auth ${formatTimeAgo(link.authAgeMs)}`);
+          }
+          if (accounts.length > 1 || plugin.meta.forceAccountBinding) {
+            extra.push(`accounts ${accounts.length || 1}`);
+          }
+          return extra.length > 0
+            ? `${formatChannelStatusState(link.statusState)} · ${extra.join(" · ")}`
+            : formatChannelStatusState(link.statusState);
+        }
+        return formatChannelStatusState(link.statusState);
       }
 
       if (link.linked !== null) {

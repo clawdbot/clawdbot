@@ -39,6 +39,7 @@ import {
   resolveDiscordOwnerAccess,
   resolveGroupDmAllow,
 } from "./allow-list.js";
+import { resolveDiscordChannelInfoSafe } from "./channel-access.js";
 import { formatDiscordUserTag } from "./format.js";
 
 export const AGENT_BUTTON_KEY = "agent";
@@ -182,22 +183,20 @@ export function resolveDiscordChannelContext(
   interaction: AgentComponentInteraction,
 ): DiscordChannelContext {
   const channel = interaction.channel;
-  const channelName = channel && "name" in channel ? (channel.name as string) : undefined;
+  const channelInfo = resolveDiscordChannelInfoSafe(channel);
+  const channelName = channelInfo.name;
   const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
-  const channelType = channel && "type" in channel ? (channel.type as number) : undefined;
+  const channelType = channelInfo.type;
   const isThread = isThreadChannelType(channelType);
 
   let parentId: string | undefined;
   let parentName: string | undefined;
   let parentSlug = "";
-  if (isThread && channel && "parentId" in channel) {
-    parentId = (channel.parentId as string) ?? undefined;
-    if ("parent" in channel) {
-      const parent = (channel as { parent?: { name?: string } }).parent;
-      if (parent?.name) {
-        parentName = parent.name;
-        parentSlug = normalizeDiscordSlug(parentName);
-      }
+  if (isThread) {
+    parentId = channelInfo.parentId;
+    parentName = channelInfo.parentName;
+    if (parentName) {
+      parentSlug = normalizeDiscordSlug(parentName);
     }
   }
 

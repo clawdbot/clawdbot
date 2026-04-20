@@ -20,9 +20,11 @@ import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
+  validateChannelsStartParams,
   validateChannelsLogoutParams,
   validateChannelsStatusParams,
 } from "../protocol/index.js";
+import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
@@ -33,6 +35,39 @@ type ChannelLogoutPayload = {
   [key: string]: unknown;
 };
 
+type ChannelStartPayload = {
+  channel: ChannelId;
+  accountId: string;
+  started: boolean;
+};
+
+function resolveRuntimeAccountSnapshot(params: {
+  runtime: ChannelRuntimeSnapshot;
+  channelId: ChannelId;
+  accountId: string;
+}): ChannelAccountSnapshot | undefined {
+  const accounts = params.runtime.channelAccounts[params.channelId];
+  const direct = accounts?.[params.accountId];
+  if (direct) {
+    return direct;
+  }
+  const fallback = params.runtime.channels[params.channelId];
+  return fallback?.accountId === params.accountId ? fallback : undefined;
+}
+
+function resolveChannelGatewayAccountId(params: {
+  plugin: ChannelPlugin;
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): string {
+  return (
+    normalizeOptionalString(params.accountId) ||
+    params.plugin.config.defaultAccountId?.(params.cfg) ||
+    params.plugin.config.listAccountIds(params.cfg)[0] ||
+    DEFAULT_ACCOUNT_ID
+  );
+}
+
 export async function logoutChannelAccount(params: {
   channelId: ChannelId;
   accountId?: string | null;
@@ -40,11 +75,7 @@ export async function logoutChannelAccount(params: {
   context: GatewayRequestContext;
   plugin: ChannelPlugin;
 }): Promise<ChannelLogoutPayload> {
-  const resolvedAccountId =
-    normalizeOptionalString(params.accountId) ||
-    params.plugin.config.defaultAccountId?.(params.cfg) ||
-    params.plugin.config.listAccountIds(params.cfg)[0] ||
-    DEFAULT_ACCOUNT_ID;
+  const resolvedAccountId = resolveChannelGatewayAccountId(params);
   const account = params.plugin.config.resolveAccount(params.cfg, resolvedAccountId);
   await params.context.stopChannel(params.channelId, resolvedAccountId);
   const result = await params.plugin.gateway?.logoutAccount?.({
@@ -66,6 +97,32 @@ export async function logoutChannelAccount(params: {
     accountId: resolvedAccountId,
     ...result,
     cleared,
+  };
+}
+
+export async function startChannelAccount(params: {
+  channelId: ChannelId;
+  accountId?: string | null;
+  cfg: OpenClawConfig;
+  context: GatewayRequestContext;
+  plugin: ChannelPlugin;
+}): Promise<ChannelStartPayload> {
+  if (!params.plugin.gateway?.startAccount) {
+    throw new Error(`Channel ${params.channelId} does not support runtime start`);
+  }
+  const resolvedAccountId = resolveChannelGatewayAccountId(params);
+  await params.context.startChannel(params.channelId, resolvedAccountId);
+  const runtime = params.context.getRuntimeSnapshot();
+  const started =
+    resolveRuntimeAccountSnapshot({
+      runtime,
+      channelId: params.channelId,
+      accountId: resolvedAccountId,
+    })?.running === true;
+  return {
+    channel: params.channelId,
+    accountId: resolvedAccountId,
+    started,
   };
 }
 
@@ -239,6 +296,62 @@ export const channelsHandlers: GatewayRequestHandlers = {
     }
 
     respond(true, payload, undefined);
+  },
+  "channels.start": async ({ params, respond, context }) => {
+    if (!validateChannelsStartParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid channels.start params: ${formatValidationErrors(validateChannelsStartParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const rawChannel = (params as { channel?: unknown }).channel;
+    const channelId = typeof rawChannel === "string" ? normalizeChannelId(rawChannel) : null;
+    if (!channelId) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid channels.start channel"),
+      );
+      return;
+    }
+    const plugin = getChannelPlugin(channelId);
+    if (!plugin) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `unknown channel: ${formatForLog(rawChannel)}`),
+      );
+      return;
+    }
+    if (!plugin.gateway?.startAccount) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `channel ${channelId} does not support start`),
+      );
+      return;
+    }
+    try {
+      const cfg = applyPluginAutoEnable({
+        config: loadConfig(),
+        env: process.env,
+      }).config;
+      const payload = await startChannelAccount({
+        channelId,
+        accountId: (params as { accountId?: string | null }).accountId,
+        cfg,
+        context,
+        plugin,
+      });
+      respond(true, payload, undefined);
+    } catch (error) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(error)));
+    }
   },
   "channels.logout": async ({ params, respond, context }) => {
     if (!validateChannelsLogoutParams(params)) {

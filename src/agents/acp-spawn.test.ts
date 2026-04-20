@@ -122,7 +122,7 @@ vi.mock("../infra/heartbeat-wake.js", () => ({
   areHeartbeatsEnabled: hoisted.areHeartbeatsEnabledMock,
 }));
 
-vi.mock("../tasks/task-executor.js", () => ({
+vi.mock("../tasks/detached-task-runtime.js", () => ({
   createRunningTaskRun: hoisted.createRunningTaskRunMock,
 }));
 

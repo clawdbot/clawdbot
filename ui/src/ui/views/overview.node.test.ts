@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../../src/gateway/protocol/connect-error-details.js";
-import { resolveAuthHintKind, shouldShowPairingHint } from "./overview-hints.ts";
+import {
+  resolveAuthHintKind,
+  resolvePairingHint,
+  shouldShowPairingHint,
+} from "./overview-hints.ts";
 
 describe("shouldShowPairingHint", () => {
   it("returns true for 'pairing required' close reason", () => {
@@ -35,6 +39,21 @@ describe("shouldShowPairingHint", () => {
         ConnectErrorDetailCodes.PAIRING_REQUIRED,
       ),
     ).toBe(true);
+  });
+});
+
+describe("resolvePairingHint", () => {
+  it("detects scope-upgrade pending approval and keeps the request id", () => {
+    expect(
+      resolvePairingHint(
+        false,
+        "scope upgrade pending approval (requestId: req-123)",
+        ConnectErrorDetailCodes.PAIRING_REQUIRED,
+      ),
+    ).toEqual({
+      kind: "scope-upgrade-pending",
+      requestId: "req-123",
+    });
   });
 });
 

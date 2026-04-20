@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../../cron/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { getCronChannelOptions, printCronList } from "./shared.js";
+import { getCronChannelOptions, parseCronToolsAllow, printCronList } from "./shared.js";
 
 const hoisted = vi.hoisted(() => ({
   listChannelPluginsMock: vi.fn(),
@@ -190,5 +190,21 @@ describe("getCronChannelOptions", () => {
   it("lists discovered channel plugin ids when plugins are available", () => {
     hoisted.listChannelPluginsMock.mockReturnValue([{ id: "telegram" }, { id: "signal" }]);
     expect(getCronChannelOptions()).toBe("last|telegram|signal");
+  });
+});
+
+describe("parseCronToolsAllow", () => {
+  it.each([
+    { input: "exec,read,write", expected: ["exec", "read", "write"] },
+    { input: "exec, read, write", expected: ["exec", "read", "write"] },
+    { input: "exec read write", expected: ["exec", "read", "write"] },
+    { input: " exec  read,write ", expected: ["exec", "read", "write"] },
+    { input: ["exec", "read", "write"], expected: ["exec", "read", "write"] },
+  ])("parses $input", ({ input, expected }) => {
+    expect(parseCronToolsAllow(input)).toEqual(expected);
+  });
+
+  it("returns undefined for empty input", () => {
+    expect(parseCronToolsAllow(" ,  ")).toBeUndefined();
   });
 });

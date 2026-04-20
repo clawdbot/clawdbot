@@ -6,7 +6,7 @@ import {
   resolveStateDir as resolveStateDirFromPaths,
 } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { loadOrCreateDeviceIdentity, type DeviceIdentity } from "../infra/device-identity.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
@@ -54,6 +54,7 @@ type CallGatewayBaseOptions = {
   clientVersion?: string;
   platform?: string;
   mode?: GatewayClientMode;
+  deviceIdentity?: DeviceIdentity | null;
   instanceId?: string;
   minProtocol?: number;
   maxProtocol?: number;
@@ -491,7 +492,10 @@ async function executeGatewayRequestWithScopes<T>(params: {
       mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
       role: "operator",
       scopes,
-      deviceIdentity: resolveDeviceIdentityForGatewayCall(),
+      deviceIdentity:
+        opts.deviceIdentity === undefined
+          ? resolveDeviceIdentityForGatewayCall()
+          : opts.deviceIdentity,
       minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
       onHelloOk: async (hello) => {

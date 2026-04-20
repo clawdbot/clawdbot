@@ -49,7 +49,9 @@ function resolveRpcOptions(cmdOpts: GatewayRpcOpts, command?: Command): GatewayR
 export function addGatewayServiceCommands(parent: Command, opts?: { statusDescription?: string }) {
   parent
     .command("status")
-    .description(opts?.statusDescription ?? "Show gateway service status + probe the Gateway")
+    .description(
+      opts?.statusDescription ?? "Show gateway service status + probe connectivity/capability",
+    )
     .option("--url <url>", "Gateway WebSocket URL (defaults to config/remote/local)")
     .option("--token <token>", "Gateway token (if required)")
     .option("--password <password>", "Gateway password (password auth)")

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { rawDataToString } from "../infra/ws.js";
-import { isWebSocketUrl } from "./cdp.helpers.js";
+import { isDirectCdpWebSocketEndpoint, isWebSocketUrl } from "./cdp.helpers.js";
 import { createTargetViaCdp, evaluateJavaScript, normalizeCdpWsUrl, snapshotAria } from "./cdp.js";
 import { parseHttpUrl } from "./config.js";
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
@@ -171,7 +171,7 @@ describe("cdp", () => {
     expect(receivedHeaders.host).toBe(`127.0.0.1:${wsPort}`);
   });
 
-  it("still enforces SSRF policy for direct WebSocket URLs", async () => {
+  it("enforces SSRF policy on the navigation target URL before any CDP connection attempt", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     try {
       await expect(
@@ -329,7 +329,7 @@ describe("cdp", () => {
     expect(res.result.value).toBe(2);
   });
 
-  it("fails when /json/version omits webSocketDebuggerUrl", async () => {
+  it("fails when /json/version omits webSocketDebuggerUrl for an HTTP cdpUrl", async () => {
     const httpPort = await startVersionHttpServer({});
     await expect(
       createTargetViaCdp({
@@ -337,6 +337,23 @@ describe("cdp", () => {
         url: "https://example.com",
       }),
     ).rejects.toThrow("CDP /json/version missing webSocketDebuggerUrl");
+  });
+
+  it("falls back to direct WS connection when /json/version is unavailable for a bare ws:// cdpUrl", async () => {
+    // Simulates a Browserless/Browserbase-style provider: the cdpUrl IS a
+    // WebSocket root (no /devtools/ path) but there is no HTTP /json/version
+    // endpoint. The WS server accepts Target.createTarget directly.
+    const wsPort = await startWsServerWithMessages((msg, socket) => {
+      if (msg.method === "Target.createTarget") {
+        socket.send(JSON.stringify({ id: msg.id, result: { targetId: "WS_FALLBACK" } }));
+      }
+    });
+    // No HTTP server on this port — discovery will fail, triggering the fallback.
+    const created = await createTargetViaCdp({
+      cdpUrl: `ws://127.0.0.1:${wsPort}`,
+      url: "https://example.com",
+    });
+    expect(created.targetId).toBe("WS_FALLBACK");
   });
 
   it("captures an aria snapshot via CDP", async () => {
@@ -477,6 +494,41 @@ describe("isWebSocketUrl", () => {
     expect(isWebSocketUrl("not-a-url")).toBe(false);
     expect(isWebSocketUrl("")).toBe(false);
     expect(isWebSocketUrl("ftp://example.com")).toBe(false);
+  });
+});
+
+describe("isDirectCdpWebSocketEndpoint", () => {
+  it("returns true for ws/wss URLs with a /devtools/<kind>/<id> path", () => {
+    expect(isDirectCdpWebSocketEndpoint("ws://127.0.0.1:9222/devtools/browser/ABC")).toBe(true);
+    expect(isDirectCdpWebSocketEndpoint("ws://127.0.0.1:9222/devtools/page/42")).toBe(true);
+    expect(isDirectCdpWebSocketEndpoint("wss://connect.example.com/devtools/browser/xyz")).toBe(
+      true,
+    );
+    expect(
+      isDirectCdpWebSocketEndpoint("wss://connect.example.com/devtools/browser/xyz?token=secret"),
+    ).toBe(true);
+  });
+
+  it("returns false for bare ws/wss URLs without a /devtools/ path (needs discovery)", () => {
+    // Reproduces the configuration shape reported in #68027.
+    expect(isDirectCdpWebSocketEndpoint("ws://127.0.0.1:9222")).toBe(false);
+    expect(isDirectCdpWebSocketEndpoint("ws://127.0.0.1:9222/")).toBe(false);
+    expect(isDirectCdpWebSocketEndpoint("wss://browserless.example")).toBe(false);
+    expect(isDirectCdpWebSocketEndpoint("wss://browserless.example/?token=abc")).toBe(false);
+  });
+
+  it("returns false for ws URLs whose path is not /devtools/*", () => {
+    expect(isDirectCdpWebSocketEndpoint("ws://127.0.0.1:9222/json/version")).toBe(false);
+    expect(isDirectCdpWebSocketEndpoint("ws://127.0.0.1:9222/devtools")).toBe(false);
+    expect(isDirectCdpWebSocketEndpoint("ws://127.0.0.1:9222/devtools/")).toBe(false);
+    expect(isDirectCdpWebSocketEndpoint("ws://127.0.0.1:9222/other/path")).toBe(false);
+  });
+
+  it("returns false for http/https URLs, invalid URLs, and empty strings", () => {
+    expect(isDirectCdpWebSocketEndpoint("http://127.0.0.1:9222/devtools/browser/ABC")).toBe(false);
+    expect(isDirectCdpWebSocketEndpoint("https://host/devtools/browser/ABC")).toBe(false);
+    expect(isDirectCdpWebSocketEndpoint("not-a-url")).toBe(false);
+    expect(isDirectCdpWebSocketEndpoint("")).toBe(false);
   });
 });
 

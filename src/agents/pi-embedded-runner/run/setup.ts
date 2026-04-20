@@ -1,6 +1,10 @@
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
-import type { PluginHookBeforeAgentStartResult } from "../../../plugins/types.js";
+import type {
+  PluginHookBeforeAgentStartResult,
+  PluginHookBeforeModelResolveAttachment,
+  PluginHookBeforeModelResolveEvent,
+} from "../../../plugins/types.js";
 import {
   CONTEXT_WINDOW_HARD_MIN_TOKENS,
   CONTEXT_WINDOW_WARN_BELOW_TOKENS,
@@ -28,7 +32,7 @@ type HookContext = {
 type HookRunnerLike = {
   hasHooks(hookName: string): boolean;
   runBeforeModelResolve(
-    input: { prompt: string },
+    input: PluginHookBeforeModelResolveEvent,
     context: HookContext,
   ): Promise<{ providerOverride?: string; modelOverride?: string } | undefined>;
   runBeforeAgentStart(
@@ -39,6 +43,7 @@ type HookRunnerLike = {
 
 export async function resolveHookModelSelection(params: {
   prompt: string;
+  attachments?: PluginHookBeforeModelResolveAttachment[];
   provider: string;
   modelId: string;
   hookRunner?: HookRunnerLike | null;
@@ -57,10 +62,10 @@ export async function resolveHookModelSelection(params: {
   // fields if present. New hook takes precedence when both are set.
   if (hookRunner?.hasHooks("before_model_resolve")) {
     try {
-      modelResolveOverride = await hookRunner.runBeforeModelResolve(
-        { prompt: params.prompt },
-        params.hookContext,
-      );
+      const event: PluginHookBeforeModelResolveEvent = params.attachments
+        ? { prompt: params.prompt, attachments: params.attachments }
+        : { prompt: params.prompt };
+      modelResolveOverride = await hookRunner.runBeforeModelResolve(event, params.hookContext);
     } catch (hookErr) {
       log.warn(`before_model_resolve hook failed: ${String(hookErr)}`);
     }
@@ -97,6 +102,18 @@ export async function resolveHookModelSelection(params: {
     modelId,
     legacyBeforeAgentStartResult,
   };
+}
+
+export function buildBeforeModelResolveAttachments(
+  images: readonly { mimeType?: string }[] | undefined,
+): PluginHookBeforeModelResolveAttachment[] | undefined {
+  if (!images?.length) {
+    return undefined;
+  }
+  return images.map((img) => ({
+    kind: "image",
+    mimeType: img.mimeType,
+  }));
 }
 
 export function resolveEffectiveRuntimeModel(params: {

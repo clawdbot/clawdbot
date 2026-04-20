@@ -22,6 +22,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { createCronExecutionId } from "../run-id.js";
 import { hasScheduledNextRunAtMs } from "../service/jobs.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
@@ -102,7 +103,6 @@ type DispatchCronDeliveryParams = {
   job: CronJob;
   agentId: string;
   agentSessionKey: string;
-  runSessionId: string;
   runStartedAt: number;
   runEndedAt: number;
   timeoutMs: number;
@@ -299,16 +299,18 @@ function getCompletedDirectCronDelivery(
 }
 
 function buildDirectCronDeliveryIdempotencyKey(params: {
-  runSessionId: string;
+  jobId: string;
+  runStartedAt: number;
   delivery: SuccessfulDeliveryTarget;
 }): string {
+  const executionId = createCronExecutionId(params.jobId, params.runStartedAt);
   const threadId =
     params.delivery.threadId == null || params.delivery.threadId === ""
       ? ""
       : String(params.delivery.threadId);
   const accountId = params.delivery.accountId?.trim() ?? "";
   const normalizedTo = normalizeDeliveryTarget(params.delivery.channel, params.delivery.to);
-  return `cron-direct-delivery:v1:${params.runSessionId}:${params.delivery.channel}:${accountId}:${normalizedTo}:${threadId}`;
+  return `cron-direct-delivery:v1:${executionId}:${params.delivery.channel}:${accountId}:${normalizedTo}:${threadId}`;
 }
 
 function shouldQueueCronAwareness(job: CronJob, deliveryBestEffort: boolean): boolean {
@@ -498,7 +500,8 @@ export async function dispatchCronDelivery(
     } = await loadDeliveryOutboundRuntime();
     const identity = resolveAgentOutboundIdentity(params.cfgWithAgentDefaults, params.agentId);
     const deliveryIdempotencyKey = buildDirectCronDeliveryIdempotencyKey({
-      runSessionId: params.runSessionId,
+      jobId: params.job.id,
+      runStartedAt: params.runStartedAt,
       delivery,
     });
     try {

@@ -5,7 +5,8 @@ import {
   completeTaskRunByRunId,
   createRunningTaskRun,
   failTaskRunByRunId,
-} from "../../tasks/task-executor.js";
+} from "../../tasks/detached-task-runtime.js";
+import { createCronExecutionId } from "../run-id.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
 import {
   applyJobPatch,
@@ -394,10 +395,6 @@ type ManualRunPreflightResult =
 
 let nextManualRunId = 1;
 
-function createCronTaskRunId(jobId: string, startedAt: number): string {
-  return `cron:${jobId}:${startedAt}`;
-}
-
 async function skipInvalidPersistedManualRun(params: {
   state: CronServiceState;
   job: CronJob;
@@ -445,7 +442,7 @@ function tryCreateManualTaskRun(params: {
   job: CronJob;
   startedAt: number;
 }): string | undefined {
-  const runId = createCronTaskRunId(params.job.id, params.startedAt);
+  const runId = createCronExecutionId(params.job.id, params.startedAt);
   try {
     createRunningTaskRun({
       runtime: "cron",

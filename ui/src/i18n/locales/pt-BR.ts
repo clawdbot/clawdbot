@@ -195,10 +195,17 @@ export const pt_BR: TranslationMap = {
       wsUrl: "URL WebSocket",
       token: "Token do Gateway",
       password: "Senha (não armazenada)",
+      passwordPlaceholder: "senha do sistema ou compartilhada",
       sessionKey: "Chave de Sessão Padrão",
       language: "Idioma",
       connectHint: "Clique em Conectar para aplicar as alterações de conexão.",
       trustedProxy: "Autenticado por proxy confiável.",
+      showToken: "Mostrar token",
+      hideToken: "Ocultar token",
+      toggleTokenVisibility: "Alternar visibilidade do token",
+      showPassword: "Mostrar senha",
+      hidePassword: "Ocultar senha",
+      togglePasswordVisibility: "Alternar visibilidade da senha",
     },
     snapshot: {
       title: "Resumo",
@@ -236,8 +243,19 @@ export const pt_BR: TranslationMap = {
     },
     pairing: {
       hint: "Este dispositivo precisa de aprovação de pareamento do host do gateway.",
+      scopeUpgradeTitle: "Ampliação de escopo aguardando aprovação.",
+      scopeUpgradeSummary:
+        "Este dispositivo já está pareado, mas a ampliação de escopo solicitada está aguardando aprovação.",
+      roleUpgradeTitle: "Alteração de função aguardando aprovação.",
+      roleUpgradeSummary:
+        "Este dispositivo já está pareado, mas a alteração de função solicitada está aguardando aprovação.",
+      metadataUpgradeTitle: "Alteração de metadados do dispositivo aguardando aprovação.",
+      metadataUpgradeSummary:
+        "Este dispositivo já está pareado, mas a alteração de metadados está aguardando aprovação.",
       mobileHint:
         "No celular? Copie a URL completa (incluindo #token=...) executando openclaw dashboard --no-open no desktop.",
+      docsTitle: "Documentação de pareamento de dispositivo (abre em nova aba)",
+      docsLink: "Docs: Pareamento de dispositivo",
     },
     insecure: {
       hint: "Esta página é HTTP, então o navegador bloqueia a identidade do dispositivo. Use HTTPS (Tailscale Serve) ou abra {url} no host do gateway.",
@@ -251,6 +269,12 @@ export const pt_BR: TranslationMap = {
       step4: "Ou gere um token reutilizável:",
       docsHint: "Para acesso remoto, recomendamos o Tailscale Serve. ",
       docsLink: "Leia a documentação →",
+      authDocsTitle: "Documentação de autenticação da Control UI (abre em nova aba)",
+      authDocsLink: "Docs: Autenticação da Control UI",
+      tailscaleDocsTitle: "Documentação do Tailscale Serve (abre em nova aba)",
+      tailscaleDocsLink: "Docs: Tailscale Serve",
+      insecureHttpDocsTitle: "Documentação de HTTP inseguro (abre em nova aba)",
+      insecureHttpDocsLink: "Docs: HTTP inseguro",
     },
     cards: {
       cost: "Custo",
@@ -623,6 +647,12 @@ export const pt_BR: TranslationMap = {
   login: {
     subtitle: "Painel do Gateway",
     passwordPlaceholder: "opcional",
+    showToken: "Mostrar token",
+    hideToken: "Ocultar token",
+    toggleTokenVisibility: "Alternar visibilidade do token",
+    showPassword: "Mostrar senha",
+    hidePassword: "Ocultar senha",
+    togglePasswordVisibility: "Alternar visibilidade da senha",
   },
   chat: {
     disconnected: "Desconectado do gateway.",

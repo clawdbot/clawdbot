@@ -50,18 +50,18 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
   const deliveryThreadId = normalizeOptionalThreadValue(
     (delivery as { threadId?: unknown } | undefined)?.threadId,
   );
-  const channel = deliveryChannel ?? "last";
   const to = deliveryTo;
   const deliveryAccountId = normalizeOptionalString(
     (delivery as { accountId?: unknown } | undefined)?.accountId,
   );
   if (hasDelivery) {
     const resolvedMode = mode ?? "announce";
+    const channel = resolvedMode === "announce" ? (deliveryChannel ?? "last") : deliveryChannel;
     return {
       mode: resolvedMode,
-      channel: resolvedMode === "announce" ? channel : undefined,
+      channel: resolvedMode === "webhook" ? undefined : channel,
       to,
-      threadId: resolvedMode === "announce" ? deliveryThreadId : undefined,
+      threadId: resolvedMode === "webhook" ? undefined : deliveryThreadId,
       accountId: deliveryAccountId,
       source: "delivery",
       requested: resolvedMode === "announce",

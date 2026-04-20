@@ -48,6 +48,7 @@ export type BuildPluginApiParams = {
       | "registerContextEngine"
       | "registerCompactionProvider"
       | "registerAgentHarness"
+      | "registerDetachedTaskRuntime"
       | "registerMemoryCapability"
       | "registerMemoryPromptSection"
       | "registerMemoryPromptSupplement"
@@ -98,6 +99,7 @@ const noopRegisterCommand: OpenClawPluginApi["registerCommand"] = () => {};
 const noopRegisterContextEngine: OpenClawPluginApi["registerContextEngine"] = () => {};
 const noopRegisterCompactionProvider: OpenClawPluginApi["registerCompactionProvider"] = () => {};
 const noopRegisterAgentHarness: OpenClawPluginApi["registerAgentHarness"] = () => {};
+const noopRegisterDetachedTaskRuntime: OpenClawPluginApi["registerDetachedTaskRuntime"] = () => {};
 const noopRegisterMemoryCapability: OpenClawPluginApi["registerMemoryCapability"] = () => {};
 const noopRegisterMemoryPromptSection: OpenClawPluginApi["registerMemoryPromptSection"] = () => {};
 const noopRegisterMemoryPromptSupplement: OpenClawPluginApi["registerMemoryPromptSupplement"] =
@@ -164,6 +166,8 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     registerCompactionProvider:
       handlers.registerCompactionProvider ?? noopRegisterCompactionProvider,
     registerAgentHarness: handlers.registerAgentHarness ?? noopRegisterAgentHarness,
+    registerDetachedTaskRuntime:
+      handlers.registerDetachedTaskRuntime ?? noopRegisterDetachedTaskRuntime,
     registerMemoryCapability: handlers.registerMemoryCapability ?? noopRegisterMemoryCapability,
     registerMemoryPromptSection:
       handlers.registerMemoryPromptSection ?? noopRegisterMemoryPromptSection,

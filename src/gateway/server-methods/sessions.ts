@@ -72,6 +72,7 @@ import {
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
   readSessionPreviewItemsFromTranscript,
+  resolveDeletedAgentIdFromSessionKey,
   resolveFreshestSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
@@ -461,7 +462,20 @@ async function handleSessionSend(params: {
   if (!key) {
     return;
   }
-  const { entry, canonicalKey, storePath } = loadSessionEntry(key);
+  const { cfg, entry, canonicalKey, storePath } = loadSessionEntry(key);
+  // Reject sends/steers targeting sessions whose owning agent was deleted (#65524).
+  const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, canonicalKey);
+  if (deletedAgentId !== null) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `Agent "${deletedAgentId}" no longer exists in configuration`,
+      ),
+    );
+    return;
+  }
   if (!entry?.sessionId) {
     params.respond(
       false,

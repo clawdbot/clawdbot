@@ -1,4 +1,5 @@
 import { listChannelPlugins } from "../../channels/plugins/index.js";
+import type { ChannelId } from "../../channels/plugins/types.public.js";
 import {
   ErrorCodes,
   errorShape,
@@ -38,6 +39,25 @@ function respondProviderUnsupported(respond: RespondFn, providerId: string) {
   );
 }
 
+function wasChannelRunning(params: {
+  context: Parameters<GatewayRequestHandlers["web.login.start"]>[0]["context"];
+  channelId: ChannelId;
+  accountId?: string;
+}): boolean {
+  const runtime = params.context.getRuntimeSnapshot();
+  if (params.accountId) {
+    const accountRuntime = runtime.channelAccounts[params.channelId]?.[params.accountId];
+    if (accountRuntime) {
+      return accountRuntime.running === true;
+    }
+  }
+  if (!params.accountId) {
+    return runtime.channels[params.channelId]?.running === true;
+  }
+  const defaultRuntime = runtime.channels[params.channelId];
+  return defaultRuntime?.accountId === params.accountId && defaultRuntime.running === true;
+}
+
 export const webHandlers: GatewayRequestHandlers = {
   "web.login.start": async ({ params, respond, context }) => {
     if (!validateWebLoginStartParams(params)) {
@@ -58,11 +78,16 @@ export const webHandlers: GatewayRequestHandlers = {
         respondProviderUnavailable(respond);
         return;
       }
-      await context.stopChannel(provider.id, accountId);
       if (!provider.gateway?.loginWithQrStart) {
         respondProviderUnsupported(respond, provider.id);
         return;
       }
+      const wasRunning = wasChannelRunning({
+        context,
+        channelId: provider.id,
+        accountId,
+      });
+      await context.stopChannel(provider.id, accountId);
       const result = await provider.gateway.loginWithQrStart({
         force: Boolean((params as { force?: boolean }).force),
         timeoutMs:
@@ -72,6 +97,11 @@ export const webHandlers: GatewayRequestHandlers = {
         verbose: Boolean((params as { verbose?: boolean }).verbose),
         accountId,
       });
+      if (result.connected) {
+        await context.startChannel(provider.id, accountId);
+      } else if (wasRunning && !result.qrDataUrl) {
+        await context.startChannel(provider.id, accountId);
+      }
       respond(true, result, undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));

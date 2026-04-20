@@ -7,6 +7,7 @@ import {
 } from "../../../src/gateway/protocol/client-info.js";
 import {
   ConnectErrorDetailCodes,
+  formatConnectErrorMessage,
   readConnectErrorRecoveryAdvice,
   readConnectErrorDetailCode,
 } from "../../../src/gateway/protocol/connect-error-details.js";
@@ -51,7 +52,7 @@ export class GatewayRequestError extends Error {
   readonly retryAfterMs?: number;
 
   constructor(error: GatewayErrorInfo) {
-    super(error.message);
+    super(formatConnectErrorMessage({ message: error.message, details: error.details }));
     this.name = "GatewayRequestError";
     this.gatewayCode = error.code;
     this.details = error.details;

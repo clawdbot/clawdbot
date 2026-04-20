@@ -91,4 +91,36 @@ describe("overview view rendering", () => {
 
     await i18n.setLocale("en");
   });
+
+  it("renders a dedicated scope-upgrade approval hint with the exact approve command", async () => {
+    const container = document.createElement("div");
+    const props = createOverviewProps({
+      lastError: "scope upgrade pending approval (requestId: req-123)",
+      lastErrorCode: "PAIRING_REQUIRED",
+    });
+
+    render(renderOverview(props), container);
+    await Promise.resolve();
+
+    expect(container.textContent).toContain("Scope upgrade pending approval.");
+    expect(container.textContent).toContain(
+      "This device is already paired, but the requested wider scope is waiting for approval.",
+    );
+    expect(container.textContent).toContain("openclaw devices approve req-123");
+  });
+
+  it("does not suggest preview-only latest approval when the request id is absent", async () => {
+    const container = document.createElement("div");
+    const props = createOverviewProps({
+      lastError: "scope upgrade pending approval",
+      lastErrorCode: "PAIRING_REQUIRED",
+    });
+
+    render(renderOverview(props), container);
+    await Promise.resolve();
+
+    expect(container.textContent).toContain("Scope upgrade pending approval.");
+    expect(container.textContent).toContain("openclaw devices list");
+    expect(container.textContent).not.toContain("openclaw devices approve --latest");
+  });
 });

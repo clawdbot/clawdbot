@@ -15,6 +15,7 @@ import {
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
 import { resolveWhatsAppAccount, resolveWhatsAppMediaMaxBytes } from "../accounts.js";
+import { WHATSAPP_AUTH_UNSTABLE_CODE, WhatsAppAuthUnstableError } from "../auth-store.js";
 import {
   WhatsAppConnectionController,
   type ManagedWhatsAppListener,
@@ -85,6 +86,16 @@ function resolveExplicitWhatsAppDebounceOverride(params: {
   return channel.debounceMs;
 }
 
+function isRetryableAuthUnstableError(error: unknown): error is WhatsAppAuthUnstableError {
+  return (
+    error instanceof WhatsAppAuthUnstableError ||
+    (typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code?: unknown }).code === WHATSAPP_AUTH_UNSTABLE_CODE)
+  );
+}
+
 export async function monitorWebChannel(
   verbose: boolean,
   listenerFactory: typeof attachWebInboxToSocket | undefined = attachWebInboxToSocket,
@@ -101,7 +112,6 @@ export async function monitorWebChannel(
   const heartbeatLogger = getChildLogger({ module: "web-heartbeat", runId });
   const reconnectLogger = getChildLogger({ module: "web-reconnect", runId });
   const statusController = createWebChannelStatusController(tuning.statusSink);
-  const _status = statusController.snapshot();
   statusController.emit();
 
   const baseCfg = loadConfig();
@@ -215,89 +225,138 @@ export async function monitorWebChannel(
         return !hasControlCommand(msg.body, cfg);
       };
 
-      const connection = await controller.openConnection({
-        connectionId,
-        createListener: async ({ sock, connection }) => {
-          const onMessage = createWebOnMessageHandler({
-            cfg,
-            verbose,
-            connectionId,
-            maxMediaBytes,
-            groupHistoryLimit,
-            groupHistories,
-            groupMemberNames,
-            echoTracker,
-            backgroundTasks: connection.backgroundTasks,
-            replyResolver: activeReplyResolver,
-            replyLogger,
-            baseMentionConfig,
-            account,
-          });
+      let connection;
+      try {
+        connection = await controller.openConnection({
+          connectionId,
+          createListener: async ({ sock, connection }) => {
+            const onMessage = createWebOnMessageHandler({
+              cfg,
+              verbose,
+              connectionId,
+              maxMediaBytes,
+              groupHistoryLimit,
+              groupHistories,
+              groupMemberNames,
+              echoTracker,
+              backgroundTasks: connection.backgroundTasks,
+              replyResolver: activeReplyResolver,
+              replyLogger,
+              baseMentionConfig,
+              account,
+            });
 
-          return (await (listenerFactory ?? attachWebInboxToSocket)({
-            verbose,
-            accountId: account.accountId,
-            authDir: account.authDir,
-            mediaMaxMb: account.mediaMaxMb,
-            selfChatMode: account.selfChatMode,
-            sendReadReceipts: account.sendReadReceipts,
-            debounceMs: inboundDebounceMs,
-            shouldDebounce,
-            socketRef: controller.socketRef,
-            shouldRetryDisconnect: () => !sigintStop && controller.shouldRetryDisconnect(),
-            disconnectRetryPolicy: reconnectPolicy,
-            disconnectRetryAbortSignal: controller.getDisconnectRetryAbortSignal(),
-            onMessage: async (msg: WebInboundMsg) => {
-              const inboundAt = Date.now();
-              controller.noteInbound(inboundAt);
-              statusController.noteInbound(inboundAt);
-              await onMessage(msg);
-            },
-            sock,
-          })) as ManagedWhatsAppListener;
-        },
-        onHeartbeat: (snapshot) => {
-          const authAgeMs = getWebAuthAgeMs(account.authDir);
-          const minutesSinceLastMessage = snapshot.lastInboundAt
-            ? Math.floor((Date.now() - snapshot.lastInboundAt) / 60000)
-            : null;
+            return (await (listenerFactory ?? attachWebInboxToSocket)({
+              verbose,
+              accountId: account.accountId,
+              authDir: account.authDir,
+              mediaMaxMb: account.mediaMaxMb,
+              selfChatMode: account.selfChatMode,
+              sendReadReceipts: account.sendReadReceipts,
+              debounceMs: inboundDebounceMs,
+              shouldDebounce,
+              socketRef: controller.socketRef,
+              shouldRetryDisconnect: () => !sigintStop && controller.shouldRetryDisconnect(),
+              disconnectRetryPolicy: reconnectPolicy,
+              disconnectRetryAbortSignal: controller.getDisconnectRetryAbortSignal(),
+              onMessage: async (msg: WebInboundMsg) => {
+                const inboundAt = Date.now();
+                controller.noteInbound(inboundAt);
+                statusController.noteInbound(inboundAt);
+                await onMessage(msg);
+              },
+              sock,
+            })) as ManagedWhatsAppListener;
+          },
+          onHeartbeat: (snapshot) => {
+            const authAgeMs = getWebAuthAgeMs(account.authDir);
+            const minutesSinceLastMessage = snapshot.lastInboundAt
+              ? Math.floor((Date.now() - snapshot.lastInboundAt) / 60000)
+              : null;
 
-          const logData = {
-            connectionId: snapshot.connectionId,
-            reconnectAttempts: snapshot.reconnectAttempts,
-            messagesHandled: snapshot.handledMessages,
-            lastInboundAt: snapshot.lastInboundAt,
-            authAgeMs,
-            uptimeMs: snapshot.uptimeMs,
-            ...(minutesSinceLastMessage !== null && minutesSinceLastMessage > 30
-              ? { minutesSinceLastMessage }
-              : {}),
-          };
-
-          if (minutesSinceLastMessage && minutesSinceLastMessage > 30) {
-            heartbeatLogger.warn(logData, "⚠️ web gateway heartbeat - no messages in 30+ minutes");
-          } else {
-            heartbeatLogger.info(logData, "web gateway heartbeat");
-          }
-        },
-        onWatchdogTimeout: (snapshot) => {
-          const watchdogBaselineAt = snapshot.lastInboundAt ?? snapshot.startedAt;
-          const minutesSinceLastMessage = Math.floor((Date.now() - watchdogBaselineAt) / 60000);
-          statusController.noteWatchdogStale();
-          heartbeatLogger.warn(
-            {
+            const logData = {
               connectionId: snapshot.connectionId,
-              minutesSinceLastMessage,
-              lastInboundAt: snapshot.lastInboundAt ? new Date(snapshot.lastInboundAt) : null,
+              reconnectAttempts: snapshot.reconnectAttempts,
               messagesHandled: snapshot.handledMessages,
+              lastInboundAt: snapshot.lastInboundAt,
+              authAgeMs,
+              uptimeMs: snapshot.uptimeMs,
+              ...(minutesSinceLastMessage !== null && minutesSinceLastMessage > 30
+                ? { minutesSinceLastMessage }
+                : {}),
+            };
+
+            if (minutesSinceLastMessage && minutesSinceLastMessage > 30) {
+              heartbeatLogger.warn(
+                logData,
+                "⚠️ web gateway heartbeat - no messages in 30+ minutes",
+              );
+            } else {
+              heartbeatLogger.info(logData, "web gateway heartbeat");
+            }
+          },
+          onWatchdogTimeout: (snapshot) => {
+            const watchdogBaselineAt = snapshot.lastInboundAt ?? snapshot.startedAt;
+            const minutesSinceLastMessage = Math.floor((Date.now() - watchdogBaselineAt) / 60000);
+            statusController.noteWatchdogStale();
+            heartbeatLogger.warn(
+              {
+                connectionId: snapshot.connectionId,
+                minutesSinceLastMessage,
+                lastInboundAt: snapshot.lastInboundAt ? new Date(snapshot.lastInboundAt) : null,
+                messagesHandled: snapshot.handledMessages,
+              },
+              "Message timeout detected - forcing reconnect",
+            );
+            whatsappHeartbeatLog.warn(
+              `No messages received in ${minutesSinceLastMessage}m - restarting connection`,
+            );
+          },
+        });
+      } catch (error) {
+        if (!isRetryableAuthUnstableError(error)) {
+          throw error;
+        }
+        const retryDecision = controller.consumeReconnectAttempt();
+        statusController.noteReconnectAttempts(retryDecision.reconnectAttempts);
+        statusController.noteClose({
+          error: error.message,
+          reconnectAttempts: retryDecision.reconnectAttempts,
+          healthState: retryDecision.healthState,
+        });
+        if (retryDecision.action === "stop") {
+          reconnectLogger.warn(
+            {
+              connectionId,
+              reconnectAttempts: retryDecision.reconnectAttempts,
+              maxAttempts: reconnectPolicy.maxAttempts,
             },
-            "Message timeout detected - forcing reconnect",
+            "web reconnect: auth state stayed unstable; max attempts reached",
           );
-          whatsappHeartbeatLog.warn(
-            `No messages received in ${minutesSinceLastMessage}m - restarting connection`,
+          runtime.error(
+            `WhatsApp auth state is still stabilizing after ${retryDecision.reconnectAttempts}/${reconnectPolicy.maxAttempts} attempts. Stopping web monitoring.`,
           );
-        },
-      });
+          await controller.shutdown();
+          break;
+        }
+        reconnectLogger.info(
+          {
+            connectionId,
+            reconnectAttempts: retryDecision.reconnectAttempts,
+            delayMs: retryDecision.delayMs,
+          },
+          "web reconnect: auth state still stabilizing during inbox attach; retrying",
+        );
+        runtime.error(
+          `WhatsApp auth state is still stabilizing. Retry ${retryDecision.reconnectAttempts}/${reconnectPolicy.maxAttempts || "∞"} for inbox attach in ${formatDurationPrecise(retryDecision.delayMs ?? 0)}.`,
+        );
+        try {
+          await controller.waitBeforeRetry(retryDecision.delayMs ?? 0);
+        } catch {
+          break;
+        }
+        continue;
+      }
 
       statusController.noteConnected();
       controller.setUnhandledRejectionCleanup(

@@ -3,19 +3,25 @@ import { startWebLoginWithQr, waitForWebLogin } from "./login-qr.js";
 import {
   createWaSocket,
   logoutWeb,
-  waitForCredsSaveQueueWithTimeout,
+  readWebAuthExistsForDecision,
+  readWebSelfId,
+  WHATSAPP_AUTH_UNSTABLE_CODE,
   waitForWaConnection,
 } from "./session.js";
 
 vi.mock("./session.js", async () => {
   const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
   const createWaSocket = vi.fn(
-    async (_printQr: boolean, _verbose: boolean, opts?: { onQr?: (qr: string) => void }) => {
+    async (
+      _printQr: boolean,
+      _verbose: boolean,
+      opts?: { authDir?: string; onQr?: (qr: string) => void },
+    ) => {
       const sock = { ws: { close: vi.fn() } };
       if (opts?.onQr) {
         setImmediate(() => opts.onQr?.("qr-data"));
       }
-      return sock;
+      return sock as never;
     },
   );
   const waitForWaConnection = vi.fn();
@@ -26,20 +32,21 @@ vi.mock("./session.js", async () => {
       (err as { status?: number })?.status ??
       (err as { error?: { output?: { statusCode?: number } } })?.error?.output?.statusCode,
   );
-  const webAuthExists = vi.fn(async () => false);
-  const readWebSelfId = vi.fn(() => ({ e164: null, jid: null }));
+  const readWebAuthExistsForDecision = vi.fn(async () => ({
+    outcome: "stable" as const,
+    exists: false,
+  }));
+  const readWebSelfId = vi.fn(() => ({ e164: null, jid: null, lid: null }));
   const logoutWeb = vi.fn(async () => true);
-  const waitForCredsSaveQueueWithTimeout = vi.fn(async () => {});
   return {
     ...actual,
     createWaSocket,
     waitForWaConnection,
     formatError,
     getStatusCode,
-    webAuthExists,
+    readWebAuthExistsForDecision,
     readWebSelfId,
     logoutWeb,
-    waitForCredsSaveQueueWithTimeout,
   };
 });
 
@@ -48,8 +55,9 @@ vi.mock("./qr-image.js", () => ({
 }));
 
 const createWaSocketMock = vi.mocked(createWaSocket);
+const readWebAuthExistsForDecisionMock = vi.mocked(readWebAuthExistsForDecision);
+const readWebSelfIdMock = vi.mocked(readWebSelfId);
 const waitForWaConnectionMock = vi.mocked(waitForWaConnection);
-const waitForCredsSaveQueueWithTimeoutMock = vi.mocked(waitForCredsSaveQueueWithTimeout);
 const logoutWebMock = vi.mocked(logoutWeb);
 
 async function flushTasks() {
@@ -60,18 +68,35 @@ async function flushTasks() {
 describe("login-qr", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    createWaSocketMock
+      .mockReset()
+      .mockImplementation(
+        async (
+          _printQr: boolean,
+          _verbose: boolean,
+          opts?: { authDir?: string; onQr?: (qr: string) => void },
+        ) => {
+          const sock = { ws: { close: vi.fn() } };
+          if (opts?.onQr) {
+            setImmediate(() => opts.onQr?.("qr-data"));
+          }
+          return sock as never;
+        },
+      );
+    waitForWaConnectionMock.mockReset();
+    readWebAuthExistsForDecisionMock.mockReset().mockResolvedValue({
+      outcome: "stable",
+      exists: false,
+    });
+    readWebSelfIdMock.mockReset().mockReturnValue({ e164: null, jid: null, lid: null });
+    logoutWebMock.mockReset().mockResolvedValue(true);
   });
 
   it("restarts login once on status 515 and completes", async () => {
-    let releaseCredsFlush: (() => void) | undefined;
-    const credsFlushGate = new Promise<void>((resolve) => {
-      releaseCredsFlush = resolve;
-    });
     waitForWaConnectionMock
       // Baileys v7 wraps the error: { error: BoomError(515) }
       .mockRejectedValueOnce({ error: { output: { statusCode: 515 } } })
       .mockResolvedValueOnce(undefined);
-    waitForCredsSaveQueueWithTimeoutMock.mockReturnValueOnce(credsFlushGate);
 
     const start = await startWebLoginWithQr({ timeoutMs: 5000 });
     expect(start.qrDataUrl).toBe("data:image/png;base64,base64");
@@ -80,11 +105,7 @@ describe("login-qr", () => {
     await flushTasks();
     await flushTasks();
 
-    expect(createWaSocketMock).toHaveBeenCalledTimes(1);
-    expect(waitForCredsSaveQueueWithTimeoutMock).toHaveBeenCalledOnce();
-    expect(waitForCredsSaveQueueWithTimeoutMock).toHaveBeenCalledWith(expect.any(String));
-
-    releaseCredsFlush?.();
+    expect(createWaSocketMock).toHaveBeenCalledTimes(2);
     const result = await resultPromise;
 
     expect(result.connected).toBe(true);
@@ -124,6 +145,45 @@ describe("login-qr", () => {
     expect(result).toEqual({
       connected: false,
       message: "WhatsApp login failed: cleanup failed",
+    });
+  });
+
+  it("returns an unstable-auth result when creds flush does not settle", async () => {
+    readWebAuthExistsForDecisionMock.mockResolvedValueOnce({ outcome: "unstable" });
+
+    const result = await startWebLoginWithQr({ timeoutMs: 5000 });
+
+    expect(result).toEqual({
+      code: WHATSAPP_AUTH_UNSTABLE_CODE,
+      message: "WhatsApp auth state is still stabilizing. Retry login in a moment.",
+    });
+    expect(createWaSocketMock).not.toHaveBeenCalled();
+  });
+
+  it("reports a recovered linked session when socket bootstrap restores auth without a QR", async () => {
+    createWaSocketMock.mockImplementationOnce(
+      async (
+        _printQr: boolean,
+        _verbose: boolean,
+        _opts?: { authDir?: string; onQr?: (qr: string) => void },
+      ) =>
+        ({
+          ws: { close: vi.fn() },
+        }) as never,
+    );
+    waitForWaConnectionMock.mockResolvedValueOnce(undefined);
+    readWebSelfIdMock.mockReturnValueOnce({ e164: "+5511977000000", jid: null, lid: null });
+
+    const result = await startWebLoginWithQr({ timeoutMs: 5000 });
+
+    expect(result).toEqual({
+      connected: true,
+      message: "WhatsApp recovered the existing linked session (+5511977000000).",
+    });
+    expect(createWaSocketMock).toHaveBeenCalledOnce();
+    await expect(waitForWebLogin({ timeoutMs: 1000 })).resolves.toEqual({
+      connected: false,
+      message: "No active WhatsApp login in progress.",
     });
   });
 });

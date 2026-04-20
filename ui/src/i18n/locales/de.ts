@@ -198,10 +198,17 @@ export const de: TranslationMap = {
       wsUrl: "WebSocket-URL",
       token: "Gateway-Token",
       password: "Passwort (nicht gespeichert)",
+      passwordPlaceholder: "System- oder gemeinsames Passwort",
       sessionKey: "Standard-Sitzungsschlüssel",
       language: "Sprache",
       connectHint: "Klicken Sie auf Verbinden, um Verbindungsänderungen anzuwenden.",
       trustedProxy: "Authentifiziert über vertrauenswürdigen Proxy.",
+      showToken: "Token anzeigen",
+      hideToken: "Token ausblenden",
+      toggleTokenVisibility: "Token-Sichtbarkeit umschalten",
+      showPassword: "Passwort anzeigen",
+      hidePassword: "Passwort ausblenden",
+      togglePasswordVisibility: "Passwort-Sichtbarkeit umschalten",
     },
     snapshot: {
       title: "Aufnahme",
@@ -240,8 +247,19 @@ export const de: TranslationMap = {
     },
     pairing: {
       hint: "Dieses Gerät benötigt eine Pairing-Freigabe vom Gateway-Host.",
+      scopeUpgradeTitle: "Umfangserweiterung wartet auf Genehmigung.",
+      scopeUpgradeSummary:
+        "Dieses Gerät ist bereits gekoppelt, aber der angeforderte erweiterte Umfang wartet auf Genehmigung.",
+      roleUpgradeTitle: "Rollenänderung wartet auf Genehmigung.",
+      roleUpgradeSummary:
+        "Dieses Gerät ist bereits gekoppelt, aber die angeforderte Rollenänderung wartet auf Genehmigung.",
+      metadataUpgradeTitle: "Änderung der Gerätemetadaten wartet auf Genehmigung.",
+      metadataUpgradeSummary:
+        "Dieses Gerät ist bereits gekoppelt, aber die Änderung der Metadaten wartet auf Genehmigung.",
       mobileHint:
         "Auf dem Mobilgerät? Kopieren Sie die vollständige URL (einschließlich #token=...) von openclaw dashboard --no-open auf Ihrem Desktop.",
+      docsTitle: "Gerätekopplungs-Dokumentation (öffnet sich in neuem Tab)",
+      docsLink: "Docs: Gerätekopplung",
     },
     insecure: {
       hint: "Diese Seite ist HTTP, daher blockiert der Browser die Geräteidentifikation. Verwenden Sie HTTPS (Tailscale Serve) oder öffnen Sie {url} auf dem Gateway-Host.",
@@ -256,6 +274,12 @@ export const de: TranslationMap = {
       step4: "Oder generiere ein wiederverwendbares Token:",
       docsHint: "Für den Remote-Zugriff wird Tailscale Serve empfohlen. ",
       docsLink: "Dokumentation lesen →",
+      authDocsTitle: "Control UI-Authentifizierungsdokumentation (öffnet sich in neuem Tab)",
+      authDocsLink: "Docs: Control UI-Authentifizierung",
+      tailscaleDocsTitle: "Tailscale Serve-Dokumentation (öffnet sich in neuem Tab)",
+      tailscaleDocsLink: "Docs: Tailscale Serve",
+      insecureHttpDocsTitle: "Dokumentation zu unsicherem HTTP (öffnet sich in neuem Tab)",
+      insecureHttpDocsLink: "Docs: Unsicheres HTTP",
     },
     cards: {
       cost: "Kosten",
@@ -627,6 +651,12 @@ export const de: TranslationMap = {
   login: {
     subtitle: "Gateway-Dashboard",
     passwordPlaceholder: "optional",
+    showToken: "Token anzeigen",
+    hideToken: "Token ausblenden",
+    toggleTokenVisibility: "Sichtbarkeit des Tokens umschalten",
+    showPassword: "Passwort anzeigen",
+    hidePassword: "Passwort ausblenden",
+    togglePasswordVisibility: "Sichtbarkeit des Passworts umschalten",
   },
   chat: {
     disconnected: "Verbindung zum Gateway getrennt.",

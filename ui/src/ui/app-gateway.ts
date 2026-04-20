@@ -2,6 +2,7 @@ import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
+import { ConnectErrorDetailCodes } from "../../../src/gateway/protocol/connect-error-details.js";
 import {
   CHAT_SESSIONS_ACTIVE_MINUTES,
   clearPendingQueueItemsForRun,
@@ -307,7 +308,9 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       if (code !== 1012) {
         if (error?.message) {
           host.lastError =
-            host.lastErrorCode && isGenericBrowserFetchFailure(error.message)
+            host.lastErrorCode &&
+            (host.lastErrorCode === ConnectErrorDetailCodes.PAIRING_REQUIRED ||
+              isGenericBrowserFetchFailure(error.message))
               ? formatConnectError({
                   message: error.message,
                   details: error.details,

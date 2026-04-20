@@ -180,6 +180,7 @@ export type ChannelAccountSnapshot = {
   name?: string;
   enabled?: boolean;
   configured?: boolean;
+  statusState?: string;
   linked?: boolean;
   running?: boolean;
   connected?: boolean;

@@ -1,4 +1,5 @@
 import { getChannelPlugin } from "../channels/plugins/index.js";
+import { formatChannelStatusState } from "../channels/plugins/status-state.js";
 import { asNullableRecord } from "../shared/record-coerce.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import type { ChannelAccountHealthSummary, HealthSummary } from "./health.types.js";
@@ -171,6 +172,19 @@ export const formatHealthChannelLines = (
           })
           .filter((value): value is string => Boolean(value))
       : [];
+    const statusState =
+      typeof baseSummary.statusState === "string" ? baseSummary.statusState : null;
+    if (statusState) {
+      if (statusState === "linked") {
+        const authAgeMs = typeof baseSummary.authAgeMs === "number" ? baseSummary.authAgeMs : null;
+        const authLabel = authAgeMs != null ? ` (auth age ${Math.round(authAgeMs / 60000)}m)` : "";
+        lines.push(`${label}: ${formatChannelStatusState(statusState)}${authLabel}`);
+      } else {
+        lines.push(`${label}: ${formatChannelStatusState(statusState)}`);
+      }
+      continue;
+    }
+
     const linked = typeof baseSummary.linked === "boolean" ? baseSummary.linked : null;
     if (linked !== null) {
       if (linked) {

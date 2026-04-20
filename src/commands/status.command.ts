@@ -1,5 +1,12 @@
 import { withProgress } from "../cli/progress.js";
+import {
+  normalizePairingConnectRequestId,
+  readConnectPairingRequiredMessage,
+  readPairingConnectErrorDetails,
+  type ConnectPairingRequiredReason,
+} from "../gateway/protocol/connect-error-details.js";
 import { type RuntimeEnv } from "../runtime.js";
+import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { runStatusJsonCommand } from "./status-json-command.ts";
 import { buildStatusOverviewSurfaceFromScan } from "./status-overview-surface.ts";
 import {
@@ -59,28 +66,34 @@ function loadStatusNodeModeModule() {
 export function resolvePairingRecoveryContext(params: {
   error?: string | null;
   closeReason?: string | null;
-}): { requestId: string | null } | null {
-  const sanitizeRequestId = (value: string): string | null => {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      return null;
-    }
-    // Keep CLI guidance injection-safe: allow only compact id characters.
-    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(trimmed)) {
-      return null;
-    }
-    return trimmed;
-  };
+  details?: unknown;
+}): {
+  requestId: string | null;
+  reason: ConnectPairingRequiredReason | null;
+  remediationHint: string | null;
+} | null {
+  const structured = readPairingConnectErrorDetails(params.details);
+  if (structured) {
+    return {
+      requestId: normalizePairingConnectRequestId(structured.requestId) ?? null,
+      reason: structured.reason ?? null,
+      remediationHint: structured.remediationHint
+        ? sanitizeTerminalText(structured.remediationHint)
+        : null,
+    };
+  }
   const source = [params.error, params.closeReason]
     .filter((part) => typeof part === "string" && part.trim().length > 0)
     .join(" ");
-  if (!source || !/pairing required/i.test(source)) {
+  const pairing = readConnectPairingRequiredMessage(source);
+  if (!pairing) {
     return null;
   }
-  const requestIdMatch = source.match(/requestId:\s*([^\s)]+)/i);
-  const requestId =
-    requestIdMatch && requestIdMatch[1] ? sanitizeRequestId(requestIdMatch[1]) : null;
-  return { requestId: requestId || null };
+  return {
+    requestId: normalizePairingConnectRequestId(pairing.requestId) ?? null,
+    reason: pairing.reason ?? null,
+    remediationHint: null,
+  };
 }
 
 export async function statusCommand(
@@ -247,6 +260,7 @@ export async function statusCommand(
   const pairingRecovery = resolvePairingRecoveryContext({
     error: gatewayProbe?.error ?? null,
     closeReason: gatewayProbe?.close?.reason ?? null,
+    details: gatewayProbe?.connectErrorDetails,
   });
 
   const usageLines = usage

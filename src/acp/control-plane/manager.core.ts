@@ -10,7 +10,7 @@ import {
   completeTaskRunByRunId,
   failTaskRunByRunId,
   startTaskRunByRunId,
-} from "../../tasks/task-executor.js";
+} from "../../tasks/detached-task-runtime.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import {
   AcpRuntimeError,

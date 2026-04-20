@@ -1,0 +1,6 @@
+interface:
+  display_name: "OpenClaw Test Performance"
+  short_description: "Benchmark and fix slow OpenClaw tests"
+  default_prompt: "Use $openclaw-test-performance to reassess the OpenClaw test benchmark, identify the next real hotspot, fix it without losing coverage, update the report, and commit scoped changes."
+policy:
+  allow_implicit_invocation: false

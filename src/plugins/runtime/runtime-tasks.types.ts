@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { DetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime-contract.js";
 import type { TaskDeliveryState } from "../../tasks/task-registry.types.js";
 import type { OpenClawPluginToolContext } from "../tool-types.js";
 import type { PluginRuntimeTaskFlow } from "./runtime-taskflow.types.js";
@@ -18,6 +19,7 @@ export type {
   TaskRunDetail,
   TaskRunView,
 } from "./task-domain-types.js";
+export type { DetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime-contract.js";
 
 export type BoundTaskRunsRuntime = {
   readonly sessionKey: string;

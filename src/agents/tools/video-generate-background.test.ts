@@ -12,7 +12,7 @@ import {
   taskExecutorMocks,
 } from "./media-generate-background.test-support.js";
 
-vi.mock("../../tasks/task-executor.js", () => taskExecutorMocks);
+vi.mock("../../tasks/detached-task-runtime.js", () => taskExecutorMocks);
 vi.mock("../../tasks/task-registry-delivery-runtime.js", () => taskDeliveryRuntimeMocks);
 vi.mock("../subagent-announce-delivery.js", () => announceDeliveryMocks);
 

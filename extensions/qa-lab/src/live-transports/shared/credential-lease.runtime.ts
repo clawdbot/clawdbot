@@ -114,8 +114,12 @@ function normalizeQaCredentialSource(value: string | undefined): QaCredentialLea
   throw new Error(`Credential source must be one of env or convex, got "${value}".`);
 }
 
-function normalizeQaCredentialRole(value: string | undefined): QaCredentialRole {
-  const normalized = value?.trim().toLowerCase() || "maintainer";
+function normalizeQaCredentialRole(
+  value: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): QaCredentialRole {
+  const defaultRole = isTruthyOptIn(env.CI) ? "ci" : "maintainer";
+  const normalized = value?.trim().toLowerCase() || defaultRole;
   if (normalized === "maintainer" || normalized === "ci") {
     return normalized;
   }
@@ -350,7 +354,7 @@ export async function acquireQaCredentialLease<TPayload>(
     };
   }
 
-  const role = normalizeQaCredentialRole(opts.role ?? env.OPENCLAW_QA_CREDENTIAL_ROLE);
+  const role = normalizeQaCredentialRole(opts.role ?? env.OPENCLAW_QA_CREDENTIAL_ROLE, env);
   const config = resolveConvexCredentialBrokerConfig({
     env,
     role,

@@ -14,6 +14,6 @@ export function registerDaemonCli(program: Command) {
     );
 
   addGatewayServiceCommands(daemon, {
-    statusDescription: "Show service install status + probe the Gateway",
+    statusDescription: "Show service install status + probe connectivity/capability",
   });
 }

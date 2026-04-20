@@ -1,7 +1,12 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
-import { createKimiToolCallMarkupWrapper, wrapKimiProviderStream } from "./stream.js";
+import {
+  createKimiThinkingWrapper,
+  createKimiToolCallMarkupWrapper,
+  resolveKimiThinkingType,
+  wrapKimiProviderStream,
+} from "./stream.js";
 
 type FakeStream = {
   result: () => Promise<unknown>;
@@ -29,6 +34,19 @@ const KIMI_MULTI_TOOL_TEXT =
   ' <|tool_calls_section_begin|> <|tool_call_begin|> functions.read:0 <|tool_call_argument_begin|> {"file_path":"./package.json"} <|tool_call_end|> <|tool_call_begin|> functions.write:1 <|tool_call_argument_begin|> {"file_path":"./out.txt","content":"done"} <|tool_call_end|> <|tool_calls_section_end|>';
 
 describe("kimi tool-call markup wrapper", () => {
+  it("defaults Kimi thinking to disabled unless explicitly enabled", () => {
+    expect(resolveKimiThinkingType({ configuredThinking: undefined })).toBe("disabled");
+    expect(resolveKimiThinkingType({ configuredThinking: undefined, thinkingLevel: "high" })).toBe(
+      "enabled",
+    );
+    expect(resolveKimiThinkingType({ configuredThinking: "off", thinkingLevel: "high" })).toBe(
+      "disabled",
+    );
+    expect(resolveKimiThinkingType({ configuredThinking: "enabled", thinkingLevel: "off" })).toBe(
+      "enabled",
+    );
+  });
+
   it("converts tagged Kimi tool-call text into structured tool calls", async () => {
     const partial = {
       role: "assistant",
@@ -241,6 +259,107 @@ describe("kimi tool-call markup wrapper", () => {
         },
       ],
       stopReason: "toolUse",
+    });
+  });
+
+  it("forces Kimi thinking disabled and strips proxy reasoning fields", () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        reasoning: { effort: "high" },
+        reasoning_effort: "high",
+        reasoningEffort: "high",
+      };
+      options?.onPayload?.(payload as never, model as never);
+      capturedPayload = payload;
+      return createFakeStream({
+        events: [],
+        resultMessage: { role: "assistant", content: [] },
+      }) as never;
+    };
+
+    const wrapped = createKimiThinkingWrapper(baseStreamFn, "disabled");
+    void wrapped(
+      {
+        api: "anthropic-messages",
+        provider: "kimi",
+        id: "kimi-code",
+      } as Model<"anthropic-messages">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(capturedPayload).toEqual({
+      thinking: { type: "disabled" },
+    });
+  });
+
+  it("lets explicit model params keep Kimi thinking disabled even when session thinking is on", () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      const payload: Record<string, unknown> = {};
+      options?.onPayload?.(payload as never, model as never);
+      capturedPayload = payload;
+      return createFakeStream({
+        events: [],
+        resultMessage: { role: "assistant", content: [] },
+      }) as never;
+    };
+
+    const wrapped = wrapKimiProviderStream({
+      provider: "kimi",
+      modelId: "kimi-code",
+      extraParams: { thinking: "off" },
+      thinkingLevel: "high",
+      streamFn: baseStreamFn,
+    } as never);
+
+    void wrapped(
+      {
+        api: "anthropic-messages",
+        provider: "kimi",
+        id: "kimi-code",
+      } as Model<"anthropic-messages">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(capturedPayload).toEqual({
+      thinking: { type: "disabled" },
+    });
+  });
+
+  it("enables Kimi thinking only when explicitly requested", () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      const payload: Record<string, unknown> = {};
+      options?.onPayload?.(payload as never, model as never);
+      capturedPayload = payload;
+      return createFakeStream({
+        events: [],
+        resultMessage: { role: "assistant", content: [] },
+      }) as never;
+    };
+
+    const wrapped = wrapKimiProviderStream({
+      provider: "kimi",
+      modelId: "kimi-code",
+      thinkingLevel: "high",
+      streamFn: baseStreamFn,
+    } as never);
+
+    void wrapped(
+      {
+        api: "anthropic-messages",
+        provider: "kimi",
+        id: "kimi-code",
+      } as Model<"anthropic-messages">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(capturedPayload).toEqual({
+      thinking: { type: "enabled" },
     });
   });
 });

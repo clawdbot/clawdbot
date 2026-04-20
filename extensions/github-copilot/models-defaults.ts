@@ -8,6 +8,7 @@ const DEFAULT_MAX_TOKENS = 8192;
 // We keep this list intentionally broad; if a model isn't available Copilot will
 // return an error and users can remove it from their config.
 const DEFAULT_MODEL_IDS = [
+  "claude-opus-4.6",
   "claude-sonnet-4.6",
   "claude-sonnet-4.5",
   "gpt-4o",

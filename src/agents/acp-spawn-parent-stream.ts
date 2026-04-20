@@ -8,7 +8,7 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
 import { normalizeAssistantPhase } from "../shared/chat-message-content.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { recordTaskRunProgressByRunId } from "../tasks/task-executor.js";
+import { recordTaskRunProgressByRunId } from "../tasks/detached-task-runtime.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
 const DEFAULT_STREAM_FLUSH_MS = 2_500;

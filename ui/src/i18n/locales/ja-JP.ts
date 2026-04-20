@@ -198,10 +198,17 @@ export const ja_JP: TranslationMap = {
       wsUrl: "WebSocket URL",
       token: "Gateway トークン",
       password: "パスワード（保存されません）",
+      passwordPlaceholder: "システムまたは共有パスワード",
       sessionKey: "デフォルトのセッションキー",
       language: "言語",
       connectHint: "接続の変更を適用するには、［Connect］をクリックしてください。",
       trustedProxy: "信頼済みプロキシ経由で認証されています。",
+      showToken: "トークンを表示",
+      hideToken: "トークンを非表示",
+      toggleTokenVisibility: "トークンの表示/非表示を切り替え",
+      showPassword: "パスワードを表示",
+      hidePassword: "パスワードを非表示",
+      togglePasswordVisibility: "パスワードの表示/非表示を切り替え",
     },
     snapshot: {
       title: "スナップショット",
@@ -240,8 +247,19 @@ export const ja_JP: TranslationMap = {
     },
     pairing: {
       hint: "このデバイスは Gateway ホストからのペアリング承認が必要です。",
+      scopeUpgradeTitle: "スコープの拡張は承認待ちです。",
+      scopeUpgradeSummary:
+        "このデバイスはすでにペアリングされていますが、要求されたより広いスコープは承認待ちです。",
+      roleUpgradeTitle: "ロールの変更は承認待ちです。",
+      roleUpgradeSummary:
+        "このデバイスはすでにペアリングされていますが、要求されたロールの変更は承認待ちです。",
+      metadataUpgradeTitle: "デバイスのメタデータ変更は承認待ちです。",
+      metadataUpgradeSummary:
+        "このデバイスはすでにペアリングされていますが、メタデータの変更は承認待ちです。",
       mobileHint:
         "モバイルを使用していますか？ デスクトップで openclaw dashboard --no-open から完全な URL（#token=... を含む）をコピーしてください。",
+      docsTitle: "デバイスのペアリングに関するドキュメント（新しいタブで開きます）",
+      docsLink: "ドキュメント: デバイスのペアリング",
     },
     insecure: {
       hint: "このページは HTTP のため、ブラウザーがデバイス ID をブロックしています。HTTPS（Tailscale Serve）を使用するか、Gateway ホストで {url} を開いてください。",
@@ -255,6 +273,12 @@ export const ja_JP: TranslationMap = {
       step4: "または、再利用可能なトークンを生成します:",
       docsHint: "リモートアクセスには、Tailscale Serve を推奨します。 ",
       docsLink: "ドキュメントを読む →",
+      authDocsTitle: "Control UI 認証ドキュメント（新しいタブで開きます）",
+      authDocsLink: "ドキュメント: Control UI 認証",
+      tailscaleDocsTitle: "Tailscale Serve ドキュメント（新しいタブで開きます）",
+      tailscaleDocsLink: "ドキュメント: Tailscale Serve",
+      insecureHttpDocsTitle: "安全でない HTTP に関するドキュメント（新しいタブで開きます）",
+      insecureHttpDocsLink: "ドキュメント: 安全でない HTTP",
     },
     cards: {
       cost: "コスト",
@@ -624,6 +648,12 @@ export const ja_JP: TranslationMap = {
   login: {
     subtitle: "Gateway ダッシュボード",
     passwordPlaceholder: "任意",
+    showToken: "トークンを表示",
+    hideToken: "トークンを非表示",
+    toggleTokenVisibility: "トークンの表示/非表示を切り替え",
+    showPassword: "パスワードを表示",
+    hidePassword: "パスワードを非表示",
+    togglePasswordVisibility: "パスワードの表示/非表示を切り替え",
   },
   chat: {
     disconnected: "Gateway から切断されました。",

@@ -64,6 +64,7 @@ export type {
 export type {
   BoundTaskFlowsRuntime,
   BoundTaskRunsRuntime,
+  DetachedTaskLifecycleRuntime,
   PluginRuntimeTaskFlows,
   PluginRuntimeTaskRuns,
   PluginRuntimeTasks,

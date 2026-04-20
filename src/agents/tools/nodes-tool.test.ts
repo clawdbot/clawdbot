@@ -320,4 +320,21 @@ describe("createNodesTool screen_record duration guardrails", () => {
       }),
     ).rejects.toThrow('invokeCommand "system.run" is reserved for shell execution');
   });
+
+  it("keeps invoke pairing guidance for scope upgrade rejections", async () => {
+    gatewayMocks.callGatewayTool.mockRejectedValueOnce(
+      new Error("scope upgrade pending approval (requestId: req-123)"),
+    );
+    const tool = createNodesTool();
+
+    await expect(
+      tool.execute("call-1", {
+        action: "invoke",
+        node: "macbook",
+        invokeCommand: "device.status",
+      }),
+    ).rejects.toThrow(
+      "pairing required before node invoke. Approve pairing request req-123 and retry.",
+    );
+  });
 });

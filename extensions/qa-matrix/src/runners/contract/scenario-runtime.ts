@@ -46,6 +46,7 @@ import {
   runRestartResumeScenario,
 } from "./scenario-runtime-restart.js";
 import {
+  runAllowlistHotReloadScenario,
   runBlockStreamingScenario,
   runMatrixQaCanary,
   runMembershipLossScenario,
@@ -247,6 +248,18 @@ export async function runMatrixQaScenario(
         token,
       });
     }
+    case "matrix-mxid-prefixed-command-block": {
+      const token = buildMatrixQaToken("MATRIX_QA_MXID_COMMAND");
+      return await runNoReplyScenario({
+        accessToken: context.observerAccessToken,
+        actorId: "observer",
+        actorUserId: context.observerUserId,
+        body: `${context.sutUserId} /new`,
+        mentionUserIds: [context.sutUserId],
+        context,
+        token,
+      });
+    }
     case "matrix-mention-metadata-spoof-block": {
       const token = buildMatrixQaToken("MATRIX_QA_METADATA_SPOOF");
       return await runNoReplyScenario({
@@ -273,6 +286,8 @@ export async function runMatrixQaScenario(
         token,
       });
     }
+    case "matrix-allowlist-hot-reload":
+      return await runAllowlistHotReloadScenario(context);
     case "matrix-multi-actor-ordering":
       return await runMultiActorOrderingScenario(context);
     case "matrix-inbound-edit-ignored":

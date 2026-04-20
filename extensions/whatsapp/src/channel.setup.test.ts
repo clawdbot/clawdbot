@@ -3,6 +3,7 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createQueuedWizardPrompter } from "../../../test/helpers/plugins/setup-wizard.js";
 import { whatsappApprovalAuth } from "./approval-auth.js";
+import { WHATSAPP_AUTH_UNSTABLE_CODE } from "./auth-store.js";
 import { whatsappPlugin } from "./channel.js";
 import { checkWhatsAppHeartbeatReady } from "./heartbeat.js";
 import type { OpenClawConfig } from "./runtime-api.js";
@@ -26,6 +27,13 @@ import {
 const hoisted = vi.hoisted(() => ({
   loginWeb: vi.fn(async () => {}),
   pathExists: vi.fn(async () => false),
+  readWebAuthState: vi.fn(async (): Promise<"linked" | "not-linked" | "unstable"> => "not-linked"),
+  readWebAuthExistsForDecision: vi.fn(
+    async (): Promise<{ outcome: "stable"; exists: boolean } | { outcome: "unstable" }> => ({
+      outcome: "stable",
+      exists: false,
+    }),
+  ),
   resolveWhatsAppAuthDir: vi.fn(() => ({
     authDir: "/tmp/openclaw-whatsapp-test",
   })),
@@ -82,6 +90,15 @@ vi.mock("./accounts.js", async () => {
   };
 });
 
+vi.mock("./auth-store.js", async () => {
+  const actual = await vi.importActual<typeof import("./auth-store.js")>("./auth-store.js");
+  return {
+    ...actual,
+    readWebAuthState: hoisted.readWebAuthState,
+    readWebAuthExistsForDecision: hoisted.readWebAuthExistsForDecision,
+  };
+});
+
 function createRuntime(): RuntimeEnv {
   return {
     error: vi.fn(),
@@ -132,6 +149,13 @@ describe("whatsapp setup wizard", () => {
     hoisted.loginWeb.mockReset();
     hoisted.pathExists.mockReset();
     hoisted.pathExists.mockResolvedValue(false);
+    hoisted.readWebAuthState.mockReset();
+    hoisted.readWebAuthState.mockResolvedValue("not-linked");
+    hoisted.readWebAuthExistsForDecision.mockReset();
+    hoisted.readWebAuthExistsForDecision.mockResolvedValue({
+      outcome: "stable",
+      exists: false,
+    });
     hoisted.resolveWhatsAppAuthDir.mockReset();
     hoisted.resolveWhatsAppAuthDir.mockReturnValue({ authDir: "/tmp/openclaw-whatsapp-test" });
   });
@@ -397,11 +421,49 @@ describe("whatsapp setup wizard", () => {
         },
       } as OpenClawConfig,
       deps: {
-        webAuthExists: async () => true,
+        readWebAuthExistsForDecision: async () => ({
+          outcome: "stable" as const,
+          exists: true,
+        }),
         hasActiveWebListener: (accountId?: string) => accountId === "work",
       },
     });
 
     expect(result).toEqual({ ok: true, reason: "ok" });
+  });
+
+  it("heartbeat readiness returns unstable when auth state timing is unresolved", async () => {
+    const result = await checkWhatsAppHeartbeatReady({
+      cfg: {
+        channels: {
+          whatsapp: {
+            accounts: {
+              default: {
+                authDir: "/tmp/default",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      deps: {
+        readWebAuthExistsForDecision: async () => ({ outcome: "unstable" as const }),
+        hasActiveWebListener: () => true,
+      },
+    });
+
+    expect(result).toEqual({ ok: false, reason: WHATSAPP_AUTH_UNSTABLE_CODE });
+  });
+
+  it("does not treat unstable auth as configured in generic plugin config checks", async () => {
+    hoisted.readWebAuthState.mockResolvedValueOnce("unstable");
+
+    await expect(
+      whatsappPlugin.config.isConfigured?.(
+        {
+          authDir: "/tmp/work",
+        } as never,
+        {} as never,
+      ),
+    ).resolves.toBe(false);
   });
 });

@@ -119,11 +119,12 @@ function makeWithRunSession() {
 function makeBaseParams(overrides: {
   synthesizedText?: string;
   deliveryRequested?: boolean;
-  runSessionId?: string;
+  runStartedAt?: number;
   sessionTarget?: string;
   deliveryBestEffort?: boolean;
 }): Parameters<typeof dispatchCronDelivery>[0] {
   const resolvedDelivery = makeResolvedDelivery();
+  const runStartedAt = overrides.runStartedAt ?? Date.now();
   return {
     cfg: {} as never,
     cfgWithAgentDefaults: {} as never,
@@ -137,9 +138,8 @@ function makeBaseParams(overrides: {
     } as never,
     agentId: "main",
     agentSessionKey: "agent:main",
-    runSessionId: overrides.runSessionId ?? "run-123",
-    runStartedAt: Date.now(),
-    runEndedAt: Date.now(),
+    runStartedAt,
+    runEndedAt: runStartedAt,
     timeoutMs: 30_000,
     resolvedDelivery,
     deliveryRequested: overrides.deliveryRequested ?? true,
@@ -267,7 +267,10 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
 
-    const params = makeBaseParams({ synthesizedText: "Morning briefing complete." });
+    const params = makeBaseParams({
+      synthesizedText: "Morning briefing complete.",
+      runStartedAt: 1_000,
+    });
     const state = await dispatchCronDelivery(params);
 
     expect(state.deliveryAttempted).toBe(true);
@@ -314,7 +317,10 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
 
-    const params = makeBaseParams({ synthesizedText: "Morning briefing complete." });
+    const params = makeBaseParams({
+      synthesizedText: "Morning briefing complete.",
+      runStartedAt: 1_000,
+    });
     const state = await dispatchCronDelivery(params);
 
     expect(state.result).toBeUndefined();
@@ -323,7 +329,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expect(enqueueSystemEvent).toHaveBeenCalledWith("Morning briefing complete.", {
       sessionKey: "agent:main:main",
-      contextKey: "cron-direct-delivery:v1:run-123:telegram::123456:",
+      contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
       trusted: false,
     });
   });
@@ -559,7 +565,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps direct announce delivery idempotent across replay for the same run session", async () => {
+  it("keeps direct announce delivery idempotent across replay for the same cron execution", async () => {
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
     vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
@@ -572,6 +578,41 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(second.delivered).toBe(true);
     expect(second.deliveryAttempted).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not collapse distinct recurring runs for the same job", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+    vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
+
+    const first = makeBaseParams({
+      runStartedAt: 1_000,
+      synthesizedText: "8:00 AM cron update.",
+    });
+    const second = makeBaseParams({
+      runStartedAt: 2_000,
+      synthesizedText: "9:00 AM cron update.",
+    });
+
+    const firstState = await dispatchCronDelivery(first);
+    const secondState = await dispatchCronDelivery(second);
+
+    expect(firstState.delivered).toBe(true);
+    expect(secondState.delivered).toBe(true);
+    expect(secondState.deliveryAttempted).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(2);
+    expect(deliverOutboundPayloads).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        payloads: [{ text: "8:00 AM cron update." }],
+      }),
+    );
+    expect(deliverOutboundPayloads).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        payloads: [{ text: "9:00 AM cron update." }],
+      }),
+    );
   });
 
   it("does not cache partial bestEffort delivery replays as delivered", async () => {
@@ -605,7 +646,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     for (let i = 0; i < 2003; i += 1) {
       const params = makeBaseParams({
         synthesizedText: `Replay-safe cron update ${i}.`,
-        runSessionId: `run-${i}`,
+        runStartedAt: i,
       });
       const state = await dispatchCronDelivery(params);
       expect(state.delivered).toBe(true);

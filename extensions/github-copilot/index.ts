@@ -69,7 +69,7 @@ export default definePluginEntry({
             credential,
           },
         ],
-        defaultModel: "github-copilot/gpt-4o",
+        defaultModel: "github-copilot/claude-opus-4.6",
       };
     }
 

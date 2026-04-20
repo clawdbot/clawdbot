@@ -96,6 +96,8 @@ export default definePluginEntry({
         },
       },
       buildReplayPolicy: () => KIMI_REPLAY_POLICY,
+      isBinaryThinking: () => true,
+      resolveDefaultThinkingLevel: () => "off",
       wrapStreamFn: wrapKimiProviderStream,
     });
   },

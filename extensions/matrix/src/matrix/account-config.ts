@@ -148,3 +148,28 @@ export function resolveMatrixAccountConfig(params: {
     ...(rooms ? { rooms } : {}),
   };
 }
+
+export function resolveMatrixAccountAllowlistConfig(params: {
+  cfg: CoreConfig;
+  accountId?: string | null;
+}): {
+  dmAllowFrom?: NonNullable<MatrixConfig["dm"]>["allowFrom"];
+  groupAllowFrom?: MatrixConfig["groupAllowFrom"];
+} {
+  const accountId = normalizeAccountId(params.accountId);
+  const base = resolveMatrixBaseConfig(params.cfg);
+  const accountConfig = findMatrixAccountConfig(params.cfg, accountId);
+  const accountDm = accountConfig?.dm;
+
+  let dmAllowFrom = base.dm?.allowFrom;
+  if (accountDm && Object.hasOwn(accountDm, "allowFrom")) {
+    dmAllowFrom = accountDm.allowFrom;
+  }
+
+  let groupAllowFrom = base.groupAllowFrom;
+  if (accountConfig && Object.hasOwn(accountConfig, "groupAllowFrom")) {
+    groupAllowFrom = accountConfig.groupAllowFrom;
+  }
+
+  return { dmAllowFrom, groupAllowFrom };
+}

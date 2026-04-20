@@ -197,10 +197,17 @@ export const fr: TranslationMap = {
       wsUrl: "URL WebSocket",
       token: "Jeton Gateway",
       password: "Mot de passe (non enregistré)",
+      passwordPlaceholder: "mot de passe système ou partagé",
       sessionKey: "Clé de session par défaut",
       language: "Langue",
       connectHint: "Cliquez sur Connect pour appliquer les modifications de connexion.",
       trustedProxy: "Authentifié via un proxy de confiance.",
+      showToken: "Afficher le jeton",
+      hideToken: "Masquer le jeton",
+      toggleTokenVisibility: "Basculer la visibilité du jeton",
+      showPassword: "Afficher le mot de passe",
+      hidePassword: "Masquer le mot de passe",
+      togglePasswordVisibility: "Basculer la visibilité du mot de passe",
     },
     snapshot: {
       title: "Capture",
@@ -238,8 +245,19 @@ export const fr: TranslationMap = {
     },
     pairing: {
       hint: "Cet appareil nécessite une approbation d’appairage de l’hôte Gateway.",
+      scopeUpgradeTitle: "Mise à niveau de portée en attente d’approbation.",
+      scopeUpgradeSummary:
+        "Cet appareil est déjà appairé, mais l’élargissement de portée demandé est en attente d’approbation.",
+      roleUpgradeTitle: "Mise à niveau du rôle en attente d’approbation.",
+      roleUpgradeSummary:
+        "Cet appareil est déjà appairé, mais le changement de rôle demandé est en attente d’approbation.",
+      metadataUpgradeTitle: "Modification des métadonnées de l’appareil en attente d’approbation.",
+      metadataUpgradeSummary:
+        "Cet appareil est déjà appairé, mais la modification des métadonnées est en attente d’approbation.",
       mobileHint:
         "Sur mobile ? Copiez l’URL complète (y compris #token=...) depuis openclaw dashboard --no-open sur votre ordinateur.",
+      docsTitle: "Documentation sur l’appairage des appareils (s’ouvre dans un nouvel onglet)",
+      docsLink: "Documentation : Appairage des appareils",
     },
     insecure: {
       hint: "Cette page utilise HTTP, le navigateur bloque donc l’identité de l’appareil. Utilisez HTTPS (Tailscale Serve) ou ouvrez {url} sur l’hôte Gateway.",
@@ -254,6 +272,13 @@ export const fr: TranslationMap = {
       step4: "Ou générez un jeton réutilisable :",
       docsHint: "Pour l’accès à distance, Tailscale Serve est recommandé. ",
       docsLink: "Lire la documentation →",
+      authDocsTitle:
+        "Documentation sur l’authentification de la Control UI (s’ouvre dans un nouvel onglet)",
+      authDocsLink: "Documentation : Authentification de la Control UI",
+      tailscaleDocsTitle: "Documentation sur Tailscale Serve (s’ouvre dans un nouvel onglet)",
+      tailscaleDocsLink: "Documentation : Tailscale Serve",
+      insecureHttpDocsTitle: "Documentation sur HTTP non sécurisé (s’ouvre dans un nouvel onglet)",
+      insecureHttpDocsLink: "Documentation : HTTP non sécurisé",
     },
     cards: {
       cost: "Coût",
@@ -627,6 +652,12 @@ export const fr: TranslationMap = {
   login: {
     subtitle: "Tableau de bord Gateway",
     passwordPlaceholder: "facultatif",
+    showToken: "Afficher le jeton",
+    hideToken: "Masquer le jeton",
+    toggleTokenVisibility: "Afficher/masquer la visibilité du jeton",
+    showPassword: "Afficher le mot de passe",
+    hidePassword: "Masquer le mot de passe",
+    togglePasswordVisibility: "Afficher/masquer la visibilité du mot de passe",
   },
   chat: {
     disconnected: "Déconnecté du Gateway.",

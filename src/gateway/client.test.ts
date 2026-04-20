@@ -278,6 +278,65 @@ describe("GatewayClient security checks", () => {
   });
 });
 
+describe("GatewayClient request errors", () => {
+  it("preserves retry metadata from gateway error responses", async () => {
+    const onClose = vi.fn();
+    const client = createClientWithIdentity("device-main", onClose);
+    client.start();
+    const ws = getLatestWs();
+    ws.emitOpen();
+    ws.emitMessage(
+      JSON.stringify({
+        type: "event",
+        event: "connect.challenge",
+        payload: { nonce: "nonce-1" },
+      }),
+    );
+    const connectFrame = JSON.parse(
+      ws.sent.find((frame) => frame.includes('"method":"connect"')) ?? "{}",
+    ) as { id?: string };
+    ws.emitMessage(
+      JSON.stringify({
+        type: "res",
+        id: connectFrame.id,
+        ok: true,
+        payload: {
+          type: "hello-ok",
+          auth: { role: "operator", scopes: ["operator.admin"] },
+        },
+      }),
+    );
+
+    const requestPromise = client.request("chat.history", { sessionKey: "main" });
+    const requestFrame = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string };
+
+    ws.emitMessage(
+      JSON.stringify({
+        type: "res",
+        id: requestFrame.id,
+        ok: false,
+        error: {
+          code: "UNAVAILABLE",
+          message: "chat.history unavailable during gateway startup",
+          details: { method: "chat.history" },
+          retryable: true,
+          retryAfterMs: 250,
+        },
+      }),
+    );
+
+    await expect(requestPromise).rejects.toMatchObject({
+      name: "GatewayClientRequestError",
+      gatewayCode: "UNAVAILABLE",
+      retryable: true,
+      retryAfterMs: 250,
+      details: { method: "chat.history" },
+    });
+
+    client.stop();
+  });
+});
+
 describe("GatewayClient close handling", () => {
   beforeEach(() => {
     wsInstances.length = 0;

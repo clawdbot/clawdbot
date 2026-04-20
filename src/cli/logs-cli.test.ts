@@ -158,6 +158,29 @@ describe("logs cli", () => {
     expect(stderrWrites.join("")).toContain("reading local log file instead");
   });
 
+  it("falls back to the local log file on loopback scope-upgrade errors", async () => {
+    callGatewayFromCli.mockRejectedValueOnce(
+      new Error("scope upgrade pending approval (requestId: req-123)"),
+    );
+    readConfiguredLogTail.mockResolvedValueOnce({
+      file: "/tmp/openclaw.log",
+      cursor: 5,
+      size: 5,
+      lines: ["local fallback line"],
+      truncated: false,
+      reset: false,
+    });
+
+    const stdoutWrites = captureStdoutWrites();
+    const stderrWrites = captureStderrWrites();
+
+    await runLogsCli(["logs"]);
+
+    expect(readConfiguredLogTail).toHaveBeenCalledTimes(1);
+    expect(stdoutWrites.join("")).toContain("local fallback line");
+    expect(stderrWrites.join("")).toContain("reading local log file instead");
+  });
+
   describe("formatLogTimestamp", () => {
     it("formats UTC timestamp in plain mode by default", () => {
       const result = formatLogTimestamp("2025-01-01T12:00:00.000Z");

@@ -191,7 +191,12 @@ describe("subagent registry seam flow", () => {
         task: "finish the task",
         cleanup: "delete",
         roundOneReply: "final completion reply",
-        outcome: { status: "ok" },
+        outcome: {
+          status: "ok",
+          startedAt: 111,
+          endedAt: 222,
+          elapsedMs: 111,
+        },
       }),
     );
 
@@ -397,6 +402,17 @@ describe("subagent registry seam flow", () => {
     });
 
     expect(updated).toBe(1);
+    const killedRun = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-killed-init");
+    const killedAt = Date.parse("2026-03-24T12:00:00Z");
+    expect(killedRun?.outcome).toEqual({
+      status: "error",
+      error: "manual kill",
+      startedAt: killedAt,
+      endedAt: killedAt,
+      elapsedMs: 0,
+    });
     await waitForFast(() => {
       expect(mocks.ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
         config: {

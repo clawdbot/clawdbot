@@ -46,6 +46,7 @@ const {
   runQaCredentialsRemoveCommand,
   runQaCoverageReportCommand,
   runQaProviderServerCommand,
+  runQaSuiteCommand,
   runQaTelegramCommand,
 } = vi.hoisted(() => ({
   runQaCredentialsAddCommand: vi.fn(),
@@ -53,6 +54,7 @@ const {
   runQaCredentialsRemoveCommand: vi.fn(),
   runQaCoverageReportCommand: vi.fn(),
   runQaProviderServerCommand: vi.fn(),
+  runQaSuiteCommand: vi.fn(),
   runQaTelegramCommand: vi.fn(),
 }));
 
@@ -76,6 +78,7 @@ vi.mock("./cli.runtime.js", () => ({
   runQaCredentialsRemoveCommand,
   runQaCoverageReportCommand,
   runQaProviderServerCommand,
+  runQaSuiteCommand,
 }));
 
 import { registerQaLabCli } from "./cli.js";
@@ -90,6 +93,7 @@ describe("qa cli registration", () => {
     runQaCredentialsRemoveCommand.mockReset();
     runQaCoverageReportCommand.mockReset();
     runQaProviderServerCommand.mockReset();
+    runQaSuiteCommand.mockReset();
     runQaTelegramCommand.mockReset();
     listQaRunnerCliContributions
       .mockReset()
@@ -188,11 +192,32 @@ describe("qa cli registration", () => {
       primaryModel: undefined,
       alternateModel: undefined,
       fastMode: false,
+      allowFailures: false,
       scenarioIds: [],
       sutAccountId: "sut",
       credentialSource: undefined,
       credentialRole: undefined,
     });
+  });
+
+  it("forwards --allow-failures for telegram runs", async () => {
+    await program.parseAsync(["node", "openclaw", "qa", "telegram", "--allow-failures"]);
+
+    expect(runQaTelegramCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowFailures: true,
+      }),
+    );
+  });
+
+  it("forwards --allow-failures for suite runs", async () => {
+    await program.parseAsync(["node", "openclaw", "qa", "suite", "--allow-failures"]);
+
+    expect(runQaSuiteCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowFailures: true,
+      }),
+    );
   });
 
   it("routes credential add flags into the qa runtime command", async () => {

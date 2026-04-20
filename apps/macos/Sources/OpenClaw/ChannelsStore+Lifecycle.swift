@@ -60,7 +60,7 @@ extension ChannelsStore {
                 timeoutMs: 35000)
             self.whatsappLoginMessage = result.message
             self.whatsappLoginQrDataUrl = result.qrDataUrl
-            self.whatsappLoginConnected = nil
+            self.whatsappLoginConnected = result.connected
             shouldAutoWait = autoWait && result.qrDataUrl != nil
         } catch {
             self.whatsappLoginMessage = error.localizedDescription
@@ -148,6 +148,7 @@ extension ChannelsStore {
 private struct WhatsAppLoginStartResult: Codable {
     let qrDataUrl: String?
     let message: String
+    let connected: Bool?
 }
 
 private struct WhatsAppLoginWaitResult: Codable {

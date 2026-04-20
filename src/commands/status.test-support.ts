@@ -250,7 +250,7 @@ export function createStatusCommandReportDataParams(
     memory: baseStatusMemory,
     memoryPlugin: baseStatusMemoryPlugin,
     pluginCompatibility: baseStatusPluginCompatibility,
-    pairingRecovery: { requestId: "req-1" },
+    pairingRecovery: { requestId: "req-1", reason: null, remediationHint: null },
     tableWidth: 120,
     ...statusTestDecorators,
     ...statusTestFormatting,

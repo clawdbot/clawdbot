@@ -58,7 +58,36 @@ export type AgentWaitResult = {
 export type SubagentRunOutcome = {
   status: "ok" | "error" | "timeout" | "unknown";
   error?: string;
+  startedAt?: number;
+  endedAt?: number;
+  elapsedMs?: number;
 };
+
+function readFiniteNumber(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+export function withSubagentOutcomeTiming(
+  outcome: SubagentRunOutcome,
+  timing: {
+    startedAt?: number;
+    endedAt?: number;
+  },
+): SubagentRunOutcome {
+  const startedAt = readFiniteNumber(timing.startedAt) ?? readFiniteNumber(outcome.startedAt);
+  const endedAt = readFiniteNumber(timing.endedAt) ?? readFiniteNumber(outcome.endedAt);
+  const nextTiming: Pick<SubagentRunOutcome, "startedAt" | "endedAt" | "elapsedMs"> = {};
+  if (typeof startedAt === "number") {
+    nextTiming.startedAt = startedAt;
+  }
+  if (typeof endedAt === "number") {
+    nextTiming.endedAt = endedAt;
+  }
+  if (typeof startedAt === "number" && typeof endedAt === "number") {
+    nextTiming.elapsedMs = Math.max(0, endedAt - startedAt);
+  }
+  return { ...outcome, ...nextTiming };
+}
 
 function extractToolResultText(content: unknown): string {
   if (typeof content === "string") {
@@ -297,20 +326,22 @@ export function applySubagentWaitOutcome(params: {
     startedAt: params.startedAt,
     endedAt: params.endedAt,
   };
-  const waitError = typeof params.wait?.error === "string" ? params.wait.error : undefined;
-  if (params.wait?.status === "timeout") {
-    next.outcome = { status: "timeout" };
-  } else if (params.wait?.status === "error") {
-    next.outcome = { status: "error", error: waitError };
-  } else if (params.wait?.status === "ok") {
-    next.outcome = { status: "ok" };
-  }
-  if (typeof params.wait?.startedAt === "number" && !next.startedAt) {
+  if (typeof params.wait?.startedAt === "number" && typeof next.startedAt !== "number") {
     next.startedAt = params.wait.startedAt;
   }
-  if (typeof params.wait?.endedAt === "number" && !next.endedAt) {
+  if (typeof params.wait?.endedAt === "number" && typeof next.endedAt !== "number") {
     next.endedAt = params.wait.endedAt;
   }
+  const waitError = typeof params.wait?.error === "string" ? params.wait.error : undefined;
+  let outcome = next.outcome;
+  if (params.wait?.status === "timeout") {
+    outcome = { status: "timeout" };
+  } else if (params.wait?.status === "error") {
+    outcome = { status: "error", error: waitError };
+  } else if (params.wait?.status === "ok") {
+    outcome = { status: "ok" };
+  }
+  next.outcome = outcome ? withSubagentOutcomeTiming(outcome, next) : undefined;
   return next;
 }
 

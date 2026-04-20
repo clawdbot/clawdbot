@@ -12,6 +12,7 @@ const BASE_METHODS = [
   "doctor.memory.dedupeDreamDiary",
   "logs.tail",
   "channels.status",
+  "channels.start",
   "channels.logout",
   "status",
   "usage.status",

@@ -58,7 +58,7 @@ describe("startHeartbeatRunner", () => {
   async function expectWakeDispatch(params: {
     cfg: OpenClawConfig;
     runSpy: RunOnce;
-    wake: { reason: string; agentId?: string; sessionKey?: string; coalesceMs: number };
+    wake: Parameters<typeof requestHeartbeatNow>[0];
     expectedCall: Record<string, unknown>;
   }) {
     const runner = startHeartbeatRunner({
@@ -299,6 +299,47 @@ describe("startHeartbeatRunner", () => {
         agentId: "ops",
         reason: "cron:job-123",
         sessionKey: "agent:ops:discord:channel:alerts",
+      },
+    });
+
+    runner.stop();
+  });
+
+  it("merges targeted wake heartbeat overrides onto the agent heartbeat config", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = await expectWakeDispatch({
+      cfg: {
+        ...heartbeatConfig([
+          {
+            id: "ops",
+            heartbeat: {
+              every: "15m",
+              prompt: "Ops prompt",
+              directPolicy: "block",
+              target: "discord:channel:ops",
+            },
+          },
+        ]),
+      } as OpenClawConfig,
+      runSpy,
+      wake: {
+        reason: "cron:job-123",
+        agentId: "ops",
+        sessionKey: "agent:ops:discord:channel:alerts",
+        heartbeat: { target: "last" },
+        coalesceMs: 0,
+      },
+      expectedCall: {
+        agentId: "ops",
+        reason: "cron:job-123",
+        sessionKey: "agent:ops:discord:channel:alerts",
+        heartbeat: {
+          every: "15m",
+          prompt: "Ops prompt",
+          directPolicy: "block",
+          target: "last",
+        },
       },
     });
 

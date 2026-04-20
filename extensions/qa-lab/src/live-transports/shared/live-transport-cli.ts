@@ -10,6 +10,7 @@ export type LiveTransportQaCommandOptions = {
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;
+  allowFailures?: boolean;
   scenarioIds?: string[];
   sutAccountId?: string;
   credentialSource?: string;
@@ -24,6 +25,7 @@ type LiveTransportQaCommanderOptions = {
   altModel?: string;
   scenario?: string[];
   fast?: boolean;
+  allowFailures?: boolean;
   sutAccount?: string;
   credentialSource?: string;
   credentialRole?: string;
@@ -57,6 +59,7 @@ export function mapLiveTransportQaCommanderOptions(
     primaryModel: opts.model,
     alternateModel: opts.altModel,
     fastMode: opts.fast,
+    allowFailures: opts.allowFailures,
     scenarioIds: opts.scenario,
     sutAccountId: opts.sutAccount,
     credentialSource: opts.credentialSource,
@@ -84,6 +87,11 @@ export function registerLiveTransportQaCli(params: {
     .option("--alt-model <ref>", "Alternate provider/model ref")
     .option("--scenario <id>", params.scenarioHelp, collectString, [])
     .option("--fast", "Enable provider fast mode where supported", false)
+    .option(
+      "--allow-failures",
+      "Write artifacts without setting a failing exit code when scenarios fail",
+      false,
+    )
     .option("--sut-account <id>", params.sutAccountHelp, "sut");
 
   if (params.credentialOptions) {

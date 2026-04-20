@@ -195,10 +195,17 @@ export const id: TranslationMap = {
       wsUrl: "URL WebSocket",
       token: "Token Gateway",
       password: "Kata sandi (tidak disimpan)",
+      passwordPlaceholder: "kata sandi sistem atau bersama",
       sessionKey: "Kunci Sesi Default",
       language: "Bahasa",
       connectHint: "Klik Connect untuk menerapkan perubahan koneksi.",
       trustedProxy: "Diautentikasi melalui proxy tepercaya.",
+      showToken: "Tampilkan token",
+      hideToken: "Sembunyikan token",
+      toggleTokenVisibility: "Alihkan visibilitas token",
+      showPassword: "Tampilkan kata sandi",
+      hidePassword: "Sembunyikan kata sandi",
+      togglePasswordVisibility: "Alihkan visibilitas kata sandi",
     },
     snapshot: {
       title: "Snapshot",
@@ -236,8 +243,19 @@ export const id: TranslationMap = {
     },
     pairing: {
       hint: "Perangkat ini memerlukan persetujuan pairing dari host gateway.",
+      scopeUpgradeTitle: "Peningkatan cakupan menunggu persetujuan.",
+      scopeUpgradeSummary:
+        "Perangkat ini sudah dipasangkan, tetapi perluasan cakupan yang diminta sedang menunggu persetujuan.",
+      roleUpgradeTitle: "Peningkatan peran menunggu persetujuan.",
+      roleUpgradeSummary:
+        "Perangkat ini sudah dipasangkan, tetapi perubahan peran yang diminta sedang menunggu persetujuan.",
+      metadataUpgradeTitle: "Perubahan metadata perangkat menunggu persetujuan.",
+      metadataUpgradeSummary:
+        "Perangkat ini sudah dipasangkan, tetapi perubahan metadata sedang menunggu persetujuan.",
       mobileHint:
         "Di seluler? Salin URL lengkap (termasuk #token=...) dari openclaw dashboard --no-open di desktop Anda.",
+      docsTitle: "Dokumentasi pemasangan perangkat (dibuka di tab baru)",
+      docsLink: "Dokumentasi: Pemasangan perangkat",
     },
     insecure: {
       hint: "Halaman ini menggunakan HTTP, jadi browser memblokir identitas perangkat. Gunakan HTTPS (Tailscale Serve) atau buka {url} di host gateway.",
@@ -251,6 +269,12 @@ export const id: TranslationMap = {
       step4: "Atau buat token yang dapat digunakan kembali:",
       docsHint: "Untuk akses jarak jauh, Tailscale Serve direkomendasikan. ",
       docsLink: "Baca dokumentasi →",
+      authDocsTitle: "Dokumentasi autentikasi Control UI (dibuka di tab baru)",
+      authDocsLink: "Dokumentasi: autentikasi Control UI",
+      tailscaleDocsTitle: "Dokumentasi Tailscale Serve (dibuka di tab baru)",
+      tailscaleDocsLink: "Dokumentasi: Tailscale Serve",
+      insecureHttpDocsTitle: "Dokumentasi HTTP tidak aman (dibuka di tab baru)",
+      insecureHttpDocsLink: "Dokumentasi: HTTP tidak aman",
     },
     cards: {
       cost: "Biaya",
@@ -621,6 +645,12 @@ export const id: TranslationMap = {
   login: {
     subtitle: "Dasbor Gateway",
     passwordPlaceholder: "opsional",
+    showToken: "Tampilkan token",
+    hideToken: "Sembunyikan token",
+    toggleTokenVisibility: "Alihkan visibilitas token",
+    showPassword: "Tampilkan kata sandi",
+    hidePassword: "Sembunyikan kata sandi",
+    togglePasswordVisibility: "Alihkan visibilitas kata sandi",
   },
   chat: {
     disconnected: "Terputus dari gateway.",

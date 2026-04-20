@@ -32,6 +32,7 @@ import {
   resolveDiscordGuildEntry,
   shouldEmitDiscordReactionNotification,
 } from "./allow-list.js";
+import { resolveDiscordChannelInfoSafe } from "./channel-access.js";
 import { formatDiscordReactionEmoji, formatDiscordUserTag } from "./format.js";
 import { resolveDiscordChannelInfo } from "./message-utils.js";
 import { setPresence } from "./presence-cache.js";
@@ -445,9 +446,10 @@ async function handleDiscordReactionEvent(
     if (!channel) {
       return;
     }
-    const channelName = "name" in channel ? (channel.name ?? undefined) : undefined;
+    const channelInfo = resolveDiscordChannelInfoSafe(channel);
+    const channelName = channelInfo.name;
     const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
-    const channelType = "type" in channel ? channel.type : undefined;
+    const channelType = channelInfo.type;
     const isDirectMessage = channelType === ChannelType.DM;
     const isGroupDm = channelType === ChannelType.GroupDM;
     const isThreadChannel =

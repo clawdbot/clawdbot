@@ -1,3 +1,4 @@
+import type { ConnectPairingRequiredReason } from "../gateway/protocol/connect-error-details.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { resolveOsSummary } from "../infra/os-summary.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
@@ -61,7 +62,11 @@ export async function buildStatusCommandReportData(
     memory: MemoryStatusSnapshot | null;
     memoryPlugin: MemoryPluginStatus;
     pluginCompatibility: PluginCompatibilityNotice[];
-    pairingRecovery: { requestId: string | null } | null;
+    pairingRecovery: {
+      requestId: string | null;
+      reason: ConnectPairingRequiredReason | null;
+      remediationHint: string | null;
+    } | null;
     tableWidth: number;
     ok: (value: string) => string;
     warn: (value: string) => string;

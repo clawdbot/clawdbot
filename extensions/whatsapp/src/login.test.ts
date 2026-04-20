@@ -21,14 +21,24 @@ vi.mock("./session.js", async () => {
   };
 });
 
+vi.mock("./auth-store.js", async () => {
+  const actual = await vi.importActual<typeof import("./auth-store.js")>("./auth-store.js");
+  return {
+    ...actual,
+    restoreCredsFromBackupIfNeeded: vi.fn(async () => false),
+  };
+});
+
 import type { waitForWaConnection } from "./session.js";
 let loginWeb: typeof import("./login.js").loginWeb;
 let createWaSocket: typeof import("./session.js").createWaSocket;
+let restoreCredsFromBackupIfNeeded: typeof import("./auth-store.js").restoreCredsFromBackupIfNeeded;
 
 describe("web login", () => {
   beforeAll(async () => {
     ({ loginWeb } = await import("./login.js"));
     ({ createWaSocket } = await import("./session.js"));
+    ({ restoreCredsFromBackupIfNeeded } = await import("./auth-store.js"));
   });
 
   beforeEach(() => {
@@ -56,6 +66,19 @@ describe("web login", () => {
 
     await vi.advanceTimersByTimeAsync(1);
     expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("prints a backup recovery success message when creds are restored from backup", async () => {
+    const waiter: typeof waitForWaConnection = vi.fn().mockResolvedValue(undefined);
+    const consoleLog = vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.mocked(restoreCredsFromBackupIfNeeded).mockResolvedValueOnce(true);
+
+    await loginWeb(false, waiter);
+
+    expect(consoleLog).toHaveBeenCalledWith(
+      expect.stringContaining("✅ Recovered from creds.json.bak; web session ready."),
+    );
+    consoleLog.mockRestore();
   });
 });
 

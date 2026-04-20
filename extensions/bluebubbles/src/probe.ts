@@ -1,8 +1,8 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { createBlueBubblesClientFromParts } from "./client.js";
 import type { BaseProbeResult } from "./runtime-api.js";
 import { normalizeSecretInputString } from "./secret-input.js";
-import { buildBlueBubblesApiUrl, blueBubblesFetchWithTimeout } from "./types.js";
 
 export type BlueBubblesProbe = BaseProbeResult & {
   status?: number | null;
@@ -47,15 +47,14 @@ export async function fetchBlueBubblesServerInfo(params: {
     return cached.info;
   }
 
-  const ssrfPolicy = params.allowPrivateNetwork ? { allowPrivateNetwork: true } : {};
-  const url = buildBlueBubblesApiUrl({ baseUrl, path: "/api/v1/server/info", password });
+  const client = createBlueBubblesClientFromParts({
+    baseUrl,
+    password,
+    allowPrivateNetwork: params.allowPrivateNetwork === true,
+    timeoutMs: params.timeoutMs ?? 5000,
+  });
   try {
-    const res = await blueBubblesFetchWithTimeout(
-      url,
-      { method: "GET" },
-      params.timeoutMs ?? 5000,
-      ssrfPolicy,
-    );
+    const res = await client.getServerInfo({ timeoutMs: params.timeoutMs ?? 5000 });
     if (!res.ok) {
       return null;
     }
@@ -153,15 +152,14 @@ export async function probeBlueBubbles(params: {
   if (!password) {
     return { ok: false, error: "password not configured" };
   }
-  const probeSsrfPolicy = params.allowPrivateNetwork ? { allowPrivateNetwork: true } : {};
-  const url = buildBlueBubblesApiUrl({ baseUrl, path: "/api/v1/ping", password });
+  const client = createBlueBubblesClientFromParts({
+    baseUrl,
+    password,
+    allowPrivateNetwork: params.allowPrivateNetwork === true,
+    timeoutMs: params.timeoutMs,
+  });
   try {
-    const res = await blueBubblesFetchWithTimeout(
-      url,
-      { method: "GET" },
-      params.timeoutMs,
-      probeSsrfPolicy,
-    );
+    const res = await client.ping({ timeoutMs: params.timeoutMs });
     if (!res.ok) {
       return { ok: false, status: res.status, error: `HTTP ${res.status}` };
     }

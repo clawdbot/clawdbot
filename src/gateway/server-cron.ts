@@ -297,6 +297,7 @@ export function buildGatewayCronService(params: {
         reason: opts?.reason,
         agentId,
         sessionKey,
+        heartbeat: opts?.heartbeat,
       });
     },
     runHeartbeatOnce: async (opts) => {

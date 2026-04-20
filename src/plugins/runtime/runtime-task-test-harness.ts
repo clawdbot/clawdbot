@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import { resetDetachedTaskLifecycleRuntimeForTests } from "../../tasks/detached-task-runtime.js";
 import {
   resetTaskRegistryControlRuntimeForTests,
   resetTaskRegistryDeliveryRuntimeForTests,
@@ -33,6 +34,7 @@ export function installRuntimeTaskDeliveryMock(): void {
 export function resetRuntimeTaskTestState(
   taskRegistryOptions?: Parameters<typeof resetTaskRegistryForTests>[0],
 ): void {
+  resetDetachedTaskLifecycleRuntimeForTests();
   resetTaskRegistryControlRuntimeForTests();
   resetTaskRegistryDeliveryRuntimeForTests();
   resetTaskRegistryForTests(taskRegistryOptions);

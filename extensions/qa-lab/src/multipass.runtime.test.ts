@@ -140,6 +140,17 @@ describe("qa multipass runtime", () => {
     expect(script).toContain("'--provider-mode' 'live-frontier'");
   });
 
+  it("forwards --allow-failures into the guest qa suite command when requested", () => {
+    const plan = createQaMultipassPlan({
+      repoRoot: process.cwd(),
+      outputDir: path.join(process.cwd(), ".artifacts", "qa-e2e", "multipass-allow-failures-test"),
+      allowFailures: true,
+      scenarioIds: ["channel-chat-baseline"],
+    });
+
+    expect(plan.qaCommand).toEqual(expect.arrayContaining(["--allow-failures"]));
+  });
+
   it("redacts forwarded live secrets in the persisted artifact script", () => {
     vi.stubEnv("OPENAI_API_KEY", "test-openai-key");
     const plan = createQaMultipassPlan({

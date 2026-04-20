@@ -4,7 +4,7 @@ import type { OpenClawConfig, ConfigFileSnapshot } from "../../config/types.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { resolveGatewayProbeSurfaceAuth } from "../../gateway/auth-surface-resolution.js";
 import { isLoopbackHost } from "../../gateway/net.js";
-import type { GatewayProbeResult } from "../../gateway/probe.js";
+import { type GatewayProbeCapability, type GatewayProbeResult } from "../../gateway/probe.js";
 import { inspectBestEffortPrimaryTailnetIPv4 } from "../../infra/network-discovery-display.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { colorize, theme } from "../../terminal/theme.js";
@@ -156,7 +156,7 @@ export function sanitizeSshTarget(value: unknown): string | null {
   if (!trimmed) {
     return null;
   }
-  return trimmed.replace(/^ssh\\s+/, "");
+  return trimmed.replace(/^ssh\s+/, "");
 }
 
 export async function resolveAuthForTarget(
@@ -280,22 +280,90 @@ export function isProbeReachable(probe: GatewayProbeResult): boolean {
   return probe.ok || isScopeLimitedProbeFailure(probe);
 }
 
+function getGatewayProbeCapability(probe: GatewayProbeResult): GatewayProbeCapability {
+  return probe.auth.capability;
+}
+
+export function summarizeGatewayProbeCapability(
+  probes: GatewayProbeResult[],
+): GatewayProbeCapability {
+  const priority: GatewayProbeCapability[] = [
+    "admin_capable",
+    "write_capable",
+    "read_only",
+    "connected_no_operator_scope",
+    "pairing_pending",
+    "unknown",
+  ];
+  for (const capability of priority) {
+    if (probes.some((probe) => getGatewayProbeCapability(probe) === capability)) {
+      return capability;
+    }
+  }
+  return "unknown";
+}
+
+function formatGatewayProbeCapabilityLabel(capability: GatewayProbeCapability) {
+  switch (capability) {
+    case "admin_capable":
+      return "Capability: admin-capable";
+    case "write_capable":
+      return "Capability: write-capable";
+    case "read_only":
+      return "Capability: read-only";
+    case "connected_no_operator_scope":
+      return "Capability: connect-only";
+    case "pairing_pending":
+      return "Capability: pairing pending";
+    default:
+      return "Capability: unknown";
+  }
+}
+
+function colorForGatewayProbeCapability(capability: GatewayProbeCapability) {
+  switch (capability) {
+    case "admin_capable":
+    case "write_capable":
+    case "read_only":
+      return theme.info;
+    case "connected_no_operator_scope":
+    case "pairing_pending":
+      return theme.warn;
+    default:
+      return theme.muted;
+  }
+}
+
+export function renderProbeCapabilityLine(probe: GatewayProbeResult, rich: boolean) {
+  const capability = getGatewayProbeCapability(probe);
+  return colorize(
+    rich,
+    colorForGatewayProbeCapability(capability),
+    formatGatewayProbeCapabilityLabel(capability),
+  );
+}
+
 export function renderProbeSummaryLine(probe: GatewayProbeResult, rich: boolean) {
+  const capability = renderProbeCapabilityLine(probe, rich);
   if (probe.ok) {
     const latency =
       typeof probe.connectLatencyMs === "number" ? `${probe.connectLatencyMs}ms` : "unknown";
-    return `${colorize(rich, theme.success, "Connect: ok")} (${latency}) · ${colorize(rich, theme.success, "RPC: ok")}`;
+    return `${colorize(rich, theme.success, "Connect: ok")} (${latency}) · ${capability} · ${colorize(rich, theme.success, "Read probe: ok")}`;
   }
 
   const detail = probe.error ? ` - ${probe.error}` : "";
   if (probe.connectLatencyMs != null) {
     const latency =
       typeof probe.connectLatencyMs === "number" ? `${probe.connectLatencyMs}ms` : "unknown";
-    const rpcStatus = isScopeLimitedProbeFailure(probe)
-      ? colorize(rich, theme.warn, "RPC: limited")
-      : colorize(rich, theme.error, "RPC: failed");
-    return `${colorize(rich, theme.success, "Connect: ok")} (${latency}) · ${rpcStatus}${detail}`;
+    const readStatus = isScopeLimitedProbeFailure(probe)
+      ? colorize(rich, theme.warn, "Read probe: limited")
+      : colorize(rich, theme.error, "Read probe: failed");
+    return `${colorize(rich, theme.success, "Connect: ok")} (${latency}) · ${capability} · ${readStatus}${detail}`;
   }
 
-  return `${colorize(rich, theme.error, "Connect: failed")}${detail}`;
+  if (getGatewayProbeCapability(probe) === "pairing_pending") {
+    return `${colorize(rich, theme.warn, "Connect: blocked")}${detail} · ${capability}`;
+  }
+
+  return `${colorize(rich, theme.error, "Connect: failed")}${detail} · ${capability}`;
 }

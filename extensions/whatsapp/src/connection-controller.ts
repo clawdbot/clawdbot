@@ -12,7 +12,6 @@ import {
   formatError,
   getStatusCode,
   logoutWeb,
-  waitForCredsSaveQueueWithTimeout,
   waitForWaConnection,
 } from "./session.js";
 
@@ -71,6 +70,13 @@ export type WhatsAppConnectionCloseDecision = {
   reconnectAttempts: number;
   healthState: "logged-out" | "conflict" | "stopped" | "reconnecting";
   normalized: NormalizedConnectionCloseReason;
+};
+
+export type WhatsAppReconnectAttemptDecision = {
+  action: "stop" | "retry";
+  delayMs?: number;
+  reconnectAttempts: number;
+  healthState: "stopped" | "reconnecting";
 };
 
 function createNeverResolvePromise<T>(): Promise<T> {
@@ -175,7 +181,6 @@ export async function waitForWhatsAppLoginResult(params: {
         restarted = true;
         params.runtime.log(info(WHATSAPP_LOGIN_RESTART_MESSAGE));
         closeWaSocket(currentSock);
-        await waitForCredsSaveQueueWithTimeout(params.authDir);
         try {
           currentSock = await createSocket(false, params.verbose, {
             authDir: params.authDir,
@@ -347,7 +352,6 @@ export class WhatsAppConnectionController {
     let sock: WaSocket | null = null;
     let connection: WhatsAppLiveConnection | null = null;
     try {
-      await waitForCredsSaveQueueWithTimeout(this.authDir);
       sock = await createWaSocket(false, this.verbose, {
         authDir: this.authDir,
       });
@@ -449,6 +453,26 @@ export class WhatsAppConnectionController {
       };
     }
 
+    const retryDecision = this.consumeReconnectAttempt();
+    if (retryDecision.action === "stop") {
+      return {
+        action: "stop",
+        reconnectAttempts: retryDecision.reconnectAttempts,
+        healthState: retryDecision.healthState,
+        normalized,
+      };
+    }
+
+    return {
+      action: "retry",
+      delayMs: retryDecision.delayMs,
+      reconnectAttempts: retryDecision.reconnectAttempts,
+      healthState: retryDecision.healthState,
+      normalized,
+    };
+  }
+
+  consumeReconnectAttempt(): WhatsAppReconnectAttemptDecision {
     this.reconnectAttempts += 1;
     if (
       this.reconnectPolicy.maxAttempts > 0 &&
@@ -458,7 +482,6 @@ export class WhatsAppConnectionController {
         action: "stop",
         reconnectAttempts: this.reconnectAttempts,
         healthState: "stopped",
-        normalized,
       };
     }
 
@@ -467,7 +490,6 @@ export class WhatsAppConnectionController {
       delayMs: computeBackoff(this.reconnectPolicy, this.reconnectAttempts),
       reconnectAttempts: this.reconnectAttempts,
       healthState: "reconnecting",
-      normalized,
     };
   }
 

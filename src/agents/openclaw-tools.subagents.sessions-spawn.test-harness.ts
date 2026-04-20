@@ -307,7 +307,7 @@ vi.mock("../config/sessions.js", () => ({
   },
 }));
 
-vi.mock("../tasks/task-executor.js", () => ({
+vi.mock("../tasks/detached-task-runtime.js", () => ({
   completeTaskRunByRunId: vi.fn(),
   createRunningTaskRun: vi.fn(),
   failTaskRunByRunId: vi.fn(),

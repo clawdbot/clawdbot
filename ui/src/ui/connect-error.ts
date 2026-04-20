@@ -1,4 +1,10 @@
-import { ConnectErrorDetailCodes } from "../../../src/gateway/protocol/connect-error-details.js";
+import {
+  ConnectErrorDetailCodes,
+  describePairingConnectRequirement,
+  formatConnectPairingRequiredMessage,
+  readConnectPairingRequiredMessage,
+  readPairingConnectErrorDetails,
+} from "../../../src/gateway/protocol/connect-error-details.js";
 import { resolveGatewayErrorDetailCode } from "./gateway.ts";
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
@@ -17,6 +23,41 @@ function normalizeErrorMessage(message: unknown): string {
   return "unknown error";
 }
 
+function formatPairingRequiredError(error: ErrorWithMessageAndDetails): string {
+  const message = normalizeErrorMessage(error.message);
+  const normalizedMessage = normalizeLowercaseStringOrEmpty(message);
+  const pairing = readPairingConnectErrorDetails(error.details);
+  const pairingMessage = readConnectPairingRequiredMessage(message);
+  const pairingReason = pairing?.reason ?? pairingMessage?.reason;
+  if (normalizedMessage.startsWith("pairing required:") && pairingReason) {
+    return `gateway pairing required: ${describePairingConnectRequirement(pairingReason)}`;
+  }
+  if (pairingMessage && normalizedMessage !== "pairing required") {
+    return message;
+  }
+
+  const approvedRoles = pairing?.approvedRoles?.join(", ") ?? "none";
+  const requestedRole = pairing?.requestedRole ?? "none";
+  const approvedScopes = pairing?.approvedScopes?.join(", ") ?? "none";
+  const requestedScopes = pairing?.requestedScopes?.join(", ") ?? "none";
+  switch (pairing?.reason) {
+    case "scope-upgrade":
+      if (pairing.approvedScopes || pairing.requestedScopes) {
+        return `device scope upgrade requires approval (approved: ${approvedScopes}; requested: ${requestedScopes})`;
+      }
+      return formatConnectPairingRequiredMessage(error.details);
+    case "role-upgrade":
+      if (pairing.approvedRoles || pairing.requestedRole) {
+        return `device role upgrade requires approval (approved: ${approvedRoles}; requested: ${requestedRole})`;
+      }
+      return formatConnectPairingRequiredMessage(error.details);
+    case "metadata-upgrade":
+      return "device reconnect details changed and require approval";
+    default:
+      return "gateway pairing required";
+  }
+}
+
 function formatErrorFromMessageAndDetails(error: ErrorWithMessageAndDetails): string {
   const message = normalizeErrorMessage(error.message);
   const detailCode = resolveGatewayErrorDetailCode(error);
@@ -29,7 +70,7 @@ function formatErrorFromMessageAndDetails(error: ErrorWithMessageAndDetails): st
     case ConnectErrorDetailCodes.AUTH_RATE_LIMITED:
       return "too many failed authentication attempts";
     case ConnectErrorDetailCodes.PAIRING_REQUIRED:
-      return "gateway pairing required";
+      return formatPairingRequiredError(error);
     case ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED:
       return "device identity required (use HTTPS/localhost or allow insecure auth explicitly)";
     case ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED:

@@ -106,7 +106,7 @@ Options:
 
 ### `gateway status`
 
-`gateway status` shows the Gateway service (launchd/systemd/schtasks) plus an optional RPC probe.
+`gateway status` shows the Gateway service (launchd/systemd/schtasks) plus an optional probe of connectivity/auth capability.
 
 ```bash
 openclaw gateway status
@@ -120,17 +120,18 @@ Options:
 - `--token <token>`: token auth for the probe.
 - `--password <password>`: password auth for the probe.
 - `--timeout <ms>`: probe timeout (default `10000`).
-- `--no-probe`: skip the RPC probe (service-only view).
+- `--no-probe`: skip the connectivity probe (service-only view).
 - `--deep`: scan system-level services too.
-- `--require-rpc`: exit non-zero when the RPC probe fails. Cannot be combined with `--no-probe`.
+- `--require-rpc`: upgrade the default connectivity probe to a read probe and exit non-zero when that read probe fails. Cannot be combined with `--no-probe`.
 
 Notes:
 
 - `gateway status` stays available for diagnostics even when the local CLI config is missing or invalid.
+- Default `gateway status` proves service state, WebSocket connect, and the auth capability visible at handshake time. It does not prove read/write/admin operations.
 - `gateway status` resolves configured auth SecretRefs for probe auth when possible.
 - If a required auth SecretRef is unresolved in this command path, `gateway status --json` reports `rpc.authWarning` when probe connectivity/auth fails; pass `--token`/`--password` explicitly or resolve the secret source first.
 - If the probe succeeds, unresolved auth-ref warnings are suppressed to avoid false positives.
-- Use `--require-rpc` in scripts and automation when a listening service is not enough and you need the Gateway RPC itself to be healthy.
+- Use `--require-rpc` in scripts and automation when a listening service is not enough and you need read-scope RPC calls to be healthy too.
 - `--deep` adds a best-effort scan for extra launchd/systemd/schtasks installs. When multiple gateway-like services are detected, human output prints cleanup hints and warns that most setups should run one gateway per machine.
 - Human output includes the resolved file log path plus the CLI-vs-service config paths/validity snapshot to help diagnose profile or state-dir drift.
 - On Linux systemd installs, service auth drift checks read both `Environment=` and `EnvironmentFile=` values from the unit (including `%h`, quoted paths, multiple files, and optional `-` files).
@@ -161,8 +162,9 @@ openclaw gateway probe --json
 Interpretation:
 
 - `Reachable: yes` means at least one target accepted a WebSocket connect.
-- `RPC: ok` means detail RPC calls (`health`/`status`/`system-presence`/`config.get`) also succeeded.
-- `RPC: limited - missing scope: operator.read` means connect succeeded but detail RPC is scope-limited. This is reported as **degraded** reachability, not full failure.
+- `Capability: read-only|write-capable|admin-capable|pairing-pending|connect-only` reports what the probe could prove about auth. It is separate from reachability.
+- `Read probe: ok` means read-scope detail RPC calls (`health`/`status`/`system-presence`/`config.get`) also succeeded.
+- `Read probe: limited - missing scope: operator.read` means connect succeeded but read-scope RPC is limited. This is reported as **degraded** reachability, not full failure.
 - Exit code is non-zero only when no probed target is reachable.
 
 JSON notes (`--json`):
@@ -170,6 +172,7 @@ JSON notes (`--json`):
 - Top level:
   - `ok`: at least one target is reachable.
   - `degraded`: at least one target had scope-limited detail RPC.
+  - `capability`: best capability seen across reachable targets (`read_only`, `write_capable`, `admin_capable`, `pairing_pending`, `connected_no_operator_scope`, or `unknown`).
   - `primaryTargetId`: best target to treat as the active winner in this order: explicit URL, SSH tunnel, configured remote, then local loopback.
   - `warnings[]`: best-effort warning records with `code`, `message`, and optional `targetIds`.
   - `network`: local loopback/tailnet URL hints derived from current config and host networking.
@@ -178,13 +181,17 @@ JSON notes (`--json`):
   - `ok`: reachability after connect + degraded classification.
   - `rpcOk`: full detail RPC success.
   - `scopeLimited`: detail RPC failed due to missing operator scope.
+- Per target (`targets[].auth`):
+  - `role`: auth role reported in `hello-ok` when available.
+  - `scopes`: granted scopes reported in `hello-ok` when available.
+  - `capability`: the surfaced auth capability classification for that target.
 
 Common warning codes:
 
 - `ssh_tunnel_failed`: SSH tunnel setup failed; the command fell back to direct probes.
 - `multiple_gateways`: more than one target was reachable; this is unusual unless you intentionally run isolated profiles, such as a rescue bot.
 - `auth_secretref_unresolved`: a configured auth SecretRef could not be resolved for a failed target.
-- `probe_scope_limited`: WebSocket connect succeeded, but detail RPC was limited by missing `operator.read`.
+- `probe_scope_limited`: WebSocket connect succeeded, but the read probe was limited by missing `operator.read`.
 
 #### Remote over SSH (Mac app parity)
 

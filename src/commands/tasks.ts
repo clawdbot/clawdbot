@@ -1,10 +1,7 @@
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import {
-  cancelTaskById,
-  getTaskById,
-  updateTaskNotifyPolicyById,
-} from "../tasks/runtime-internal.js";
+import { getTaskById, updateTaskNotifyPolicyById } from "../tasks/runtime-internal.js";
+import { cancelDetachedTaskRunById } from "../tasks/task-executor.js";
 import {
   listTaskFlowAuditFindings,
   summarizeTaskFlowAuditFindings,
@@ -391,7 +388,7 @@ export async function tasksCancelCommand(opts: { lookup: string }, runtime: Runt
     runtime.exit(1);
     return;
   }
-  const result = await cancelTaskById({
+  const result = await cancelDetachedTaskRunById({
     cfg: await loadTaskCancelConfig(),
     taskId: task.taskId,
   });

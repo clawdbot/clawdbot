@@ -24,9 +24,31 @@ export function runOutcomesEqual(
     return false;
   }
   if (a.status === "error" && b.status === "error") {
-    return (a.error ?? "") === (b.error ?? "");
+    if ((a.error ?? "") !== (b.error ?? "")) {
+      return false;
+    }
   }
-  return true;
+  if (!runOutcomeHasTiming(a) || !runOutcomeHasTiming(b)) {
+    return true;
+  }
+  return a.startedAt === b.startedAt && a.endedAt === b.endedAt && a.elapsedMs === b.elapsedMs;
+}
+
+export function runOutcomeHasTiming(outcome: SubagentRunOutcome | undefined): boolean {
+  return (
+    Number.isFinite(outcome?.startedAt) ||
+    Number.isFinite(outcome?.endedAt) ||
+    Number.isFinite(outcome?.elapsedMs)
+  );
+}
+
+export function shouldUpdateRunOutcome(
+  current: SubagentRunOutcome | undefined,
+  next: SubagentRunOutcome | undefined,
+): boolean {
+  return (
+    !runOutcomesEqual(current, next) || (!runOutcomeHasTiming(current) && runOutcomeHasTiming(next))
+  );
 }
 
 export function resolveLifecycleOutcomeFromRunOutcome(

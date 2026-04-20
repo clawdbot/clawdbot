@@ -34,6 +34,55 @@ function createTempAuthDir(prefix: string) {
   );
 }
 
+function mockFsOpenForCredsWrites(params?: {
+  onTempWrite?: (filePath: string) => Promise<void> | void;
+}) {
+  const open = fs.open.bind(fs);
+  const tempHandles: Array<{
+    filePath: string;
+    writeFile: ReturnType<typeof vi.fn>;
+    sync: ReturnType<typeof vi.fn>;
+    close: ReturnType<typeof vi.fn>;
+  }> = [];
+  const dirHandles: Array<{
+    filePath: string;
+    sync: ReturnType<typeof vi.fn>;
+    close: ReturnType<typeof vi.fn>;
+  }> = [];
+  const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+    if (typeof filePath === "string" && flags === "w" && filePath.includes(".creds.")) {
+      const handle = {
+        filePath,
+        writeFile: vi.fn(async () => {
+          await params?.onTempWrite?.(filePath);
+        }),
+        sync: vi.fn(async () => {}),
+        close: vi.fn(async () => {}),
+      };
+      tempHandles.push(handle);
+      return handle as never;
+    }
+    if (typeof filePath === "string" && flags === "r") {
+      const handle = {
+        filePath,
+        sync: vi.fn(async () => {}),
+        close: vi.fn(async () => {}),
+      };
+      dirHandles.push(handle);
+      return handle as never;
+    }
+    return open(filePath as never, flags as never, mode as never);
+  });
+  return {
+    openSpy,
+    tempHandles,
+    dirHandles,
+    restore() {
+      openSpy.mockRestore();
+    },
+  };
+}
+
 function mockCredsJsonSpies(readContents: string) {
   const credsSuffix = path.join("/tmp", "openclaw-oauth", "whatsapp", "default", "creds.json");
   const copySpy = vi.spyOn(fsSync, "copyFileSync").mockImplementation(() => {});
@@ -116,7 +165,7 @@ describe("web session", () => {
 
   it("creates WA socket with QR handler", async () => {
     const authDir = createTempAuthDir("openclaw-wa-creds-test");
-    const writeFileSpy = vi.spyOn(fs, "writeFile");
+    const openMock = mockFsOpenForCredsWrites();
 
     await createWaSocket(true, false, { authDir });
     const makeWASocket = baileys.makeWASocket as ReturnType<typeof vi.fn>;
@@ -129,12 +178,12 @@ describe("web session", () => {
     expect(typeof passedLogger?.trace).toBe("function");
     await emitCredsUpdate(authDir);
 
-    expect(writeFileSpy).toHaveBeenCalledWith(
+    expect(openMock.openSpy).toHaveBeenCalledWith(
       expect.stringContaining(path.join(authDir, ".creds.")),
-      expect.any(String),
-      expect.objectContaining({ mode: 0o600 }),
+      "w",
+      0o600,
     );
-    writeFileSpy.mockRestore();
+    openMock.restore();
   });
 
   it("uses ambient env proxy agent when HTTPS_PROXY is configured", async () => {
@@ -253,16 +302,16 @@ describe("web session", () => {
 
   it("does not clobber creds backup when creds.json is corrupted", async () => {
     const creds = mockCredsJsonSpies("{");
-    const writeFileSpy = vi.spyOn(fs, "writeFile");
+    const openMock = mockFsOpenForCredsWrites();
 
     await createWaSocket(false, false);
     await emitCredsUpdate();
 
     expect(creds.copySpy).not.toHaveBeenCalled();
-    expect(writeFileSpy).toHaveBeenCalled();
+    expect(openMock.tempHandles).toHaveLength(1);
 
     creds.restore();
-    writeFileSpy.mockRestore();
+    openMock.restore();
   });
 
   it("serializes creds.update saves to avoid overlapping writes", async () => {
@@ -274,19 +323,16 @@ describe("web session", () => {
     });
 
     const authDir = createTempAuthDir("openclaw-wa-queue");
-    const writeFile = fs.writeFile.bind(fs);
-    const writeFileSpy = vi
-      .spyOn(fs, "writeFile")
-      .mockImplementation(async (file, data, options) => {
-        if (typeof file === "string" && file.startsWith(authDir) && file.includes(".creds.")) {
+    const openMock = mockFsOpenForCredsWrites({
+      onTempWrite: async (filePath) => {
+        if (filePath.startsWith(authDir)) {
           inFlight += 1;
           maxInFlight = Math.max(maxInFlight, inFlight);
           await gate;
           inFlight -= 1;
-          return;
         }
-        return writeFile(file, data, options as never);
-      });
+      },
+    });
 
     await createWaSocket(false, false, { authDir });
     const sock = getLastSocket();
@@ -301,10 +347,10 @@ describe("web session", () => {
 
     await waitForCredsSaveQueue(authDir);
 
-    expect(writeFileSpy).toHaveBeenCalledTimes(2);
+    expect(openMock.tempHandles).toHaveLength(2);
     expect(maxInFlight).toBe(1);
     expect(inFlight).toBe(0);
-    writeFileSpy.mockRestore();
+    openMock.restore();
   });
 
   it("lets different authDir queues flush independently", async () => {
@@ -321,24 +367,21 @@ describe("web session", () => {
 
     const authDirA = createTempAuthDir("openclaw-wa-a");
     const authDirB = createTempAuthDir("openclaw-wa-b");
-    const writeFile = fs.writeFile.bind(fs);
-    const writeFileSpy = vi
-      .spyOn(fs, "writeFile")
-      .mockImplementation(async (file, data, options) => {
-        if (typeof file === "string" && file.startsWith(authDirA) && file.includes(".creds.")) {
+    const openMock = mockFsOpenForCredsWrites({
+      onTempWrite: async (filePath) => {
+        if (filePath.startsWith(authDirA)) {
           inFlightA += 1;
           await gateA;
           inFlightA -= 1;
           return;
         }
-        if (typeof file === "string" && file.startsWith(authDirB) && file.includes(".creds.")) {
+        if (filePath.startsWith(authDirB)) {
           inFlightB += 1;
           await gateB;
           inFlightB -= 1;
-          return;
         }
-        return writeFile(file, data, options as never);
-      });
+      },
+    });
 
     await createWaSocket(false, false, { authDir: authDirA });
     const sockA = getLastSocket();
@@ -350,7 +393,7 @@ describe("web session", () => {
 
     await flushCredsUpdate();
 
-    expect(writeFileSpy).toHaveBeenCalledTimes(2);
+    expect(openMock.tempHandles).toHaveLength(2);
     expect(inFlightA).toBe(1);
     expect(inFlightB).toBe(1);
 
@@ -360,12 +403,12 @@ describe("web session", () => {
 
     expect(inFlightA).toBe(0);
     expect(inFlightB).toBe(0);
-    writeFileSpy.mockRestore();
+    openMock.restore();
   });
 
   it("rotates creds backup when creds.json is valid JSON", async () => {
     const creds = mockCredsJsonSpies("{}");
-    const writeFileSpy = vi.spyOn(fs, "writeFile");
+    const openMock = mockFsOpenForCredsWrites();
     const backupSuffix = path.join(
       "/tmp",
       "openclaw-oauth",
@@ -381,27 +424,32 @@ describe("web session", () => {
     const args = creds.copySpy.mock.calls[0] ?? [];
     expect(String(args[0] ?? "")).toContain(creds.credsSuffix);
     expect(String(args[1] ?? "")).toContain(backupSuffix);
-    expect(writeFileSpy).toHaveBeenCalled();
+    expect(openMock.tempHandles).toHaveLength(1);
 
     creds.restore();
-    writeFileSpy.mockRestore();
+    openMock.restore();
   });
 
   it("writes creds.json atomically via temp file and rename", async () => {
-    const writeFileSpy = vi.spyOn(fs, "writeFile").mockResolvedValue(undefined);
+    const openMock = mockFsOpenForCredsWrites();
     const renameSpy = vi.spyOn(fs, "rename").mockResolvedValue(undefined);
     const rmSpy = vi.spyOn(fs, "rm").mockResolvedValue(undefined);
-    const chmodSpy = vi.spyOn(fsSync, "chmodSync").mockImplementation(() => {});
+    const chmodSpy = vi.spyOn(fs, "chmod").mockResolvedValue(undefined);
 
     await writeCredsJsonAtomically("/tmp/openclaw-oauth/whatsapp/default", {
       me: { id: "123@s.whatsapp.net" },
     });
 
-    expect(writeFileSpy).toHaveBeenCalledTimes(1);
+    expect(openMock.tempHandles).toHaveLength(1);
+    expect(openMock.tempHandles[0]?.writeFile).toHaveBeenCalledTimes(1);
+    expect(openMock.tempHandles[0]?.sync).toHaveBeenCalledTimes(1);
+    expect(openMock.tempHandles[0]?.close).toHaveBeenCalledTimes(1);
     expect(renameSpy).toHaveBeenCalledTimes(1);
     expect(rmSpy).not.toHaveBeenCalled();
-    expect(chmodSpy).not.toHaveBeenCalled();
-    const writePath = writeFileSpy.mock.calls[0]?.[0];
+    expect(chmodSpy).toHaveBeenCalledOnce();
+    expect(openMock.dirHandles).toHaveLength(1);
+    expect(openMock.dirHandles[0]?.sync).toHaveBeenCalledTimes(1);
+    const writePath = openMock.tempHandles[0]?.filePath;
     const renameArgs = renameSpy.mock.calls[0] ?? [];
     expect(typeof writePath).toBe("string");
     expect(writePath).toContain(".creds.");
@@ -409,7 +457,7 @@ describe("web session", () => {
       path.join("/tmp", "openclaw-oauth", "whatsapp", "default", "creds.json"),
     );
 
-    writeFileSpy.mockRestore();
+    openMock.restore();
     renameSpy.mockRestore();
     rmSpy.mockRestore();
     chmodSpy.mockRestore();

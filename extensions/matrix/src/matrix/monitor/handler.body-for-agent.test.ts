@@ -30,6 +30,7 @@ describe("createMatrixRoomMessageHandler inbound body formatting", () => {
         channels: {
           matrix: {
             contextVisibility,
+            groupAllowFrom: ["@alice:example.org"],
           },
         },
       },
@@ -338,6 +339,7 @@ describe("createMatrixRoomMessageHandler inbound body formatting", () => {
         channels: {
           matrix: {
             contextVisibility: "allowlist",
+            groupAllowFrom: ["@alice:example.org"],
           },
         },
       },

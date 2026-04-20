@@ -590,6 +590,9 @@ describe("gateway server sessions", () => {
 
   test("sessions.create can start the first agent turn from an initial task", async () => {
     await createSessionStoreDir();
+    // Register "ops" so the deleted-agent guard added in #65986 does not
+    // reject the auto-started chat.send triggered by `task:`.
+    testState.agentsConfig = { list: [{ id: "ops", default: true }] };
     const { ws } = await openClient();
 
     const created = await rpcReq<{

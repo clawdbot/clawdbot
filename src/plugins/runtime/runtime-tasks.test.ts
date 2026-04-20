@@ -1,4 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getDetachedTaskLifecycleRuntime,
+  setDetachedTaskLifecycleRuntime,
+} from "../../tasks/detached-task-runtime.js";
 import {
   getRuntimeTaskMocks,
   installRuntimeTaskDeliveryMock,
@@ -173,6 +177,53 @@ describe("runtime tasks", () => {
         title: "Cancel me",
         status: "cancelled",
       },
+    });
+  });
+
+  it("routes runtime task cancellation through the detached task runtime seam", async () => {
+    const legacyTaskFlow = createRuntimeTaskFlow().bindSession({
+      sessionKey: "agent:main:main",
+    });
+    const taskRuns = createRuntimeTaskRuns().bindSession({
+      sessionKey: "agent:main:main",
+    });
+
+    const created = legacyTaskFlow.createManaged({
+      controllerId: "tests/runtime-tasks",
+      goal: "Cancel through runtime seam",
+    });
+    const child = legacyTaskFlow.runTask({
+      flowId: created.flowId,
+      runtime: "acp",
+      childSessionKey: "agent:main:subagent:child",
+      runId: "runtime-task-cancel-seam",
+      task: "Cancel via seam",
+      status: "running",
+      startedAt: 22,
+      lastEventAt: 23,
+    });
+    if (!child.created) {
+      throw new Error("expected child task creation to succeed");
+    }
+
+    const defaultRuntime = getDetachedTaskLifecycleRuntime();
+    const cancelDetachedTaskRunByIdSpy = vi.fn(
+      (...args: Parameters<typeof defaultRuntime.cancelDetachedTaskRunById>) =>
+        defaultRuntime.cancelDetachedTaskRunById(...args),
+    );
+    setDetachedTaskLifecycleRuntime({
+      ...defaultRuntime,
+      cancelDetachedTaskRunById: cancelDetachedTaskRunByIdSpy,
+    });
+
+    await taskRuns.cancel({
+      taskId: child.task.taskId,
+      cfg: {} as never,
+    });
+
+    expect(cancelDetachedTaskRunByIdSpy).toHaveBeenCalledWith({
+      cfg: {} as never,
+      taskId: child.task.taskId,
     });
   });
 

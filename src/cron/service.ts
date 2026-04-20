@@ -70,6 +70,10 @@ export class CronService implements CronServiceContract {
     return this.state.store?.jobs.find((job) => job.id === id);
   }
 
+  getDefaultAgentId(): string | undefined {
+    return this.state.deps.defaultAgentId;
+  }
+
   wake(opts: { mode: "now" | "next-heartbeat"; text: string }) {
     return ops.wakeNow(this.state, opts);
   }

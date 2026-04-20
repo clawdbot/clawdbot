@@ -1,7 +1,14 @@
 // before_model_resolve hook
+export type PluginHookBeforeModelResolveAttachment = {
+  kind: "image" | "video" | "audio" | "document" | "other";
+  mimeType?: string;
+};
+
 export type PluginHookBeforeModelResolveEvent = {
   /** User prompt for this run. No session messages are available yet in this phase. */
   prompt: string;
+  /** Attachment metadata for file-aware model routing. */
+  attachments?: PluginHookBeforeModelResolveAttachment[];
 };
 
 export type PluginHookBeforeModelResolveResult = {

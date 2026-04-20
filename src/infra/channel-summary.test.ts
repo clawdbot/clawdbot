@@ -72,6 +72,7 @@ function makeTelegramSummaryPlugin(params: {
   enabled: boolean;
   configured: boolean;
   linked?: boolean;
+  statusState?: string;
   authAgeMs?: number;
   allowFrom?: string[];
 }): ChannelPlugin {
@@ -107,6 +108,7 @@ function makeTelegramSummaryPlugin(params: {
     },
     status: {
       buildChannelSummary: async () => ({
+        statusState: params.statusState,
         linked: params.linked,
         configured: params.configured,
         authAgeMs: params.authAgeMs,
@@ -277,6 +279,29 @@ describe("buildChannelSummary", () => {
 
     expect(lines).toContain("Telegram: not linked +15551234567");
     expect(lines).toContain("  - primary (Main Bot) (dm:mutuals, token:env)");
+  });
+
+  it("prefers plugin statusState when provided", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          plugin: makeTelegramSummaryPlugin({
+            enabled: true,
+            configured: true,
+            statusState: "unstable",
+          }),
+          source: "test",
+        },
+      ]),
+    );
+
+    const lines = await buildChannelSummary({ channels: {} } as never, {
+      colorize: false,
+      includeAllowFrom: false,
+    });
+
+    expect(lines).toContain("Telegram: auth stabilizing +15551234567");
   });
 
   it("renders non-slack account detail fields for configured accounts", async () => {

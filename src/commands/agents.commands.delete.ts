@@ -6,7 +6,11 @@ import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
-import { createQuietRuntime, requireValidConfigFileSnapshot } from "./agents.command-shared.js";
+import {
+  createQuietRuntime,
+  purgeAgentSessionStoreEntries,
+  requireValidConfigFileSnapshot,
+} from "./agents.command-shared.js";
 import { findAgentEntryIndex, listAgentEntries, pruneAgentConfig } from "./agents.config.js";
 import { moveToTrash } from "./onboard-helpers.js";
 
@@ -79,6 +83,9 @@ export async function agentsDeleteCommand(
   if (!opts.json) {
     logConfigUpdated(runtime);
   }
+
+  // Purge session store entries for this agent so orphaned sessions cannot be targeted (#65524).
+  await purgeAgentSessionStoreEntries(cfg, agentId);
 
   const quietRuntime = opts.json ? createQuietRuntime(runtime) : runtime;
   await moveToTrash(workspaceDir, quietRuntime);

@@ -42,6 +42,7 @@ type MatrixQaThreadScenarioResult = Awaited<ReturnType<typeof runThreadScenario>
 
 const MATRIX_SUBAGENT_THREAD_HOOK_ERROR_RE =
   /thread=true is unavailable because no channel plugin registered subagent_spawning hooks/i;
+const MATRIX_QA_HOT_RELOAD_RESTART_DELAY_MS = 300_000;
 
 function assertMatrixQaInReplyTarget(params: {
   actualEventId?: string;
@@ -466,6 +467,85 @@ export async function runObserverAllowlistOverrideScenario(context: MatrixQaScen
       `trigger sender: ${context.observerUserId}`,
       `driver event: ${driverEventId}`,
       ...buildMatrixReplyDetails("reply", reply),
+    ].join("\n"),
+  } satisfies MatrixQaScenarioExecution;
+}
+
+export async function runAllowlistHotReloadScenario(context: MatrixQaScenarioContext) {
+  if (!context.patchGatewayConfig) {
+    throw new Error("Matrix allowlist hot-reload scenario requires gateway config patching");
+  }
+  const accepted = await runTopologyScopedTopLevelScenario({
+    accessToken: context.observerAccessToken,
+    actorId: "observer",
+    actorUserId: context.observerUserId,
+    context,
+    roomKey: context.topology.defaultRoomKey,
+    tokenPrefix: "MATRIX_QA_GROUP_RELOAD_ACCEPTED",
+  });
+  const accountId = context.sutAccountId ?? "sut";
+
+  await context.patchGatewayConfig(
+    {
+      channels: {
+        matrix: {
+          accounts: {
+            [accountId]: {
+              groupAllowFrom: [context.driverUserId],
+            },
+          },
+        },
+      },
+      gateway: {
+        // Isolate the Matrix handler's per-message config read from generic channel reload.
+        reload: {
+          mode: "off",
+        },
+      },
+    },
+    {
+      restartDelayMs: MATRIX_QA_HOT_RELOAD_RESTART_DELAY_MS,
+    },
+  );
+
+  const blockedToken = buildMatrixQaToken("MATRIX_QA_GROUP_RELOAD_REMOVED");
+  const removed = await runNoReplyExpectedScenario({
+    accessToken: context.observerAccessToken,
+    actorId: "observer",
+    actorUserId: context.observerUserId,
+    baseUrl: context.baseUrl,
+    body: buildMentionPrompt(context.sutUserId, blockedToken),
+    mentionUserIds: [context.sutUserId],
+    observedEvents: context.observedEvents,
+    roomId: context.roomId,
+    syncState: context.syncState,
+    syncStreams: context.syncStreams,
+    sutUserId: context.sutUserId,
+    replyPredicate: (event) =>
+      isMatrixQaExactMarkerReply(event, {
+        roomId: context.roomId,
+        sutUserId: context.sutUserId,
+        token: blockedToken,
+      }),
+    timeoutMs: Math.min(NO_REPLY_WINDOW_MS, context.timeoutMs),
+    token: blockedToken,
+  });
+
+  return {
+    artifacts: {
+      accepted: accepted.artifacts ?? {},
+      blocked: removed.artifacts ?? {},
+      driverEventId: accepted.artifacts?.driverEventId,
+      secondDriverEventId: removed.artifacts?.driverEventId,
+      firstReply: accepted.artifacts?.reply,
+      token: accepted.artifacts?.token,
+      triggerBody: accepted.artifacts?.triggerBody,
+    },
+    details: [
+      "group allowlist before removal:",
+      accepted.details,
+      "group allowlist after hot reload removal:",
+      removed.details,
     ].join("\n"),
   } satisfies MatrixQaScenarioExecution;
 }

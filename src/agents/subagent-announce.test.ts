@@ -168,7 +168,33 @@ vi.mock("./subagent-announce-delivery.js", () => ({
 }));
 
 vi.mock("./subagent-announce.registry.runtime.js", () => subagentRegistryRuntimeMock);
+import { applySubagentWaitOutcome } from "./subagent-announce-output.js";
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
+
+describe("subagent wait outcome timing", () => {
+  it.each([
+    { wait: { status: "ok" }, expected: { status: "ok" } },
+    { wait: { status: "timeout" }, expected: { status: "timeout" } },
+    {
+      wait: { status: "error", error: "boom" },
+      expected: { status: "error", error: "boom" },
+    },
+  ] as const)("adds timing to $wait.status outcomes", ({ wait, expected }) => {
+    const result = applySubagentWaitOutcome({
+      wait,
+      outcome: undefined,
+      startedAt: 1_000,
+      endedAt: 1_250,
+    });
+
+    expect(result.outcome).toEqual({
+      ...expected,
+      startedAt: 1_000,
+      endedAt: 1_250,
+      elapsedMs: 250,
+    });
+  });
+});
 
 describe("subagent announce seam flow", () => {
   beforeEach(() => {

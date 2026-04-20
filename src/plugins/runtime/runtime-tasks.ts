@@ -1,4 +1,4 @@
-import { cancelTaskById, listTasksForFlowId } from "../../tasks/runtime-internal.js";
+import { listTasksForFlowId } from "../../tasks/runtime-internal.js";
 import {
   mapTaskFlowDetail,
   mapTaskFlowView,
@@ -6,7 +6,7 @@ import {
   mapTaskRunDetail,
   mapTaskRunView,
 } from "../../tasks/task-domain-views.js";
-import { getFlowTaskSummary } from "../../tasks/task-executor.js";
+import { cancelDetachedTaskRunById, getFlowTaskSummary } from "../../tasks/task-executor.js";
 import {
   getTaskFlowByIdForOwner,
   listTaskFlowsForOwner,
@@ -47,7 +47,7 @@ function assertSessionKey(sessionKey: string | undefined, errorMessage: string):
 }
 
 function mapCancelledTaskResult(
-  result: Awaited<ReturnType<typeof cancelTaskById>>,
+  result: Awaited<ReturnType<typeof cancelDetachedTaskRunById>>,
 ): TaskRunCancelResult {
   return {
     found: result.found,
@@ -107,7 +107,7 @@ function createBoundTaskRunsRuntime(params: {
         };
       }
       return mapCancelledTaskResult(
-        await cancelTaskById({
+        await cancelDetachedTaskRunById({
           cfg,
           taskId: task.taskId,
         }),

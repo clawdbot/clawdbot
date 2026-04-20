@@ -1,9 +1,11 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getRegisteredDetachedTaskLifecycleRuntime } from "./detached-task-runtime-state.js";
 import {
   cancelTaskById,
   createTaskRecord,
   findLatestTaskForFlowId,
+  getTaskById,
   isParentFlowLinkError,
   linkTaskToFlowById,
   listTasksForFlowId,
@@ -636,7 +638,7 @@ export async function cancelFlowById(params: {
   const linkedTasks = listTasksForFlowId(flow.flowId);
   const activeTasks = linkedTasks.filter((task) => isActiveTaskStatus(task.status));
   for (const task of activeTasks) {
-    await cancelTaskById({
+    await cancelDetachedTaskRunById({
       cfg: params.cfg,
       taskId: task.taskId,
     });
@@ -707,5 +709,16 @@ export async function cancelFlowByIdForOwner(params: {
 }
 
 export async function cancelDetachedTaskRunById(params: { cfg: OpenClawConfig; taskId: string }) {
+  const task = getTaskById(params.taskId);
+  if (!task) {
+    return cancelTaskById(params);
+  }
+  const registeredRuntime = getRegisteredDetachedTaskLifecycleRuntime();
+  if (registeredRuntime) {
+    const cancelled = await registeredRuntime.cancelDetachedTaskRunById(params);
+    if (cancelled.found) {
+      return cancelled;
+    }
+  }
   return cancelTaskById(params);
 }

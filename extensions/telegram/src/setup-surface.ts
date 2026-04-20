@@ -13,7 +13,6 @@ import { inspectTelegramAccount } from "./account-inspect.js";
 import { listTelegramAccountIds, resolveTelegramAccount } from "./accounts.js";
 import {
   parseTelegramAllowFromId,
-  resolveTelegramAllowFromEntries,
   TELEGRAM_TOKEN_HELP_LINES,
   TELEGRAM_USER_ID_HELP_LINES,
   telegramSetupAdapter,
@@ -79,18 +78,16 @@ export const telegramSetupWizard: ChannelSetupWizard = {
   allowFrom: createAllowFromSection({
     helpTitle: "Telegram user id",
     helpLines: TELEGRAM_USER_ID_HELP_LINES,
-    credentialInputKey: "token",
-    message: "Telegram allowFrom (numeric sender id; @username resolves to id)",
-    placeholder: "@username",
+    message: "Telegram allowFrom (numeric sender id)",
+    placeholder: "123456789",
     invalidWithoutCredentialNote:
-      "Telegram token missing; use numeric sender ids (usernames require a bot token).",
+      "Telegram allowFrom requires numeric sender ids. DM your bot first, then copy from.id from logs or getUpdates.",
     parseInputs: splitSetupEntries,
     parseId: parseTelegramAllowFromId,
-    resolveEntries: async ({ cfg, accountId, credentialValues, entries }) =>
-      resolveTelegramAllowFromEntries({
-        credentialValue: credentialValues.token,
-        entries,
-        apiRoot: resolveTelegramAccount({ cfg, accountId }).config.apiRoot,
+    resolveEntries: async ({ entries }) =>
+      entries.map((entry) => {
+        const id = parseTelegramAllowFromId(entry);
+        return { input: entry, resolved: Boolean(id), id };
       }),
     apply: async ({ cfg, accountId, allowFrom }) =>
       patchChannelConfigForAccount({

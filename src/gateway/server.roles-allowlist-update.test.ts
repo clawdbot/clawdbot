@@ -519,7 +519,7 @@ describe("gateway node command allowlist", () => {
           displayName: "node-platform-pin",
           deviceIdentity,
         }),
-      ).rejects.toThrow(/pairing required/i);
+      ).rejects.toThrow(/device metadata change pending approval/i);
     } finally {
       await iosClient?.stopAndWait();
     }

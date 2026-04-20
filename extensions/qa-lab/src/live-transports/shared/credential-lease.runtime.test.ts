@@ -80,6 +80,65 @@ describe("credential lease runtime", () => {
     expect(headers.authorization).toBe("Bearer maintainer-secret");
   });
 
+  it("defaults convex credential role to maintainer outside CI", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      jsonResponse({
+        status: "ok",
+        credentialId: "cred-maintainer-default",
+        leaseToken: "lease-maintainer-default",
+        payload: { groupId: "-100123", driverToken: "driver", sutToken: "sut" },
+      }),
+    );
+
+    await acquireQaCredentialLease({
+      kind: "telegram",
+      source: "convex",
+      env: {
+        OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
+        OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maintainer-secret",
+      },
+      fetchImpl,
+      resolveEnvPayload: () => ({ groupId: "-1", driverToken: "unused", sutToken: "unused" }),
+      parsePayload: (payload) =>
+        payload as { groupId: string; driverToken: string; sutToken: string },
+    });
+
+    const firstCall = fetchImpl.mock.calls[0];
+    const firstInit = firstCall?.[1];
+    const headers = firstInit?.headers as Record<string, string>;
+    expect(headers.authorization).toBe("Bearer maintainer-secret");
+  });
+
+  it("defaults convex credential role to ci when CI=true", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      jsonResponse({
+        status: "ok",
+        credentialId: "cred-ci-default",
+        leaseToken: "lease-ci-default",
+        payload: { groupId: "-100123", driverToken: "driver", sutToken: "sut" },
+      }),
+    );
+
+    await acquireQaCredentialLease({
+      kind: "telegram",
+      source: "convex",
+      env: {
+        CI: "true",
+        OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
+        OPENCLAW_QA_CONVEX_SECRET_CI: "ci-secret",
+      },
+      fetchImpl,
+      resolveEnvPayload: () => ({ groupId: "-1", driverToken: "unused", sutToken: "unused" }),
+      parsePayload: (payload) =>
+        payload as { groupId: string; driverToken: string; sutToken: string },
+    });
+
+    const firstCall = fetchImpl.mock.calls[0];
+    const firstInit = firstCall?.[1];
+    const headers = firstInit?.headers as Record<string, string>;
+    expect(headers.authorization).toBe("Bearer ci-secret");
+  });
+
   it("retries convex acquire while the pool is exhausted", async () => {
     const fetchImpl = vi
       .fn<typeof fetch>()

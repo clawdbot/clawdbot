@@ -49,9 +49,11 @@ These commands sit beside the main test suites when you need QA-lab realism:
 - `pnpm openclaw qa suite`
   - Runs repo-backed QA scenarios directly on the host.
   - Runs multiple selected scenarios in parallel by default with isolated
-    gateway workers, up to 64 workers or the selected scenario count. Use
-    `--concurrency <count>` to tune the worker count, or `--concurrency 1` for
-    the older serial lane.
+    gateway workers. `qa-channel` defaults to concurrency 4 (bounded by the
+    selected scenario count). Use `--concurrency <count>` to tune the worker
+    count, or `--concurrency 1` for the older serial lane.
+  - Exits non-zero when any scenario fails. Use `--allow-failures` when you
+    want artifacts without a failing exit code.
   - Supports provider modes `live-frontier`, `mock-openai`, and `aimock`.
     `aimock` starts a local AIMock-backed provider server for experimental
     fixture and protocol-mock coverage without replacing the scenario-aware
@@ -86,6 +88,8 @@ These commands sit beside the main test suites when you need QA-lab realism:
   - Runs the Telegram live QA lane against a real private group using the driver and SUT bot tokens from env.
   - Requires `OPENCLAW_QA_TELEGRAM_GROUP_ID`, `OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN`, and `OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN`. The group id must be the numeric Telegram chat id.
   - Supports `--credential-source convex` for shared pooled credentials. Use env mode by default, or set `OPENCLAW_QA_CREDENTIAL_SOURCE=convex` to opt into pooled leases.
+  - Exits non-zero when any scenario fails. Use `--allow-failures` when you
+    want artifacts without a failing exit code.
   - Requires two distinct bots in the same private group, with the SUT bot exposing a Telegram username.
   - For stable bot-to-bot observation, enable Bot-to-Bot Communication Mode in `@BotFather` for both bots and ensure the driver bot can observe group bot traffic.
   - Writes a Telegram QA report, summary, and observed-messages artifact under `.artifacts/qa-e2e/...`.
@@ -118,7 +122,7 @@ Required env vars:
   - `OPENCLAW_QA_CONVEX_SECRET_CI` for `ci`
 - Credential role selection:
   - CLI: `--credential-role maintainer|ci`
-  - Env default: `OPENCLAW_QA_CREDENTIAL_ROLE` (defaults to `maintainer`)
+  - Env default: `OPENCLAW_QA_CREDENTIAL_ROLE` (defaults to `ci` in CI, `maintainer` otherwise)
 
 Optional env vars:
 

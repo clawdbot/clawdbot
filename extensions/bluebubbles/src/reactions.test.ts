@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { sendBlueBubblesReaction } from "./reactions.js";
+import {
+  normalizeBlueBubblesReactionInput,
+  normalizeBlueBubblesReactionInputStrict,
+  sendBlueBubblesReaction,
+} from "./reactions.js";
 import { installBlueBubblesFetchTestHooks } from "./test-harness.js";
 
 vi.mock("./accounts.js", async () => {
@@ -106,18 +110,24 @@ describe("reactions", () => {
       ).rejects.toThrow("password is required");
     });
 
-    it("throws for unsupported reaction type", async () => {
-      await expect(
-        sendBlueBubblesReaction({
-          chatGuid: "chat-123",
-          messageGuid: "msg-123",
-          emoji: "unsupported",
-          opts: {
-            serverUrl: "http://localhost:1234",
-            password: "test",
-          },
-        }),
-      ).rejects.toThrow("Unsupported BlueBubbles reaction");
+    it("falls back to love for unsupported reaction type", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        text: () => Promise.resolve(""),
+      });
+
+      await sendBlueBubblesReaction({
+        chatGuid: "chat-123",
+        messageGuid: "msg-123",
+        emoji: "👀",
+        opts: {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+        },
+      });
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.reaction).toBe("love");
     });
 
     describe("reaction type normalization", () => {
@@ -236,6 +246,27 @@ describe("reactions", () => {
       await expectRemovedReaction("-love");
     });
 
+    it("falls back to removing love for unsupported removal reactions", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        text: () => Promise.resolve(""),
+      });
+
+      await sendBlueBubblesReaction({
+        chatGuid: "chat-123",
+        messageGuid: "msg-123",
+        emoji: "👀",
+        remove: true,
+        opts: {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+        },
+      });
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.reaction).toBe("-love");
+    });
+
     it("uses custom partIndex when provided", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
@@ -333,6 +364,56 @@ describe("reactions", () => {
       it("handles text alias removal", async () => {
         await expectRemovedReaction("haha", "-laugh");
       });
+    });
+  });
+
+  describe("normalizeBlueBubblesReactionInputStrict", () => {
+    it("maps supported emoji to canonical type", () => {
+      expect(normalizeBlueBubblesReactionInputStrict("👍")).toBe("like");
+      expect(normalizeBlueBubblesReactionInputStrict("❤️")).toBe("love");
+      expect(normalizeBlueBubblesReactionInputStrict("😂")).toBe("laugh");
+    });
+
+    it("throws on unsupported input so validators can detect misconfiguration", () => {
+      expect(() => normalizeBlueBubblesReactionInputStrict("👀")).toThrow(
+        /Unsupported BlueBubbles reaction/,
+      );
+      expect(() => normalizeBlueBubblesReactionInputStrict("🎉")).toThrow(
+        /Unsupported BlueBubbles reaction/,
+      );
+    });
+
+    it("throws on empty input", () => {
+      expect(() => normalizeBlueBubblesReactionInputStrict("")).toThrow(
+        /requires an emoji or name/,
+      );
+      expect(() => normalizeBlueBubblesReactionInputStrict("   ")).toThrow(
+        /requires an emoji or name/,
+      );
+    });
+  });
+
+  describe("normalizeBlueBubblesReactionInput (lenient)", () => {
+    it("maps supported emoji to canonical type", () => {
+      expect(normalizeBlueBubblesReactionInput("👍")).toBe("like");
+      expect(normalizeBlueBubblesReactionInput("❤️")).toBe("love");
+    });
+
+    it("falls back to love when input is unsupported by iMessage tapback", () => {
+      expect(normalizeBlueBubblesReactionInput("👀")).toBe("love");
+      expect(normalizeBlueBubblesReactionInput("🎉")).toBe("love");
+    });
+
+    it("falls back to -love on unsupported remove", () => {
+      expect(normalizeBlueBubblesReactionInput("👀", true)).toBe("-love");
+    });
+
+    it("still throws on empty input (strict error bubbles up unchanged)", () => {
+      // Empty input is a contract error from the caller, not a decorative
+      // emoji the model picked; we intentionally do not mask it.
+      expect(() => normalizeBlueBubblesReactionInput("")).toThrow(
+        /requires an emoji or name/,
+      );
     });
   });
 });

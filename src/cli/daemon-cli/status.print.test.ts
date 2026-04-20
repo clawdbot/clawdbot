@@ -120,4 +120,36 @@ describe("printDaemonStatus", () => {
       expect.stringContaining(formatCliCommand("openclaw gateway restart")),
     );
   });
+
+  it("prints probe kind and capability separately", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        gateway: {
+          bindMode: "loopback",
+          bindHost: "127.0.0.1",
+          port: 18789,
+          portSource: "env/config",
+          probeUrl: "ws://127.0.0.1:18789",
+        },
+        rpc: {
+          ok: true,
+          kind: "connect",
+          capability: "write_capable",
+          url: "ws://127.0.0.1:18789",
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Connectivity probe: ok"));
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Capability: write-capable"));
+  });
 });

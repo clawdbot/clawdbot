@@ -74,6 +74,7 @@ import {
   capArrayByJsonBytes,
   loadSessionEntry,
   resolveGatewayModelSupportsImages,
+  resolveDeletedAgentIdFromSessionKey,
   readSessionMessages,
   resolveSessionModelRef,
 } from "../session-utils.js";
@@ -1846,6 +1847,18 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     const rawSessionKey = p.sessionKey;
     const { cfg, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
+    const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, sessionKey);
+    if (deletedAgentId !== null) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `Agent "${deletedAgentId}" no longer exists in configuration`,
+        ),
+      );
+      return;
+    }
     const agentId = resolveSessionAgentId({
       sessionKey,
       config: cfg,

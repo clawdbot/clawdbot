@@ -33,6 +33,7 @@ export type {
   PluginHookBeforeAgentStartEvent,
   PluginHookBeforeAgentStartOverrideResult,
   PluginHookBeforeAgentStartResult,
+  PluginHookBeforeModelResolveAttachment,
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildEvent,

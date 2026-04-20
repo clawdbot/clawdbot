@@ -1,4 +1,3 @@
-import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/setup-runtime";
 import {
   createEnvPatchedAccountSetupAdapter,
@@ -11,7 +10,6 @@ import {
 import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { resolveDefaultTelegramAccountId, resolveTelegramAccount } from "./accounts.js";
 import { isNumericTelegramSenderUserId } from "./allow-from.js";
-import { lookupTelegramChatId } from "./api-fetch.js";
 
 const channel = "telegram" as const;
 
@@ -44,36 +42,6 @@ export function parseTelegramAllowFromId(raw: string): string | null {
   return isNumericTelegramSenderUserId(stripped) ? stripped : null;
 }
 
-export async function resolveTelegramAllowFromEntries(params: {
-  entries: string[];
-  credentialValue?: string;
-  apiRoot?: string;
-  proxyUrl?: string;
-  network?: TelegramNetworkConfig;
-}) {
-  return await Promise.all(
-    params.entries.map(async (entry) => {
-      const numericId = parseTelegramAllowFromId(entry);
-      if (numericId) {
-        return { input: entry, resolved: true, id: numericId };
-      }
-      const stripped = normalizeTelegramAllowFromInput(entry);
-      if (!stripped || !params.credentialValue?.trim()) {
-        return { input: entry, resolved: false, id: null };
-      }
-      const username = stripped.startsWith("@") ? stripped : `@${stripped}`;
-      const id = await lookupTelegramChatId({
-        token: params.credentialValue,
-        chatId: username,
-        apiRoot: params.apiRoot,
-        proxyUrl: params.proxyUrl,
-        network: params.network,
-      });
-      return { input: entry, resolved: Boolean(id), id };
-    }),
-  );
-}
-
 export async function promptTelegramAllowFromForAccount(params: {
   cfg: OpenClawConfig;
   prompter: WizardPrompter;
@@ -82,30 +50,20 @@ export async function promptTelegramAllowFromForAccount(params: {
   const accountId = params.accountId ?? resolveDefaultTelegramAccountId(params.cfg);
   const resolved = resolveTelegramAccount({ cfg: params.cfg, accountId });
   await params.prompter.note(TELEGRAM_USER_ID_HELP_LINES.join("\n"), "Telegram user id");
-  if (!resolved.token?.trim()) {
-    await params.prompter.note(
-      "Telegram token missing; username lookup is unavailable.",
-      "Telegram",
-    );
-  }
   const unique = await promptResolvedAllowFrom({
     prompter: params.prompter,
     existing: resolved.config.allowFrom ?? [],
-    token: resolved.token,
-    message: "Telegram allowFrom (numeric sender id; @username resolves to id)",
-    placeholder: "@username",
+    message: "Telegram allowFrom (numeric sender id)",
+    placeholder: "123456789",
     label: "Telegram allowlist",
     parseInputs: splitSetupEntries,
     parseId: parseTelegramAllowFromId,
     invalidWithoutTokenNote:
-      "Telegram token missing; use numeric sender ids (usernames require a bot token).",
-    resolveEntries: async ({ entries, token }) =>
-      resolveTelegramAllowFromEntries({
-        credentialValue: token,
-        entries,
-        apiRoot: resolved.config.apiRoot,
-        proxyUrl: resolved.config.proxy,
-        network: resolved.config.network,
+      "Telegram allowFrom requires numeric sender ids. DM your bot first, then copy from.id from logs or getUpdates.",
+    resolveEntries: async ({ entries }) =>
+      entries.map((entry) => {
+        const id = parseTelegramAllowFromId(entry);
+        return { input: entry, resolved: Boolean(id), id };
       }),
   });
   return patchChannelConfigForAccount({

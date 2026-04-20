@@ -361,6 +361,28 @@ async function waitForMatrixChannelReady(
   throw new Error(`matrix account "${accountId}" did not become ready`);
 }
 
+async function patchMatrixQaGatewayConfig(params: {
+  gateway: MatrixQaGatewayChild;
+  patch: Record<string, unknown>;
+  restartDelayMs?: number;
+}) {
+  const snapshot = (await params.gateway.call("config.get", {}, { timeoutMs: 60_000 })) as {
+    hash?: string;
+  };
+  if (!snapshot.hash) {
+    throw new Error("Matrix QA config patch requires config.get hash");
+  }
+  await params.gateway.call(
+    "config.patch",
+    {
+      raw: JSON.stringify(params.patch, null, 2),
+      baseHash: snapshot.hash,
+      restartDelayMs: params.restartDelayMs ?? 0,
+    },
+    { timeoutMs: 60_000 },
+  );
+}
+
 async function startMatrixQaLiveLaneGateway(params: {
   repoRoot: string;
   transport: {
@@ -665,6 +687,7 @@ export async function runMatrixQaLive(params: {
                 );
               },
               roomId: provisioning.roomId,
+              sutAccountId,
               sutAccessToken: provisioning.sut.accessToken,
               sutDeviceId: provisioning.sut.deviceId,
               sutPassword: provisioning.sut.password,
@@ -673,6 +696,13 @@ export async function runMatrixQaLive(params: {
               sutUserId: provisioning.sut.userId,
               timeoutMs: scenario.timeoutMs,
               topology: provisioning.topology,
+              patchGatewayConfig: async (patch, opts) => {
+                await patchMatrixQaGatewayConfig({
+                  gateway: scenarioGateway.harness.gateway,
+                  patch,
+                  restartDelayMs: opts?.restartDelayMs,
+                });
+              },
             }),
           );
           const result = measuredScenario.result;
@@ -881,6 +911,7 @@ export const __testing = {
   buildMatrixQaConfigSnapshot,
   findMatrixQaScenarios,
   isMatrixAccountReady,
+  patchMatrixQaGatewayConfig,
   resolveMatrixQaModels,
   summarizeMatrixQaConfigSnapshot,
   waitForMatrixChannelReady,

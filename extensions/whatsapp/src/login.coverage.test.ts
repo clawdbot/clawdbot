@@ -2,12 +2,7 @@ import { rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loginWeb } from "./login.js";
-import {
-  createWaSocket,
-  formatError,
-  waitForCredsSaveQueueWithTimeout,
-  waitForWaConnection,
-} from "./session.js";
+import { createWaSocket, formatError, waitForWaConnection } from "./session.js";
 
 const rmMock = vi.spyOn(fs, "rm");
 const testState = vi.hoisted(() => ({
@@ -51,14 +46,12 @@ vi.mock("./session.js", async () => {
       (err as { status?: number })?.status ??
       (err as { error?: { output?: { statusCode?: number } } })?.error?.output?.statusCode,
   );
-  const waitForCredsSaveQueueWithTimeout = vi.fn(async () => {});
   return {
     ...actual,
     createWaSocket,
     waitForWaConnection,
     formatError,
     getStatusCode,
-    waitForCredsSaveQueueWithTimeout,
     WA_WEB_AUTH_DIR: authDir,
     logoutWeb: vi.fn(async (params: { authDir?: string }) => {
       await fs.rm(params.authDir ?? authDir, {
@@ -72,7 +65,6 @@ vi.mock("./session.js", async () => {
 
 const createWaSocketMock = vi.mocked(createWaSocket);
 const waitForWaConnectionMock = vi.mocked(waitForWaConnection);
-const waitForCredsSaveQueueWithTimeoutMock = vi.mocked(waitForCredsSaveQueueWithTimeout);
 const formatErrorMock = vi.mocked(formatError);
 
 async function flushTasks() {
@@ -86,7 +78,6 @@ describe("loginWeb coverage", () => {
     vi.clearAllMocks();
     createWaSocketMock.mockClear();
     waitForWaConnectionMock.mockReset().mockResolvedValue(undefined);
-    waitForCredsSaveQueueWithTimeoutMock.mockReset().mockResolvedValue(undefined);
     formatErrorMock.mockReset().mockImplementation((err: unknown) => `formatted:${String(err)}`);
     rmMock.mockClear();
   });
@@ -99,24 +90,15 @@ describe("loginWeb coverage", () => {
   });
 
   it("restarts once when WhatsApp requests code 515", async () => {
-    let releaseCredsFlush: (() => void) | undefined;
-    const credsFlushGate = new Promise<void>((resolve) => {
-      releaseCredsFlush = resolve;
-    });
     waitForWaConnectionMock
       .mockRejectedValueOnce({ error: { output: { statusCode: 515 } } })
       .mockResolvedValueOnce(undefined);
-    waitForCredsSaveQueueWithTimeoutMock.mockReturnValueOnce(credsFlushGate);
 
     const runtime = { log: vi.fn(), error: vi.fn() } as never;
     const pendingLogin = loginWeb(false, waitForWaConnectionMock as never, runtime);
     await flushTasks();
 
-    expect(createWaSocketMock).toHaveBeenCalledTimes(1);
-    expect(waitForCredsSaveQueueWithTimeoutMock).toHaveBeenCalledOnce();
-    expect(waitForCredsSaveQueueWithTimeoutMock).toHaveBeenCalledWith(testState.authDir);
-
-    releaseCredsFlush?.();
+    expect(createWaSocketMock).toHaveBeenCalledTimes(2);
     await pendingLogin;
 
     expect(createWaSocketMock).toHaveBeenCalledTimes(2);

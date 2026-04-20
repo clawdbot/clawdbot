@@ -49,6 +49,39 @@ describe("emitSubagentEndedHookOnce", () => {
     lifecycleMocks.runSubagentEnded.mockClear();
   });
 
+  it("treats timing differences as different only after both outcomes have timing", () => {
+    expect(
+      mod.runOutcomesEqual(
+        { status: "timeout", startedAt: 1_000, endedAt: 2_000, elapsedMs: 1_000 },
+        { status: "timeout", startedAt: 1_000, endedAt: 2_500, elapsedMs: 1_500 },
+      ),
+    ).toBe(false);
+    expect(
+      mod.runOutcomesEqual(
+        { status: "error", error: "boom", startedAt: 1_000, endedAt: 2_000, elapsedMs: 1_000 },
+        { status: "error", error: "boom", startedAt: 1_000, endedAt: 2_000, elapsedMs: 1_000 },
+      ),
+    ).toBe(true);
+    expect(
+      mod.runOutcomesEqual(
+        { status: "ok", startedAt: 1_000, endedAt: 2_000, elapsedMs: 1_000 },
+        { status: "ok" },
+      ),
+    ).toBe(true);
+    expect(
+      mod.shouldUpdateRunOutcome(
+        { status: "ok" },
+        { status: "ok", startedAt: 1_000, endedAt: 2_000, elapsedMs: 1_000 },
+      ),
+    ).toBe(true);
+    expect(
+      mod.shouldUpdateRunOutcome(
+        { status: "ok", startedAt: 1_000, endedAt: 2_000, elapsedMs: 1_000 },
+        { status: "ok" },
+      ),
+    ).toBe(false);
+  });
+
   it("records ended hook marker even when no subagent_ended hooks are registered", async () => {
     lifecycleMocks.getGlobalHookRunner.mockReturnValue({
       hasHooks: () => false,

@@ -30,6 +30,7 @@ import { resolveConnectChallengeTimeoutMs } from "./handshake-timeouts.js";
 import { isLoopbackHost, isSecureWebSocketUrl } from "./net.js";
 import {
   ConnectErrorDetailCodes,
+  formatConnectErrorMessage,
   readConnectErrorDetailCode,
   readConnectErrorRecoveryAdvice,
   type ConnectErrorRecoveryAdvice,
@@ -56,6 +57,8 @@ type GatewayClientErrorShape = {
   code?: string;
   message?: string;
   details?: unknown;
+  retryable?: boolean;
+  retryAfterMs?: number;
 };
 
 type SelectedConnectAuth = {
@@ -79,15 +82,19 @@ type FingerprintCheckingClientOptions = Omit<ClientOptions, "checkServerIdentity
   checkServerIdentity?: (servername: string, cert: CertMeta) => Error | undefined;
 };
 
-class GatewayClientRequestError extends Error {
+export class GatewayClientRequestError extends Error {
   readonly gatewayCode: string;
   readonly details?: unknown;
+  readonly retryable: boolean;
+  readonly retryAfterMs?: number;
 
   constructor(error: GatewayClientErrorShape) {
-    super(error.message ?? "gateway request failed");
+    super(formatConnectErrorMessage({ message: error.message, details: error.details }));
     this.name = "GatewayClientRequestError";
     this.gatewayCode = error.code ?? "UNAVAILABLE";
     this.details = error.details;
+    this.retryable = error.retryable === true;
+    this.retryAfterMs = error.retryAfterMs;
   }
 }
 
@@ -779,6 +786,8 @@ export class GatewayClient {
               code: parsed.error?.code,
               message: parsed.error?.message ?? "unknown error",
               details: parsed.error?.details,
+              retryable: parsed.error?.retryable,
+              retryAfterMs: parsed.error?.retryAfterMs,
             }),
           );
         }

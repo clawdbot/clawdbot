@@ -380,7 +380,7 @@ export function createBrowserTool(opts?: {
     description: [
       "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
       "Browser choice: omit profile by default for the isolated OpenClaw-managed browser (`openclaw`).",
-      'For the logged-in user browser on the local host, use profile="user". A supported Chromium-based browser (v144+) must be running. Use only when existing logins/cookies matter and the user is present.',
+      'For the logged-in user browser, use profile="user". A supported Chromium-based browser (v144+) must be running on the selected host or browser node. Use only when existing logins/cookies matter and the user is present.',
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
       "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc).",
       'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
@@ -395,31 +395,39 @@ export function createBrowserTool(opts?: {
       const profile = readStringParam(params, "profile");
       const requestedNode = readStringParam(params, "node");
       let target = readStringParam(params, "target") as "sandbox" | "host" | "node" | undefined;
+      const configuredNode = browserToolDeps.loadConfig().gateway?.nodes?.browser?.node?.trim();
 
       if (requestedNode && target && target !== "node") {
         throw new Error('node is only supported with target="node".');
       }
-      // User-browser profiles (existing-session) are host-only.
+      // existing-session profiles can attach through the selected host or browser node,
+      // but they must never fall back into the sandbox browser.
       const isUserBrowserProfile = shouldPreferHostForProfile(profile);
       if (isUserBrowserProfile) {
-        if (requestedNode || target === "node") {
-          throw new Error(`profile="${profile}" only supports the local host browser.`);
-        }
         if (target === "sandbox") {
           throw new Error(
             `profile="${profile}" cannot use the sandbox browser; use target="host" or omit target.`,
           );
         }
-        if (!target && !requestedNode) {
-          target = "host";
-        }
       }
 
-      const nodeTarget = await resolveBrowserNodeTarget({
-        requestedNode: requestedNode ?? undefined,
-        target,
-        sandboxBridgeUrl: opts?.sandboxBridgeUrl,
-      });
+      let nodeTarget: BrowserNodeTarget | null = null;
+      try {
+        nodeTarget = await resolveBrowserNodeTarget({
+          requestedNode: requestedNode ?? undefined,
+          target,
+          sandboxBridgeUrl: opts?.sandboxBridgeUrl,
+        });
+      } catch (error) {
+        // Keep the logged-in user browser usable on the host when auto-discovery
+        // of browser nodes fails transiently. Explicit node requests still fail.
+        if (!(isUserBrowserProfile && !target && !requestedNode && !configuredNode)) {
+          throw error;
+        }
+      }
+      if (isUserBrowserProfile && !target && !requestedNode && !nodeTarget) {
+        target = "host";
+      }
 
       const resolvedTarget = target === "node" ? undefined : target;
       const baseUrl = nodeTarget

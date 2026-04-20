@@ -4,7 +4,7 @@ import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/text-runtime";
-import { readWebSelfIdentity } from "../auth-store.js";
+import { readWebSelfIdentityForDecision, WhatsAppAuthUnstableError } from "../auth-store.js";
 import { getPrimaryIdentityId, resolveComparableIdentity } from "../identity.js";
 import { DEFAULT_RECONNECT_POLICY, computeBackoff, sleepWithAbort } from "../reconnect.js";
 import { createWaSocket, formatError, getStatusCode, waitForWaConnection } from "../session.js";
@@ -131,10 +131,16 @@ export async function attachWebInboxToSocket(
     );
   }
 
-  const self = await readWebSelfIdentity(
+  const selfIdentity = await readWebSelfIdentityForDecision(
     options.authDir,
     sock.user as { id?: string | null; lid?: string | null } | undefined,
   );
+  if (selfIdentity.outcome === "unstable") {
+    throw new WhatsAppAuthUnstableError(
+      "WhatsApp auth state is still stabilizing; retrying inbox attach.",
+    );
+  }
+  const self = selfIdentity.identity;
   type QueuedInboundMessage = WebInboundMessage & {
     dedupeKey?: string;
   };

@@ -80,6 +80,8 @@ disposable server. It requires `OPENCLAW_QA_TELEGRAM_GROUP_ID`,
 private group. The SUT bot must have a Telegram username, and bot-to-bot
 observation works best when both bots have Bot-to-Bot Communication Mode
 enabled in `@BotFather`.
+The command exits non-zero when any scenario fails. Use `--allow-failures` when
+you want artifacts without a failing exit code.
 
 Live transport lanes now share one smaller contract instead of each inventing
 their own scenario list shape:
@@ -107,9 +109,11 @@ inside the guest, runs `qa suite`, then copies the normal QA report and
 summary back into `.artifacts/qa-e2e/...` on the host.
 It reuses the same scenario-selection behavior as `qa suite` on the host.
 Host and Multipass suite runs execute multiple selected scenarios in parallel
-with isolated gateway workers by default, up to 64 workers or the selected
-scenario count. Use `--concurrency <count>` to tune the worker count, or
-`--concurrency 1` for serial execution.
+with isolated gateway workers by default. `qa-channel` defaults to concurrency
+4, capped by the selected scenario count. Use `--concurrency <count>` to tune
+the worker count, or `--concurrency 1` for serial execution.
+The command exits non-zero when any scenario fails. Use `--allow-failures` when
+you want artifacts without a failing exit code.
 Live runs forward the supported QA auth inputs that are practical for the
 guest: env-based provider keys, the QA live provider config path, and
 `CODEX_HOME` when present. Keep `--output-dir` under the repo root so the guest

@@ -330,6 +330,20 @@ describe("callGateway url resolution", () => {
     expect(lastRequestOptions?.method).toBe("health");
   });
 
+  it("honors an explicit null device identity override", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await callGateway({
+      method: "health",
+      token: "explicit-token",
+      deviceIdentity: null,
+    });
+
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18789");
+    expect(lastClientOptions?.token).toBe("explicit-token");
+    expect(lastClientOptions?.deviceIdentity).toBeNull();
+  });
+
   it("uses OPENCLAW_GATEWAY_URL env override in remote mode when remote URL is missing", async () => {
     loadConfig.mockReturnValue({
       gateway: { mode: "remote", bind: "loopback", remote: {} },

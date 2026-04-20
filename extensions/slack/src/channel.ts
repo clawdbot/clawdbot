@@ -170,6 +170,10 @@ async function resolveSlackSendContext(params: {
   const send =
     resolveOutboundSendDep<SlackSendFn>(params.deps, "slack") ??
     (await loadSlackSendRuntime()).sendMessageSlack;
+  // params.cfg is the scoped channel-dispatch config; channel credentials are
+  // expected to be resolved here (not a raw loadConfig() snapshot). Strict mode
+  // is intentional so boot-time misconfigurations surface loudly. See #68237
+  // for the companion tolerant-mode path in sendMessageSlack itself.
   const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
   const token = getTokenForOperation(account, "write");
   const botToken = account.botToken?.trim();

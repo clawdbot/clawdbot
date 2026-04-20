@@ -6,10 +6,41 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Plugins/tasks: add a detached runtime registration contract so plugin executors can own detached task lifecycle and cancellation without reaching into core task internals. (#68915) Thanks @mbelinky.
+- Terminal/logging: optimize `sanitizeForLog()` by replacing the iterative control-character stripping loop with a single regex pass while preserving the existing ANSI-first sanitization behavior. (#67205) Thanks @bulutmuf.
+- QA/CI: make `openclaw qa suite` and `openclaw qa telegram` fail by default when scenarios fail, add `--allow-failures` for artifact-only runs, and tighten live-lane defaults for CI automation. (#69122) Thanks @joshavant.
+
 ### Fixes
 
+- Cron/Telegram: key isolated direct-delivery dedupe to each cron execution instead of the reused session id, so recurring Telegram announce runs no longer report delivered while silently skipping later sends. (#69000) Thanks @obviyus.
+- Models/Kimi: default bundled Kimi thinking to off and normalize Anthropic-compatible `thinking` payloads so stale session `/think` state no longer silently re-enables reasoning on Kimi runs. (#68907) Thanks @frankekn.
 - Control UI/cron: keep the runtime-only `last` delivery sentinel from being materialized into persisted cron delivery and failure-alert channel configs when jobs are created or edited. (#68829) Thanks @tianhaocui.
 - OpenAI/Responses: strip orphaned reasoning blocks before outbound Responses API calls so compacted or restored histories no longer fail on standalone reasoning items. (#55787) Thanks @suboss87.
+- Cron/CLI: parse PowerShell-style `--tools` allow-lists the same way as comma-separated input, so `cron add` and `cron edit` no longer persist `exec read write` as one combined tool entry on Windows. (#68858) Thanks @chen-zhang-cs-code.
+- Browser/user-profile: let existing-session `profile="user"` tool calls auto-route to a connected browser node or use explicit `target="node"`, while still honoring explicit `target="host"` pinning. (#48677)
+- Discord/slash commands: tolerate partial Discord channel metadata in slash-command and model-picker flows so partial channel objects no longer crash when channel names, topics, or thread parent metadata are unavailable. (#68953) Thanks @dutifulbob.
+- BlueBubbles: consolidate outbound HTTP through a typed `BlueBubblesClient` that resolves the SSRF policy once at construction so image attachments stop getting blocked on localhost and reactions stop getting blocked on private-IP BB deployments. Fixes #34749 and #59722. (#68234) Thanks @omarshahine.
+- Cron/gateway: reject ambiguous announce delivery config at add/update time so invalid multi-channel or target-id provider settings fail early instead of persisting broken cron jobs. (#69015) Thanks @obviyus.
+- Cron/main-session delivery: preserve `heartbeat.target="last"` through deferred wake queuing, gateway wake forwarding, and same-target wake coalescing so queued cron replies still return to the last active chat. (#69021) Thanks @obviyus.
+- Cron/gateway: ignore disabled channels when announce delivery ambiguity is checked, and validate main-session delivery patches against the live cron service default agent so hot-reloaded agent config does not falsely reject valid updates. (#69040) Thanks @obviyus.
+- Matrix/allowlists: hot-reload `dm.allowFrom` and `groupAllowFrom` entries on inbound messages while keeping config removals authoritative, so Matrix allowlist changes no longer require a channel restart to add or revoke a sender. (#68546) Thanks @johnlanni.
+- BlueBubbles: always set `method` explicitly on outbound text sends (`"private-api"` when available, `"apple-script"` otherwise), and prefer Private API on macOS 26 even for plain text. Fixes silent delivery failure on macOS setups without Private API where an omitted `method` let BB Server fall back to version-dependent default behavior that silently drops the message (#64480), and the AppleScript `-1700` error on macOS 26 Tahoe plain text sends (#53159). (#69070) Thanks @xqing3.
+- Matrix/commands: recognize slash commands that are prefixed with the bot's Matrix mention, so room messages like `@bot:server /new` trigger the command path without requiring custom mention regexes. (#68570) Thanks @nightq and @johnlanni.
+- Gateway/pairing: return reason-specific `PAIRING_REQUIRED` details, remediation hints, and request ids so unapproved-device and scope-upgrade failures surface actionable recovery guidance in the CLI and Control UI. (#69227) Thanks @obviyus.
+- Agents/subagents: include requested role and runtime timing on subagent failure payloads so parent agents can correlate failed or timed-out child work. (#68726) Thanks @BKF-Gitty.
+- Gateway/sessions: reject stale agent-scoped sessions after an agent is removed from config while preserving legacy default-agent main-session aliases. (#65986) Thanks @bittoby.
+- Doctor/gateway: surface pending device pairing requests, scope-upgrade approval drift, and stale device-token mismatch repair steps so `openclaw doctor --fix` no longer leaves pairing/auth setup failures unexplained. (#69210) Thanks @obviyus.
+- Cron/isolated-agent: preserve explicit `delivery.mode: "none"` message targets for isolated runs without inheriting implicit `last` routing, so agent-initiated Telegram sends keep their authored destination while bare `mode:none` jobs stay targetless. (#69153) Thanks @obviyus.
+- Cron/isolated-agent: keep `delivery.mode: "none"` account-only or thread-only configs from inheriting a stale implicit recipient, so isolated runs only resolve message routing when the job authored an explicit `to` target. (#69163) Thanks @obviyus.
+- Gateway/TUI: retry session history while the local gateway is still finishing startup, so `openclaw tui` reconnects no longer fail on transient `chat.history unavailable during gateway startup` errors. (#69164) Thanks @shakkernerd.
+- BlueBubbles/reactions: fall back to `love` when an agent reacts with an emoji outside the iMessage tapback set (`love`/`like`/`dislike`/`laugh`/`emphasize`/`question`), so wider-vocabulary model reactions like `👀` still produce a visible tapback instead of failing the whole reaction request. Configured ack reactions still validate strictly via the new `normalizeBlueBubblesReactionInputStrict` path. (#64693) Thanks @zqchris.
+- BlueBubbles: prefer iMessage over SMS when both chats exist for the same handle, honor explicit `sms:` targets, and never silently downgrade iMessage-available recipients. (#61781) Thanks @rmartin.
+- Telegram/setup: require numeric `allowFrom` user IDs during setup instead of offering unsupported `@username` DM resolution, and point operators to `from.id`/`getUpdates` for discovery. (#69191) Thanks @obviyus.
+- GitHub Copilot/onboarding: default GitHub Copilot setup to `claude-opus-4.6` and keep the bundled default model list aligned, so new Copilot setups no longer start on the older `gpt-4o` default. (#69207) Thanks @obviyus.
+- Gateway/status: separate reachability, capability, and read-probe reporting so connect-only or scope-limited sessions no longer look fully healthy, and normalize SSH targets entered as `ssh user@host`. (#69215) Thanks @obviyus.
+- Slack: fix outbound replies failing with "unresolved SecretRef" for accounts configured via `file` or `exec` secret sources; the send path now tolerates the runtime snapshot retaining an unresolved channel SecretRef when a boot-resolved token override is already available. (#68954) Thanks @openperf.
+- Control UI/device pairing: explain scope and role approval upgrades during reconnects, and show requested versus approved access in the Control UI and `openclaw devices` so broader reconnects no longer look like lost pairings. (#69221) Thanks @obviyus.
+- Gateway/Control UI: surface pending scope, role, and device-metadata pairing approvals in auth errors and Control UI hints so broader reconnects no longer look like random auth breakage. (#69226) Thanks @obviyus.
 
 ## 2026.4.19-beta.2
 
@@ -29,6 +60,7 @@ Docs: https://docs.openclaw.ai
 - Browser/CDP: allow the selected remote CDP profile host for CDP health and control checks without widening browser navigation SSRF policy, so WSL-to-Windows Chrome endpoints no longer appear offline under strict defaults. Fixes #68108. (#68207) Thanks @Mlightsnow.
 - Codex: stop cumulative app-server token totals from being treated as fresh context usage, so session status no longer reports inflated context percentages after long Codex threads. (#64669) Thanks @cyrusaf.
 - Browser/CDP: add phase-specific CDP readiness diagnostics and normalize loopback WebSocket host aliases, so Windows browser startup failures surface whether HTTP discovery, WebSocket discovery, SSRF validation, or the `Browser.getVersion` health check failed.
+- Browser/CDP: discover Chrome’s real DevTools websocket from bare `ws://host:port` attach-only roots before declaring the profile down, while still falling back to direct websocket providers that do not expose `/json/version`. Fixes #68027. (#68715) Thanks @visionik.
 
 ## 2026.4.18
 
@@ -66,6 +98,7 @@ Docs: https://docs.openclaw.ai
 - macOS/remote SSH: require an already-trusted host key on the macOS remote command, gateway probe, port tunnel, and pairing probe paths by switching `StrictHostKeyChecking=accept-new` to `StrictHostKeyChecking=yes` and centralizing the shared SSH option fragments in `CommandResolver`, so first-time macOS remote connections no longer silently accept an unknown host key and must be trusted ahead of time via `~/.ssh/known_hosts`. (#68199)
 - CLI/configure: show the channel picker before probing statuses and let remove mode delete configured channel blocks directly from config. (#68007) Thanks @gumadeiras.
 - Control UI/settings: reset scroll position when switching settings pages and align details headers. (#68150) Thanks @BunsDev.
+- WhatsApp/gateway: harden WhatsApp auth persistence and backup recovery, model unstable auth state explicitly in setup/status/health, recover backup-backed login without forcing a fresh QR, and keep local gateway handoff and channel restarts truthful after login. Thanks @mcaxtr.
 - OpenAI Codex/OAuth: keep OpenClaw as the canonical owner for imported Codex CLI OAuth sessions, stop writing refreshed credentials back into `.codex`, and prefer fresher OpenClaw credentials over stale imported CLI state so refresh recovery stays stable. Thanks @vincentkoc.
 - OpenAI Codex/OAuth: treat the OpenAI TLS prerequisites probe as advisory instead of a hard blocker, so Codex sign-in can still proceed when the speculative Node/OpenSSL precheck fails but the real OAuth flow still works. Thanks @vincentkoc.
 - Models status/OAuth health: align OAuth health reporting with the same effective credential view runtime uses, so expired refreshable sessions stop showing healthy by default and fresher imported Codex CLI credentials surface correctly in `models status`, doctor, and gateway auth status. Thanks @vincentkoc.
@@ -102,6 +135,7 @@ Docs: https://docs.openclaw.ai
 - Google/Antigravity: resolve forward-compatible Gemini 3.1 Pro custom-tools and Flash variants from the bundled Google plugin templates, so `google-antigravity/gemini-3.1-pro-preview-customtools` no longer falls through to an unknown-model error. Fixes #35512.
 - Active Memory: raise the blocking recall timeout ceiling to 120 seconds and reject larger config values during plugin schema validation. Fixes #68410. (#68480) Thanks @Bartok9.
 - Control UI/chat: keep history-backed user image uploads visible after chat reload while filtering blocked or non-image transcript media paths. (#68415) Thanks @mraleko.
+- Matrix/plugins: keep remaining Matrix event helpers on the canonical `matrix-js-sdk` subpath so build and plugin-load entrypoint checks stay consistent. (#68498) Thanks @masatohoshino.
 
 ## 2026.4.15
 

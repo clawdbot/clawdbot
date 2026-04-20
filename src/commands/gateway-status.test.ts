@@ -55,6 +55,11 @@ const mocks = vi.hoisted(() => {
           connectLatencyMs: 12,
           error: null,
           close: null,
+          auth: {
+            role: "operator",
+            scopes: ["operator.read"],
+            capability: "read_only",
+          },
           health: { ok: true },
           status: {
             linkChannel: {
@@ -93,6 +98,11 @@ const mocks = vi.hoisted(() => {
         connectLatencyMs: 34,
         error: null,
         close: null,
+        auth: {
+          role: "operator",
+          scopes: ["operator.admin"],
+          capability: "admin_capable",
+        },
         health: { ok: true },
         status: {
           linkChannel: {
@@ -196,7 +206,8 @@ vi.mock("../infra/tls/gateway.js", () => ({
   loadGatewayTlsRuntime: mocks.loadGatewayTlsRuntime,
 }));
 
-vi.mock("../gateway/probe.js", () => ({
+vi.mock("../gateway/probe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/probe.js")>()),
   probeGateway: mocks.probeGateway,
 }));
 
@@ -346,6 +357,11 @@ describe("gateway-status command", () => {
       connectLatencyMs: 51,
       error: "missing scope: operator.read",
       close: null,
+      auth: {
+        role: "operator",
+        scopes: ["operator.write"],
+        capability: "write_capable",
+      },
       health: null,
       status: null,
       presence: null,
@@ -358,6 +374,7 @@ describe("gateway-status command", () => {
     const parsed = JSON.parse(runtimeLogs.join("\n")) as {
       ok?: boolean;
       degraded?: boolean;
+      capability?: string;
       warnings?: Array<{ code?: string; targetIds?: string[] }>;
       targets?: Array<{
         connect?: {
@@ -365,15 +382,20 @@ describe("gateway-status command", () => {
           rpcOk?: boolean;
           scopeLimited?: boolean;
         };
+        auth?: {
+          capability?: string;
+        };
       }>;
     };
     expect(parsed.ok).toBe(true);
     expect(parsed.degraded).toBe(true);
+    expect(parsed.capability).toBe("write_capable");
     expect(parsed.targets?.[0]?.connect).toMatchObject({
       ok: true,
       rpcOk: false,
       scopeLimited: true,
     });
+    expect(parsed.targets?.[0]?.auth?.capability).toBe("write_capable");
     const scopeLimitedWarning = parsed.warnings?.find(
       (warning) => warning.code === "probe_scope_limited",
     );
@@ -415,6 +437,11 @@ describe("gateway-status command", () => {
               connectLatencyMs: null,
               error: "connection refused",
               close: null,
+              auth: {
+                role: null,
+                scopes: [],
+                capability: "unknown",
+              },
               health: null,
               status: null,
               presence: null,
@@ -571,6 +598,11 @@ describe("gateway-status command", () => {
       connectLatencyMs: 20,
       error: null,
       close: null,
+      auth: {
+        role: "operator",
+        scopes: ["operator.read"],
+        capability: "read_only",
+      },
       health: { ok: true },
       status: {
         linkChannel: {

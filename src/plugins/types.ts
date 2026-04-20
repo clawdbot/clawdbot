@@ -1980,6 +1980,10 @@ export type OpenClawPluginApi = {
   ) => void;
   /** Register an agent harness implementation. */
   registerAgentHarness: (harness: AgentHarness) => void;
+  /** Register the active detached task runtime for this plugin (exclusive slot). */
+  registerDetachedTaskRuntime: (
+    runtime: import("./runtime/runtime-tasks.types.js").DetachedTaskLifecycleRuntime,
+  ) => void;
   /** Register the active memory capability for this memory plugin (exclusive slot). */
   registerMemoryCapability: (
     capability: import("./memory-state.js").MemoryPluginCapability,

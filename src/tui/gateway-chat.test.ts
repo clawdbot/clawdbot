@@ -30,6 +30,7 @@ vi.mock("../gateway/net.js", async () => {
 });
 
 const { GatewayChatClient, resolveGatewayConnection } = await import("./gateway-chat.js");
+const { GatewayClientRequestError } = await import("../gateway/client.js");
 
 async function fileExists(filePath: string): Promise<boolean> {
   try {
@@ -129,6 +130,7 @@ describe("resolveGatewayConnection", () => {
 
   afterEach(() => {
     envSnapshot.restore();
+    vi.useRealTimers();
   });
 
   it("throws when url override is missing explicit credentials", async () => {
@@ -423,6 +425,10 @@ describe("resolveGatewayConnection", () => {
 });
 
 describe("GatewayChatClient", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("identifies the TUI as a tui client and skips device identity on insecure local ui paths", () => {
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",
@@ -442,5 +448,35 @@ describe("GatewayChatClient", () => {
       (client as unknown as { client: { opts: { deviceIdentity?: unknown } } }).client.opts
         .deviceIdentity,
     ).toBeUndefined();
+  });
+
+  it("retries startup-unavailable chat history until the gateway finishes booting", async () => {
+    vi.useFakeTimers();
+
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+      allowInsecureLocalOperatorUi: true,
+    });
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new GatewayClientRequestError({
+          code: "UNAVAILABLE",
+          message: "chat.history unavailable during gateway startup",
+          details: { method: "chat.history" },
+          retryable: true,
+          retryAfterMs: 250,
+        }),
+      )
+      .mockResolvedValueOnce({ messages: [] });
+
+    (client as unknown as { client: { request: typeof request } }).client.request = request;
+
+    const historyPromise = client.loadHistory({ sessionKey: "main", limit: 200 });
+    await vi.advanceTimersByTimeAsync(250);
+
+    await expect(historyPromise).resolves.toEqual({ messages: [] });
+    expect(request).toHaveBeenCalledTimes(2);
   });
 });

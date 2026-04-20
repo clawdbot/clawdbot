@@ -9,6 +9,7 @@ import {
   resolveAuthForTarget,
   resolveProbeBudgetMs,
   resolveTargets,
+  sanitizeSshTarget,
 } from "./helpers.js";
 import { createSecretRefGatewayConfig } from "./test-support.js";
 
@@ -230,6 +231,11 @@ describe("probe reachability classification", () => {
       connectLatencyMs: 51,
       error: "missing scope: operator.read",
       close: null,
+      auth: {
+        role: "operator",
+        scopes: ["operator.write"],
+        capability: "write_capable" as const,
+      },
       health: null,
       status: null,
       presence: null,
@@ -238,7 +244,8 @@ describe("probe reachability classification", () => {
 
     expect(isScopeLimitedProbeFailure(probe)).toBe(true);
     expect(isProbeReachable(probe)).toBe(true);
-    expect(renderProbeSummaryLine(probe, false)).toContain("RPC: limited");
+    expect(renderProbeSummaryLine(probe, false)).toContain("Capability: write-capable");
+    expect(renderProbeSummaryLine(probe, false)).toContain("Read probe: limited");
   });
 
   it("keeps non-scope RPC failures as unreachable", () => {
@@ -248,6 +255,11 @@ describe("probe reachability classification", () => {
       connectLatencyMs: 43,
       error: "unknown method: status",
       close: null,
+      auth: {
+        role: "operator",
+        scopes: [],
+        capability: "connected_no_operator_scope" as const,
+      },
       health: null,
       status: null,
       presence: null,
@@ -256,7 +268,8 @@ describe("probe reachability classification", () => {
 
     expect(isScopeLimitedProbeFailure(probe)).toBe(false);
     expect(isProbeReachable(probe)).toBe(false);
-    expect(renderProbeSummaryLine(probe, false)).toContain("RPC: failed");
+    expect(renderProbeSummaryLine(probe, false)).toContain("Capability: connect-only");
+    expect(renderProbeSummaryLine(probe, false)).toContain("Read probe: failed");
   });
 });
 describe("gateway-status local target scheme", () => {
@@ -355,5 +368,12 @@ describe("resolveProbeBudgetMs", () => {
         url: "wss://gateway.example/ws",
       }),
     ).toBe(2000);
+  });
+});
+
+describe("sanitizeSshTarget", () => {
+  it("strips a leading ssh command prefix", () => {
+    expect(sanitizeSshTarget("ssh me@studio")).toBe("me@studio");
+    expect(sanitizeSshTarget("  ssh me@studio:2222  ")).toBe("me@studio:2222");
   });
 });

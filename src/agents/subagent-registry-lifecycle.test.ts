@@ -27,7 +27,7 @@ const browserLifecycleCleanupMocks = vi.hoisted(() => ({
   cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
 }));
 
-vi.mock("../tasks/task-executor.js", () => ({
+vi.mock("../tasks/detached-task-runtime.js", () => ({
   completeTaskRunByRunId: taskExecutorMocks.completeTaskRunByRunId,
   failTaskRunByRunId: taskExecutorMocks.failTaskRunByRunId,
   setDetachedTaskDeliveryStatusByRunId: taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId,
@@ -60,11 +60,6 @@ vi.mock("./subagent-announce.js", () => ({
 vi.mock("./subagent-registry-cleanup.js", () => ({
   resolveCleanupCompletionReason: () => SUBAGENT_ENDED_REASON_COMPLETE,
   resolveDeferredCleanupDecision: () => ({ kind: "give-up", reason: "retry-limit" }),
-}));
-
-vi.mock("./subagent-registry-completion.js", () => ({
-  runOutcomesEqual: (left: unknown, right: unknown) =>
-    JSON.stringify(left) === JSON.stringify(right),
 }));
 
 vi.mock("./subagent-registry-helpers.js", () => ({
@@ -236,6 +231,77 @@ describe("subagent registry lifecycle hardening", () => {
         childSessionKey: entry.childSessionKey,
       }),
     );
+  });
+
+  it("enriches registered-run outcomes with persisted timing before cleanup", async () => {
+    const persist = vi.fn();
+    const runSubagentAnnounceFlow = vi.fn(async () => true);
+    const entry = createRunEntry({
+      startedAt: 2_000,
+      expectsCompletionMessage: false,
+    });
+
+    const controller = createLifecycleController({ entry, persist, runSubagentAnnounceFlow });
+
+    await expect(
+      controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: 4_250,
+        outcome: { status: "timeout" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        triggerCleanup: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    const enrichedOutcome = {
+      status: "timeout" as const,
+      startedAt: 2_000,
+      endedAt: 4_250,
+      elapsedMs: 2_250,
+    };
+    expect(entry.outcome).toEqual(enrichedOutcome);
+    expect(taskExecutorMocks.failTaskRunByRunId).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "timed_out",
+      }),
+    );
+    expect(runSubagentAnnounceFlow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        startedAt: 2_000,
+        endedAt: 4_250,
+        outcome: enrichedOutcome,
+      }),
+    );
+    expect(persist).toHaveBeenCalled();
+  });
+
+  it("persists timing when a preexisting outcome matches without timing", async () => {
+    const persist = vi.fn();
+    const entry = createRunEntry({
+      startedAt: 2_000,
+      outcome: { status: "ok" },
+      expectsCompletionMessage: false,
+    });
+
+    const controller = createLifecycleController({ entry, persist });
+
+    await expect(
+      controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: 4_250,
+        outcome: { status: "ok" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        triggerCleanup: false,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(entry.outcome).toEqual({
+      status: "ok",
+      startedAt: 2_000,
+      endedAt: 4_250,
+      elapsedMs: 2_250,
+    });
+    expect(persist).toHaveBeenCalled();
   });
 
   it("does not wait for a completion reply when the run does not expect one", async () => {

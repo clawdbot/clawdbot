@@ -22,12 +22,14 @@ import {
   setBlueBubblesParticipantContactDepsForTest,
 } from "./participant-contact-names.js";
 import type { OpenClawConfig, PluginRuntime } from "./runtime-api.js";
+import { createBlueBubblesFetchGuardPassthroughInstaller } from "./test-harness.js";
 import {
   createBlueBubblesMonitorTestRuntime,
   EMPTY_DISPATCH_RESULT,
   resetBlueBubblesMonitorTestState,
   type DispatchReplyParams,
 } from "./test-support/monitor-test-support.js";
+import { _setFetchGuardForTesting } from "./types.js";
 
 // Mock dependencies
 vi.mock("./send.js", () => ({
@@ -255,8 +257,16 @@ describe("BlueBubbles webhook monitor", () => {
     return handled;
   }
 
+  const installFetchGuardPassthrough = createBlueBubblesFetchGuardPassthroughInstaller();
+
   beforeEach(() => {
     vi.stubGlobal("fetch", mockFetch);
+    // The BlueBubblesClient now routes every BB API call through the SSRF
+    // guard (mode-2 allowlist for configured hostnames). Install a passthrough
+    // that wraps `globalThis.fetch` (our stubbed mockFetch) in a real Response
+    // so guarded callers get the same mocked behavior the pre-migration
+    // callsites did. (#34749, #59722)
+    installFetchGuardPassthrough();
     mockFetch.mockReset();
     mockFetch.mockResolvedValue({
       ok: true,
@@ -284,6 +294,7 @@ describe("BlueBubbles webhook monitor", () => {
     setBlueBubblesParticipantContactDepsForTest();
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    _setFetchGuardForTesting(null);
   });
 
   describe("DM pairing behavior vs allowFrom", () => {

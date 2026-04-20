@@ -17,7 +17,7 @@ const taskExecutorMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
-vi.mock("../../tasks/task-executor.js", () => taskExecutorMocks);
+vi.mock("../../tasks/detached-task-runtime.js", () => taskExecutorMocks);
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;

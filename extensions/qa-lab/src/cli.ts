@@ -35,6 +35,7 @@ async function runQaSuite(opts: {
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;
+  allowFailures?: boolean;
   cliAuthMode?: string;
   parityPack?: string;
   scenarioIds?: string[];
@@ -238,6 +239,11 @@ export function registerQaLabCli(program: Command) {
     .option("--concurrency <count>", "Scenario worker concurrency", (value: string) =>
       Number(value),
     )
+    .option(
+      "--allow-failures",
+      "Write artifacts without setting a failing exit code when scenarios fail",
+      false,
+    )
     .option("--fast", "Enable provider fast mode where supported", false)
     .option("--image <alias>", "Multipass image alias")
     .option("--cpus <count>", "Multipass vCPU count", (value: string) => Number(value))
@@ -256,6 +262,7 @@ export function registerQaLabCli(program: Command) {
         parityPack?: string;
         scenario?: string[];
         concurrency?: number;
+        allowFailures?: boolean;
         fast?: boolean;
         image?: string;
         cpus?: number;
@@ -275,6 +282,7 @@ export function registerQaLabCli(program: Command) {
           parityPack: opts.parityPack,
           scenarioIds: opts.scenario,
           concurrency: opts.concurrency,
+          allowFailures: opts.allowFailures,
           image: opts.image,
           cpus: opts.cpus,
           memory: opts.memory,

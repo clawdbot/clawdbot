@@ -47,7 +47,7 @@ openclaw status
 openclaw logs --follow
 ```
 
-Healthy baseline: `Runtime: running` and `RPC probe: ok`.
+Healthy baseline: `Runtime: running`, `Connectivity probe: ok`, and `Capability: ...` that matches what you expect. Use `openclaw gateway status --require-rpc` when you need read-scope RPC proof, not just reachability.
 
   </Step>
 

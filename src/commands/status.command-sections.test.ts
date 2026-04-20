@@ -175,13 +175,19 @@ describe("status.command-sections", () => {
 
     expect(
       buildStatusPairingRecoveryLines({
-        pairingRecovery: { requestId: "req-123" },
+        pairingRecovery: {
+          requestId: "req-123",
+          reason: "scope-upgrade",
+          remediationHint: "Review the requested scopes, then approve the pending upgrade.",
+        },
         warn: (value) => `warn(${value})`,
         muted: (value) => `muted(${value})`,
         formatCliCommand: (value) => `cmd:${value}`,
       }),
     ).toEqual([
-      "warn(Gateway pairing approval required.)",
+      "warn(Gateway scope upgrade approval required.)",
+      "muted(Reason: device is asking for more scopes than currently approved.)",
+      "muted(Hint: Review the requested scopes, then approve the pending upgrade.)",
       "muted(Recovery: cmd:openclaw devices approve req-123)",
       "muted(Fallback: cmd:openclaw devices approve --latest)",
       "muted(Inspect: cmd:openclaw devices list)",

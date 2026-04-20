@@ -196,10 +196,17 @@ export const uk: TranslationMap = {
       wsUrl: "URL WebSocket",
       token: "Токен шлюзу",
       password: "Пароль (не зберігається)",
+      passwordPlaceholder: "системний або спільний пароль",
       sessionKey: "Типовий ключ сеансу",
       language: "Мова",
       connectHint: "Натисніть «Підключити», щоб застосувати зміни підключення.",
       trustedProxy: "Автентифіковано через довірений проксі.",
+      showToken: "Показати токен",
+      hideToken: "Приховати токен",
+      toggleTokenVisibility: "Перемкнути видимість токена",
+      showPassword: "Показати пароль",
+      hidePassword: "Приховати пароль",
+      togglePasswordVisibility: "Перемкнути видимість пароля",
     },
     snapshot: {
       title: "Знімок",
@@ -238,8 +245,19 @@ export const uk: TranslationMap = {
     },
     pairing: {
       hint: "Цей пристрій потребує схвалення спарювання від хоста шлюзу.",
+      scopeUpgradeTitle: "Розширення області дії очікує на схвалення.",
+      scopeUpgradeSummary:
+        "Цей пристрій уже сполучено, але запитуване ширше охоплення очікує на схвалення.",
+      roleUpgradeTitle: "Зміна ролі очікує на схвалення.",
+      roleUpgradeSummary:
+        "Цей пристрій уже сполучено, але запитувана зміна ролі очікує на схвалення.",
+      metadataUpgradeTitle: "Зміна метаданих пристрою очікує на схвалення.",
+      metadataUpgradeSummary:
+        "Цей пристрій уже сполучено, але зміна метаданих очікує на схвалення.",
       mobileHint:
         "На мобільному? Скопіюйте повний URL (включно з #token=...) з openclaw dashboard --no-open на вашому комп’ютері.",
+      docsTitle: "Документація щодо сполучення пристроїв (відкривається в новій вкладці)",
+      docsLink: "Документація: Сполучення пристроїв",
     },
     insecure: {
       hint: "Ця сторінка використовує HTTP, тому браузер блокує ідентичність пристрою. Використовуйте HTTPS (Tailscale Serve) або відкрийте {url} на хості шлюзу.",
@@ -253,6 +271,12 @@ export const uk: TranslationMap = {
       step4: "Або згенеруйте багаторазовий токен:",
       docsHint: "Для віддаленого доступу рекомендовано Tailscale Serve. ",
       docsLink: "Читати документацію →",
+      authDocsTitle: "Документація щодо автентифікації Control UI (відкривається в новій вкладці)",
+      authDocsLink: "Документація: автентифікація Control UI",
+      tailscaleDocsTitle: "Документація щодо Tailscale Serve (відкривається в новій вкладці)",
+      tailscaleDocsLink: "Документація: Tailscale Serve",
+      insecureHttpDocsTitle: "Документація щодо незахищеного HTTP (відкривається в новій вкладці)",
+      insecureHttpDocsLink: "Документація: незахищений HTTP",
     },
     cards: {
       cost: "Вартість",
@@ -625,6 +649,12 @@ export const uk: TranslationMap = {
   login: {
     subtitle: "Панель Gateway",
     passwordPlaceholder: "необов’язково",
+    showToken: "Показати токен",
+    hideToken: "Приховати токен",
+    toggleTokenVisibility: "Перемкнути видимість токена",
+    showPassword: "Показати пароль",
+    hidePassword: "Приховати пароль",
+    togglePasswordVisibility: "Перемкнути видимість пароля",
   },
   chat: {
     disconnected: "Відключено від шлюзу.",

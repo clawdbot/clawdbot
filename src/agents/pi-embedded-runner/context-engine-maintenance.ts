@@ -15,7 +15,7 @@ import {
   recordTaskRunProgressByRunId,
   setDetachedTaskDeliveryStatusByRunId,
   startTaskRunByRunId,
-} from "../../tasks/task-executor.js";
+} from "../../tasks/detached-task-runtime.js";
 import {
   cancelTaskByIdForOwner,
   findTaskByRunIdForOwner,

@@ -86,6 +86,7 @@ cat ~/.openclaw/openclaw.json
 - Gateway port collision diagnostics (default `18789`).
 - Security warnings for open DM policies.
 - Gateway auth checks for local token mode (offers token generation when no token source exists; does not overwrite token SecretRef configs).
+- Device pairing trouble detection (pending first-time pair requests, pending role/scope upgrades, stale local device-token cache drift, and paired-record auth drift).
 - systemd linger check on Linux.
 - Workspace bootstrap file size check (truncation/near-limit warnings for context files).
 - Shell completion status check and auto-install/upgrade.
@@ -400,6 +401,34 @@ runs the best-effort migration steps: legacy Matrix state migration and legacy
 encrypted-state preparation. Both steps are non-fatal; errors are logged and
 startup continues. In read-only mode (`openclaw doctor` without `--fix`) this check
 is skipped entirely.
+
+### 8c) Device pairing and auth drift
+
+Doctor now inspects device-pairing state as part of the normal health pass.
+
+What it reports:
+
+- pending first-time pairing requests
+- pending role upgrades for already paired devices
+- pending scope upgrades for already paired devices
+- public-key mismatch repairs where the device id still matches but the device
+  identity no longer matches the approved record
+- paired records missing an active token for an approved role
+- paired tokens whose scopes drift outside the approved pairing baseline
+- local cached device-token entries for the current machine that predate a
+  gateway-side token rotation or carry stale scope metadata
+
+Doctor does not auto-approve pair requests or auto-rotate device tokens. It
+prints the exact next steps instead:
+
+- inspect pending requests with `openclaw devices list`
+- approve the exact request with `openclaw devices approve <requestId>`
+- rotate a fresh token with `openclaw devices rotate --device <deviceId> --role <role>`
+- remove and re-approve a stale record with `openclaw devices remove <deviceId>`
+
+This closes the common "already paired but still getting pairing required"
+hole: doctor now distinguishes first-time pairing from pending role/scope
+upgrades and from stale token/device-identity drift.
 
 ### 9) Security warnings
 

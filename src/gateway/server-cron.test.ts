@@ -140,6 +140,48 @@ describe("buildGatewayCronService", () => {
     }
   });
 
+  it("forwards heartbeat overrides through the cron wake adapter", () => {
+    const cfg = createCronConfig("server-cron-heartbeat-override");
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const cronDeps = (
+        state.cron as unknown as {
+          state?: {
+            deps?: {
+              requestHeartbeatNow?: (opts?: {
+                agentId?: string;
+                sessionKey?: string | null;
+                reason?: string;
+                heartbeat?: { target?: string };
+              }) => void;
+            };
+          };
+        }
+      ).state?.deps;
+
+      cronDeps?.requestHeartbeatNow?.({
+        reason: "cron:test",
+        sessionKey: "discord:channel:ops",
+        heartbeat: { target: "last" },
+      });
+
+      expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+        reason: "cron:test",
+        agentId: "main",
+        sessionKey: "agent:main:discord:channel:ops",
+        heartbeat: { target: "last" },
+      });
+    } finally {
+      state.cron.stop();
+    }
+  });
+
   it("preserves trust downgrades when cron enqueues system events", () => {
     const cfg = createCronConfig("server-cron-untrusted");
     loadConfigMock.mockReturnValue(cfg);

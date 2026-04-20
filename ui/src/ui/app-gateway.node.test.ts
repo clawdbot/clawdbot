@@ -433,6 +433,31 @@ describe("connectGateway", () => {
     expect(host.lastErrorCode).toBe("AUTH_TOKEN_MISMATCH");
   });
 
+  it("surfaces scope-upgrade approval details instead of a dead pairing error", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitClose({
+      code: 4008,
+      reason: "connect failed",
+      error: {
+        code: "NOT_PAIRED",
+        message: "scope upgrade pending approval (requestId: req-123)",
+        details: {
+          code: ConnectErrorDetailCodes.PAIRING_REQUIRED,
+          reason: "scope-upgrade",
+          requestId: "req-123",
+        },
+      },
+    });
+
+    expect(host.lastErrorCode).toBe(ConnectErrorDetailCodes.PAIRING_REQUIRED);
+    expect(host.lastError).toBe("scope upgrade pending approval (requestId: req-123)");
+  });
+
   it("surfaces shutdown restart reasons before the socket closes", () => {
     const host = createHost();
 
