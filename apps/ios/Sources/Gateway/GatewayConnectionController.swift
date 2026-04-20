@@ -1060,7 +1060,8 @@ private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate, @u
     }
 
     private func finish(_ fingerprint: String?) {
-        let (shouldComplete, taskToCancel, sessionToInvalidate) = self.state.withLock { s -> (Bool, URLSessionWebSocketTask?, URLSession?) in
+        typealias FinishState = (Bool, URLSessionWebSocketTask?, URLSession?)
+        let (shouldComplete, taskToCancel, sessionToInvalidate) = self.state.withLock { s -> FinishState in
             guard !s.didFinish else { return (false, nil, nil) }
             s.didFinish = true
             let task = s.task

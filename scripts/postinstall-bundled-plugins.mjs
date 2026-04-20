@@ -1,10 +1,9 @@
 #!/usr/bin/env node
-// Runs after install to restore bundled extension runtime deps.
-// Installed builds can lazy-load bundled plugin code through root dist chunks,
-// so runtime dependencies declared in dist/extensions/*/package.json must also
-// resolve from the package root node_modules. Source checkouts resolve bundled
-// plugin deps from the workspace root, so stale plugin-local node_modules must
-// not linger under extensions/* and shadow the root graph.
+// Runs after install to keep packaged dist safe and compatible.
+// Bundled extension runtime dependencies are extension-owned. Do not install
+// every bundled extension dependency during core package install unless the
+// legacy eager-install escape hatch is explicitly enabled; `openclaw doctor
+// --fix` owns the repair path for extensions that are actually used.
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
@@ -33,6 +32,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_EXTENSIONS_DIR = join(__dirname, "..", "dist", "extensions");
 const DEFAULT_PACKAGE_ROOT = join(__dirname, "..");
 const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
+const EAGER_BUNDLED_PLUGIN_DEPS_ENV = "OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS";
 const DIST_INVENTORY_PATH = "dist/postinstall-inventory.json";
 const LEGACY_UPDATE_COMPAT_SIDECARS = [
   {
@@ -465,6 +465,10 @@ export function createNestedNpmInstallEnv(env = process.env) {
   return nextEnv;
 }
 
+function shouldEagerInstallBundledPluginDeps(env = process.env) {
+  return env?.[EAGER_BUNDLED_PLUGIN_DEPS_ENV]?.trim() === "1";
+}
+
 export function applyBaileysEncryptedStreamFinishHotfix(params = {}) {
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
   const pathExists = params.existsSync ?? existsSync;
@@ -712,6 +716,16 @@ export function runBundledPluginPostinstall(params = {}) {
       existsSync: pathExists,
     })
   ) {
+    return;
+  }
+  if (!shouldEagerInstallBundledPluginDeps(env)) {
+    applyBundledPluginRuntimeHotfixes({
+      packageRoot,
+      existsSync: pathExists,
+      readFileSync: params.readFileSync,
+      writeFileSync: params.writeFileSync,
+      log,
+    });
     return;
   }
   const runtimeDeps =

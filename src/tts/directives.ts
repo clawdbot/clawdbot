@@ -62,7 +62,15 @@ export function parseTtsDirectives(
     return { cleanedText: text, overrides: {}, warnings: [], hasDirective: false };
   }
 
-  const providers = resolveDirectiveProviders(options);
+  if (!/\[\[tts:/iu.test(text)) {
+    return { cleanedText: text, overrides: {}, warnings: [], hasDirective: false };
+  }
+
+  let providers: SpeechProviderPlugin[] | undefined;
+  const getProviders = () => {
+    providers ??= resolveDirectiveProviders(options);
+    return providers;
+  };
   const overrides: TtsDirectiveOverrides = {};
   const warnings: string[] = [];
   let cleanedText = text;
@@ -107,10 +115,14 @@ export function parseTtsDirectives(
       }
     }
 
-    const orderedProviders = prioritizeProvider(
-      providers,
-      declaredProviderId ?? normalizeLowercaseStringOrEmpty(options?.preferredProviderId),
-    );
+    let orderedProviders: SpeechProviderPlugin[] | undefined;
+    const getOrderedProviders = () => {
+      orderedProviders ??= prioritizeProvider(
+        getProviders(),
+        declaredProviderId ?? normalizeLowercaseStringOrEmpty(options?.preferredProviderId),
+      );
+      return orderedProviders;
+    };
 
     for (const token of tokens) {
       const eqIndex = token.indexOf("=");
@@ -127,7 +139,7 @@ export function parseTtsDirectives(
         continue;
       }
 
-      for (const provider of orderedProviders) {
+      for (const provider of getOrderedProviders()) {
         const parsed = provider.parseDirectiveToken?.({
           key,
           value: rawValue,

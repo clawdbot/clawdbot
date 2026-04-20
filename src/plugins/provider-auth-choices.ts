@@ -40,6 +40,12 @@ type ProviderOnboardAuthFlagCandidate = ProviderAuthChoiceCandidate & {
   cliFlag: string;
   cliOption: string;
 };
+type ManifestProviderAuthChoiceParams = {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  includeUntrustedWorkspacePlugins?: boolean;
+};
 
 const PROVIDER_AUTH_CHOICE_ORIGIN_PRIORITY: Readonly<Record<PluginOrigin, number>> = {
   config: 0,
@@ -165,12 +171,20 @@ function resolvePreferredManifestAuthChoicesByChoiceId(
   return [...preferredByChoiceId.values()];
 }
 
-export function resolveManifestProviderAuthChoices(params?: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  includeUntrustedWorkspacePlugins?: boolean;
-}): ProviderAuthChoiceMetadata[] {
+function resolvePreferredManifestAuthChoiceMetadata(params: {
+  config?: ManifestProviderAuthChoiceParams;
+  matches: (choice: ProviderAuthChoiceCandidate) => boolean;
+}): ProviderAuthChoiceMetadata | undefined {
+  const candidates = resolveManifestProviderAuthChoiceCandidates(params.config).filter(
+    params.matches,
+  );
+  const preferred = pickPreferredManifestAuthChoice(candidates);
+  return preferred ? stripChoiceOrigin(preferred) : undefined;
+}
+
+export function resolveManifestProviderAuthChoices(
+  params?: ManifestProviderAuthChoiceParams,
+): ProviderAuthChoiceMetadata[] {
   return resolvePreferredManifestAuthChoicesByChoiceId(
     resolveManifestProviderAuthChoiceCandidates(params),
   ).map(stripChoiceOrigin);
@@ -178,22 +192,16 @@ export function resolveManifestProviderAuthChoices(params?: {
 
 export function resolveManifestProviderAuthChoice(
   choiceId: string,
-  params?: {
-    config?: OpenClawConfig;
-    workspaceDir?: string;
-    env?: NodeJS.ProcessEnv;
-    includeUntrustedWorkspacePlugins?: boolean;
-  },
+  params?: ManifestProviderAuthChoiceParams,
 ): ProviderAuthChoiceMetadata | undefined {
   const normalized = choiceId.trim();
   if (!normalized) {
     return undefined;
   }
-  const candidates = resolveManifestProviderAuthChoiceCandidates(params).filter(
-    (choice) => choice.choiceId === normalized,
-  );
-  const preferred = pickPreferredManifestAuthChoice(candidates);
-  return preferred ? stripChoiceOrigin(preferred) : undefined;
+  return resolvePreferredManifestAuthChoiceMetadata({
+    config: params,
+    matches: (choice) => choice.choiceId === normalized,
+  });
 }
 
 export function resolveManifestProviderApiKeyChoice(params: {
@@ -207,42 +215,31 @@ export function resolveManifestProviderApiKeyChoice(params: {
   if (!normalizedProviderId) {
     return undefined;
   }
-  const candidates = resolveManifestProviderAuthChoiceCandidates(params).filter((choice) => {
-    if (!choice.optionKey) {
-      return false;
-    }
-    return resolveProviderIdForAuth(choice.providerId, params) === normalizedProviderId;
+  return resolvePreferredManifestAuthChoiceMetadata({
+    config: params,
+    matches: (choice) =>
+      Boolean(choice.optionKey) &&
+      resolveProviderIdForAuth(choice.providerId, params) === normalizedProviderId,
   });
-  const preferred = pickPreferredManifestAuthChoice(candidates);
-  return preferred ? stripChoiceOrigin(preferred) : undefined;
 }
 
 export function resolveManifestDeprecatedProviderAuthChoice(
   choiceId: string,
-  params?: {
-    config?: OpenClawConfig;
-    workspaceDir?: string;
-    env?: NodeJS.ProcessEnv;
-    includeUntrustedWorkspacePlugins?: boolean;
-  },
+  params?: ManifestProviderAuthChoiceParams,
 ): ProviderAuthChoiceMetadata | undefined {
   const normalized = choiceId.trim();
   if (!normalized) {
     return undefined;
   }
-  const candidates = resolveManifestProviderAuthChoiceCandidates(params).filter((choice) =>
-    choice.deprecatedChoiceIds?.includes(normalized),
-  );
-  const preferred = pickPreferredManifestAuthChoice(candidates);
-  return preferred ? stripChoiceOrigin(preferred) : undefined;
+  return resolvePreferredManifestAuthChoiceMetadata({
+    config: params,
+    matches: (choice) => choice.deprecatedChoiceIds?.includes(normalized) === true,
+  });
 }
 
-export function resolveManifestProviderOnboardAuthFlags(params?: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  includeUntrustedWorkspacePlugins?: boolean;
-}): ProviderOnboardAuthFlag[] {
+export function resolveManifestProviderOnboardAuthFlags(
+  params?: ManifestProviderAuthChoiceParams,
+): ProviderOnboardAuthFlag[] {
   const preferredByFlag = new Map<string, ProviderOnboardAuthFlagCandidate>();
 
   for (const choice of resolveManifestProviderAuthChoiceCandidates(params)) {

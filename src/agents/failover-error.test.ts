@@ -510,8 +510,13 @@ describe("failover-error", () => {
 
   it("infers timeout from common node error codes", () => {
     expect(resolveFailoverReasonFromError({ code: "ETIMEDOUT" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "ECONNREFUSED" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ code: "ECONNRESET" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "EAI_AGAIN" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "EHOSTUNREACH" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ code: "EHOSTDOWN" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "ENETRESET" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "ENETUNREACH" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ code: "EPIPE" })).toBe("timeout");
   });
 
@@ -538,6 +543,11 @@ describe("failover-error", () => {
   });
 
   it("infers timeout from connection/network error messages", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "model_cooldown: All credentials for model gpt-5 are cooling down",
+      }),
+    ).toBe("rate_limit");
     expect(resolveFailoverReasonFromError({ message: "Connection error." })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ message: "fetch failed" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ message: "Network error: ECONNREFUSED" })).toBe(

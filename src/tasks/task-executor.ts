@@ -1,5 +1,9 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type {
+  DetachedRunningTaskCreateParams,
+  DetachedTaskCreateParams,
+} from "./detached-task-runtime-contract.js";
 import { getRegisteredDetachedTaskLifecycleRuntime } from "./detached-task-runtime-state.js";
 import {
   cancelTaskById,
@@ -32,7 +36,6 @@ import type {
   TaskRecord,
   TaskRegistrySummary,
   TaskRuntime,
-  TaskScopeKind,
   TaskStatus,
   TaskTerminalOutcome,
 } from "./task-registry.types.js";
@@ -84,31 +87,8 @@ function ensureSingleTaskFlow(params: {
   }
 }
 
-type TaskRunCreateParams = {
-  runtime: TaskRuntime;
-  taskKind?: string;
-  sourceId?: string;
-  requesterSessionKey?: string;
-  ownerKey?: string;
-  scopeKind?: TaskScopeKind;
-  requesterOrigin?: TaskDeliveryState["requesterOrigin"];
-  parentFlowId?: string;
-  childSessionKey?: string;
-  parentTaskId?: string;
-  agentId?: string;
-  runId?: string;
-  label?: string;
-  task: string;
-  preferMetadata?: boolean;
-  notifyPolicy?: TaskNotifyPolicy;
-  deliveryStatus?: TaskDeliveryStatus;
-};
-
-type RunningTaskRunCreateParams = TaskRunCreateParams & {
-  startedAt?: number;
-  lastEventAt?: number;
-  progressSummary?: string | null;
-};
+type TaskRunCreateParams = DetachedTaskCreateParams;
+type RunningTaskRunCreateParams = DetachedRunningTaskCreateParams;
 
 export function createQueuedTaskRun(params: TaskRunCreateParams): TaskRecord {
   const task = createTaskRecord({

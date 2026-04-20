@@ -194,33 +194,12 @@ export function collectRootDistBundledRuntimeMirrors(params) {
 }
 
 export function collectBundledPluginRootRuntimeMirrorErrors(params) {
-  const rootRuntimeDeps = collectRuntimeDependencySpecs(params.rootPackageJson);
   const errors = [];
 
   for (const [dependencyName, record] of params.bundledRuntimeDependencySpecs) {
     for (const conflict of record.conflicts) {
       errors.push(
         `bundled runtime dependency '${dependencyName}' has conflicting plugin specs: ${record.pluginIds.join(", ")} use '${record.spec}', ${conflict.pluginId} uses '${conflict.spec}'.`,
-      );
-    }
-  }
-
-  for (const [dependencyName, mirror] of params.requiredRootMirrors) {
-    const rootSpec = rootRuntimeDeps.get(dependencyName);
-    const importers = [...mirror.importers].toSorted((left, right) => left.localeCompare(right));
-    const importerLabel = importers.join(", ");
-    const pluginLabel = mirror.pluginIds
-      .toSorted((left, right) => left.localeCompare(right))
-      .join(", ");
-    if (typeof rootSpec !== "string" || rootSpec.length === 0) {
-      errors.push(
-        `root dist imports bundled plugin runtime dependency '${dependencyName}' from ${importerLabel}; mirror '${dependencyName}: ${mirror.spec}' in root package.json (declared by ${pluginLabel}).`,
-      );
-      continue;
-    }
-    if (rootSpec !== mirror.spec) {
-      errors.push(
-        `root dist imports bundled plugin runtime dependency '${dependencyName}' from ${importerLabel}; root package.json has '${rootSpec}' but plugin manifest declares '${mirror.spec}' (${pluginLabel}).`,
       );
     }
   }

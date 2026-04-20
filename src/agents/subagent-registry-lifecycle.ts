@@ -1,5 +1,5 @@
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
+import type { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import { formatErrorMessage, readErrorName } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
@@ -8,13 +8,8 @@ import {
   failTaskRunByRunId,
   setDetachedTaskDeliveryStatusByRunId,
 } from "../tasks/detached-task-runtime.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.js";
-import { withSubagentOutcomeTiming } from "./subagent-announce-output.js";
-import {
-  captureSubagentCompletionReply,
-  runSubagentAnnounceFlow,
-  type SubagentRunOutcome,
-} from "./subagent-announce.js";
+import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+import { type SubagentRunOutcome, withSubagentOutcomeTiming } from "./subagent-announce-output.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   type SubagentLifecycleEndedReason,
@@ -36,6 +31,23 @@ import {
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+
+type CaptureSubagentCompletionReply =
+  (typeof import("./subagent-announce.js"))["captureSubagentCompletionReply"];
+type RunSubagentAnnounceFlow = (typeof import("./subagent-announce.js"))["runSubagentAnnounceFlow"];
+type BrowserCleanupModule = Pick<
+  typeof import("../browser-lifecycle-cleanup.js"),
+  "cleanupBrowserSessionsForLifecycleEnd"
+>;
+
+let browserCleanupPromise: Promise<BrowserCleanupModule> | null = null;
+
+async function loadCleanupBrowserSessionsForLifecycleEnd(): Promise<
+  BrowserCleanupModule["cleanupBrowserSessionsForLifecycleEnd"]
+> {
+  browserCleanupPromise ??= import("../browser-lifecycle-cleanup.js");
+  return (await browserCleanupPromise).cleanupBrowserSessionsForLifecycleEnd;
+}
 
 export function createSubagentRegistryLifecycleController(params: {
   runs: Map<string, SubagentRunRecord>;
@@ -61,9 +73,9 @@ export function createSubagentRegistryLifecycleController(params: {
     workspaceDir?: string;
   }): Promise<void>;
   resumeSubagentRun(runId: string): void;
-  captureSubagentCompletionReply: typeof captureSubagentCompletionReply;
+  captureSubagentCompletionReply: CaptureSubagentCompletionReply;
   cleanupBrowserSessionsForLifecycleEnd?: typeof cleanupBrowserSessionsForLifecycleEnd;
-  runSubagentAnnounceFlow: typeof runSubagentAnnounceFlow;
+  runSubagentAnnounceFlow: RunSubagentAnnounceFlow;
   warn(message: string, meta?: Record<string, unknown>): void;
 }) {
   const scheduledResumeTimers = new Set<ReturnType<typeof setTimeout>>();
@@ -223,7 +235,7 @@ export function createSubagentRegistryLifecycleController(params: {
 
     let captured: string | undefined;
     try {
-      captured = await captureSubagentCompletionReply(sessionKey);
+      captured = await params.captureSubagentCompletionReply(sessionKey);
     } catch {
       return false;
     }
@@ -658,7 +670,10 @@ export function createSubagentRegistryLifecycleController(params: {
       return;
     }
 
-    await (params.cleanupBrowserSessionsForLifecycleEnd ?? cleanupBrowserSessionsForLifecycleEnd)({
+    const cleanupBrowserSessions =
+      params.cleanupBrowserSessionsForLifecycleEnd ??
+      (await loadCleanupBrowserSessionsForLifecycleEnd());
+    await cleanupBrowserSessions({
       sessionKeys: [entry.childSessionKey],
       onWarn: (msg) => params.warn(msg, { runId: entry.runId }),
     });

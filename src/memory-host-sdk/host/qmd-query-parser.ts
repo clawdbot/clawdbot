@@ -1,5 +1,6 @@
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { extractBalancedJsonPrefix } from "../../shared/balanced-json.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 
 const log = createSubsystemLogger("memory");
@@ -34,7 +35,7 @@ export function parseQmdQueryJson(stdout: string, stderr: string): QmdQueryResul
     if (parsed !== null) {
       return parsed;
     }
-    const noisyPayload = extractFirstJsonArray(trimmedStdout);
+    const noisyPayload = extractBalancedJsonPrefix(trimmedStdout, { openers: ["["] })?.json;
     if (!noisyPayload) {
       throw new Error("qmd query JSON response was not an array");
     }
@@ -112,45 +113,4 @@ function parseQmdQueryResultArray(raw: string): QmdQueryResult[] | null {
 
 function parseQmdLineNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
-}
-
-function extractFirstJsonArray(raw: string): string | null {
-  const start = raw.indexOf("[");
-  if (start < 0) {
-    return null;
-  }
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let i = start; i < raw.length; i += 1) {
-    const char = raw[i];
-    if (char === undefined) {
-      break;
-    }
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-        continue;
-      }
-      if (char === "\\") {
-        escaped = true;
-      } else if (char === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (char === '"') {
-      inString = true;
-      continue;
-    }
-    if (char === "[") {
-      depth += 1;
-    } else if (char === "]") {
-      depth -= 1;
-      if (depth === 0) {
-        return raw.slice(start, i + 1);
-      }
-    }
-  }
-  return null;
 }

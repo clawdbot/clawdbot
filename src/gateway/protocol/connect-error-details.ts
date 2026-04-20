@@ -238,6 +238,29 @@ function normalizeStringArray(value: unknown): string[] | undefined {
   return normalized.length > 0 ? normalized : [];
 }
 
+function createPairingConnectErrorDetails(params: {
+  reason?: ConnectPairingRequiredReason;
+  requestId?: string;
+  remediationHint?: string;
+  deviceId?: string;
+  requestedRole?: string;
+  requestedScopes?: string[];
+  approvedRoles?: string[];
+  approvedScopes?: string[];
+}): PairingConnectErrorDetails {
+  return {
+    code: ConnectErrorDetailCodes.PAIRING_REQUIRED,
+    ...(params.reason ? { reason: params.reason } : {}),
+    ...(params.requestId ? { requestId: params.requestId } : {}),
+    ...(params.remediationHint ? { remediationHint: params.remediationHint } : {}),
+    ...(params.deviceId ? { deviceId: params.deviceId } : {}),
+    ...(params.requestedRole ? { requestedRole: params.requestedRole } : {}),
+    ...(params.requestedScopes ? { requestedScopes: params.requestedScopes } : {}),
+    ...(params.approvedRoles ? { approvedRoles: params.approvedRoles } : {}),
+    ...(params.approvedScopes ? { approvedScopes: params.approvedScopes } : {}),
+  };
+}
+
 export function describePairingConnectRequirement(
   reason: ConnectPairingRequiredReason | undefined,
 ): string {
@@ -289,17 +312,16 @@ export function buildPairingConnectErrorDetails(params: {
   const requestedScopes = normalizeStringArray(params.requestedScopes);
   const approvedRoles = normalizeStringArray(params.approvedRoles);
   const approvedScopes = normalizeStringArray(params.approvedScopes);
-  return {
-    code: ConnectErrorDetailCodes.PAIRING_REQUIRED,
-    ...(params.reason ? { reason: params.reason } : {}),
-    ...(requestId ? { requestId } : {}),
-    ...(remediationHint ? { remediationHint } : {}),
-    ...(deviceId ? { deviceId } : {}),
-    ...(requestedRole ? { requestedRole } : {}),
-    ...(requestedScopes ? { requestedScopes } : {}),
-    ...(approvedRoles ? { approvedRoles } : {}),
-    ...(approvedScopes ? { approvedScopes } : {}),
-  };
+  return createPairingConnectErrorDetails({
+    reason: params.reason,
+    requestId,
+    remediationHint,
+    deviceId,
+    requestedRole,
+    requestedScopes,
+    approvedRoles,
+    approvedScopes,
+  });
 }
 
 export function buildPairingConnectCloseReason(params: {
@@ -339,17 +361,16 @@ export function readPairingConnectErrorDetails(
   const requestedScopes = normalizeStringArray(raw.requestedScopes);
   const approvedRoles = normalizeStringArray(raw.approvedRoles);
   const approvedScopes = normalizeStringArray(raw.approvedScopes);
-  return {
-    code: ConnectErrorDetailCodes.PAIRING_REQUIRED,
-    ...(reason ? { reason } : {}),
-    ...(requestId ? { requestId } : {}),
-    ...(remediationHint ? { remediationHint } : {}),
-    ...(deviceId ? { deviceId } : {}),
-    ...(requestedRole ? { requestedRole } : {}),
-    ...(requestedScopes ? { requestedScopes } : {}),
-    ...(approvedRoles ? { approvedRoles } : {}),
-    ...(approvedScopes ? { approvedScopes } : {}),
-  };
+  return createPairingConnectErrorDetails({
+    reason,
+    requestId,
+    remediationHint,
+    deviceId,
+    requestedRole,
+    requestedScopes,
+    approvedRoles,
+    approvedScopes,
+  });
 }
 
 export function readConnectPairingRequiredDetails(

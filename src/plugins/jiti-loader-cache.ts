@@ -21,8 +21,18 @@ export function getCachedPluginJitiLoader(params: {
   tryNative?: boolean;
   cacheScopeKey?: string;
 }): PluginJitiLoader {
+  const jitiFilename = params.jitiFilename ?? params.modulePath;
+  if (params.cacheScopeKey) {
+    const scopedCacheKey = `${jitiFilename}::${params.cacheScopeKey}`;
+    const cached = params.cache.get(scopedCacheKey);
+    if (cached) {
+      return cached;
+    }
+  }
+  const hasAliasOverride = Boolean(params.aliasMap);
+  const hasTryNativeOverride = typeof params.tryNative === "boolean";
   const defaultConfig =
-    params.aliasMap || typeof params.tryNative === "boolean"
+    hasAliasOverride || hasTryNativeOverride
       ? resolvePluginLoaderJitiConfig({
           modulePath: params.modulePath,
           argv1: params.argvEntry ?? process.argv[1],
@@ -34,6 +44,11 @@ export function getCachedPluginJitiLoader(params: {
     ? {
         tryNative: params.tryNative ?? defaultConfig.tryNative,
         aliasMap: params.aliasMap ?? defaultConfig.aliasMap,
+        cacheKey:
+          !hasAliasOverride &&
+          (!hasTryNativeOverride || params.tryNative === defaultConfig.tryNative)
+            ? defaultConfig.cacheKey
+            : undefined,
       }
     : resolvePluginLoaderJitiConfig({
         modulePath: params.modulePath,
@@ -42,16 +57,18 @@ export function getCachedPluginJitiLoader(params: {
         ...(params.preferBuiltDist ? { preferBuiltDist: true } : {}),
       });
   const { tryNative, aliasMap } = resolved;
-  const cacheKey = createPluginLoaderJitiCacheKey({
-    tryNative,
-    aliasMap,
-  });
-  const scopedCacheKey = `${params.jitiFilename ?? params.modulePath}::${params.cacheScopeKey ?? cacheKey}`;
+  const cacheKey =
+    resolved.cacheKey ??
+    createPluginLoaderJitiCacheKey({
+      tryNative,
+      aliasMap,
+    });
+  const scopedCacheKey = `${jitiFilename}::${params.cacheScopeKey ?? cacheKey}`;
   const cached = params.cache.get(scopedCacheKey);
   if (cached) {
     return cached;
   }
-  const loader = (params.createLoader ?? createJiti)(params.jitiFilename ?? params.modulePath, {
+  const loader = (params.createLoader ?? createJiti)(jitiFilename, {
     ...buildPluginLoaderJitiOptions(aliasMap),
     tryNative,
   });

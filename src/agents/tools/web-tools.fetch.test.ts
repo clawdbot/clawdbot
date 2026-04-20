@@ -20,7 +20,7 @@ vi.mock("./web-fetch-utils.js", async () => {
 vi.mock("../../web-fetch/runtime.js", () => ({
   resolveWebFetchDefinition: resolveWebFetchDefinitionMock,
 }));
-import { createWebFetchTool } from "./web-tools.js";
+import { createWebFetchTool } from "./web-fetch.js";
 
 const lookupMock = vi.fn();
 

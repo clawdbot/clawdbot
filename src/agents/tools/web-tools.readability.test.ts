@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractReadableContent } from "./web-tools.js";
+import { extractReadableContent } from "./web-fetch.js";
 
 const SAMPLE_HTML = `<!doctype html>
 <html lang="en">

@@ -430,12 +430,87 @@ export function resolveExtensionApiAlias(params: LoaderModuleResolveParams = {})
   return null;
 }
 
+const MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES = 512;
+
+// Memoize loader alias/config by effective resolution context so repeated
+// loader setup avoids rebuilding the same filesystem-derived map and cache key.
+// Include cwd/env inputs because the fallback root and private QA alias
+// surfaces depend on them.
+const aliasMapCache = new Map<string, Record<string, string>>();
+const pluginLoaderJitiConfigCache = new Map<
+  string,
+  {
+    tryNative: boolean;
+    aliasMap: Record<string, string>;
+    cacheKey: string;
+  }
+>();
+
+function setBoundedCacheValue<T>(cache: Map<string, T>, key: string, value: T) {
+  if (cache.has(key)) {
+    cache.delete(key);
+  }
+  cache.set(key, value);
+  while (cache.size > MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES) {
+    const oldestKey = cache.keys().next().value;
+    if (typeof oldestKey !== "string") {
+      break;
+    }
+    cache.delete(oldestKey);
+  }
+}
+
+function buildPluginLoaderAliasMapCacheKey(params: {
+  modulePath: string;
+  argv1?: string;
+  moduleUrl?: string;
+  pluginSdkResolution: PluginSdkResolutionPreference;
+}) {
+  return [
+    params.modulePath,
+    params.argv1 ?? "",
+    params.moduleUrl ?? "",
+    params.pluginSdkResolution,
+    process.cwd(),
+    process.env.NODE_ENV === "production" ? "production" : "non-production",
+    shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "private-qa" : "public",
+  ].join("\0");
+}
+
+function buildPluginLoaderJitiConfigCacheKey(params: {
+  modulePath: string;
+  argv1?: string;
+  moduleUrl: string;
+  preferBuiltDist?: boolean;
+}) {
+  return [
+    buildPluginLoaderAliasMapCacheKey({
+      modulePath: params.modulePath,
+      argv1: params.argv1,
+      moduleUrl: params.moduleUrl,
+      pluginSdkResolution: "auto",
+    }),
+    params.preferBuiltDist === true ? "prefer-built-dist" : "default-dist",
+  ].join("\0");
+}
+
 export function buildPluginLoaderAliasMap(
   modulePath: string,
   argv1: string | undefined = STARTUP_ARGV1,
   moduleUrl?: string,
   pluginSdkResolution: PluginSdkResolutionPreference = "auto",
 ): Record<string, string> {
+  const cacheKey = buildPluginLoaderAliasMapCacheKey({
+    modulePath,
+    argv1,
+    moduleUrl,
+    pluginSdkResolution,
+  });
+  const cached = aliasMapCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
   const pluginSdkAlias = resolvePluginSdkAliasFile({
     srcFile: "root-alias.cjs",
     distFile: "root-alias.cjs",
@@ -445,7 +520,7 @@ export function buildPluginLoaderAliasMap(
     pluginSdkResolution,
   });
   const extensionApiAlias = resolveExtensionApiAlias({ modulePath, pluginSdkResolution });
-  return {
+  const result: Record<string, string> = {
     ...(extensionApiAlias
       ? { "openclaw/extension-api": normalizeJitiAliasTargetPath(extensionApiAlias) }
       : {}),
@@ -463,6 +538,8 @@ export function buildPluginLoaderAliasMap(
       ).map(([key, value]) => [key, normalizeJitiAliasTargetPath(value)]),
     ),
   };
+  setBoundedCacheValue(aliasMapCache, cacheKey, result);
+  return result;
 }
 
 export function resolvePluginRuntimeModulePath(
@@ -575,12 +652,18 @@ export function resolvePluginLoaderJitiConfig(params: {
   aliasMap: Record<string, string>;
   cacheKey: string;
 } {
+  const configCacheKey = buildPluginLoaderJitiConfigCacheKey(params);
+  const cached = pluginLoaderJitiConfigCache.get(configCacheKey);
+  if (cached) {
+    return cached;
+  }
+
   const tryNative = resolvePluginLoaderJitiTryNative(
     params.modulePath,
     params.preferBuiltDist ? { preferBuiltDist: true } : {},
   );
   const aliasMap = buildPluginLoaderAliasMap(params.modulePath, params.argv1, params.moduleUrl);
-  return {
+  const result = {
     tryNative,
     aliasMap,
     cacheKey: createPluginLoaderJitiCacheKey({
@@ -588,6 +671,8 @@ export function resolvePluginLoaderJitiConfig(params: {
       aliasMap,
     }),
   };
+  setBoundedCacheValue(pluginLoaderJitiConfigCache, configCacheKey, result);
+  return result;
 }
 
 export function isBundledPluginExtensionPath(params: {

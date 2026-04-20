@@ -1,3 +1,8 @@
+import { normalizeChatChannelId } from "../channels/ids.js";
+import type { AgentRouteBinding } from "../config/types.agents.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeAccountId, normalizeAgentId } from "./session-key.js";
+
 export type RouteBindingScopeConstraint = {
   guildId?: string | null;
   teamId?: string | null;
@@ -9,6 +14,12 @@ export type RouteBindingScope = {
   teamId?: string | null;
   groupSpace?: string | null;
   memberRoleIds?: Iterable<string> | null;
+};
+
+export type NormalizedRouteBindingMatch = {
+  agentId: string;
+  accountId: string;
+  channelId: string;
 };
 
 export function normalizeRouteBindingId(value: unknown): string {
@@ -23,6 +34,40 @@ export function normalizeRouteBindingId(value: unknown): string {
 
 export function normalizeRouteBindingRoles(value: string[] | null | undefined): string[] | null {
   return Array.isArray(value) && value.length > 0 ? value : null;
+}
+
+export function normalizeRouteBindingChannelId(raw?: string | null): string | null {
+  const normalized = normalizeChatChannelId(raw);
+  if (normalized) {
+    return normalized;
+  }
+  const fallback = normalizeLowercaseStringOrEmpty(raw);
+  return fallback || null;
+}
+
+export function resolveNormalizedRouteBindingMatch(
+  binding: AgentRouteBinding,
+): NormalizedRouteBindingMatch | null {
+  if (!binding || typeof binding !== "object") {
+    return null;
+  }
+  const match = binding.match;
+  if (!match || typeof match !== "object") {
+    return null;
+  }
+  const channelId = normalizeRouteBindingChannelId(match.channel);
+  if (!channelId) {
+    return null;
+  }
+  const accountId = typeof match.accountId === "string" ? match.accountId.trim() : "";
+  if (!accountId || accountId === "*") {
+    return null;
+  }
+  return {
+    agentId: normalizeAgentId(binding.agentId),
+    accountId: normalizeAccountId(accountId),
+    channelId,
+  };
 }
 
 function scopeIdMatches(params: {

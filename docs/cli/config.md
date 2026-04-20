@@ -336,6 +336,34 @@ If dry-run fails:
 - `Dry run note: skipped <n> exec SecretRef resolvability check(s)`: dry-run skipped exec refs; rerun with `--allow-exec` if you need exec resolvability validation.
 - For batch mode, fix failing entries and rerun `--dry-run` before writing.
 
+## Write safety
+
+`openclaw config set` and other OpenClaw-owned config writers validate the full
+post-change config before committing it to disk. If the new payload fails schema
+validation or looks like a destructive clobber, the active config is left alone
+and the rejected payload is saved beside it as `openclaw.json.rejected.*`.
+
+Prefer CLI writes for small edits:
+
+```bash
+openclaw config set gateway.reload.mode hybrid --dry-run
+openclaw config set gateway.reload.mode hybrid
+openclaw config validate
+```
+
+If a write is rejected, inspect the saved payload and fix the full config shape:
+
+```bash
+CONFIG="$(openclaw config file)"
+ls -lt "$CONFIG".rejected.* 2>/dev/null | head
+openclaw config validate
+```
+
+Direct editor writes are still allowed, but the running Gateway treats them as
+untrusted until they validate. Invalid direct edits can be restored from the
+last-known-good backup during startup or hot reload. See
+[Gateway troubleshooting](/gateway/troubleshooting#gateway-restored-last-known-good-config).
+
 ## Subcommands
 
 - `config file`: Print the active config file path (resolved from `OPENCLAW_CONFIG_PATH` or default location).

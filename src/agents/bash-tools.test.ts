@@ -1,6 +1,6 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { drainFormattedSystemEvents } from "../auto-reply/reply/session-updates.js";
+import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resetHeartbeatWakeStateForTests,
@@ -25,13 +25,161 @@ import {
 import { createExecTool, createProcessTool } from "./bash-tools.js";
 import { resolveShellFromPath, sanitizeBinaryOutput } from "./shell-utils.js";
 
+vi.mock("../infra/channel-summary.js", () => ({
+  buildChannelSummary: vi.fn(async () => []),
+}));
+
+vi.mock("../infra/exec-approval-surface.js", () => ({
+  describeNativeExecApprovalClientSetup: () => null,
+  listNativeExecApprovalClientLabels: () => [],
+  resolveExecApprovalInitiatingSurfaceState: (params: {
+    channel?: string | null;
+    accountId?: string | null;
+  }) => {
+    const channel = params.channel ?? undefined;
+    return {
+      kind: "enabled",
+      channel,
+      channelLabel:
+        channel === "tui" ? "terminal UI" : channel === "internal" ? "Web UI" : "this platform",
+      accountId: params.accountId ?? undefined,
+    };
+  },
+  supportsNativeExecApprovalClient: (channel?: string | null) =>
+    !channel || channel === "internal" || channel === "tui",
+}));
+
+vi.mock("../utils/delivery-context.js", () => ({
+  normalizeDeliveryContext: (context?: {
+    channel?: string | null;
+    to?: string | number | null;
+    accountId?: string | null;
+    threadId?: string | number | null;
+  }) => {
+    if (!context) {
+      return undefined;
+    }
+    const channel = context.channel?.trim().toLowerCase();
+    const to = context.to == null ? undefined : String(context.to).trim();
+    const accountId = context.accountId?.trim();
+    const threadId = context.threadId == null ? undefined : context.threadId;
+    if (!channel && !to && !accountId && threadId == null) {
+      return undefined;
+    }
+    return {
+      channel: channel || undefined,
+      to: to || undefined,
+      accountId: accountId || undefined,
+      ...(threadId != null && threadId !== "" ? { threadId } : {}),
+    };
+  },
+}));
+
+vi.mock("./bash-tools.exec-approval-followup.js", () => ({
+  buildExecApprovalFollowupPrompt: (text: string) => text,
+  sendExecApprovalFollowup: vi.fn(async () => false),
+}));
+
+vi.mock("./tools/gateway.js", () => ({
+  callGatewayTool: vi.fn(async () => ({ ok: true })),
+  readGatewayCallOptions: vi.fn(() => ({})),
+}));
+
+vi.mock("../infra/shell-env.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../infra/shell-env.js")>("../infra/shell-env.js");
+  return {
+    ...actual,
+    getShellPathFromLoginShell: vi.fn(() => null),
+    resolveShellEnvFallbackTimeoutMs: vi.fn(() => 0),
+  };
+});
+
+vi.mock("../process/supervisor/index.js", () => {
+  type SpawnInput = {
+    argv?: string[];
+    ptyCommand?: string;
+    env?: NodeJS.ProcessEnv;
+    onStdout?: (chunk: string) => void;
+  };
+
+  const immediate = () => new Promise<void>((resolve) => setImmediate(resolve));
+  const readEnvPath = (env?: NodeJS.ProcessEnv) => env?.PATH ?? env?.Path ?? "";
+  const extractCommand = (input: SpawnInput) => input.ptyCommand ?? input.argv?.at(-1) ?? "";
+  const splitCommands = (command: string) =>
+    command
+      .split(";")
+      .map((part) => part.trim())
+      .filter(Boolean);
+  const stdoutForSegment = (segment: string, env?: NodeJS.ProcessEnv) => {
+    if (segment === "echo $PATH" || segment === "Write-Output $env:PATH") {
+      return `${readEnvPath(env)}\n`;
+    }
+    if (segment.startsWith("echo ")) {
+      return `${segment.slice("echo ".length)}\n`;
+    }
+    if (segment.startsWith("Write-Output ")) {
+      return `${segment.slice("Write-Output ".length)}\n`;
+    }
+    return "";
+  };
+
+  const commandOutput = (command: string, env?: NodeJS.ProcessEnv) =>
+    splitCommands(command)
+      .map((segment) => stdoutForSegment(segment, env))
+      .join("");
+
+  return {
+    getProcessSupervisor: () => ({
+      spawn: async (input: SpawnInput) => {
+        const command = extractCommand(input);
+        const output = commandOutput(command, input.env);
+        const exitCode = splitCommands(command).includes("exit 1") ? 1 : 0;
+        const stagedOutput = command.includes("after")
+          ? output.replace(/after[^\n]*\n?/gu, "")
+          : output;
+        const deferredOutput = output.slice(stagedOutput.length);
+        if (stagedOutput) {
+          input.onStdout?.(stagedOutput);
+        }
+        return {
+          runId: "mock-bash-run",
+          startedAtMs: Date.now(),
+          pid: 123,
+          stdin: undefined,
+          wait: async () => {
+            await immediate();
+            if (deferredOutput) {
+              input.onStdout?.(deferredOutput);
+            }
+            return {
+              reason: "exit" as const,
+              exitCode,
+              exitSignal: null,
+              durationMs: 0,
+              stdout: "",
+              stderr: "",
+              timedOut: false,
+              noOutputTimedOut: false,
+            };
+          },
+          cancel: vi.fn(),
+        };
+      },
+      cancel: vi.fn(),
+      cancelScope: vi.fn(),
+      reconcileOrphans: vi.fn(),
+      getRecord: vi.fn(),
+    }),
+  };
+});
+
 const isWin = process.platform === "win32";
 const defaultShell = isWin
   ? undefined
   : process.env.OPENCLAW_TEST_SHELL || resolveShellFromPath("bash") || process.env.SHELL || "sh";
 // PowerShell: Start-Sleep for delays, ; for command separation, $null for null device
 const shortDelayCmd = isWin ? "Start-Sleep -Milliseconds 4" : "sleep 0.004";
-const yieldDelayCmd = isWin ? "Start-Sleep -Milliseconds 16" : "sleep 0.016";
 const POLL_INTERVAL_MS = isWin ? 15 : 2;
 const BACKGROUND_POLL_TIMEOUT_MS = isWin ? 8000 : 1200;
 const NOTIFY_EVENT_TIMEOUT_MS = isWin ? 12_000 : 5_000;
@@ -122,6 +270,7 @@ const readNormalizedTextContent = (content: ToolTextContent) =>
   normalizeText(readTextContent(content));
 const readTrimmedLines = (content: ToolTextContent) =>
   (readTextContent(content) ?? "").split("\n").map((line) => line.trim());
+const waitOneTurn = () => new Promise<void>((resolve) => setImmediate(resolve));
 const readTotalLines = (details: unknown) => (details as { totalLines?: number }).totalLines;
 const readProcessStatus = (details: unknown) => (details as { status?: string }).status;
 const readProcessStatusOrRunning = (details: unknown) =>
@@ -516,11 +665,7 @@ describe("exec tool backgrounding", () => {
   it(
     "backgrounds after yield and can be polled",
     async () => {
-      const result = await executeExecCommand(
-        execTool,
-        joinCommands([yieldDelayCmd, shellEcho(OUTPUT_DONE)]),
-        { yieldMs: 10 },
-      );
+      const result = await executeExecCommand(execTool, shellEcho(OUTPUT_DONE), { yieldMs: 0 });
 
       // Timing can race here: command may already be complete before the first response.
       if (result.details.status === PROCESS_STATUS_COMPLETED) {
@@ -787,7 +932,7 @@ describe("exec backgrounded onUpdate suppression", () => {
       await execTool.execute(nextCallId(), { command }, undefined, onUpdateSpy);
       const callsAtExit = onUpdateSpy.mock.calls.length;
       // Allow a tick for any straggling stdout data events.
-      await new Promise((r) => setTimeout(r, 5));
+      await waitOneTurn();
       expect(onUpdateSpy.mock.calls.length).toBe(callsAtExit);
     },
     isWin ? 10_000 : 5_000,
@@ -806,7 +951,7 @@ describe("exec backgrounded onUpdate suppression", () => {
       ]);
       // Abort almost immediately so the signal fires while the command
       // is still producing output.
-      setTimeout(() => abortController.abort(), 10);
+      setTimeout(() => abortController.abort(), 0);
       const result = await execTool.execute(
         nextCallId(),
         { command },
@@ -815,7 +960,7 @@ describe("exec backgrounded onUpdate suppression", () => {
       );
       const callsAtAbort = onUpdateSpy.mock.calls.length;
       // Allow a tick for any straggling stdout data events.
-      await new Promise((r) => setTimeout(r, 5));
+      await waitOneTurn();
       // After abort, no new onUpdate calls should have been made.
       expect(onUpdateSpy.mock.calls.length).toBe(callsAtAbort);
       expect(result).toBeDefined();

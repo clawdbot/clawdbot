@@ -20,10 +20,14 @@ describe("run-oxlint", () => {
     const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
       scripts: Record<string, string>;
     };
+    const shardedLintRunner = readFileSync("scripts/run-oxlint-shards.mjs", "utf8");
 
-    expect(packageJson.scripts.check).toContain("pnpm lint");
+    expect(packageJson.scripts.check).toBe("node scripts/check.mjs");
+    expect(packageJson.scripts.lint).toBe("node scripts/run-oxlint-shards.mjs");
     expect(packageJson.scripts.check).not.toContain(
       "node scripts/prepare-extension-package-boundary-artifacts.mjs",
     );
+    expect(shardedLintRunner).toContain("prepare-extension-package-boundary-artifacts.mjs");
+    expect(shardedLintRunner).toContain('OPENCLAW_OXLINT_SKIP_PREPARE: "1"');
   });
 });

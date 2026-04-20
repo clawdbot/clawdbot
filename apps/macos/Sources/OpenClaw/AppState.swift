@@ -30,6 +30,26 @@ final class AppState {
         case direct
     }
 
+    struct RemoteGatewayConfigDraft {
+        var transport: RemoteTransport
+        var remoteUrl: String
+        var remoteHost: String?
+        var remoteTarget: String
+        var remoteIdentity: String
+        var remoteToken: String
+        var remoteTokenDirty: Bool
+    }
+
+    struct GatewayConfigSyncDraft {
+        var connectionMode: ConnectionMode
+        var remoteTransport: RemoteTransport
+        var remoteTarget: String
+        var remoteIdentity: String
+        var remoteUrl: String
+        var remoteToken: String
+        var remoteTokenDirty: Bool
+    }
+
     var isPaused: Bool {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.isPaused, forKey: pauseDefaultsKey) } }
     }
@@ -420,25 +440,19 @@ final class AppState {
 
     private static func updatedRemoteGatewayConfig(
         current: [String: Any],
-        transport: RemoteTransport,
-        remoteUrl: String,
-        remoteHost: String?,
-        remoteTarget: String,
-        remoteIdentity: String,
-        remoteToken: String,
-        remoteTokenDirty: Bool) -> (remote: [String: Any], changed: Bool)
+        draft: RemoteGatewayConfigDraft) -> (remote: [String: Any], changed: Bool)
     {
         var remote = current
         var changed = false
 
-        switch transport {
+        switch draft.transport {
         case .direct:
             changed = Self.updateGatewayString(
                 &remote,
                 key: "transport",
                 value: RemoteTransport.direct.rawValue) || changed
 
-            let trimmedUrl = remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedUrl = draft.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmedUrl.isEmpty {
                 changed = Self.updateGatewayString(&remote, key: "url", value: nil) || changed
             } else if let normalizedUrl = GatewayRemoteConfig.normalizeGatewayUrlString(trimmedUrl) {
@@ -448,7 +462,7 @@ final class AppState {
         case .ssh:
             changed = Self.updateGatewayString(&remote, key: "transport", value: nil) || changed
 
-            if let host = remoteHost {
+            if let host = draft.remoteHost {
                 let existingUrl = (remote["url"] as? String)?
                     .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 let parsedExisting = existingUrl.isEmpty ? nil : URL(string: existingUrl)
@@ -458,13 +472,13 @@ final class AppState {
                 changed = Self.updateGatewayString(&remote, key: "url", value: desiredUrl) || changed
             }
 
-            let sanitizedTarget = Self.sanitizeSSHTarget(remoteTarget)
+            let sanitizedTarget = Self.sanitizeSSHTarget(draft.remoteTarget)
             changed = Self.updateGatewayString(&remote, key: "sshTarget", value: sanitizedTarget) || changed
-            changed = Self.updateGatewayString(&remote, key: "sshIdentity", value: remoteIdentity) || changed
+            changed = Self.updateGatewayString(&remote, key: "sshIdentity", value: draft.remoteIdentity) || changed
         }
 
-        if remoteTokenDirty {
-            changed = Self.updateGatewayString(&remote, key: "token", value: remoteToken) || changed
+        if draft.remoteTokenDirty {
+            changed = Self.updateGatewayString(&remote, key: "token", value: draft.remoteToken) || changed
         }
 
         return (remote, changed)
@@ -550,19 +564,13 @@ final class AppState {
 
     private static func syncedGatewayRoot(
         currentRoot: [String: Any],
-        connectionMode: ConnectionMode,
-        remoteTransport: RemoteTransport,
-        remoteTarget: String,
-        remoteIdentity: String,
-        remoteUrl: String,
-        remoteToken: String,
-        remoteTokenDirty: Bool) -> (root: [String: Any], changed: Bool)
+        draft: GatewayConfigSyncDraft) -> (root: [String: Any], changed: Bool)
     {
         var root = currentRoot
         var gateway = root["gateway"] as? [String: Any] ?? [:]
         var changed = false
 
-        let desiredMode: String? = switch connectionMode {
+        let desiredMode: String? = switch draft.connectionMode {
         case .local:
             "local"
         case .remote:
@@ -582,18 +590,19 @@ final class AppState {
             changed = true
         }
 
-        if connectionMode == .remote {
-            let remoteHost = CommandResolver.parseSSHTarget(remoteTarget)?.host
+        if draft.connectionMode == .remote {
+            let remoteHost = CommandResolver.parseSSHTarget(draft.remoteTarget)?.host
             let currentRemote = gateway["remote"] as? [String: Any] ?? [:]
             let updated = Self.updatedRemoteGatewayConfig(
                 current: currentRemote,
-                transport: remoteTransport,
-                remoteUrl: remoteUrl,
-                remoteHost: remoteHost,
-                remoteTarget: remoteTarget,
-                remoteIdentity: remoteIdentity,
-                remoteToken: remoteToken,
-                remoteTokenDirty: remoteTokenDirty)
+                draft: .init(
+                    transport: draft.remoteTransport,
+                    remoteUrl: draft.remoteUrl,
+                    remoteHost: remoteHost,
+                    remoteTarget: draft.remoteTarget,
+                    remoteIdentity: draft.remoteIdentity,
+                    remoteToken: draft.remoteToken,
+                    remoteTokenDirty: draft.remoteTokenDirty))
             if updated.changed {
                 gateway["remote"] = updated.remote
                 changed = true
@@ -625,13 +634,14 @@ final class AppState {
         // Keep app-only connection settings local to avoid overwriting remote gateway config.
         let synced = Self.syncedGatewayRoot(
             currentRoot: OpenClawConfigFile.loadDict(),
-            connectionMode: self.connectionMode,
-            remoteTransport: self.remoteTransport,
-            remoteTarget: self.remoteTarget,
-            remoteIdentity: self.remoteIdentity,
-            remoteUrl: self.remoteUrl,
-            remoteToken: self.remoteToken,
-            remoteTokenDirty: self.remoteTokenDirty)
+            draft: .init(
+                connectionMode: self.connectionMode,
+                remoteTransport: self.remoteTransport,
+                remoteTarget: self.remoteTarget,
+                remoteIdentity: self.remoteIdentity,
+                remoteUrl: self.remoteUrl,
+                remoteToken: self.remoteToken,
+                remoteTokenDirty: self.remoteTokenDirty))
         guard synced.changed else { return }
         OpenClawConfigFile.saveDict(synced.root)
     }
@@ -788,44 +798,20 @@ extension AppState {
 extension AppState {
     static func _testUpdatedRemoteGatewayConfig(
         current: [String: Any],
-        transport: RemoteTransport,
-        remoteUrl: String,
-        remoteHost: String?,
-        remoteTarget: String,
-        remoteIdentity: String,
-        remoteToken: String,
-        remoteTokenDirty: Bool) -> [String: Any]
+        draft: RemoteGatewayConfigDraft) -> [String: Any]
     {
         self.updatedRemoteGatewayConfig(
             current: current,
-            transport: transport,
-            remoteUrl: remoteUrl,
-            remoteHost: remoteHost,
-            remoteTarget: remoteTarget,
-            remoteIdentity: remoteIdentity,
-            remoteToken: remoteToken,
-            remoteTokenDirty: remoteTokenDirty).remote
+            draft: draft).remote
     }
 
     static func _testSyncedGatewayRoot(
         currentRoot: [String: Any],
-        connectionMode: ConnectionMode,
-        remoteTransport: RemoteTransport,
-        remoteTarget: String,
-        remoteIdentity: String,
-        remoteUrl: String,
-        remoteToken: String,
-        remoteTokenDirty: Bool) -> [String: Any]
+        draft: GatewayConfigSyncDraft) -> [String: Any]
     {
         self.syncedGatewayRoot(
             currentRoot: currentRoot,
-            connectionMode: connectionMode,
-            remoteTransport: remoteTransport,
-            remoteTarget: remoteTarget,
-            remoteIdentity: remoteIdentity,
-            remoteUrl: remoteUrl,
-            remoteToken: remoteToken,
-            remoteTokenDirty: remoteTokenDirty).root
+            draft: draft).root
     }
 }
 #endif

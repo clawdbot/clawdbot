@@ -1,5 +1,8 @@
 {
   "extends": "./tsconfig.test.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": ".artifacts/tsgo-cache/core-test.tsbuildinfo"
+  },
   "include": [
     "src/**/*.d.ts",
     "src/**/*.test.ts",

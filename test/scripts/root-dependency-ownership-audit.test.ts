@@ -18,16 +18,16 @@ describe("collectModuleSpecifiers", () => {
 });
 
 describe("classifyRootDependencyOwnership", () => {
-  it("treats root-dist bundled runtime mirrors as blocked extension deps", () => {
+  it("treats root-dist bundled runtime imports as localizable extension deps", () => {
     expect(
       classifyRootDependencyOwnership({
         sections: ["extensions"],
         rootMirrorImporters: ["discovery-DZDwKJdJ.js"],
       }),
     ).toEqual({
-      category: "extension_only_root_mirror",
+      category: "extension_only_localizable",
       recommendation:
-        "blocked by packaged host graph: remove root mirror only after bundled runtime resolution stops importing it from root dist",
+        "remove from root package.json and rely on owning extension manifests plus doctor --fix",
     });
   });
 
@@ -52,7 +52,7 @@ describe("classifyRootDependencyOwnership", () => {
     ).toEqual({
       category: "extension_only_localizable",
       recommendation:
-        "candidate to remove from root package.json and rely on owning extension manifests",
+        "remove from root package.json and rely on owning extension manifests plus doctor --fix",
     });
   });
 

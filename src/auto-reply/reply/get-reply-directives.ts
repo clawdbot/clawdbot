@@ -1,7 +1,7 @@
 import { listAgentEntries } from "../../agents/agent-scope.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
-import type { ModelAliasIndex } from "../../agents/model-selection.js";
+import { type ModelAliasIndex, resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -51,6 +51,24 @@ function loadCommandsRegistry() {
 function loadSkillCommands() {
   skillCommandsPromise ??= import("../skill-commands.runtime.js");
   return skillCommandsPromise;
+}
+
+function canUseFastExplicitModelDirective(params: {
+  directives: InlineDirectives;
+  defaultProvider: string;
+  aliasIndex: ModelAliasIndex;
+}): boolean {
+  const raw = normalizeOptionalString(params.directives.rawModelDirective);
+  if (!raw || /^[0-9]+$/.test(raw)) {
+    return false;
+  }
+  return Boolean(
+    resolveModelRefFromString({
+      raw,
+      defaultProvider: params.defaultProvider,
+      aliasIndex: params.aliasIndex,
+    }),
+  );
 }
 
 function resolveDirectiveCommandText(params: { ctx: MsgContext; sessionCtx: TemplateContext }) {
@@ -202,8 +220,13 @@ export async function resolveReplyDirectives(params: {
     commandSource: ctx.CommandSource,
   });
   const commandTextHasSlash = commandText.includes("/");
+  const hasConfiguredModelAliases =
+    commandTextHasSlash &&
+    Object.values(cfg.agents?.defaults?.models ?? {}).some((entry) =>
+      Boolean(normalizeOptionalString(entry.alias)),
+    );
   const reservedCommands = new Set<string>();
-  if (commandTextHasSlash) {
+  if (hasConfiguredModelAliases) {
     const { listChatCommands } = await loadCommandsRegistry();
     for (const chatCommand of listChatCommands()) {
       for (const alias of chatCommand.textAliases) {
@@ -212,11 +235,13 @@ export async function resolveReplyDirectives(params: {
     }
   }
 
-  const rawAliases = resolveConfiguredDirectiveAliases({
-    cfg,
-    commandTextHasSlash,
-    reservedCommands,
-  });
+  const rawAliases = hasConfiguredModelAliases
+    ? resolveConfiguredDirectiveAliases({
+        cfg,
+        commandTextHasSlash,
+        reservedCommands,
+      })
+    : [];
 
   // Only load workspace skill commands when we actually need them to filter aliases.
   // This avoids scanning skills for messages that only use plain text with no slash syntax.
@@ -428,33 +453,41 @@ export async function resolveReplyDirectives(params: {
     isFastTestEnv: process.env.OPENCLAW_TEST_FAST === "1",
   });
 
-  const modelState =
+  const useFastModelSelection =
     useFastReplyRuntime &&
-    !directives.hasModelDirective &&
     !hasResolvedHeartbeatModelOverride &&
+    !(agentCfg?.models && Object.keys(agentCfg.models).length > 0) &&
     !normalizeOptionalString(targetSessionEntry?.modelOverride) &&
-    !normalizeOptionalString(targetSessionEntry?.providerOverride)
-      ? createFastTestModelSelectionState({
-          agentCfg,
-          provider,
-          model,
-        })
-      : await createModelSelectionState({
-          cfg,
-          agentId,
-          agentCfg,
-          sessionEntry: targetSessionEntry,
-          sessionStore,
-          sessionKey,
-          parentSessionKey: targetSessionEntry?.parentSessionKey ?? ctx.ParentSessionKey,
-          storePath,
-          defaultProvider,
-          defaultModel,
-          provider,
-          model,
-          hasModelDirective: directives.hasModelDirective,
-          hasResolvedHeartbeatModelOverride,
-        });
+    !normalizeOptionalString(targetSessionEntry?.providerOverride) &&
+    (!directives.hasModelDirective ||
+      canUseFastExplicitModelDirective({
+        directives,
+        defaultProvider,
+        aliasIndex: params.aliasIndex,
+      }));
+
+  const modelState = useFastModelSelection
+    ? createFastTestModelSelectionState({
+        agentCfg,
+        provider,
+        model,
+      })
+    : await createModelSelectionState({
+        cfg,
+        agentId,
+        agentCfg,
+        sessionEntry: targetSessionEntry,
+        sessionStore,
+        sessionKey,
+        parentSessionKey: targetSessionEntry?.parentSessionKey ?? ctx.ParentSessionKey,
+        storePath,
+        defaultProvider,
+        defaultModel,
+        provider,
+        model,
+        hasModelDirective: directives.hasModelDirective,
+        hasResolvedHeartbeatModelOverride,
+      });
   provider = modelState.provider;
   model = modelState.model;
   const resolvedThinkLevelWithDefault =

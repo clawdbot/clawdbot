@@ -104,6 +104,13 @@ export function startGatewayConfigReloader(opts: {
   readSnapshot: () => Promise<ConfigFileSnapshot>;
   onHotReload: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => Promise<void>;
   onRestart: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
+  recoverSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
+  promoteSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
+  onRecovered?: (params: {
+    reason: string;
+    snapshot: ConfigFileSnapshot;
+    recoveredSnapshot: ConfigFileSnapshot;
+  }) => void | Promise<void>;
   subscribeToWrites?: (listener: (event: ConfigWriteNotification) => void) => () => void;
   log: {
     info: (msg: string) => void;
@@ -120,7 +127,7 @@ export function startGatewayConfigReloader(opts: {
   let stopped = false;
   let restartQueued = false;
   let missingConfigRetries = 0;
-  let pendingInProcessConfig: OpenClawConfig | null = null;
+  let pendingInProcessConfig: { config: OpenClawConfig; persistedHash: string } | null = null;
   let lastAppliedWriteHash = opts.initialInternalWriteHash ?? null;
 
   const scheduleAfter = (wait: number) => {
@@ -180,6 +187,32 @@ export function startGatewayConfigReloader(opts: {
     return true;
   };
 
+  const recoverAndReadSnapshot = async (
+    snapshot: ConfigFileSnapshot,
+    reason: string,
+  ): Promise<ConfigFileSnapshot | null> => {
+    if (!opts.recoverSnapshot) {
+      return null;
+    }
+    const recovered = await opts.recoverSnapshot(snapshot, reason);
+    if (!recovered) {
+      return null;
+    }
+    opts.log.warn(`config reload restored last-known-good config after ${reason}`);
+    const nextSnapshot = await opts.readSnapshot();
+    if (!nextSnapshot.valid) {
+      const issues = formatConfigIssueLines(nextSnapshot.issues, "").join(", ");
+      opts.log.warn(`config reload recovery snapshot is invalid: ${issues}`);
+      return null;
+    }
+    try {
+      await opts.onRecovered?.({ reason, snapshot, recoveredSnapshot: nextSnapshot });
+    } catch (err) {
+      opts.log.warn(`config reload recovery notice failed: ${String(err)}`);
+    }
+    return nextSnapshot;
+  };
+
   const applySnapshot = async (nextConfig: OpenClawConfig) => {
     const changedPaths = diffConfigPaths(currentConfig, nextConfig);
     currentConfig = nextConfig;
@@ -224,6 +257,32 @@ export function startGatewayConfigReloader(opts: {
     await opts.onHotReload(plan, nextConfig);
   };
 
+  const promoteAcceptedSnapshot = async (snapshot: ConfigFileSnapshot, reason: string) => {
+    if (!opts.promoteSnapshot || !snapshot.exists || !snapshot.valid) {
+      return;
+    }
+    try {
+      await opts.promoteSnapshot(snapshot, reason);
+    } catch (err) {
+      opts.log.warn(`config reload last-known-good promotion failed: ${String(err)}`);
+    }
+  };
+
+  const promoteAcceptedInProcessWrite = async (persistedHash: string) => {
+    if (!opts.promoteSnapshot) {
+      return;
+    }
+    try {
+      const snapshot = await opts.readSnapshot();
+      if (snapshot.hash !== persistedHash || !snapshot.valid) {
+        return;
+      }
+      await promoteAcceptedSnapshot(snapshot, "in-process-write");
+    } catch (err) {
+      opts.log.warn(`config reload in-process last-known-good promotion failed: ${String(err)}`);
+    }
+  };
+
   const runReload = async () => {
     if (stopped) {
       return;
@@ -239,13 +298,14 @@ export function startGatewayConfigReloader(opts: {
     }
     try {
       if (pendingInProcessConfig) {
-        const nextConfig = pendingInProcessConfig;
+        const pendingWrite = pendingInProcessConfig;
         pendingInProcessConfig = null;
         missingConfigRetries = 0;
-        await applySnapshot(nextConfig);
+        await applySnapshot(pendingWrite.config);
+        await promoteAcceptedInProcessWrite(pendingWrite.persistedHash);
         return;
       }
-      const snapshot = await opts.readSnapshot();
+      let snapshot = await opts.readSnapshot();
       if (lastAppliedWriteHash && typeof snapshot.hash === "string") {
         if (snapshot.hash === lastAppliedWriteHash) {
           return;
@@ -255,10 +315,16 @@ export function startGatewayConfigReloader(opts: {
       if (handleMissingSnapshot(snapshot)) {
         return;
       }
-      if (handleInvalidSnapshot(snapshot)) {
-        return;
+      if (!snapshot.valid) {
+        const recoveredSnapshot = await recoverAndReadSnapshot(snapshot, "invalid-config");
+        if (!recoveredSnapshot) {
+          handleInvalidSnapshot(snapshot);
+          return;
+        }
+        snapshot = recoveredSnapshot;
       }
       await applySnapshot(snapshot.config);
+      await promoteAcceptedSnapshot(snapshot, "valid-config");
     } catch (err) {
       opts.log.error(`config reload failed: ${String(err)}`);
     } finally {
@@ -285,7 +351,10 @@ export function startGatewayConfigReloader(opts: {
       if (event.configPath !== opts.watchPath) {
         return;
       }
-      pendingInProcessConfig = event.runtimeConfig;
+      pendingInProcessConfig = {
+        config: event.runtimeConfig,
+        persistedHash: event.persistedHash,
+      };
       lastAppliedWriteHash = event.persistedHash;
       scheduleAfter(0);
     }) ?? (() => {});

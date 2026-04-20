@@ -25,13 +25,13 @@ describe("resolveCronDeliveryPlan", () => {
       makeJob({
         name: "Cron Target Context",
         payload: { kind: "agentTurn", message: "send a message" },
-      delivery: {
-        mode: "none",
-        channel: "telegram",
-        to: "123:topic:42",
-        threadId: 42,
-        accountId: "ops",
-      },
+        delivery: {
+          mode: "none",
+          channel: "telegram",
+          to: "123:topic:42",
+          threadId: 42,
+          accountId: "ops",
+        },
       }),
     );
 

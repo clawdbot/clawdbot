@@ -42,7 +42,7 @@ async function fetchWithRetry(input: string, init?: RequestInit, attempts = 3) {
       if (attempt === attempts) {
         throw error;
       }
-      await sleep(50);
+      await sleep(10);
     }
   }
   throw lastError;
@@ -61,7 +61,7 @@ async function waitForRunnerCatalog(baseUrl: string, timeoutMs = 5_000) {
     if (bootstrap.runnerCatalog.status !== "loading") {
       return bootstrap.runnerCatalog;
     }
-    await sleep(50);
+    await sleep(10);
   }
   throw new Error("runner catalog stayed loading");
 }
@@ -75,7 +75,7 @@ async function waitForFile(filePath: string, timeoutMs = 5_000) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;
       }
-      await sleep(50);
+      await sleep(10);
     }
   }
   throw new Error(`file did not appear: ${filePath}`);
@@ -417,7 +417,7 @@ describe("qa-lab server", () => {
       await lab.stop();
     });
 
-    await sleep(150);
+    await sleep(25);
     await expect(readFile(markerPath, "utf8")).rejects.toThrow();
 
     const bootstrapResponse = await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`);
@@ -501,7 +501,6 @@ describe("qa-lab server", () => {
       }),
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 800));
     const snapshot = (await (await fetchWithRetry(`${lab.baseUrl}/api/state`)).json()) as {
       messages: Array<{ direction: string }>;
     };

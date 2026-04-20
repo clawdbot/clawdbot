@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/media-understanding-core",
-  "version": "2026.4.19-beta.1",
+  "version": "2026.4.20",
   "private": true,
   "description": "OpenClaw media understanding runtime package",
   "type": "module",

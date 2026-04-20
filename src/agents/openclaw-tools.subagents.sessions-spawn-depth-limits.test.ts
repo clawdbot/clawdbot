@@ -10,6 +10,16 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
+vi.mock("../tasks/task-executor.js", () => ({
+  completeTaskRunByRunId: vi.fn(),
+  createQueuedTaskRun: vi.fn(),
+  createRunningTaskRun: vi.fn(),
+  failTaskRunByRunId: vi.fn(),
+  recordTaskRunProgressByRunId: vi.fn(),
+  setDetachedTaskDeliveryStatusByRunId: vi.fn(),
+  startTaskRunByRunId: vi.fn(),
+}));
+
 let storeTemplatePath = "";
 let configOverride: Record<string, unknown> = {
   session: createPerSenderSessionConfig(),
@@ -20,13 +30,9 @@ let subagentRegistryTesting: typeof import("./subagent-registry.js").__testing;
 let setSubagentSpawnDepsForTest: typeof import("./subagent-spawn.js").__testing.setDepsForTest;
 let createSessionsSpawnTool: typeof import("./tools/sessions-spawn-tool.js").createSessionsSpawnTool;
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  return {
-    ...actual,
-    loadConfig: () => configOverride,
-  };
-});
+vi.mock("../config/config.js", () => ({
+  loadConfig: () => configOverride,
+}));
 
 function writeStore(agentId: string, store: Record<string, unknown>) {
   const storePath = storeTemplatePath.replaceAll("{agentId}", agentId);

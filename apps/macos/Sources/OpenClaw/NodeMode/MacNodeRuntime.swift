@@ -845,10 +845,8 @@ extension MacNodeRuntime {
     {
         guard persistAllowlist, security == .allowlist else { return }
         var seenPatterns = Set<String>()
-        for pattern in allowAlwaysPatterns {
-            if seenPatterns.insert(pattern).inserted {
-                ExecApprovalsStore.addAllowlistEntry(agentId: agentId, pattern: pattern)
-            }
+        for pattern in allowAlwaysPatterns where seenPatterns.insert(pattern).inserted {
+            ExecApprovalsStore.addAllowlistEntry(agentId: agentId, pattern: pattern)
         }
     }
 

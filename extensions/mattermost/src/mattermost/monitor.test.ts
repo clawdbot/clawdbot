@@ -1,9 +1,13 @@
 import { createClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import { resolveMattermostAccount } from "./accounts.js";
+import * as clientModule from "./client.js";
+import type { MattermostClient } from "./client.js";
 import {
   buildMattermostModelPickerSelectMessageSid,
+  canFinalizeMattermostPreviewInPlace,
+  deliverMattermostReplyWithDraftPreview,
   evaluateMattermostMentionGate,
   MattermostRetryableInboundError,
   processMattermostReplayGuardedPost,
@@ -11,6 +15,8 @@ import {
   resolveMattermostEffectiveReplyToId,
   resolveMattermostReplyRootId,
   resolveMattermostThreadSessionContext,
+  shouldFinalizeMattermostPreviewAfterDispatch,
+  shouldClearMattermostDraftPreview,
   type MattermostMentionGateInput,
   type MattermostRequireMentionResolverInput,
 } from "./monitor.js";
@@ -40,6 +46,34 @@ function resolveRequireMentionForTest(params: MattermostRequireMentionResolverIn
   }
   return true;
 }
+
+const updateMattermostPostSpy = vi.spyOn(clientModule, "updateMattermostPost");
+
+function createMattermostClientMock(): MattermostClient {
+  return {
+    baseUrl: "https://chat.example.com",
+    apiBaseUrl: "https://chat.example.com/api/v4",
+    token: "token",
+    request: vi.fn(async () => ({})) as MattermostClient["request"],
+    fetchImpl: vi.fn(
+      async () => new Response(null, { status: 200 }),
+    ) as MattermostClient["fetchImpl"],
+  };
+}
+
+function createDraftStreamMock(postId: string | undefined = "preview-post-1") {
+  return {
+    flush: vi.fn(async () => {}),
+    postId: vi.fn(() => postId),
+    clear: vi.fn(async () => {}),
+    stop: vi.fn(async () => {}),
+  };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  updateMattermostPostSpy.mockResolvedValue({ id: "patched" } as never);
+});
 
 function evaluateMentionGateForMessage(params: { cfg: OpenClawConfig; threadRootId?: string }) {
   const account = resolveMattermostAccount({ cfg: params.cfg, accountId: "default" });
@@ -164,6 +198,186 @@ describe("resolveMattermostReplyRootId", () => {
 
   it("falls back to undefined when neither reply target is available", () => {
     expect(resolveMattermostReplyRootId({})).toBeUndefined();
+  });
+});
+
+describe("canFinalizeMattermostPreviewInPlace", () => {
+  it("allows in-place finalization when the final reply target matches the preview thread", () => {
+    expect(
+      canFinalizeMattermostPreviewInPlace({
+        previewRootId: "thread-root-456",
+        threadRootId: "thread-root-456",
+        replyToId: "child-post-789",
+      }),
+    ).toBe(true);
+  });
+
+  it("prevents in-place finalization when a top-level preview would become a threaded reply", () => {
+    expect(
+      canFinalizeMattermostPreviewInPlace({
+        replyToId: "child-post-789",
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("shouldClearMattermostDraftPreview", () => {
+  it("deletes the preview after successful normal final delivery", () => {
+    expect(
+      shouldClearMattermostDraftPreview({
+        finalizedViaPreviewPost: false,
+        finalReplyDelivered: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps the preview when final delivery failed", () => {
+    expect(
+      shouldClearMattermostDraftPreview({
+        finalizedViaPreviewPost: false,
+        finalReplyDelivered: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps the preview when it already became the final reply", () => {
+    expect(
+      shouldClearMattermostDraftPreview({
+        finalizedViaPreviewPost: true,
+        finalReplyDelivered: true,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("deliverMattermostReplyWithDraftPreview", () => {
+  it("deletes the preview after a successful normal final send", async () => {
+    const draftStream = createDraftStreamMock();
+    const deliverFinal = vi.fn(async () => {});
+
+    await deliverMattermostReplyWithDraftPreview({
+      payload: { text: "All good", replyToId: "reply-1" } as never,
+      info: { kind: "final" },
+      client: createMattermostClientMock(),
+      draftStream,
+      resolvePreviewFinalText: (text) => text?.trim(),
+      previewState: { finalizedViaPreviewPost: false },
+      logVerboseMessage: vi.fn(),
+      deliverFinal,
+    });
+
+    expect(deliverFinal).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    expect(updateMattermostPostSpy).not.toHaveBeenCalled();
+  });
+
+  it("deletes the preview after a successful non-finalizable media final", async () => {
+    const draftStream = createDraftStreamMock();
+    const deliverFinal = vi.fn(async () => {});
+
+    await deliverMattermostReplyWithDraftPreview({
+      payload: {
+        text: "Photo",
+        replyToId: "reply-1",
+        mediaUrl: "https://example.com/a.png",
+      } as never,
+      info: { kind: "final" },
+      client: createMattermostClientMock(),
+      draftStream,
+      effectiveReplyToId: "thread-root-1",
+      resolvePreviewFinalText: (text) => text?.trim(),
+      previewState: { finalizedViaPreviewPost: false },
+      logVerboseMessage: vi.fn(),
+      deliverFinal,
+    });
+
+    expect(deliverFinal).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("finalizes the preview in place when the final targets the same thread", async () => {
+    const draftStream = createDraftStreamMock();
+    const deliverFinal = vi.fn(async () => {});
+
+    await deliverMattermostReplyWithDraftPreview({
+      payload: { text: "Final answer", replyToId: "child-post-789" } as never,
+      info: { kind: "final" },
+      client: createMattermostClientMock(),
+      draftStream,
+      effectiveReplyToId: "thread-root-456",
+      resolvePreviewFinalText: (text) => text?.trim(),
+      previewState: { finalizedViaPreviewPost: false },
+      logVerboseMessage: vi.fn(),
+      deliverFinal,
+    });
+
+    expect(updateMattermostPostSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      "preview-post-1",
+      expect.objectContaining({ message: "Final answer" }),
+    );
+    expect(draftStream.stop).toHaveBeenCalledTimes(1);
+    expect(draftStream.stop.mock.invocationCallOrder[0]).toBeLessThan(
+      updateMattermostPostSpy.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(deliverFinal).not.toHaveBeenCalled();
+    expect(draftStream.clear).not.toHaveBeenCalled();
+  });
+
+  it("keeps the existing preview unchanged when final delivery fails", async () => {
+    const draftStream = createDraftStreamMock();
+    const deliverFinal = vi.fn(async () => {
+      throw new Error("send failed");
+    });
+
+    await expect(
+      deliverMattermostReplyWithDraftPreview({
+        payload: { text: "Broken", replyToId: "reply-1" } as never,
+        info: { kind: "final" },
+        client: createMattermostClientMock(),
+        draftStream,
+        resolvePreviewFinalText: (text) => text?.trim(),
+        previewState: { finalizedViaPreviewPost: false },
+        logVerboseMessage: vi.fn(),
+        deliverFinal,
+      }),
+    ).rejects.toThrow("send failed");
+
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(updateMattermostPostSpy).not.toHaveBeenCalledWith(
+      expect.anything(),
+      "preview-post-1",
+      expect.objectContaining({ message: "↓ See below." }),
+    );
+  });
+});
+
+describe("shouldFinalizeMattermostPreviewAfterDispatch", () => {
+  it("reuses the preview only for a single eligible final payload", () => {
+    expect(
+      shouldFinalizeMattermostPreviewAfterDispatch({
+        finalCount: 1,
+        canFinalizeInPlace: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("falls back to normal sends for multi-payload finals", () => {
+    expect(
+      shouldFinalizeMattermostPreviewAfterDispatch({
+        finalCount: 2,
+        canFinalizeInPlace: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("falls back to normal sends when the final cannot be edited into the preview", () => {
+    expect(
+      shouldFinalizeMattermostPreviewAfterDispatch({
+        finalCount: 1,
+        canFinalizeInPlace: false,
+      }),
+    ).toBe(false);
   });
 });
 

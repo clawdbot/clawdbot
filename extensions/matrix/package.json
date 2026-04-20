@@ -1,11 +1,11 @@
 {
   "name": "@openclaw/matrix",
-  "version": "2026.4.19-beta.1",
+  "version": "2026.4.20",
   "description": "OpenClaw Matrix channel plugin",
   "type": "module",
   "dependencies": {
     "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
-    "@matrix-org/matrix-sdk-crypto-wasm": "18.0.0",
+    "@matrix-org/matrix-sdk-crypto-wasm": "18.1.0",
     "fake-indexeddb": "^6.2.5",
     "markdown-it": "14.1.1",
     "matrix-js-sdk": "41.3.0",
@@ -16,7 +16,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.19-beta.1"
+    "openclaw": ">=2026.4.20"
   },
   "peerDependenciesMeta": {
     "openclaw": {

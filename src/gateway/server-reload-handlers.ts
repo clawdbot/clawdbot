@@ -23,6 +23,7 @@ import {
 } from "../secrets/runtime.js";
 import { getInspectableTaskRegistrySummary } from "../tasks/task-registry.maintenance.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
+import { enqueueConfigRecoveryNotice } from "./config-recovery-notice.js";
 import type { ChannelKind } from "./config-reload-plan.js";
 import { startGatewayConfigReloader, type GatewayReloadPlan } from "./config-reload.js";
 import { resolveHooksConfig } from "./hooks.js";
@@ -82,6 +83,8 @@ type ManagedGatewayConfigReloaderParams = Omit<
   initialInternalWriteHash: string | null;
   watchPath: string;
   readSnapshot: typeof import("../config/config.js").readConfigFileSnapshot;
+  recoverSnapshot: typeof import("../config/config.js").recoverConfigFromLastKnownGood;
+  promoteSnapshot: typeof import("../config/config.js").promoteConfigSnapshotToLastKnownGood;
   subscribeToWrites: typeof import("../config/config.js").registerConfigWriteListener;
   logReload: GatewayReloadLog & {
     error: (msg: string) => void;
@@ -300,6 +303,17 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
     initialConfig: params.initialConfig,
     initialInternalWriteHash: params.initialInternalWriteHash,
     readSnapshot: params.readSnapshot,
+    recoverSnapshot: async (snapshot, reason) =>
+      await params.recoverSnapshot({ snapshot, reason: `reload-${reason}` }),
+    promoteSnapshot: async (snapshot, _reason) => await params.promoteSnapshot(snapshot),
+    onRecovered: ({ reason, snapshot, recoveredSnapshot }) => {
+      enqueueConfigRecoveryNotice({
+        cfg: recoveredSnapshot.config,
+        phase: "reload",
+        reason: `reload-${reason}`,
+        configPath: snapshot.path,
+      });
+    },
     subscribeToWrites: params.subscribeToWrites,
     onHotReload: async (plan, nextConfig) => {
       const previousSharedGatewaySessionGeneration =

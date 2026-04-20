@@ -33,6 +33,7 @@ import {
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { runPreparedReply } from "./get-reply-run.js";
 import { finalizeInboundContext } from "./inbound-context.js";
+import { hasInboundMedia } from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createFastTestModelSelectionState } from "./model-selection.js";
 import { initSessionState } from "./session.js";
@@ -117,18 +118,6 @@ function mergeSkillFilters(channelFilter?: string[], agentFilter?: string[]): st
   }
   const agentSet = new Set(agent);
   return channel.filter((name) => agentSet.has(name));
-}
-
-function hasInboundMedia(ctx: MsgContext): boolean {
-  return Boolean(
-    ctx.StickerMediaIncluded ||
-    ctx.Sticker ||
-    normalizeOptionalString(ctx.MediaPath) ||
-    normalizeOptionalString(ctx.MediaUrl) ||
-    ctx.MediaPaths?.some((value) => normalizeOptionalString(value)) ||
-    ctx.MediaUrls?.some((value) => normalizeOptionalString(value)) ||
-    ctx.MediaTypes?.length,
-  );
 }
 
 function hasLinkCandidate(ctx: MsgContext): boolean {
@@ -323,22 +312,25 @@ export async function getReplyFromConfig(
     });
   }
 
-  const channelModelOverride = resolveChannelModelOverride({
-    cfg,
-    channel:
-      groupResolution?.channel ??
-      sessionEntry.channel ??
-      sessionEntry.origin?.provider ??
-      (typeof finalized.OriginatingChannel === "string"
-        ? finalized.OriginatingChannel
-        : undefined) ??
-      finalized.Provider,
-    groupId: groupResolution?.id ?? sessionEntry.groupId,
-    groupChatType: sessionEntry.chatType ?? sessionCtx.ChatType ?? finalized.ChatType,
-    groupChannel: sessionEntry.groupChannel ?? sessionCtx.GroupChannel ?? finalized.GroupChannel,
-    groupSubject: sessionEntry.subject ?? sessionCtx.GroupSubject ?? finalized.GroupSubject,
-    parentSessionKey: sessionCtx.ParentSessionKey,
-  });
+  const channelModelOverride = cfg.channels?.modelByChannel
+    ? resolveChannelModelOverride({
+        cfg,
+        channel:
+          groupResolution?.channel ??
+          sessionEntry.channel ??
+          sessionEntry.origin?.provider ??
+          (typeof finalized.OriginatingChannel === "string"
+            ? finalized.OriginatingChannel
+            : undefined) ??
+          finalized.Provider,
+        groupId: groupResolution?.id ?? sessionEntry.groupId,
+        groupChatType: sessionEntry.chatType ?? sessionCtx.ChatType ?? finalized.ChatType,
+        groupChannel:
+          sessionEntry.groupChannel ?? sessionCtx.GroupChannel ?? finalized.GroupChannel,
+        groupSubject: sessionEntry.subject ?? sessionCtx.GroupSubject ?? finalized.GroupSubject,
+        parentSessionKey: sessionCtx.ParentSessionKey,
+      })
+    : null;
   const hasSessionModelOverride = Boolean(
     normalizeOptionalString(sessionEntry.modelOverride) ||
     normalizeOptionalString(sessionEntry.providerOverride),

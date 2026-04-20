@@ -581,6 +581,26 @@ describe("client cache", () => {
     });
     expect(a).not.toBe(b);
   });
+
+  it("private-network config changes rebuild the client without explicit invalidation", () => {
+    const cfg = {
+      channels: {
+        bluebubbles: {
+          serverUrl: "http://192.168.1.50:1234",
+          password: "s3cret",
+          network: { dangerouslyAllowPrivateNetwork: true },
+        },
+      },
+    };
+    const allowed = createBlueBubblesClient({ cfg: cfg as never });
+    expect(allowed.getSsrfPolicy()).toEqual({ allowPrivateNetwork: true });
+
+    cfg.channels.bluebubbles.network.dangerouslyAllowPrivateNetwork = false;
+    const denied = createBlueBubblesClient({ cfg: cfg as never });
+
+    expect(denied).not.toBe(allowed);
+    expect(denied.getSsrfPolicy()).toEqual({});
+  });
 });
 
 describe("client construction", () => {

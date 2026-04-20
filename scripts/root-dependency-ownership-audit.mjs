@@ -130,11 +130,13 @@ export function classifyRootDependencyOwnership(record) {
   const sections = new Set(record.sections);
 
   if (record.rootMirrorImporters.length > 0) {
-    return {
-      category: "extension_only_root_mirror",
-      recommendation:
-        "blocked by packaged host graph: remove root mirror only after bundled runtime resolution stops importing it from root dist",
-    };
+    if (!sectionSetContainsCore(sections)) {
+      return {
+        category: "extension_only_localizable",
+        recommendation:
+          "remove from root package.json and rely on owning extension manifests plus doctor --fix",
+      };
+    }
   }
 
   if (sections.size === 0) {
@@ -169,7 +171,7 @@ export function classifyRootDependencyOwnership(record) {
     return {
       category: "extension_only_localizable",
       recommendation:
-        "candidate to remove from root package.json and rely on owning extension manifests",
+        "remove from root package.json and rely on owning extension manifests plus doctor --fix",
     };
   }
 

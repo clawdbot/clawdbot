@@ -176,6 +176,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
         cfg,
         sessionEntry,
         agentDir: statusAgentDir,
+        includeExternalProfiles: false,
       });
   const activeModelAuth = Object.hasOwn(params, "activeModelAuthOverride")
     ? params.activeModelAuthOverride
@@ -185,6 +186,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
           cfg,
           sessionEntry,
           agentDir: statusAgentDir,
+          includeExternalProfiles: false,
         })
       : selectedModelAuth;
   const currentUsageProvider = (() => {

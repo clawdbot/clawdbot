@@ -234,7 +234,9 @@ final class NodeAppModel {
         self.watchMessagingService.setStatusHandler { [weak self] status in
             Task { @MainActor in
                 GatewayDiagnostics.log(
-                    "node app model: watch status callback reachable=\(status.reachable) activation=\(status.activationState) backgrounded=\(self?.isBackgrounded ?? false)")
+                    "node app model: watch status callback "
+                        + "reachable=\(status.reachable) activation=\(status.activationState) "
+                        + "backgrounded=\(self?.isBackgrounded ?? false)")
                 await self?.handleWatchMessagingStatusChanged(status)
             }
         }
@@ -924,7 +926,9 @@ final class NodeAppModel {
                 self.screen.showDefaultCanvas()
             } else {
                 let trustedA2UIURL = await self.resolveA2UIHostURL()
-                self.screen.navigate(to: url, trustA2UIActions: trustedA2UIURL == Self.normalizeURLForTrustComparison(url))
+                self.screen.navigate(
+                    to: url,
+                    trustA2UIActions: trustedA2UIURL == Self.normalizeURLForTrustComparison(url))
             }
             return BridgeInvokeResponse(id: req.id, ok: true)
         case OpenClawCanvasCommand.hide.rawValue:
@@ -934,7 +938,9 @@ final class NodeAppModel {
             let params = try Self.decodeParams(OpenClawCanvasNavigateParams.self, from: req.paramsJSON)
             let trimmedURL = params.url.trimmingCharacters(in: .whitespacesAndNewlines)
             let trustedA2UIURL = await self.resolveA2UIHostURL()
-            self.screen.navigate(to: trimmedURL, trustA2UIActions: trustedA2UIURL == Self.normalizeURLForTrustComparison(trimmedURL))
+            self.screen.navigate(
+                to: trimmedURL,
+                trustA2UIActions: trustedA2UIURL == Self.normalizeURLForTrustComparison(trimmedURL))
             return BridgeInvokeResponse(id: req.id, ok: true)
         case OpenClawCanvasCommand.evalJS.rawValue:
             let params = try Self.decodeParams(OpenClawCanvasEvalParams.self, from: req.paramsJSON)
@@ -2562,8 +2568,8 @@ extension NodeAppModel {
                 PendingForegroundNodeActionsResponse.self,
                 from: payload)
             guard !decoded.actions.isEmpty else { return }
-            self.pendingActionLogger.info(
-                "Pending actions pulled trigger=\(trigger, privacy: .public) count=\(decoded.actions.count, privacy: .public)")
+            // swiftlint:disable:next line_length
+            self.pendingActionLogger.info("Pending actions pulled trigger=\(trigger, privacy: .public) count=\(decoded.actions.count, privacy: .public)")
             await self.applyPendingForegroundNodeActions(decoded.actions, trigger: trigger)
         } catch {
             // Best-effort only.
@@ -2585,8 +2591,8 @@ extension NodeAppModel {
                 command: action.command,
                 paramsJSON: action.paramsJSON)
             let result = await self.handleInvoke(req)
-            self.pendingActionLogger.info(
-                "Pending action replay trigger=\(trigger, privacy: .public) id=\(action.id, privacy: .public) command=\(action.command, privacy: .public) ok=\(result.ok, privacy: .public)")
+            // swiftlint:disable:next line_length
+            self.pendingActionLogger.info("Pending action replay trigger=\(trigger, privacy: .public) id=\(action.id, privacy: .public) command=\(action.command, privacy: .public) ok=\(result.ok, privacy: .public)")
             guard result.ok else { return }
             let acked = await self.ackPendingForegroundNodeAction(
                 id: action.id,
@@ -2603,15 +2609,15 @@ extension NodeAppModel {
     {
         do {
             let payload = try JSONEncoder().encode(PendingForegroundNodeActionsAckRequest(ids: [id]))
-            let paramsJSON = String(decoding: payload, as: UTF8.self)
+            let paramsJSON = String(bytes: payload, encoding: .utf8) ?? "{}"
             _ = try await self.nodeGateway.request(
                 method: "node.pending.ack",
                 paramsJSON: paramsJSON,
                 timeoutSeconds: 6)
             return true
         } catch {
-            self.pendingActionLogger.error(
-                "Pending action ack failed trigger=\(trigger, privacy: .public) id=\(id, privacy: .public) command=\(command, privacy: .public) error=\(String(describing: error), privacy: .public)")
+            // swiftlint:disable:next line_length
+            self.pendingActionLogger.error("Pending action ack failed trigger=\(trigger, privacy: .public) id=\(id, privacy: .public) command=\(command, privacy: .public) error=\(String(describing: error), privacy: .public)")
             return false
         }
     }
@@ -2623,7 +2629,7 @@ extension NodeAppModel {
         case .deduped(let replyId):
             self.watchReplyLogger.debug(
                 "watch reply deduped replyId=\(replyId, privacy: .public)")
-        case .queue(let replyId, let actionId):
+        case let .queue(replyId, actionId):
             self.watchReplyLogger.info(
                 "watch reply queued replyId=\(replyId, privacy: .public) action=\(actionId, privacy: .public)")
         case .forward:
@@ -2737,7 +2743,9 @@ extension NodeAppModel {
 
     private func handleWatchMessagingStatusChanged(_ status: WatchMessagingStatus) async {
         GatewayDiagnostics.log(
-            "watch exec approval: status changed reachable=\(status.reachable) activation=\(status.activationState) backgrounded=\(self.isBackgrounded)")
+            "watch exec approval: status changed "
+                + "reachable=\(status.reachable) activation=\(status.activationState) "
+                + "backgrounded=\(self.isBackgrounded)")
         guard self.isBackgrounded else { return }
         guard status.supported, status.paired, status.appInstalled else { return }
         guard status.reachable || status.activationState == "activated" else { return }
@@ -2752,7 +2760,8 @@ extension NodeAppModel {
         self.pendingWatchExecApprovalRecoveryIDs.append(normalizedApprovalID)
         self.pendingWatchExecApprovalRecoveryIDs.sort()
         GatewayDiagnostics.log(
-            "watch exec approval: queued recovery id=\(normalizedApprovalID) pendingCount=\(self.pendingWatchExecApprovalRecoveryIDs.count)")
+            "watch exec approval: queued recovery "
+                + "id=\(normalizedApprovalID) pendingCount=\(self.pendingWatchExecApprovalRecoveryIDs.count)")
         self.persistWatchExecApprovalBridgeState()
     }
 
@@ -2763,7 +2772,8 @@ extension NodeAppModel {
         self.pendingWatchExecApprovalRecoveryIDs.removeAll { $0 == normalizedApprovalID }
         guard self.pendingWatchExecApprovalRecoveryIDs.count != originalCount else { return }
         GatewayDiagnostics.log(
-            "watch exec approval: cleared recovery id=\(normalizedApprovalID) pendingCount=\(self.pendingWatchExecApprovalRecoveryIDs.count)")
+            "watch exec approval: cleared recovery "
+                + "id=\(normalizedApprovalID) pendingCount=\(self.pendingWatchExecApprovalRecoveryIDs.count)")
         self.persistWatchExecApprovalBridgeState()
     }
 
@@ -2818,8 +2828,8 @@ extension NodeAppModel {
             self.watchExecApprovalLogger.debug(
                 "watch exec approval prompt sent id=\(prompt.id, privacy: .public) reason=\(reason, privacy: .public)")
         } catch {
-            self.watchExecApprovalLogger.error(
-                "watch exec approval prompt failed id=\(prompt.id, privacy: .public) reason=\(reason, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+            // swiftlint:disable:next line_length
+            self.watchExecApprovalLogger.error("watch exec approval prompt failed id=\(prompt.id, privacy: .public) reason=\(reason, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
         }
         await self.syncWatchExecApprovalSnapshot(reason: "\(reason)_snapshot")
     }
@@ -2840,8 +2850,8 @@ extension NodeAppModel {
         do {
             _ = try await self.watchMessagingService.sendExecApprovalResolved(message)
         } catch {
-            self.watchExecApprovalLogger.error(
-                "watch exec approval resolved update failed id=\(normalizedApprovalID, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+            // swiftlint:disable:next line_length
+            self.watchExecApprovalLogger.error("watch exec approval resolved update failed id=\(normalizedApprovalID, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
         }
         await self.syncWatchExecApprovalSnapshot(reason: "resolved_snapshot")
     }
@@ -2860,8 +2870,8 @@ extension NodeAppModel {
         do {
             _ = try await self.watchMessagingService.sendExecApprovalExpired(message)
         } catch {
-            self.watchExecApprovalLogger.error(
-                "watch exec approval expiry update failed id=\(normalizedApprovalID, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+            // swiftlint:disable:next line_length
+            self.watchExecApprovalLogger.error("watch exec approval expiry update failed id=\(normalizedApprovalID, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
         }
         await self.syncWatchExecApprovalSnapshot(reason: "expired_\(reason.rawValue)")
     }
@@ -2869,7 +2879,9 @@ extension NodeAppModel {
     private func syncWatchExecApprovalSnapshot(reason: String) async {
         self.pruneExpiredWatchExecApprovalPrompts()
         GatewayDiagnostics.log(
-            "watch exec approval: sync snapshot start reason=\(reason) cacheCount=\(self.watchExecApprovalPromptsByID.count) backgrounded=\(self.isBackgrounded)")
+            "watch exec approval: sync snapshot start "
+                + "reason=\(reason) cacheCount=\(self.watchExecApprovalPromptsByID.count) "
+                + "backgrounded=\(self.isBackgrounded)")
         let approvals = self.watchExecApprovalPromptsByID.values
             .sorted { lhs, rhs in
                 let lhsExpires = lhs.expiresAtMs ?? Int.max
@@ -2888,13 +2900,13 @@ extension NodeAppModel {
             _ = try await self.watchMessagingService.syncExecApprovalSnapshot(message)
             GatewayDiagnostics.log(
                 "watch exec approval: sync snapshot sent reason=\(reason) count=\(approvals.count)")
-            self.watchExecApprovalLogger.debug(
-                "watch exec approval snapshot sent reason=\(reason, privacy: .public) count=\(approvals.count, privacy: .public)")
+            // swiftlint:disable:next line_length
+            self.watchExecApprovalLogger.debug("watch exec approval snapshot sent reason=\(reason, privacy: .public) count=\(approvals.count, privacy: .public)")
         } catch {
             GatewayDiagnostics.log(
                 "watch exec approval: sync snapshot failed reason=\(reason) error=\(error.localizedDescription)")
-            self.watchExecApprovalLogger.error(
-                "watch exec approval snapshot failed reason=\(reason, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+            // swiftlint:disable:next line_length
+            self.watchExecApprovalLogger.error("watch exec approval snapshot failed reason=\(reason, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -2933,7 +2945,10 @@ extension NodeAppModel {
             candidateIDs: approvalIDs,
             cachedApprovalIDs: Array(self.watchExecApprovalPromptsByID.keys))
         GatewayDiagnostics.log(
-            "watch exec approval: hydrate candidates reason=\(reason) ids=\(approvalIDs.joined(separator: ",")) missing=\(missingApprovalIDs.joined(separator: ",")) cached=\(self.watchExecApprovalPromptsByID.count)")
+            "watch exec approval: hydrate candidates "
+                + "reason=\(reason) ids=\(approvalIDs.joined(separator: ",")) "
+                + "missing=\(missingApprovalIDs.joined(separator: ",")) "
+                + "cached=\(self.watchExecApprovalPromptsByID.count)")
         guard !missingApprovalIDs.isEmpty else {
             self.watchExecApprovalLogger.debug(
                 "watch exec approval hydrate skipped reason=\(reason, privacy: .public): no missing approval ids")
@@ -2957,8 +2972,8 @@ extension NodeAppModel {
                     forApprovalID: approvalId,
                     notificationCenter: self.notificationCenter)
             case let .failed(message):
-                self.watchExecApprovalLogger.error(
-                    "watch exec approval hydrate failed id=\(approvalId, privacy: .public) reason=\(reason, privacy: .public) error=\(message, privacy: .public)")
+                // swiftlint:disable:next line_length
+                self.watchExecApprovalLogger.error("watch exec approval hydrate failed id=\(approvalId, privacy: .public) reason=\(reason, privacy: .public) error=\(message, privacy: .public)")
             }
         }
     }
@@ -3039,8 +3054,8 @@ extension NodeAppModel {
                 reason: .notFound)
             return true
         case let .failed(message):
-            self.watchExecApprovalLogger.error(
-                "watch exec approval push fetch failed id=\(normalizedApprovalID, privacy: .public) error=\(message, privacy: .public)")
+            // swiftlint:disable:next line_length
+            self.watchExecApprovalLogger.error("watch exec approval push fetch failed id=\(normalizedApprovalID, privacy: .public) error=\(message, privacy: .public)")
             return false
         }
     }
@@ -3086,13 +3101,15 @@ extension NodeAppModel {
             return true
         }
 
-        if ExecApprovalNotificationBridge.payloadKind(userInfo: userInfo) == ExecApprovalNotificationBridge.requestedKind,
+        let execApprovalPushKind = ExecApprovalNotificationBridge.payloadKind(userInfo: userInfo)
+        let isExecApprovalRequestPush = execApprovalPushKind == ExecApprovalNotificationBridge.requestedKind
+        if isExecApprovalRequestPush,
            let approvalId = ExecApprovalNotificationBridge.approvalID(from: userInfo)
         {
             let handled = await self.handleExecApprovalRequestedRemotePush(approvalId: approvalId)
             if handled {
-                self.execApprovalNotificationLogger.info(
-                    "Handled exec approval request push wakeId=\(wakeId, privacy: .public) id=\(approvalId, privacy: .public)")
+                // swiftlint:disable:next line_length
+                self.execApprovalNotificationLogger.info("Handled exec approval request push wakeId=\(wakeId, privacy: .public) id=\(approvalId, privacy: .public)")
             }
             return handled
         }
@@ -3313,8 +3330,8 @@ extension NodeAppModel {
             self.clearPendingExecApprovalPromptIfMatches(approvalId)
             await self.publishWatchExecApprovalExpired(approvalId: approvalId, reason: .notFound)
         case let .failed(message):
-            self.execApprovalNotificationLogger.error(
-                "Exec approval prompt fetch failed id=\(approvalId, privacy: .public) reason=\(message, privacy: .public)")
+            // swiftlint:disable:next line_length
+            self.execApprovalNotificationLogger.error("Exec approval prompt fetch failed id=\(approvalId, privacy: .public) reason=\(message, privacy: .public)")
         }
     }
 
@@ -3417,7 +3434,9 @@ extension NodeAppModel {
                 return .stale
             }
             GatewayDiagnostics.log(
-                "watch exec approval: fetch prompt failed id=\(approvalId) reason=\(fetchReason) error=\(error.localizedDescription)")
+                "watch exec approval: fetch prompt failed "
+                    + "id=\(approvalId) reason=\(fetchReason) "
+                    + "error=\(error.localizedDescription)")
             return .failed(message: error.localizedDescription)
         }
     }
@@ -3647,28 +3666,33 @@ extension NodeAppModel {
         let reconnectReason = normalizedReason.isEmpty ? "watch_request" : normalizedReason
         if await self.isOperatorConnected() {
             GatewayDiagnostics.log(
-                "watch exec approval: watch_request_reconnect_connected reason=\(reconnectReason) phase=already_connected")
+                "watch exec approval: watch_request_reconnect_connected "
+                    + "reason=\(reconnectReason) phase=already_connected")
             return true
         }
 
         guard self.isBackgrounded else {
             GatewayDiagnostics.log(
-                "watch exec approval: watch_request_reconnect_begin reason=\(reconnectReason) backgrounded=false strategy=default")
+                "watch exec approval: watch_request_reconnect_begin "
+                    + "reason=\(reconnectReason) backgrounded=false strategy=default")
             let connected = await self.ensureOperatorApprovalConnection(timeoutMs: timeoutMs)
             GatewayDiagnostics.log(
-                "watch exec approval: watch_request_reconnect_\(connected ? "connected" : "timeout") reason=\(reconnectReason) phase=foreground_delegate")
+                "watch exec approval: watch_request_reconnect_\(connected ? "connected" : "timeout") "
+                    + "reason=\(reconnectReason) phase=foreground_delegate")
             return connected
         }
 
         guard self.gatewayAutoReconnectEnabled else {
             GatewayDiagnostics.log(
-                "watch exec approval: watch_request_reconnect_timeout reason=\(reconnectReason) phase=auto_reconnect_disabled")
+                "watch exec approval: watch_request_reconnect_timeout "
+                    + "reason=\(reconnectReason) phase=auto_reconnect_disabled")
             return false
         }
 
         guard let cfg = self.activeGatewayConnectConfig else {
             GatewayDiagnostics.log(
-                "watch exec approval: watch_request_reconnect_timeout reason=\(reconnectReason) phase=no_active_gateway_config")
+                "watch exec approval: watch_request_reconnect_timeout "
+                    + "reason=\(reconnectReason) phase=no_active_gateway_config")
             return false
         }
 
@@ -3677,7 +3701,8 @@ extension NodeAppModel {
         let leaseSeconds = min(45.0, max(15.0, Double(max(timeoutMs, 1_000)) / 1000.0 + 8.0))
         self.grantBackgroundReconnectLease(seconds: leaseSeconds, reason: "watch_review_\(reconnectReason)")
         GatewayDiagnostics.log(
-            "watch exec approval: watch_request_reconnect_lease_granted reason=\(reconnectReason) seconds=\(leaseSeconds)")
+            "watch exec approval: watch_request_reconnect_lease_granted "
+                + "reason=\(reconnectReason) seconds=\(leaseSeconds)")
 
         let hadReconnectLoop = self.operatorGatewayTask != nil
         let canStartReconnectLoop = hadReconnectLoop || self.shouldStartOperatorGatewayLoop(
@@ -3687,20 +3712,24 @@ extension NodeAppModel {
             stableID: cfg.effectiveStableID)
         guard canStartReconnectLoop else {
             GatewayDiagnostics.log(
-                "watch exec approval: watch_request_reconnect_timeout reason=\(reconnectReason) phase=no_operator_reconnect_auth")
+                "watch exec approval: watch_request_reconnect_timeout "
+                    + "reason=\(reconnectReason) phase=no_operator_reconnect_auth")
             return false
         }
 
         self.ensureOperatorReconnectLoopIfNeeded()
         GatewayDiagnostics.log(
-            "watch exec approval: watch_request_reconnect_loop_\(hadReconnectLoop ? "reused" : "started") reason=\(reconnectReason)")
+            "watch exec approval: watch_request_reconnect_loop_\(hadReconnectLoop ? "reused" : "started") "
+                + "reason=\(reconnectReason)")
 
         let initialWaitMs = min(2_500, max(750, timeoutMs / 4))
         GatewayDiagnostics.log(
-            "watch exec approval: watch_request_reconnect_wait reason=\(reconnectReason) phase=initial timeoutMs=\(initialWaitMs)")
+            "watch exec approval: watch_request_reconnect_wait "
+                + "reason=\(reconnectReason) phase=initial timeoutMs=\(initialWaitMs)")
         if await self.waitForOperatorConnection(timeoutMs: initialWaitMs, pollMs: 200) {
             GatewayDiagnostics.log(
-                "watch exec approval: watch_request_reconnect_connected reason=\(reconnectReason) phase=initial")
+                "watch exec approval: watch_request_reconnect_connected "
+                    + "reason=\(reconnectReason) phase=initial")
             return true
         }
 
@@ -3725,10 +3754,12 @@ extension NodeAppModel {
 
         let remainingWaitMs = max(250, timeoutMs - initialWaitMs)
         GatewayDiagnostics.log(
-            "watch exec approval: watch_request_reconnect_wait reason=\(reconnectReason) phase=restart timeoutMs=\(remainingWaitMs)")
+            "watch exec approval: watch_request_reconnect_wait "
+                + "reason=\(reconnectReason) phase=restart timeoutMs=\(remainingWaitMs)")
         let connected = await self.waitForOperatorConnection(timeoutMs: remainingWaitMs, pollMs: 200)
         GatewayDiagnostics.log(
-            "watch exec approval: watch_request_reconnect_\(connected ? "connected" : "timeout") reason=\(reconnectReason) phase=restart")
+            "watch exec approval: watch_request_reconnect_\(connected ? "connected" : "timeout") "
+                + "reason=\(reconnectReason) phase=restart")
         return connected
     }
 

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/arcee-provider",
-  "version": "2026.4.19-beta.1",
+  "version": "2026.4.20",
   "private": true,
   "description": "OpenClaw Arcee provider plugin",
   "type": "module",

@@ -253,14 +253,20 @@ function resolveRetryConfig(cronConfig?: CronConfig) {
   };
 }
 
-function resolveDeliveryStatus(params: { job: CronJob; delivered?: boolean }): CronDeliveryStatus {
+function resolveDeliveryState(params: { job: CronJob; delivered?: boolean }): {
+  delivered?: boolean;
+  status: CronDeliveryStatus;
+} {
+  if (!resolveCronDeliveryPlan(params.job).requested) {
+    return { status: "not-requested" };
+  }
   if (params.delivered === true) {
-    return "delivered";
+    return { delivered: true, status: "delivered" };
   }
   if (params.delivered === false) {
-    return "not-delivered";
+    return { delivered: false, status: "not-delivered" };
   }
-  return resolveCronDeliveryPlan(params.job).requested ? "unknown" : "not-requested";
+  return { status: "unknown" };
 }
 
 function normalizeCronMessageChannel(input: unknown): CronMessageChannel | undefined {
@@ -416,11 +422,11 @@ export function applyJobResult(
     result.status === "error" && typeof result.error === "string"
       ? (resolveFailoverReasonFromError(result.error) ?? undefined)
       : undefined;
-  job.state.lastDelivered = result.delivered;
-  const deliveryStatus = resolveDeliveryStatus({ job, delivered: result.delivered });
-  job.state.lastDeliveryStatus = deliveryStatus;
+  const deliveryState = resolveDeliveryState({ job, delivered: result.delivered });
+  job.state.lastDelivered = deliveryState.delivered;
+  job.state.lastDeliveryStatus = deliveryState.status;
   job.state.lastDeliveryError =
-    deliveryStatus === "not-delivered" && result.error ? result.error : undefined;
+    deliveryState.status === "not-delivered" && result.error ? result.error : undefined;
   job.updatedAtMs = result.endedAt;
 
   // Track consecutive errors for backoff / auto-disable.

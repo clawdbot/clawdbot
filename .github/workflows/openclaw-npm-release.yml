@@ -110,6 +110,16 @@ jobs:
           OPENCLAW_LOCAL_CHECK: "0"
         run: pnpm check
 
+      - name: Check test types
+        env:
+          OPENCLAW_LOCAL_CHECK: "0"
+        run: pnpm check:test-types
+
+      - name: Check architecture
+        env:
+          OPENCLAW_LOCAL_CHECK: "0"
+        run: pnpm check:architecture
+
       - name: Build
         run: pnpm build
 

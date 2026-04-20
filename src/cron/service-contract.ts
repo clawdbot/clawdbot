@@ -1,3 +1,4 @@
+import type { CronListPageOptions, CronListPageResult } from "./service/list-page-types.js";
 import type {
   CronAddInput,
   CronAddResult,
@@ -12,28 +13,7 @@ import type {
 } from "./service/state.js";
 import type { CronJob } from "./types.js";
 
-type CronJobsEnabledFilter = "all" | "enabled" | "disabled";
-type CronJobsSortBy = "nextRunAtMs" | "updatedAtMs" | "name";
-type CronSortDir = "asc" | "desc";
-
-export type CronListPageOptions = {
-  includeDisabled?: boolean;
-  limit?: number;
-  offset?: number;
-  query?: string;
-  enabled?: CronJobsEnabledFilter;
-  sortBy?: CronJobsSortBy;
-  sortDir?: CronSortDir;
-};
-
-export type CronListPageResult = {
-  jobs: CronJob[];
-  total: number;
-  offset: number;
-  limit: number;
-  hasMore: boolean;
-  nextOffset: number | null;
-};
+export type { CronListPageOptions, CronListPageResult } from "./service/list-page-types.js";
 
 export type CronWakeResult = { ok: true } | { ok: false };
 

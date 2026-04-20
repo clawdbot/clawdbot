@@ -7,6 +7,24 @@ import {
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 import { createProviderAuthResolver } from "./models-config.providers.secrets.js";
 
+vi.mock("./model-auth-env.js", () => ({
+  resolveEnvApiKey: () => null,
+}));
+
+vi.mock("./provider-auth-aliases.js", () => ({
+  resolveProviderIdForAuth: (provider: string) => provider.trim().toLowerCase(),
+}));
+
+vi.mock("./model-auth-env-vars.js", () => ({
+  PROVIDER_ENV_API_KEY_CANDIDATES: {},
+  listKnownProviderEnvApiKeyNames: () => [],
+  resolveProviderEnvApiKeyCandidates: () => ({}),
+}));
+
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveProviderSyntheticAuthWithPlugin: () => undefined,
+}));
+
 vi.mock("./models-config.providers.js", () => ({
   applyNativeStreamingUsageCompat: (providers: unknown) => providers,
   enforceSourceManagedProviderSecrets: ({ providers }: { providers: unknown }) => providers,

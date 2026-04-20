@@ -7,9 +7,10 @@ import {
   resolveStorePath,
 } from "../../config/sessions/inbound.runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { buildAgentSessionKey, type RoutePeer } from "../../routing/resolve-route.js";
+import type { RoutePeer } from "../../routing/resolve-route.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { buildOutboundBaseSessionKey } from "./base-session-key.js";
 import type { ResolvedMessagingTarget } from "./target-resolver.js";
 
 export type OutboundSessionRoute = {
@@ -76,23 +77,6 @@ function inferPeerKind(params: {
   return "direct";
 }
 
-function buildBaseSessionKey(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  channel: ChannelId;
-  accountId?: string | null;
-  peer: RoutePeer;
-}): string {
-  return buildAgentSessionKey({
-    agentId: params.agentId,
-    channel: params.channel,
-    accountId: params.accountId,
-    peer: params.peer,
-    dmScope: params.cfg.session?.dmScope ?? "main",
-    identityLinks: params.cfg.session?.identityLinks,
-  });
-}
-
 function resolveFallbackSession(
   params: ResolveOutboundSessionRouteParams,
 ): OutboundSessionRoute | null {
@@ -109,7 +93,7 @@ function resolveFallbackSession(
     return null;
   }
   const peer: RoutePeer = { kind: peerKind, id: peerId };
-  const baseSessionKey = buildBaseSessionKey({
+  const baseSessionKey = buildOutboundBaseSessionKey({
     cfg: params.cfg,
     agentId: params.agentId,
     channel: params.channel,

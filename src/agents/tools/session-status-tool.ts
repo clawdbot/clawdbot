@@ -22,6 +22,7 @@ import {
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
+import type { BuildStatusTextParams } from "../../status/status-text.js";
 import { buildTaskStatusSnapshotForRelatedSessionKeyForOwner } from "../../tasks/task-owner-access.js";
 import { formatTaskStatusDetail, formatTaskStatusTitle } from "../../tasks/task-status.js";
 import { loadModelCatalog } from "../model-catalog.js";
@@ -55,32 +56,7 @@ const SessionStatusToolSchema = Type.Object({
 });
 
 type CommandsStatusRuntimeModule = {
-  buildStatusText: (params: {
-    cfg: OpenClawConfig;
-    sessionEntry?: SessionEntry;
-    sessionKey: string;
-    parentSessionKey?: string;
-    sessionScope?: "global" | "per-sender" | "per-thread" | "shared";
-    storePath?: string;
-    statusChannel: string;
-    provider: string;
-    model: string;
-    contextTokens?: number;
-    resolvedThinkLevel?: ThinkLevel;
-    resolvedFastMode?: boolean;
-    resolvedVerboseLevel: VerboseLevel;
-    resolvedReasoningLevel: ReasoningLevel;
-    resolvedElevatedLevel?: ElevatedLevel;
-    resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
-    isGroup: boolean;
-    defaultGroupActivation: () => "always" | "mention";
-    taskLineOverride?: string;
-    skipDefaultTaskLookup?: boolean;
-    primaryModelLabelOverride?: string;
-    modelAuthOverride?: string;
-    activeModelAuthOverride?: string;
-    includeTranscriptUsage?: boolean;
-  }) => Promise<string>;
+  buildStatusText: (params: BuildStatusTextParams) => Promise<string>;
 };
 
 let commandsStatusRuntimePromise: Promise<CommandsStatusRuntimeModule> | null = null;

@@ -1,7 +1,7 @@
 import type { ChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveFirstBoundAccountId } from "../routing/bound-account-read.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 
 // Delivery targets often carry a transport wrapper (e.g. Matrix `room:<id>` or
 // LINE `line:group:<id>`), while route bindings commonly store raw peer ids on

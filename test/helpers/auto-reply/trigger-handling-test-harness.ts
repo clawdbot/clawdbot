@@ -3,11 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, expect, vi } from "vitest";
-import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resetProviderRuntimeHookCacheForTest } from "../plugins/provider-runtime.js";
-import { resolveRelativeBundledPluginPublicModuleId } from "../test-utils/bundled-plugin-public-surface.js";
-import { withFastReplyConfig } from "./reply/get-reply-fast-path.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "../../../src/agents/auth-profiles.js";
+import { withFastReplyConfig } from "../../../src/auto-reply/reply/get-reply-fast-path.js";
+import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
+import { resetProviderRuntimeHookCacheForTest } from "../../../src/plugins/provider-runtime.js";
+import { resolveRelativeBundledPluginPublicModuleId } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
 type AnyMock = any;
@@ -49,7 +49,7 @@ export function getQueueEmbeddedPiMessageMock(): AnyMock {
 }
 
 const installPiEmbeddedMock = () =>
-  vi.doMock("../agents/pi-embedded.js", () => ({
+  vi.doMock("../../../src/agents/pi-embedded.js", () => ({
     abortEmbeddedPiRun: (...args: unknown[]) => piEmbeddedMocks.abortEmbeddedPiRun(...args),
     compactEmbeddedPiSession: (...args: unknown[]) =>
       piEmbeddedMocks.compactEmbeddedPiSession(...args),
@@ -65,7 +65,7 @@ const installPiEmbeddedMock = () =>
 
 installPiEmbeddedMock();
 
-vi.doMock("../agents/pi-embedded-runner/runs.js", () => ({
+vi.doMock("../../../src/agents/pi-embedded-runner/runs.js", () => ({
   abortEmbeddedPiRun: (...args: unknown[]) => piEmbeddedMocks.abortEmbeddedPiRun(...args),
 }));
 
@@ -83,7 +83,7 @@ export function getProviderUsageMocks(): AnyMocks {
   return providerUsageMocks;
 }
 
-vi.mock("../infra/provider-usage.js", () => providerUsageMocks);
+vi.mock("../../../src/infra/provider-usage.js", () => providerUsageMocks);
 
 const modelCatalogMocks = getSharedMocks("openclaw.trigger-handling.model-catalog-mocks", () => ({
   loadModelCatalog: vi.fn().mockResolvedValue([
@@ -112,15 +112,15 @@ export function getModelCatalogMocks(): AnyMocks {
 }
 
 const installModelCatalogMock = () =>
-  vi.doMock("../agents/model-catalog.js", () => modelCatalogMocks);
+  vi.doMock("../../../src/agents/model-catalog.js", () => modelCatalogMocks);
 
 installModelCatalogMock();
 
-vi.doMock("../agents/model-catalog.runtime.js", () => ({
+vi.doMock("../../../src/agents/model-catalog.runtime.js", () => ({
   loadModelCatalog: (...args: unknown[]) => modelCatalogMocks.loadModelCatalog(...args),
 }));
 
-vi.doMock("../plugins/provider-runtime.runtime.js", () => ({
+vi.doMock("../../../src/plugins/provider-runtime.runtime.js", () => ({
   augmentModelCatalogWithProviderPlugins: async (params: { catalog?: unknown[] }) =>
     params.catalog ?? [],
   buildProviderAuthDoctorHintWithPlugin: () => undefined,
@@ -150,11 +150,11 @@ export function getModelFallbackMocks(): AnyMocks {
 }
 
 const installModelFallbackMock = () =>
-  vi.doMock("../agents/model-fallback.js", () => modelFallbackMocks);
+  vi.doMock("../../../src/agents/model-fallback.js", () => modelFallbackMocks);
 
 installModelFallbackMock();
 
-vi.doMock("../infra/git-commit.js", () => ({
+vi.doMock("../../../src/infra/git-commit.js", () => ({
   resolveCommitHash: vi.fn(() => "abcdef0"),
 }));
 
@@ -302,12 +302,12 @@ export function makeCfg(home: string): OpenClawConfig {
 }
 
 export async function loadGetReplyFromConfig() {
-  return (await import("./reply.js")).getReplyFromConfig;
+  return (await import("../../../src/auto-reply/reply.js")).getReplyFromConfig;
 }
 
 export function installTriggerHandlingReplyHarness(
   setGetReplyFromConfig: (
-    getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig,
+    getReplyFromConfig: typeof import("../../../src/auto-reply/reply.js").getReplyFromConfig,
   ) => void,
 ): void {
   beforeAll(async () => {
@@ -357,7 +357,7 @@ export function makeWhatsAppElevatedCfg(
 
 export async function runDirectElevatedToggleAndLoadStore(params: {
   cfg: OpenClawConfig;
-  getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
+  getReplyFromConfig: typeof import("../../../src/auto-reply/reply.js").getReplyFromConfig;
   body?: string;
 }): Promise<{
   text: string | undefined;
@@ -386,7 +386,7 @@ export async function runDirectElevatedToggleAndLoadStore(params: {
 
 export async function expectInlineCommandHandledAndStripped(params: {
   home: string;
-  getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
+  getReplyFromConfig: typeof import("../../../src/auto-reply/reply.js").getReplyFromConfig;
   body: string;
   stripToken: string;
   blockReplyContains: string;
@@ -419,7 +419,7 @@ export async function expectInlineCommandHandledAndStripped(params: {
 export async function runGreetingPromptForBareNewOrReset(params: {
   home: string;
   body: "/new" | "/reset";
-  getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
+  getReplyFromConfig: typeof import("../../../src/auto-reply/reply.js").getReplyFromConfig;
 }) {
   const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
   runEmbeddedPiAgentMock.mockClear();

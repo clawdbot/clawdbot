@@ -1,4 +1,5 @@
 import {
+  compareTaskAuditFindingSortKeys,
   createEmptyTaskAuditSummary,
   type TaskAuditCode,
   type TaskAuditFinding,
@@ -74,17 +75,18 @@ function findTimestampInconsistency(task: TaskRecord): TaskAuditFinding | null {
 }
 
 function compareFindings(left: TaskAuditFinding, right: TaskAuditFinding): number {
-  const severityRank = (severity: TaskAuditSeverity) => (severity === "error" ? 0 : 1);
-  const severityDiff = severityRank(left.severity) - severityRank(right.severity);
-  if (severityDiff !== 0) {
-    return severityDiff;
-  }
-  const leftAge = left.ageMs ?? -1;
-  const rightAge = right.ageMs ?? -1;
-  if (leftAge !== rightAge) {
-    return rightAge - leftAge;
-  }
-  return left.task.createdAt - right.task.createdAt;
+  return compareTaskAuditFindingSortKeys(
+    {
+      severity: left.severity,
+      ageMs: left.ageMs,
+      createdAt: left.task.createdAt,
+    },
+    {
+      severity: right.severity,
+      ageMs: right.ageMs,
+      createdAt: right.task.createdAt,
+    },
+  );
 }
 
 export function listTaskAuditFindings(options: TaskAuditOptions = {}): TaskAuditFinding[] {

@@ -41,6 +41,8 @@ export type MatrixQaScenarioId =
   | "matrix-restart-resume"
   | "matrix-post-restart-room-continue"
   | "matrix-initial-catchup-then-incremental"
+  | "matrix-restart-replay-dedupe"
+  | "matrix-stale-sync-replay-dedupe"
   | "matrix-room-membership-loss"
   | "matrix-homeserver-restart-resume"
   | "matrix-mention-gating"
@@ -431,6 +433,18 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     id: "matrix-initial-catchup-then-incremental",
     timeoutMs: 90_000,
     title: "Matrix initial catchup is followed by incremental replies",
+    topology: MATRIX_QA_RESTART_ROOM_TOPOLOGY,
+  },
+  {
+    id: "matrix-restart-replay-dedupe",
+    timeoutMs: 90_000,
+    title: "Matrix restart does not redeliver a handled event",
+    topology: MATRIX_QA_RESTART_ROOM_TOPOLOGY,
+  },
+  {
+    id: "matrix-stale-sync-replay-dedupe",
+    timeoutMs: 90_000,
+    title: "Matrix stale sync replay is absorbed by inbound dedupe",
     topology: MATRIX_QA_RESTART_ROOM_TOPOLOGY,
   },
   {

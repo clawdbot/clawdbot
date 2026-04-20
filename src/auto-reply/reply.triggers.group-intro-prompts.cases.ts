@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { makeCfg } from "./reply.triggers.trigger-handling.test-harness.js";
+import { makeCfg } from "../../test/helpers/auto-reply/trigger-handling-test-harness.js";
 import { buildGroupChatContext, buildGroupIntro } from "./reply/groups.js";
 
 type GetReplyFromConfig = typeof import("./reply.js").getReplyFromConfig;

@@ -292,7 +292,9 @@ enum GatewaySettingsStore {
         let port = defaults.object(forKey: self.lastGatewayPortDefaultsKey) as? Int
 
         let payload = LastGatewayConnectionData(
-            kind: kind, stableID: stableID, useTLS: useTLS,
+            kind: kind,
+            stableID: stableID,
+            useTLS: useTLS,
             host: kind == .manual ? host : nil,
             port: kind == .manual ? port : nil)
         guard self.saveLastGatewayConnectionData(payload) else { return }

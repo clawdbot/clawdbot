@@ -1,13 +1,13 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createLiveTargetMatcher } from "./live-target-matcher.js";
 
-type CreateLiveTargetMatcher = typeof import("./live-target-matcher.js").createLiveTargetMatcher;
-let createLiveTargetMatcher: CreateLiveTargetMatcher;
-
-beforeAll(async () => {
-  vi.doUnmock("../plugins/providers.js");
-  vi.doUnmock("../plugins/manifest-registry.js");
-  vi.resetModules();
-  ({ createLiveTargetMatcher } = await import("./live-target-matcher.js"));
+vi.mock("./live-provider-owner.js", () => {
+  const anthropicOwned = new Set(["anthropic", "claude-cli"]);
+  return {
+    liveProvidersShareOwningPlugin(left: string, right: string): boolean {
+      return anthropicOwned.has(left) && anthropicOwned.has(right);
+    },
+  };
 });
 
 describe("createLiveTargetMatcher", () => {

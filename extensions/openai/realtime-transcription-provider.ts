@@ -14,6 +14,7 @@ import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-i
 import WebSocket from "ws";
 import {
   asFiniteNumber,
+  captureOpenAIRealtimeWsClose,
   readRealtimeErrorDetail,
   resolveOpenAIProviderConfigRecord,
   trimToUndefined,
@@ -192,20 +193,12 @@ class OpenAIRealtimeTranscriptionSession implements RealtimeTranscriptionSession
       });
 
       this.ws.on("close", (code, reasonBuffer) => {
-        captureWsEvent({
+        captureOpenAIRealtimeWsClose({
           url,
-          direction: "local",
-          kind: "ws-close",
           flowId: this.flowId,
-          closeCode: typeof code === "number" ? code : undefined,
-          meta: {
-            provider: "openai",
-            capability: "realtime-transcription",
-            reason:
-              Buffer.isBuffer(reasonBuffer) && reasonBuffer.length > 0
-                ? reasonBuffer.toString("utf8")
-                : undefined,
-          },
+          capability: "realtime-transcription",
+          code,
+          reasonBuffer,
         });
         this.connected = false;
         if (this.closed) {

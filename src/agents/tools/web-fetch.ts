@@ -10,9 +10,8 @@ import {
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
 import { isRecord } from "../../utils.js";
-import { resolveWebFetchDefinition } from "../../web-fetch/runtime.js";
 import { resolveWebProviderConfig } from "../../web/provider-runtime-shared.js";
-import { stringEnum } from "../schema/typebox.js";
+import { stringEnum } from "../schema/string-enum.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import {
@@ -23,7 +22,6 @@ import {
   truncateText,
   type ExtractMode,
 } from "./web-fetch-utils.js";
-import { fetchWithWebToolsNetworkGuard } from "./web-guarded-fetch.js";
 import {
   CacheEntry,
   DEFAULT_CACHE_TTL_MINUTES,
@@ -73,6 +71,32 @@ type WebFetchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer 
     ? Fetch
     : undefined
   : undefined;
+type ResolveWebFetchDefinition =
+  (typeof import("../../web-fetch/runtime.js"))["resolveWebFetchDefinition"];
+type WebFetchProviderFallback = ReturnType<ResolveWebFetchDefinition>;
+type WebFetchRuntimeModule = Pick<
+  typeof import("../../web-fetch/runtime.js"),
+  "resolveWebFetchDefinition"
+>;
+type WebGuardedFetchModule = Pick<
+  typeof import("./web-guarded-fetch.js"),
+  "fetchWithWebToolsNetworkGuard"
+>;
+
+let webFetchRuntimePromise: Promise<WebFetchRuntimeModule> | null = null;
+let webGuardedFetchPromise: Promise<WebGuardedFetchModule> | null = null;
+
+async function loadWebFetchRuntime(): Promise<WebFetchRuntimeModule> {
+  webFetchRuntimePromise ??= import("../../web-fetch/runtime.js");
+  return await webFetchRuntimePromise;
+}
+
+async function loadWebGuardedFetch(): Promise<
+  WebGuardedFetchModule["fetchWithWebToolsNetworkGuard"]
+> {
+  webGuardedFetchPromise ??= import("./web-guarded-fetch.js");
+  return (await webGuardedFetchPromise).fetchWithWebToolsNetworkGuard;
+}
 
 function resolveFetchConfig(cfg?: OpenClawConfig): WebFetchConfig {
   return resolveWebProviderConfig(cfg, "fetch") as NonNullable<WebFetchConfig> | undefined;
@@ -251,7 +275,7 @@ type WebFetchRuntimeParams = {
     allowRfc2544BenchmarkRange?: boolean;
   };
   lookupFn?: LookupFn;
-  resolveProviderFallback: () => ReturnType<typeof resolveWebFetchDefinition>;
+  resolveProviderFallback: () => Promise<WebFetchProviderFallback>;
 };
 
 function normalizeProviderFinalUrl(value: unknown): string | undefined {
@@ -341,7 +365,7 @@ async function maybeFetchProviderWebFetchPayload(
     tookMs: number;
   },
 ): Promise<Record<string, unknown> | null> {
-  const providerFallback = params.resolveProviderFallback();
+  const providerFallback = await params.resolveProviderFallback();
   if (!providerFallback) {
     return null;
   }
@@ -387,6 +411,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   let release: (() => Promise<void>) | null = null;
   let finalUrl = params.url;
   try {
+    const fetchWithWebToolsNetworkGuard = await loadWebGuardedFetch();
     const result = await fetchWithWebToolsNetworkGuard({
       url: params.url,
       maxRedirects: params.maxRedirects,
@@ -503,7 +528,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
             extractor = "raw-html";
           } else {
             const providerLabel =
-              params.resolveProviderFallback()?.provider.label ?? "provider fallback";
+              (await params.resolveProviderFallback())?.provider.label ?? "provider fallback";
             throw new Error(
               `Web fetch extraction failed: Readability, ${providerLabel}, and basic HTML cleanup returned no content.`,
             );
@@ -583,9 +608,10 @@ export function createWebFetchTool(options?: {
     DEFAULT_FETCH_USER_AGENT;
   const maxResponseBytes = resolveFetchMaxResponseBytes(fetch);
   let providerFallbackResolved = false;
-  let providerFallbackCache: ReturnType<typeof resolveWebFetchDefinition>;
-  const resolveProviderFallback = () => {
+  let providerFallbackCache: WebFetchProviderFallback;
+  const resolveProviderFallback = async () => {
     if (!providerFallbackResolved) {
+      const { resolveWebFetchDefinition } = await loadWebFetchRuntime();
       providerFallbackCache = resolveWebFetchDefinition({
         config: options?.config,
         sandboxed: options?.sandboxed,

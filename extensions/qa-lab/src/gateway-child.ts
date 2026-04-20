@@ -42,6 +42,14 @@ import type { QaTransportAdapter } from "./qa-transport.js";
 
 export type { QaCliBackendAuthMode } from "./providers/env.js";
 const QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS = 5;
+
+export type QaGatewayChildStateMutationContext = {
+  configPath: string;
+  runtimeEnv: NodeJS.ProcessEnv;
+  stateDir: string;
+  tempRoot: string;
+};
+
 async function getFreePort() {
   return await new Promise<number>((resolve, reject) => {
     const server = net.createServer();
@@ -694,9 +702,94 @@ export async function startQaGatewayChild(params: {
     if (!child || !cfg || !baseUrl || !wsUrl || !rpcClient || !env) {
       throw new Error("qa gateway child failed to start");
     }
-    const runningChild = child;
-    const runningRpcClient = rpcClient;
+    let activeChild = child;
+    let activeRpcClient = rpcClient;
     const runningEnv = env;
+
+    const spawnReplacementGatewayChild = async () => {
+      const nextChild = spawn(
+        nodeExecPath,
+        [
+          distEntryPath,
+          "gateway",
+          "run",
+          "--port",
+          String(gatewayPort),
+          "--bind",
+          "loopback",
+          "--allow-unconfigured",
+        ],
+        {
+          cwd: runtimeCwd,
+          env: runningEnv,
+          detached: process.platform !== "win32",
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
+      nextChild.stdout.on("data", (chunk) => {
+        const buffer = Buffer.from(chunk);
+        stdout.push(buffer);
+        stdoutLog.write(buffer);
+      });
+      nextChild.stderr.on("data", (chunk) => {
+        const buffer = Buffer.from(chunk);
+        stderr.push(buffer);
+        stderrLog.write(buffer);
+      });
+
+      try {
+        await waitForGatewayReady({
+          baseUrl,
+          logs,
+          child: nextChild,
+          timeoutMs: 120_000,
+        });
+        const nextRpcClient = await startQaGatewayRpcClient({
+          wsUrl,
+          token: gatewayToken,
+          logs,
+        });
+        try {
+          let rpcReady = false;
+          let lastRpcStartupError: unknown = null;
+          for (let rpcAttempt = 1; rpcAttempt <= 4; rpcAttempt += 1) {
+            try {
+              await nextRpcClient.request("config.get", {}, { timeoutMs: 10_000 });
+              rpcReady = true;
+              break;
+            } catch (error) {
+              lastRpcStartupError = error;
+              if (rpcAttempt >= 4 || !isRetryableRpcStartupError(error)) {
+                throw error;
+              }
+              await sleep(500 * rpcAttempt);
+              await waitForGatewayReady({
+                baseUrl,
+                logs,
+                child: nextChild,
+                timeoutMs: 15_000,
+              });
+            }
+          }
+          if (!rpcReady) {
+            throw lastRpcStartupError ?? new Error("qa gateway rpc client failed to start");
+          }
+        } catch (error) {
+          await nextRpcClient.stop().catch(() => {});
+          throw error;
+        }
+        return {
+          child: nextChild,
+          rpcClient: nextRpcClient,
+        };
+      } catch (error) {
+        await stopQaGatewayChildProcessTree(nextChild, {
+          gracefulTimeoutMs: 1_500,
+          forceTimeoutMs: 1_500,
+        });
+        throw error;
+      }
+    };
 
     return {
       cfg,
@@ -710,10 +803,27 @@ export async function startQaGatewayChild(params: {
       runtimeEnv: runningEnv,
       logs,
       async restart(signal: NodeJS.Signals = "SIGUSR1") {
-        if (!runningChild.pid) {
+        if (!activeChild.pid) {
           throw new Error("qa gateway child has no pid");
         }
-        process.kill(runningChild.pid, signal);
+        process.kill(activeChild.pid, signal);
+      },
+      async restartAfterStateMutation(
+        mutateState: (context: QaGatewayChildStateMutationContext) => Promise<void>,
+      ) {
+        await activeRpcClient.stop().catch(() => {});
+        await stopQaGatewayChildProcessTree(activeChild);
+        await mutateState({
+          configPath,
+          runtimeEnv: runningEnv,
+          stateDir,
+          tempRoot,
+        });
+        const restarted = await spawnReplacementGatewayChild();
+        activeChild = restarted.child;
+        activeRpcClient = restarted.rpcClient;
+        child = activeChild;
+        rpcClient = activeRpcClient;
       },
       async call(
         method: string,
@@ -724,7 +834,7 @@ export async function startQaGatewayChild(params: {
         let lastDetails = "";
         for (let attempt = 1; attempt <= 3; attempt += 1) {
           try {
-            return await runningRpcClient.request(method, rpcParams, {
+            return await activeRpcClient.request(method, rpcParams, {
               ...opts,
               timeoutMs,
             });
@@ -737,7 +847,7 @@ export async function startQaGatewayChild(params: {
             await waitForGatewayReady({
               baseUrl,
               logs,
-              child: runningChild,
+              child: activeChild,
               timeoutMs: Math.max(10_000, timeoutMs),
             });
           }
@@ -745,8 +855,8 @@ export async function startQaGatewayChild(params: {
         throw new Error(`${lastDetails}${formatQaGatewayLogsForError(logs())}`);
       },
       async stop(opts?: { keepTemp?: boolean; preserveToDir?: string }) {
-        await runningRpcClient.stop().catch(() => {});
-        await stopQaGatewayChildProcessTree(runningChild);
+        await activeRpcClient.stop().catch(() => {});
+        await stopQaGatewayChildProcessTree(activeChild);
         await closeWriteStream(stdoutLog);
         await closeWriteStream(stderrLog);
         if (opts?.preserveToDir && !(opts?.keepTemp ?? keepTemp)) {

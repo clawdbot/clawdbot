@@ -1,27 +1,18 @@
 import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
-import { normalizeChatChannelId } from "../channels/ids.js";
 import { listRouteBindings } from "../config/bindings.js";
 import type { AgentRouteBinding } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
+  normalizeRouteBindingChannelId,
   normalizeRouteBindingId,
   normalizeRouteBindingRoles,
+  resolveNormalizedRouteBindingMatch,
   routeBindingScopeMatches,
 } from "./binding-scope.js";
 import { peerKindMatches } from "./peer-kind-match.js";
-import { normalizeAccountId, normalizeAgentId } from "./session-key.js";
+import { normalizeAgentId } from "./session-key.js";
 
-function normalizeBindingChannelId(raw?: string | null): string | null {
-  const normalized = normalizeChatChannelId(raw);
-  if (normalized) {
-    return normalized;
-  }
-  const fallback = normalizeLowercaseStringOrEmpty(raw);
-  return fallback || null;
-}
-
-function resolveNormalizedBindingMatch(binding: AgentRouteBinding): {
+function resolveNormalizedBoundAccountMatch(binding: AgentRouteBinding): {
   agentId: string;
   accountId: string;
   channelId: string;
@@ -31,27 +22,15 @@ function resolveNormalizedBindingMatch(binding: AgentRouteBinding): {
   teamId?: string | null;
   roles?: string[] | null;
 } | null {
-  if (!binding || typeof binding !== "object") {
-    return null;
-  }
+  const baseMatch = resolveNormalizedRouteBindingMatch(binding);
   const match = binding.match;
-  if (!match || typeof match !== "object") {
-    return null;
-  }
-  const channelId = normalizeBindingChannelId(match.channel);
-  if (!channelId) {
-    return null;
-  }
-  const accountId = typeof match.accountId === "string" ? match.accountId.trim() : "";
-  if (!accountId || accountId === "*") {
+  if (!baseMatch || !match || typeof match !== "object") {
     return null;
   }
   const peerId = match.peer && typeof match.peer.id === "string" ? match.peer.id.trim() : undefined;
   const peerKind = match.peer ? normalizeChatType(match.peer.kind) : undefined;
   return {
-    agentId: normalizeAgentId(binding.agentId),
-    accountId: normalizeAccountId(accountId),
-    channelId,
+    ...baseMatch,
     peerId: peerId || undefined,
     peerKind: peerKind ?? undefined,
     guildId: normalizeRouteBindingId(match.guildId) || null,
@@ -88,7 +67,7 @@ export function resolveFirstBoundAccountId(params: {
   groupSpace?: string | null;
   memberRoleIds?: string[];
 }): string | undefined {
-  const normalizedChannel = normalizeBindingChannelId(params.channelId);
+  const normalizedChannel = normalizeRouteBindingChannelId(params.channelId);
   if (!normalizedChannel) {
     return undefined;
   }
@@ -103,7 +82,7 @@ export function resolveFirstBoundAccountId(params: {
   let wildcardPeerMatch: string | undefined;
   let channelOnlyFallback: string | undefined;
   for (const binding of listRouteBindings(params.cfg)) {
-    const resolved = resolveNormalizedBindingMatch(binding);
+    const resolved = resolveNormalizedBoundAccountMatch(binding);
     if (
       !resolved ||
       resolved.channelId !== normalizedChannel ||

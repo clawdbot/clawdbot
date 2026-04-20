@@ -58,6 +58,8 @@ type SetupAutoEnableReason = {
   reason: string;
 };
 
+type PluginApiBuildParams = Parameters<typeof buildPluginApi>[0];
+
 const EMPTY_RUNTIME = {} as PluginRuntime;
 const NOOP_LOGGER: PluginLogger = {
   info() {},
@@ -269,6 +271,56 @@ function resolveRegister(mod: OpenClawPluginModule): {
   return {};
 }
 
+function resolveSetupRegistration(record: PluginManifestRecord): {
+  setupSource: string;
+  register: (api: ReturnType<typeof buildPluginApi>) => void | Promise<void>;
+} | null {
+  const setupSource = record.setupSource ?? resolveSetupApiPath(record.rootDir);
+  if (!setupSource) {
+    return null;
+  }
+
+  let mod: OpenClawPluginModule;
+  try {
+    mod = getJiti(setupSource)(setupSource) as OpenClawPluginModule;
+  } catch {
+    return null;
+  }
+
+  const resolved = resolveRegister((mod as { default?: OpenClawPluginModule }).default ?? mod);
+  if (!resolved.register) {
+    return null;
+  }
+  if (resolved.definition?.id && resolved.definition.id !== record.id) {
+    return null;
+  }
+  return {
+    setupSource,
+    register: resolved.register,
+  };
+}
+
+function buildSetupPluginApi(params: {
+  record: PluginManifestRecord;
+  setupSource: string;
+  handlers: PluginApiBuildParams["handlers"];
+}): ReturnType<typeof buildPluginApi> {
+  return buildPluginApi({
+    id: params.record.id,
+    name: params.record.name ?? params.record.id,
+    version: params.record.version,
+    description: params.record.description,
+    source: params.setupSource,
+    rootDir: params.record.rootDir,
+    registrationMode: "setup-only",
+    config: {} as OpenClawConfig,
+    runtime: EMPTY_RUNTIME,
+    logger: NOOP_LOGGER,
+    resolvePath: (input) => input,
+    handlers: params.handlers,
+  });
+}
+
 function ignoreAsyncSetupRegisterResult(result: void | Promise<void>): void {
   if (!result || typeof result.then !== "function") {
     return;
@@ -366,38 +418,14 @@ export function resolvePluginSetupRegistry(params?: {
     if (selectedPluginIds && !selectedPluginIds.has(record.id)) {
       continue;
     }
-    const setupSource = record.setupSource ?? resolveSetupApiPath(record.rootDir);
-    if (!setupSource) {
+    const setupRegistration = resolveSetupRegistration(record);
+    if (!setupRegistration) {
       continue;
     }
 
-    let mod: OpenClawPluginModule;
-    try {
-      mod = getJiti(setupSource)(setupSource) as OpenClawPluginModule;
-    } catch {
-      continue;
-    }
-
-    const resolved = resolveRegister((mod as { default?: OpenClawPluginModule }).default ?? mod);
-    if (!resolved.register) {
-      continue;
-    }
-    if (resolved.definition?.id && resolved.definition.id !== record.id) {
-      continue;
-    }
-
-    const api = buildPluginApi({
-      id: record.id,
-      name: record.name ?? record.id,
-      version: record.version,
-      description: record.description,
-      source: setupSource,
-      rootDir: record.rootDir,
-      registrationMode: "setup-only",
-      config: {} as OpenClawConfig,
-      runtime: EMPTY_RUNTIME,
-      logger: NOOP_LOGGER,
-      resolvePath: (input) => input,
+    const api = buildSetupPluginApi({
+      record,
+      setupSource: setupRegistration.setupSource,
       handlers: {
         registerProvider(provider) {
           const key = `${record.id}:${normalizeProviderId(provider.id)}`;
@@ -437,7 +465,7 @@ export function resolvePluginSetupRegistry(params?: {
     });
 
     try {
-      const result = resolved.register(api);
+      const result = setupRegistration.register(api);
       if (result && typeof result.then === "function") {
         // Keep setup registration sync-only.
         ignoreAsyncSetupRegisterResult(result);
@@ -484,44 +512,17 @@ export function resolvePluginSetupProvider(params: {
     return undefined;
   }
 
-  const setupSource = record.setupSource ?? resolveSetupApiPath(record.rootDir);
-  if (!setupSource) {
-    setCachedSetupValue(setupProviderCache, cacheKey, null);
-    return undefined;
-  }
-
-  let mod: OpenClawPluginModule;
-  try {
-    mod = getJiti(setupSource)(setupSource) as OpenClawPluginModule;
-  } catch {
-    setCachedSetupValue(setupProviderCache, cacheKey, null);
-    return undefined;
-  }
-
-  const resolved = resolveRegister((mod as { default?: OpenClawPluginModule }).default ?? mod);
-  if (!resolved.register) {
-    setCachedSetupValue(setupProviderCache, cacheKey, null);
-    return undefined;
-  }
-  if (resolved.definition?.id && resolved.definition.id !== record.id) {
+  const setupRegistration = resolveSetupRegistration(record);
+  if (!setupRegistration) {
     setCachedSetupValue(setupProviderCache, cacheKey, null);
     return undefined;
   }
 
   let matchedProvider: ProviderPlugin | undefined;
   const localProviderKeys = new Set<string>();
-  const api = buildPluginApi({
-    id: record.id,
-    name: record.name ?? record.id,
-    version: record.version,
-    description: record.description,
-    source: setupSource,
-    rootDir: record.rootDir,
-    registrationMode: "setup-only",
-    config: {} as OpenClawConfig,
-    runtime: EMPTY_RUNTIME,
-    logger: NOOP_LOGGER,
-    resolvePath: (input) => input,
+  const api = buildSetupPluginApi({
+    record,
+    setupSource: setupRegistration.setupSource,
     handlers: {
       registerProvider(provider) {
         const key = normalizeProviderId(provider.id);
@@ -539,7 +540,7 @@ export function resolvePluginSetupProvider(params: {
   });
 
   try {
-    const result = resolved.register(api);
+    const result = setupRegistration.register(api);
     if (result && typeof result.then === "function") {
       // Keep setup registration sync-only.
       ignoreAsyncSetupRegisterResult(result);
@@ -584,43 +585,17 @@ export function resolvePluginSetupCliBackend(params: {
     return undefined;
   }
 
-  const setupSource = record.setupSource ?? resolveSetupApiPath(record.rootDir);
-  if (!setupSource) {
-    setCachedSetupValue(setupCliBackendCache, cacheKey, null);
-    return undefined;
-  }
-
-  let mod: OpenClawPluginModule;
-  try {
-    mod = getJiti(setupSource)(setupSource) as OpenClawPluginModule;
-  } catch {
-    setCachedSetupValue(setupCliBackendCache, cacheKey, null);
-    return undefined;
-  }
-  const resolved = resolveRegister((mod as { default?: OpenClawPluginModule }).default ?? mod);
-  if (!resolved.register) {
-    setCachedSetupValue(setupCliBackendCache, cacheKey, null);
-    return undefined;
-  }
-  if (resolved.definition?.id && resolved.definition.id !== record.id) {
+  const setupRegistration = resolveSetupRegistration(record);
+  if (!setupRegistration) {
     setCachedSetupValue(setupCliBackendCache, cacheKey, null);
     return undefined;
   }
 
   let matchedBackend: CliBackendPlugin | undefined;
   const localBackendKeys = new Set<string>();
-  const api = buildPluginApi({
-    id: record.id,
-    name: record.name ?? record.id,
-    version: record.version,
-    description: record.description,
-    source: setupSource,
-    rootDir: record.rootDir,
-    registrationMode: "setup-only",
-    config: {} as OpenClawConfig,
-    runtime: EMPTY_RUNTIME,
-    logger: NOOP_LOGGER,
-    resolvePath: (input) => input,
+  const api = buildSetupPluginApi({
+    record,
+    setupSource: setupRegistration.setupSource,
     handlers: {
       registerProvider() {},
       registerConfigMigration() {},
@@ -639,7 +614,7 @@ export function resolvePluginSetupCliBackend(params: {
   });
 
   try {
-    const result = resolved.register(api);
+    const result = setupRegistration.register(api);
     if (result && typeof result.then === "function") {
       // Keep setup registration sync-only.
       ignoreAsyncSetupRegisterResult(result);

@@ -43,7 +43,9 @@ import {
   runHomeserverRestartResumeScenario,
   runInitialCatchupThenIncrementalScenario,
   runPostRestartRoomContinueScenario,
+  runRestartReplayDedupeScenario,
   runRestartResumeScenario,
+  runStaleSyncReplayDedupeScenario,
 } from "./scenario-runtime-restart.js";
 import {
   runAllowlistHotReloadScenario,
@@ -233,6 +235,10 @@ export async function runMatrixQaScenario(
       return await runPostRestartRoomContinueScenario(context);
     case "matrix-initial-catchup-then-incremental":
       return await runInitialCatchupThenIncrementalScenario(context);
+    case "matrix-restart-replay-dedupe":
+      return await runRestartReplayDedupeScenario(context);
+    case "matrix-stale-sync-replay-dedupe":
+      return await runStaleSyncReplayDedupeScenario(context);
     case "matrix-room-membership-loss":
       return await runMembershipLossScenario(context);
     case "matrix-homeserver-restart-resume":

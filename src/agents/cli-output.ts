@@ -1,4 +1,5 @@
 import type { CliBackendConfig } from "../config/types.js";
+import { extractBalancedJsonFragments } from "../shared/balanced-json.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 
@@ -39,48 +40,7 @@ function usesClaudeStreamJsonDialect(params: {
 }
 
 function extractJsonObjectCandidates(raw: string): string[] {
-  const candidates: string[] = [];
-  let depth = 0;
-  let start = -1;
-  let inString = false;
-  let escaped = false;
-
-  for (let index = 0; index < raw.length; index += 1) {
-    const char = raw[index] ?? "";
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (char === "\\") {
-      if (inString) {
-        escaped = true;
-      }
-      continue;
-    }
-    if (char === '"') {
-      inString = !inString;
-      continue;
-    }
-    if (inString) {
-      continue;
-    }
-    if (char === "{") {
-      if (depth === 0) {
-        start = index;
-      }
-      depth += 1;
-      continue;
-    }
-    if (char === "}" && depth > 0) {
-      depth -= 1;
-      if (depth === 0 && start >= 0) {
-        candidates.push(raw.slice(start, index + 1));
-        start = -1;
-      }
-    }
-  }
-
-  return candidates;
+  return extractBalancedJsonFragments(raw, { openers: ["{"] }).map((fragment) => fragment.json);
 }
 
 function parseJsonRecordCandidates(raw: string): Record<string, unknown>[] {

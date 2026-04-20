@@ -338,7 +338,9 @@ struct OnboardingWizardView: View {
                     Text("Security notice")
                         .font(.headline)
                     Text(
-                        "The connected OpenClaw agent can use device capabilities you enable, such as camera, microphone, photos, contacts, calendar, and location. Continue only if you trust the gateway and agent you connect to.")
+                        "The connected OpenClaw agent can use device capabilities you enable, "
+                            + "such as camera, microphone, photos, contacts, calendar, and location. "
+                            + "Continue only if you trust the gateway and agent you connect to.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

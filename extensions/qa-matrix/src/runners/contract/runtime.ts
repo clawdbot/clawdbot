@@ -42,7 +42,11 @@ type MatrixQaGatewayChild = {
     params: Record<string, unknown>,
     options?: { timeoutMs?: number },
   ): Promise<unknown>;
+  restartAfterStateMutation?: (
+    mutateState: (context: { stateDir: string }) => Promise<void>,
+  ) => Promise<void>;
   restart(): Promise<void>;
+  runtimeEnv?: NodeJS.ProcessEnv;
 };
 
 type MatrixQaLiveLaneGatewayHarness = {
@@ -653,6 +657,7 @@ export async function runMatrixQaLive(params: {
               observerDeviceId: provisioning.observer.deviceId,
               observerPassword: provisioning.observer.password,
               observerUserId: provisioning.observer.userId,
+              gatewayStateDir: scenarioGateway.harness.gateway.runtimeEnv?.OPENCLAW_STATE_DIR,
               outputDir,
               restartGateway: async () => {
                 if (!gatewayHarness) {
@@ -667,6 +672,30 @@ export async function runMatrixQaLive(params: {
                 scenarioRestartGatewayMs += measuredRestart.durationMs;
                 writeMatrixQaProgress(
                   `gateway restart done ${scenario.id} ${formatMatrixQaDurationMs(measuredRestart.durationMs)}`,
+                );
+              },
+              restartGatewayAfterStateMutation: async (mutateState) => {
+                if (!gatewayHarness) {
+                  throw new Error(
+                    "Matrix persisted-state restart scenario requires a live gateway",
+                  );
+                }
+                const restartAfterStateMutation =
+                  scenarioGateway.harness.gateway.restartAfterStateMutation;
+                if (!restartAfterStateMutation) {
+                  throw new Error(
+                    "Matrix persisted-state restart scenario requires a hard restart callback",
+                  );
+                }
+                writeMatrixQaProgress(`gateway hard restart start ${scenario.id}`);
+                const measuredRestart = await measureMatrixQaStep(async () => {
+                  await restartAfterStateMutation(mutateState);
+                  await waitForMatrixChannelReady(scenarioGateway.harness.gateway, sutAccountId);
+                });
+                gatewayRestartMs += measuredRestart.durationMs;
+                scenarioRestartGatewayMs += measuredRestart.durationMs;
+                writeMatrixQaProgress(
+                  `gateway hard restart done ${scenario.id} ${formatMatrixQaDurationMs(measuredRestart.durationMs)}`,
                 );
               },
               restartGatewayWithQueuedMessage: async (queueMessage) => {

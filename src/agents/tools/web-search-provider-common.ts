@@ -2,7 +2,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
-import { withTrustedWebToolsEndpoint } from "./web-guarded-fetch.js";
 import {
   CacheEntry,
   DEFAULT_CACHE_TTL_MINUTES,
@@ -14,6 +13,20 @@ import {
   resolveTimeoutSeconds,
   writeCache,
 } from "./web-shared.js";
+
+type WebGuardedFetchModule = Pick<
+  typeof import("./web-guarded-fetch.js"),
+  "withTrustedWebToolsEndpoint"
+>;
+
+let webGuardedFetchPromise: Promise<WebGuardedFetchModule> | null = null;
+
+async function loadTrustedWebToolsEndpoint(): Promise<
+  WebGuardedFetchModule["withTrustedWebToolsEndpoint"]
+> {
+  webGuardedFetchPromise ??= import("./web-guarded-fetch.js");
+  return (await webGuardedFetchPromise).withTrustedWebToolsEndpoint;
+}
 
 export type SearchConfigRecord = (NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
   ? Web extends { search?: infer Search }
@@ -69,6 +82,7 @@ export async function withTrustedWebSearchEndpoint<T>(
   },
   run: (response: Response) => Promise<T>,
 ): Promise<T> {
+  const withTrustedWebToolsEndpoint = await loadTrustedWebToolsEndpoint();
   return withTrustedWebToolsEndpoint(
     {
       url: params.url,
@@ -91,6 +105,7 @@ export async function postTrustedWebToolsJson<T>(
   },
   parseResponse: (response: Response) => Promise<T>,
 ): Promise<T> {
+  const withTrustedWebToolsEndpoint = await loadTrustedWebToolsEndpoint();
   return withTrustedWebToolsEndpoint(
     {
       url: params.url,

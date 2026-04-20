@@ -16,10 +16,7 @@ import {
   loadPluginManifestRegistry,
   type PluginManifestRecord,
 } from "../plugins/manifest-registry.js";
-import {
-  PUBLIC_SURFACE_SOURCE_EXTENSIONS,
-  normalizeBundledPluginArtifactSubpath,
-} from "../plugins/public-surface-runtime.js";
+import { resolveRegistryPluginModuleLocationFromRecords } from "./facade-resolution-shared.js";
 
 const ALWAYS_ALLOWED_RUNTIME_DIR_NAMES = new Set([
   "image-generation-core",
@@ -171,30 +168,11 @@ export function resolveRegistryPluginModuleLocation(params: {
     cacheKey: params.resolutionKey,
     ...(params.env ? { env: params.env } : {}),
   });
-  type RegistryRecord = (typeof registry)[number];
-  const tiers: Array<(plugin: RegistryRecord) => boolean> = [
-    (plugin) => plugin.id === params.dirName,
-    (plugin) => path.basename(plugin.rootDir) === params.dirName,
-    (plugin) => plugin.channels.includes(params.dirName),
-  ];
-  const artifactBasename = normalizeBundledPluginArtifactSubpath(params.artifactBasename);
-  const sourceBaseName = artifactBasename.replace(/\.js$/u, "");
-  for (const matchFn of tiers) {
-    for (const record of registry.filter(matchFn)) {
-      const rootDir = path.resolve(record.rootDir);
-      const builtCandidate = path.join(rootDir, artifactBasename);
-      if (fs.existsSync(builtCandidate)) {
-        return { modulePath: builtCandidate, boundaryRoot: rootDir };
-      }
-      for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
-        const sourceCandidate = path.join(rootDir, `${sourceBaseName}${ext}`);
-        if (fs.existsSync(sourceCandidate)) {
-          return { modulePath: sourceCandidate, boundaryRoot: rootDir };
-        }
-      }
-    }
-  }
-  return null;
+  return resolveRegistryPluginModuleLocationFromRecords({
+    registry,
+    dirName: params.dirName,
+    artifactBasename: params.artifactBasename,
+  });
 }
 
 function readBundledPluginManifestRecordFromDir(params: {

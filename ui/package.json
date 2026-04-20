@@ -15,7 +15,7 @@
     "lit": "^3.3.2",
     "markdown-it": "^14.1.1",
     "markdown-it-task-lists": "^2.1.1",
-    "marked": "^18.0.0"
+    "marked": "^18.0.1"
   },
   "devDependencies": {
     "@types/markdown-it": "^14.1.2",

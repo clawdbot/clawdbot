@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { sanitizeGoogleAssistantFirstOrdering } from "../../shared/google-turn-ordering.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import type { WorkspaceBootstrapFile } from "../workspace.js";
@@ -261,28 +262,5 @@ export function buildBootstrapContextFiles(
 }
 
 export function sanitizeGoogleTurnOrdering(messages: AgentMessage[]): AgentMessage[] {
-  const GOOGLE_TURN_ORDER_BOOTSTRAP_TEXT = "(session bootstrap)";
-  const first = messages[0] as { role?: unknown; content?: unknown } | undefined;
-  const role = first?.role;
-  const content = first?.content;
-  if (
-    role === "user" &&
-    typeof content === "string" &&
-    content.trim() === GOOGLE_TURN_ORDER_BOOTSTRAP_TEXT
-  ) {
-    return messages;
-  }
-  if (role !== "assistant") {
-    return messages;
-  }
-
-  // Cloud Code Assist rejects histories that begin with a model turn (tool call or text).
-  // Prepend a tiny synthetic user turn so the rest of the transcript can be used.
-  const bootstrap: AgentMessage = {
-    role: "user",
-    content: GOOGLE_TURN_ORDER_BOOTSTRAP_TEXT,
-    timestamp: Date.now(),
-  } as AgentMessage;
-
-  return [bootstrap, ...messages];
+  return sanitizeGoogleAssistantFirstOrdering(messages);
 }

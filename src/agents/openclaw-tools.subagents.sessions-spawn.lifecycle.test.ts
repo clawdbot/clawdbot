@@ -11,6 +11,7 @@ import {
   setSessionsSpawnHookRunnerOverride,
   setupSessionsSpawnGatewayMock,
   setSessionsSpawnConfigOverride,
+  waitForSessionsSpawnEvent,
 } from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
 import {
   getLatestSubagentRunByChildSessionKey,
@@ -60,15 +61,6 @@ function buildDiscordCleanupHooks(onDelete: (key: string | undefined) => void) {
     },
   };
 }
-
-const waitFor = async (label: string, predicate: () => boolean, timeoutMs = 30_000) => {
-  await vi.waitFor(
-    () => {
-      expect(predicate(), label).toBe(true);
-    },
-    { timeout: timeoutMs, interval: 1 },
-  );
-};
 
 async function getDiscordGroupSpawnTool() {
   return await getSessionsSpawnTool({
@@ -152,7 +144,7 @@ async function emitLifecycleEndAndFlush(params: {
 }
 
 async function waitForRunCleanup(childSessionKey: string) {
-  await waitFor("run cleanup bookkeeping", () => {
+  await waitForSessionsSpawnEvent("run cleanup bookkeeping", () => {
     const run = getLatestSubagentRunByChildSessionKey(childSessionKey);
     return run?.cleanupCompletedAt != null;
   });
@@ -232,7 +224,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     if (!child.runId) {
       throw new Error("missing child runId");
     }
-    await waitFor(
+    await waitForSessionsSpawnEvent(
       "subagent wait, label patch, and main agent trigger",
       () =>
         ctx.waitCalls.some((call) => call.runId === child.runId) &&
@@ -295,7 +287,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       endedAt: 2345,
     });
 
-    await waitFor(
+    await waitForSessionsSpawnEvent(
       "lifecycle cleanup",
       () => ctx.calls.filter((call) => call.method === "agent").length >= 2 && Boolean(deletedKey),
     );
@@ -358,14 +350,14 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     if (!child.runId) {
       throw new Error("missing child runId");
     }
-    await waitFor("agent.wait called for child run", () =>
+    await waitForSessionsSpawnEvent("agent.wait called for child run", () =>
       ctx.waitCalls.some((call) => call.runId === child.runId),
     );
-    await waitFor(
+    await waitForSessionsSpawnEvent(
       "main agent cleanup trigger",
       () => ctx.calls.filter((call) => call.method === "agent").length >= 2,
     );
-    await waitFor("delete cleanup", () => Boolean(deletedKey));
+    await waitForSessionsSpawnEvent("delete cleanup", () => Boolean(deletedKey));
 
     const childWait = ctx.waitCalls.find((call) => call.runId === child.runId);
     expect(childWait?.timeoutMs).toBe(1000);
@@ -416,12 +408,11 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     }
     const childSessionKey = child.sessionKey;
 
-    await waitFor(
+    await waitForSessionsSpawnEvent(
       "timeout outcome",
       () =>
         ctx.waitCalls.some((call) => call.runId === child.runId) &&
         getLatestSubagentRunByChildSessionKey(childSessionKey)?.outcome?.status === "timeout",
-      20_000,
     );
     await waitForRunCleanup(childSessionKey);
 
@@ -488,7 +479,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       endedAt: 2000,
     });
 
-    await waitFor(
+    await waitForSessionsSpawnEvent(
       "account-aware lifecycle announce",
       () => ctx.calls.filter((call) => call.method === "agent").length >= 2,
     );

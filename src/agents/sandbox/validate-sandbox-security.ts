@@ -50,6 +50,12 @@ const BLOCKED_HOME_SUBPATHS = [
 const BLOCKED_SECCOMP_PROFILES = new Set(["unconfined"]);
 const BLOCKED_APPARMOR_PROFILES = new Set(["unconfined"]);
 const RESERVED_CONTAINER_TARGET_PATHS = ["/workspace", SANDBOX_AGENT_WORKSPACE_MOUNT];
+let blockedHostPathsCache:
+  | {
+      key: string;
+      paths: string[];
+    }
+  | undefined;
 
 export type ValidateBindMountsOptions = {
   allowedSourceRoots?: string[];
@@ -146,13 +152,22 @@ export function getBlockedReasonForSourcePath(
 }
 
 function getBlockedHostPaths(): string[] {
+  const cacheKey = JSON.stringify({
+    home: process.env.HOME,
+    openclawHome: process.env.OPENCLAW_HOME,
+    osHome: os.homedir(),
+  });
+  if (blockedHostPathsCache?.key === cacheKey) {
+    return blockedHostPathsCache.paths;
+  }
   const blocked = new Set(BLOCKED_HOST_PATHS.map(normalizeHostPath));
   for (const home of getBlockedHomeRoots()) {
     for (const suffix of BLOCKED_HOME_SUBPATHS) {
       blocked.add(normalizeHostPath(path.posix.join(home, suffix)));
     }
   }
-  return [...blocked];
+  blockedHostPathsCache = { key: cacheKey, paths: [...blocked] };
+  return blockedHostPathsCache.paths;
 }
 
 function getBlockedHomeRoots(): string[] {

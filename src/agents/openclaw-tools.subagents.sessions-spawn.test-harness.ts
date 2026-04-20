@@ -23,6 +23,13 @@ type SessionsSpawnGatewayMockOptions = {
   onSessionsDelete?: (params: unknown) => void;
   agentWaitResult?: { status: "ok" | "timeout"; startedAt: number; endedAt: number };
 };
+type EventWaiter = {
+  label: string;
+  predicate: () => boolean;
+  resolve: () => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+};
 
 const hoisted = vi.hoisted(() => {
   const callGatewayMock = vi.fn();
@@ -90,9 +97,23 @@ const hoisted = vi.hoisted(() => {
     defaultRunSubagentAnnounceFlow,
     runSubagentAnnounceFlowOverride: defaultRunSubagentAnnounceFlow,
   };
+  const eventWaiters: EventWaiter[] = [];
+  const notifyEventWaiters = () => {
+    for (let index = eventWaiters.length - 1; index >= 0; index -= 1) {
+      const waiter = eventWaiters[index];
+      if (!waiter?.predicate()) {
+        continue;
+      }
+      clearTimeout(waiter.timer);
+      eventWaiters.splice(index, 1);
+      waiter.resolve();
+    }
+  };
   return {
     callGatewayMock,
     defaultConfigOverride,
+    eventWaiters,
+    notifyEventWaiters,
     nextRunId: () => {
       nextRunId += 1;
       return `run-${nextRunId}`;
@@ -120,6 +141,26 @@ export function getGatewayMethods(): Array<string | undefined> {
 
 export function findGatewayRequest(method: string): GatewayRequest | undefined {
   return getGatewayRequests().find((request) => request.method === method);
+}
+
+export async function waitForSessionsSpawnEvent(
+  label: string,
+  predicate: () => boolean,
+  timeoutMs = 5_000,
+): Promise<void> {
+  if (predicate()) {
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const index = hoisted.eventWaiters.findIndex((waiter) => waiter.timer === timer);
+      if (index >= 0) {
+        hoisted.eventWaiters.splice(index, 1);
+      }
+      reject(new Error(`Timed out waiting for ${label}`));
+    }, timeoutMs);
+    hoisted.eventWaiters.push({ label, predicate, resolve, reject, timer });
+  });
 }
 
 export function resetSessionsSpawnConfigOverride(): void {
@@ -165,6 +206,10 @@ export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
     cleanupBrowserSessionsForLifecycleEnd: async () => {},
     ensureContextEnginesInitialized: () => {},
     ensureRuntimePluginsLoaded: () => {},
+    persistSubagentRunsToDisk: () => {
+      hoisted.notifyEventWaiters();
+    },
+    restoreSubagentRunsFromDisk: () => 0,
     resolveContextEngine: async () => ({
       info: { id: "test", name: "Test" },
       assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
@@ -195,6 +240,7 @@ export function setupSessionsSpawnGatewayMock(setupOpts: SessionsSpawnGatewayMoc
   getCallGatewayMock().mockImplementation(async (optsUnknown: unknown) => {
     const request = optsUnknown as GatewayRequest;
     calls.push(request);
+    hoisted.notifyEventWaiters();
 
     if (request.method === "sessions.list" && setupOpts.includeSessionsList) {
       return {
@@ -233,6 +279,7 @@ export function setupSessionsSpawnGatewayMock(setupOpts: SessionsSpawnGatewayMoc
     if (request.method === "agent.wait") {
       const params = request.params as AgentWaitCall | undefined;
       waitCalls.push(params ?? {});
+      hoisted.notifyEventWaiters();
       const waitResult = setupOpts.agentWaitResult ?? {
         status: "ok",
         startedAt: 1000,
@@ -246,11 +293,13 @@ export function setupSessionsSpawnGatewayMock(setupOpts: SessionsSpawnGatewayMoc
 
     if (request.method === "sessions.patch") {
       setupOpts.onSessionsPatch?.(request.params);
+      hoisted.notifyEventWaiters();
       return { ok: true };
     }
 
     if (request.method === "sessions.delete") {
       setupOpts.onSessionsDelete?.(request.params);
+      hoisted.notifyEventWaiters();
       return { ok: true };
     }
 

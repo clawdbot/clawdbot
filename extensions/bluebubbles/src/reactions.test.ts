@@ -411,9 +411,7 @@ describe("reactions", () => {
     it("still throws on empty input (strict error bubbles up unchanged)", () => {
       // Empty input is a contract error from the caller, not a decorative
       // emoji the model picked; we intentionally do not mask it.
-      expect(() => normalizeBlueBubblesReactionInput("")).toThrow(
-        /requires an emoji or name/,
-      );
+      expect(() => normalizeBlueBubblesReactionInput("")).toThrow(/requires an emoji or name/);
     });
   });
 });

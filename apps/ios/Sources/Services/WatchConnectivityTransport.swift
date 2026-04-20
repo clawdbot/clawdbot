@@ -13,8 +13,7 @@ private func sendReachableWatchMessage(_ payload: [String: Any], with session: W
     // WatchConnectivity replies arrive on its own queue. Keep this continuation explicitly
     // nonisolated so Swift 6 does not inherit a caller actor (for example MainActor) into the
     // Objective-C callback boundary and trap on the reply callback executor check.
-    try await withCheckedThrowingContinuation(isolation: nil) {
-        (continuation: CheckedContinuation<Void, Error>) in
+    try await withCheckedThrowingContinuation(isolation: nil) { (continuation: CheckedContinuation<Void, Error>) in
         session.sendMessage(
             payload,
             replyHandler: { _ in
@@ -259,7 +258,9 @@ extension WatchConnectivityTransport: WCSessionDelegate {
         error: (any Error)?)
     {
         GatewayDiagnostics.log(
-            "watch messaging: activation complete state=\(Self.activationStateLabel(activationState)) error=\(error?.localizedDescription ?? "none")")
+            "watch messaging: activation complete "
+                + "state=\(Self.activationStateLabel(activationState)) "
+                + "error=\(error?.localizedDescription ?? "none")")
         if let error {
             Self.logger.error("watch activation failed: \(error.localizedDescription, privacy: .public)")
         } else {
@@ -357,7 +358,9 @@ extension WatchConnectivityTransport: WCSessionDelegate {
 
     func sessionReachabilityDidChange(_ session: WCSession) {
         GatewayDiagnostics.log(
-            "watch messaging: reachability changed reachable=\(session.isReachable) paired=\(session.isPaired) installed=\(session.isWatchAppInstalled)")
+            "watch messaging: reachability changed "
+                + "reachable=\(session.isReachable) paired=\(session.isPaired) "
+                + "installed=\(session.isWatchAppInstalled)")
         self.emitStatusUpdate(Self.status(for: session))
     }
 }

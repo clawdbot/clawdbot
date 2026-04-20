@@ -6,6 +6,7 @@ import type { ElevatedLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import type { CommandContext } from "./commands-types.js";
 import { isDirectiveOnly } from "./directive-handling.directive-only.js";
+import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
 import type { ApplyInlineDirectivesFastLaneParams } from "./directive-handling.params.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
@@ -47,6 +48,21 @@ function loadDirectiveFastLane() {
 function loadDirectivePersist() {
   directivePersistPromise ??= import("./directive-handling.persist.runtime.js");
   return directivePersistPromise;
+}
+
+function hasOnlyModelDirective(directives: InlineDirectives): boolean {
+  return (
+    directives.hasModelDirective &&
+    !directives.hasThinkDirective &&
+    !directives.hasFastDirective &&
+    !directives.hasVerboseDirective &&
+    !directives.hasTraceDirective &&
+    !directives.hasReasoningDirective &&
+    !directives.hasElevatedDirective &&
+    !directives.hasExecDirective &&
+    !directives.hasQueueDirective &&
+    !directives.hasStatusDirective
+  );
 }
 
 export type ApplyDirectiveResult =
@@ -210,6 +226,69 @@ export async function applyInlineDirectiveOverrides(params: {
     if (!command.isAuthorizedSender) {
       typing.cleanup();
       return { kind: "reply", reply: undefined };
+    }
+    if (hasOnlyModelDirective(directives) && effectiveModelDirective) {
+      const modelResolution = resolveModelSelectionFromDirective({
+        directives: {
+          ...directives,
+          rawModelDirective: effectiveModelDirective,
+        },
+        cfg,
+        agentDir,
+        defaultProvider,
+        defaultModel,
+        aliasIndex,
+        allowedModelKeys: modelState.allowedModelKeys,
+        allowedModelCatalog: modelState.allowedModelCatalog,
+        provider,
+      });
+      if (modelResolution.errorText) {
+        typing.cleanup();
+        return { kind: "reply", reply: { text: modelResolution.errorText } };
+      }
+      const modelSelection = modelResolution.modelSelection;
+      if (modelSelection) {
+        await (
+          await loadDirectivePersist()
+        ).persistInlineDirectives({
+          directives,
+          effectiveModelDirective,
+          cfg,
+          agentDir,
+          sessionEntry,
+          sessionStore,
+          sessionKey,
+          storePath,
+          elevatedEnabled,
+          elevatedAllowed,
+          defaultProvider,
+          defaultModel,
+          aliasIndex,
+          allowedModelKeys: modelState.allowedModelKeys,
+          provider,
+          model,
+          initialModelLabel,
+          formatModelSwitchEvent,
+          agentCfg,
+          messageProvider: ctx.Provider,
+          surface: ctx.Surface,
+          gatewayClientScopes: ctx.GatewayClientScopes,
+          senderIsOwner: command.senderIsOwner,
+          markLiveSwitchPending: true,
+        });
+        const label = `${modelSelection.provider}/${modelSelection.model}`;
+        const labelWithAlias = modelSelection.alias ? `${modelSelection.alias} (${label})` : label;
+        const parts = [
+          modelSelection.isDefault
+            ? `Model reset to default (${labelWithAlias}).`
+            : `Model set to ${labelWithAlias}.`,
+          modelResolution.profileOverride
+            ? `Auth profile set to ${modelResolution.profileOverride}.`
+            : undefined,
+        ].filter(Boolean);
+        typing.cleanup();
+        return { kind: "reply", reply: { text: parts.join(" ") } };
+      }
     }
     const {
       currentThinkLevel: resolvedDefaultThinkLevel,

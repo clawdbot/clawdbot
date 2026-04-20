@@ -31,10 +31,12 @@ vi.mock("./cdp-timeouts.js", async () => {
   const actual = await vi.importActual<typeof import("./cdp-timeouts.js")>("./cdp-timeouts.js");
   return {
     ...actual,
-    CHROME_LAUNCH_READY_WINDOW_MS: 300,
-    CHROME_LAUNCH_READY_POLL_MS: 25,
-    CHROME_BOOTSTRAP_PREFS_TIMEOUT_MS: 200,
-    CHROME_BOOTSTRAP_EXIT_TIMEOUT_MS: 100,
+    CHROME_LAUNCH_READY_WINDOW_MS: 20,
+    CHROME_LAUNCH_READY_POLL_MS: 5,
+    CHROME_BOOTSTRAP_PREFS_TIMEOUT_MS: 120,
+    CHROME_BOOTSTRAP_PREFS_POLL_MS: 5,
+    CHROME_BOOTSTRAP_EXIT_TIMEOUT_MS: 40,
+    CHROME_BOOTSTRAP_EXIT_POLL_MS: 5,
   };
 });
 
@@ -220,10 +222,15 @@ describe("chrome.ts internal", () => {
       // — other candidate-executable probes still return true so
       // resolveBrowserExecutable succeeds and we actually reach the
       // exists() invocation inside launchOpenClawChrome.
+      let prefsProbeCount = 0;
       const existsSpy = vi.spyOn(fs, "existsSync").mockImplementation((p) => {
         const s = String(p);
         if (s.endsWith("Local State") || s.endsWith("Preferences")) {
-          throw new Error("EACCES");
+          prefsProbeCount += 1;
+          if (prefsProbeCount === 1) {
+            throw new Error("EACCES");
+          }
+          return true;
         }
         if (s.includes("Google Chrome")) {
           return true;
@@ -353,6 +360,9 @@ describe("chrome.ts internal", () => {
           if (s.includes("google-chrome")) {
             return true;
           }
+          if (s.endsWith("Local State") || s.endsWith("Preferences")) {
+            return true;
+          }
           return false;
         });
         const fakeProc = makeFakeProc();
@@ -452,7 +462,7 @@ describe("chrome.ts internal", () => {
           });
         },
         run: async (baseUrl) => {
-          await expect(isChromeCdpReady(baseUrl, 300, 100)).resolves.toBe(false);
+          await expect(isChromeCdpReady(baseUrl, 50, 10)).resolves.toBe(false);
         },
       });
     });
@@ -464,12 +474,12 @@ describe("chrome.ts internal", () => {
           wss.on("connection", (ws) => {
             ws.on("message", () => {
               ws.send("not-json-at-all");
-              setTimeout(() => ws.close(), 50);
+              setTimeout(() => ws.close(), 1);
             });
           });
         },
         run: async (baseUrl) => {
-          await expect(isChromeCdpReady(baseUrl, 300, 200)).resolves.toBe(false);
+          await expect(isChromeCdpReady(baseUrl, 50, 10)).resolves.toBe(false);
         },
       });
     });
@@ -481,12 +491,12 @@ describe("chrome.ts internal", () => {
           wss.on("connection", (ws) => {
             ws.on("message", () => {
               ws.send(JSON.stringify({ id: 42, result: { product: "Chrome" } }));
-              setTimeout(() => ws.close(), 50);
+              setTimeout(() => ws.close(), 1);
             });
           });
         },
         run: async (baseUrl) => {
-          await expect(isChromeCdpReady(baseUrl, 300, 200)).resolves.toBe(false);
+          await expect(isChromeCdpReady(baseUrl, 50, 10)).resolves.toBe(false);
         },
       });
     });
@@ -506,7 +516,7 @@ describe("chrome.ts internal", () => {
           });
         },
         run: async (baseUrl) => {
-          await expect(isChromeCdpReady(baseUrl, 300, 400)).resolves.toBe(true);
+          await expect(isChromeCdpReady(baseUrl, 50, 10)).resolves.toBe(true);
         },
       });
     });
@@ -576,7 +586,7 @@ describe("chrome.ts internal", () => {
       await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
       try {
         const addr = server.address() as AddressInfo;
-        await expect(isChromeCdpReady(`http://127.0.0.1:${addr.port}`, 300, 200)).resolves.toBe(
+        await expect(isChromeCdpReady(`http://127.0.0.1:${addr.port}`, 50, 10)).resolves.toBe(
           false,
         );
       } finally {
@@ -594,7 +604,7 @@ describe("chrome.ts internal", () => {
           });
         },
         run: async (baseUrl) => {
-          await expect(isChromeCdpReady(baseUrl, 300, 200)).resolves.toBe(false);
+          await expect(isChromeCdpReady(baseUrl, 50, 10)).resolves.toBe(false);
         },
       });
     });
@@ -622,7 +632,7 @@ describe("chrome.ts internal", () => {
           });
         },
         run: async (baseUrl) => {
-          await expect(isChromeCdpReady(baseUrl, 300, 400)).resolves.toBe(true);
+          await expect(isChromeCdpReady(baseUrl, 50, 10)).resolves.toBe(true);
         },
       });
     });
@@ -848,8 +858,13 @@ describe("chrome.ts internal", () => {
         }
         return false;
       });
-      const fakeProc = makeFakeProc();
-      spawnMock.mockImplementation(() => fakeProc);
+      const bootstrapProc = makeFakeProc({ exitCode: 0 });
+      const runtimeProc = makeFakeProc();
+      let spawnCount = 0;
+      spawnMock.mockImplementation(() => {
+        spawnCount += 1;
+        return spawnCount === 1 ? bootstrapProc : runtimeProc;
+      });
       await withMockChromeCdpServer({
         wsPath: "/devtools/browser/BOOTSTRAP_BREAK",
         run: async (baseUrl) => {
@@ -874,12 +889,16 @@ describe("chrome.ts internal", () => {
 
     it("breaks out of the bootstrap exit-wait loop once the child reports an exit code", async () => {
       // Covers the `if (bootstrap.exitCode != null) break;` branch.
+      let prefsProbeCount = 0;
       vi.spyOn(fs, "existsSync").mockImplementation((p) => {
         const s = String(p);
         if (s.includes("Google Chrome")) {
           return true;
         }
-        // Force bootstrap by reporting prefs absent.
+        if (s.endsWith("Local State") || s.endsWith("Preferences")) {
+          prefsProbeCount += 1;
+          return prefsProbeCount > 2;
+        }
         return false;
       });
       const bootstrapProc = makeFakeProc();

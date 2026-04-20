@@ -7,8 +7,12 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   maybeRecoverSuspiciousConfigRead,
   maybeRecoverSuspiciousConfigReadSync,
+  promoteConfigSnapshotToLastKnownGood,
+  recoverConfigFromLastKnownGood,
+  resolveLastKnownGoodConfigPath,
   type ObserveRecoveryDeps,
 } from "./io.observe-recovery.js";
+import type { ConfigFileSnapshot } from "./types.js";
 
 describe("config observe recovery", () => {
   let fixtureRoot = "";
@@ -31,6 +35,26 @@ describe("config observe recovery", () => {
   async function seedConfig(configPath: string, config: Record<string, unknown>): Promise<void> {
     await fsp.mkdir(path.dirname(configPath), { recursive: true });
     await fsp.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
+  }
+
+  async function makeSnapshot(configPath: string, config: Record<string, unknown>) {
+    const raw = `${JSON.stringify(config, null, 2)}\n`;
+    await fsp.mkdir(path.dirname(configPath), { recursive: true });
+    await fsp.writeFile(configPath, raw, "utf-8");
+    return {
+      path: configPath,
+      exists: true,
+      raw,
+      parsed: config,
+      sourceConfig: config,
+      resolved: config,
+      valid: true,
+      runtimeConfig: config,
+      config,
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    } satisfies ConfigFileSnapshot;
   }
 
   function makeDeps(
@@ -156,6 +180,67 @@ describe("config observe recovery", () => {
         .findLast((line) => line.event === "config.observe");
       expect(observe?.backupHash).toBeTypeOf("string");
       expect(observe?.lastKnownGoodIno ?? null).toBeNull();
+    });
+  });
+
+  it("promotes a valid startup config and restores it after an invalid direct edit", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps, configPath, auditPath, warn } = makeDeps(home);
+      const snapshot = await makeSnapshot(configPath, {
+        gateway: { mode: "local", auth: { mode: "token", token: "secret-token" } },
+        channels: { discord: { enabled: true, dmPolicy: "pairing" } },
+      });
+
+      await expect(
+        promoteConfigSnapshotToLastKnownGood({ deps, snapshot, logger: deps.logger }),
+      ).resolves.toBe(true);
+      await expect(fsp.readFile(resolveLastKnownGoodConfigPath(configPath), "utf-8")).resolves.toBe(
+        snapshot.raw,
+      );
+
+      const brokenRaw = "{ gateway: { mode: 123 } }\n";
+      await fsp.writeFile(configPath, brokenRaw, "utf-8");
+      const restored = await recoverConfigFromLastKnownGood({
+        deps,
+        snapshot: {
+          ...snapshot,
+          raw: brokenRaw,
+          parsed: { gateway: { mode: 123 } },
+          valid: false,
+          issues: [{ path: "gateway.mode", message: "Expected string" }],
+        },
+        reason: "test-invalid-config",
+      });
+
+      expect(restored).toBe(true);
+      await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(snapshot.raw);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("Config auto-restored from last-known-good:"),
+      );
+      const lines = (await fsp.readFile(auditPath, "utf-8")).trim().split("\n").filter(Boolean);
+      const observe = lines
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .findLast((line) => line.event === "config.observe");
+      expect(observe?.restoredFromBackup).toBe(true);
+      expect(observe?.restoredBackupPath).toBe(resolveLastKnownGoodConfigPath(configPath));
+    });
+  });
+
+  it("refuses to promote redacted secret placeholders", async () => {
+    await withSuiteHome(async (home) => {
+      const warn = vi.fn();
+      const { deps, configPath } = makeDeps(home, warn);
+      const snapshot = await makeSnapshot(configPath, {
+        gateway: { mode: "local", auth: { mode: "token", token: "***" } },
+      });
+
+      await expect(
+        promoteConfigSnapshotToLastKnownGood({ deps, snapshot, logger: deps.logger }),
+      ).resolves.toBe(false);
+      await expect(fsp.stat(resolveLastKnownGoodConfigPath(configPath))).rejects.toThrow();
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("Config last-known-good promotion skipped"),
+      );
     });
   });
 });

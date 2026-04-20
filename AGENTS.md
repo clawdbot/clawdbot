@@ -127,17 +127,20 @@
 - Node remains supported for running built output (`dist/*`) and production installs.
 - Mac packaging (dev): `scripts/package-mac-app.sh` defaults to current arch.
 - Type-check/build: `pnpm build`
-- TypeScript checks are split by architecture boundary, with four normal lanes:
-  - `pnpm tsgo` / `pnpm tsgo:core`: core production roots (`src/`, `ui/`, `packages/`; no `extensions/` include roots).
-  - `pnpm tsgo:core:test`: core colocated tests.
-  - `pnpm tsgo:extensions`: bundled extension production graph.
-  - `pnpm tsgo:extensions:test`: bundled extension colocated tests.
-  - `pnpm tsgo:all`: every TypeScript graph above; this is what `pnpm check` runs.
+- TypeScript checks are split by architecture boundary. Normal entrypoints:
+  - `pnpm tsgo`: fastest core production check (`src/`, `ui/`, `packages/`; no `extensions/` include roots).
+  - `pnpm tsgo:prod`: core + bundled extension production graphs; this is what `pnpm check` runs.
+  - `pnpm check:test-types` / `pnpm tsgo:test`: core + bundled extension test graphs.
+  - `pnpm tsgo:all`: every production + test graph through project references; use for full typecheck sweeps.
+  - Boundary/debug slices exist (`tsgo:core:test`, `tsgo:extensions:test`, `tsgo:core:all`, `tsgo:extensions:all`, `tsgo:test:src`, `tsgo:test:ui`, `tsgo:test:packages`), but do not present them as the normal flow.
   - `pnpm tsgo:profile [core-test|extensions-test|--all]`: profile fresh graph cost into `.artifacts/tsgo-profile/`. Diagnostic-only profile slices (`core-test-agents`, `core-test-non-agents`) exist for investigating agent graph cost; do not treat them as normal user-facing checks.
-  - Narrow aliases remain for local loops: `pnpm tsgo:test:src`, `pnpm tsgo:test:ui`, `pnpm tsgo:test:packages`.
 - Do not add `tsc --noEmit`, `typecheck`, or `check:types` lanes for repo type checking. Use `tsgo` graphs. `tsc` is allowed only when emitting declaration/package-boundary compatibility artifacts that `tsgo` does not replace.
 - Boundary rule: core must not know extension implementation details. Extensions hook into core through manifests, registries, capabilities, and public `openclaw/plugin-sdk/*` contracts. If you find core production code naming a specific extension, or a core test that is really testing extension-owned behavior, call it out and prefer moving coverage/logic to the owning extension or a generic contract test.
 - Lint/format: `pnpm check`
+  - `pnpm lint`: type-aware lint shards for core, extensions, and scripts, run in parallel after shared boundary artifacts are prepared once.
+  - `pnpm lint:core`, `pnpm lint:extensions`, `pnpm lint:scripts`: focused lint shards.
+  - `pnpm lint:all`: legacy single-pass repo-wide oxlint, useful when comparing shard behavior.
+  - `pnpm lint:apps`: app lint surface such as Swift; keep app lint separate from repo TypeScript lint.
 - Local agent/dev shells default to host-aware `OPENCLAW_LOCAL_CHECK=1` behavior for `pnpm tsgo` and `pnpm lint`; set `OPENCLAW_LOCAL_CHECK_MODE=throttled` to force the lower-memory profile, `OPENCLAW_LOCAL_CHECK_MODE=full` to keep lock-only behavior, or `OPENCLAW_LOCAL_CHECK=0` in CI/shared runs.
 - Format check: `pnpm format:check` (oxfmt --check)
 - Format fix: `pnpm format` or `pnpm format:fix` (oxfmt --write)
@@ -146,7 +149,8 @@
   - A local dev gate is the fast default loop, usually `pnpm check` plus any scoped test you actually need.
   - A landing gate is the broader bar before pushing `main`, usually `pnpm check`, `pnpm test`, and `pnpm build` when the touched surface can affect build output, packaging, lazy-loading/module boundaries, or published surfaces.
   - A CI gate is whatever the relevant workflow enforces for that lane (for example `check`, `check-additional`, `build-smoke`, or release validation).
-- Local dev gate: prefer `pnpm check` for the normal edit loop. It keeps the repo-architecture policy guards out of the default local loop.
+- Local dev gate: prefer `pnpm check` for the normal edit loop. It runs production typecheck, lint, and independent policy guards. It keeps test typecheck and repo-architecture policy guards out of the default local loop.
+- Timed local gate: use `pnpm check:timed` to see per-stage cost. Use `pnpm check:timed:all-types` when investigating test typecheck cost. Add `:architecture` only when investigating the CI architecture gate locally.
 - CI architecture gate: `check-additional` enforces architecture and boundary policy guards that are intentionally kept out of the default local loop.
 - Formatting gate: the pre-commit hook runs targeted formatting on staged source files before `pnpm check`. If you want a repo-wide formatting-only preflight locally, run `pnpm format:check` explicitly.
 - If you need a fast commit loop, `FAST_COMMIT=1 git commit ...` skips the hook’s repo-wide `pnpm check`; targeted formatting/linting still runs, so use that only when you are deliberately covering the touched surface some other way.
@@ -190,7 +194,7 @@
 - New runtime control-flow code should not branch on `error: string` or `reason: string` when a closed code union would be reasonable.
 - Dynamic import guardrail: do not mix `await import("x")` and static `import ... from "x"` for the same module in production code paths. If you need lazy loading, create a dedicated `*.runtime.ts` boundary (that re-exports from `x`) and dynamically import that boundary from lazy callers only.
 - Dynamic import verification: after refactors that touch lazy-loading/module boundaries, run `pnpm build` and check for `[INEFFECTIVE_DYNAMIC_IMPORT]` warnings before submitting.
-- Circular dependencies: keep both `pnpm check:import-cycles` and `pnpm check:madge-import-cycles` green; do not reintroduce runtime import cycles or madge-detected import loops.
+- Circular dependencies: `pnpm check` runs the fast runtime import-cycle guard. `pnpm check:architecture` (and CI `check-additional`) also runs the broader madge import-cycle guard; keep both green before landing architecture-sensitive changes.
 - Extension SDK self-import guardrail: inside an extension package, do not import that same extension via `openclaw/plugin-sdk/<extension>` from production files. Route internal imports through a local barrel such as `./api.ts` or `./runtime-api.ts`, and keep the `plugin-sdk/<extension>` path as the external contract only.
 - Extension package boundary guardrail: inside a bundled plugin package, do not use relative imports/exports that resolve outside that same package root. If shared code belongs in the plugin SDK, import `openclaw/plugin-sdk/<subpath>` instead of reaching into `src/plugin-sdk/**` or other repo paths via `../`.
 - Extension API surface rule: `openclaw/plugin-sdk/<subpath>` is the only public cross-package contract for extension-facing SDK code. If an extension needs a new seam, add a public subpath first; do not reach into `src/plugin-sdk/**` by relative path.

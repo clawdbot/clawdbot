@@ -1,4 +1,3 @@
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "openclaw/plugin-sdk/agent-runtime";
 import { vi } from "vitest";
 import {
   removeAckReactionAfterReply,
@@ -9,6 +8,9 @@ import {
   resolveInboundMentionDecision,
 } from "../../../src/channels/mention-gating.js";
 import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
+
+const DEFAULT_PROVIDER = "openai";
+const DEFAULT_MODEL = "gpt-5.4";
 
 type DeepPartial<T> = {
   [K in keyof T]?: T[K] extends (...args: never[]) => unknown

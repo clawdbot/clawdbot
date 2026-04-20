@@ -8,7 +8,9 @@ import { ensurePortAvailable } from "../infra/ports.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CONFIG_DIR } from "../utils.js";
 import {
+  CHROME_BOOTSTRAP_EXIT_POLL_MS,
   CHROME_BOOTSTRAP_EXIT_TIMEOUT_MS,
+  CHROME_BOOTSTRAP_PREFS_POLL_MS,
   CHROME_BOOTSTRAP_PREFS_TIMEOUT_MS,
   CHROME_LAUNCH_READY_POLL_MS,
   CHROME_LAUNCH_READY_WINDOW_MS,
@@ -313,7 +315,7 @@ export async function launchOpenClawChrome(
       if (exists(localStatePath) && exists(preferencesPath)) {
         break;
       }
-      await new Promise((r) => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, CHROME_BOOTSTRAP_PREFS_POLL_MS));
     }
     try {
       bootstrap.kill("SIGTERM");
@@ -325,7 +327,7 @@ export async function launchOpenClawChrome(
       if (bootstrap.exitCode != null) {
         break;
       }
-      await new Promise((r) => setTimeout(r, 50));
+      await new Promise((r) => setTimeout(r, CHROME_BOOTSTRAP_EXIT_POLL_MS));
     }
   }
 

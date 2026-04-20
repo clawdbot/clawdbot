@@ -35,6 +35,8 @@ export type MatrixQaScenarioArtifacts = {
   catchupDriverEventId?: string;
   catchupReply?: MatrixQaReplyArtifact;
   catchupToken?: string;
+  dedupeCommitObserved?: boolean;
+  duplicateWindowMs?: number;
   driverEventId?: string;
   editEventId?: string;
   editedToken?: string;
@@ -42,6 +44,9 @@ export type MatrixQaScenarioArtifacts = {
   firstDriverEventId?: string;
   firstReply?: MatrixQaReplyArtifact;
   firstToken?: string;
+  freshDriverEventId?: string;
+  freshReply?: MatrixQaReplyArtifact;
+  freshToken?: string;
   incrementalDriverEventId?: string;
   incrementalReply?: MatrixQaReplyArtifact;
   incrementalToken?: string;
@@ -68,6 +73,7 @@ export type MatrixQaScenarioArtifacts = {
   secondDriverEventId?: string;
   secondReply?: MatrixQaReplyArtifact;
   secondToken?: string;
+  staleSyncCursor?: string;
   subagentCompletion?: MatrixQaReplyArtifact;
   subagentIntro?: MatrixQaReplyArtifact;
   threadDriverEventId?: string;

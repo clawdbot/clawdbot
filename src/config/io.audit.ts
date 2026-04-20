@@ -3,7 +3,7 @@ import { resolveStateDir } from "./paths.js";
 
 const CONFIG_AUDIT_LOG_FILENAME = "config-audit.jsonl";
 
-export type ConfigWriteAuditResult = "rename" | "copy-fallback" | "failed";
+export type ConfigWriteAuditResult = "rename" | "copy-fallback" | "failed" | "rejected";
 
 export type ConfigWriteAuditRecord = {
   ts: string;
@@ -269,7 +269,7 @@ export function finalizeConfigWriteAuditRecord(params: {
     uid: null,
     gid: null,
   };
-  const success = params.result !== "failed";
+  const success = params.result !== "failed" && params.result !== "rejected";
   return {
     ...params.base,
     result: params.result,

@@ -25,6 +25,8 @@ const DEFAULT_RECENT_USER_CHARS = 220;
 const DEFAULT_RECENT_ASSISTANT_CHARS = 180;
 const DEFAULT_CACHE_TTL_MS = 15_000;
 const DEFAULT_MAX_CACHE_ENTRIES = 1000;
+const CACHE_SWEEP_INTERVAL_MS = 1000;
+const DEFAULT_MIN_TIMEOUT_MS = 250;
 const DEFAULT_QUERY_MODE = "recent" as const;
 const DEFAULT_QMD_SEARCH_MODE = "search" as const;
 const DEFAULT_TRANSCRIPT_DIR = "active-memory";
@@ -173,6 +175,8 @@ type ActiveMemoryToggleStore = {
 type AsyncLock = <T>(task: () => Promise<T>) => Promise<T>;
 
 const toggleStoreLocks = new Map<string, AsyncLock>();
+let lastActiveRecallCacheSweepAt = 0;
+let minimumTimeoutMs = DEFAULT_MIN_TIMEOUT_MS;
 
 function createAsyncLock(): AsyncLock {
   let lock: Promise<void> = Promise.resolve();
@@ -632,7 +636,7 @@ function normalizePluginConfig(pluginConfig: unknown): ResolvedActiveRecallPlugi
     timeoutMs: clampInt(
       parseOptionalPositiveInt(raw.timeoutMs, DEFAULT_TIMEOUT_MS),
       DEFAULT_TIMEOUT_MS,
-      250,
+      minimumTimeoutMs,
       120_000,
     ),
     queryMode:
@@ -944,12 +948,19 @@ function getCachedResult(cacheKey: string): ActiveRecallResult | undefined {
 }
 
 function setCachedResult(cacheKey: string, result: ActiveRecallResult, ttlMs: number): void {
-  sweepExpiredCacheEntries();
+  const now = Date.now();
+  if (
+    activeRecallCache.size >= DEFAULT_MAX_CACHE_ENTRIES ||
+    now - lastActiveRecallCacheSweepAt >= CACHE_SWEEP_INTERVAL_MS
+  ) {
+    sweepExpiredCacheEntries(now);
+    lastActiveRecallCacheSweepAt = now;
+  }
   if (activeRecallCache.has(cacheKey)) {
     activeRecallCache.delete(cacheKey);
   }
   activeRecallCache.set(cacheKey, {
-    expiresAt: Date.now() + ttlMs,
+    expiresAt: now + ttlMs,
     result,
   });
   while (activeRecallCache.size > DEFAULT_MAX_CACHE_ENTRIES) {
@@ -2027,3 +2038,17 @@ export default definePluginEntry({
     });
   },
 });
+
+export const __testing = {
+  buildCacheKey,
+  getCachedResult,
+  resetActiveRecallCacheForTests() {
+    activeRecallCache.clear();
+    lastActiveRecallCacheSweepAt = 0;
+    minimumTimeoutMs = DEFAULT_MIN_TIMEOUT_MS;
+  },
+  setMinimumTimeoutMsForTests(value: number) {
+    minimumTimeoutMs = value;
+  },
+  setCachedResult,
+};

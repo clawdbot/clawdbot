@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { installDownloadSpec } from "./skills-install-download.js";
 import { setTempStateDir } from "./skills-install.download-test-utils.js";
@@ -20,6 +21,48 @@ vi.mock("../process/exec.js", () => ({
 vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
 }));
+
+// Download tests cover installer path handling; fs-safe has dedicated pinned-helper coverage.
+vi.mock("../infra/fs-pinned-write-helper.js", async () => {
+  const fs = await import("node:fs/promises");
+  const path = await import("node:path");
+  const { pipeline } = await import("node:stream/promises");
+  return {
+    runPinnedWriteHelper: async (params: {
+      rootPath: string;
+      relativeParentPath: string;
+      basename: string;
+      mkdir: boolean;
+      mode: number;
+      input:
+        | { kind: "buffer"; data: string | Buffer; encoding?: BufferEncoding }
+        | { kind: "stream"; stream: NodeJS.ReadableStream };
+    }) => {
+      const parentPath = params.relativeParentPath
+        ? path.join(params.rootPath, ...params.relativeParentPath.split("/"))
+        : params.rootPath;
+      if (params.mkdir) {
+        await fs.mkdir(parentPath, { recursive: true });
+      }
+      const targetPath = path.join(parentPath, params.basename);
+      if (params.input.kind === "buffer") {
+        await fs.writeFile(targetPath, params.input.data, {
+          encoding: params.input.encoding,
+          mode: params.mode,
+        });
+      } else {
+        const handle = await fs.open(targetPath, "w", params.mode);
+        try {
+          await pipeline(params.input.stream, handle.createWriteStream());
+        } finally {
+          await handle.close().catch(() => undefined);
+        }
+      }
+      const stat = await fs.stat(targetPath);
+      return { dev: stat.dev, ino: stat.ino };
+    },
+  };
+});
 
 vi.mock("./skills.js", () => ({
   hasBinary: (bin: string) => hasBinaryMock(bin),
@@ -93,9 +136,13 @@ async function installDownloadSkill(params: {
 }
 
 function mockArchiveResponse(buffer: Uint8Array): void {
-  const blobPart = Uint8Array.from(buffer);
   fetchWithSsrFGuardMock.mockResolvedValue({
-    response: new Response(new Blob([blobPart]), { status: 200 }),
+    response: {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      body: Readable.from([Buffer.from(buffer)]),
+    },
     release: async () => undefined,
   });
 }
@@ -208,18 +255,19 @@ describe("installDownloadSpec extraction safety", () => {
       await fs.mkdir(outsideRoot, { recursive: true });
 
       fetchWithSsrFGuardMock.mockResolvedValue({
-        response: new Response(
-          new ReadableStream({
-            async start(controller) {
-              controller.enqueue(new Uint8Array(Buffer.from("payload")));
+        response: {
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          body: Readable.from(
+            (async function* () {
+              yield Buffer.from("payload");
               const reboundRoot = `${safeRoot}-rebound`;
               await fs.rename(safeRoot, reboundRoot);
               await fs.symlink(outsideRoot, safeRoot);
-              controller.close();
-            },
-          }),
-          { status: 200 },
-        ),
+            })(),
+          ),
+        },
         release: async () => undefined,
       });
 

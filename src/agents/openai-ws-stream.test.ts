@@ -213,6 +213,11 @@ const { MockManager } = vi.hoisted(() => {
   return { MockManager: TrackedMockManager };
 });
 
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveProviderTransportTurnStateWithPlugin: () => undefined,
+  resolveProviderWebSocketSessionPolicyWithPlugin: () => undefined,
+}));
+
 // Track if streamSimple (HTTP fallback) was called
 const streamSimpleCalls: Array<{ model: unknown; context: unknown; options?: unknown }> = [];
 const mockStreamSimple = vi.fn((model: unknown, context: unknown, options?: unknown) => {
@@ -2526,6 +2531,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
   it("keeps websocket degraded for the session until the cool-down expires", async () => {
     openAIWsStreamTesting.setWsDegradeCooldownMsForTest(50);
     MockManager.globalConnectShouldFail = true;
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
 
     try {
       const sessionId = "sess-degraded-cooldown";
@@ -2560,7 +2566,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
       expect(MockManager.instances).toHaveLength(2);
       expect(cooledManager.connectCallCount).toBe(0);
 
-      await new Promise((resolve) => setTimeout(resolve, 60));
+      nowSpy.mockReturnValue(1_060);
 
       const thirdStream = streamFn(
         modelStub as Parameters<typeof streamFn>[0],
@@ -2579,6 +2585,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
       });
       await new Promise((resolve) => setImmediate(resolve));
     } finally {
+      nowSpy.mockRestore();
       MockManager.globalConnectShouldFail = false;
       openAIWsStreamTesting.setWsDegradeCooldownMsForTest();
       releaseWsSession("sess-degraded-cooldown");

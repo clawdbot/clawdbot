@@ -368,7 +368,16 @@ function makeSnapshot(partial: Partial<ConfigFileSnapshot> = {}): ConfigFileSnap
 
 function createReloaderHarness(
   readSnapshot: () => Promise<ConfigFileSnapshot>,
-  options: { initialInternalWriteHash?: string | null } = {},
+  options: {
+    initialInternalWriteHash?: string | null;
+    recoverSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
+    promoteSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
+    onRecovered?: (params: {
+      reason: string;
+      snapshot: ConfigFileSnapshot;
+      recoveredSnapshot: ConfigFileSnapshot;
+    }) => void | Promise<void>;
+  } = {},
 ) {
   const watcher = createWatcherMock();
   vi.spyOn(chokidar, "watch").mockReturnValue(watcher as unknown as never);
@@ -392,6 +401,9 @@ function createReloaderHarness(
     initialConfig: { gateway: { reload: { debounceMs: 0 } } },
     initialInternalWriteHash: options.initialInternalWriteHash,
     readSnapshot,
+    recoverSnapshot: options.recoverSnapshot,
+    promoteSnapshot: options.promoteSnapshot,
+    onRecovered: options.onRecovered,
     subscribeToWrites,
     onHotReload,
     onRestart,
@@ -515,9 +527,164 @@ describe("startGatewayConfigReloader", () => {
     }
   });
 
+  it("restores last-known-good on invalid external config edits and reloads recovered snapshot", async () => {
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(
+        makeSnapshot({
+          valid: false,
+          raw: "{ gateway: { mode: 123 } }",
+          issues: [{ path: "gateway.mode", message: "Expected string" }],
+          hash: "bad-1",
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeSnapshot({
+          config: {
+            gateway: { reload: { debounceMs: 0 } },
+            hooks: { enabled: true },
+          },
+          hash: "last-good-1",
+        }),
+      );
+    const recoverSnapshot = vi.fn(async () => true);
+    const promoteSnapshot = vi.fn(async () => true);
+    const onRecovered = vi.fn();
+    const { watcher, onHotReload, onRestart, log, reloader } = createReloaderHarness(readSnapshot, {
+      recoverSnapshot,
+      promoteSnapshot,
+      onRecovered,
+    });
+
+    watcher.emit("change");
+    await vi.runAllTimersAsync();
+
+    expect(recoverSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ valid: false }),
+      "invalid-config",
+    );
+    expect(readSnapshot).toHaveBeenCalledTimes(2);
+    expect(onRecovered).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: "invalid-config",
+        snapshot: expect.objectContaining({ valid: false }),
+        recoveredSnapshot: expect.objectContaining({ hash: "last-good-1" }),
+      }),
+    );
+    expect(onHotReload).toHaveBeenCalledTimes(1);
+    expect(onRestart).not.toHaveBeenCalled();
+    expect(promoteSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ hash: "last-good-1" }),
+      "valid-config",
+    );
+    expect(log.warn).toHaveBeenCalledWith(
+      "config reload restored last-known-good config after invalid-config",
+    );
+
+    await reloader.stop();
+  });
+
+  it("promotes valid external config edits after they are accepted", async () => {
+    const acceptedSnapshot = makeSnapshot({
+      config: {
+        gateway: { reload: { debounceMs: 0 } },
+        hooks: { enabled: true },
+      },
+      hash: "external-good-1",
+    });
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(acceptedSnapshot);
+    const promoteSnapshot = vi.fn(async () => true);
+    const { watcher, onHotReload, reloader } = createReloaderHarness(readSnapshot, {
+      promoteSnapshot,
+    });
+
+    watcher.emit("change");
+    await vi.runAllTimersAsync();
+
+    expect(onHotReload).toHaveBeenCalledTimes(1);
+    expect(promoteSnapshot).toHaveBeenCalledWith(acceptedSnapshot, "valid-config");
+
+    await reloader.stop();
+  });
+
+  it("does not promote external config edits when hot reload rejects them", async () => {
+    const acceptedSnapshot = makeSnapshot({
+      config: {
+        gateway: { reload: { debounceMs: 0 } },
+        hooks: { enabled: true },
+      },
+      hash: "external-rejected-1",
+    });
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(acceptedSnapshot);
+    const promoteSnapshot = vi.fn(async () => true);
+    const { watcher, onHotReload, log, reloader } = createReloaderHarness(readSnapshot, {
+      promoteSnapshot,
+    });
+    onHotReload.mockRejectedValueOnce(new Error("reload refused"));
+
+    watcher.emit("change");
+    await vi.runAllTimersAsync();
+
+    expect(onHotReload).toHaveBeenCalledTimes(1);
+    expect(promoteSnapshot).not.toHaveBeenCalled();
+    expect(log.error).toHaveBeenCalledWith("config reload failed: Error: reload refused");
+
+    await reloader.stop();
+  });
+
+  it("keeps accepted external config reloads applied when last-known-good promotion fails", async () => {
+    const acceptedSnapshot = makeSnapshot({
+      config: {
+        gateway: { reload: { debounceMs: 0 } },
+        hooks: { enabled: true },
+      },
+      hash: "external-promotion-fails-1",
+    });
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(acceptedSnapshot);
+    const promoteSnapshot = vi.fn(async () => {
+      throw new Error("disk full");
+    });
+    const { watcher, onHotReload, log, reloader } = createReloaderHarness(readSnapshot, {
+      promoteSnapshot,
+    });
+
+    watcher.emit("change");
+    await vi.runAllTimersAsync();
+
+    expect(onHotReload).toHaveBeenCalledTimes(1);
+    expect(promoteSnapshot).toHaveBeenCalledWith(acceptedSnapshot, "valid-config");
+    expect(log.warn).toHaveBeenCalledWith(
+      "config reload last-known-good promotion failed: Error: disk full",
+    );
+
+    await reloader.stop();
+  });
+
   it("reuses in-process write notifications and dedupes watcher rereads by persisted hash", async () => {
     const readSnapshot = vi
       .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(
+        makeSnapshot({
+          sourceConfig: {
+            gateway: { reload: { debounceMs: 0 } },
+          },
+          runtimeConfig: {
+            gateway: { reload: { debounceMs: 0 } },
+            hooks: { enabled: true },
+          },
+          config: {
+            gateway: { reload: { debounceMs: 0 } },
+            hooks: { enabled: true },
+          },
+          hash: "internal-1",
+        }),
+      )
       .mockResolvedValueOnce(
         makeSnapshot({
           sourceConfig: {
@@ -548,7 +715,8 @@ describe("startGatewayConfigReloader", () => {
           hash: "external-1",
         }),
       );
-    const harness = createReloaderHarness(readSnapshot);
+    const promoteSnapshot = vi.fn(async () => true);
+    const harness = createReloaderHarness(readSnapshot, { promoteSnapshot });
 
     harness.emitWrite({
       configPath: "/tmp/openclaw.json",
@@ -562,22 +730,64 @@ describe("startGatewayConfigReloader", () => {
     });
     await vi.runOnlyPendingTimersAsync();
 
-    expect(readSnapshot).not.toHaveBeenCalled();
-    expect(harness.onHotReload).toHaveBeenCalledTimes(1);
-
-    harness.watcher.emit("change");
-    harness.watcher.emit("change");
-    await vi.runOnlyPendingTimersAsync();
-
     expect(readSnapshot).toHaveBeenCalledTimes(1);
     expect(harness.onHotReload).toHaveBeenCalledTimes(1);
+    expect(promoteSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ hash: "internal-1" }),
+      "in-process-write",
+    );
 
+    harness.watcher.emit("change");
     harness.watcher.emit("change");
     await vi.runOnlyPendingTimersAsync();
 
     expect(readSnapshot).toHaveBeenCalledTimes(2);
     expect(harness.onHotReload).toHaveBeenCalledTimes(1);
+
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(readSnapshot).toHaveBeenCalledTimes(3);
+    expect(harness.onHotReload).toHaveBeenCalledTimes(1);
     expect(harness.onRestart).toHaveBeenCalledTimes(1);
+
+    await harness.reloader.stop();
+  });
+
+  it("skips in-process promotion when the persisted file hash no longer matches the write", async () => {
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        sourceConfig: {
+          gateway: { reload: { debounceMs: 0 }, port: 19002 },
+        },
+        runtimeConfig: {
+          gateway: { reload: { debounceMs: 0 }, port: 19002 },
+        },
+        config: {
+          gateway: { reload: { debounceMs: 0 }, port: 19002 },
+        },
+        hash: "racing-external-edit",
+      }),
+    );
+    const promoteSnapshot = vi.fn(async () => true);
+    const harness = createReloaderHarness(readSnapshot, { promoteSnapshot });
+
+    harness.emitWrite({
+      configPath: "/tmp/openclaw.json",
+      sourceConfig: { gateway: { reload: { debounceMs: 0 } } },
+      runtimeConfig: {
+        gateway: { reload: { debounceMs: 0 } },
+        hooks: { enabled: true },
+      },
+      persistedHash: "internal-1",
+      writtenAtMs: Date.now(),
+    });
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(harness.onHotReload).toHaveBeenCalledTimes(1);
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    expect(promoteSnapshot).not.toHaveBeenCalled();
+    expect(harness.log.warn).not.toHaveBeenCalled();
 
     await harness.reloader.stop();
   });

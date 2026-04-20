@@ -38,6 +38,7 @@ import {
   getMediaUnderstandingProvider,
   normalizeMediaProviderId,
 } from "./provider-registry.js";
+import { providerSupportsCapability } from "./provider-supports.js";
 import { resolveModelEntries, resolveScopeDecision } from "./resolve.js";
 import {
   buildModelDecision,
@@ -62,22 +63,6 @@ export type RunCapabilityResult = {
   outputs: MediaUnderstandingOutput[];
   decision: MediaUnderstandingDecision;
 };
-
-function providerSupportsCapability(
-  provider: MediaUnderstandingProvider | undefined,
-  capability: MediaUnderstandingCapability,
-): boolean {
-  if (!provider) {
-    return false;
-  }
-  if (capability === "audio") {
-    return Boolean(provider.transcribeAudio);
-  }
-  if (capability === "image") {
-    return Boolean(provider.describeImage);
-  }
-  return Boolean(provider.describeVideo);
-}
 
 function resolveConfiguredKeyProviderOrder(params: {
   cfg: OpenClawConfig;

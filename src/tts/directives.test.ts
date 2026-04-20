@@ -56,6 +56,28 @@ const fullPolicy: SpeechModelOverridePolicy = {
 };
 
 describe("parseTtsDirectives provider-aware routing", () => {
+  it("does not resolve providers when text has no directives", () => {
+    const failProvider = {
+      get id() {
+        throw new Error("provider should not be read without directives");
+      },
+      get autoSelectOrder() {
+        throw new Error("provider order should not be read without directives");
+      },
+    } as unknown as SpeechProviderPlugin;
+
+    const result = parseTtsDirectives("hello without TTS markup", fullPolicy, {
+      providers: [failProvider, failProvider],
+    });
+
+    expect(result).toEqual({
+      cleanedText: "hello without TTS markup",
+      overrides: {},
+      warnings: [],
+      hasDirective: false,
+    });
+  });
+
   it("routes generic speed to the explicitly declared provider", () => {
     const result = parseTtsDirectives(
       "hello [[tts:provider=minimax speed=1.2]] world",

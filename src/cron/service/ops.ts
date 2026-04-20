@@ -21,6 +21,13 @@ import {
   recomputeNextRuns,
   recomputeNextRunsForMaintenance,
 } from "./jobs.js";
+import type {
+  CronJobsEnabledFilter,
+  CronJobsSortBy,
+  CronListPageOptions,
+  CronListPageResult,
+  CronSortDir,
+} from "./list-page-types.js";
 import { locked } from "./locked.js";
 import type { CronServiceState } from "./state.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
@@ -35,28 +42,6 @@ import {
   wake,
 } from "./timer.js";
 
-type CronJobsEnabledFilter = "all" | "enabled" | "disabled";
-type CronJobsSortBy = "nextRunAtMs" | "updatedAtMs" | "name";
-type CronSortDir = "asc" | "desc";
-
-export type CronListPageOptions = {
-  includeDisabled?: boolean;
-  limit?: number;
-  offset?: number;
-  query?: string;
-  enabled?: CronJobsEnabledFilter;
-  sortBy?: CronJobsSortBy;
-  sortDir?: CronSortDir;
-};
-
-export type CronListPageResult = {
-  jobs: ReturnType<typeof sortJobs>;
-  total: number;
-  offset: number;
-  limit: number;
-  hasMore: boolean;
-  nextOffset: number | null;
-};
 function mergeManualRunSnapshotAfterReload(params: {
   state: CronServiceState;
   jobId: string;

@@ -44,9 +44,6 @@ const GUARDED_CHANNEL_EXTENSIONS = new Set([
   "zalo",
   "zalouser",
 ]);
-// Shared config validation intentionally consumes this curated Telegram contract.
-const ALLOWED_CORE_CHANNEL_SDK_SUBPATHS = new Set(["telegram-command-config"]);
-
 function bundledPluginFile(pluginId: string, relativePath: string): string {
   const rootDir = bundledPluginRoots.get(pluginId);
   if (!rootDir) {
@@ -509,9 +506,6 @@ function expectCoreSourceStaysOffPluginSpecificSdkFacades(file: string, imports:
       continue;
     }
     const targetSubpath = specifier.split("/plugin-sdk/")[1]?.replace(/\.[cm]?[jt]sx?$/u, "") ?? "";
-    if (ALLOWED_CORE_CHANNEL_SDK_SUBPATHS.has(targetSubpath)) {
-      continue;
-    }
     const targetExtensionId =
       [...GUARDED_CHANNEL_EXTENSIONS].find(
         (extensionId) =>

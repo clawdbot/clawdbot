@@ -12,12 +12,13 @@ import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
 } from "../openai-responses-payload-policy.js";
+import { resolveOpenAITextVerbosity, type OpenAITextVerbosity } from "../openai-text-verbosity.js";
 import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
 import { log } from "./logger.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 type OpenAIServiceTier = "auto" | "default" | "flex" | "priority";
-type OpenAITextVerbosity = "low" | "medium" | "high";
+export { resolveOpenAITextVerbosity };
 
 function resolveOpenAIRequestCapabilities(model: {
   api?: unknown;
@@ -102,29 +103,6 @@ export function resolveOpenAIServiceTier(
   if (raw !== undefined && normalized === undefined) {
     const rawSummary = typeof raw === "string" ? raw : typeof raw;
     log.warn(`ignoring invalid OpenAI service tier param: ${rawSummary}`);
-  }
-  return normalized;
-}
-
-function normalizeOpenAITextVerbosity(value: unknown): OpenAITextVerbosity | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (normalized === "low" || normalized === "medium" || normalized === "high") {
-    return normalized;
-  }
-  return undefined;
-}
-
-export function resolveOpenAITextVerbosity(
-  extraParams: Record<string, unknown> | undefined,
-): OpenAITextVerbosity | undefined {
-  const raw = extraParams?.textVerbosity ?? extraParams?.text_verbosity;
-  const normalized = normalizeOpenAITextVerbosity(raw);
-  if (raw !== undefined && normalized === undefined) {
-    const rawSummary = typeof raw === "string" ? raw : typeof raw;
-    log.warn(`ignoring invalid OpenAI text verbosity param: ${rawSummary}`);
   }
   return normalized;
 }

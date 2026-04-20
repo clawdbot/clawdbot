@@ -1,5 +1,8 @@
 {
   "extends": "./tsconfig.test.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": ".artifacts/tsgo-cache/extensions-test.tsbuildinfo"
+  },
   "include": [
     "src/**/*.d.ts",
     "ui/**/*.d.ts",

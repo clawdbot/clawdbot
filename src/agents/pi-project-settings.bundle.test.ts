@@ -1,7 +1,89 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
+
+vi.mock("../infra/boundary-file-read.js", async () => {
+  const fs = await import("node:fs");
+  return {
+    openBoundaryFileSync: ({ absolutePath }: { absolutePath: string }) => ({
+      ok: true,
+      fd: fs.openSync(absolutePath, "r"),
+    }),
+  };
+});
+
+vi.mock("../plugins/manifest-registry.js", async () => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  return {
+    loadPluginManifestRegistry: (params: { workspaceDir?: string }) => {
+      const rootDir = path.join(
+        params.workspaceDir ?? "",
+        ".openclaw",
+        "extensions",
+        "claude-bundle",
+      );
+      if (!fs.existsSync(path.join(rootDir, ".claude-plugin", "plugin.json"))) {
+        return { plugins: [], diagnostics: [] };
+      }
+      const resolvedRootDir = fs.realpathSync(rootDir);
+      return {
+        diagnostics: [],
+        plugins: [
+          {
+            id: "claude-bundle",
+            origin: "workspace",
+            format: "bundle",
+            bundleFormat: "claude",
+            settingsFiles: ["settings.json"],
+            rootDir: resolvedRootDir,
+          },
+        ],
+      };
+    },
+  };
+});
+
+vi.mock("./embedded-pi-mcp.js", async () => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  return {
+    loadEmbeddedPiMcpConfig: (params: {
+      workspaceDir: string;
+      cfg?: { mcp?: { servers?: Record<string, unknown> } };
+    }) => {
+      const pluginRoot = path.join(params.workspaceDir, ".openclaw", "extensions", "claude-bundle");
+      const mcpPath = path.join(pluginRoot, ".mcp.json");
+      let bundleServers: Record<string, unknown> = {};
+      if (fs.existsSync(mcpPath)) {
+        const raw = JSON.parse(fs.readFileSync(mcpPath, "utf-8")) as {
+          mcpServers?: Record<string, { args?: string[]; command?: string }>;
+        };
+        const resolvedRoot = fs.realpathSync(pluginRoot);
+        bundleServers = Object.fromEntries(
+          Object.entries(raw.mcpServers ?? {}).map(([id, server]) => [
+            id,
+            {
+              ...server,
+              args: server.args?.map((arg) =>
+                arg.startsWith("./") ? path.join(resolvedRoot, arg) : arg,
+              ),
+              cwd: resolvedRoot,
+            },
+          ]),
+        );
+      }
+      return {
+        diagnostics: [],
+        mcpServers: {
+          ...bundleServers,
+          ...params.cfg?.mcp?.servers,
+        },
+      };
+    },
+  };
+});
 
 const { loadEnabledBundlePiSettingsSnapshot } = await import("./pi-project-settings-snapshot.js");
 

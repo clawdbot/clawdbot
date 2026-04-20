@@ -10,7 +10,9 @@ import {
   getRuntimeConfig,
   isNixMode,
   loadConfig,
+  promoteConfigSnapshotToLastKnownGood,
   readConfigFileSnapshot,
+  recoverConfigFromLastKnownGood,
   registerConfigWriteListener,
   writeConfigFile,
 } from "../config/config.js";
@@ -243,6 +245,7 @@ export async function startGatewayServer(
 
   let cfgAtStart: OpenClawConfig;
   let startupInternalWriteHash: string | null = null;
+  let startupLastGoodSnapshot = configSnapshot;
   const startupRuntimeConfig = applyConfigOverrides(configSnapshot.config);
   const authBootstrap = await prepareGatewayStartupConfig({
     configSnapshot,
@@ -294,6 +297,7 @@ export async function startGatewayServer(
   {
     const startupSnapshot = await readConfigFileSnapshot();
     startupInternalWriteHash = startupSnapshot.hash ?? null;
+    startupLastGoodSnapshot = startupSnapshot;
   }
   const pluginBootstrap = await prepareGatewayPluginBootstrap({
     cfgAtStart,
@@ -782,6 +786,8 @@ export async function startGatewayServer(
       initialInternalWriteHash: startupInternalWriteHash,
       watchPath: configSnapshot.path,
       readSnapshot: readConfigFileSnapshot,
+      recoverSnapshot: recoverConfigFromLastKnownGood,
+      promoteSnapshot: promoteConfigSnapshotToLastKnownGood,
       subscribeToWrites: registerConfigWriteListener,
       deps,
       broadcast,
@@ -811,6 +817,9 @@ export async function startGatewayServer(
       resolveSharedGatewaySessionGenerationForConfig,
       sharedGatewaySessionGenerationState,
       clients,
+    });
+    await promoteConfigSnapshotToLastKnownGood(startupLastGoodSnapshot).catch((err) => {
+      log.warn(`gateway: failed to promote config last-known-good backup: ${String(err)}`);
     });
   } catch (err) {
     await closeOnStartupFailure();

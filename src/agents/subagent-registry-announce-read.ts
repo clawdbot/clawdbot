@@ -1,4 +1,5 @@
-import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   countPendingDescendantRunsExcludingRunFromRuns,

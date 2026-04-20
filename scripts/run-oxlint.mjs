@@ -54,19 +54,25 @@ function prepareExtensionPackageBoundaryArtifacts(env) {
 
 export function main(argv = process.argv.slice(2), runtimeEnv = process.env) {
   const { args: finalArgs, env } = applyLocalOxlintPolicy(argv, runtimeEnv);
-  const releaseLock = shouldAcquireLocalHeavyCheckLockForOxlint(finalArgs, {
-    cwd: process.cwd(),
-    env,
-  })
-    ? acquireLocalHeavyCheckLockSync({
-        cwd: process.cwd(),
-        env,
-        toolName: "oxlint",
-      })
-    : () => {};
+  const releaseLock =
+    env.OPENCLAW_OXLINT_SKIP_LOCK === "1"
+      ? () => {}
+      : shouldAcquireLocalHeavyCheckLockForOxlint(finalArgs, {
+            cwd: process.cwd(),
+            env,
+          })
+        ? acquireLocalHeavyCheckLockSync({
+            cwd: process.cwd(),
+            env,
+            toolName: "oxlint",
+          })
+        : () => {};
 
   try {
-    if (shouldPrepareExtensionPackageBoundaryArtifacts(finalArgs)) {
+    if (
+      env.OPENCLAW_OXLINT_SKIP_PREPARE !== "1" &&
+      shouldPrepareExtensionPackageBoundaryArtifacts(finalArgs)
+    ) {
       prepareExtensionPackageBoundaryArtifacts(env);
     }
 

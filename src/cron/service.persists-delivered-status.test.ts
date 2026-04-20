@@ -26,6 +26,13 @@ function buildIsolatedAgentTurnJob(name: string): CronAddInput {
   };
 }
 
+function buildAnnounceIsolatedAgentTurnJob(name: string): CronAddInput {
+  return {
+    ...buildIsolatedAgentTurnJob(name),
+    delivery: { mode: "announce", channel: "telegram", to: "123" },
+  };
+}
+
 function buildMainSessionSystemEventJob(name: string): CronAddInput {
   return {
     name,
@@ -40,6 +47,7 @@ function buildMainSessionSystemEventJob(name: string): CronAddInput {
 function createIsolatedCronWithFinishedBarrier(params: {
   storePath: string;
   delivered?: boolean;
+  error?: string;
   onFinished?: (evt: { jobId: string; delivered?: boolean; deliveryStatus?: string }) => void;
 }) {
   const finished = createFinishedBarrier();
@@ -52,6 +60,7 @@ function createIsolatedCronWithFinishedBarrier(params: {
     runIsolatedAgentJob: vi.fn(async () => ({
       status: "ok" as const,
       summary: "done",
+      ...(params.error === undefined ? {} : { error: params.error }),
       ...(params.delivered === undefined ? {} : { delivered: params.delivered }),
     })),
     onEvent: (evt) => {
@@ -117,12 +126,14 @@ function expectDeliveryNotRequested(
 async function runIsolatedJobAndReadState(params: {
   job: CronAddInput;
   delivered?: boolean;
+  error?: string;
   onFinished?: (evt: { jobId: string; delivered?: boolean; deliveryStatus?: string }) => void;
 }) {
   const store = await makeStorePath();
   const { cron, finished } = createIsolatedCronWithFinishedBarrier({
     storePath: store.storePath,
     ...(params.delivered !== undefined ? { delivered: params.delivered } : {}),
+    ...(params.error !== undefined ? { error: params.error } : {}),
     ...(params.onFinished ? { onFinished: params.onFinished } : {}),
   });
 
@@ -142,7 +153,7 @@ async function runIsolatedJobAndReadState(params: {
 describe("CronService persists delivered status", () => {
   it("persists lastDelivered=true when isolated job reports delivered", async () => {
     const updated = await runIsolatedJobAndReadState({
-      job: buildIsolatedAgentTurnJob("delivered-true"),
+      job: buildAnnounceIsolatedAgentTurnJob("delivered-true"),
       delivered: true,
     });
     expectSuccessfulCronRun(updated);
@@ -153,13 +164,34 @@ describe("CronService persists delivered status", () => {
 
   it("persists lastDelivered=false when isolated job explicitly reports not delivered", async () => {
     const updated = await runIsolatedJobAndReadState({
-      job: buildIsolatedAgentTurnJob("delivered-false"),
+      job: buildAnnounceIsolatedAgentTurnJob("delivered-false"),
       delivered: false,
     });
     expectSuccessfulCronRun(updated);
     expect(updated?.state.lastDelivered).toBe(false);
     expect(updated?.state.lastDeliveryStatus).toBe("not-delivered");
     expect(updated?.state.lastDeliveryError).toBeUndefined();
+  });
+
+  it("suppresses delivered=false when delivery.mode none opts out of delivery", async () => {
+    const updated = await runIsolatedJobAndReadState({
+      job: buildIsolatedAgentTurnJob("delivery-none-delivered-false"),
+      delivered: false,
+      error: "Message failed",
+    });
+    expectDeliveryNotRequested(updated);
+  });
+
+  it("preserves delivery errors when requested delivery reports not delivered", async () => {
+    const updated = await runIsolatedJobAndReadState({
+      job: buildAnnounceIsolatedAgentTurnJob("delivery-requested-error"),
+      delivered: false,
+      error: "Message failed",
+    });
+    expectSuccessfulCronRun(updated);
+    expect(updated?.state.lastDelivered).toBe(false);
+    expect(updated?.state.lastDeliveryStatus).toBe("not-delivered");
+    expect(updated?.state.lastDeliveryError).toBe("Message failed");
   });
 
   it("persists not-requested delivery state when delivery is not configured", async () => {
@@ -171,10 +203,7 @@ describe("CronService persists delivered status", () => {
 
   it("persists unknown delivery state when delivery is requested but the runner omits delivered", async () => {
     const updated = await runIsolatedJobAndReadState({
-      job: {
-        ...buildIsolatedAgentTurnJob("delivery-unknown"),
-        delivery: { mode: "announce", channel: "telegram", to: "123" },
-      },
+      job: buildAnnounceIsolatedAgentTurnJob("delivery-unknown"),
     });
     expectSuccessfulCronRun(updated);
     expect(updated?.state.lastDelivered).toBeUndefined();
@@ -205,7 +234,7 @@ describe("CronService persists delivered status", () => {
   it("emits delivered in the finished event", async () => {
     let capturedEvent: { jobId: string; delivered?: boolean; deliveryStatus?: string } | undefined;
     await runIsolatedJobAndReadState({
-      job: buildIsolatedAgentTurnJob("event-test"),
+      job: buildAnnounceIsolatedAgentTurnJob("event-test"),
       delivered: true,
       onFinished: (evt) => {
         capturedEvent = evt;

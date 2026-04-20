@@ -49,14 +49,14 @@
 - TypeScript (ESM), strict typing, avoid `any`
 - Keep files under ~700 LOC - extract helpers when larger
 - Colocated tests: `*.test.ts` next to source files
-- Run `pnpm check` before commits (lint + format)
-- Run `pnpm tsgo` for production type checking, or `pnpm tsgo:all` for production plus test types
+- Run `pnpm check` before commits (production type check + lint + format)
+- Run `pnpm check:test-types` when you need test type coverage, or `pnpm tsgo:all` for a full production plus test type sweep
 
 ## Stack & Commands
 
 - **Package manager**: pnpm (`pnpm install`)
 - **Dev**: `pnpm openclaw ...` or `pnpm dev`
-- **Type-check**: `pnpm tsgo` (production), `pnpm tsgo:all` (production plus tests)
+- **Type-check**: `pnpm tsgo` (core production), `pnpm tsgo:prod` (core + extension production), `pnpm check:test-types` (tests)
 - **Lint/format**: `pnpm check`
 - **Tests**: `pnpm test`
 - **Build**: `pnpm build`

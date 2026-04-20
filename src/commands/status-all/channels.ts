@@ -1,13 +1,9 @@
 import fs from "node:fs";
-import {
-  hasConfiguredUnavailableCredentialStatus,
-  hasResolvedCredentialValue,
-} from "../../channels/account-snapshot-fields.js";
+import { resolveInspectedChannelAccount } from "../../channels/account-inspection.js";
+import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
 import {
   buildChannelAccountSnapshot,
   formatChannelAllowFrom,
-  resolveChannelAccountConfigured,
-  resolveChannelAccountEnabled,
 } from "../../channels/account-summary.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
@@ -17,7 +13,6 @@ import type {
   ChannelId,
   ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
-import { inspectReadOnlyChannelAccount } from "../../channels/read-only-account-inspect.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { asRecord } from "../../shared/record-coerce.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -59,54 +54,16 @@ function existsSyncMaybe(p: string | undefined): boolean | null {
   }
 }
 
-async function inspectChannelAccount(
-  plugin: ChannelPlugin,
-  cfg: OpenClawConfig,
-  accountId: string,
-) {
-  return (
-    plugin.config.inspectAccount?.(cfg, accountId) ??
-    (await inspectReadOnlyChannelAccount({
-      channelId: plugin.id,
-      cfg,
-      accountId,
-    }))
-  );
-}
-
 async function resolveChannelAccountRow(
   params: ResolvedChannelAccountRowParams,
 ): Promise<ChannelAccountRow> {
   const { plugin, cfg, sourceConfig, accountId } = params;
-  const sourceInspectedAccount = await inspectChannelAccount(plugin, sourceConfig, accountId);
-  const resolvedInspectedAccount = await inspectChannelAccount(plugin, cfg, accountId);
-  const resolvedInspection = resolvedInspectedAccount as {
-    enabled?: boolean;
-    configured?: boolean;
-  } | null;
-  const sourceInspection = sourceInspectedAccount as {
-    enabled?: boolean;
-    configured?: boolean;
-  } | null;
-  const resolvedAccount = resolvedInspectedAccount ?? plugin.config.resolveAccount(cfg, accountId);
-  const useSourceUnavailableAccount = Boolean(
-    sourceInspectedAccount &&
-    hasConfiguredUnavailableCredentialStatus(sourceInspectedAccount) &&
-    (!hasResolvedCredentialValue(resolvedAccount) ||
-      (sourceInspection?.configured === true && resolvedInspection?.configured === false)),
-  );
-  const account = useSourceUnavailableAccount ? sourceInspectedAccount : resolvedAccount;
-  const selectedInspection = useSourceUnavailableAccount ? sourceInspection : resolvedInspection;
-  const enabled =
-    selectedInspection?.enabled ?? resolveChannelAccountEnabled({ plugin, account, cfg });
-  const configured =
-    selectedInspection?.configured ??
-    (await resolveChannelAccountConfigured({
-      plugin,
-      account,
-      cfg,
-      readAccountConfiguredField: true,
-    }));
+  const { account, enabled, configured } = await resolveInspectedChannelAccount({
+    plugin,
+    cfg,
+    sourceConfig,
+    accountId,
+  });
   const snapshot = buildChannelAccountSnapshot({
     plugin,
     cfg,

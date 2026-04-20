@@ -1,6 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import { streamWithPayloadPatch } from "../agents/pi-embedded-runner/stream-payload-utils.js";
+import { visitObjectContentBlocks } from "../shared/message-content-blocks.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { ProviderWrapStreamFnContext } from "./plugin-entry.js";
 
@@ -64,34 +65,25 @@ export function decodeHtmlEntitiesInObject(value: unknown): unknown {
 }
 
 function decodeToolCallArgumentsHtmlEntitiesInMessage(message: unknown): void {
-  if (!message || typeof message !== "object") {
-    return;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return;
-  }
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
+  visitObjectContentBlocks(message, (block) => {
     const typedBlock = block as { type?: unknown; arguments?: unknown };
     if (typedBlock.type !== "toolCall" || !typedBlock.arguments) {
-      continue;
+      return;
     }
     if (typeof typedBlock.arguments === "object") {
       typedBlock.arguments = decodeHtmlEntitiesInObject(typedBlock.arguments);
     }
-  }
+  });
 }
 
-function wrapStreamDecodeToolCallArgumentHtmlEntities(
+export function wrapStreamMessageObjects(
   stream: ReturnType<typeof streamSimple>,
+  transformMessage: (message: unknown) => void,
 ): ReturnType<typeof streamSimple> {
   const originalResult = stream.result.bind(stream);
   stream.result = async () => {
     const message = await originalResult();
-    decodeToolCallArgumentsHtmlEntitiesInMessage(message);
+    transformMessage(message);
     return message;
   };
 
@@ -104,8 +96,8 @@ function wrapStreamDecodeToolCallArgumentHtmlEntities(
           const result = await iterator.next();
           if (!result.done && result.value && typeof result.value === "object") {
             const event = result.value as { partial?: unknown; message?: unknown };
-            decodeToolCallArgumentsHtmlEntitiesInMessage(event.partial);
-            decodeToolCallArgumentsHtmlEntitiesInMessage(event.message);
+            transformMessage(event.partial);
+            transformMessage(event.message);
           }
           return result;
         },
@@ -128,10 +120,10 @@ export function createHtmlEntityToolCallArgumentDecodingWrapper(
     const maybeStream = underlying(model, context, options);
     if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
       return Promise.resolve(maybeStream).then((stream) =>
-        wrapStreamDecodeToolCallArgumentHtmlEntities(stream),
+        wrapStreamMessageObjects(stream, decodeToolCallArgumentsHtmlEntitiesInMessage),
       );
     }
-    return wrapStreamDecodeToolCallArgumentHtmlEntities(maybeStream);
+    return wrapStreamMessageObjects(maybeStream, decodeToolCallArgumentsHtmlEntitiesInMessage);
   };
 }
 

@@ -46,32 +46,32 @@ describe("plugin contract registry scoped retries", () => {
       .mockReturnValueOnce(
         createMockRuntimeRegistry({
           plugin: {
-            id: "xai",
+            id: "arcee",
             status: "error",
-            error: "transient xai load failure",
+            error: "transient arcee load failure",
             providerIds: [],
             webFetchProviderIds: [],
             webSearchProviderIds: [],
           },
-          diagnostics: [{ pluginId: "xai", message: "transient xai load failure" }],
+          diagnostics: [{ pluginId: "arcee", message: "transient arcee load failure" }],
         }),
       )
       .mockReturnValueOnce(
         createMockRuntimeRegistry({
           plugin: {
-            id: "xai",
+            id: "arcee",
             status: "loaded",
-            providerIds: ["xai"],
+            providerIds: ["arcee"],
             webFetchProviderIds: [],
-            webSearchProviderIds: ["grok"],
+            webSearchProviderIds: [],
           },
           providers: [
             {
-              pluginId: "xai",
+              pluginId: "arcee",
               provider: {
-                id: "xai",
-                label: "xAI",
-                docsPath: "/providers/xai",
+                id: "arcee",
+                label: "Arcee",
+                docsPath: "/providers/arcee",
                 auth: [],
               } as ProviderPlugin,
             },
@@ -82,12 +82,15 @@ describe("plugin contract registry scoped retries", () => {
     vi.doMock("../bundled-capability-runtime.js", () => ({
       loadBundledCapabilityRuntimeRegistry,
     }));
+    vi.doMock("../provider-contract-public-artifacts.js", () => ({
+      resolveBundledExplicitProviderContractsFromPublicArtifacts: () => null,
+    }));
 
     const { resolveProviderContractProvidersForPluginIds } = await import("./registry.js");
 
     expect(
-      resolveProviderContractProvidersForPluginIds(["xai"]).map((provider) => provider.id),
-    ).toEqual(["xai"]);
+      resolveProviderContractProvidersForPluginIds(["arcee"]).map((provider) => provider.id),
+    ).toEqual(["arcee"]);
     expect(loadBundledCapabilityRuntimeRegistry).toHaveBeenCalledTimes(2);
   });
 
@@ -97,36 +100,36 @@ describe("plugin contract registry scoped retries", () => {
       .mockReturnValueOnce(
         createMockRuntimeRegistry({
           plugin: {
-            id: "xai",
+            id: "searxng",
             status: "error",
-            error: "transient grok load failure",
+            error: "transient searxng load failure",
             providerIds: [],
             webFetchProviderIds: [],
             webSearchProviderIds: [],
           },
-          diagnostics: [{ pluginId: "xai", message: "transient grok load failure" }],
+          diagnostics: [{ pluginId: "searxng", message: "transient searxng load failure" }],
         }),
       )
       .mockReturnValueOnce(
         createMockRuntimeRegistry({
           plugin: {
-            id: "xai",
+            id: "searxng",
             status: "loaded",
-            providerIds: ["xai"],
+            providerIds: [],
             webFetchProviderIds: [],
-            webSearchProviderIds: ["grok"],
+            webSearchProviderIds: ["searxng"],
           },
           webSearchProviders: [
             {
-              pluginId: "xai",
+              pluginId: "searxng",
               provider: {
-                id: "grok",
-                label: "Grok Search",
-                hint: "Search the web with Grok",
-                envVars: ["XAI_API_KEY"],
-                placeholder: "XAI_API_KEY",
-                signupUrl: "https://x.ai",
-                credentialPath: "plugins.entries.xai.config.webSearch.apiKey",
+                id: "searxng",
+                label: "SearXNG",
+                hint: "Search the web with SearXNG",
+                envVars: ["SEARXNG_URL"],
+                placeholder: "https://search.example.test",
+                signupUrl: "https://docs.searxng.org",
+                credentialPath: "plugins.entries.searxng.config.webSearch.url",
                 requiresCredential: true,
                 getCredentialValue: () => undefined,
                 setCredentialValue() {},
@@ -144,12 +147,17 @@ describe("plugin contract registry scoped retries", () => {
     vi.doMock("../bundled-capability-runtime.js", () => ({
       loadBundledCapabilityRuntimeRegistry,
     }));
+    vi.doMock("../web-provider-public-artifacts.explicit.js", () => ({
+      resolveBundledExplicitWebSearchProvidersFromPublicArtifacts: () => null,
+    }));
 
     const { resolveWebSearchProviderContractEntriesForPluginId } = await import("./registry.js");
 
     expect(
-      resolveWebSearchProviderContractEntriesForPluginId("xai").map((entry) => entry.provider.id),
-    ).toEqual(["grok"]);
+      resolveWebSearchProviderContractEntriesForPluginId("searxng").map(
+        (entry) => entry.provider.id,
+      ),
+    ).toEqual(["searxng"]);
     expect(loadBundledCapabilityRuntimeRegistry).toHaveBeenCalledTimes(2);
   });
 
@@ -180,6 +188,9 @@ describe("plugin contract registry scoped retries", () => {
     vi.doMock("../bundled-capability-runtime.js", () => ({
       loadBundledCapabilityRuntimeRegistry,
     }));
+    vi.doMock("../provider-contract-public-artifacts.js", () => ({
+      resolveBundledExplicitProviderContractsFromPublicArtifacts: () => null,
+    }));
 
     const { requireProviderContractProvider } = await import("./registry.js");
 
@@ -189,9 +200,9 @@ describe("plugin contract registry scoped retries", () => {
 
   it("uses provider public artifacts before falling back to the bundled runtime registry", async () => {
     const loadBundledCapabilityRuntimeRegistry = vi.fn(() => {
-      throw new Error("provider contract vitest fast path should not hit bundled runtime registry");
+      throw new Error("provider contract public artifact should not hit bundled runtime registry");
     });
-    const loadVitestProviderContractRegistry = vi.fn(() => [
+    const resolveBundledExplicitProviderContractsFromPublicArtifacts = vi.fn(() => [
       {
         pluginId: "openai",
         provider: {
@@ -229,8 +240,8 @@ describe("plugin contract registry scoped retries", () => {
     vi.doMock("../bundled-capability-runtime.js", () => ({
       loadBundledCapabilityRuntimeRegistry,
     }));
-    vi.doMock("./provider-vitest-registry.js", () => ({
-      loadVitestProviderContractRegistry,
+    vi.doMock("../provider-contract-public-artifacts.js", () => ({
+      resolveBundledExplicitProviderContractsFromPublicArtifacts,
     }));
 
     const { resolveProviderContractProvidersForPluginIds } = await import("./registry.js");
@@ -238,24 +249,34 @@ describe("plugin contract registry scoped retries", () => {
     expect(
       resolveProviderContractProvidersForPluginIds(["openai"]).map((provider) => provider.id),
     ).toEqual(["openai", "openai-codex"]);
-    expect(loadVitestProviderContractRegistry).toHaveBeenCalledTimes(1);
+    expect(resolveBundledExplicitProviderContractsFromPublicArtifacts).toHaveBeenCalledTimes(1);
     expect(loadBundledCapabilityRuntimeRegistry).not.toHaveBeenCalled();
   });
 
   it("uses web search public artifacts before falling back to the bundled runtime registry", async () => {
     const loadBundledCapabilityRuntimeRegistry = vi.fn(() => {
       throw new Error(
-        "web search contract vitest fast path should not hit bundled runtime registry",
+        "web search contract public artifact should not hit bundled runtime registry",
       );
     });
-    const loadVitestWebSearchProviderContractRegistry = vi.fn(() => [
+    const resolveBundledExplicitWebSearchProvidersFromPublicArtifacts = vi.fn(() => [
       {
         pluginId: "google",
-        provider: {
-          id: "gemini",
-          label: "Gemini",
-          credentialPath: "plugins.entries.google.config.webSearch.apiKey",
-        } as WebSearchProviderPlugin,
+        id: "gemini",
+        label: "Gemini",
+        hint: "Search with Gemini",
+        envVars: ["GEMINI_API_KEY"],
+        placeholder: "GEMINI_API_KEY",
+        signupUrl: "https://aistudio.google.com",
+        credentialPath: "plugins.entries.google.config.webSearch.apiKey",
+        requiresCredential: true,
+        getCredentialValue: () => undefined,
+        setCredentialValue() {},
+        createTool: () => ({
+          description: "search",
+          parameters: {},
+          execute: async () => ({}),
+        }),
         credentialValue: "AIzaSyDUMMY",
       },
     ]);
@@ -263,8 +284,8 @@ describe("plugin contract registry scoped retries", () => {
     vi.doMock("../bundled-capability-runtime.js", () => ({
       loadBundledCapabilityRuntimeRegistry,
     }));
-    vi.doMock("./web-provider-vitest-registry.js", () => ({
-      loadVitestWebSearchProviderContractRegistry,
+    vi.doMock("../web-provider-public-artifacts.explicit.js", () => ({
+      resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
     }));
 
     const { resolveWebSearchProviderContractEntriesForPluginId } = await import("./registry.js");
@@ -274,7 +295,7 @@ describe("plugin contract registry scoped retries", () => {
         (entry) => entry.provider.id,
       ),
     ).toEqual(["gemini"]);
-    expect(loadVitestWebSearchProviderContractRegistry).toHaveBeenCalledTimes(1);
+    expect(resolveBundledExplicitWebSearchProvidersFromPublicArtifacts).toHaveBeenCalledTimes(1);
     expect(loadBundledCapabilityRuntimeRegistry).not.toHaveBeenCalled();
   });
 

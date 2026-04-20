@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   ensureAuthProfileStore: vi.fn(),
+  loadAuthProfileStoreWithoutExternalProfiles: vi.fn(),
   resolveAuthProfileOrder: vi.fn(),
   resolveAuthProfileDisplayLabel: vi.fn(),
   resolveUsableCustomProviderApiKey: vi.fn(() => null),
@@ -10,6 +11,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./auth-profiles.js", () => ({
   ensureAuthProfileStore: mocks.ensureAuthProfileStore,
+  loadAuthProfileStoreWithoutExternalProfiles: mocks.loadAuthProfileStoreWithoutExternalProfiles,
   resolveAuthProfileOrder: mocks.resolveAuthProfileOrder,
   resolveAuthProfileDisplayLabel: mocks.resolveAuthProfileDisplayLabel,
 }));
@@ -27,6 +29,7 @@ describe("resolveModelAuthLabel", () => {
       ({ resolveModelAuthLabel } = await import("./model-auth-label.js"));
     }
     mocks.ensureAuthProfileStore.mockReset();
+    mocks.loadAuthProfileStoreWithoutExternalProfiles.mockReset();
     mocks.resolveAuthProfileOrder.mockReset();
     mocks.resolveAuthProfileDisplayLabel.mockReset();
     mocks.resolveUsableCustomProviderApiKey.mockReset();
@@ -107,5 +110,29 @@ describe("resolveModelAuthLabel", () => {
     });
 
     expect(label).toBe("oauth (anthropic:oauth)");
+  });
+
+  it("can skip external auth profile overlays for status labels", () => {
+    mocks.loadAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
+      version: 1,
+      profiles: {
+        "anthropic:oauth": {
+          type: "oauth",
+          provider: "anthropic",
+        },
+      },
+    } as never);
+    mocks.resolveAuthProfileOrder.mockReturnValue(["anthropic:oauth"]);
+    mocks.resolveAuthProfileDisplayLabel.mockReturnValue("anthropic:oauth");
+
+    const label = resolveModelAuthLabel({
+      provider: "anthropic",
+      cfg: {},
+      includeExternalProfiles: false,
+    });
+
+    expect(label).toBe("oauth (anthropic:oauth)");
+    expect(mocks.loadAuthProfileStoreWithoutExternalProfiles).toHaveBeenCalledOnce();
+    expect(mocks.ensureAuthProfileStore).not.toHaveBeenCalled();
   });
 });

@@ -9,3 +9,29 @@ export function resolveConfiguredMediaMaxBytes(cfg?: OpenClawConfig): number | u
   }
   return undefined;
 }
+
+export function resolveChannelAccountMediaMaxMb(params: {
+  cfg: OpenClawConfig;
+  channel?: string | null;
+  accountId?: string | null;
+}): number | undefined {
+  const channelId = params.channel?.trim();
+  const accountId = params.accountId?.trim();
+  const channelCfg = channelId ? params.cfg.channels?.[channelId] : undefined;
+  const channelObj =
+    channelCfg && typeof channelCfg === "object"
+      ? (channelCfg as Record<string, unknown>)
+      : undefined;
+  const channelMediaMax =
+    typeof channelObj?.mediaMaxMb === "number" ? channelObj.mediaMaxMb : undefined;
+  const accountsObj =
+    channelObj?.accounts && typeof channelObj.accounts === "object"
+      ? (channelObj.accounts as Record<string, unknown>)
+      : undefined;
+  const accountCfg = accountId && accountsObj ? accountsObj[accountId] : undefined;
+  const accountMediaMax =
+    accountCfg && typeof accountCfg === "object"
+      ? (accountCfg as Record<string, unknown>).mediaMaxMb
+      : undefined;
+  return (typeof accountMediaMax === "number" ? accountMediaMax : undefined) ?? channelMediaMax;
+}

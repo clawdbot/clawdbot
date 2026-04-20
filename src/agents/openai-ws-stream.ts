@@ -41,7 +41,7 @@ import {
   normalizeAssistantPhase,
 } from "../shared/chat-message-content.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { resolveOpenAIStrictToolSetting } from "./openai-tool-schema.js";
+import { resolveOpenAIStrictToolSetting } from "./openai-strict-tool-setting.js";
 import {
   getOpenAIWebSocketErrorDetails,
   OpenAIWebSocketManager,

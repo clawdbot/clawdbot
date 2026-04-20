@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/lmstudio-provider",
-  "version": "2026.4.19-beta.1",
+  "version": "2026.4.20",
   "private": true,
   "description": "OpenClaw LM Studio provider plugin",
   "type": "module",

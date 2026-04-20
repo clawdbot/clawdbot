@@ -74,7 +74,10 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
         let snapshot = self.transport.currentStatusSnapshot()
         self.lastEmittedStatus = snapshot
         GatewayDiagnostics.log(
-            "watch messaging: set status handler supported=\(snapshot.supported) paired=\(snapshot.paired) appInstalled=\(snapshot.appInstalled) reachable=\(snapshot.reachable) activation=\(snapshot.activationState)")
+            "watch messaging: set status handler "
+                + "supported=\(snapshot.supported) paired=\(snapshot.paired) "
+                + "appInstalled=\(snapshot.appInstalled) reachable=\(snapshot.reachable) "
+                + "activation=\(snapshot.activationState)")
         handler(snapshot)
     }
 
@@ -134,7 +137,10 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
         }
         self.lastEmittedStatus = snapshot
         GatewayDiagnostics.log(
-            "watch messaging: status supported=\(snapshot.supported) paired=\(snapshot.paired) appInstalled=\(snapshot.appInstalled) reachable=\(snapshot.reachable) activation=\(snapshot.activationState)")
+            "watch messaging: status "
+                + "supported=\(snapshot.supported) paired=\(snapshot.paired) "
+                + "appInstalled=\(snapshot.appInstalled) reachable=\(snapshot.reachable) "
+                + "activation=\(snapshot.activationState)")
         self.statusHandler?(snapshot)
     }
 
@@ -148,7 +154,9 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
 
     private func emitExecApprovalSnapshotRequest(_ event: WatchExecApprovalSnapshotRequestEvent) {
         GatewayDiagnostics.log(
-            "watch messaging: snapshot request id=\(event.requestId) transport=\(event.transport) sentAtMs=\(event.sentAtMs ?? -1)")
+            "watch messaging: snapshot request "
+                + "id=\(event.requestId) transport=\(event.transport) "
+                + "sentAtMs=\(event.sentAtMs ?? -1)")
         self.execApprovalSnapshotRequestHandler?(event)
     }
 }

@@ -45,6 +45,7 @@ export async function persistInlineDirectives(params: {
   surface?: string;
   gatewayClientScopes?: string[];
   senderIsOwner?: boolean;
+  markLiveSwitchPending?: boolean;
 }): Promise<{ provider: string; model: string; contextTokens: number }> {
   const {
     directives,
@@ -185,6 +186,7 @@ export async function persistInlineDirectives(params: {
           entry: sessionEntry,
           selection: modelResolution.modelSelection,
           profileOverride: modelResolution.profileOverride,
+          markLiveSwitchPending: params.markLiveSwitchPending,
         });
         provider = modelResolution.modelSelection.provider;
         model = modelResolution.modelSelection.model;

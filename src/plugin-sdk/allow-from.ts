@@ -1,3 +1,4 @@
+import { isAllowedParsedChatSender as isAllowedParsedChatSenderShared } from "../channels/plugins/chat-target-prefixes.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 export type {
@@ -90,43 +91,7 @@ export function isAllowedParsedChatSender(params: {
   normalizeSender: (sender: string) => string;
   parseAllowTarget: (entry: string) => ParsedChatAllowTarget;
 }): boolean {
-  const allowFrom = params.allowFrom.map((entry) => String(entry).trim());
-  if (allowFrom.length === 0) {
-    return false;
-  }
-  if (allowFrom.includes("*")) {
-    return true;
-  }
-
-  const senderNormalized = params.normalizeSender(params.sender);
-  const chatId = params.chatId ?? undefined;
-  const chatGuid = params.chatGuid?.trim();
-  const chatIdentifier = params.chatIdentifier?.trim();
-
-  for (const entry of allowFrom) {
-    if (!entry) {
-      continue;
-    }
-    const parsed = params.parseAllowTarget(entry);
-    if (parsed.kind === "chat_id" && chatId !== undefined) {
-      if (parsed.chatId === chatId) {
-        return true;
-      }
-    } else if (parsed.kind === "chat_guid" && chatGuid) {
-      if (parsed.chatGuid === chatGuid) {
-        return true;
-      }
-    } else if (parsed.kind === "chat_identifier" && chatIdentifier) {
-      if (parsed.chatIdentifier === chatIdentifier) {
-        return true;
-      }
-    } else if (parsed.kind === "handle" && senderNormalized) {
-      if (parsed.handle === senderNormalized) {
-        return true;
-      }
-    }
-  }
-  return false;
+  return isAllowedParsedChatSenderShared(params);
 }
 
 export type BasicAllowlistResolutionEntry = {

@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/io.js";
 import { sendMessage } from "../infra/outbound/message.js";
 import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
 import { createExecTool } from "./bash-tools.exec.js";
@@ -25,13 +24,144 @@ vi.mock("../infra/outbound/message.js", () => ({
   sendMessage: vi.fn(async () => ({ ok: true })),
 }));
 
-vi.mock("../infra/shell-env.js", async () => {
-  const mod =
-    await vi.importActual<typeof import("../infra/shell-env.js")>("../infra/shell-env.js");
+vi.mock("../utils/message-channel.js", () => {
+  const normalizeMessageChannel = (raw?: string | null) => {
+    const normalized = raw?.trim().toLowerCase();
+    if (!normalized) {
+      return undefined;
+    }
+    if (normalized === "web" || normalized === "webchat") {
+      return "internal";
+    }
+    return normalized;
+  };
+  const isGatewayMessageChannel = (value: string) => Boolean(normalizeMessageChannel(value));
   return {
-    ...mod,
-    getShellPathFromLoginShell: vi.fn(() => null),
-    resolveShellEnvFallbackTimeoutMs: vi.fn(() => 0),
+    INTERNAL_MESSAGE_CHANNEL: "internal",
+    isDeliverableMessageChannel: (value: string) => {
+      const channel = normalizeMessageChannel(value);
+      return Boolean(channel && channel !== "internal" && channel !== "tui");
+    },
+    isGatewayMessageChannel,
+    normalizeMessageChannel,
+    resolveGatewayMessageChannel: normalizeMessageChannel,
+    resolveMessageChannel: (primary?: string | null, fallback?: string | null) =>
+      normalizeMessageChannel(primary) ?? normalizeMessageChannel(fallback),
+  };
+});
+
+vi.mock("../utils/delivery-context.js", () => ({
+  normalizeDeliveryContext: (context?: {
+    channel?: string | null;
+    to?: string | number | null;
+    accountId?: string | null;
+    threadId?: string | number | null;
+  }) => {
+    if (!context) {
+      return undefined;
+    }
+    const channel = context.channel?.trim().toLowerCase();
+    const to = context.to == null ? undefined : String(context.to).trim();
+    const accountId = context.accountId?.trim();
+    const threadId = context.threadId == null ? undefined : context.threadId;
+    if (!channel && !to && !accountId && threadId == null) {
+      return undefined;
+    }
+    return {
+      channel: channel || undefined,
+      to: to || undefined,
+      accountId: accountId || undefined,
+      ...(threadId != null && threadId !== "" ? { threadId } : {}),
+    };
+  },
+}));
+
+vi.mock("../infra/exec-approval-surface.js", () => ({
+  describeNativeExecApprovalClientSetup: () => null,
+  listNativeExecApprovalClientLabels: () => [],
+  resolveExecApprovalInitiatingSurfaceState: (params: {
+    channel?: string | null;
+    accountId?: string | null;
+  }) => {
+    const channel = params.channel ?? undefined;
+    return {
+      kind: "enabled",
+      channel,
+      channelLabel:
+        channel === "tui" ? "terminal UI" : channel === "internal" ? "Web UI" : "this platform",
+      accountId: params.accountId ?? undefined,
+    };
+  },
+  supportsNativeExecApprovalClient: (channel?: string | null) =>
+    !channel || channel === "internal" || channel === "tui",
+}));
+
+vi.mock("../infra/shell-env.js", () => ({
+  getShellPathFromLoginShell: vi.fn(() => null),
+  resolveShellEnvFallbackTimeoutMs: vi.fn(() => 0),
+}));
+
+vi.mock("../process/supervisor/index.js", () => {
+  const stdoutFor = (command: string) => {
+    if (
+      command.includes("calendar events primary --today --json") ||
+      command.includes("gog-wrapper")
+    ) {
+      return '{"events":[]}\n';
+    }
+    if (command.includes("printf delayed-ok")) {
+      return "delayed-ok";
+    }
+    if (command.includes("printf webchat-ok")) {
+      return "webchat-ok";
+    }
+    if (command.includes("printf approval-one")) {
+      return "approval-one";
+    }
+    if (command.includes("printf approval-two")) {
+      return "approval-two";
+    }
+    if (command.includes("echo allow-always")) {
+      return "allow-always\n";
+    }
+    if (command.includes("echo cron-ok")) {
+      return "cron-ok\n";
+    }
+    if (command.includes("echo ok")) {
+      return "ok\n";
+    }
+    return "";
+  };
+  return {
+    getProcessSupervisor: () => ({
+      spawn: async (input: { argv?: string[]; onStdout?: (chunk: string) => void }) => {
+        const command = input.argv?.join(" ") ?? "";
+        const stdout = stdoutFor(command);
+        if (stdout) {
+          input.onStdout?.(stdout);
+        }
+        return {
+          runId: "mock-approval-run",
+          startedAtMs: Date.now(),
+          stdin: undefined,
+          wait: async () => ({
+            reason: "exit" as const,
+            exitCode: 0,
+            exitSignal: null,
+            durationMs: 0,
+            stdout: "",
+            stderr: "",
+            timedOut: false,
+            noOutputTimedOut: false,
+          }),
+          cancel: vi.fn(),
+        };
+      },
+      cancel: vi.fn(),
+      cancelScope: vi.fn(),
+      reconcileOrphans: vi.fn(),
+      getRecord: vi.fn(),
+    }),
   };
 });
 
@@ -256,8 +386,6 @@ describe("exec approvals", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
     if (previousHome === undefined) {
       delete process.env.HOME;
     } else {
@@ -336,7 +464,7 @@ describe("exec approvals", () => {
     ).toMatchObject({
       suppressNotifyOnExit: true,
     });
-    await expect.poll(() => agentParams, { timeout: 2_000, interval: 1 }).toBeTruthy();
+    await expect.poll(() => agentParams, { timeout: 2000, interval: 1 }).toBeTruthy();
   });
 
   it("skips approval when node allowlist is satisfied", async () => {
@@ -619,13 +747,20 @@ describe("exec approvals", () => {
     await expect
       .poll(
         async () => {
-          const raw = await fs.readFile(approvalsPath, "utf8");
-          const parsed = JSON.parse(raw) as {
-            agents?: { main?: { allowlist?: Array<{ source?: string }> } };
-          };
-          return parsed.agents?.main?.allowlist?.some((entry) => entry.source === "allow-always");
+          try {
+            const raw = await fs.readFile(approvalsPath, "utf8");
+            const parsed = JSON.parse(raw) as {
+              agents?: { main?: { allowlist?: Array<{ source?: string }> } };
+            };
+            return (
+              parsed.agents?.main?.allowlist?.some((entry) => entry.source === "allow-always") ===
+              true
+            );
+          } catch {
+            return false;
+          }
         },
-        { timeout: 1_000, interval: 1 },
+        { timeout: 2000, interval: 1 },
       )
       .toBe(true);
 
@@ -796,7 +931,7 @@ describe("exec approvals", () => {
     });
 
     expect(result.details.status).toBe("approval-pending");
-    await expect.poll(() => agentCalls.length, { timeout: 3_000, interval: 1 }).toBe(1);
+    await expect.poll(() => agentCalls.length, { timeout: 3000, interval: 1 }).toBe(1);
     expect(agentCalls[0]).toEqual(
       expect.objectContaining({
         sessionKey: "agent:main:main",
@@ -837,7 +972,7 @@ describe("exec approvals", () => {
     });
 
     expect(result.details.status).toBe("approval-pending");
-    await expect.poll(() => agentCalls.length, { timeout: 3_000, interval: 1 }).toBe(1);
+    await expect.poll(() => agentCalls.length, { timeout: 3000, interval: 1 }).toBe(1);
     expect(agentCalls[0]).toEqual(
       expect.objectContaining({
         sessionKey: "agent:main:discord:channel:123",
@@ -900,7 +1035,7 @@ describe("exec approvals", () => {
 
     resolveDecision?.({ decision: "allow-once" });
 
-    await expect.poll(() => agentCalls.length, { timeout: 3_000, interval: 1 }).toBe(1);
+    await expect.poll(() => agentCalls.length, { timeout: 3000, interval: 1 }).toBe(1);
     expect(agentCalls[0]).toEqual(
       expect.objectContaining({
         sessionKey: "agent:main:discord:channel:123",
@@ -944,7 +1079,7 @@ describe("exec approvals", () => {
 
     expect(result.details.status).toBe("approval-pending");
 
-    await expect.poll(() => agentCalls.length, { timeout: 3_000, interval: 1 }).toBe(1);
+    await expect.poll(() => agentCalls.length, { timeout: 3000, interval: 1 }).toBe(1);
     expect(agentCalls[0]).toEqual(
       expect.objectContaining({
         sessionKey: "agent:main:main",
@@ -985,7 +1120,7 @@ describe("exec approvals", () => {
     });
 
     expect(result.details.status).toBe("approval-pending");
-    await expect.poll(() => agentCalls.length, { timeout: 3_000, interval: 1 }).toBe(1);
+    await expect.poll(() => agentCalls.length, { timeout: 3000, interval: 1 }).toBe(1);
     expect(typeof agentCalls[0]?.message).toBe("string");
     expect(agentCalls[0]?.message).toContain("An async command did not run.");
     expect(agentCalls[0]?.message).toContain(
@@ -1025,17 +1160,17 @@ describe("exec approvals", () => {
     const tool = createElevatedAllowlistExecTool();
 
     const first = await tool.execute("call-seq-1", {
-      command: "npm view diver --json",
+      command: "printf approval-one",
       elevated: true,
     });
     const second = await tool.execute("call-seq-2", {
-      command: "brew outdated",
+      command: "printf approval-two",
       elevated: true,
     });
 
     expect(first.details.status).toBe("approval-pending");
     expect(second.details.status).toBe("approval-pending");
-    expect(requestCommands).toEqual(["npm view diver --json", "brew outdated"]);
+    expect(requestCommands).toEqual(["printf approval-one", "printf approval-two"]);
     expect(requestIds).toHaveLength(2);
     expect(requestIds[0]).not.toBe(requestIds[1]);
     expect(waitIds).toEqual(requestIds);

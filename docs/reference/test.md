@@ -38,6 +38,7 @@ title: "Tests"
 For local PR land/gate checks, run:
 
 - `pnpm check`
+- `pnpm check:test-types`
 - `pnpm build`
 - `pnpm test`
 - `pnpm check:docs`

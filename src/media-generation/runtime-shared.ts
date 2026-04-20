@@ -1,6 +1,7 @@
 import { listProfilesForProvider } from "../agents/auth-profiles.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { describeFailoverError, isFailoverError } from "../agents/failover-error.js";
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
 import {
@@ -9,6 +10,7 @@ import {
 } from "../config/model-input.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type {
@@ -26,6 +28,23 @@ export type {
   MediaNormalizationEntry,
   MediaNormalizationValue,
 } from "./normalization.types.js";
+
+export function recordCapabilityCandidateFailure(params: {
+  attempts: FallbackAttempt[];
+  provider: string;
+  model: string;
+  error: unknown;
+}): void {
+  const described = isFailoverError(params.error) ? describeFailoverError(params.error) : undefined;
+  params.attempts.push({
+    provider: params.provider,
+    model: params.model,
+    error: described?.message ?? formatErrorMessage(params.error),
+    reason: described?.reason,
+    status: described?.status,
+    code: described?.code,
+  });
+}
 
 export function hasMediaNormalizationEntry<TValue extends MediaNormalizationValue>(
   entry: MediaNormalizationEntry<TValue> | undefined,

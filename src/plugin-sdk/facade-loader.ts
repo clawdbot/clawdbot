@@ -9,11 +9,12 @@ import {
   type PluginJitiLoaderCache,
   type PluginJitiLoaderFactory,
 } from "../plugins/jiti-loader-cache.js";
-import {
-  resolveBundledPluginSourcePublicSurfacePath,
-  resolveBundledPluginPublicSurfacePath,
-} from "../plugins/public-surface-runtime.js";
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
+import {
+  createFacadeResolutionKey as createFacadeResolutionKeyShared,
+  resolveBundledFacadeModuleLocation,
+  resolveCachedFacadeModuleLocation,
+} from "./facade-resolution-shared.js";
 
 const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
 
@@ -58,7 +59,7 @@ function createFacadeResolutionKey(params: {
   env?: NodeJS.ProcessEnv;
 }): string {
   const bundledPluginsDir = resolveBundledPluginsDir(params.env ?? process.env);
-  return `${params.dirName}::${params.artifactBasename}::${bundledPluginsDir ? path.resolve(bundledPluginsDir) : "<default>"}`;
+  return createFacadeResolutionKeyShared({ ...params, bundledPluginsDir });
 }
 
 function resolveFacadeModuleLocationUncached(params: {
@@ -67,48 +68,12 @@ function resolveFacadeModuleLocationUncached(params: {
   env?: NodeJS.ProcessEnv;
 }): { modulePath: string; boundaryRoot: string } | null {
   const bundledPluginsDir = resolveBundledPluginsDir(params.env ?? process.env);
-  const preferSource = !CURRENT_MODULE_PATH.includes(`${path.sep}dist${path.sep}`);
-  if (preferSource) {
-    const modulePath =
-      resolveBundledPluginSourcePublicSurfacePath({
-        ...params,
-        sourceRoot: bundledPluginsDir ?? path.resolve(getOpenClawPackageRoot(), "extensions"),
-      }) ??
-      resolveBundledPluginPublicSurfacePath({
-        rootDir: getOpenClawPackageRoot(),
-        env: params.env,
-        ...(bundledPluginsDir ? { bundledPluginsDir } : {}),
-        dirName: params.dirName,
-        artifactBasename: params.artifactBasename,
-      });
-    if (modulePath) {
-      return {
-        modulePath,
-        boundaryRoot:
-          bundledPluginsDir && modulePath.startsWith(path.resolve(bundledPluginsDir) + path.sep)
-            ? path.resolve(bundledPluginsDir)
-            : getOpenClawPackageRoot(),
-      };
-    }
-    return null;
-  }
-  const modulePath = resolveBundledPluginPublicSurfacePath({
-    rootDir: getOpenClawPackageRoot(),
-    env: params.env,
-    ...(bundledPluginsDir ? { bundledPluginsDir } : {}),
-    dirName: params.dirName,
-    artifactBasename: params.artifactBasename,
+  return resolveBundledFacadeModuleLocation({
+    ...params,
+    currentModulePath: CURRENT_MODULE_PATH,
+    packageRoot: getOpenClawPackageRoot(),
+    bundledPluginsDir,
   });
-  if (!modulePath) {
-    return null;
-  }
-  return {
-    modulePath,
-    boundaryRoot:
-      bundledPluginsDir && modulePath.startsWith(path.resolve(bundledPluginsDir) + path.sep)
-        ? path.resolve(bundledPluginsDir)
-        : getOpenClawPackageRoot(),
-  };
 }
 
 function resolveFacadeModuleLocation(params: {
@@ -116,13 +81,11 @@ function resolveFacadeModuleLocation(params: {
   artifactBasename: string;
   env?: NodeJS.ProcessEnv;
 }): { modulePath: string; boundaryRoot: string } | null {
-  const key = createFacadeResolutionKey(params);
-  if (cachedFacadeModuleLocationsByKey.has(key)) {
-    return cachedFacadeModuleLocationsByKey.get(key) ?? null;
-  }
-  const resolved = resolveFacadeModuleLocationUncached(params);
-  cachedFacadeModuleLocationsByKey.set(key, resolved);
-  return resolved;
+  return resolveCachedFacadeModuleLocation({
+    cache: cachedFacadeModuleLocationsByKey,
+    key: createFacadeResolutionKey(params),
+    resolve: () => resolveFacadeModuleLocationUncached(params),
+  });
 }
 
 function getJiti(modulePath: string) {

@@ -1,5 +1,3 @@
-import { encodePngRgba, fillPixel } from "openclaw/plugin-sdk/media-runtime";
-
 export const MATRIX_QA_IMAGE_ATTACHMENT_FILENAME = "red-top-blue-bottom.png";
 
 export type MatrixQaMediaTypeCoverageCase = {
@@ -14,21 +12,13 @@ export type MatrixQaMediaTypeCoverageCase = {
 };
 
 const MATRIX_QA_IMAGE_COLOR_GROUPS = [["red"], ["blue"]] as const;
+const MATRIX_QA_SPLIT_COLOR_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAHElEQVR4nGP4z8DwnxLMMGrAsDCAQv2jBgwPAwAxtf4Q24P5oAAAAABJRU5ErkJggg==";
 const MATRIX_QA_ONE_PIXEL_JPEG_BASE64 =
   "/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEAAkGBxAQEBUQEBAVFRUVFRUVFRUVFRUVFRUVFRUXFhUVFRUYHSggGBolHRUVITEhJSkrLi4uFx8zODMsNygtLisBCgoKDg0OGhAQGi0fHyUtLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLf/AABEIAAEAAQMBIgACEQEDEQH/xAAXAAEBAQEAAAAAAAAAAAAAAAAAAQID/8QAFhEBAQEAAAAAAAAAAAAAAAAAAAER/9oADAMBAAIQAxAAAAH2AP/EABgQAQEAAwAAAAAAAAAAAAAAAAEAEQIS/9oACAEBAAEFAk1o7//EABYRAQEBAAAAAAAAAAAAAAAAAAABEf/aAAgBAwEBPwGn/8QAFhEBAQEAAAAAAAAAAAAAAAAAABEB/9oACAECAQE/AYf/xAAaEAACAgMAAAAAAAAAAAAAAAABEQAhMUFh/9oACAEBAAY/AjK9cY2f/8QAGhABAQACAwAAAAAAAAAAAAAAAAERITFBUf/aAAgBAQABPyGQk7W5jVYkA//Z";
 
 export function createMatrixQaSplitColorImagePng() {
-  const width = 16;
-  const height = 16;
-  const rgba = Buffer.alloc(width * height * 4);
-  for (let y = 0; y < height; y += 1) {
-    const isTopHalf = y < height / 2;
-    for (let x = 0; x < width; x += 1) {
-      const [red, green, blue] = isTopHalf ? [255, 0, 0] : [0, 0, 255];
-      fillPixel(rgba, x, y, width, red, green, blue);
-    }
-  }
-  return encodePngRgba(rgba, width, height);
+  return Buffer.from(MATRIX_QA_SPLIT_COLOR_PNG_BASE64, "base64");
 }
 
 function createMatrixQaOnePixelJpeg() {

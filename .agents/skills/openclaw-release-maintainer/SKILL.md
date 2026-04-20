@@ -64,6 +64,7 @@ Use this skill for release and publish-time workflow. Keep ordinary development 
 Before tagging or publishing, run:
 
 ```bash
+pnpm check:architecture
 pnpm build
 pnpm ui:build
 pnpm release:check
@@ -108,6 +109,7 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 - Always validate the OpenClaw npm release path before creating the tag.
 - Default release checks:
   - `pnpm check`
+  - `pnpm check:architecture`
   - `pnpm build`
   - `pnpm ui:build`
   - `pnpm release:check`

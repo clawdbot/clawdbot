@@ -337,14 +337,15 @@ export async function runPreparedReply(
           workspaceDir,
           isPrimaryRun: !isSubagentSessionKey(sessionKey) && !isAcpSessionKey(sessionKey),
           isCanonicalWorkspace: !spawnedWorkspaceOverride,
-          hasBootstrapFileAccess: resolveBareResetBootstrapFileAccess({
-            cfg,
-            agentId,
-            sessionKey,
-            workspaceDir,
-            modelProvider: provider,
-            modelId: model,
-          }),
+          hasBootstrapFileAccess: () =>
+            resolveBareResetBootstrapFileAccess({
+              cfg,
+              agentId,
+              sessionKey,
+              workspaceDir,
+              modelProvider: provider,
+              modelId: model,
+            }),
         })
       : null;
   const startupContextPrelude =
@@ -559,7 +560,7 @@ export async function runPreparedReply(
     logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
   }
   let authProfileId = useFastReplyRuntime
-    ? undefined
+    ? preparedSessionState.sessionEntry?.authProfileOverride
     : await resolveSessionAuthProfileOverride({
         cfg,
         provider,
@@ -612,7 +613,7 @@ export async function runPreparedReply(
       refreshPreparedState: async () => {
         preparedSessionState = resolvePreparedSessionState();
         authProfileId = useFastReplyRuntime
-          ? undefined
+          ? preparedSessionState.sessionEntry?.authProfileOverride
           : await resolveSessionAuthProfileOverride({
               cfg,
               provider,

@@ -61,28 +61,36 @@ enum RemoteGatewayAuthIssue: Equatable {
     var body: String {
         switch self {
         case .tokenRequired:
-            "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`."
+            "Paste the token configured on the gateway host. "
+                + "On the gateway host, run `openclaw config get gateway.auth.token`. "
+                + "If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`."
         case .tokenMismatch:
             "Check `gateway.auth.token` or `OPENCLAW_GATEWAY_TOKEN` on the gateway host and try again."
         case .gatewayTokenNotConfigured:
-            "This gateway is set to token auth, but no `gateway.auth.token` is configured on the gateway host. If the gateway uses an environment variable instead, set `OPENCLAW_GATEWAY_TOKEN` before starting the gateway."
+            "This gateway is set to token auth, but no `gateway.auth.token` is configured on the gateway host. "
+                + "If the gateway uses an environment variable instead, "
+                + "set `OPENCLAW_GATEWAY_TOKEN` before starting the gateway."
         case .setupCodeExpired:
             "Scan or paste a fresh setup code from an already-paired OpenClaw client, then try again."
         case .passwordRequired:
-            "This onboarding flow does not support password auth yet. Reconfigure the gateway to use token auth, then retry."
+            "This onboarding flow does not support password auth yet. "
+                + "Reconfigure the gateway to use token auth, then retry."
         case .pairingRequired:
-            "Approve this device from an already-paired OpenClaw client. In your OpenClaw chat, run `/pair approve`, then click **Check connection** again."
+            "Approve this device from an already-paired OpenClaw client. "
+                + "In your OpenClaw chat, run `/pair approve`, then click **Check connection** again."
         }
     }
 
     var footnote: String? {
         switch self {
         case .tokenRequired, .gatewayTokenNotConfigured:
-            "No token yet? Generate one on the gateway host with `openclaw doctor --generate-gateway-token`, then set it as `gateway.auth.token`."
+            "No token yet? Generate one on the gateway host with "
+                + "`openclaw doctor --generate-gateway-token`, then set it as `gateway.auth.token`."
         case .setupCodeExpired:
             nil
         case .pairingRequired:
-            "If you do not have another paired OpenClaw client yet, approve the pending request on the gateway host with `openclaw devices approve`."
+            "If you do not have another paired OpenClaw client yet, "
+                + "approve the pending request on the gateway host with `openclaw devices approve`."
         case .tokenMismatch, .passwordRequired:
             nil
         }
@@ -101,7 +109,8 @@ enum RemoteGatewayAuthIssue: Equatable {
         case .passwordRequired:
             "This gateway uses password auth. Remote onboarding on macOS cannot collect gateway passwords yet."
         case .pairingRequired:
-            "Pairing required. In an already-paired OpenClaw client, run /pair approve, then check the connection again."
+            "Pairing required. In an already-paired OpenClaw client, "
+                + "run /pair approve, then check the connection again."
         }
     }
 }
@@ -135,7 +144,8 @@ struct RemoteGatewayProbeSuccess: Equatable {
         case .some(.deviceToken):
             "This Mac used a stored device token. New or unpaired devices may still need the gateway token."
         case .some(.bootstrapToken):
-            "This Mac is still using the temporary setup code. Approve pairing to finish provisioning device-scoped auth."
+            "This Mac is still using the temporary setup code. "
+                + "Approve pairing to finish provisioning device-scoped auth."
         case .some(.sharedToken), .some(.password), .some(GatewayAuthSource.none), nil:
             nil
         }
@@ -219,7 +229,8 @@ enum RemoteGatewayProbe {
            trimmed.localizedCaseInsensitiveContains("host key verification failed")
         {
             let host = CommandResolver.parseSSHTarget(target)?.host ?? target
-            return "SSH check failed: Host key verification failed. Remove the old key with ssh-keygen -R \(host) and try again."
+            return "SSH check failed: Host key verification failed. "
+                + "Remove the old key with ssh-keygen -R \(host) and try again."
         }
         if let trimmed, !trimmed.isEmpty {
             if let message = response.message, message.hasPrefix("exit ") {

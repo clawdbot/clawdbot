@@ -84,6 +84,23 @@ describe("buildBareSessionResetPrompt", () => {
     expect(complete.prompt).toContain("Execute your Session Startup sequence now");
   });
 
+  it("does not resolve bootstrap file access when bootstrap is complete", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-reset-bootstrap-complete-");
+    let resolvedAccess = false;
+
+    const complete = await resolveBareSessionResetPromptState({
+      workspaceDir,
+      hasBootstrapFileAccess: () => {
+        resolvedAccess = true;
+        return false;
+      },
+    });
+
+    expect(complete.bootstrapMode).toBe("none");
+    expect(complete.shouldPrependStartupContext).toBe(true);
+    expect(resolvedAccess).toBe(false);
+  });
+
   it("suppresses bootstrap mode for non-primary bare reset sessions", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-reset-non-primary-");
     await fs.writeFile(path.join(workspaceDir, "BOOTSTRAP.md"), "ritual", "utf8");

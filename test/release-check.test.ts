@@ -192,7 +192,7 @@ describe("bundled plugin root runtime mirrors", () => {
     }
   });
 
-  it("flags missing root mirrors for plugin deps imported by root dist", () => {
+  it("does not require root mirrors for plugin deps imported by root dist", () => {
     expect(
       collectBundledPluginRootRuntimeMirrorErrors({
         bundledRuntimeDependencySpecs: makeBundledSpecs(),
@@ -208,12 +208,10 @@ describe("bundled plugin root runtime mirrors", () => {
         ]),
         rootPackageJson: { dependencies: {} },
       }),
-    ).toEqual([
-      "root dist imports bundled plugin runtime dependency '@larksuiteoapi/node-sdk' from probe-Cz2PiFtC.js; mirror '@larksuiteoapi/node-sdk: ^1.60.0' in root package.json (declared by feishu).",
-    ]);
+    ).toEqual([]);
   });
 
-  it("flags root mirror version drift from plugin manifests", () => {
+  it("does not compare root mirror versions for plugin manifest deps", () => {
     expect(
       collectBundledPluginRootRuntimeMirrorErrors({
         bundledRuntimeDependencySpecs: makeBundledSpecs(),
@@ -229,9 +227,7 @@ describe("bundled plugin root runtime mirrors", () => {
         ]),
         rootPackageJson: { dependencies: { "@larksuiteoapi/node-sdk": "^1.61.0" } },
       }),
-    ).toEqual([
-      "root dist imports bundled plugin runtime dependency '@larksuiteoapi/node-sdk' from probe-Cz2PiFtC.js; root package.json has '^1.61.0' but plugin manifest declares '^1.60.0' (feishu).",
-    ]);
+    ).toEqual([]);
   });
 
   it("accepts matching root mirrors for plugin deps imported by root dist", () => {

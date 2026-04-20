@@ -63,6 +63,22 @@ type ConfigIssueAccount = {
   configured?: boolean | null;
 } & Record<string, unknown>;
 
+function buildComputedAccountStatusAdapterBase<ResolvedAccount, Probe, Audit>(
+  options: Omit<ChannelStatusAdapter<ResolvedAccount, Probe, Audit>, "buildAccountSnapshot">,
+): Omit<ChannelStatusAdapter<ResolvedAccount, Probe, Audit>, "buildAccountSnapshot"> {
+  return {
+    defaultRuntime: options.defaultRuntime,
+    buildChannelSummary: options.buildChannelSummary,
+    probeAccount: options.probeAccount,
+    formatCapabilitiesProbe: options.formatCapabilitiesProbe,
+    auditAccount: options.auditAccount,
+    buildCapabilitiesDiagnostics: options.buildCapabilitiesDiagnostics,
+    logSelfId: options.logSelfId,
+    resolveAccountState: options.resolveAccountState,
+    collectStatusIssues: options.collectStatusIssues,
+  };
+}
+
 /** Create the baseline runtime snapshot shape used by channel/account status stores. */
 export function createDefaultChannelRuntimeState<T extends Record<string, unknown>>(
   accountId: string,
@@ -212,15 +228,7 @@ export function createComputedAccountStatusAdapter<
   },
 ): ChannelStatusAdapter<ResolvedAccount, Probe, Audit> {
   return {
-    defaultRuntime: options.defaultRuntime,
-    buildChannelSummary: options.buildChannelSummary,
-    probeAccount: options.probeAccount,
-    formatCapabilitiesProbe: options.formatCapabilitiesProbe,
-    auditAccount: options.auditAccount,
-    buildCapabilitiesDiagnostics: options.buildCapabilitiesDiagnostics,
-    logSelfId: options.logSelfId,
-    resolveAccountState: options.resolveAccountState,
-    collectStatusIssues: options.collectStatusIssues,
+    ...buildComputedAccountStatusAdapterBase(options),
     buildAccountSnapshot: (params) => {
       const typedParams = params as ComputedAccountStatusAdapterParams<
         ResolvedAccount,
@@ -254,15 +262,7 @@ export function createAsyncComputedAccountStatusAdapter<
   },
 ): ChannelStatusAdapter<ResolvedAccount, Probe, Audit> {
   return {
-    defaultRuntime: options.defaultRuntime,
-    buildChannelSummary: options.buildChannelSummary,
-    probeAccount: options.probeAccount,
-    formatCapabilitiesProbe: options.formatCapabilitiesProbe,
-    auditAccount: options.auditAccount,
-    buildCapabilitiesDiagnostics: options.buildCapabilitiesDiagnostics,
-    logSelfId: options.logSelfId,
-    resolveAccountState: options.resolveAccountState,
-    collectStatusIssues: options.collectStatusIssues,
+    ...buildComputedAccountStatusAdapterBase(options),
     buildAccountSnapshot: async (params) => {
       const typedParams = params as ComputedAccountStatusAdapterParams<
         ResolvedAccount,

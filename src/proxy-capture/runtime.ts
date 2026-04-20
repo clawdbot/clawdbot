@@ -7,7 +7,12 @@ import {
   persistEventPayload,
   safeJsonString,
 } from "./store.sqlite.js";
-import type { CaptureProtocol } from "./types.js";
+import type {
+  CaptureDirection,
+  CaptureEventKind,
+  CaptureEventRecord,
+  CaptureProtocol,
+} from "./types.js";
 
 const DEBUG_PROXY_FETCH_PATCH_KEY = Symbol.for("openclaw.debugProxy.fetchPatch");
 
@@ -48,6 +53,31 @@ function resolveUrlString(input: RequestInfo | URL): string | null {
     return input.url;
   }
   return null;
+}
+
+function createHttpCaptureEventBase(params: {
+  settings: DebugProxySettings;
+  rawUrl: string;
+  url: URL;
+  transport?: "http" | "sse";
+  direction: CaptureDirection;
+  kind: CaptureEventKind;
+  flowId: string;
+  method: string;
+}): CaptureEventRecord {
+  return {
+    sessionId: params.settings.sessionId,
+    ts: Date.now(),
+    sourceScope: "openclaw",
+    sourceProcess: params.settings.sourceProcess,
+    protocol: params.transport ?? protocolFromUrl(params.rawUrl),
+    direction: params.direction,
+    kind: params.kind,
+    flowId: params.flowId,
+    method: params.method,
+    host: params.url.host,
+    path: `${params.url.pathname}${params.url.search}`,
+  };
 }
 
 function installDebugProxyGlobalFetchPatch(settings: DebugProxySettings): void {
@@ -193,17 +223,16 @@ export function captureHttpExchange(params: {
         : params.requestHeaders?.["content-type"],
   });
   store.recordEvent({
-    sessionId: settings.sessionId,
-    ts: Date.now(),
-    sourceScope: "openclaw",
-    sourceProcess: settings.sourceProcess,
-    protocol: params.transport ?? protocolFromUrl(params.url),
-    direction: "outbound",
-    kind: "request",
-    flowId,
-    method: params.method,
-    host: url.host,
-    path: `${url.pathname}${url.search}`,
+    ...createHttpCaptureEventBase({
+      settings,
+      rawUrl: params.url,
+      url,
+      transport: params.transport,
+      direction: "outbound",
+      kind: "request",
+      flowId,
+      method: params.method,
+    }),
     contentType:
       params.requestHeaders instanceof Headers
         ? (params.requestHeaders.get("content-type") ?? undefined)
@@ -222,17 +251,16 @@ export function captureHttpExchange(params: {
     typeof params.response.arrayBuffer === "function";
   if (!cloneable) {
     store.recordEvent({
-      sessionId: settings.sessionId,
-      ts: Date.now(),
-      sourceScope: "openclaw",
-      sourceProcess: settings.sourceProcess,
-      protocol: params.transport ?? protocolFromUrl(params.url),
-      direction: "inbound",
-      kind: "response",
-      flowId,
-      method: params.method,
-      host: url.host,
-      path: `${url.pathname}${url.search}`,
+      ...createHttpCaptureEventBase({
+        settings,
+        rawUrl: params.url,
+        url,
+        transport: params.transport,
+        direction: "inbound",
+        kind: "response",
+        flowId,
+        method: params.method,
+      }),
       status: params.response.status,
       contentType:
         typeof params.response.headers?.get === "function"
@@ -255,17 +283,16 @@ export function captureHttpExchange(params: {
         contentType: params.response.headers.get("content-type") ?? undefined,
       });
       store.recordEvent({
-        sessionId: settings.sessionId,
-        ts: Date.now(),
-        sourceScope: "openclaw",
-        sourceProcess: settings.sourceProcess,
-        protocol: params.transport ?? protocolFromUrl(params.url),
-        direction: "inbound",
-        kind: "response",
-        flowId,
-        method: params.method,
-        host: url.host,
-        path: `${url.pathname}${url.search}`,
+        ...createHttpCaptureEventBase({
+          settings,
+          rawUrl: params.url,
+          url,
+          transport: params.transport,
+          direction: "inbound",
+          kind: "response",
+          flowId,
+          method: params.method,
+        }),
         status: params.response.status,
         contentType: params.response.headers.get("content-type") ?? undefined,
         headersJson: safeJsonString(Object.fromEntries(params.response.headers.entries())),
@@ -275,17 +302,16 @@ export function captureHttpExchange(params: {
     })
     .catch((error) => {
       store.recordEvent({
-        sessionId: settings.sessionId,
-        ts: Date.now(),
-        sourceScope: "openclaw",
-        sourceProcess: settings.sourceProcess,
-        protocol: params.transport ?? protocolFromUrl(params.url),
-        direction: "local",
-        kind: "error",
-        flowId,
-        method: params.method,
-        host: url.host,
-        path: `${url.pathname}${url.search}`,
+        ...createHttpCaptureEventBase({
+          settings,
+          rawUrl: params.url,
+          url,
+          transport: params.transport,
+          direction: "local",
+          kind: "error",
+          flowId,
+          method: params.method,
+        }),
         errorText: error instanceof Error ? error.message : String(error),
       });
     });

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import plugin from "./index.js";
+import plugin, { __testing } from "./index.js";
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -119,10 +119,12 @@ describe("active-memory plugin", () => {
     runEmbeddedPiAgent.mockResolvedValue({
       payloads: [{ text: "- lemon pepper wings\n- blue cheese" }],
     });
+    __testing.resetActiveRecallCacheForTests();
     plugin.register(api as unknown as OpenClawPluginApi);
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     if (stateDir) {
       await fs.rm(stateDir, { recursive: true, force: true });
@@ -1022,9 +1024,10 @@ describe("active-memory plugin", () => {
   });
 
   it("does not cache timeout results", async () => {
+    __testing.setMinimumTimeoutMsForTests(1);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 250,
+      timeoutMs: 1,
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
@@ -1032,12 +1035,15 @@ describe("active-memory plugin", () => {
     runEmbeddedPiAgent.mockImplementation(async (params: { abortSignal?: AbortSignal }) => {
       lastAbortSignal = params.abortSignal;
       return await new Promise((resolve, reject) => {
-        const abortHandler = () => reject(new Error("aborted"));
-        params.abortSignal?.addEventListener("abort", abortHandler, { once: true });
-        setTimeout(() => {
+        const timer = setTimeout(() => {
           params.abortSignal?.removeEventListener("abort", abortHandler);
           resolve({ payloads: [] });
         }, 2_000);
+        const abortHandler = () => {
+          clearTimeout(timer);
+          reject(new Error("aborted"));
+        };
+        params.abortSignal?.addEventListener("abort", abortHandler, { once: true });
       });
     });
 
@@ -1102,14 +1108,15 @@ describe("active-memory plugin", () => {
   });
 
   it("ignores late subagent payloads once the active-memory timeout signal has fired", async () => {
+    __testing.setMinimumTimeoutMsForTests(1);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 250,
+      timeoutMs: 1,
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
     runEmbeddedPiAgent.mockImplementationOnce(async (params: { timeoutMs?: number }) => {
-      await new Promise((resolve) => setTimeout(resolve, (params.timeoutMs ?? 0) + 25));
+      await new Promise((resolve) => setTimeout(resolve, (params.timeoutMs ?? 0) + 1));
       return {
         payloads: [{ text: "late timeout payload that should never become memory context" }],
         meta: { aborted: true },
@@ -1944,45 +1951,42 @@ describe("active-memory plugin", () => {
     expect(lines.some((line) => line.includes("\r"))).toBe(false);
   });
 
-  it("caps the active-memory cache size and evicts the oldest entries", async () => {
-    api.pluginConfig = {
-      agents: ["main"],
-      logging: true,
-    };
-    plugin.register(api as unknown as OpenClawPluginApi);
-
+  it("caps the active-memory cache size and evicts the oldest entries", () => {
+    const sessionKey = "agent:main:cache-cap";
     for (let index = 0; index <= 1000; index += 1) {
-      await hooks.before_prompt_build(
-        { prompt: `cache pressure prompt ${index}`, messages: [] },
-        {
+      __testing.setCachedResult(
+        __testing.buildCacheKey({
           agentId: "main",
-          trigger: "user",
-          sessionKey: "agent:main:cache-cap",
-          messageProvider: "webchat",
+          sessionKey,
+          query: `cache pressure prompt ${index}`,
+        }),
+        {
+          status: "ok",
+          elapsedMs: 1,
+          rawReply: `memory ${index}`,
+          summary: `memory ${index}`,
         },
+        15_000,
       );
     }
 
-    const callsBeforeReplay = runEmbeddedPiAgent.mock.calls.length;
-
-    await hooks.before_prompt_build(
-      { prompt: "cache pressure prompt 0", messages: [] },
-      {
-        agentId: "main",
-        trigger: "user",
-        sessionKey: "agent:main:cache-cap",
-        messageProvider: "webchat",
-      },
-    );
-
-    expect(runEmbeddedPiAgent.mock.calls.length).toBe(callsBeforeReplay + 1);
-    const infoLines = vi
-      .mocked(api.logger.info)
-      .mock.calls.map((call: unknown[]) => String(call[0]));
     expect(
-      infoLines.some(
-        (line: string) => line.includes("cached status=ok") && line.includes("prompt 0"),
+      __testing.getCachedResult(
+        __testing.buildCacheKey({
+          agentId: "main",
+          sessionKey,
+          query: "cache pressure prompt 0",
+        }),
       ),
-    ).toBe(false);
+    ).toBeUndefined();
+    expect(
+      __testing.getCachedResult(
+        __testing.buildCacheKey({
+          agentId: "main",
+          sessionKey,
+          query: "cache pressure prompt 1",
+        }),
+      ),
+    ).toMatchObject({ status: "ok", summary: "memory 1" });
   });
 });

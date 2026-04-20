@@ -8,6 +8,7 @@ import {
   resolveDefaultModelForAgent,
 } from "../agents/model-selection.js";
 import { loadConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -20,8 +21,9 @@ import {
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "./auth.js";
-import { sendGatewayAuthFailure } from "./http-common.js";
+import { sendGatewayAuthFailure, sendJson } from "./http-common.js";
 import { ADMIN_SCOPE, CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
+import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 
 export const OPENCLAW_MODEL_ID = "openclaw";
@@ -117,6 +119,48 @@ export async function authorizeGatewayHttpRequestOrReply(params: {
     // full trusted-operator surface.
     trustDeclaredOperatorScopes: !usesSharedSecretGatewayMethod(authResult.method),
   };
+}
+
+export async function authorizeScopedGatewayHttpRequestOrReply(params: {
+  req: IncomingMessage;
+  res: ServerResponse;
+  auth: ResolvedGatewayAuth;
+  trustedProxies?: string[];
+  allowRealIpFallback?: boolean;
+  rateLimiter?: AuthRateLimiter;
+  operatorMethod: string;
+  resolveOperatorScopes: (
+    req: IncomingMessage,
+    requestAuth: AuthorizedGatewayHttpRequest,
+  ) => string[];
+}): Promise<{ cfg: OpenClawConfig; requestAuth: AuthorizedGatewayHttpRequest } | null> {
+  const cfg = loadConfig();
+  const requestAuth = await authorizeGatewayHttpRequestOrReply({
+    req: params.req,
+    res: params.res,
+    auth: params.auth,
+    trustedProxies: params.trustedProxies ?? cfg.gateway?.trustedProxies,
+    allowRealIpFallback: params.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback,
+    rateLimiter: params.rateLimiter,
+  });
+  if (!requestAuth) {
+    return null;
+  }
+
+  const requestedScopes = params.resolveOperatorScopes(params.req, requestAuth);
+  const scopeAuth = authorizeOperatorScopesForMethod(params.operatorMethod, requestedScopes);
+  if (!scopeAuth.allowed) {
+    sendJson(params.res, 403, {
+      ok: false,
+      error: {
+        type: "forbidden",
+        message: `missing scope: ${scopeAuth.missingScope}`,
+      },
+    });
+    return null;
+  }
+
+  return { cfg, requestAuth };
 }
 
 export function isGatewayBearerHttpRequest(

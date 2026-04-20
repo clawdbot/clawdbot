@@ -27,8 +27,12 @@ export type MatrixQaScenarioContext = {
   observerDeviceId?: string;
   observerPassword?: string;
   observerUserId: string;
+  gatewayStateDir?: string;
   outputDir?: string;
   restartGateway?: () => Promise<void>;
+  restartGatewayAfterStateMutation?: (
+    mutateState: (context: { stateDir: string }) => Promise<void>,
+  ) => Promise<void>;
   restartGatewayWithQueuedMessage?: (queueMessage: () => Promise<void>) => Promise<void>;
   roomId: string;
   interruptTransport?: () => Promise<void>;

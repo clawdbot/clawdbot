@@ -4,7 +4,7 @@ import {
   providerContractLoadError,
   resolveProviderContractProvidersForPluginIds,
 } from "../../../src/plugins/contracts/registry.js";
-import { loadBundledPluginPublicArtifactModuleSync } from "../../../src/plugins/public-surface-loader.js";
+import { resolveBundledExplicitProviderContractsFromPublicArtifacts } from "../../../src/plugins/provider-contract-public-artifacts.js";
 import type { ProviderPlugin } from "../../../src/plugins/types.js";
 import { installProviderPluginContractSuite } from "./provider-contract-suites.js";
 
@@ -13,56 +13,10 @@ type ProviderContractEntry = {
   provider: ProviderPlugin;
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isProviderPlugin(value: unknown): value is ProviderPlugin {
-  return (
-    isRecord(value) &&
-    typeof value.id === "string" &&
-    typeof value.label === "string" &&
-    Array.isArray(value.auth)
-  );
-}
-
 function resolveProviderContractProvidersFromPublicArtifact(
   pluginId: string,
 ): ProviderContractEntry[] | null {
-  let mod: Record<string, unknown>;
-  try {
-    mod = loadBundledPluginPublicArtifactModuleSync<Record<string, unknown>>({
-      dirName: pluginId,
-      artifactBasename: "provider-contract-api.js",
-    });
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      error.message.startsWith("Unable to resolve bundled plugin public surface ")
-    ) {
-      return null;
-    }
-    throw error;
-  }
-
-  const providers: ProviderContractEntry[] = [];
-  for (const [name, exported] of Object.entries(mod).toSorted(([left], [right]) =>
-    left.localeCompare(right),
-  )) {
-    if (
-      typeof exported !== "function" ||
-      exported.length !== 0 ||
-      !name.startsWith("create") ||
-      !name.endsWith("Provider")
-    ) {
-      continue;
-    }
-    const provider = exported();
-    if (isProviderPlugin(provider)) {
-      providers.push({ pluginId, provider });
-    }
-  }
-  return providers.length > 0 ? providers : null;
+  return resolveBundledExplicitProviderContractsFromPublicArtifacts({ onlyPluginIds: [pluginId] });
 }
 
 export function describeProviderContracts(pluginId: string) {

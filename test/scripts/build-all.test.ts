@@ -1,9 +1,15 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   BUILD_ALL_PROFILES,
   BUILD_ALL_STEPS,
+  resolveBuildAllStepCacheState,
   resolveBuildAllStep,
   resolveBuildAllSteps,
+  restoreBuildAllStepCacheOutputs,
+  writeBuildAllStepCacheStamp,
 } from "../../scripts/build-all.mjs";
 
 describe("resolveBuildAllStep", () => {
@@ -100,5 +106,102 @@ describe("resolveBuildAllSteps", () => {
 
   it("rejects unknown build profiles", () => {
     expect(() => resolveBuildAllSteps("wat")).toThrow("Unknown build profile: wat");
+  });
+});
+
+describe("resolveBuildAllStepCacheState", () => {
+  it("marks cacheable steps fresh when the input signature matches", () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-build-cache-"));
+    try {
+      const inputPath = path.join(rootDir, "src/input.ts");
+      const outputPath = path.join(rootDir, "dist/output.js");
+      fs.mkdirSync(path.dirname(inputPath), { recursive: true });
+      fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+      fs.writeFileSync(inputPath, "input");
+      fs.writeFileSync(outputPath, "output");
+      const step = {
+        label: "cached",
+        cache: {
+          inputs: ["src"],
+          outputs: ["dist"],
+        },
+      };
+      const cacheState = resolveBuildAllStepCacheState(step, { rootDir });
+      writeBuildAllStepCacheStamp(step, cacheState, { rootDir });
+
+      expect(resolveBuildAllStepCacheState(step, { rootDir })).toMatchObject({
+        cacheable: true,
+        fresh: true,
+        reason: "fresh",
+        inputFiles: 1,
+        outputFiles: 1,
+      });
+    } finally {
+      fs.rmSync(rootDir, { force: true, recursive: true });
+    }
+  });
+
+  it("marks cacheable steps stale when an input changes", () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-build-cache-"));
+    try {
+      const inputPath = path.join(rootDir, "src/input.ts");
+      const outputPath = path.join(rootDir, "dist/output.js");
+      fs.mkdirSync(path.dirname(inputPath), { recursive: true });
+      fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+      fs.writeFileSync(inputPath, "input");
+      fs.writeFileSync(outputPath, "output");
+      const step = {
+        label: "cached",
+        cache: {
+          inputs: ["src"],
+          outputs: ["dist"],
+        },
+      };
+      const cacheState = resolveBuildAllStepCacheState(step, { rootDir });
+      writeBuildAllStepCacheStamp(step, cacheState, { rootDir });
+      fs.writeFileSync(inputPath, "changed");
+
+      expect(resolveBuildAllStepCacheState(step, { rootDir })).toMatchObject({
+        cacheable: true,
+        fresh: false,
+        reason: "stale",
+      });
+    } finally {
+      fs.rmSync(rootDir, { force: true, recursive: true });
+    }
+  });
+
+  it("restores cached outputs when generated files were removed", () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-build-cache-"));
+    try {
+      const inputPath = path.join(rootDir, "src/input.ts");
+      const outputPath = path.join(rootDir, "dist/output.js");
+      fs.mkdirSync(path.dirname(inputPath), { recursive: true });
+      fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+      fs.writeFileSync(inputPath, "input");
+      fs.writeFileSync(outputPath, "output");
+      const step = {
+        label: "cached",
+        cache: {
+          inputs: ["src"],
+          outputs: ["dist"],
+        },
+      };
+      const cacheState = resolveBuildAllStepCacheState(step, { rootDir });
+      writeBuildAllStepCacheStamp(step, cacheState, { rootDir });
+      fs.rmSync(path.join(rootDir, "dist"), { force: true, recursive: true });
+
+      const restorable = resolveBuildAllStepCacheState(step, { rootDir });
+      expect(restorable).toMatchObject({
+        cacheable: true,
+        fresh: true,
+        reason: "fresh-cache",
+        restorable: true,
+      });
+      expect(restoreBuildAllStepCacheOutputs(restorable, { rootDir })).toBe(true);
+      expect(fs.readFileSync(outputPath, "utf8")).toBe("output");
+    } finally {
+      fs.rmSync(rootDir, { force: true, recursive: true });
+    }
   });
 });

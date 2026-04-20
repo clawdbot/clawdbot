@@ -1,22 +1,12 @@
-import { readStringValue } from "../shared/string-coerce.js";
-import { normalizeToolParameterSchema } from "./pi-tools.schema.js";
-import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
-
-type OpenAITransportKind = "stream" | "websocket";
-
-type OpenAIStrictToolModel = {
-  provider?: unknown;
-  api?: unknown;
-  baseUrl?: unknown;
-  id?: unknown;
-  compat?: { supportsStore?: boolean };
-};
+import { normalizeToolParameterSchema } from "./pi-tools-parameter-schema.js";
+export {
+  resolveOpenAIStrictToolSetting,
+  resolvesToNativeOpenAIStrictTools,
+} from "./openai-strict-tool-setting.js";
 
 type ToolWithParameters = {
   parameters: unknown;
 };
-
-const optionalString = readStringValue;
 
 export function normalizeStrictOpenAIJsonSchema(schema: unknown): unknown {
   return normalizeStrictOpenAIJsonSchemaRecursive(normalizeToolParameterSchema(schema ?? {}));
@@ -127,44 +117,4 @@ export function resolveOpenAIStrictToolFlagForInventory(
     return strict === false ? false : undefined;
   }
   return tools.every((tool) => isStrictOpenAIJsonSchemaCompatible(tool.parameters));
-}
-
-export function resolvesToNativeOpenAIStrictTools(
-  model: OpenAIStrictToolModel,
-  transport: OpenAITransportKind,
-): boolean {
-  const capabilities = resolveProviderRequestCapabilities({
-    provider: optionalString(model.provider),
-    api: optionalString(model.api),
-    baseUrl: optionalString(model.baseUrl),
-    capability: "llm",
-    transport,
-    modelId: optionalString(model.id),
-    compat:
-      model.compat && typeof model.compat === "object"
-        ? (model.compat as { supportsStore?: boolean })
-        : undefined,
-  });
-  if (!capabilities.usesKnownNativeOpenAIRoute) {
-    return false;
-  }
-  return (
-    capabilities.provider === "openai" ||
-    capabilities.provider === "openai-codex" ||
-    capabilities.provider === "azure-openai" ||
-    capabilities.provider === "azure-openai-responses"
-  );
-}
-
-export function resolveOpenAIStrictToolSetting(
-  model: OpenAIStrictToolModel,
-  options?: { transport?: OpenAITransportKind; supportsStrictMode?: boolean },
-): boolean | undefined {
-  if (resolvesToNativeOpenAIStrictTools(model, options?.transport ?? "stream")) {
-    return true;
-  }
-  if (options?.supportsStrictMode) {
-    return false;
-  }
-  return undefined;
 }

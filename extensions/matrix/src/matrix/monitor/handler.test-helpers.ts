@@ -85,6 +85,7 @@ type MatrixHandlerTestHarnessOptions = {
   enqueueSystemEvent?: (...args: unknown[]) => void;
   getRoomInfo?: MatrixMonitorHandlerParams["getRoomInfo"];
   getMemberDisplayName?: MatrixMonitorHandlerParams["getMemberDisplayName"];
+  resolveLiveUserAllowlist?: MatrixMonitorHandlerParams["resolveLiveUserAllowlist"];
 };
 
 type MatrixHandlerTestHarness = {
@@ -242,6 +243,7 @@ export function createMatrixHandlerTestHarness(
     getRoomInfo: options.getRoomInfo ?? (async () => ({ altAliases: [] })),
     getMemberDisplayName: options.getMemberDisplayName ?? (async () => "sender"),
     needsRoomAliasesForConfig: options.needsRoomAliasesForConfig ?? false,
+    resolveLiveUserAllowlist: options.resolveLiveUserAllowlist,
     historyLimit: options.historyLimit ?? 0,
   });
 

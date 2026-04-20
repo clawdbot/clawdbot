@@ -1629,10 +1629,20 @@ for usage/billing and raise limits as needed.
     `config.apply` replaces the **entire config**. If you send a partial object, everything
     else is removed.
 
+    Current OpenClaw protects many accidental clobbers:
+
+    - OpenClaw-owned config writes validate the full post-change config before writing.
+    - Invalid or destructive OpenClaw-owned writes are rejected and saved as `openclaw.json.rejected.*`.
+    - If a direct edit breaks startup or hot reload, the Gateway restores the last-known-good config and saves the rejected file as `openclaw.json.clobbered.*`.
+    - The main agent receives a boot warning after recovery so it does not blindly write the bad config again.
+
     Recover:
 
-    - Restore from backup (git or a copied `~/.openclaw/openclaw.json`).
-    - If you have no backup, re-run `openclaw doctor` and reconfigure channels/models.
+    - Check `openclaw logs --follow` for `Config auto-restored from last-known-good`, `Config write rejected:`, or `config reload restored last-known-good config`.
+    - Inspect the newest `openclaw.json.clobbered.*` or `openclaw.json.rejected.*` beside the active config.
+    - Keep the active restored config if it works, then copy only the intended keys back with `openclaw config set` or `config.patch`.
+    - Run `openclaw config validate` and `openclaw doctor`.
+    - If you have no last-known-good or rejected payload, restore from backup, or re-run `openclaw doctor` and reconfigure channels/models.
     - If this was unexpected, file a bug and include your last known config or any backup.
     - A local coding agent can often reconstruct a working config from logs or history.
 
@@ -1644,7 +1654,7 @@ for usage/billing and raise limits as needed.
     - Use `config.patch` for partial RPC edits; keep `config.apply` for full-config replacement only.
     - If you are using the owner-only `gateway` tool from an agent run, it will still reject writes to `tools.exec.ask` / `tools.exec.security` (including legacy `tools.bash.*` aliases that normalize to the same protected exec paths).
 
-    Docs: [Config](/cli/config), [Configure](/cli/configure), [Doctor](/gateway/doctor).
+    Docs: [Config](/cli/config), [Configure](/cli/configure), [Gateway troubleshooting](/gateway/troubleshooting#gateway-restored-last-known-good-config), [Doctor](/gateway/doctor).
 
   </Accordion>
 

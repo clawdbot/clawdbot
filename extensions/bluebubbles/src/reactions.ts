@@ -119,10 +119,7 @@ const UNSUPPORTED_REACTION_ERROR = "UnsupportedBlueBubblesReaction";
  * need to detect unsupported input (e.g. config sanity checks) rather
  * than gracefully substituting a fallback.
  */
-export function normalizeBlueBubblesReactionInputStrict(
-  emoji: string,
-  remove?: boolean,
-): string {
+export function normalizeBlueBubblesReactionInputStrict(emoji: string, remove?: boolean): string {
   const trimmed = emoji.trim();
   if (!trimmed) {
     throw new Error("BlueBubbles reaction requires an emoji or name.");

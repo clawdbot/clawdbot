@@ -1158,6 +1158,11 @@ jobs:
           OPENCLAW_LOCAL_CHECK: "0"
         run: pnpm check
 
+      - name: Check test types
+        env:
+          OPENCLAW_LOCAL_CHECK: "0"
+        run: pnpm check:test-types
+
       - name: Strict TS build smoke
         run: pnpm build:strict-smoke
 
@@ -1289,8 +1294,7 @@ jobs:
                 run_check "ui:i18n:check" pnpm ui:i18n:check
               fi
               run_check "gateway-watch-regression" pnpm test:gateway:watch-regression
-              run_check "check:import-cycles" pnpm check:import-cycles
-              run_check "check:madge-import-cycles" pnpm check:madge-import-cycles
+              run_check "check:architecture" pnpm check:architecture
               ;;
             *)
               echo "Unsupported additional check group: $ADDITIONAL_CHECK_GROUP" >&2

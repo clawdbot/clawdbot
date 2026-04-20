@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { LiveSessionModelSwitchError } from "./live-model-switch.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 
 const state = vi.hoisted(() => ({
   runWithModelFallbackMock: vi.fn(),
@@ -57,10 +57,14 @@ vi.mock("./command/session.js", () => ({
   resolveSession: () => ({
     sessionId: "session-1",
     sessionKey: "agent:main",
-    sessionEntry: { sessionId: "session-1", updatedAt: Date.now() },
-    sessionStore: {},
-    storePath: "/tmp/store.json",
-    isNewSession: true,
+    sessionEntry: {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    },
+    sessionStore: undefined,
+    storePath: undefined,
+    isNewSession: false,
     persistedThinking: undefined,
     persistedVerbose: undefined,
   }),
@@ -124,6 +128,27 @@ vi.mock("../config/io.js", () => ({
     snapshot: { valid: false },
   }),
 }));
+
+vi.mock("./agent-runtime-config.js", () => {
+  const cfg = {
+    agents: {
+      defaults: {
+        models: {
+          "anthropic/claude": {},
+          "openai/claude": {},
+          "openai/gpt-5.4": {},
+        },
+      },
+    },
+  };
+  return {
+    resolveAgentRuntimeConfig: async () => ({
+      loadedRaw: cfg,
+      sourceConfig: cfg,
+      cfg,
+    }),
+  };
+});
 
 vi.mock("../config/runtime-snapshot.js", () => ({
   setRuntimeConfigSnapshot: vi.fn(),
@@ -258,8 +283,13 @@ vi.mock("./skills.js", () => ({
   buildWorkspaceSkillSnapshot: () => ({}),
 }));
 
-vi.mock("./skills/refresh.js", () => ({
+vi.mock("./skills/filter.js", () => ({
+  matchesSkillFilter: () => true,
+}));
+
+vi.mock("./skills/refresh-state.js", () => ({
   getSkillsSnapshotVersion: () => 0,
+  shouldRefreshSnapshotForVersion: () => false,
 }));
 
 vi.mock("./spawned-context.js", () => ({
@@ -280,9 +310,11 @@ vi.mock("../acp/control-plane/manager.js", () => ({
   }),
 }));
 
-async function getAgentCommand() {
-  return (await import("./agent-command.js")).agentCommand;
-}
+let agentCommand: typeof import("./agent-command.js").agentCommand;
+
+beforeAll(async () => {
+  agentCommand ??= (await import("./agent-command.js")).agentCommand;
+});
 
 type FallbackRunnerParams = {
   provider: string;
@@ -322,7 +354,6 @@ function setupModelSwitchRetry(switchOptions: ModelSwitchOptions) {
 }
 
 async function runBasicAgentCommand() {
-  const agentCommand = await getAgentCommand();
   await agentCommand({
     message: "hello",
     to: "+1234567890",
@@ -379,7 +410,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
   it("propagates non-switch errors without retrying and emits lifecycle error", async () => {
     state.runWithModelFallbackMock.mockRejectedValueOnce(new Error("provider down"));
 
-    const agentCommand = await getAgentCommand();
     await expect(
       agentCommand({
         message: "hello",

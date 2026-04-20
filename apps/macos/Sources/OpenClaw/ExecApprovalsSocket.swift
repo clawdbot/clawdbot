@@ -476,10 +476,8 @@ private enum ExecHostExecutor {
     {
         guard decision == .allowAlways, context.security == .allowlist else { return }
         var seenPatterns = Set<String>()
-        for pattern in context.allowAlwaysPatterns {
-            if seenPatterns.insert(pattern).inserted {
-                ExecApprovalsStore.addAllowlistEntry(agentId: context.agentId, pattern: pattern)
-            }
+        for pattern in context.allowAlwaysPatterns where seenPatterns.insert(pattern).inserted {
+            ExecApprovalsStore.addAllowlistEntry(agentId: context.agentId, pattern: pattern)
         }
     }
 

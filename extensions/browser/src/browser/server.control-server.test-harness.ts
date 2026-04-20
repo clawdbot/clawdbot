@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import { deriveDefaultBrowserCdpPortRange } from "../config/port-defaults.js";
+import * as browserServerModule from "../server.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import { installChromeUserDataDirHooks } from "./chrome-user-data-dir.test-harness.js";
 import { getFreePort } from "./test-port.js";
@@ -341,17 +342,6 @@ export function getChromeMcpMocks(): Record<string, MockFn> {
 const chromeUserDataDir = vi.hoisted(() => ({ dir: "/tmp/openclaw" }));
 installChromeUserDataDirHooks(chromeUserDataDir);
 
-type BrowserServerModule = typeof import("../server.js");
-let browserServerModule: BrowserServerModule | null = null;
-
-async function loadBrowserServerModule(): Promise<BrowserServerModule> {
-  if (browserServerModule) {
-    return browserServerModule;
-  }
-  browserServerModule = await import("../server.js");
-  return browserServerModule;
-}
-
 function makeProc(pid = 123) {
   const handlers = new Map<string, Array<(...args: unknown[]) => void>>();
   return {
@@ -477,16 +467,11 @@ vi.mock("./screenshot.js", () => ({
 }));
 
 export async function startBrowserControlServerFromConfig() {
-  const server = await loadBrowserServerModule();
-  return await server.startBrowserControlServerFromConfig();
+  return await browserServerModule.startBrowserControlServerFromConfig();
 }
 
 export async function stopBrowserControlServer(): Promise<void> {
-  const server = browserServerModule;
-  if (!server) {
-    return;
-  }
-  await server.stopBrowserControlServer();
+  await browserServerModule.stopBrowserControlServer();
 }
 
 export function makeResponse(
@@ -571,8 +556,6 @@ export function installBrowserControlServerHooks() {
     });
 
     await resetBrowserControlServerTestContext();
-    await loadBrowserServerModule();
-
     // Minimal CDP JSON endpoints used by the server.
     let putNewCalls = 0;
     vi.stubGlobal(

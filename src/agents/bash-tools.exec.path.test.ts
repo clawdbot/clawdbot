@@ -31,6 +31,48 @@ vi.mock("../infra/exec-approvals.js", async () => {
   return { ...mod, resolveExecApprovals: () => createExecApprovals() };
 });
 
+vi.mock("../process/supervisor/index.js", () => ({
+  getProcessSupervisor: () => ({
+    spawn: async (input: {
+      argv?: string[];
+      env?: NodeJS.ProcessEnv;
+      onStdout?: (chunk: string) => void;
+    }) => {
+      const command = input.argv?.at(-1) ?? "";
+      const env = input.env ?? {};
+      if (command.includes("OPENCLAW_SHELL")) {
+        input.onStdout?.(env.OPENCLAW_SHELL ?? "");
+      } else if (command.includes("SSLKEYLOGFILE")) {
+        input.onStdout?.(env.SSLKEYLOGFILE ?? "");
+      } else if (command.includes("$PATH")) {
+        input.onStdout?.(env.PATH ?? "");
+      } else if (command === "echo ok") {
+        input.onStdout?.("ok\n");
+      }
+      return {
+        runId: "mock-path-run",
+        startedAtMs: Date.now(),
+        stdin: undefined,
+        wait: async () => ({
+          reason: "exit" as const,
+          exitCode: 0,
+          exitSignal: null,
+          durationMs: 0,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          noOutputTimedOut: false,
+        }),
+        cancel: vi.fn(),
+      };
+    },
+    cancel: vi.fn(),
+    cancelScope: vi.fn(),
+    reconcileOrphans: vi.fn(),
+    getRecord: vi.fn(),
+  }),
+}));
+
 let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
 
 function createExecApprovals(): ExecApprovalsResolved {

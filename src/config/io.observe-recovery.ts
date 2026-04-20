@@ -7,6 +7,7 @@ import {
   type ConfigObserveAuditRecord,
 } from "./io.audit.js";
 import { resolveStateDir } from "./paths.js";
+import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
 export type ObserveRecoveryDeps = {
   fs: {
@@ -28,6 +29,7 @@ export type ObserveRecoveryDeps = {
         options?: { encoding?: BufferEncoding; mode?: number; flag?: string },
       ): Promise<unknown>;
       copyFile(src: string, dest: string): Promise<unknown>;
+      chmod?(path: string, mode: number): Promise<unknown>;
       mkdir(path: string, options?: { recursive?: boolean; mode?: number }): Promise<unknown>;
       appendFile(
         path: string,
@@ -55,6 +57,7 @@ export type ObserveRecoveryDeps = {
       options?: { encoding?: BufferEncoding; mode?: number; flag?: string },
     ): unknown;
     copyFileSync(src: string, dest: string): unknown;
+    chmodSync?(path: string, mode: number): unknown;
     mkdirSync(path: string, options?: { recursive?: boolean; mode?: number }): unknown;
     appendFileSync(
       path: string,
@@ -109,6 +112,7 @@ type ConfigStatMetadataSource =
 
 type ConfigHealthEntry = {
   lastKnownGood?: ConfigHealthFingerprint;
+  lastPromotedGood?: ConfigHealthFingerprint;
   lastObservedSuspiciousSignature?: string | null;
 };
 
@@ -506,6 +510,47 @@ function formatConfigArtifactTimestamp(ts: string): string {
   return ts.replaceAll(":", "-").replaceAll(".", "-");
 }
 
+export function resolveLastKnownGoodConfigPath(configPath: string): string {
+  return `${configPath}.last-good`;
+}
+
+function isSensitiveConfigPath(pathLabel: string): boolean {
+  return /(^|\.)(api[-_]?key|auth|bearer|credential|password|private[-_]?key|secret|token)(\.|$)/i.test(
+    pathLabel,
+  );
+}
+
+function collectPollutedSecretPlaceholders(
+  value: unknown,
+  pathLabel = "",
+  output: string[] = [],
+): string[] {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed === "***" || trimmed === "[redacted]") {
+      output.push(pathLabel || "<root>");
+      return output;
+    }
+    if (isSensitiveConfigPath(pathLabel) && (trimmed.includes("...") || trimmed.includes("…"))) {
+      output.push(pathLabel || "<root>");
+    }
+    return output;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item, index) =>
+      collectPollutedSecretPlaceholders(item, `${pathLabel}[${index}]`, output),
+    );
+    return output;
+  }
+  if (isRecord(value)) {
+    for (const [key, child] of Object.entries(value)) {
+      const childPath = pathLabel ? `${pathLabel}.${key}` : key;
+      collectPollutedSecretPlaceholders(child, childPath, output);
+    }
+  }
+  return output;
+}
+
 async function persistClobberedConfigSnapshot(params: {
   deps: ObserveRecoveryDeps;
   configPath: string;
@@ -760,6 +805,7 @@ export async function observeConfigSnapshot(
   if (suspicious.length === 0) {
     if (snapshot.valid) {
       const nextEntry: ConfigHealthEntry = {
+        ...entry,
         lastKnownGood: current,
         lastObservedSuspiciousSignature: null,
       };
@@ -858,6 +904,7 @@ export function observeConfigSnapshotSync(
   if (suspicious.length === 0) {
     if (snapshot.valid) {
       healthState = setConfigHealthEntry(healthState, snapshot.path, {
+        ...entry,
         lastKnownGood: current,
         lastObservedSuspiciousSignature: null,
       });
@@ -901,4 +948,130 @@ export function observeConfigSnapshotSync(
     createLastObservedSuspiciousEntry(entry, suspiciousSignature),
   );
   writeConfigHealthStateSync(deps, healthState);
+}
+
+export async function promoteConfigSnapshotToLastKnownGood(params: {
+  deps: ObserveRecoveryDeps;
+  snapshot: ConfigFileSnapshot;
+  logger?: Pick<typeof console, "warn">;
+}): Promise<boolean> {
+  const { deps, snapshot } = params;
+  if (!snapshot.exists || !snapshot.valid || typeof snapshot.raw !== "string") {
+    return false;
+  }
+  const polluted = collectPollutedSecretPlaceholders(snapshot.parsed);
+  if (polluted.length > 0) {
+    params.logger?.warn(
+      `Config last-known-good promotion skipped: redacted secret placeholder at ${polluted[0]}`,
+    );
+    return false;
+  }
+  const stat = await deps.fs.promises.stat(snapshot.path).catch(() => null);
+  const now = new Date().toISOString();
+  const current = createConfigHealthFingerprint({
+    hash: resolveConfigSnapshotHash(snapshot) ?? hashConfigRaw(snapshot.raw),
+    raw: snapshot.raw,
+    parsed: snapshot.parsed,
+    gatewaySource: snapshot.resolved,
+    stat: stat as ConfigStatMetadataSource,
+    observedAt: now,
+  });
+  const lastGoodPath = resolveLastKnownGoodConfigPath(snapshot.path);
+  await deps.fs.promises.writeFile(lastGoodPath, snapshot.raw, {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
+  await deps.fs.promises.chmod?.(lastGoodPath, 0o600).catch(() => {});
+  const healthState = await readConfigHealthState(deps);
+  const entry = getConfigHealthEntry(healthState, snapshot.path);
+  await writeConfigHealthState(
+    deps,
+    setConfigHealthEntry(healthState, snapshot.path, {
+      ...entry,
+      lastKnownGood: current,
+      lastPromotedGood: current,
+      lastObservedSuspiciousSignature: null,
+    }),
+  );
+  return true;
+}
+
+export async function recoverConfigFromLastKnownGood(params: {
+  deps: ObserveRecoveryDeps;
+  snapshot: ConfigFileSnapshot;
+  reason: string;
+}): Promise<boolean> {
+  const { deps, snapshot } = params;
+  if (!snapshot.exists || typeof snapshot.raw !== "string") {
+    return false;
+  }
+  const healthState = await readConfigHealthState(deps);
+  const entry = getConfigHealthEntry(healthState, snapshot.path);
+  const promoted = entry.lastPromotedGood;
+  if (!promoted?.hash) {
+    return false;
+  }
+  const lastGoodPath = resolveLastKnownGoodConfigPath(snapshot.path);
+  const backupRaw = await deps.fs.promises.readFile(lastGoodPath, "utf-8").catch(() => null);
+  if (!backupRaw || hashConfigRaw(backupRaw) !== promoted.hash) {
+    return false;
+  }
+  let backupParsed: unknown;
+  try {
+    backupParsed = deps.json5.parse(backupRaw);
+  } catch {
+    return false;
+  }
+  const polluted = collectPollutedSecretPlaceholders(backupParsed);
+  if (polluted.length > 0) {
+    deps.logger.warn(
+      `Config last-known-good recovery skipped: redacted secret placeholder at ${polluted[0]}`,
+    );
+    return false;
+  }
+  const now = new Date().toISOString();
+  const stat = await deps.fs.promises.stat(snapshot.path).catch(() => null);
+  const current = createConfigHealthFingerprint({
+    hash: resolveConfigSnapshotHash(snapshot) ?? hashConfigRaw(snapshot.raw),
+    raw: snapshot.raw,
+    parsed: snapshot.parsed,
+    gatewaySource: snapshot.resolved,
+    stat: stat as ConfigStatMetadataSource,
+    observedAt: now,
+  });
+  const clobberedPath = await persistClobberedConfigSnapshot({
+    deps,
+    configPath: snapshot.path,
+    raw: snapshot.raw,
+    observedAt: now,
+  });
+  await deps.fs.promises.copyFile(lastGoodPath, snapshot.path);
+  await deps.fs.promises.chmod?.(snapshot.path, 0o600).catch(() => {});
+  deps.logger.warn(
+    `Config auto-restored from last-known-good: ${snapshot.path} (${params.reason})`,
+  );
+  await appendConfigAuditRecord(
+    createConfigObserveAuditAppendParams(deps, {
+      ts: now,
+      configPath: snapshot.path,
+      valid: snapshot.valid,
+      current,
+      suspicious: [params.reason],
+      lastKnownGood: promoted,
+      backup: promoted,
+      clobberedPath,
+      restoredFromBackup: true,
+      restoredBackupPath: lastGoodPath,
+    }),
+  );
+  await writeConfigHealthState(
+    deps,
+    setConfigHealthEntry(healthState, snapshot.path, {
+      ...entry,
+      lastKnownGood: promoted,
+      lastPromotedGood: promoted,
+      lastObservedSuspiciousSignature: null,
+    }),
+  );
+  return true;
 }

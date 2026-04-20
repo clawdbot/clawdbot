@@ -308,7 +308,9 @@ struct GeneralSettings: View {
                 .padding(.leading, self.remoteLabelWidth + 10)
             if self.state.remoteTokenUnsupported {
                 Text(
-                    "The current gateway.remote.token value is not plain text. OpenClaw for macOS cannot use it directly; enter a plaintext token here to replace it.")
+                    "The current gateway.remote.token value is not plain text. "
+                        + "OpenClaw for macOS cannot use it directly; "
+                        + "enter a plaintext token here to replace it.")
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .padding(.leading, self.remoteLabelWidth + 10)

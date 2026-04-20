@@ -32,6 +32,14 @@ export type ChannelMessageActionDiscoveryInput = {
   senderIsOwner?: boolean;
 };
 
+type ChannelMessageActionDiscoveryParams = ChannelMessageActionDiscoveryInput & {
+  cfg: OpenClawConfig;
+};
+
+type ChannelMessageToolMediaSourceParamKeyInput = ChannelMessageActionDiscoveryParams & {
+  action?: ChannelMessageActionName;
+};
+
 const loggedMessageActionErrors = new Set<string>();
 
 export function resolveMessageActionDiscoveryChannelId(raw?: string | null): string | undefined {
@@ -135,7 +143,7 @@ function normalizeMessageToolMediaSourceParams(
   );
 }
 
-export function resolveCurrentChannelMessageToolDiscoveryAdapter(channel?: string): {
+export function resolveCurrentChannelMessageToolDiscoveryAdapter(channel?: string | null): {
   pluginId: string;
   actions: ChannelMessageToolDiscoveryAdapter;
 } | null {
@@ -238,19 +246,9 @@ export function listChannelMessageCapabilities(cfg: OpenClawConfig): ChannelMess
   return Array.from(capabilities);
 }
 
-export function listChannelMessageCapabilitiesForChannel(params: {
-  cfg: OpenClawConfig;
-  channel?: string;
-  currentChannelId?: string | null;
-  currentThreadTs?: string | null;
-  currentMessageId?: string | number | null;
-  accountId?: string | null;
-  sessionKey?: string | null;
-  sessionId?: string | null;
-  agentId?: string | null;
-  requesterSenderId?: string | null;
-  senderIsOwner?: boolean;
-}): ChannelMessageCapability[] {
+export function listChannelMessageCapabilitiesForChannel(
+  params: ChannelMessageActionDiscoveryParams,
+): ChannelMessageCapability[] {
   const pluginActions = resolveCurrentChannelMessageToolDiscoveryAdapter(params.channel);
   if (!pluginActions) {
     return [];
@@ -279,19 +277,9 @@ function mergeToolSchemaProperties(
   }
 }
 
-export function resolveChannelMessageToolSchemaProperties(params: {
-  cfg: OpenClawConfig;
-  channel?: string;
-  currentChannelId?: string | null;
-  currentThreadTs?: string | null;
-  currentMessageId?: string | number | null;
-  accountId?: string | null;
-  sessionKey?: string | null;
-  sessionId?: string | null;
-  agentId?: string | null;
-  requesterSenderId?: string | null;
-  senderIsOwner?: boolean;
-}): Record<string, TSchema> {
+export function resolveChannelMessageToolSchemaProperties(
+  params: ChannelMessageActionDiscoveryParams,
+): Record<string, TSchema> {
   const properties: Record<string, TSchema> = {};
   const currentChannel = resolveMessageActionDiscoveryChannelId(params.channel);
   const discoveryBase = createMessageActionDiscoveryContext(params);
@@ -338,20 +326,9 @@ export function resolveChannelMessageToolSchemaProperties(params: {
   return properties;
 }
 
-export function resolveChannelMessageToolMediaSourceParamKeys(params: {
-  cfg: OpenClawConfig;
-  action?: ChannelMessageActionName;
-  channel?: string;
-  currentChannelId?: string | null;
-  currentThreadTs?: string | null;
-  currentMessageId?: string | number | null;
-  accountId?: string | null;
-  sessionKey?: string | null;
-  sessionId?: string | null;
-  agentId?: string | null;
-  requesterSenderId?: string | null;
-  senderIsOwner?: boolean;
-}): string[] {
+export function resolveChannelMessageToolMediaSourceParamKeys(
+  params: ChannelMessageToolMediaSourceParamKeyInput,
+): string[] {
   const pluginActions = resolveCurrentChannelMessageToolDiscoveryAdapter(params.channel);
   if (!pluginActions) {
     return [];
@@ -374,18 +351,7 @@ export function channelSupportsMessageCapability(
 }
 
 export function channelSupportsMessageCapabilityForChannel(
-  params: {
-    cfg: OpenClawConfig;
-    channel?: string;
-    currentChannelId?: string | null;
-    currentThreadTs?: string | null;
-    currentMessageId?: string | number | null;
-    accountId?: string | null;
-    sessionKey?: string | null;
-    sessionId?: string | null;
-    agentId?: string | null;
-    requesterSenderId?: string | null;
-  },
+  params: ChannelMessageActionDiscoveryParams,
   capability: ChannelMessageCapability,
 ): boolean {
   return listChannelMessageCapabilitiesForChannel(params).includes(capability);

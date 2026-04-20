@@ -6,6 +6,7 @@ import {
   resolveBundledDefaultMediaModel,
 } from "./bundled-defaults.js";
 import { buildMediaUnderstandingRegistry, normalizeMediaProviderId } from "./provider-registry.js";
+import { providerSupportsCapability } from "./provider-supports.js";
 import type { MediaUnderstandingCapability, MediaUnderstandingProvider } from "./types.js";
 
 const MB = 1024 * 1024;
@@ -37,22 +38,6 @@ export const DEFAULT_PROMPT: Record<MediaUnderstandingCapability, string> = {
 export const DEFAULT_VIDEO_MAX_BASE64_BYTES = 70 * MB;
 export const CLI_OUTPUT_MAX_BUFFER = 5 * MB;
 export const DEFAULT_MEDIA_CONCURRENCY = 2;
-
-function providerSupportsCapability(
-  provider: MediaUnderstandingProvider | undefined,
-  capability: MediaUnderstandingCapability,
-): boolean {
-  if (!provider) {
-    return false;
-  }
-  if (capability === "audio") {
-    return Boolean(provider.transcribeAudio);
-  }
-  if (capability === "image") {
-    return Boolean(provider.describeImage);
-  }
-  return Boolean(provider.describeVideo);
-}
 
 function resolveDefaultRegistry(cfg?: OpenClawConfig) {
   return buildMediaUnderstandingRegistry(undefined, cfg ?? ({} as OpenClawConfig));

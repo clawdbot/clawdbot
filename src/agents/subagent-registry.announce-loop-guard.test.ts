@@ -53,11 +53,6 @@ vi.mock("../infra/agent-events.js", () => ({
   onAgentEvent: mocks.onAgentEvent,
 }));
 
-vi.mock("./subagent-announce.js", () => ({
-  runSubagentAnnounceFlow: mocks.runSubagentAnnounceFlow,
-  captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
-}));
-
 vi.mock("./subagent-registry.store.js", () => ({
   loadSubagentRegistryFromDisk: mocks.loadSubagentRegistryFromDisk,
   saveSubagentRegistryToDisk: mocks.saveSubagentRegistryToDisk,
@@ -101,10 +96,16 @@ describe("announce loop guard (#18264)", () => {
     mocks.saveSubagentRegistryToDisk.mockClear();
     mocks.updateSessionStore.mockClear();
     registry.resetSubagentRegistryForTests({ persist: false });
+    registry.__testing.setDepsForTest({
+      captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
+      cleanupBrowserSessionsForLifecycleEnd: async () => {},
+      runSubagentAnnounceFlow: mocks.runSubagentAnnounceFlow,
+    });
   });
 
   afterEach(() => {
     registry.resetSubagentRegistryForTests({ persist: false });
+    registry.__testing.setDepsForTest();
     vi.useRealTimers();
     vi.clearAllMocks();
   });

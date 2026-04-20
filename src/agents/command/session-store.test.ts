@@ -1,14 +1,79 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore } from "../../config/sessions.js";
 import type { EmbeddedPiRunResult } from "../pi-embedded.js";
 import { updateSessionStoreAfterAgentRun } from "./session-store.js";
 import { resolveSession } from "./session.js";
+
+vi.mock("../model-selection.js", () => ({
+  isCliProvider: (provider: string, cfg?: OpenClawConfig) =>
+    Object.hasOwn(cfg?.agents?.defaults?.cliBackends ?? {}, provider),
+  normalizeProviderId: (provider: string) => provider.trim().toLowerCase(),
+}));
+
+vi.mock("../../config/sessions.js", async () => {
+  const fsSync = await import("node:fs");
+  const fs = await import("node:fs/promises");
+  const path = await import("node:path");
+  const readStore = async (storePath: string): Promise<Record<string, SessionEntry>> => {
+    try {
+      return JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, SessionEntry>;
+    } catch {
+      return {};
+    }
+  };
+  const writeStore = async (storePath: string, store: Record<string, SessionEntry>) => {
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf8");
+  };
+  return {
+    mergeSessionEntry: (existing: SessionEntry | undefined, patch: Partial<SessionEntry>) => ({
+      ...existing,
+      ...patch,
+      sessionId: patch.sessionId ?? existing?.sessionId ?? "mock-session",
+      updatedAt: Math.max(existing?.updatedAt ?? 0, patch.updatedAt ?? 0, Date.now()),
+    }),
+    setSessionRuntimeModel: (entry: SessionEntry, runtime: { provider: string; model: string }) => {
+      entry.modelProvider = runtime.provider;
+      entry.model = runtime.model;
+      return true;
+    },
+    updateSessionStore: async <T>(
+      storePath: string,
+      mutator: (store: Record<string, SessionEntry>) => Promise<T> | T,
+    ) => {
+      const store = await readStore(storePath);
+      const previousAcpByKey = new Map(
+        Object.entries(store)
+          .filter(
+            (entry): entry is [string, SessionEntry & { acp: NonNullable<SessionEntry["acp"]> }] =>
+              Boolean(entry[1]?.acp),
+          )
+          .map(([key, entry]) => [key, entry.acp]),
+      );
+      const result = await mutator(store);
+      for (const [key, acp] of previousAcpByKey) {
+        const next = store[key];
+        if (next && !next.acp) {
+          next.acp = acp;
+        }
+      }
+      await writeStore(storePath, store);
+      return result;
+    },
+    loadSessionStore: (storePath: string) => {
+      try {
+        return JSON.parse(fsSync.readFileSync(storePath, "utf8")) as Record<string, SessionEntry>;
+      } catch {
+        return {};
+      }
+    },
+  };
+});
 
 function acpMeta() {
   return {
@@ -76,6 +141,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         sessionKey,
         storePath,
         sessionStore,
+        contextTokensOverride: 200_000,
         defaultProvider: "claude-cli",
         defaultModel: "claude-sonnet-4-6",
         result,
@@ -98,8 +164,8 @@ describe("updateSessionStoreAfterAgentRun", () => {
 
   it("preserves ACP metadata when caller has a stale session snapshot", async () => {
     await withTempSessionStore(async ({ storePath }) => {
-      const sessionKey = `agent:codex:acp:${randomUUID()}`;
-      const sessionId = randomUUID();
+      const sessionKey = "agent:codex:acp:test-acp-preserve";
+      const sessionId = "test-acp-session";
 
       const existing: SessionEntry = {
         sessionId,
@@ -144,8 +210,8 @@ describe("updateSessionStoreAfterAgentRun", () => {
 
   it("persists latest systemPromptReport for downstream warning dedupe", async () => {
     await withTempSessionStore(async ({ storePath }) => {
-      const sessionKey = `agent:codex:report:${randomUUID()}`;
-      const sessionId = randomUUID();
+      const sessionKey = "agent:codex:report:test-system-prompt-report";
+      const sessionId = "test-system-prompt-report-session";
 
       const sessionStore: Record<string, SessionEntry> = {
         [sessionKey]: {

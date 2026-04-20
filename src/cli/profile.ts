@@ -1,6 +1,5 @@
 import os from "node:os";
 import path from "node:path";
-import { FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -8,7 +7,7 @@ import {
 } from "../shared/string-coerce.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { isValidProfileName } from "./profile-utils.js";
-import { forwardConsumedCliRootOption } from "./root-option-forward.js";
+import { scanCliRootOptions } from "./root-option-scan.js";
 import { takeCliRootOptionValue } from "./root-option-value.js";
 
 export type CliProfileParseResult =
@@ -16,70 +15,49 @@ export type CliProfileParseResult =
   | { ok: false; error: string };
 
 export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
-  if (argv.length < 2) {
-    return { ok: true, profile: null, argv };
-  }
-
-  const out: string[] = argv.slice(0, 2);
   let profile: string | null = null;
   let sawDev = false;
 
-  const args = argv.slice(2);
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
-    if (arg === undefined) {
-      continue;
-    }
-    if (arg === FLAG_TERMINATOR) {
-      out.push(arg, ...args.slice(i + 1));
-      break;
-    }
-
+  const scanned = scanCliRootOptions(argv, ({ arg, args, index, out }) => {
     if (arg === "--dev") {
       if (resolveCliArgvInvocation(out).primary === "gateway") {
         out.push(arg);
-        continue;
+        return { kind: "handled" };
       }
       if (profile && profile !== "dev") {
-        return { ok: false, error: "Cannot combine --dev with --profile" };
+        return { kind: "error", error: "Cannot combine --dev with --profile" };
       }
       sawDev = true;
       profile = "dev";
-      continue;
+      return { kind: "handled" };
     }
 
     if (arg === "--profile" || arg.startsWith("--profile=")) {
       if (sawDev) {
-        return { ok: false, error: "Cannot combine --dev with --profile" };
+        return { kind: "error", error: "Cannot combine --dev with --profile" };
       }
-      const next = args[i + 1];
+      const next = args[index + 1];
       const { value, consumedNext } = takeCliRootOptionValue(arg, next);
-      if (consumedNext) {
-        i += 1;
-      }
       if (!value) {
-        return { ok: false, error: "--profile requires a value" };
+        return { kind: "error", error: "--profile requires a value" };
       }
       if (!isValidProfileName(value)) {
         return {
-          ok: false,
+          kind: "error",
           error: 'Invalid --profile (use letters, numbers, "_", "-" only)',
         };
       }
       profile = value;
-      continue;
+      return { kind: "handled", consumedNext };
     }
+    return { kind: "pass" };
+  });
 
-    const consumedRootOption = forwardConsumedCliRootOption(args, i, out);
-    if (consumedRootOption > 0) {
-      i += consumedRootOption - 1;
-      continue;
-    }
-
-    out.push(arg);
+  if (!scanned.ok) {
+    return scanned;
   }
 
-  return { ok: true, profile, argv: out };
+  return { ok: true, profile, argv: scanned.argv };
 }
 
 function resolveProfileStateDir(

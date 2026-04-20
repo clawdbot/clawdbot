@@ -29,7 +29,7 @@ export type ChatSenderAllowParams = {
   chatIdentifier?: string | null;
 };
 
-function isAllowedParsedChatSender(params: {
+export function isAllowedParsedChatSender(params: {
   allowFrom: Array<string | number>;
   sender: string;
   chatId?: number | null;

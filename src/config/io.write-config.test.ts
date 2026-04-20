@@ -233,6 +233,38 @@ describe("config io write", () => {
     });
   });
 
+  it("rejects destructive internal writes before replacing the config", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      const original = {
+        gateway: { mode: "local" },
+        channels: { telegram: { enabled: true, dmPolicy: "pairing" } },
+        agents: { list: [{ id: "main", default: true, workspace: "/tmp/openclaw-main" }] },
+        tools: { profile: "safe" },
+        commands: { ownerDisplay: "hash" },
+      };
+      await fs.writeFile(configPath, `${JSON.stringify(original, null, 2)}\n`, "utf-8");
+      const warn = vi.fn();
+      const io = createConfigIO({
+        env: { VITEST: "true" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: { warn, error: vi.fn() },
+      });
+
+      await expect(io.writeConfigFile({ update: { channel: "beta" } })).rejects.toMatchObject({
+        code: "CONFIG_WRITE_REJECTED",
+      });
+
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(
+        `${JSON.stringify(original, null, 2)}\n`,
+      );
+      const entries = await fs.readdir(path.dirname(configPath));
+      expect(entries.some((entry) => entry.includes(".rejected."))).toBe(true);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("Config write rejected:"));
+    });
+  });
+
   it("does not inject include-only $schema into the root config during partial writes", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
