@@ -77,6 +77,45 @@ In practice, that means the rescue bot gets its own:
 
 The prompts are otherwise the same as normal onboarding.
 
+## General Multi-Gateway Setup
+
+The rescue-bot layout above is the easiest default, but the same isolation
+pattern works for any pair or group of Gateways on one host.
+
+For a more general setup, give each extra Gateway its own named profile and its
+own base port:
+
+```bash
+# main (default profile)
+openclaw setup
+openclaw gateway --port 18789
+
+# extra gateway
+openclaw --profile ops setup
+openclaw --profile ops gateway --port 19789
+```
+
+If you want both Gateways to use named profiles, that also works:
+
+```bash
+openclaw --profile main setup
+openclaw --profile main gateway --port 18789
+
+openclaw --profile ops setup
+openclaw --profile ops gateway --port 19789
+```
+
+Services follow the same pattern:
+
+```bash
+openclaw gateway install
+openclaw --profile ops gateway install --port 19789
+```
+
+Use the rescue-bot quickstart when you want a fallback operator lane. Use the
+general profile pattern when you want multiple long-lived Gateways for
+different channels, tenants, workspaces, or operational roles.
+
 ## Isolation Checklist
 
 Keep these unique per Gateway instance:
