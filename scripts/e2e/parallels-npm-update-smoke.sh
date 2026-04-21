@@ -196,13 +196,14 @@ import json
 import os
 import re
 import sys
+from typing import Optional
 
 payload = json.loads(os.environ["PRL_VM_JSON"])
 requested = os.environ["REQUESTED_VM_NAME"].strip()
 requested_lower = requested.lower()
 names = [str(item.get("name", "")).strip() for item in payload if str(item.get("name", "")).strip()]
 
-def parse_ubuntu_version(name: str) -> tuple[int, ...] | None:
+def parse_ubuntu_version(name: str) -> Optional[tuple[int, ...]]:
     match = re.search(r"ubuntu\s+(\d+(?:\.\d+)*)", name, re.IGNORECASE)
     if not match:
         return None

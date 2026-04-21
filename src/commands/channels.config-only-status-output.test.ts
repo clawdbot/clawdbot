@@ -6,7 +6,12 @@ const activeChannelPlugins = vi.hoisted(() => [] as ChannelPlugin[]);
 
 vi.mock("../channels/plugins/index.js", () => ({
   listChannelPlugins: () => activeChannelPlugins,
+  getLoadedChannelPlugin: (id: string) => activeChannelPlugins.find((plugin) => plugin.id === id),
   getChannelPlugin: (id: string) => activeChannelPlugins.find((plugin) => plugin.id === id),
+}));
+
+vi.mock("../channels/plugins/read-only.js", () => ({
+  listReadOnlyChannelPluginsForConfig: () => activeChannelPlugins,
 }));
 
 vi.mock("../channels/plugins/status.js", () => ({

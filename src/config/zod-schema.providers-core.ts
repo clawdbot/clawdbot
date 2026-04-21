@@ -82,6 +82,7 @@ const ChannelStreamingBlockSchema = z
 const ChannelStreamingPreviewSchema = z
   .object({
     chunk: BlockStreamingChunkSchema.optional(),
+    toolProgress: z.boolean().optional(),
   })
   .strict();
 const ChannelPreviewStreamingConfigSchema = z

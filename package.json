@@ -1532,6 +1532,7 @@
     "@modelcontextprotocol/sdk": "1.29.0",
     "@mozilla/readability": "^0.6.0",
     "@sinclair/typebox": "0.34.49",
+    "@tencent-connect/qqbot-connector": "^1.1.0",
     "ajv": "^8.18.0",
     "chalk": "^5.6.2",
     "chokidar": "^5.0.0",

@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
     effectiveConfig: config,
     diagnostics: [],
   })),
-  loadAuthProfileStore: vi.fn(),
+  loadAuthProfileStoreWithoutExternalProfiles: vi.fn(),
   listChannelPlugins: vi.fn(() => []),
 }));
 
@@ -25,7 +25,7 @@ vi.mock("../cli/command-secret-targets.js", () => ({
 }));
 
 vi.mock("../agents/auth-profiles.js", () => ({
-  loadAuthProfileStore: mocks.loadAuthProfileStore,
+  loadAuthProfileStoreWithoutExternalProfiles: mocks.loadAuthProfileStoreWithoutExternalProfiles,
 }));
 
 vi.mock("../channels/plugins/index.js", () => ({
@@ -35,13 +35,13 @@ vi.mock("../channels/plugins/index.js", () => ({
 import { channelsListCommand } from "./channels/list.js";
 
 describe("channels list auth profiles", () => {
-  it("includes external auth profiles in JSON output", async () => {
+  it("includes local auth profiles in JSON output without loading external profiles", async () => {
     const runtime = createTestRuntime();
     mocks.readConfigFileSnapshot.mockResolvedValue({
       ...baseConfigSnapshot,
       config: {},
     });
-    mocks.loadAuthProfileStore.mockReturnValue({
+    mocks.loadAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
       version: 1,
       profiles: {
         "anthropic:default": {

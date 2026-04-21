@@ -6,6 +6,7 @@ import {
 import {
   type AuthCredentialReasonCode,
   ensureAuthProfileStore,
+  hasAnyAuthProfileStoreSource,
   resolveApiKeyForProfile,
   resolveProfileUnusableUntilForDisplay,
 } from "../agents/auth-profiles.js";
@@ -207,6 +208,12 @@ export async function noteAuthProfileHealth(params: {
   prompter: DoctorPrompter;
   allowKeychainPrompt: boolean;
 }): Promise<void> {
+  if (
+    Object.keys(params.cfg.auth?.profiles ?? {}).length === 0 &&
+    !hasAnyAuthProfileStoreSource()
+  ) {
+    return;
+  }
   const store = ensureAuthProfileStore(undefined, {
     allowKeychainPrompt: params.allowKeychainPrompt,
   });

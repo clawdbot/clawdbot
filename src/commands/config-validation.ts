@@ -6,7 +6,7 @@ import {
 } from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import {
-  buildPluginCompatibilityNotices,
+  buildPluginCompatibilitySnapshotNotices,
   formatPluginCompatibilityNotice,
 } from "../plugins/status.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -29,7 +29,7 @@ export async function requireValidConfigFileSnapshot(
   if (opts?.includeCompatibilityAdvisory !== true) {
     return snapshot;
   }
-  const compatibility = buildPluginCompatibilityNotices({ config: snapshot.config });
+  const compatibility = buildPluginCompatibilitySnapshotNotices({ config: snapshot.config });
   if (compatibility.length > 0) {
     runtime.log(
       [

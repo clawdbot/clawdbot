@@ -284,6 +284,7 @@ async function maybeFilterModelsByProvider(params: {
     const selection = await params.prompter.select({
       message: "Filter models by provider",
       options: [{ value: "*", label: "All providers" }, ...buildModelProviderFilterOptions(next)],
+      searchable: true,
     });
     if (selection !== "*") {
       next = next.filter((entry) => entry.provider === selection);

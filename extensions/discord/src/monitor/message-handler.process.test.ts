@@ -45,6 +45,30 @@ type DispatchInboundParams = {
     onReasoningStream?: () => Promise<void> | void;
     onReasoningEnd?: () => Promise<void> | void;
     onToolStart?: (payload: { name?: string }) => Promise<void> | void;
+    onItemEvent?: (payload: {
+      progressText?: string;
+      summary?: string;
+      title?: string;
+      name?: string;
+    }) => Promise<void> | void;
+    onPlanUpdate?: (payload: {
+      phase?: string;
+      explanation?: string;
+      steps?: string[];
+    }) => Promise<void> | void;
+    onApprovalEvent?: (payload: { phase?: string; command?: string }) => Promise<void> | void;
+    onCommandOutput?: (payload: {
+      phase?: string;
+      name?: string;
+      title?: string;
+      exitCode?: number | null;
+    }) => Promise<void> | void;
+    onPatchSummary?: (payload: {
+      phase?: string;
+      summary?: string;
+      title?: string;
+    }) => Promise<void> | void;
+    suppressDefaultToolProgressMessages?: boolean;
     onCompactionStart?: () => Promise<void> | void;
     onCompactionEnd?: () => Promise<void> | void;
     onPartialReply?: (payload: { text?: string }) => Promise<void> | void;

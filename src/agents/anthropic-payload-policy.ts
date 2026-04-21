@@ -58,7 +58,12 @@ function resolveAnthropicEphemeralCacheControl(
   if (retention === "none") {
     return undefined;
   }
-  const ttl = retention === "long" && isLongTtlEligibleEndpoint(baseUrl) ? "1h" : undefined;
+  // Trust explicit long-retention opt-ins for Anthropic-compatible custom providers.
+  // Keep hostname gating for implicit/env-driven long retention so defaults stay conservative.
+  const ttl =
+    retention === "long" && (cacheRetention === "long" || isLongTtlEligibleEndpoint(baseUrl))
+      ? "1h"
+      : undefined;
   return { type: "ephemeral", ...(ttl ? { ttl } : {}) };
 }
 

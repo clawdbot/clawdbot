@@ -21,6 +21,17 @@ describe("createSlackPluginBase", () => {
       }),
     ).toBe("tts");
   });
+
+  it("exposes security checks on the setup surface", () => {
+    const plugin = createSlackPluginBase({
+      setup: {} as never,
+      setupWizard: {} as never,
+    });
+
+    expect(plugin.security?.resolveDmPolicy).toBeTypeOf("function");
+    expect(plugin.security?.collectWarnings).toBeTypeOf("function");
+    expect(plugin.security?.collectAuditFindings).toBeTypeOf("function");
+  });
 });
 
 describe("setSlackChannelAllowlist", () => {

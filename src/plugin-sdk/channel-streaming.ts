@@ -116,6 +116,14 @@ export function resolveChannelStreamingPreviewChunk(
   );
 }
 
+export function resolveChannelStreamingPreviewToolProgress(
+  entry: StreamingCompatEntry | null | undefined,
+  defaultValue = true,
+): boolean {
+  const config = getChannelStreamingConfigObject(entry);
+  return asBoolean(config?.preview?.toolProgress) ?? defaultValue;
+}
+
 export function resolveChannelStreamingNativeTransport(
   entry: StreamingCompatEntry | null | undefined,
 ): boolean | undefined {

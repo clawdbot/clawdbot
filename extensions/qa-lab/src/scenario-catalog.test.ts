@@ -149,6 +149,29 @@ describe("qa scenario catalog", () => {
     ]);
   });
 
+  it("includes the thinking slash model remap scenario", () => {
+    const scenario = readQaScenarioById("thinking-slash-model-remap");
+    const config = readQaScenarioExecutionConfig("thinking-slash-model-remap") as
+      | {
+          requiredProviderMode?: string;
+          anthropicModelRef?: string;
+          openAiXhighModelRef?: string;
+          noXhighModelRef?: string;
+        }
+      | undefined;
+
+    expect(scenario.sourcePath).toBe("qa/scenarios/models/thinking-slash-model-remap.md");
+    expect(config?.requiredProviderMode).toBe("live-frontier");
+    expect(config?.anthropicModelRef).toBe("anthropic/claude-sonnet-4-6");
+    expect(config?.openAiXhighModelRef).toBe("openai/gpt-5.4");
+    expect(config?.noXhighModelRef).toBe("anthropic/claude-sonnet-4-6");
+    expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
+      "selects Anthropic and verifies adaptive options",
+      "maps adaptive to medium when switching to OpenAI",
+      "maps xhigh to high on a model without xhigh",
+    ]);
+  });
+
   it("includes the seeded mock-only broken-turn scenarios in the markdown pack", () => {
     const scenarioIds = [
       "reasoning-only-recovery-replay-safe-read",

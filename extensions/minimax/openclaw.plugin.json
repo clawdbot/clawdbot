@@ -6,7 +6,7 @@
   "autoEnableWhenConfiguredProviders": ["minimax", "minimax-portal"],
   "nonSecretAuthMarkers": ["minimax-oauth"],
   "providerAuthEnvVars": {
-    "minimax": ["MINIMAX_API_KEY"],
+    "minimax": ["MINIMAX_CODE_PLAN_KEY", "MINIMAX_CODING_API_KEY", "MINIMAX_API_KEY"],
     "minimax-portal": ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"]
   },
   "providerAuthChoices": [

@@ -76,6 +76,7 @@ export {
   createFixedWindowRateLimiter,
   createWebhookAnomalyTracker,
   readJsonWebhookBodyOrReject,
+  registerPluginHttpRoute,
   registerWebhookTarget,
   registerWebhookTargetWithPluginRoute,
   resolveWebhookPath,

@@ -24,30 +24,6 @@
           "transcodeEnabled": { "type": "boolean" }
         }
       },
-      "speechQueryParams": {
-        "type": "object",
-        "additionalProperties": {
-          "type": "string"
-        }
-      },
-      "tts": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "enabled": { "type": "boolean" },
-          "provider": { "type": "string" },
-          "baseUrl": { "type": "string" },
-          "apiKey": { "type": "string" },
-          "model": { "type": "string" },
-          "voice": { "type": "string" },
-          "authStyle": {
-            "type": "string",
-            "enum": ["bearer", "api-key"]
-          },
-          "queryParams": { "$ref": "#/$defs/speechQueryParams" },
-          "speed": { "type": "number" }
-        }
-      },
       "stt": {
         "type": "object",
         "additionalProperties": false,
@@ -139,7 +115,6 @@
         "items": { "type": "string" }
       },
       "audioFormatPolicy": { "$ref": "#/$defs/audioFormatPolicy" },
-      "tts": { "$ref": "#/$defs/tts" },
       "stt": { "$ref": "#/$defs/stt" },
       "urlDirectUpload": { "type": "boolean" },
       "upgradeUrl": { "type": "string" },

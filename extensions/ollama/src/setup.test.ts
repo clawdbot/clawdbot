@@ -114,6 +114,7 @@ describe("ollama setup", () => {
 
   it("puts suggested cloud model first in cloud mode", async () => {
     const prompter = createCloudPrompter();
+    vi.stubGlobal("fetch", createOllamaFetchMock({ tags: [] }));
     const result = await promptAndConfigureOllama({
       cfg: {},
       env: {},
@@ -130,6 +131,7 @@ describe("ollama setup", () => {
 
   it("uses generic token flags for cloud-only setup", async () => {
     const prompter = createCloudPrompter();
+    vi.stubGlobal("fetch", createOllamaFetchMock({ tags: [] }));
 
     const result = await promptAndConfigureOllama({
       cfg: {},
@@ -189,7 +191,7 @@ describe("ollama setup", () => {
 
   it("cloud mode does not hit local Ollama endpoints", async () => {
     const prompter = createCloudPrompter();
-    const fetchMock = vi.fn();
+    const fetchMock = createOllamaFetchMock({ tags: [] });
     vi.stubGlobal("fetch", fetchMock);
 
     await promptAndConfigureOllama({
@@ -199,7 +201,12 @@ describe("ollama setup", () => {
       allowSecretRefPrompt: false,
     });
 
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock.mock.calls.some((call) => requestUrl(call[0]).includes("127.0.0.1"))).toBe(
+      false,
+    );
+    expect(fetchMock.mock.calls.some((call) => requestUrl(call[0]).includes("ollama.com"))).toBe(
+      true,
+    );
   });
 
   it("rejects the local marker during cloud-only setup", async () => {
@@ -250,6 +257,7 @@ describe("ollama setup", () => {
       }),
       note: vi.fn(async () => undefined),
     } as unknown as WizardPrompter;
+    vi.stubGlobal("fetch", createOllamaFetchMock({ tags: [] }));
 
     await promptAndConfigureOllama({
       cfg: {},
@@ -315,8 +323,9 @@ describe("ollama setup", () => {
     );
   });
 
-  it("cloud mode seeds the hosted cloud model list", async () => {
+  it("cloud mode falls back to the hardcoded cloud model list when /api/tags is empty", async () => {
     const prompter = createCloudPrompter();
+    vi.stubGlobal("fetch", createOllamaFetchMock({ tags: [] }));
     const result = await promptAndConfigureOllama({
       cfg: {},
       env: {},
@@ -331,6 +340,36 @@ describe("ollama setup", () => {
       "text",
       "image",
     ]);
+  });
+
+  it("cloud mode populates models from ollama.com /api/tags when reachable", async () => {
+    const prompter = createCloudPrompter();
+    const fetchMock = createOllamaFetchMock({
+      tags: ["qwen3-coder:480b-cloud", "gpt-oss:120b-cloud"],
+      show: { "qwen3-coder:480b-cloud": 262144 },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await promptAndConfigureOllama({
+      cfg: {},
+      env: {},
+      prompter,
+      allowSecretRefPrompt: false,
+    });
+    const models = result.config.models?.providers?.ollama?.models;
+    const modelIds = models?.map((m) => m.id);
+
+    expect(modelIds).toEqual([
+      "kimi-k2.5:cloud",
+      "minimax-m2.7:cloud",
+      "glm-5.1:cloud",
+      "qwen3-coder:480b-cloud",
+      "gpt-oss:120b-cloud",
+    ]);
+    expect(models?.find((m) => m.id === "qwen3-coder:480b-cloud")?.contextWindow).toBe(262144);
+    expect(
+      fetchMock.mock.calls.some((call) => requestUrl(call[0]) === "https://ollama.com/api/tags"),
+    ).toBe(true);
   });
 
   it("uses /api/show context windows when building Ollama model configs", async () => {

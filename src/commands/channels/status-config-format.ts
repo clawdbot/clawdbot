@@ -2,7 +2,7 @@ import {
   hasConfiguredUnavailableCredentialStatus,
   hasResolvedCredentialValue,
 } from "../../channels/account-snapshot-fields.js";
-import { listChannelPlugins } from "../../channels/plugins/index.js";
+import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import {
   buildChannelAccountSnapshot,
   buildReadOnlySourceChannelAccountSnapshot,
@@ -47,7 +47,7 @@ export async function formatConfigChannelsStatusLines(
       return buildChannelAccountLine(provider, account, bits);
     });
 
-  const plugins = listChannelPlugins();
+  const plugins = listReadOnlyChannelPluginsForConfig(cfg);
   const sourceConfig = opts?.sourceConfig ?? cfg;
   for (const plugin of plugins) {
     const accountIds = plugin.config.listAccountIds(cfg);

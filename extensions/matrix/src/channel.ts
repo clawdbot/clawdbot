@@ -4,6 +4,7 @@ import {
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-primitives";
+import type { ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
   createAllowlistProviderOpenWarningCollector,
@@ -15,7 +16,6 @@ import {
   createResolvedDirectoryEntriesLister,
   createRuntimeDirectoryLiveAdapter,
 } from "openclaw/plugin-sdk/directory-runtime";
-import { buildTrafficStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
 import {
@@ -34,7 +34,10 @@ import { matrixApprovalCapability } from "./approval-native.js";
 import { createMatrixPairingText, createMatrixProbeAccount } from "./channel-account-paths.js";
 import { DEFAULT_ACCOUNT_ID, matrixConfigAdapter } from "./config-adapter.js";
 import { MatrixConfigSchema } from "./config-schema.js";
-import { matrixDoctor } from "./doctor.js";
+import {
+  legacyConfigRules as MATRIX_LEGACY_CONFIG_RULES,
+  normalizeCompatibilityConfig as normalizeMatrixCompatibilityConfig,
+} from "./doctor-contract.js";
 import { shouldSuppressLocalMatrixExecApprovalPrompt } from "./exec-approvals.js";
 import {
   resolveMatrixGroupRequireMention,
@@ -64,14 +67,17 @@ import {
   resolveSingleAccountPromotionTarget,
   singleAccountKeysToMove,
 } from "./setup-contract.js";
-import { matrixSetupAdapter } from "./setup-core.js";
-import { matrixSetupWizard } from "./setup-surface.js";
+import { createMatrixSetupWizardProxy, matrixSetupAdapter } from "./setup-core.js";
 import { runMatrixStartupMaintenance } from "./startup-maintenance.js";
 import { resolveMatrixInboundConversation } from "./thread-binding-api.js";
 import type { CoreConfig } from "./types.js";
 // Mutex for serializing account startup (workaround for concurrent dynamic import race condition)
 let matrixStartupLock: Promise<void> = Promise.resolve();
 
+const loadMatrixSetupWizard = createLazyRuntimeNamedExport(
+  () => import("./setup-surface.js"),
+  "matrixSetupWizard",
+);
 const loadMatrixChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
   "matrixChannelRuntime",
@@ -86,6 +92,31 @@ const meta = {
   blurb: "open protocol; configure a homeserver + access token.",
   order: 70,
   quickstartAllowFrom: true,
+};
+
+function buildMatrixTrafficStatusSummary(
+  snapshot?: {
+    lastInboundAt?: number | null;
+    lastOutboundAt?: number | null;
+  } | null,
+) {
+  return {
+    lastInboundAt: snapshot?.lastInboundAt ?? null,
+    lastOutboundAt: snapshot?.lastOutboundAt ?? null,
+  };
+}
+
+const matrixDoctor: ChannelDoctorAdapter = {
+  dmAllowFromMode: "nestedOnly",
+  groupModel: "sender",
+  groupAllowFromFallbackToAllowFrom: false,
+  warnOnEmptyGroupSenderAllowlist: true,
+  legacyConfigRules: MATRIX_LEGACY_CONFIG_RULES,
+  normalizeCompatibilityConfig: normalizeMatrixCompatibilityConfig,
+  runConfigSequence: async ({ cfg, env, shouldRepair }) =>
+    await (await import("./doctor.js")).runMatrixDoctorSequence({ cfg, env, shouldRepair }),
+  cleanStaleConfig: async ({ cfg }) =>
+    await (await import("./doctor.js")).cleanStaleMatrixPluginConfig(cfg),
 };
 
 const listMatrixDirectoryPeersFromConfig =
@@ -294,7 +325,9 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
     base: {
       id: "matrix",
       meta,
-      setupWizard: matrixSetupWizard,
+      setupWizard: createMatrixSetupWizardProxy(async () => ({
+        matrixSetupWizard: await loadMatrixSetupWizard(),
+      })),
       capabilities: {
         chatTypes: ["direct", "group", "thread"],
         polls: true,
@@ -432,7 +465,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
           extra: {
             baseUrl: account.homeserver,
             lastProbeAt: runtime?.lastProbeAt ?? null,
-            ...buildTrafficStatusSummary(runtime),
+            ...buildMatrixTrafficStatusSummary(runtime),
           },
         }),
       }),

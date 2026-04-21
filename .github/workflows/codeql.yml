@@ -62,7 +62,7 @@ jobs:
             needs_autobuild: false
             config_file: ""
           - language: swift
-            runs_on: macos-latest
+            runs_on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-latest' || 'macos-latest' }}
             needs_node: false
             needs_python: false
             needs_java: false

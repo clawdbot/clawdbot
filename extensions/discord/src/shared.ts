@@ -22,6 +22,7 @@ import {
   collectUnsupportedSecretRefConfigCandidates,
   unsupportedSecretRefSurfacePatterns,
 } from "./security-contract.js";
+import { discordSecurityAdapter } from "./security.js";
 import { deriveLegacySessionChatType } from "./session-contract.js";
 
 export const DISCORD_CHANNEL = "discord" as const;
@@ -82,6 +83,7 @@ export function createDiscordPluginBase(params: {
   | "config"
   | "setup"
   | "messaging"
+  | "security"
   | "secrets"
 > {
   return {
@@ -125,6 +127,7 @@ export function createDiscordPluginBase(params: {
     messaging: {
       deriveLegacySessionChatType,
     },
+    security: discordSecurityAdapter,
     secrets: {
       secretTargetRegistryEntries,
       unsupportedSecretRefSurfacePatterns,
@@ -146,6 +149,7 @@ export function createDiscordPluginBase(params: {
     | "config"
     | "setup"
     | "messaging"
+    | "security"
     | "secrets"
   >;
 }

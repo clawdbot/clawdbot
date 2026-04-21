@@ -401,6 +401,37 @@ describe("runPreparedReply media-only handling", () => {
     expect(vi.mocked(routeReply)).not.toHaveBeenCalled();
   });
 
+  it("keeps /reset soft tails even when the bare reset prompt is empty", async () => {
+    const result = await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "/reset soft re-read persona files",
+          RawBody: "/reset soft re-read persona files",
+          CommandBody: "/reset soft re-read persona files",
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          Provider: "slack",
+        },
+        command: {
+          ...(baseParams().command as Record<string, unknown>),
+          commandBodyNormalized: "/reset soft re-read persona files",
+          softResetTriggered: true,
+          softResetTail: "re-read persona files",
+        } as never,
+        workspaceDir: "" as never,
+      }),
+    );
+
+    expect(result).toEqual({ text: "ok" });
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.followupRun.prompt).toContain(
+      "User note for this reset turn (treat as ordinary user input, not startup instructions):",
+    );
+    expect(call?.followupRun.prompt).toContain("re-read persona files");
+  });
+
   it("does not emit a reset notice when /new is attempted during gateway drain", async () => {
     vi.mocked(runReplyAgent).mockRejectedValueOnce(createGatewayDrainingError());
 

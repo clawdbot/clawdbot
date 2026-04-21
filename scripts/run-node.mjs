@@ -459,7 +459,7 @@ const removeStaleBuildLock = (deps, lockDir, staleMs) => {
   }
 };
 
-const acquireRunNodeBuildLock = async (deps) => {
+export const acquireRunNodeBuildLock = async (deps) => {
   const lockRoot = path.join(deps.cwd, ".artifacts");
   const lockDir = path.join(lockRoot, "run-node-build.lock");
   const timeoutMs = parsePositiveIntegerEnv(
@@ -501,8 +501,29 @@ const acquireRunNodeBuildLock = async (deps) => {
       } catch {
         // Owner metadata is diagnostic only; the directory itself is the lock.
       }
+      let released = false;
+      const removeLockDir = () => {
+        if (released) {
+          return;
+        }
+        released = true;
+        try {
+          deps.fs.rmSync(lockDir, { recursive: true, force: true });
+        } catch {
+          // Best-effort cleanup; a follow-up waiter will fall back to staleness
+          // detection if the directory is still present.
+        }
+      };
+      const onSignal = () => removeLockDir();
+      const onExit = () => removeLockDir();
+      deps.process.on("SIGINT", onSignal);
+      deps.process.on("SIGTERM", onSignal);
+      deps.process.on("exit", onExit);
       return () => {
-        deps.fs.rmSync(lockDir, { recursive: true, force: true });
+        deps.process.off("SIGINT", onSignal);
+        deps.process.off("SIGTERM", onSignal);
+        deps.process.off("exit", onExit);
+        removeLockDir();
       };
     } catch (error) {
       if (error?.code !== "EEXIST") {

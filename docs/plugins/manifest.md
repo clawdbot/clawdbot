@@ -510,7 +510,7 @@ Important examples:
 | Field                                                             | What it means                                                                                                                                |
 | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | `openclaw.extensions`                                             | Declares native plugin entrypoints.                                                                                                          |
-| `openclaw.setupEntry`                                             | Lightweight setup-only entrypoint used during onboarding and deferred channel startup.                                                       |
+| `openclaw.setupEntry`                                             | Lightweight setup-only entrypoint used during onboarding, deferred channel startup, and read-only channel status/SecretRef discovery.        |
 | `openclaw.channel`                                                | Cheap channel catalog metadata like labels, docs paths, aliases, and selection copy.                                                         |
 | `openclaw.channel.configuredState`                                | Lightweight configured-state checker metadata that can answer "does env-only setup already exist?" without loading the full channel runtime. |
 | `openclaw.channel.persistedAuthState`                             | Lightweight persisted-auth checker metadata that can answer "is anything already signed in?" without loading the full channel runtime.       |
@@ -523,6 +523,12 @@ Important examples:
 `openclaw.install.minHostVersion` is enforced during install and manifest
 registry loading. Invalid values are rejected; newer-but-valid values skip the
 plugin on older hosts.
+
+Channel plugins should provide `openclaw.setupEntry` when status, channel list,
+or SecretRef scans need to identify configured accounts without loading the full
+runtime. The setup entry should expose channel metadata plus setup-safe config,
+status, and secrets adapters; keep network clients, gateway listeners, and
+transport runtimes in the main extension entrypoint.
 
 `openclaw.install.allowInvalidConfigRecovery` is intentionally narrow. It does
 not make arbitrary broken configs installable. Today it only allows install

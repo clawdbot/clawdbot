@@ -37,7 +37,7 @@ export async function dispatchInboundMessage(params: {
   ctx: MsgContext | FinalizedMsgContext;
   cfg: OpenClawConfig;
   dispatcher: ReplyDispatcher;
-  replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
+  replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
   replyResolver?: GetReplyFromConfig;
 }): Promise<DispatchInboundResult> {
   const finalized = finalizeInboundContext(params.ctx);
@@ -58,7 +58,7 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
   ctx: MsgContext | FinalizedMsgContext;
   cfg: OpenClawConfig;
   dispatcherOptions: ReplyDispatcherWithTypingOptions;
-  replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
+  replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
   replyResolver?: GetReplyFromConfig;
 }): Promise<DispatchInboundResult> {
   const silentReplyContext = resolveDispatcherSilentReplyContext(params.ctx, params.cfg);
@@ -88,7 +88,7 @@ export async function dispatchInboundMessageWithDispatcher(params: {
   ctx: MsgContext | FinalizedMsgContext;
   cfg: OpenClawConfig;
   dispatcherOptions: ReplyDispatcherOptions;
-  replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
+  replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
   replyResolver?: GetReplyFromConfig;
 }): Promise<DispatchInboundResult> {
   const silentReplyContext = resolveDispatcherSilentReplyContext(params.ctx, params.cfg);

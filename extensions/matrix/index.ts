@@ -77,7 +77,7 @@ export default defineBundledChannelEntry({
     exportName: "channelSecrets",
   },
   runtime: {
-    specifier: "./runtime-api.js",
+    specifier: "./runtime-setter-api.js",
     exportName: "setMatrixRuntime",
   },
   registerCliMetadata: registerMatrixCliMetadata,

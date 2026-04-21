@@ -78,6 +78,7 @@ export function ensurePluginRegistryLoaded(options?: {
   config?: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  workspaceDir?: string;
   onlyPluginIds?: string[];
 }): void {
   const scope = options?.scope ?? "all";

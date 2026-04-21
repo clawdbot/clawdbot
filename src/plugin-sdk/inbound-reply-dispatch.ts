@@ -12,12 +12,12 @@ import { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 import { createNormalizedOutboundDeliverer, type OutboundReplyPayload } from "./reply-payload.js";
 
 type ReplyOptionsWithoutModelSelected = Omit<
-  Omit<GetReplyOptions, "onToolResult" | "onBlockReply">,
+  Omit<GetReplyOptions, "onBlockReply">,
   "onModelSelected"
 >;
 type RecordInboundSessionFn = typeof import("../channels/session.js").recordInboundSession;
 
-type ReplyDispatchFromConfigOptions = Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
+type ReplyDispatchFromConfigOptions = Omit<GetReplyOptions, "onBlockReply">;
 
 /** Run `dispatchReplyFromConfig` with a dispatcher that always gets its settled callback. */
 export async function dispatchReplyFromConfigWithSettledDispatcher(params: {

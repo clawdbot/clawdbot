@@ -159,6 +159,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
       params.emitSessionLifecycleEventMock?.(...args),
     formatThinkingLevels: (levels: string[]) => levels.join(", "),
     normalizeThinkLevel: (level: unknown) => normalizeOptionalString(level),
+    DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT: 5,
     DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH: 3,
     ADMIN_SCOPE: "operator.admin",
     AGENT_LANE_SUBAGENT: "subagent",

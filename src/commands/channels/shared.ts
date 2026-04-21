@@ -1,5 +1,10 @@
 import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
-import { type ChannelId, getChannelPlugin } from "../../channels/plugins/index.js";
+import { getBundledChannelSetupPlugin } from "../../channels/plugins/bundled.js";
+import {
+  type ChannelId,
+  getChannelPlugin,
+  getLoadedChannelPlugin,
+} from "../../channels/plugins/index.js";
 import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
 import type { CommandSecretResolutionMode } from "../../cli/command-secret-gateway.js";
 import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
@@ -46,7 +51,10 @@ export function formatAccountLabel(params: { accountId: string; name?: string })
 }
 
 export const channelLabel = (channel: ChatChannel) => {
-  const plugin = getChannelPlugin(channel);
+  const plugin =
+    getLoadedChannelPlugin(channel) ??
+    getBundledChannelSetupPlugin(channel) ??
+    getChannelPlugin(channel);
   return plugin?.meta.label ?? channel;
 };
 

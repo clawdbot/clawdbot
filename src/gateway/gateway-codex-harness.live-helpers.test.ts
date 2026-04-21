@@ -42,6 +42,19 @@ describe("gateway codex harness live helpers", () => {
     expect(isExpectedCodexModelsCommandText(text)).toBe(true);
   });
 
+  it("accepts sandbox escalation rejection for codex models", () => {
+    const texts = [
+      "I couldn’t list them because `codex models` requires running outside the sandbox here, and that approval was rejected.",
+      "I couldn’t list them because the local `codex models` command requires elevated execution in this environment, and that request was rejected.",
+      "I couldn’t list them because the local `codex models` command requires host permissions here, and that escalation was rejected.",
+      "I couldn’t run `codex models` because the sandboxed attempt failed and the required elevated retry was not approved.",
+    ];
+
+    for (const text of texts) {
+      expect(isExpectedCodexModelsCommandText(text)).toBe(true);
+    }
+  });
+
   it("accepts the interactive TUI current-model summary", () => {
     const text = [
       "`codex models` didn’t return a plain list in this environment; it dropped into the interactive TUI instead.",
@@ -73,6 +86,19 @@ describe("gateway codex harness live helpers", () => {
       EXPECTED_CODEX_MODELS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
     ).toBe(true);
     expect(isExpectedCodexModelsCommandText(text)).toBe(false);
+  });
+
+  it("accepts the sandboxed CLI failure active-model summary", () => {
+    const text = [
+      "I couldn’t inspect the CLI model list because sandboxed `codex --help` failed on a namespace restriction, and the escalated retry was rejected.",
+      "",
+      "What I can confirm from the current session is:",
+      "- Active model: `codex/gpt-5.4`",
+    ].join("\n");
+
+    expect(
+      EXPECTED_CODEX_MODELS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+    ).toBe(true);
   });
 
   it("rejects unrelated codex command output", () => {

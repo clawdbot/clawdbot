@@ -1,6 +1,6 @@
-import { loadAuthProfileStore } from "../../agents/auth-profiles.js";
+import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles.js";
 import { isChannelVisibleInConfiguredLists } from "../../channels/plugins/exposure.js";
-import { listChannelPlugins } from "../../channels/plugins/index.js";
+import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
@@ -94,7 +94,7 @@ async function loadUsageWithProgress(
   try {
     return await withProgress(
       { label: "Fetching usage snapshot…", indeterminate: true, enabled: true },
-      async () => await loadProviderUsageSummary(),
+      async () => await loadProviderUsageSummary({ skipPluginAuthWithoutCredentialSource: true }),
     );
   } catch (err) {
     runtime.error(String(err));
@@ -112,9 +112,9 @@ export async function channelsListCommand(
   }
   const includeUsage = opts.usage !== false;
 
-  const plugins = listChannelPlugins();
+  const plugins = listReadOnlyChannelPluginsForConfig(cfg);
 
-  const authStore = loadAuthProfileStore();
+  const authStore = loadAuthProfileStoreWithoutExternalProfiles();
   const authProfiles = Object.entries(authStore.profiles).map(([profileId, profile]) => ({
     id: profileId,
     provider: profile.provider,
@@ -122,7 +122,9 @@ export async function channelsListCommand(
     isExternal: false,
   }));
   if (opts.json) {
-    const usage = includeUsage ? await loadProviderUsageSummary() : undefined;
+    const usage = includeUsage
+      ? await loadProviderUsageSummary({ skipPluginAuthWithoutCredentialSource: true })
+      : undefined;
     const chat: Record<string, string[]> = {};
     for (const plugin of plugins) {
       chat[plugin.id] = plugin.config.listAccountIds(cfg);

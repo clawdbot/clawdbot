@@ -165,6 +165,16 @@ describe("bundled plugin metadata", () => {
     });
   });
 
+  it("keeps Telegram's narrow runtime setter on the bundled runtime sidecar surface", () => {
+    const telegram = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "telegram");
+    expectArtifactPresence(telegram?.publicSurfaceArtifacts, {
+      contains: ["runtime-setter-api.js"],
+    });
+    expectArtifactPresence(telegram?.runtimeSidecarArtifacts, {
+      contains: ["runtime-setter-api.js"],
+    });
+  });
+
   it("loads tlon channel config metadata from the lightweight schema surface", () => {
     expect(collectRepoBundledChannelConfigsForTest("tlon")?.tlon).toEqual(
       expect.objectContaining({
@@ -184,6 +194,13 @@ describe("bundled plugin metadata", () => {
     expect(matrix?.packageManifest?.channel?.persistedAuthState).toEqual({
       specifier: "./auth-presence",
       exportName: "hasAnyMatrixAuth",
+    });
+  });
+
+  it("keeps Matrix's narrow runtime-setter sidecar on the bundled public surface", () => {
+    const matrix = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "matrix");
+    expectArtifactPresence(matrix?.publicSurfaceArtifacts, {
+      contains: ["runtime-setter-api.js"],
     });
   });
 

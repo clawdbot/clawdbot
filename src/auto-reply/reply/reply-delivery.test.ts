@@ -125,6 +125,20 @@ describe("createBlockReplyDeliveryHandler", () => {
     });
   });
 
+  it("parses lowercase media directives in block replies before path normalization", () => {
+    const normalized = normalizeReplyPayloadDirectives({
+      payload: { text: "media: ./report.pdf" },
+      trimLeadingWhitespace: true,
+      parseMode: "auto",
+    });
+
+    expect(normalized.payload).toMatchObject({
+      text: undefined,
+      mediaUrl: "./report.pdf",
+      mediaUrls: ["./report.pdf"],
+    });
+  });
+
   it("passes normalized media block replies through media path normalization", async () => {
     const blockReplyPipeline = {
       enqueue: vi.fn(),

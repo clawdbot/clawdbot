@@ -807,6 +807,20 @@ export function runBundledPluginPostinstall(params = {}) {
   });
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+export function isDirectPostinstallInvocation(params = {}) {
+  const entryPath = params.entryPath ?? process.argv[1];
+  if (!entryPath) {
+    return false;
+  }
+  const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
+  const resolveRealPath = params.realpathSync ?? realpathSync;
+  try {
+    return resolveRealPath(entryPath) === resolveRealPath(modulePath);
+  } catch {
+    return pathToFileURL(entryPath).href === pathToFileURL(modulePath).href;
+  }
+}
+
+if (isDirectPostinstallInvocation()) {
   runBundledPluginPostinstall();
 }

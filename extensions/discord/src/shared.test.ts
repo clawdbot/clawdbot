@@ -18,4 +18,12 @@ describe("createDiscordPluginBase", () => {
       }),
     ).toBe("status");
   });
+
+  it("exposes security checks on the setup surface", () => {
+    const plugin = createDiscordPluginBase({ setup: {} as never });
+
+    expect(plugin.security?.resolveDmPolicy).toBeTypeOf("function");
+    expect(plugin.security?.collectWarnings).toBeTypeOf("function");
+    expect(plugin.security?.collectAuditFindings).toBeTypeOf("function");
+  });
 });

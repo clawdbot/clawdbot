@@ -168,6 +168,27 @@ describe("listThinkingLevels", () => {
       }),
     ).toBe("high");
   });
+
+  it("maps unsupported adaptive to medium and unsupported xhigh to high", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [{ id: "off" }, { id: "minimal" }, { id: "low" }, { id: "medium" }, { id: "high" }],
+    });
+
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "openai",
+        model: "gpt-5.4",
+        level: "adaptive",
+      }),
+    ).toBe("medium");
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        level: "xhigh",
+      }),
+    ).toBe("high");
+  });
 });
 
 describe("listThinkingLevelLabels", () => {

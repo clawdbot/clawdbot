@@ -29,7 +29,15 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "list", "--json"]);
 
-    expect(buildPluginSnapshotReport).toHaveBeenCalledWith();
+    expect(buildPluginSnapshotReport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        logger: expect.objectContaining({
+          info: expect.any(Function),
+          warn: expect.any(Function),
+          error: expect.any(Function),
+        }),
+      }),
+    );
 
     expect(JSON.parse(runtimeLogs[0] ?? "null")).toEqual({
       workspaceDir: "/workspace",

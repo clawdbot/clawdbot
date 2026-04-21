@@ -883,6 +883,12 @@ export async function dispatchReplyFromConfig(
       originatingChannel,
       systemEvent: shouldRouteToOriginating,
     });
+    const suppressDefaultToolProgressMessages =
+      params.replyOptions?.suppressDefaultToolProgressMessages === true;
+    const onToolResultFromReplyOptions = params.replyOptions?.onToolResult;
+    const onPlanUpdateFromReplyOptions = params.replyOptions?.onPlanUpdate;
+    const onApprovalEventFromReplyOptions = params.replyOptions?.onApprovalEvent;
+    const onPatchSummaryFromReplyOptions = params.replyOptions?.onPatchSummary;
 
     const replyResolver =
       params.replyResolver ?? (await loadGetReplyFromConfigRuntime()).getReplyFromConfig;
@@ -894,6 +900,7 @@ export async function dispatchReplyFromConfig(
         suppressTyping: typing.suppressTyping,
         onToolResult: (payload: ReplyPayload) => {
           const run = async () => {
+            await onToolResultFromReplyOptions?.(payload);
             if (suppressDelivery) {
               return;
             }
@@ -910,6 +917,20 @@ export async function dispatchReplyFromConfig(
             if (!deliveryPayload) {
               return;
             }
+            if (suppressDefaultToolProgressMessages) {
+              const hasMedia = resolveSendableOutboundReplyParts(deliveryPayload).hasMedia;
+              const execApproval =
+                deliveryPayload.channelData &&
+                typeof deliveryPayload.channelData === "object" &&
+                !Array.isArray(deliveryPayload.channelData)
+                  ? deliveryPayload.channelData.execApproval
+                  : undefined;
+              const hasExecApproval =
+                execApproval && typeof execApproval === "object" && !Array.isArray(execApproval);
+              if (!hasMedia && !hasExecApproval && deliveryPayload.isError !== true) {
+                return;
+              }
+            }
             if (shouldRouteToOriginating) {
               await sendPayloadAsync(deliveryPayload, undefined, false);
             } else {
@@ -918,27 +939,34 @@ export async function dispatchReplyFromConfig(
           };
           return run();
         },
-        onPlanUpdate: async ({ phase, explanation, steps }) => {
-          if (phase !== "update") {
+        onPlanUpdate: async (payload) => {
+          await onPlanUpdateFromReplyOptions?.(payload);
+          if (payload.phase !== "update" || suppressDefaultToolProgressMessages) {
             return;
           }
-          await sendPlanUpdate({ explanation, steps });
+          await sendPlanUpdate({ explanation: payload.explanation, steps: payload.steps });
         },
-        onApprovalEvent: async ({ phase, status, command, message }) => {
-          if (phase !== "requested") {
+        onApprovalEvent: async (payload) => {
+          await onApprovalEventFromReplyOptions?.(payload);
+          if (payload.phase !== "requested" || suppressDefaultToolProgressMessages) {
             return;
           }
-          const label = summarizeApprovalLabel({ status, command, message });
+          const label = summarizeApprovalLabel({
+            status: payload.status,
+            command: payload.command,
+            message: payload.message,
+          });
           if (!label) {
             return;
           }
           await maybeSendWorkingStatus(label);
         },
-        onPatchSummary: async ({ phase, summary, title }) => {
-          if (phase !== "end") {
+        onPatchSummary: async (payload) => {
+          await onPatchSummaryFromReplyOptions?.(payload);
+          if (payload.phase !== "end" || suppressDefaultToolProgressMessages) {
             return;
           }
-          const label = summarizePatchLabel({ summary, title });
+          const label = summarizePatchLabel({ summary: payload.summary, title: payload.title });
           if (!label) {
             return;
           }

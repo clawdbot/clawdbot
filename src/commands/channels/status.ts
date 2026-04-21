@@ -1,13 +1,15 @@
-import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
 import { formatCliCommand } from "../../cli/command-format.js";
-import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
+import { getConfiguredChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
 import { withProgress } from "../../cli/progress.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { collectChannelStatusIssues } from "../../infra/channels-status-issues.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
+import { listConfiguredChannelIdsForReadOnlyScope } from "../../plugins/channel-plugin-ids.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { redactSensitiveUrlLikeString } from "../../shared/net/redact-sensitive-url.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import {
@@ -28,6 +30,16 @@ export type ChannelsStatusOptions = {
   probe?: boolean;
   timeout?: string;
 };
+
+function redactGatewayUrlSecretsInText(text: string): string {
+  return text.replace(/\b(?:wss?|https?):\/\/[^\s"'<>]+/gi, (rawUrl) => {
+    return redactSensitiveUrlLikeString(rawUrl);
+  });
+}
+
+function formatChannelsStatusError(err: unknown): string {
+  return redactGatewayUrlSecretsInText(formatErrorMessage(err));
+}
 
 export function formatGatewayChannelsStatusLines(payload: Record<string, unknown>): string[] {
   const lines: string[] = [];
@@ -109,20 +121,19 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
       return buildChannelAccountLine(provider, account, bits);
     });
 
-  const plugins = listChannelPlugins();
   const accountsByChannel = payload.channelAccounts as Record<string, unknown> | undefined;
   const accountPayloads: Partial<Record<string, Array<Record<string, unknown>>>> = {};
-  for (const plugin of plugins) {
-    const raw = accountsByChannel?.[plugin.id];
+  for (const channelId of Object.keys(accountsByChannel ?? {}).toSorted()) {
+    const raw = accountsByChannel?.[channelId];
     if (Array.isArray(raw)) {
-      accountPayloads[plugin.id] = raw as Array<Record<string, unknown>>;
+      accountPayloads[channelId] = raw as Array<Record<string, unknown>>;
     }
   }
 
-  for (const plugin of plugins) {
-    const accounts = accountPayloads[plugin.id];
+  for (const channelId of Object.keys(accountPayloads).toSorted()) {
+    const accounts = accountPayloads[channelId];
     if (accounts && accounts.length > 0) {
-      lines.push(...accountLines(plugin.id, accounts));
+      lines.push(...accountLines(channelId, accounts));
     }
   }
 
@@ -174,7 +185,8 @@ export async function channelsStatusCommand(
     }
     runtime.log(formatGatewayChannelsStatusLines(payload).join("\n"));
   } catch (err) {
-    runtime.error(`Gateway not reachable: ${String(err)}`);
+    const safeError = formatChannelsStatusError(err);
+    runtime.error(`Gateway not reachable: ${safeError}`);
     const cfg = await requireValidConfigSnapshot(runtime);
     if (!cfg) {
       return;
@@ -182,12 +194,29 @@ export async function channelsStatusCommand(
     const { resolvedConfig } = await resolveCommandConfigWithSecrets({
       config: cfg,
       commandName: "channels status",
-      targetIds: getChannelsCommandSecretTargetIds(),
+      targetIds: getConfiguredChannelsCommandSecretTargetIds(cfg),
       mode: "read_only_status",
       runtime,
     });
     const snapshot = await readConfigFileSnapshot();
     const mode = cfg.gateway?.mode === "remote" ? "remote" : "local";
+    if (opts.json) {
+      writeRuntimeJson(runtime, {
+        gatewayReachable: false,
+        error: safeError,
+        configOnly: true,
+        config: {
+          path: snapshot.path,
+          mode,
+        },
+        configuredChannels: listConfiguredChannelIdsForReadOnlyScope({
+          config: resolvedConfig,
+          env: process.env,
+          includePersistedAuthState: false,
+        }),
+      });
+      return;
+    }
     runtime.log(
       (
         await formatConfigChannelsStatusLines(

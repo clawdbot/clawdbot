@@ -17,6 +17,8 @@ vi.mock("../markdown.ts", () => ({
 
 vi.mock("../views/agents-utils.ts", () => ({
   agentLogoUrl: () => "/openclaw-logo.svg",
+  isRenderableControlUiAvatarUrl: (value: string) =>
+    /^data:image\//i.test(value) || (value.startsWith("/") && !value.startsWith("//")),
 }));
 
 vi.mock("./speech.ts", () => ({
@@ -184,6 +186,24 @@ describe("grouped chat rendering", () => {
     );
     expect(assistantConfirm).not.toBeNull();
     expect(assistantConfirm?.classList.contains("chat-delete-confirm--right")).toBe(true);
+  });
+
+  it("falls back to the local logo when the assistant avatar is a remote URL", () => {
+    const container = document.createElement("div");
+
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: "hello",
+        timestamp: 1000,
+      },
+      { assistantAvatar: "https://example.com/avatar.png" },
+    );
+
+    const avatar = container.querySelector<HTMLImageElement>(".chat-avatar.assistant");
+    expect(avatar).not.toBeNull();
+    expect(avatar?.getAttribute("src")).toBe("/openclaw-logo.svg");
   });
 
   it("keeps inline tool cards collapsed by default and renders expanded state", () => {

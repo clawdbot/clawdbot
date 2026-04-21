@@ -16,6 +16,7 @@ import {
   buildPluginSnapshotReport,
   formatPluginCompatibilityNotice,
 } from "../plugins/status.js";
+import type { PluginLogger } from "../plugins/types.js";
 import {
   resolveUninstallChannelConfigKeys,
   resolveUninstallDirectoryTarget,
@@ -64,6 +65,13 @@ export type PluginUninstallOptions = {
   keepConfig?: boolean;
   force?: boolean;
   dryRun?: boolean;
+};
+
+const quietPluginJsonLogger: PluginLogger = {
+  debug: () => undefined,
+  info: () => undefined,
+  warn: () => undefined,
+  error: () => undefined,
 };
 
 function formatInspectSection(title: string, lines: string[]): string[] {
@@ -144,7 +152,9 @@ export function registerPluginsCli(program: Command) {
     .option("--enabled", "Only show enabled plugins", false)
     .option("--verbose", "Show detailed entries", false)
     .action((opts: PluginsListOptions) => {
-      const report = buildPluginSnapshotReport();
+      const report = buildPluginSnapshotReport(
+        opts.json ? { logger: quietPluginJsonLogger } : undefined,
+      );
       const list = opts.enabled
         ? report.plugins.filter((p) => p.status === "loaded")
         : report.plugins;
@@ -246,7 +256,10 @@ export function registerPluginsCli(program: Command) {
     .option("--json", "Print JSON")
     .action((id: string | undefined, opts: PluginInspectOptions) => {
       const cfg = loadConfig();
-      const report = buildPluginDiagnosticsReport({ config: cfg });
+      const report = buildPluginDiagnosticsReport({
+        config: cfg,
+        ...(opts.json ? { logger: quietPluginJsonLogger } : {}),
+      });
       if (opts.all) {
         if (id) {
           defaultRuntime.error("Pass either a plugin id or --all, not both.");
@@ -254,6 +267,7 @@ export function registerPluginsCli(program: Command) {
         }
         const inspectAll = buildAllPluginInspectReports({
           config: cfg,
+          ...(opts.json ? { logger: quietPluginJsonLogger } : {}),
           report,
         });
         const inspectAllWithInstall = inspectAll.map((inspect) => ({
@@ -322,6 +336,7 @@ export function registerPluginsCli(program: Command) {
       const inspect = buildPluginInspectReport({
         id,
         config: cfg,
+        ...(opts.json ? { logger: quietPluginJsonLogger } : {}),
         report,
       });
       if (!inspect) {

@@ -734,6 +734,7 @@ Notes:
 - `partial` (default): replace preview text with the latest partial output.
 - `block`: append chunked preview updates.
 - `progress`: show progress status text while generating, then send final text.
+- `streaming.preview.toolProgress`: when draft preview is active, route tool/progress updates into the same edited preview message (default: `true`). Set `false` to keep separate tool/progress messages.
 
 `channels.slack.streaming.nativeTransport` controls Slack native text streaming when `channels.slack.streaming.mode` is `partial` (default: `true`).
 
@@ -971,7 +972,7 @@ Primary reference:
   - compatibility toggle: `dangerouslyAllowNameMatching` (break-glass; keep off unless needed)
   - channel access: `groupPolicy`, `channels.*`, `channels.*.users`, `channels.*.requireMention`
   - threading/history: `replyToMode`, `replyToModeByChatType`, `thread.*`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
-  - delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `streaming`, `streaming.nativeTransport`
+  - delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `streaming`, `streaming.nativeTransport`, `streaming.preview.toolProgress`
   - ops/features: `configWrites`, `commands.native`, `slashCommand.*`, `actions.*`, `userToken`, `userTokenReadOnly`
 
 ## Troubleshooting

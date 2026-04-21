@@ -111,6 +111,7 @@ function expectPluginLoaderCall(params: {
   autoEnabledReasons?: Record<string, string[]>;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  logger?: unknown;
   loadModules?: boolean;
 }) {
   expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
@@ -124,6 +125,7 @@ function expectPluginLoaderCall(params: {
         : {}),
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
       ...(params.env ? { env: params.env } : {}),
+      ...(params.logger !== undefined ? { logger: params.logger } : {}),
       ...(params.loadModules !== undefined ? { loadModules: params.loadModules } : {}),
     }),
   );
@@ -134,6 +136,7 @@ function expectMetadataSnapshotLoaderCall(params: {
   activationSourceConfig?: unknown;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  logger?: unknown;
   loadModules?: boolean;
 }) {
   expect(loadPluginMetadataRegistrySnapshotMock).toHaveBeenCalledWith(
@@ -144,6 +147,7 @@ function expectMetadataSnapshotLoaderCall(params: {
         : {}),
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
       ...(params.env ? { env: params.env } : {}),
+      ...(params.logger !== undefined ? { logger: params.logger } : {}),
       ...(params.loadModules !== undefined ? { loadModules: params.loadModules } : {}),
     }),
   );
@@ -363,6 +367,27 @@ describe("plugin status reports", () => {
       config: {},
       workspaceDir: "/workspace",
       env,
+      loadModules: false,
+    });
+  });
+
+  it("forwards an explicit logger to plugin loading", () => {
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+
+    buildPluginSnapshotReport({
+      config: {},
+      logger,
+      workspaceDir: "/workspace",
+    });
+
+    expectMetadataSnapshotLoaderCall({
+      config: {},
+      logger,
+      workspaceDir: "/workspace",
       loadModules: false,
     });
   });

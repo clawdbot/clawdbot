@@ -11,11 +11,21 @@ async function loadNoteRuntime() {
   return import("../terminal/note.js");
 }
 
+function hasConfigOAuthProfiles(cfg: OpenClawConfig): boolean {
+  return Object.values(cfg.auth?.profiles ?? {}).some((profile) => profile?.mode === "oauth");
+}
+
 export async function maybeRepairLegacyOAuthProfileIds(
   cfg: OpenClawConfig,
   prompter: DoctorPrompter,
 ): Promise<OpenClawConfig> {
+  if (!hasConfigOAuthProfiles(cfg)) {
+    return cfg;
+  }
   const store = ensureAuthProfileStore();
+  if (Object.keys(store.profiles).length === 0) {
+    return cfg;
+  }
   let nextCfg = cfg;
   const { resolvePluginProviders } = await loadProviderRuntime();
   const providers = resolvePluginProviders({

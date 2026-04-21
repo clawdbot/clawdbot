@@ -130,6 +130,19 @@ describe("refreshChatAvatar", () => {
     expect(host.chatAvatarUrl).toBeNull();
   });
 
+  it("drops remote avatar metadata so the control UI can rely on same-origin images only", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ avatarUrl: "https://example.com/avatar.png" }),
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const host = makeHost({ basePath: "", sessionKey: "agent:main" });
+    await refreshChatAvatar(host);
+
+    expect(host.chatAvatarUrl).toBeNull();
+  });
+
   it("ignores stale avatar responses after switching sessions", async () => {
     const mainRequest = createDeferred<{ avatarUrl?: string }>();
     const opsRequest = createDeferred<{ avatarUrl?: string }>();

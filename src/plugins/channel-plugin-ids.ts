@@ -1,11 +1,16 @@
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
-import { listPotentialConfiguredChannelIds } from "../channels/config-presence.js";
+import {
+  hasPotentialConfiguredChannels,
+  listPotentialConfiguredChannelIds,
+} from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingPluginConfig,
   resolveMemoryDreamingPluginId,
 } from "../memory-host-sdk/dreaming.js";
+import { isSafeChannelEnvVarTriggerName } from "../secrets/channel-env-var-names.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import {
@@ -59,6 +64,125 @@ function normalizeChannelIds(channelIds: Iterable<string>): string[] {
         .filter((channelId): channelId is string => Boolean(channelId)),
     ),
   ).toSorted((left, right) => left.localeCompare(right));
+}
+
+function hasNonEmptyEnvValue(env: NodeJS.ProcessEnv, key: string): boolean {
+  if (!isSafeChannelEnvVarTriggerName(key)) {
+    return false;
+  }
+  const trimmed = key.trim();
+  const value = env[trimmed] ?? env[trimmed.toUpperCase()];
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function listEnvConfiguredManifestChannelIds(params: {
+  records: readonly PluginManifestRecord[];
+  config: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): string[] {
+  const channelIds = new Set<string>();
+  const trustConfig = params.activationSourceConfig ?? params.config;
+  const normalizedConfig = normalizePluginsConfig(trustConfig.plugins);
+  for (const record of params.records) {
+    if (
+      !isChannelPluginEligibleForScopedOwnership({
+        plugin: record,
+        normalizedConfig,
+        rootConfig: trustConfig,
+      })
+    ) {
+      continue;
+    }
+    for (const channelId of record.channels) {
+      const envVars = record.channelEnvVars?.[channelId] ?? [];
+      if (envVars.some((envVar) => hasNonEmptyEnvValue(params.env, envVar))) {
+        channelIds.add(channelId);
+      }
+    }
+  }
+  return [...channelIds].toSorted((left, right) => left.localeCompare(right));
+}
+
+function listConfiguredChannelIdsForPluginScope(params: {
+  config: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  cache?: boolean;
+  includePersistedAuthState?: boolean;
+  manifestRecords?: readonly PluginManifestRecord[];
+}): string[] {
+  const records =
+    params.manifestRecords ??
+    loadPluginManifestRegistry({
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      cache: params.cache,
+    }).plugins;
+  return [
+    ...new Set([
+      ...listPotentialConfiguredChannelIds(params.config, params.env, {
+        includePersistedAuthState: params.includePersistedAuthState,
+      }),
+      ...listEnvConfiguredManifestChannelIds({
+        records,
+        config: params.config,
+        activationSourceConfig: params.activationSourceConfig,
+        env: params.env,
+      }),
+    ]),
+  ].toSorted((left, right) => left.localeCompare(right));
+}
+
+export function listConfiguredChannelIdsForReadOnlyScope(params: {
+  config: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  cache?: boolean;
+  includePersistedAuthState?: boolean;
+  manifestRecords?: readonly PluginManifestRecord[];
+}): string[] {
+  const env = params.env ?? process.env;
+  const workspaceDir =
+    params.workspaceDir ??
+    resolveAgentWorkspaceDir(params.config, resolveDefaultAgentId(params.config));
+  return listConfiguredChannelIdsForPluginScope({
+    config: params.config,
+    activationSourceConfig: params.activationSourceConfig,
+    workspaceDir,
+    env,
+    cache: params.cache,
+    includePersistedAuthState: params.includePersistedAuthState,
+    manifestRecords: params.manifestRecords,
+  });
+}
+
+export function hasConfiguredChannelsForReadOnlyScope(params: {
+  config: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  cache?: boolean;
+  includePersistedAuthState?: boolean;
+  manifestRecords?: readonly PluginManifestRecord[];
+}): boolean {
+  const env = params.env ?? process.env;
+  if (
+    hasPotentialConfiguredChannels(params.config, env, {
+      includePersistedAuthState: params.includePersistedAuthState,
+    })
+  ) {
+    return true;
+  }
+  return (
+    listConfiguredChannelIdsForReadOnlyScope({
+      ...params,
+      env,
+    }).length > 0
+  );
 }
 
 function isChannelPluginEligibleForScopedOwnership(params: {
@@ -143,7 +267,7 @@ function resolveScopedChannelOwnerPluginIds(params: {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-export function resolveScopedChannelPluginIds(params: {
+function resolveScopedChannelPluginIds(params: {
   config: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
   channelIds: readonly string[];
@@ -222,7 +346,12 @@ export function resolveConfiguredChannelPluginIds(params: {
   env: NodeJS.ProcessEnv;
 }): string[] {
   const configuredChannelIds = new Set(
-    listPotentialConfiguredChannelIds(params.config, params.env).map((id) => id.trim()),
+    listConfiguredChannelIdsForPluginScope({
+      config: params.config,
+      activationSourceConfig: params.activationSourceConfig,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+    }).map((id) => id.trim()),
   );
   if (configuredChannelIds.size === 0) {
     return [];

@@ -21,6 +21,7 @@ import type { ChatModelOverride, ModelCatalogEntry } from "./types.ts";
 import type { SessionsListResult } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
+import { isRenderableControlUiAvatarUrl } from "./views/agents-utils.ts";
 
 export type ChatHost = {
   client: GatewayBrowserClient | null;
@@ -557,7 +558,7 @@ export async function refreshChatAvatar(host: ChatHost) {
       return;
     }
     const avatarUrl = typeof data.avatarUrl === "string" ? data.avatarUrl.trim() : "";
-    host.chatAvatarUrl = avatarUrl || null;
+    host.chatAvatarUrl = avatarUrl && isRenderableControlUiAvatarUrl(avatarUrl) ? avatarUrl : null;
   } catch {
     if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
       host.chatAvatarUrl = null;

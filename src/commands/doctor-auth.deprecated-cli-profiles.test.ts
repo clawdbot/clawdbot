@@ -63,6 +63,16 @@ beforeEach(() => {
 });
 
 describe("maybeRepairLegacyOAuthProfileIds", () => {
+  it("skips provider loading when config has no legacy OAuth profiles", async () => {
+    const cfg = { channels: { telegram: { enabled: true } } } as OpenClawConfig;
+
+    const next = await maybeRepairLegacyOAuthProfileIds(cfg, makePrompter(true));
+
+    expect(next).toBe(cfg);
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+    expect(repairMocks.repairOAuthProfileIdMismatch).not.toHaveBeenCalled();
+  });
+
   it("repairs provider-owned legacy OAuth profile ids", async () => {
     authProfileStoreMock.store = {
       version: 1,

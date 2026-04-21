@@ -61,6 +61,10 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram Draft Chunk Break Preference",
     help: "Preferred breakpoints for Telegram draft chunks (paragraph | newline | sentence).",
   },
+  "streaming.preview.toolProgress": {
+    label: "Telegram Draft Tool Progress",
+    help: "Show tool/progress activity in the live draft preview message (default: true). Set false to keep tool updates as separate messages.",
+  },
   "retry.attempts": {
     label: "Telegram Retry Attempts",
     help: "Max retry attempts for outbound Telegram API calls (default: 3).",

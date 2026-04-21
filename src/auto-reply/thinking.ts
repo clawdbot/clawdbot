@@ -257,8 +257,15 @@ export function resolveSupportedThinkingLevel(params: {
   model?: string | null;
   level: ThinkLevel;
 }): ThinkLevel {
-  if (isThinkingLevelSupported(params)) {
+  const profile = resolveThinkingProfile({ provider: params.provider, model: params.model });
+  if (profile.levels.some((entry) => entry.id === params.level)) {
     return params.level;
   }
-  return resolveLargestSupportedThinkingLevel(params.provider, params.model);
+  const requestedRank = THINKING_LEVEL_RANKS[params.level];
+  const ranked = profile.levels.toSorted((a, b) => b.rank - a.rank);
+  return (
+    ranked.find((level) => level.id !== "off" && level.rank <= requestedRank)?.id ??
+    ranked.find((level) => level.id !== "off")?.id ??
+    "off"
+  );
 }

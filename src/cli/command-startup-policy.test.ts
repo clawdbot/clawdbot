@@ -43,11 +43,29 @@ describe("command-startup-policy", () => {
         commandPath: ["status"],
         jsonOutputMode: false,
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       shouldLoadPluginsForCommandPath({
         commandPath: ["status"],
         jsonOutputMode: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldLoadPluginsForCommandPath({
+        commandPath: ["health"],
+        jsonOutputMode: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldLoadPluginsForCommandPath({
+        commandPath: ["channels", "status"],
+        jsonOutputMode: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldLoadPluginsForCommandPath({
+        commandPath: ["channels", "list"],
+        jsonOutputMode: false,
       }),
     ).toBe(false);
     expect(

@@ -417,14 +417,18 @@ async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<voi
 }
 
 async function runMemorySearchHealthContribution(ctx: DoctorHealthFlowContext): Promise<void> {
-  await maybeRepairMemoryRecallHealth({
-    cfg: ctx.cfg,
-    prompter: ctx.prompter,
-  });
+  if (ctx.prompter.shouldRepair) {
+    await maybeRepairMemoryRecallHealth({
+      cfg: ctx.cfg,
+      prompter: ctx.prompter,
+    });
+  }
   await noteMemorySearchHealth(ctx.cfg, {
     gatewayMemoryProbe: ctx.gatewayMemoryProbe ?? { checked: false, ready: false },
   });
-  await noteMemoryRecallHealth(ctx.cfg);
+  if (ctx.options.deep === true) {
+    await noteMemoryRecallHealth(ctx.cfg);
+  }
 }
 
 async function runDevicePairingHealth(ctx: DoctorHealthFlowContext): Promise<void> {

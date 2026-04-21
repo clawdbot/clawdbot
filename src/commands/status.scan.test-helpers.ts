@@ -109,9 +109,13 @@ export function createStatusPluginRegistryModuleMock(
 
 export function createStatusPluginStatusModuleMock(
   mocks: Pick<StatusScanSharedMocks, "buildPluginCompatibilityNotices">,
-): { buildPluginCompatibilityNotices: StatusScanSharedMocks["buildPluginCompatibilityNotices"] } {
+): {
+  buildPluginCompatibilityNotices: StatusScanSharedMocks["buildPluginCompatibilityNotices"];
+  buildPluginCompatibilitySnapshotNotices: StatusScanSharedMocks["buildPluginCompatibilityNotices"];
+} {
   return {
     buildPluginCompatibilityNotices: mocks.buildPluginCompatibilityNotices,
+    buildPluginCompatibilitySnapshotNotices: mocks.buildPluginCompatibilityNotices,
   };
 }
 
@@ -177,6 +181,36 @@ export async function loadStatusScanModuleForTest(
 
   vi.doMock("../channels/config-presence.js", () => ({
     hasPotentialConfiguredChannels: mocks.hasPotentialConfiguredChannels,
+  }));
+  vi.doMock("../plugins/channel-plugin-ids.js", () => ({
+    hasConfiguredChannelsForReadOnlyScope: (params: {
+      config: OpenClawConfig;
+      env?: NodeJS.ProcessEnv;
+      includePersistedAuthState?: boolean;
+    }) =>
+      Boolean(
+        mocks.hasPotentialConfiguredChannels(
+          params.config,
+          params.env,
+          params.includePersistedAuthState === undefined
+            ? undefined
+            : { includePersistedAuthState: params.includePersistedAuthState },
+        ),
+      ),
+    listConfiguredChannelIdsForReadOnlyScope: (params: {
+      config: OpenClawConfig;
+      env?: NodeJS.ProcessEnv;
+      includePersistedAuthState?: boolean;
+    }) =>
+      mocks.hasPotentialConfiguredChannels(
+        params.config,
+        params.env,
+        params.includePersistedAuthState === undefined
+          ? undefined
+          : { includePersistedAuthState: params.includePersistedAuthState },
+      )
+        ? ["mock-channel"]
+        : [],
   }));
 
   vi.doMock("../config/io.js", () => ({

@@ -35,7 +35,7 @@ export const THINKING_LEVEL_RANKS: Record<ThinkLevel, number> = {
   low: 20,
   medium: 30,
   high: 40,
-  adaptive: 50,
+  adaptive: 30,
   xhigh: 60,
   max: 70,
 };

@@ -5,6 +5,7 @@ import {
   createBundledRuntimeDependencyInstallArgs,
   createBundledRuntimeDependencyInstallEnv,
   createNestedNpmInstallEnv,
+  isDirectPostinstallInvocation,
   pruneInstalledPackageDist,
   discoverBundledPluginRuntimeDeps,
   pruneBundledPluginSourceNodeModules,
@@ -81,6 +82,20 @@ describe("bundled plugin postinstall", () => {
       windowsVerbatimArguments: undefined,
     });
   }
+
+  it("recognizes direct invocation through symlinked temp prefixes", () => {
+    const realpathSync = vi.fn((value: string) =>
+      value.replace(/^\/var\/folders\//u, "/private/var/folders/"),
+    );
+
+    expect(
+      isDirectPostinstallInvocation({
+        entryPath: "/var/folders/tmp/openclaw/scripts/postinstall-bundled-plugins.mjs",
+        modulePath: "/private/var/folders/tmp/openclaw/scripts/postinstall-bundled-plugins.mjs",
+        realpathSync,
+      }),
+    ).toBe(true);
+  });
 
   async function writeDiscordDaveyOptionalDependencyFixture(
     extensionsDir: string,

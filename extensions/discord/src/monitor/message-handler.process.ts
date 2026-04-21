@@ -16,7 +16,10 @@ import {
   resolveEnvelopeFormatOptions,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-streaming";
+import {
+  resolveChannelStreamingBlockEnabled,
+  resolveChannelStreamingPreviewToolProgress,
+} from "openclaw/plugin-sdk/channel-streaming";
 import {
   isDangerousNameMatchingEnabled,
   readSessionUpdatedAt,
@@ -602,6 +605,33 @@ export async function processDiscordMessage(
   let draftText = "";
   let hasStreamedMessage = false;
   let finalizedViaPreviewMessage = false;
+  const previewToolProgressEnabled =
+    Boolean(draftStream) && resolveChannelStreamingPreviewToolProgress(discordConfig);
+  let previewToolProgressSuppressed = false;
+  let previewToolProgressLines: string[] = [];
+
+  const pushPreviewToolProgress = (line?: string) => {
+    if (!draftStream || !previewToolProgressEnabled || previewToolProgressSuppressed) {
+      return;
+    }
+    const normalized = line?.replace(/\s+/g, " ").trim();
+    if (!normalized) {
+      return;
+    }
+    const previous = previewToolProgressLines.at(-1);
+    if (previous === normalized) {
+      return;
+    }
+    previewToolProgressLines = [...previewToolProgressLines, normalized].slice(-8);
+    const previewText = ["Working…", ...previewToolProgressLines.map((entry) => `• ${entry}`)].join(
+      "\n",
+    );
+    lastPartialText = previewText;
+    draftText = previewText;
+    hasStreamedMessage = true;
+    draftChunker?.reset();
+    draftStream.update(previewText);
+  };
 
   const resolvePreviewFinalText = (text?: string) => {
     if (typeof text !== "string") {
@@ -652,6 +682,8 @@ export async function processDiscordMessage(
     if (cleaned === lastPartialText) {
       return;
     }
+    previewToolProgressSuppressed = true;
+    previewToolProgressLines = [];
     hasStreamedMessage = true;
     if (discordStreamMode === "partial") {
       // Keep the longer preview to avoid visible punctuation flicker.
@@ -895,6 +927,8 @@ export async function processDiscordMessage(
               lastPartialText = "";
               draftText = "";
               draftChunker?.reset();
+              previewToolProgressSuppressed = false;
+              previewToolProgressLines = [];
             }
           : undefined,
         onReasoningEnd: draftStream
@@ -906,9 +940,12 @@ export async function processDiscordMessage(
               lastPartialText = "";
               draftText = "";
               draftChunker?.reset();
+              previewToolProgressSuppressed = false;
+              previewToolProgressLines = [];
             }
           : undefined,
         onModelSelected,
+        suppressDefaultToolProgressMessages: previewToolProgressEnabled ? true : undefined,
         onReasoningStream: async () => {
           await statusReactions.setThinking();
         },
@@ -917,6 +954,42 @@ export async function processDiscordMessage(
             return;
           }
           await statusReactions.setTool(payload.name);
+          pushPreviewToolProgress(payload.name ? `tool: ${payload.name}` : "tool running");
+        },
+        onItemEvent: async (payload) => {
+          pushPreviewToolProgress(
+            payload.progressText ?? payload.summary ?? payload.title ?? payload.name,
+          );
+        },
+        onPlanUpdate: async (payload) => {
+          if (payload.phase !== "update") {
+            return;
+          }
+          pushPreviewToolProgress(payload.explanation ?? payload.steps?.[0] ?? "planning");
+        },
+        onApprovalEvent: async (payload) => {
+          if (payload.phase !== "requested") {
+            return;
+          }
+          pushPreviewToolProgress(
+            payload.command ? `approval: ${payload.command}` : "approval requested",
+          );
+        },
+        onCommandOutput: async (payload) => {
+          if (payload.phase !== "end") {
+            return;
+          }
+          pushPreviewToolProgress(
+            payload.name
+              ? `${payload.name}${payload.exitCode === 0 ? " ✓" : payload.exitCode != null ? ` (exit ${payload.exitCode})` : ""}`
+              : payload.title,
+          );
+        },
+        onPatchSummary: async (payload) => {
+          if (payload.phase !== "end") {
+            return;
+          }
+          pushPreviewToolProgress(payload.summary ?? payload.title ?? "patch applied");
         },
         onCompactionStart: async () => {
           if (isProcessAborted(abortSignal)) {

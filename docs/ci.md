@@ -61,7 +61,7 @@ GitHub may mark superseded jobs as `cancelled` when a newer push lands on the sa
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `blacksmith-16vcpu-ubuntu-2404`  | `preflight`, `security-scm-fast`, `security-dependency-audit`, `security-fast`, `build-artifacts`, Linux checks, docs checks, Python skills, `android` |
 | `blacksmith-32vcpu-windows-2025` | `checks-windows`                                                                                                                                       |
-| `macos-latest`                   | `macos-node`, `macos-swift`                                                                                                                            |
+| `blacksmith-12vcpu-macos-latest` | `macos-node`, `macos-swift` on `openclaw/openclaw`; forks fall back to `macos-latest`                                                                  |
 
 ## Local Equivalents
 

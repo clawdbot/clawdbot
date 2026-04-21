@@ -17,4 +17,11 @@ describe("stripStructuralPrefixes", () => {
   it("passes through plain text", () => {
     expect(stripStructuralPrefixes("just a message")).toBe("just a message");
   });
+
+  it("flattens multiline soft reset commands before downstream parsing", () => {
+    expect(stripStructuralPrefixes("/reset soft\nre-read persona files")).toBe(
+      "/reset soft re-read persona files",
+    );
+    expect(stripStructuralPrefixes("/reset \nsoft")).toBe("/reset soft");
+  });
 });

@@ -40,6 +40,7 @@ type UsageSummaryOptions = {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   fetch?: typeof fetch;
+  skipPluginAuthWithoutCredentialSource?: boolean;
 };
 
 async function fetchProviderUsageSnapshot(params: {
@@ -96,6 +97,7 @@ export async function loadProviderUsageSummary(
     agentDir: opts.agentDir,
     config,
     env,
+    skipPluginAuthWithoutCredentialSource: opts.skipPluginAuthWithoutCredentialSource,
   });
   if (auths.length === 0) {
     return { updatedAt: now, providers: [] };

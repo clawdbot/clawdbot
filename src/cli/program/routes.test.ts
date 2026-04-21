@@ -7,6 +7,8 @@ const modelsListCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const modelsStatusCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const runDaemonStatusMock = vi.hoisted(() => vi.fn(async () => {}));
 const statusJsonCommandMock = vi.hoisted(() => vi.fn(async () => {}));
+const channelsListCommandMock = vi.hoisted(() => vi.fn(async () => {}));
+const channelsStatusCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock("../config-cli.js", () => ({
   runConfigGet: runConfigGetMock,
@@ -26,6 +28,14 @@ vi.mock("../../commands/status-json.js", () => ({
   statusJsonCommand: statusJsonCommandMock,
 }));
 
+vi.mock("../../commands/channels/list.js", () => ({
+  channelsListCommand: channelsListCommandMock,
+}));
+
+vi.mock("../../commands/channels/status.js", () => ({
+  channelsStatusCommand: channelsStatusCommandMock,
+}));
+
 describe("program routes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -42,20 +52,48 @@ describe("program routes", () => {
     await expect(route?.run(argv)).resolves.toBe(false);
   }
 
-  it("matches status route and preloads plugins only for text output", () => {
+  it("matches status route without plugin preload", () => {
     const route = expectRoute(["status"]);
-    expect(typeof route?.loadPlugins).toBe("function");
-    const shouldLoad = route?.loadPlugins as (argv: string[]) => boolean;
-    expect(shouldLoad(["node", "openclaw", "status"])).toBe(true);
-    expect(shouldLoad(["node", "openclaw", "status", "--json"])).toBe(false);
+    expect(route?.loadPlugins).toBeUndefined();
   });
 
-  it("matches health route and preloads plugins only for text output", () => {
+  it("matches health route without plugin preload", () => {
     const route = expectRoute(["health"]);
-    expect(typeof route?.loadPlugins).toBe("function");
-    const shouldLoad = route?.loadPlugins as (argv: string[]) => boolean;
-    expect(shouldLoad(["node", "openclaw", "health"])).toBe(true);
-    expect(shouldLoad(["node", "openclaw", "health", "--json"])).toBe(false);
+    expect(route?.loadPlugins).toBeUndefined();
+  });
+
+  it("matches channel read-only routes without plugin preload", () => {
+    expect(expectRoute(["channels", "list"])?.loadPlugins).toBeUndefined();
+    expect(expectRoute(["channels", "status"])?.loadPlugins).toBeUndefined();
+  });
+
+  it("passes parsed channel read-only route flags through", async () => {
+    const listRoute = expectRoute(["channels", "list"]);
+    await expect(
+      listRoute?.run(["node", "openclaw", "channels", "list", "--json", "--no-usage"]),
+    ).resolves.toBe(true);
+    expect(channelsListCommandMock).toHaveBeenCalledWith(
+      { json: true, usage: false },
+      expect.any(Object),
+    );
+
+    const statusRoute = expectRoute(["channels", "status"]);
+    await expect(
+      statusRoute?.run([
+        "node",
+        "openclaw",
+        "channels",
+        "status",
+        "--json",
+        "--probe",
+        "--timeout",
+        "5000",
+      ]),
+    ).resolves.toBe(true);
+    expect(channelsStatusCommandMock).toHaveBeenCalledWith(
+      { json: true, probe: true, timeout: "5000" },
+      expect.any(Object),
+    );
   });
 
   it("matches gateway status route without plugin preload", () => {

@@ -6,6 +6,7 @@ import {
   resolveChannelStreamingChunkMode,
   resolveChannelStreamingNativeTransport,
   resolveChannelStreamingPreviewChunk,
+  resolveChannelStreamingPreviewToolProgress,
 } from "./channel-streaming.js";
 
 describe("channel-streaming", () => {
@@ -20,6 +21,7 @@ describe("channel-streaming", () => {
         },
         preview: {
           chunk: { minChars: 10, maxChars: 20, breakPreference: "sentence" },
+          toolProgress: false,
         },
       },
       chunkMode: "length",
@@ -43,6 +45,7 @@ describe("channel-streaming", () => {
       maxChars: 20,
       breakPreference: "sentence",
     });
+    expect(resolveChannelStreamingPreviewToolProgress(entry)).toBe(false);
   });
 
   it("falls back to legacy flat fields when the canonical object is absent", () => {
@@ -68,5 +71,6 @@ describe("channel-streaming", () => {
       maxChars: 16,
       breakPreference: "newline",
     });
+    expect(resolveChannelStreamingPreviewToolProgress(entry)).toBe(true);
   });
 });

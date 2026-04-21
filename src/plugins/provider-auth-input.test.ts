@@ -64,6 +64,13 @@ function setMinimaxEnv(params: { apiKey?: string; oauthToken?: string } = {}) {
   }
 }
 
+function currentMinimaxTestEnv(): NodeJS.ProcessEnv {
+  return {
+    MINIMAX_API_KEY: process.env.MINIMAX_API_KEY,
+    MINIMAX_OAUTH_TOKEN: process.env.MINIMAX_OAUTH_TOKEN,
+  };
+}
+
 async function ensureMinimaxApiKey(params: {
   config?: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["config"];
   env?: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["env"];
@@ -76,7 +83,7 @@ async function ensureMinimaxApiKey(params: {
 }) {
   return await ensureMinimaxApiKeyInternal({
     config: params.config,
-    env: params.env,
+    env: params.env ?? currentMinimaxTestEnv(),
     prompter: createPrompter({
       confirm: params.confirm,
       note: params.note,
@@ -119,7 +126,7 @@ async function ensureMinimaxApiKeyWithEnvRefPrompter(params: {
 }) {
   return await ensureMinimaxApiKeyInternal({
     config: params.config,
-    env: params.env,
+    env: params.env ?? currentMinimaxTestEnv(),
     prompter: createPrompter({ select: params.select, text: params.text, note: params.note }),
     secretInputMode: "ref", // pragma: allowlist secret
     setCredential: params.setCredential,
@@ -179,6 +186,7 @@ async function ensureWithOptionEnvOrPrompt(params: {
     token: params.token,
     tokenProvider: params.tokenProvider,
     config: {},
+    env: currentMinimaxTestEnv(),
     expectedProviders: params.expectedProviders,
     provider: params.provider,
     envLabel: params.envLabel,

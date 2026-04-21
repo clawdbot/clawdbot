@@ -45,6 +45,7 @@ const MAX_ANCESTOR_WALK_DEPTH = 32;
 const restartLog = createSubsystemLogger("restart");
 let sleepSyncOverride: ((ms: number) => void) | null = null;
 let dateNowOverride: (() => number) | null = null;
+let parentPidOverride: (() => number) | null = null;
 
 function getTimeMs(): number {
   return dateNowOverride ? dateNowOverride() : Date.now();
@@ -68,6 +69,10 @@ function sleepSync(ms: number): void {
       // Best-effort fallback when Atomics.wait is unavailable.
     }
   }
+}
+
+function getParentPid(): number {
+  return parentPidOverride ? parentPidOverride() : process.ppid;
 }
 
 /**
@@ -135,7 +140,7 @@ function readParentPidFromProc(pid: number): number | null {
  */
 function getSelfAndAncestorPidsSync(): Set<number> {
   const pids = new Set<number>([process.pid]);
-  const immediateParent = process.ppid;
+  const immediateParent = getParentPid();
   if (!Number.isFinite(immediateParent) || immediateParent <= 0) {
     return pids;
   }
@@ -552,6 +557,9 @@ export const __testing = {
   },
   setDateNowOverride(fn: (() => number) | null) {
     dateNowOverride = fn;
+  },
+  setParentPidOverride(fn: (() => number) | null) {
+    parentPidOverride = fn;
   },
   /** Invoke sleepSync directly (bypasses the override) for unit-testing the real Atomics path. */
   callSleepSyncRaw: sleepSync,

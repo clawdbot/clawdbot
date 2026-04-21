@@ -13,6 +13,7 @@ import {
 } from "../../shared/string-coerce.js";
 import { normalizeCommandBody } from "../commands-registry.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
+import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import type { CommandContext } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import type { SessionInitResult } from "./session.js";
@@ -218,13 +219,17 @@ export function initFastReplySessionState(params: {
   const strippedForReset = isGroup
     ? stripMentions(triggerBodyNormalized, ctx, cfg, agentId)
     : triggerBodyNormalized;
-  const resetMatch = strippedForReset.match(/^\/(new|reset)(?:\s|$)/i);
-  const resetTriggered = Boolean(resetMatch);
+  const normalizedResetBody = normalizeCommandBody(strippedForReset, {
+    botUsername: ctx.BotUsername,
+  });
+  const softReset = parseSoftResetCommand(normalizedResetBody);
+  const resetMatch = normalizedResetBody.match(/^\/(new|reset)(?:\s|$)/i);
+  const resetTriggered = Boolean(resetMatch) && !softReset.matched;
   const previousSessionEntry = resetTriggered && existingEntry ? { ...existingEntry } : undefined;
   const sessionId =
     !resetTriggered && existingEntry ? existingEntry.sessionId : crypto.randomUUID();
   const bodyStripped = resetTriggered
-    ? strippedForReset.slice(resetMatch?.[0].length ?? 0).trimStart()
+    ? normalizedResetBody.slice(resetMatch?.[0].length ?? 0).trimStart()
     : (ctx.BodyForAgent ?? ctx.Body ?? "");
   const now = Date.now();
   const sessionFile =

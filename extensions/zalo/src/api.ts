@@ -3,7 +3,10 @@
  * @see https://bot.zaloplatforms.com/docs
  */
 
+import { resolvePinnedHostnameWithPolicy, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+
 const ZALO_API_BASE = "https://bot-api.zaloplatforms.com";
+const ZALO_MEDIA_SSRF_POLICY: SsrFPolicy = {};
 
 export type ZaloFetch = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -172,7 +175,28 @@ export async function sendPhoto(
   params: ZaloSendPhotoParams,
   fetcher?: ZaloFetch,
 ): Promise<ZaloApiResponse<ZaloMessage>> {
-  return callZaloApi<ZaloMessage>("sendPhoto", token, params, { fetch: fetcher });
+  const photoUrl = params.photo.trim();
+  let parsedPhotoUrl: URL;
+  try {
+    parsedPhotoUrl = new URL(photoUrl);
+  } catch {
+    throw new Error("Zalo photo URL must be an absolute HTTP or HTTPS URL");
+  }
+
+  if (parsedPhotoUrl.protocol !== "http:" && parsedPhotoUrl.protocol !== "https:") {
+    throw new Error("Zalo photo URL must use HTTP or HTTPS");
+  }
+
+  await resolvePinnedHostnameWithPolicy(parsedPhotoUrl.hostname, {
+    policy: ZALO_MEDIA_SSRF_POLICY,
+  });
+
+  return callZaloApi<ZaloMessage>(
+    "sendPhoto",
+    token,
+    { ...params, photo: parsedPhotoUrl.href },
+    { fetch: fetcher },
+  );
 }
 
 /**

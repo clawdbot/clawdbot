@@ -118,10 +118,11 @@ import {
   updateSkillEnabled,
 } from "./controllers/skills.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
-import "./components/dashboard-header.ts";
 import { icons } from "./icons.ts";
+import "./components/dashboard-header.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
 import { isPluginEnabledInConfigSnapshot } from "./plugin-activation.ts";
+import { isRenderableControlUiAvatarUrl } from "./views/agents-utils.ts";
 import { agentLogoUrl } from "./views/agents-utils.ts";
 import {
   resolveAgentConfig,
@@ -314,8 +315,6 @@ function dismissUpdateBanner(updateAvailable: unknown) {
   }
 }
 
-const AVATAR_DATA_RE = /^data:/i;
-const AVATAR_HTTP_RE = /^https?:\/\//i;
 const COMMUNICATION_SECTION_KEYS = ["channels", "messages", "broadcast", "talk", "audio"] as const;
 const APPEARANCE_SECTION_KEYS = ["__appearance__", "ui", "wizard"] as const;
 const AUTOMATION_SECTION_KEYS = [
@@ -413,10 +412,10 @@ function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
   if (!candidate) {
     return undefined;
   }
-  if (AVATAR_DATA_RE.test(candidate) || AVATAR_HTTP_RE.test(candidate)) {
+  if (isRenderableControlUiAvatarUrl(candidate)) {
     return candidate;
   }
-  return identity?.avatarUrl;
+  return undefined;
 }
 
 // ── Quick Settings data extraction helpers ──

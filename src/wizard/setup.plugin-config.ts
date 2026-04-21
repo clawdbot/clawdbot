@@ -396,6 +396,7 @@ export async function configurePluginConfig(params: {
       }),
       { value: "__skip__", label: "Back", hint: "Return to section menu" },
     ],
+    searchable: true,
   });
 
   if (selected === "__skip__") {

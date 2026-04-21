@@ -62,7 +62,10 @@ function registerTarget(params: {
     core: params.core ?? ({} as PluginRuntime),
     secret: params.secret ?? "secret",
     path: params.path,
+    webhookUrl: `https://example.com${params.path}`,
+    webhookPath: params.path,
     mediaMaxMb: 5,
+    canHostMedia: true,
     statusSink: params.statusSink,
   });
 }

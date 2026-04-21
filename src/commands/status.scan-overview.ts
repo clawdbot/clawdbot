@@ -1,8 +1,8 @@
-import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { collectChannelStatusIssues as collectChannelStatusIssuesFn } from "../infra/channels-status-issues.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
 import type { UpdateCheckResult } from "../infra/update-check.js";
+import { hasConfiguredChannelsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { buildChannelsTable as buildChannelsTableFn } from "./status-all/channels.js";
 import type { getAgentLocalStatuses as getAgentLocalStatusesFn } from "./status.agent-local.js";
@@ -168,7 +168,9 @@ export async function collectStatusScanOverview(params: {
       ).resolveCommandConfigWithSecrets({
         config: loadedConfig,
         commandName: params.commandName,
-        targetIds: (await loadCommandSecretTargetsModule()).getStatusCommandSecretTargetIds(),
+        targetIds: (await loadCommandSecretTargetsModule()).getStatusCommandSecretTargetIds(
+          loadedConfig,
+        ),
         mode: "read_only_status",
         ...(params.runtime ? { runtime: params.runtime } : {}),
       }),
@@ -176,7 +178,7 @@ export async function collectStatusScanOverview(params: {
   params.progress?.tick();
   const hasConfiguredChannels = params.resolveHasConfiguredChannels
     ? params.resolveHasConfiguredChannels(cfg)
-    : hasPotentialConfiguredChannels(cfg);
+    : hasConfiguredChannelsForReadOnlyScope({ config: cfg });
   const osSummary = resolveOsSummary();
   const bootstrap = await createStatusScanCoreBootstrap<
     Awaited<ReturnType<typeof getAgentLocalStatusesFn>>
@@ -279,6 +281,7 @@ export async function collectStatusScanOverview(params: {
 
 export async function resolveStatusSummaryFromOverview(params: {
   overview: Pick<StatusScanOverviewResult, "skipColdStartNetworkChecks" | "cfg" | "sourceConfig">;
+  includeChannelSummary?: boolean;
 }) {
   if (params.overview.skipColdStartNetworkChecks) {
     return buildColdStartStatusSummary();
@@ -287,6 +290,7 @@ export async function resolveStatusSummaryFromOverview(params: {
     getStatusSummary({
       config: params.overview.cfg,
       sourceConfig: params.overview.sourceConfig,
+      includeChannelSummary: params.includeChannelSummary,
     }),
   );
 }

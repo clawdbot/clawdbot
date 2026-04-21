@@ -139,6 +139,14 @@ If your channel supports env-driven setup or auth and generic startup/config
 flows should know those env names before runtime loads, declare them in the
 plugin manifest with `channelEnvVars`. Keep channel runtime `envVars` or local
 constants for operator-facing copy only.
+
+If your channel can appear in `status`, `channels list`, `channels status`, or
+SecretRef scans before the plugin runtime starts, add `openclaw.setupEntry` in
+`package.json`. That entrypoint should be safe to import in read-only command
+paths and should return the channel metadata, setup-safe config adapter, status
+adapter, and channel secret target metadata needed for those summaries. Do not
+start clients, listeners, or transport runtimes from the setup entry.
+
 `createOptionalChannelSetupWizard`, `DEFAULT_ACCOUNT_ID`,
 `createTopLevelChannelDmPolicy`, `setSetupChannelEnabled`, and
 `splitSetupEntries`

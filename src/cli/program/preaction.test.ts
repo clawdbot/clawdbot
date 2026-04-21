@@ -209,7 +209,7 @@ describe("registerPreActionHooks", () => {
       runtime: runtimeMock,
       commandPath: ["status"],
     });
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "channels" });
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
     expect(processTitleSetSpy).toHaveBeenCalledWith("openclaw-status");
 
     vi.clearAllMocks();

@@ -19,7 +19,9 @@ import type { AnyAgentTool } from "./pi-tools.types.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
 import {
+  resolveSubagentCapabilityStore,
   resolveStoredSubagentCapabilities,
+  type SessionCapabilityStore,
   type SubagentSessionRole,
 } from "./subagent-capabilities.js";
 import { isToolAllowedByPolicies, isToolAllowedByPolicyName } from "./tool-policy-match.js";
@@ -100,9 +102,19 @@ export function resolveSubagentToolPolicy(cfg?: OpenClawConfig, depth?: number):
 export function resolveSubagentToolPolicyForSession(
   cfg: OpenClawConfig | undefined,
   sessionKey: string,
+  opts?: {
+    store?: SessionCapabilityStore;
+  },
 ): SandboxToolPolicy {
   const configured = cfg?.tools?.subagents?.tools;
-  const capabilities = resolveStoredSubagentCapabilities(sessionKey, { cfg });
+  const store = resolveSubagentCapabilityStore(sessionKey, {
+    cfg,
+    store: opts?.store,
+  });
+  const capabilities = resolveStoredSubagentCapabilities(sessionKey, {
+    cfg,
+    store,
+  });
   const allow = Array.isArray(configured?.allow) ? configured.allow : undefined;
   const alsoAllow = Array.isArray(configured?.alsoAllow) ? configured.alsoAllow : undefined;
   const explicitAllow = new Set(

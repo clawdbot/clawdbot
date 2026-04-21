@@ -139,14 +139,15 @@ export async function sendPhotoZalo(
   }
 
   return await runZaloSend("Failed to send photo", () =>
-    sendPhoto(
-      context.token,
-      {
-        chat_id: context.chatId,
-        photo: photoUrl.trim(),
-        caption: options.caption?.slice(0, 2000),
-      },
-      context.fetcher,
-    ),
+    (async () =>
+      sendPhoto(
+        context.token,
+        {
+          chat_id: context.chatId,
+          photo: photoUrl.trim(),
+          caption: options.caption?.slice(0, 2000),
+        },
+        context.fetcher,
+      ))(),
   );
 }

@@ -450,24 +450,25 @@ export async function createModelSelectionState(params: {
     if (defaultThinkingLevel) {
       return defaultThinkingLevel;
     }
-    let catalogForThinking = modelCatalog ?? allowedModelCatalog;
-    if (!catalogForThinking || catalogForThinking.length === 0) {
+    const agentThinkingDefault = agentEntry?.thinkingDefault as ThinkLevel | undefined;
+    const configuredThinkingDefault = agentCfg?.thinkingDefault as ThinkLevel | undefined;
+    const explicitThinkingDefault = agentThinkingDefault ?? configuredThinkingDefault;
+    if (explicitThinkingDefault) {
+      defaultThinkingLevel = explicitThinkingDefault;
+      return defaultThinkingLevel;
+    }
+    if (!modelCatalog) {
       modelCatalog = await (await loadModelCatalogRuntime()).loadModelCatalog({ config: cfg });
       logStage("catalog-loaded-for-thinking", `entries=${modelCatalog.length}`);
-      catalogForThinking = modelCatalog;
     }
+    const catalogForThinking = modelCatalog.length > 0 ? modelCatalog : allowedModelCatalog;
     const resolved = resolveThinkingDefault({
       cfg,
       provider,
       model,
       catalog: catalogForThinking,
     });
-    const agentThinkingDefault = agentEntry?.thinkingDefault as ThinkLevel | undefined;
-    defaultThinkingLevel =
-      agentThinkingDefault ??
-      resolved ??
-      (agentCfg?.thinkingDefault as ThinkLevel | undefined) ??
-      "off";
+    defaultThinkingLevel = resolved ?? "off";
     return defaultThinkingLevel;
   };
 

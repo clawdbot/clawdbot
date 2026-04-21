@@ -6,7 +6,7 @@ describe("command-path-policy", () => {
     expect(resolveCliCommandPathPolicy(["status"])).toEqual({
       bypassConfigGuard: false,
       routeConfigGuard: "when-suppressed",
-      loadPlugins: "text-only",
+      loadPlugins: "never",
       hideBanner: false,
       ensureCliPath: false,
     });
@@ -21,6 +21,20 @@ describe("command-path-policy", () => {
       ensureCliPath: true,
     });
     expect(resolveCliCommandPathPolicy(["channels", "add"])).toEqual({
+      bypassConfigGuard: false,
+      routeConfigGuard: "never",
+      loadPlugins: "never",
+      hideBanner: false,
+      ensureCliPath: true,
+    });
+    expect(resolveCliCommandPathPolicy(["channels", "status"])).toEqual({
+      bypassConfigGuard: false,
+      routeConfigGuard: "never",
+      loadPlugins: "never",
+      hideBanner: false,
+      ensureCliPath: true,
+    });
+    expect(resolveCliCommandPathPolicy(["channels", "list"])).toEqual({
       bypassConfigGuard: false,
       routeConfigGuard: "never",
       loadPlugins: "never",

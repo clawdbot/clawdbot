@@ -299,22 +299,29 @@ export function ensureAuthProfileStore(
   agentDir?: string,
   options?: { allowKeychainPrompt?: boolean },
 ): AuthProfileStore {
+  return overlayExternalAuthProfiles(
+    ensureAuthProfileStoreWithoutExternalProfiles(agentDir, options),
+    { agentDir },
+  );
+}
+
+export function ensureAuthProfileStoreWithoutExternalProfiles(
+  agentDir?: string,
+  options?: { allowKeychainPrompt?: boolean },
+): AuthProfileStore {
   const runtimeStore = resolveRuntimeAuthProfileStore(agentDir);
   if (runtimeStore) {
-    return overlayExternalAuthProfiles(runtimeStore, { agentDir });
+    return runtimeStore;
   }
-
   const store = loadAuthProfileStoreForAgent(agentDir, options);
   const authPath = resolveAuthStorePath(agentDir);
   const mainAuthPath = resolveAuthStorePath();
   if (!agentDir || authPath === mainAuthPath) {
-    return overlayExternalAuthProfiles(store, { agentDir });
+    return store;
   }
 
   const mainStore = loadAuthProfileStoreForAgent(undefined, options);
-  const merged = mergeAuthProfileStores(mainStore, store);
-
-  return overlayExternalAuthProfiles(merged, { agentDir });
+  return mergeAuthProfileStores(mainStore, store);
 }
 
 export function findPersistedAuthProfileCredential(params: {

@@ -14,7 +14,7 @@ import type {
   NormalizedMessage,
   ToolCard,
 } from "../types/chat-types.ts";
-import { agentLogoUrl } from "../views/agents-utils.ts";
+import { agentLogoUrl, isRenderableControlUiAvatarUrl } from "../views/agents-utils.ts";
 import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
 import {
   extractTextCached,
@@ -665,9 +665,7 @@ function renderAvatar(
 }
 
 function isAvatarUrl(value: string): boolean {
-  return (
-    /^https?:\/\//i.test(value) || /^data:image\//i.test(value) || value.startsWith("/") // Relative paths from avatar endpoint
-  );
+  return isRenderableControlUiAvatarUrl(value);
 }
 
 function resolveRenderableMessageImages(

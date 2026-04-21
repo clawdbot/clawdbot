@@ -11,6 +11,7 @@ import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pi
 import {
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingNativeTransport,
+  resolveChannelStreamingPreviewToolProgress,
 } from "openclaw/plugin-sdk/channel-streaming";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/outbound-runtime";
@@ -665,14 +666,41 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     : undefined;
   let hasStreamedMessage = false;
   const streamMode = slackStreaming.draftMode;
+  const previewToolProgressEnabled =
+    Boolean(draftStream) && resolveChannelStreamingPreviewToolProgress(account.config);
+  let previewToolProgressSuppressed = false;
+  let previewToolProgressLines: string[] = [];
   let appendRenderedText = "";
   let appendSourceText = "";
   let statusUpdateCount = 0;
+
+  const pushPreviewToolProgress = (line?: string) => {
+    if (!draftStream || !previewToolProgressEnabled || previewToolProgressSuppressed) {
+      return;
+    }
+    const normalized = line?.replace(/\s+/g, " ").trim();
+    if (!normalized) {
+      return;
+    }
+    const previous = previewToolProgressLines.at(-1);
+    if (previous === normalized) {
+      return;
+    }
+    previewToolProgressLines = [...previewToolProgressLines, normalized].slice(-8);
+    draftStream.update(
+      ["Working…", ...previewToolProgressLines.map((entry) => `• ${entry}`)].join("\n"),
+    );
+    hasStreamedMessage = true;
+  };
+
   const updateDraftFromPartial = (text?: string) => {
     const trimmed = text?.trimEnd();
     if (!trimmed) {
       return;
     }
+
+    previewToolProgressSuppressed = true;
+    previewToolProgressLines = [];
 
     if (streamMode === "append") {
       const next = applyAppendOnlyStreamUpdate({
@@ -713,6 +741,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           appendSourceText = "";
           statusUpdateCount = 0;
         }
+        previewToolProgressSuppressed = false;
+        previewToolProgressLines = [];
       };
 
   let dispatchError: unknown;
@@ -733,6 +763,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             ? !resolveChannelStreamingBlockEnabled(account.config)
             : undefined,
         onModelSelected,
+        suppressDefaultToolProgressMessages: previewToolProgressEnabled ? true : undefined,
         onPartialReply: useStreaming
           ? undefined
           : !previewStreamingEnabled
@@ -747,11 +778,47 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
               await statusReactions.setThinking();
             }
           : undefined,
-        onToolStart: statusReactionsEnabled
-          ? async (payload) => {
-              await statusReactions.setTool(payload.name);
-            }
-          : undefined,
+        onToolStart: async (payload) => {
+          if (statusReactionsEnabled) {
+            await statusReactions.setTool(payload.name);
+          }
+          pushPreviewToolProgress(payload.name ? `tool: ${payload.name}` : "tool running");
+        },
+        onItemEvent: async (payload) => {
+          pushPreviewToolProgress(
+            payload.progressText ?? payload.summary ?? payload.title ?? payload.name,
+          );
+        },
+        onPlanUpdate: async (payload) => {
+          if (payload.phase !== "update") {
+            return;
+          }
+          pushPreviewToolProgress(payload.explanation ?? payload.steps?.[0] ?? "planning");
+        },
+        onApprovalEvent: async (payload) => {
+          if (payload.phase !== "requested") {
+            return;
+          }
+          pushPreviewToolProgress(
+            payload.command ? `approval: ${payload.command}` : "approval requested",
+          );
+        },
+        onCommandOutput: async (payload) => {
+          if (payload.phase !== "end") {
+            return;
+          }
+          pushPreviewToolProgress(
+            payload.name
+              ? `${payload.name}${payload.exitCode === 0 ? " ✓" : payload.exitCode != null ? ` (exit ${payload.exitCode})` : ""}`
+              : payload.title,
+          );
+        },
+        onPatchSummary: async (payload) => {
+          if (payload.phase !== "end") {
+            return;
+          }
+          pushPreviewToolProgress(payload.summary ?? payload.title ?? "patch applied");
+        },
       },
     });
     queuedFinal = result.queuedFinal;

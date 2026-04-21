@@ -1,12 +1,12 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const statusSummaryMocks = vi.hoisted(() => ({
-  hasPotentialConfiguredChannels: vi.fn(() => true),
+  hasConfiguredChannelsForReadOnlyScope: vi.fn(() => true),
   buildChannelSummary: vi.fn(async () => ["ok"]),
 }));
 
-vi.mock("../channels/config-presence.js", () => ({
-  hasPotentialConfiguredChannels: statusSummaryMocks.hasPotentialConfiguredChannels,
+vi.mock("../plugins/channel-plugin-ids.js", () => ({
+  hasConfiguredChannelsForReadOnlyScope: statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope,
 }));
 
 vi.mock("./status.summary.runtime.js", () => ({
@@ -125,7 +125,7 @@ describe("getStatusSummary", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    statusSummaryMocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+    statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope.mockReturnValue(true);
     statusSummaryMocks.buildChannelSummary.mockResolvedValue(["ok"]);
   });
 
@@ -140,12 +140,25 @@ describe("getStatusSummary", () => {
   });
 
   it("skips channel summary imports when no channels are configured", async () => {
-    statusSummaryMocks.hasPotentialConfiguredChannels.mockReturnValue(false);
+    statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope.mockReturnValue(false);
 
     const summary = await getStatusSummary();
 
     expect(summary.channelSummary).toEqual([]);
     expect(summary.linkChannel).toBeUndefined();
+    expect(statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope).toHaveBeenCalledWith({
+      config: {},
+    });
+    expect(buildChannelSummary).not.toHaveBeenCalled();
+    expect(resolveLinkChannelContext).not.toHaveBeenCalled();
+  });
+
+  it("skips channel summary imports when explicitly disabled", async () => {
+    const summary = await getStatusSummary({ includeChannelSummary: false });
+
+    expect(summary.channelSummary).toEqual([]);
+    expect(summary.linkChannel).toBeUndefined();
+    expect(statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope).not.toHaveBeenCalled();
     expect(buildChannelSummary).not.toHaveBeenCalled();
     expect(resolveLinkChannelContext).not.toHaveBeenCalled();
   });

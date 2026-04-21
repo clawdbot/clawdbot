@@ -159,6 +159,48 @@ describe("resolveCommandAuthorization", () => {
     expect(otherAuth.isAuthorizedSender).toBe(false);
   });
 
+  it("rejects wildcard channel senders when the plugin enforces owner-only commands", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "discord",
+          plugin: {
+            ...createOutboundTestPlugin({
+              id: "discord",
+              outbound: { deliveryMode: "direct" },
+            }),
+            commands: { enforceOwnerForCommands: true },
+            config: {
+              listAccountIds: () => ["default"],
+              resolveAccount: () => ({}),
+              resolveAllowFrom: () => ["*"],
+              formatAllowFrom,
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+    const cfg = {
+      channels: { discord: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+
+    const auth = resolveCommandAuthorization({
+      ctx: {
+        Provider: "discord",
+        Surface: "discord",
+        ChatType: "direct",
+        From: "discord:123",
+        SenderId: "123",
+      } as MsgContext,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.senderIsOwner).toBe(false);
+    expect(auth.isAuthorizedSender).toBe(false);
+  });
+
   it("uses explicit owner allowlist when allowFrom is empty", () => {
     const cfg = {
       commands: { ownerAllowFrom: ["whatsapp:+15551234567"] },

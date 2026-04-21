@@ -1320,6 +1320,168 @@ describe("initSessionState reset policy", () => {
     expect(result.sessionId).not.toBe(existingSessionId);
   });
 
+  it("keeps the existing stale session for /reset soft", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
+    const root = await makeCaseDir("openclaw-reset-soft-stale-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:whatsapp:dm:soft-stale";
+    const existingSessionId = "soft-stale-session-id";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
+      },
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+        reset: { mode: "daily", atHour: 4, idleMinutes: 30 },
+      },
+    } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "/reset soft",
+        RawBody: "/reset soft",
+        CommandBody: "/reset soft",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.resetTriggered).toBe(false);
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
+    expect(clearBootstrapSnapshotOnSessionRolloverSpy).not.toHaveBeenCalledWith({
+      sessionKey,
+      previousSessionId: existingSessionId,
+    });
+  });
+
+  it("keeps the existing stale session for /reset: soft", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
+    const root = await makeCaseDir("openclaw-reset-soft-colon-stale-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:whatsapp:dm:soft-colon-stale";
+    const existingSessionId = "soft-colon-stale-session-id";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
+      },
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+        reset: { mode: "daily", atHour: 4, idleMinutes: 30 },
+      },
+    } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "/reset: soft",
+        RawBody: "/reset: soft",
+        CommandBody: "/reset: soft",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.resetTriggered).toBe(false);
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
+    expect(clearBootstrapSnapshotOnSessionRolloverSpy).not.toHaveBeenCalledWith({
+      sessionKey,
+      previousSessionId: existingSessionId,
+    });
+  });
+
+  it("keeps the existing stale session for multiline /reset soft tails", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
+    const root = await makeCaseDir("openclaw-reset-soft-multiline-stale-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:whatsapp:dm:soft-multiline-stale";
+    const existingSessionId = "soft-multiline-stale-session-id";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
+      },
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+        reset: { mode: "daily", atHour: 4, idleMinutes: 30 },
+      },
+    } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "/reset soft\nre-read persona files",
+        RawBody: "/reset soft\nre-read persona files",
+        CommandBody: "/reset soft\nre-read persona files",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.resetTriggered).toBe(false);
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
+    expect(clearBootstrapSnapshotOnSessionRolloverSpy).not.toHaveBeenCalledWith({
+      sessionKey,
+      previousSessionId: existingSessionId,
+    });
+  });
+
+  it("does not preserve a stale session for unauthorized /reset soft", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
+    const root = await makeCaseDir("openclaw-reset-soft-stale-unauthorized-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:whatsapp:dm:soft-stale-unauthorized";
+    const existingSessionId = "soft-stale-unauthorized-session-id";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
+      },
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+        reset: { mode: "daily", atHour: 4, idleMinutes: 30 },
+      },
+    } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "/reset soft",
+        RawBody: "/reset soft",
+        CommandBody: "/reset soft",
+        Provider: "whatsapp",
+        Surface: "whatsapp",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: false,
+    });
+
+    expect(result.resetTriggered).toBe(false);
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(clearBootstrapSnapshotOnSessionRolloverSpy).toHaveBeenCalledWith({
+      sessionKey,
+      previousSessionId: existingSessionId,
+    });
+  });
+
   it("uses per-type overrides for thread sessions", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
     const root = await makeCaseDir("openclaw-reset-thread-");
@@ -1966,6 +2128,84 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         Surface: "telegram",
         OriginatingChannel: "telegram",
         GatewayClientScopes: ["operator.write"],
+        ChatType: "direct",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.resetTriggered).toBe(false);
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
+  });
+
+  it("keeps the existing session for /reset soft", async () => {
+    const storePath = await createStorePath("openclaw-soft-reset-session-");
+    const sessionKey = "agent:main:telegram:dm:user-soft-reset";
+    const existingSessionId = "existing-session-soft-reset";
+
+    await seedSessionStoreWithOverrides({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+      overrides: {
+        cliSessionIds: { "claude-cli": "cli-session-1" },
+        cliSessionBindings: {
+          "claude-cli": {
+            sessionId: "cli-session-1",
+            extraSystemPromptHash: "prompt-hash",
+          },
+        },
+      },
+    });
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 999 },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "/reset soft",
+        RawBody: "/reset soft",
+        CommandBody: "/reset soft",
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.resetTriggered).toBe(false);
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
+  });
+
+  it("keeps the existing session for /reset newline soft", async () => {
+    const storePath = await createStorePath("openclaw-reset-newline-soft-");
+    const sessionKey = "agent:main:telegram:dm:user-reset-newline-soft";
+    const existingSessionId = "existing-session-reset-newline-soft";
+
+    await seedSessionStoreWithOverrides({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+      overrides: {},
+    });
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 999 },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "/reset \nsoft",
+        RawBody: "/reset \nsoft",
+        CommandBody: "/reset \nsoft",
+        Provider: "telegram",
+        Surface: "telegram",
         ChatType: "direct",
         SessionKey: sessionKey,
       },

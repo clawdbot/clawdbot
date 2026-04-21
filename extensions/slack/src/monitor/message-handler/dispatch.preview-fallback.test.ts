@@ -108,6 +108,7 @@ vi.mock("openclaw/plugin-sdk/channel-reply-pipeline", () => ({
 vi.mock("openclaw/plugin-sdk/channel-streaming", () => ({
   resolveChannelStreamingBlockEnabled: () => false,
   resolveChannelStreamingNativeTransport: () => false,
+  resolveChannelStreamingPreviewToolProgress: () => true,
 }));
 
 vi.mock("openclaw/plugin-sdk/outbound-runtime", () => ({

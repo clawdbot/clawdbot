@@ -98,7 +98,7 @@ export function registerChannelsCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runChannelsCommand(async () => {
-        const { channelsListCommand } = await loadChannelsCommands();
+        const { channelsListCommand } = await import("../commands/channels/list.js");
         await channelsListCommand(opts, defaultRuntime);
       });
     });
@@ -111,7 +111,7 @@ export function registerChannelsCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runChannelsCommand(async () => {
-        const { channelsStatusCommand } = await loadChannelsCommands();
+        const { channelsStatusCommand } = await import("../commands/channels/status.js");
         await channelsStatusCommand(opts, defaultRuntime);
       });
     });

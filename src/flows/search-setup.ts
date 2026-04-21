@@ -390,6 +390,7 @@ export async function runSearchSetupFlow(
       },
     ],
     initialValue: defaultProvider,
+    searchable: true,
   });
 
   if (choice === "__skip__") {

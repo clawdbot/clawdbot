@@ -3,7 +3,11 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { resolveBuildRequirement, runNodeMain } from "../../scripts/run-node.mjs";
+import {
+  acquireRunNodeBuildLock,
+  resolveBuildRequirement,
+  runNodeMain,
+} from "../../scripts/run-node.mjs";
 import {
   bundledDistPluginFile,
   bundledPluginFile,
@@ -1069,6 +1073,82 @@ describe("run-node script", () => {
 
       expect(exitCode).toBe(0);
       expect(spawnCalls).toEqual([expectedBuildSpawn(), statusCommandSpawn()]);
+    });
+  });
+
+  describe("acquireRunNodeBuildLock", () => {
+    const lockDeps = (tmp: string, fakeProcess: NodeJS.Process) => ({
+      cwd: tmp,
+      args: ["status"],
+      env: { OPENCLAW_RUNNER_LOG: "0" },
+      fs: fsSync,
+      process: fakeProcess,
+      stderr: { write: () => true } as unknown as NodeJS.WriteStream,
+    });
+
+    it("releases the lock directory when the wrapper receives SIGINT", async () => {
+      await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+        const fakeProcess = createFakeProcess();
+        const lockDir = path.join(tmp, ".artifacts", "run-node-build.lock");
+
+        const release = await acquireRunNodeBuildLock(lockDeps(tmp, fakeProcess));
+        expect(fsSync.existsSync(lockDir)).toBe(true);
+
+        fakeProcess.emit("SIGINT");
+        expect(fsSync.existsSync(lockDir)).toBe(false);
+
+        // Normal release after signal must be a no-op, not throw.
+        expect(() => release()).not.toThrow();
+        expect(fakeProcess.listenerCount("SIGINT")).toBe(0);
+        expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
+        expect(fakeProcess.listenerCount("exit")).toBe(0);
+      });
+    });
+
+    it("releases the lock directory when the wrapper receives SIGTERM", async () => {
+      await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+        const fakeProcess = createFakeProcess();
+        const lockDir = path.join(tmp, ".artifacts", "run-node-build.lock");
+
+        const release = await acquireRunNodeBuildLock(lockDeps(tmp, fakeProcess));
+        expect(fsSync.existsSync(lockDir)).toBe(true);
+
+        fakeProcess.emit("SIGTERM");
+        expect(fsSync.existsSync(lockDir)).toBe(false);
+        expect(() => release()).not.toThrow();
+      });
+    });
+
+    it("releases the lock directory on process exit", async () => {
+      await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+        const fakeProcess = createFakeProcess();
+        const lockDir = path.join(tmp, ".artifacts", "run-node-build.lock");
+
+        const release = await acquireRunNodeBuildLock(lockDeps(tmp, fakeProcess));
+        expect(fsSync.existsSync(lockDir)).toBe(true);
+
+        fakeProcess.emit("exit");
+        expect(fsSync.existsSync(lockDir)).toBe(false);
+        expect(() => release()).not.toThrow();
+      });
+    });
+
+    it("detaches signal listeners after a normal release", async () => {
+      await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+        const fakeProcess = createFakeProcess();
+        const lockDir = path.join(tmp, ".artifacts", "run-node-build.lock");
+
+        const release = await acquireRunNodeBuildLock(lockDeps(tmp, fakeProcess));
+        expect(fakeProcess.listenerCount("SIGINT")).toBe(1);
+        expect(fakeProcess.listenerCount("SIGTERM")).toBe(1);
+        expect(fakeProcess.listenerCount("exit")).toBe(1);
+
+        release();
+        expect(fsSync.existsSync(lockDir)).toBe(false);
+        expect(fakeProcess.listenerCount("SIGINT")).toBe(0);
+        expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
+        expect(fakeProcess.listenerCount("exit")).toBe(0);
+      });
     });
   });
 });

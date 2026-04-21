@@ -1,11 +1,11 @@
-var __defProp$2 = Object.defineProperty;
+var __defProp$1 = Object.defineProperty;
 var __exportAll = (all, no_symbols) => {
 	let target = {};
-	for (var name in all) __defProp$2(target, name, {
+	for (var name in all) __defProp$1(target, name, {
 		get: all[name],
 		enumerable: true
 	});
-	if (!no_symbols) __defProp$2(target, Symbol.toStringTag, { value: "Module" });
+	if (!no_symbols) __defProp$1(target, Symbol.toStringTag, { value: "Module" });
 	return target;
 };
 /**
@@ -1889,943 +1889,6 @@ var A2uiMessageProcessor = class A2uiMessageProcessor {
 		return value;
 	}
 };
-var __defProp$1 = Object.defineProperty;
-var __defNormalProp$1 = (obj, key, value) => key in obj ? __defProp$1(obj, key, {
-	enumerable: true,
-	configurable: true,
-	writable: true,
-	value
-}) : obj[key] = value;
-var __publicField$1 = (obj, key, value) => {
-	__defNormalProp$1(obj, typeof key !== "symbol" ? key + "" : key, value);
-	return value;
-};
-var __accessCheck$1 = (obj, member, msg) => {
-	if (!member.has(obj)) throw TypeError("Cannot " + msg);
-};
-var __privateIn$1 = (member, obj) => {
-	if (Object(obj) !== obj) throw TypeError("Cannot use the \"in\" operator on this value");
-	return member.has(obj);
-};
-var __privateAdd$1 = (obj, member, value) => {
-	if (member.has(obj)) throw TypeError("Cannot add the same private member more than once");
-	member instanceof WeakSet ? member.add(obj) : member.set(obj, value);
-};
-var __privateMethod$1 = (obj, member, method) => {
-	__accessCheck$1(obj, member, "access private method");
-	return method;
-};
-/**
-* @license
-* Copyright Google LLC All Rights Reserved.
-*
-* Use of this source code is governed by an MIT-style license that can be
-* found in the LICENSE file at https://angular.io/license
-*/
-function defaultEquals$1(a, b) {
-	return Object.is(a, b);
-}
-/**
-* @license
-* Copyright Google LLC All Rights Reserved.
-*
-* Use of this source code is governed by an MIT-style license that can be
-* found in the LICENSE file at https://angular.io/license
-*/
-let activeConsumer$1 = null;
-let inNotificationPhase$1 = false;
-let epoch$1 = 1;
-const SIGNAL$1 = /* @__PURE__ */ Symbol("SIGNAL");
-function setActiveConsumer$1(consumer) {
-	const prev = activeConsumer$1;
-	activeConsumer$1 = consumer;
-	return prev;
-}
-function getActiveConsumer$1() {
-	return activeConsumer$1;
-}
-function isInNotificationPhase$1() {
-	return inNotificationPhase$1;
-}
-const REACTIVE_NODE$1 = {
-	version: 0,
-	lastCleanEpoch: 0,
-	dirty: false,
-	producerNode: void 0,
-	producerLastReadVersion: void 0,
-	producerIndexOfThis: void 0,
-	nextProducerIndex: 0,
-	liveConsumerNode: void 0,
-	liveConsumerIndexOfThis: void 0,
-	consumerAllowSignalWrites: false,
-	consumerIsAlwaysLive: false,
-	producerMustRecompute: () => false,
-	producerRecomputeValue: () => {},
-	consumerMarkedDirty: () => {},
-	consumerOnSignalRead: () => {}
-};
-function producerAccessed$1(node) {
-	if (inNotificationPhase$1) throw new Error(typeof ngDevMode !== "undefined" && ngDevMode ? `Assertion error: signal read during notification phase` : "");
-	if (activeConsumer$1 === null) return;
-	activeConsumer$1.consumerOnSignalRead(node);
-	const idx = activeConsumer$1.nextProducerIndex++;
-	assertConsumerNode$1(activeConsumer$1);
-	if (idx < activeConsumer$1.producerNode.length && activeConsumer$1.producerNode[idx] !== node) {
-		if (consumerIsLive$1(activeConsumer$1)) {
-			const staleProducer = activeConsumer$1.producerNode[idx];
-			producerRemoveLiveConsumerAtIndex$1(staleProducer, activeConsumer$1.producerIndexOfThis[idx]);
-		}
-	}
-	if (activeConsumer$1.producerNode[idx] !== node) {
-		activeConsumer$1.producerNode[idx] = node;
-		activeConsumer$1.producerIndexOfThis[idx] = consumerIsLive$1(activeConsumer$1) ? producerAddLiveConsumer$1(node, activeConsumer$1, idx) : 0;
-	}
-	activeConsumer$1.producerLastReadVersion[idx] = node.version;
-}
-function producerIncrementEpoch$1() {
-	epoch$1++;
-}
-function producerUpdateValueVersion$1(node) {
-	if (!node.dirty && node.lastCleanEpoch === epoch$1) return;
-	if (!node.producerMustRecompute(node) && !consumerPollProducersForChange$1(node)) {
-		node.dirty = false;
-		node.lastCleanEpoch = epoch$1;
-		return;
-	}
-	node.producerRecomputeValue(node);
-	node.dirty = false;
-	node.lastCleanEpoch = epoch$1;
-}
-function producerNotifyConsumers$1(node) {
-	if (node.liveConsumerNode === void 0) return;
-	const prev = inNotificationPhase$1;
-	inNotificationPhase$1 = true;
-	try {
-		for (const consumer of node.liveConsumerNode) if (!consumer.dirty) consumerMarkDirty$1(consumer);
-	} finally {
-		inNotificationPhase$1 = prev;
-	}
-}
-function producerUpdatesAllowed$1() {
-	return (activeConsumer$1 == null ? void 0 : activeConsumer$1.consumerAllowSignalWrites) !== false;
-}
-function consumerMarkDirty$1(node) {
-	var _a;
-	node.dirty = true;
-	producerNotifyConsumers$1(node);
-	(_a = node.consumerMarkedDirty) == null || _a.call(node.wrapper ?? node);
-}
-function consumerBeforeComputation$1(node) {
-	node && (node.nextProducerIndex = 0);
-	return setActiveConsumer$1(node);
-}
-function consumerAfterComputation$1(node, prevConsumer) {
-	setActiveConsumer$1(prevConsumer);
-	if (!node || node.producerNode === void 0 || node.producerIndexOfThis === void 0 || node.producerLastReadVersion === void 0) return;
-	if (consumerIsLive$1(node)) for (let i = node.nextProducerIndex; i < node.producerNode.length; i++) producerRemoveLiveConsumerAtIndex$1(node.producerNode[i], node.producerIndexOfThis[i]);
-	while (node.producerNode.length > node.nextProducerIndex) {
-		node.producerNode.pop();
-		node.producerLastReadVersion.pop();
-		node.producerIndexOfThis.pop();
-	}
-}
-function consumerPollProducersForChange$1(node) {
-	assertConsumerNode$1(node);
-	for (let i = 0; i < node.producerNode.length; i++) {
-		const producer = node.producerNode[i];
-		const seenVersion = node.producerLastReadVersion[i];
-		if (seenVersion !== producer.version) return true;
-		producerUpdateValueVersion$1(producer);
-		if (seenVersion !== producer.version) return true;
-	}
-	return false;
-}
-function producerAddLiveConsumer$1(node, consumer, indexOfThis) {
-	var _a;
-	assertProducerNode$1(node);
-	assertConsumerNode$1(node);
-	if (node.liveConsumerNode.length === 0) {
-		(_a = node.watched) == null || _a.call(node.wrapper);
-		for (let i = 0; i < node.producerNode.length; i++) node.producerIndexOfThis[i] = producerAddLiveConsumer$1(node.producerNode[i], node, i);
-	}
-	node.liveConsumerIndexOfThis.push(indexOfThis);
-	return node.liveConsumerNode.push(consumer) - 1;
-}
-function producerRemoveLiveConsumerAtIndex$1(node, idx) {
-	var _a;
-	assertProducerNode$1(node);
-	assertConsumerNode$1(node);
-	if (typeof ngDevMode !== "undefined" && ngDevMode && idx >= node.liveConsumerNode.length) throw new Error(`Assertion error: active consumer index ${idx} is out of bounds of ${node.liveConsumerNode.length} consumers)`);
-	if (node.liveConsumerNode.length === 1) {
-		(_a = node.unwatched) == null || _a.call(node.wrapper);
-		for (let i = 0; i < node.producerNode.length; i++) producerRemoveLiveConsumerAtIndex$1(node.producerNode[i], node.producerIndexOfThis[i]);
-	}
-	const lastIdx = node.liveConsumerNode.length - 1;
-	node.liveConsumerNode[idx] = node.liveConsumerNode[lastIdx];
-	node.liveConsumerIndexOfThis[idx] = node.liveConsumerIndexOfThis[lastIdx];
-	node.liveConsumerNode.length--;
-	node.liveConsumerIndexOfThis.length--;
-	if (idx < node.liveConsumerNode.length) {
-		const idxProducer = node.liveConsumerIndexOfThis[idx];
-		const consumer = node.liveConsumerNode[idx];
-		assertConsumerNode$1(consumer);
-		consumer.producerIndexOfThis[idxProducer] = idx;
-	}
-}
-function consumerIsLive$1(node) {
-	var _a;
-	return node.consumerIsAlwaysLive || (((_a = node == null ? void 0 : node.liveConsumerNode) == null ? void 0 : _a.length) ?? 0) > 0;
-}
-function assertConsumerNode$1(node) {
-	node.producerNode ?? (node.producerNode = []);
-	node.producerIndexOfThis ?? (node.producerIndexOfThis = []);
-	node.producerLastReadVersion ?? (node.producerLastReadVersion = []);
-}
-function assertProducerNode$1(node) {
-	node.liveConsumerNode ?? (node.liveConsumerNode = []);
-	node.liveConsumerIndexOfThis ?? (node.liveConsumerIndexOfThis = []);
-}
-/**
-* @license
-* Copyright Google LLC All Rights Reserved.
-*
-* Use of this source code is governed by an MIT-style license that can be
-* found in the LICENSE file at https://angular.io/license
-*/
-function computedGet$1(node) {
-	producerUpdateValueVersion$1(node);
-	producerAccessed$1(node);
-	if (node.value === ERRORED$1) throw node.error;
-	return node.value;
-}
-function createComputed$1(computation) {
-	const node = Object.create(COMPUTED_NODE$1);
-	node.computation = computation;
-	const computed = () => computedGet$1(node);
-	computed[SIGNAL$1] = node;
-	return computed;
-}
-const UNSET$1 = /* @__PURE__ */ Symbol("UNSET");
-const COMPUTING$1 = /* @__PURE__ */ Symbol("COMPUTING");
-const ERRORED$1 = /* @__PURE__ */ Symbol("ERRORED");
-const COMPUTED_NODE$1 = {
-	...REACTIVE_NODE$1,
-	value: UNSET$1,
-	dirty: true,
-	error: null,
-	equal: defaultEquals$1,
-	producerMustRecompute(node) {
-		return node.value === UNSET$1 || node.value === COMPUTING$1;
-	},
-	producerRecomputeValue(node) {
-		if (node.value === COMPUTING$1) throw new Error("Detected cycle in computations.");
-		const oldValue = node.value;
-		node.value = COMPUTING$1;
-		const prevConsumer = consumerBeforeComputation$1(node);
-		let newValue;
-		let wasEqual = false;
-		try {
-			newValue = node.computation.call(node.wrapper);
-			wasEqual = oldValue !== UNSET$1 && oldValue !== ERRORED$1 && node.equal.call(node.wrapper, oldValue, newValue);
-		} catch (err) {
-			newValue = ERRORED$1;
-			node.error = err;
-		} finally {
-			consumerAfterComputation$1(node, prevConsumer);
-		}
-		if (wasEqual) {
-			node.value = oldValue;
-			return;
-		}
-		node.value = newValue;
-		node.version++;
-	}
-};
-/**
-* @license
-* Copyright Google LLC All Rights Reserved.
-*
-* Use of this source code is governed by an MIT-style license that can be
-* found in the LICENSE file at https://angular.io/license
-*/
-function defaultThrowError$1() {
-	throw new Error();
-}
-let throwInvalidWriteToSignalErrorFn$1 = defaultThrowError$1;
-function throwInvalidWriteToSignalError$1() {
-	throwInvalidWriteToSignalErrorFn$1();
-}
-/**
-* @license
-* Copyright Google LLC All Rights Reserved.
-*
-* Use of this source code is governed by an MIT-style license that can be
-* found in the LICENSE file at https://angular.io/license
-*/
-function createSignal$1(initialValue) {
-	const node = Object.create(SIGNAL_NODE$1);
-	node.value = initialValue;
-	const getter = () => {
-		producerAccessed$1(node);
-		return node.value;
-	};
-	getter[SIGNAL$1] = node;
-	return getter;
-}
-function signalGetFn$1() {
-	producerAccessed$1(this);
-	return this.value;
-}
-function signalSetFn$1(node, newValue) {
-	if (!producerUpdatesAllowed$1()) throwInvalidWriteToSignalError$1();
-	if (!node.equal.call(node.wrapper, node.value, newValue)) {
-		node.value = newValue;
-		signalValueChanged$1(node);
-	}
-}
-const SIGNAL_NODE$1 = {
-	...REACTIVE_NODE$1,
-	equal: defaultEquals$1,
-	value: void 0
-};
-function signalValueChanged$1(node) {
-	node.version++;
-	producerIncrementEpoch$1();
-	producerNotifyConsumers$1(node);
-}
-/**
-* @license
-* Copyright 2024 Bloomberg Finance L.P.
-*
-* Licensed under the Apache License, Version 2.0 (the "License");
-* you may not use this file except in compliance with the License.
-* You may obtain a copy of the License at
-*
-*     http://www.apache.org/licenses/LICENSE-2.0
-*
-* Unless required by applicable law or agreed to in writing, software
-* distributed under the License is distributed on an "AS IS" BASIS,
-* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-* See the License for the specific language governing permissions and
-* limitations under the License.
-*/
-const NODE$1 = Symbol("node");
-var Signal$1;
-((Signal2) => {
-	var _a, _brand, _b, _brand2;
-	class State {
-		constructor(initialValue, options = {}) {
-			__privateAdd$1(this, _brand);
-			__publicField$1(this, _a);
-			const node = createSignal$1(initialValue)[SIGNAL$1];
-			this[NODE$1] = node;
-			node.wrapper = this;
-			if (options) {
-				const equals = options.equals;
-				if (equals) node.equal = equals;
-				node.watched = options[Signal2.subtle.watched];
-				node.unwatched = options[Signal2.subtle.unwatched];
-			}
-		}
-		get() {
-			if (!(0, Signal2.isState)(this)) throw new TypeError("Wrong receiver type for Signal.State.prototype.get");
-			return signalGetFn$1.call(this[NODE$1]);
-		}
-		set(newValue) {
-			if (!(0, Signal2.isState)(this)) throw new TypeError("Wrong receiver type for Signal.State.prototype.set");
-			if (isInNotificationPhase$1()) throw new Error("Writes to signals not permitted during Watcher callback");
-			const ref = this[NODE$1];
-			signalSetFn$1(ref, newValue);
-		}
-	}
-	_a = NODE$1;
-	_brand = /* @__PURE__ */ new WeakSet();
-	Signal2.isState = (s) => typeof s === "object" && __privateIn$1(_brand, s);
-	Signal2.State = State;
-	class Computed {
-		constructor(computation, options) {
-			__privateAdd$1(this, _brand2);
-			__publicField$1(this, _b);
-			const node = createComputed$1(computation)[SIGNAL$1];
-			node.consumerAllowSignalWrites = true;
-			this[NODE$1] = node;
-			node.wrapper = this;
-			if (options) {
-				const equals = options.equals;
-				if (equals) node.equal = equals;
-				node.watched = options[Signal2.subtle.watched];
-				node.unwatched = options[Signal2.subtle.unwatched];
-			}
-		}
-		get() {
-			if (!(0, Signal2.isComputed)(this)) throw new TypeError("Wrong receiver type for Signal.Computed.prototype.get");
-			return computedGet$1(this[NODE$1]);
-		}
-	}
-	_b = NODE$1;
-	_brand2 = /* @__PURE__ */ new WeakSet();
-	Signal2.isComputed = (c) => typeof c === "object" && __privateIn$1(_brand2, c);
-	Signal2.Computed = Computed;
-	((subtle2) => {
-		var _a2, _brand3, _assertSignals, assertSignals_fn;
-		function untrack(cb) {
-			let output;
-			let prevActiveConsumer = null;
-			try {
-				prevActiveConsumer = setActiveConsumer$1(null);
-				output = cb();
-			} finally {
-				setActiveConsumer$1(prevActiveConsumer);
-			}
-			return output;
-		}
-		subtle2.untrack = untrack;
-		function introspectSources(sink) {
-			var _a3;
-			if (!(0, Signal2.isComputed)(sink) && !(0, Signal2.isWatcher)(sink)) throw new TypeError("Called introspectSources without a Computed or Watcher argument");
-			return ((_a3 = sink[NODE$1].producerNode) == null ? void 0 : _a3.map((n) => n.wrapper)) ?? [];
-		}
-		subtle2.introspectSources = introspectSources;
-		function introspectSinks(signal) {
-			var _a3;
-			if (!(0, Signal2.isComputed)(signal) && !(0, Signal2.isState)(signal)) throw new TypeError("Called introspectSinks without a Signal argument");
-			return ((_a3 = signal[NODE$1].liveConsumerNode) == null ? void 0 : _a3.map((n) => n.wrapper)) ?? [];
-		}
-		subtle2.introspectSinks = introspectSinks;
-		function hasSinks(signal) {
-			if (!(0, Signal2.isComputed)(signal) && !(0, Signal2.isState)(signal)) throw new TypeError("Called hasSinks without a Signal argument");
-			const liveConsumerNode = signal[NODE$1].liveConsumerNode;
-			if (!liveConsumerNode) return false;
-			return liveConsumerNode.length > 0;
-		}
-		subtle2.hasSinks = hasSinks;
-		function hasSources(signal) {
-			if (!(0, Signal2.isComputed)(signal) && !(0, Signal2.isWatcher)(signal)) throw new TypeError("Called hasSources without a Computed or Watcher argument");
-			const producerNode = signal[NODE$1].producerNode;
-			if (!producerNode) return false;
-			return producerNode.length > 0;
-		}
-		subtle2.hasSources = hasSources;
-		class Watcher {
-			constructor(notify) {
-				__privateAdd$1(this, _brand3);
-				__privateAdd$1(this, _assertSignals);
-				__publicField$1(this, _a2);
-				let node = Object.create(REACTIVE_NODE$1);
-				node.wrapper = this;
-				node.consumerMarkedDirty = notify;
-				node.consumerIsAlwaysLive = true;
-				node.consumerAllowSignalWrites = false;
-				node.producerNode = [];
-				this[NODE$1] = node;
-			}
-			watch(...signals) {
-				if (!(0, Signal2.isWatcher)(this)) throw new TypeError("Called unwatch without Watcher receiver");
-				__privateMethod$1(this, _assertSignals, assertSignals_fn).call(this, signals);
-				const node = this[NODE$1];
-				node.dirty = false;
-				const prev = setActiveConsumer$1(node);
-				for (const signal of signals) producerAccessed$1(signal[NODE$1]);
-				setActiveConsumer$1(prev);
-			}
-			unwatch(...signals) {
-				if (!(0, Signal2.isWatcher)(this)) throw new TypeError("Called unwatch without Watcher receiver");
-				__privateMethod$1(this, _assertSignals, assertSignals_fn).call(this, signals);
-				const node = this[NODE$1];
-				assertConsumerNode$1(node);
-				for (let i = node.producerNode.length - 1; i >= 0; i--) if (signals.includes(node.producerNode[i].wrapper)) {
-					producerRemoveLiveConsumerAtIndex$1(node.producerNode[i], node.producerIndexOfThis[i]);
-					const lastIdx = node.producerNode.length - 1;
-					node.producerNode[i] = node.producerNode[lastIdx];
-					node.producerIndexOfThis[i] = node.producerIndexOfThis[lastIdx];
-					node.producerNode.length--;
-					node.producerIndexOfThis.length--;
-					node.nextProducerIndex--;
-					if (i < node.producerNode.length) {
-						const idxConsumer = node.producerIndexOfThis[i];
-						const producer = node.producerNode[i];
-						assertProducerNode$1(producer);
-						producer.liveConsumerIndexOfThis[idxConsumer] = i;
-					}
-				}
-			}
-			getPending() {
-				if (!(0, Signal2.isWatcher)(this)) throw new TypeError("Called getPending without Watcher receiver");
-				return this[NODE$1].producerNode.filter((n) => n.dirty).map((n) => n.wrapper);
-			}
-		}
-		_a2 = NODE$1;
-		_brand3 = /* @__PURE__ */ new WeakSet();
-		_assertSignals = /* @__PURE__ */ new WeakSet();
-		assertSignals_fn = function(signals) {
-			for (const signal of signals) if (!(0, Signal2.isComputed)(signal) && !(0, Signal2.isState)(signal)) throw new TypeError("Called watch/unwatch without a Computed or State argument");
-		};
-		Signal2.isWatcher = (w) => __privateIn$1(_brand3, w);
-		subtle2.Watcher = Watcher;
-		function currentComputed() {
-			var _a3;
-			return (_a3 = getActiveConsumer$1()) == null ? void 0 : _a3.wrapper;
-		}
-		subtle2.currentComputed = currentComputed;
-		subtle2.watched = Symbol("watched");
-		subtle2.unwatched = Symbol("unwatched");
-	})(Signal2.subtle || (Signal2.subtle = {}));
-})(Signal$1 || (Signal$1 = {}));
-/**
-* equality check here is always false so that we can dirty the storage
-* via setting to _anything_
-*
-*
-* This is for a pattern where we don't *directly* use signals to back the values used in collections
-* so that instanceof checks and getters and other native features "just work" without having
-* to do nested proxying.
-*
-* (though, see deep.ts for nested / deep behavior)
-*/
-const createStorage = (initial = null) => new Signal$1.State(initial, { equals: () => false });
-const ARRAY_GETTER_METHODS = new Set([
-	Symbol.iterator,
-	"concat",
-	"entries",
-	"every",
-	"filter",
-	"find",
-	"findIndex",
-	"flat",
-	"flatMap",
-	"forEach",
-	"includes",
-	"indexOf",
-	"join",
-	"keys",
-	"lastIndexOf",
-	"map",
-	"reduce",
-	"reduceRight",
-	"slice",
-	"some",
-	"values"
-]);
-const ARRAY_WRITE_THEN_READ_METHODS = new Set([
-	"fill",
-	"push",
-	"unshift"
-]);
-function convertToInt(prop) {
-	if (typeof prop === "symbol") return null;
-	const num = Number(prop);
-	if (isNaN(num)) return null;
-	return num % 1 === 0 ? num : null;
-}
-var SignalArray = class SignalArray {
-	/**
-	* Creates an array from an iterable object.
-	* @param iterable An iterable object to convert to an array.
-	*/
-	/**
-	* Creates an array from an iterable object.
-	* @param iterable An iterable object to convert to an array.
-	* @param mapfn A mapping function to call on every element of the array.
-	* @param thisArg Value of 'this' used to invoke the mapfn.
-	*/
-	static from(iterable, mapfn, thisArg) {
-		return mapfn ? new SignalArray(Array.from(iterable, mapfn, thisArg)) : new SignalArray(Array.from(iterable));
-	}
-	static of(...arr) {
-		return new SignalArray(arr);
-	}
-	constructor(arr = []) {
-		let clone = arr.slice();
-		let self = this;
-		let boundFns = /* @__PURE__ */ new Map();
-		/**
-		Flag to track whether we have *just* intercepted a call to `.push()` or
-		`.unshift()`, since in those cases (and only those cases!) the `Array`
-		itself checks `.length` to return from the function call.
-		*/
-		let nativelyAccessingLengthFromPushOrUnshift = false;
-		return new Proxy(clone, {
-			get(target, prop) {
-				let index = convertToInt(prop);
-				if (index !== null) {
-					self.#readStorageFor(index);
-					self.#collection.get();
-					return target[index];
-				}
-				if (prop === "length") {
-					if (nativelyAccessingLengthFromPushOrUnshift) nativelyAccessingLengthFromPushOrUnshift = false;
-					else self.#collection.get();
-					return target[prop];
-				}
-				if (ARRAY_WRITE_THEN_READ_METHODS.has(prop)) nativelyAccessingLengthFromPushOrUnshift = true;
-				if (ARRAY_GETTER_METHODS.has(prop)) {
-					let fn = boundFns.get(prop);
-					if (fn === void 0) {
-						fn = (...args) => {
-							self.#collection.get();
-							return target[prop](...args);
-						};
-						boundFns.set(prop, fn);
-					}
-					return fn;
-				}
-				return target[prop];
-			},
-			set(target, prop, value) {
-				target[prop] = value;
-				let index = convertToInt(prop);
-				if (index !== null) {
-					self.#dirtyStorageFor(index);
-					self.#collection.set(null);
-				} else if (prop === "length") self.#collection.set(null);
-				return true;
-			},
-			getPrototypeOf() {
-				return SignalArray.prototype;
-			}
-		});
-	}
-	#collection = createStorage();
-	#storages = /* @__PURE__ */ new Map();
-	#readStorageFor(index) {
-		let storage = this.#storages.get(index);
-		if (storage === void 0) {
-			storage = createStorage();
-			this.#storages.set(index, storage);
-		}
-		storage.get();
-	}
-	#dirtyStorageFor(index) {
-		const storage = this.#storages.get(index);
-		if (storage) storage.set(null);
-	}
-};
-Object.setPrototypeOf(SignalArray.prototype, Array.prototype);
-var SignalMap = class {
-	collection = createStorage();
-	storages = /* @__PURE__ */ new Map();
-	vals;
-	readStorageFor(key) {
-		const { storages } = this;
-		let storage = storages.get(key);
-		if (storage === void 0) {
-			storage = createStorage();
-			storages.set(key, storage);
-		}
-		storage.get();
-	}
-	dirtyStorageFor(key) {
-		const storage = this.storages.get(key);
-		if (storage) storage.set(null);
-	}
-	constructor(existing) {
-		this.vals = existing ? new Map(existing) : /* @__PURE__ */ new Map();
-	}
-	get(key) {
-		this.readStorageFor(key);
-		return this.vals.get(key);
-	}
-	has(key) {
-		this.readStorageFor(key);
-		return this.vals.has(key);
-	}
-	entries() {
-		this.collection.get();
-		return this.vals.entries();
-	}
-	keys() {
-		this.collection.get();
-		return this.vals.keys();
-	}
-	values() {
-		this.collection.get();
-		return this.vals.values();
-	}
-	forEach(fn) {
-		this.collection.get();
-		this.vals.forEach(fn);
-	}
-	get size() {
-		this.collection.get();
-		return this.vals.size;
-	}
-	[Symbol.iterator]() {
-		this.collection.get();
-		return this.vals[Symbol.iterator]();
-	}
-	get [Symbol.toStringTag]() {
-		return this.vals[Symbol.toStringTag];
-	}
-	set(key, value) {
-		this.dirtyStorageFor(key);
-		this.collection.set(null);
-		this.vals.set(key, value);
-		return this;
-	}
-	delete(key) {
-		this.dirtyStorageFor(key);
-		this.collection.set(null);
-		return this.vals.delete(key);
-	}
-	clear() {
-		this.storages.forEach((s) => s.set(null));
-		this.collection.set(null);
-		this.vals.clear();
-	}
-};
-Object.setPrototypeOf(SignalMap.prototype, Map.prototype);
-/**
-* Create a reactive Object, backed by Signals, using a Proxy.
-* This allows dynamic creation and deletion of signals using the object primitive
-* APIs that most folks are familiar with -- the only difference is instantiation.
-* ```js
-* const obj = new SignalObject({ foo: 123 });
-*
-* obj.foo // 123
-* obj.foo = 456
-* obj.foo // 456
-* obj.bar = 2
-* obj.bar // 2
-* ```
-*/
-const SignalObject = class SignalObjectImpl {
-	static fromEntries(entries) {
-		return new SignalObjectImpl(Object.fromEntries(entries));
-	}
-	#storages = /* @__PURE__ */ new Map();
-	#collection = createStorage();
-	constructor(obj = {}) {
-		let proto = Object.getPrototypeOf(obj);
-		let descs = Object.getOwnPropertyDescriptors(obj);
-		let clone = Object.create(proto);
-		for (let prop in descs) Object.defineProperty(clone, prop, descs[prop]);
-		let self = this;
-		return new Proxy(clone, {
-			get(target, prop, receiver) {
-				self.#readStorageFor(prop);
-				return Reflect.get(target, prop, receiver);
-			},
-			has(target, prop) {
-				self.#readStorageFor(prop);
-				return prop in target;
-			},
-			ownKeys(target) {
-				self.#collection.get();
-				return Reflect.ownKeys(target);
-			},
-			set(target, prop, value, receiver) {
-				let result = Reflect.set(target, prop, value, receiver);
-				self.#dirtyStorageFor(prop);
-				self.#dirtyCollection();
-				return result;
-			},
-			deleteProperty(target, prop) {
-				if (prop in target) {
-					delete target[prop];
-					self.#dirtyStorageFor(prop);
-					self.#dirtyCollection();
-				}
-				return true;
-			},
-			getPrototypeOf() {
-				return SignalObjectImpl.prototype;
-			}
-		});
-	}
-	#readStorageFor(key) {
-		let storage = this.#storages.get(key);
-		if (storage === void 0) {
-			storage = createStorage();
-			this.#storages.set(key, storage);
-		}
-		storage.get();
-	}
-	#dirtyStorageFor(key) {
-		const storage = this.#storages.get(key);
-		if (storage) storage.set(null);
-	}
-	#dirtyCollection() {
-		this.#collection.set(null);
-	}
-};
-var SignalSet = class {
-	collection = createStorage();
-	storages = /* @__PURE__ */ new Map();
-	vals;
-	storageFor(key) {
-		const storages = this.storages;
-		let storage = storages.get(key);
-		if (storage === void 0) {
-			storage = createStorage();
-			storages.set(key, storage);
-		}
-		return storage;
-	}
-	dirtyStorageFor(key) {
-		const storage = this.storages.get(key);
-		if (storage) storage.set(null);
-	}
-	constructor(existing) {
-		this.vals = new Set(existing);
-	}
-	has(value) {
-		this.storageFor(value).get();
-		return this.vals.has(value);
-	}
-	entries() {
-		this.collection.get();
-		return this.vals.entries();
-	}
-	keys() {
-		this.collection.get();
-		return this.vals.keys();
-	}
-	values() {
-		this.collection.get();
-		return this.vals.values();
-	}
-	forEach(fn) {
-		this.collection.get();
-		this.vals.forEach(fn);
-	}
-	get size() {
-		this.collection.get();
-		return this.vals.size;
-	}
-	[Symbol.iterator]() {
-		this.collection.get();
-		return this.vals[Symbol.iterator]();
-	}
-	get [Symbol.toStringTag]() {
-		return this.vals[Symbol.toStringTag];
-	}
-	add(value) {
-		this.dirtyStorageFor(value);
-		this.collection.set(null);
-		this.vals.add(value);
-		return this;
-	}
-	delete(value) {
-		this.dirtyStorageFor(value);
-		this.collection.set(null);
-		return this.vals.delete(value);
-	}
-	clear() {
-		this.storages.forEach((s) => s.set(null));
-		this.collection.set(null);
-		this.vals.clear();
-	}
-};
-Object.setPrototypeOf(SignalSet.prototype, Set.prototype);
-function create() {
-	return new A2uiMessageProcessor({
-		arrayCtor: SignalArray,
-		mapCtor: SignalMap,
-		objCtor: SignalObject,
-		setCtor: SignalSet
-	});
-}
-const Data = {
-	createSignalA2uiMessageProcessor: create,
-	A2uiMessageProcessor,
-	Guards: guards_exports
-};
-/**
-* @license
-* Copyright 2017 Google LLC
-* SPDX-License-Identifier: BSD-3-Clause
-*/
-const t$1 = (t) => (e, o) => {
-	void 0 !== o ? o.addInitializer(() => {
-		customElements.define(t, e);
-	}) : customElements.define(t, e);
-};
-/**
-* @license
-* Copyright 2017 Google LLC
-* SPDX-License-Identifier: BSD-3-Clause
-*/ const o$9 = {
-	attribute: !0,
-	type: String,
-	converter: u$3,
-	reflect: !1,
-	hasChanged: f$3
-}, r$7 = (t = o$9, e, r) => {
-	const { kind: n, metadata: i } = r;
-	let s = globalThis.litPropertyMetadata.get(i);
-	if (void 0 === s && globalThis.litPropertyMetadata.set(i, s = /* @__PURE__ */ new Map()), "setter" === n && ((t = Object.create(t)).wrapped = !0), s.set(r.name, t), "accessor" === n) {
-		const { name: o } = r;
-		return {
-			set(r) {
-				const n = e.get.call(this);
-				e.set.call(this, r), this.requestUpdate(o, n, t, !0, r);
-			},
-			init(e) {
-				return void 0 !== e && this.C(o, void 0, t, e), e;
-			}
-		};
-	}
-	if ("setter" === n) {
-		const { name: o } = r;
-		return function(r) {
-			const n = this[o];
-			e.call(this, r), this.requestUpdate(o, n, t, !0, r);
-		};
-	}
-	throw Error("Unsupported decorator location: " + n);
-};
-function n$6(t) {
-	return (e, o) => "object" == typeof o ? r$7(t, e, o) : ((t, e, o) => {
-		const r = e.hasOwnProperty(o);
-		return e.constructor.createProperty(o, t), r ? Object.getOwnPropertyDescriptor(e, o) : void 0;
-	})(t, e, o);
-}
-/**
-* @license
-* Copyright 2017 Google LLC
-* SPDX-License-Identifier: BSD-3-Clause
-*/ function r$6(r) {
-	return n$6({
-		...r,
-		state: !0,
-		attribute: !1
-	});
-}
-/**
-* @license
-* Copyright 2017 Google LLC
-* SPDX-License-Identifier: BSD-3-Clause
-*/
-const e$6 = (e, t, c) => (c.configurable = !0, c.enumerable = !0, Reflect.decorate && "object" != typeof t && Object.defineProperty(e, t, c), c);
-/**
-* @license
-* Copyright 2017 Google LLC
-* SPDX-License-Identifier: BSD-3-Clause
-*/ function e$5(e, r) {
-	return (n, s, i) => {
-		const o = (t) => t.renderRoot?.querySelector(e) ?? null;
-		if (r) {
-			const { get: e, set: r } = "object" == typeof s ? n : i ?? (() => {
-				const t = Symbol();
-				return {
-					get() {
-						return this[t];
-					},
-					set(e) {
-						this[t] = e;
-					}
-				};
-			})();
-			return e$6(n, s, { get() {
-				let t = e.call(this);
-				return void 0 === t && (t = o(this), (null !== t || this.hasUpdated) && r.call(this, t)), t;
-			} });
-		}
-		return e$6(n, s, { get() {
-			return o(this);
-		} });
-	};
-}
 var __defProp = Object.defineProperty;
 var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, {
 	enumerable: true,
@@ -3309,6 +2372,461 @@ var Signal;
 	})(Signal2.subtle || (Signal2.subtle = {}));
 })(Signal || (Signal = {}));
 /**
+* equality check here is always false so that we can dirty the storage
+* via setting to _anything_
+*
+*
+* This is for a pattern where we don't *directly* use signals to back the values used in collections
+* so that instanceof checks and getters and other native features "just work" without having
+* to do nested proxying.
+*
+* (though, see deep.ts for nested / deep behavior)
+*/
+const createStorage = (initial = null) => new Signal.State(initial, { equals: () => false });
+const ARRAY_GETTER_METHODS = new Set([
+	Symbol.iterator,
+	"concat",
+	"entries",
+	"every",
+	"filter",
+	"find",
+	"findIndex",
+	"flat",
+	"flatMap",
+	"forEach",
+	"includes",
+	"indexOf",
+	"join",
+	"keys",
+	"lastIndexOf",
+	"map",
+	"reduce",
+	"reduceRight",
+	"slice",
+	"some",
+	"values"
+]);
+const ARRAY_WRITE_THEN_READ_METHODS = new Set([
+	"fill",
+	"push",
+	"unshift"
+]);
+function convertToInt(prop) {
+	if (typeof prop === "symbol") return null;
+	const num = Number(prop);
+	if (isNaN(num)) return null;
+	return num % 1 === 0 ? num : null;
+}
+var SignalArray = class SignalArray {
+	/**
+	* Creates an array from an iterable object.
+	* @param iterable An iterable object to convert to an array.
+	*/
+	/**
+	* Creates an array from an iterable object.
+	* @param iterable An iterable object to convert to an array.
+	* @param mapfn A mapping function to call on every element of the array.
+	* @param thisArg Value of 'this' used to invoke the mapfn.
+	*/
+	static from(iterable, mapfn, thisArg) {
+		return mapfn ? new SignalArray(Array.from(iterable, mapfn, thisArg)) : new SignalArray(Array.from(iterable));
+	}
+	static of(...arr) {
+		return new SignalArray(arr);
+	}
+	constructor(arr = []) {
+		let clone = arr.slice();
+		let self = this;
+		let boundFns = /* @__PURE__ */ new Map();
+		/**
+		Flag to track whether we have *just* intercepted a call to `.push()` or
+		`.unshift()`, since in those cases (and only those cases!) the `Array`
+		itself checks `.length` to return from the function call.
+		*/
+		let nativelyAccessingLengthFromPushOrUnshift = false;
+		return new Proxy(clone, {
+			get(target, prop) {
+				let index = convertToInt(prop);
+				if (index !== null) {
+					self.#readStorageFor(index);
+					self.#collection.get();
+					return target[index];
+				}
+				if (prop === "length") {
+					if (nativelyAccessingLengthFromPushOrUnshift) nativelyAccessingLengthFromPushOrUnshift = false;
+					else self.#collection.get();
+					return target[prop];
+				}
+				if (ARRAY_WRITE_THEN_READ_METHODS.has(prop)) nativelyAccessingLengthFromPushOrUnshift = true;
+				if (ARRAY_GETTER_METHODS.has(prop)) {
+					let fn = boundFns.get(prop);
+					if (fn === void 0) {
+						fn = (...args) => {
+							self.#collection.get();
+							return target[prop](...args);
+						};
+						boundFns.set(prop, fn);
+					}
+					return fn;
+				}
+				return target[prop];
+			},
+			set(target, prop, value) {
+				target[prop] = value;
+				let index = convertToInt(prop);
+				if (index !== null) {
+					self.#dirtyStorageFor(index);
+					self.#collection.set(null);
+				} else if (prop === "length") self.#collection.set(null);
+				return true;
+			},
+			getPrototypeOf() {
+				return SignalArray.prototype;
+			}
+		});
+	}
+	#collection = createStorage();
+	#storages = /* @__PURE__ */ new Map();
+	#readStorageFor(index) {
+		let storage = this.#storages.get(index);
+		if (storage === void 0) {
+			storage = createStorage();
+			this.#storages.set(index, storage);
+		}
+		storage.get();
+	}
+	#dirtyStorageFor(index) {
+		const storage = this.#storages.get(index);
+		if (storage) storage.set(null);
+	}
+};
+Object.setPrototypeOf(SignalArray.prototype, Array.prototype);
+var SignalMap = class {
+	collection = createStorage();
+	storages = /* @__PURE__ */ new Map();
+	vals;
+	readStorageFor(key) {
+		const { storages } = this;
+		let storage = storages.get(key);
+		if (storage === void 0) {
+			storage = createStorage();
+			storages.set(key, storage);
+		}
+		storage.get();
+	}
+	dirtyStorageFor(key) {
+		const storage = this.storages.get(key);
+		if (storage) storage.set(null);
+	}
+	constructor(existing) {
+		this.vals = existing ? new Map(existing) : /* @__PURE__ */ new Map();
+	}
+	get(key) {
+		this.readStorageFor(key);
+		return this.vals.get(key);
+	}
+	has(key) {
+		this.readStorageFor(key);
+		return this.vals.has(key);
+	}
+	entries() {
+		this.collection.get();
+		return this.vals.entries();
+	}
+	keys() {
+		this.collection.get();
+		return this.vals.keys();
+	}
+	values() {
+		this.collection.get();
+		return this.vals.values();
+	}
+	forEach(fn) {
+		this.collection.get();
+		this.vals.forEach(fn);
+	}
+	get size() {
+		this.collection.get();
+		return this.vals.size;
+	}
+	[Symbol.iterator]() {
+		this.collection.get();
+		return this.vals[Symbol.iterator]();
+	}
+	get [Symbol.toStringTag]() {
+		return this.vals[Symbol.toStringTag];
+	}
+	set(key, value) {
+		this.dirtyStorageFor(key);
+		this.collection.set(null);
+		this.vals.set(key, value);
+		return this;
+	}
+	delete(key) {
+		this.dirtyStorageFor(key);
+		this.collection.set(null);
+		return this.vals.delete(key);
+	}
+	clear() {
+		this.storages.forEach((s) => s.set(null));
+		this.collection.set(null);
+		this.vals.clear();
+	}
+};
+Object.setPrototypeOf(SignalMap.prototype, Map.prototype);
+/**
+* Create a reactive Object, backed by Signals, using a Proxy.
+* This allows dynamic creation and deletion of signals using the object primitive
+* APIs that most folks are familiar with -- the only difference is instantiation.
+* ```js
+* const obj = new SignalObject({ foo: 123 });
+*
+* obj.foo // 123
+* obj.foo = 456
+* obj.foo // 456
+* obj.bar = 2
+* obj.bar // 2
+* ```
+*/
+const SignalObject = class SignalObjectImpl {
+	static fromEntries(entries) {
+		return new SignalObjectImpl(Object.fromEntries(entries));
+	}
+	#storages = /* @__PURE__ */ new Map();
+	#collection = createStorage();
+	constructor(obj = {}) {
+		let proto = Object.getPrototypeOf(obj);
+		let descs = Object.getOwnPropertyDescriptors(obj);
+		let clone = Object.create(proto);
+		for (let prop in descs) Object.defineProperty(clone, prop, descs[prop]);
+		let self = this;
+		return new Proxy(clone, {
+			get(target, prop, receiver) {
+				self.#readStorageFor(prop);
+				return Reflect.get(target, prop, receiver);
+			},
+			has(target, prop) {
+				self.#readStorageFor(prop);
+				return prop in target;
+			},
+			ownKeys(target) {
+				self.#collection.get();
+				return Reflect.ownKeys(target);
+			},
+			set(target, prop, value, receiver) {
+				let result = Reflect.set(target, prop, value, receiver);
+				self.#dirtyStorageFor(prop);
+				self.#dirtyCollection();
+				return result;
+			},
+			deleteProperty(target, prop) {
+				if (prop in target) {
+					delete target[prop];
+					self.#dirtyStorageFor(prop);
+					self.#dirtyCollection();
+				}
+				return true;
+			},
+			getPrototypeOf() {
+				return SignalObjectImpl.prototype;
+			}
+		});
+	}
+	#readStorageFor(key) {
+		let storage = this.#storages.get(key);
+		if (storage === void 0) {
+			storage = createStorage();
+			this.#storages.set(key, storage);
+		}
+		storage.get();
+	}
+	#dirtyStorageFor(key) {
+		const storage = this.#storages.get(key);
+		if (storage) storage.set(null);
+	}
+	#dirtyCollection() {
+		this.#collection.set(null);
+	}
+};
+var SignalSet = class {
+	collection = createStorage();
+	storages = /* @__PURE__ */ new Map();
+	vals;
+	storageFor(key) {
+		const storages = this.storages;
+		let storage = storages.get(key);
+		if (storage === void 0) {
+			storage = createStorage();
+			storages.set(key, storage);
+		}
+		return storage;
+	}
+	dirtyStorageFor(key) {
+		const storage = this.storages.get(key);
+		if (storage) storage.set(null);
+	}
+	constructor(existing) {
+		this.vals = new Set(existing);
+	}
+	has(value) {
+		this.storageFor(value).get();
+		return this.vals.has(value);
+	}
+	entries() {
+		this.collection.get();
+		return this.vals.entries();
+	}
+	keys() {
+		this.collection.get();
+		return this.vals.keys();
+	}
+	values() {
+		this.collection.get();
+		return this.vals.values();
+	}
+	forEach(fn) {
+		this.collection.get();
+		this.vals.forEach(fn);
+	}
+	get size() {
+		this.collection.get();
+		return this.vals.size;
+	}
+	[Symbol.iterator]() {
+		this.collection.get();
+		return this.vals[Symbol.iterator]();
+	}
+	get [Symbol.toStringTag]() {
+		return this.vals[Symbol.toStringTag];
+	}
+	add(value) {
+		this.dirtyStorageFor(value);
+		this.collection.set(null);
+		this.vals.add(value);
+		return this;
+	}
+	delete(value) {
+		this.dirtyStorageFor(value);
+		this.collection.set(null);
+		return this.vals.delete(value);
+	}
+	clear() {
+		this.storages.forEach((s) => s.set(null));
+		this.collection.set(null);
+		this.vals.clear();
+	}
+};
+Object.setPrototypeOf(SignalSet.prototype, Set.prototype);
+function create() {
+	return new A2uiMessageProcessor({
+		arrayCtor: SignalArray,
+		mapCtor: SignalMap,
+		objCtor: SignalObject,
+		setCtor: SignalSet
+	});
+}
+const Data = {
+	createSignalA2uiMessageProcessor: create,
+	A2uiMessageProcessor,
+	Guards: guards_exports
+};
+/**
+* @license
+* Copyright 2017 Google LLC
+* SPDX-License-Identifier: BSD-3-Clause
+*/
+const t$1 = (t) => (e, o) => {
+	void 0 !== o ? o.addInitializer(() => {
+		customElements.define(t, e);
+	}) : customElements.define(t, e);
+};
+/**
+* @license
+* Copyright 2017 Google LLC
+* SPDX-License-Identifier: BSD-3-Clause
+*/ const o$9 = {
+	attribute: !0,
+	type: String,
+	converter: u$3,
+	reflect: !1,
+	hasChanged: f$3
+}, r$7 = (t = o$9, e, r) => {
+	const { kind: n, metadata: i } = r;
+	let s = globalThis.litPropertyMetadata.get(i);
+	if (void 0 === s && globalThis.litPropertyMetadata.set(i, s = /* @__PURE__ */ new Map()), "setter" === n && ((t = Object.create(t)).wrapped = !0), s.set(r.name, t), "accessor" === n) {
+		const { name: o } = r;
+		return {
+			set(r) {
+				const n = e.get.call(this);
+				e.set.call(this, r), this.requestUpdate(o, n, t, !0, r);
+			},
+			init(e) {
+				return void 0 !== e && this.C(o, void 0, t, e), e;
+			}
+		};
+	}
+	if ("setter" === n) {
+		const { name: o } = r;
+		return function(r) {
+			const n = this[o];
+			e.call(this, r), this.requestUpdate(o, n, t, !0, r);
+		};
+	}
+	throw Error("Unsupported decorator location: " + n);
+};
+function n$6(t) {
+	return (e, o) => "object" == typeof o ? r$7(t, e, o) : ((t, e, o) => {
+		const r = e.hasOwnProperty(o);
+		return e.constructor.createProperty(o, t), r ? Object.getOwnPropertyDescriptor(e, o) : void 0;
+	})(t, e, o);
+}
+/**
+* @license
+* Copyright 2017 Google LLC
+* SPDX-License-Identifier: BSD-3-Clause
+*/ function r$6(r) {
+	return n$6({
+		...r,
+		state: !0,
+		attribute: !1
+	});
+}
+/**
+* @license
+* Copyright 2017 Google LLC
+* SPDX-License-Identifier: BSD-3-Clause
+*/
+const e$6 = (e, t, c) => (c.configurable = !0, c.enumerable = !0, Reflect.decorate && "object" != typeof t && Object.defineProperty(e, t, c), c);
+/**
+* @license
+* Copyright 2017 Google LLC
+* SPDX-License-Identifier: BSD-3-Clause
+*/ function e$5(e, r) {
+	return (n, s, i) => {
+		const o = (t) => t.renderRoot?.querySelector(e) ?? null;
+		if (r) {
+			const { get: e, set: r } = "object" == typeof s ? n : i ?? (() => {
+				const t = Symbol();
+				return {
+					get() {
+						return this[t];
+					},
+					set(e) {
+						this[t] = e;
+					}
+				};
+			})();
+			return e$6(n, s, { get() {
+				let t = e.call(this);
+				return void 0 === t && (t = o(this), (null !== t || this.hasUpdated) && r.call(this, t)), t;
+			} });
+		}
+		return e$6(n, s, { get() {
+			return o(this);
+		} });
+	};
+}
+/**
 * @license
 * Copyright 2023 Google LLC
 * SPDX-License-Identifier: BSD-3-Clause
@@ -3498,7 +3016,7 @@ function* o$3(o, f) {
 	}
 }
 let pending = false;
-let watcher = new Signal$1.subtle.Watcher(() => {
+let watcher = new Signal.subtle.Watcher(() => {
 	if (!pending) {
 		pending = true;
 		queueMicrotask(() => {
@@ -3516,7 +3034,7 @@ function flushPending() {
 * This will produce a memory leak.
 */
 function effect(cb) {
-	let c = new Signal$1.Computed(() => cb());
+	let c = new Signal.Computed(() => cb());
 	watcher.watch(c);
 	c.get();
 	return () => {

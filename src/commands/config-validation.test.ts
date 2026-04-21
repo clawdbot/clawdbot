@@ -3,11 +3,11 @@ import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import { createCompatibilityNotice } from "../plugins/status.test-helpers.js";
 import { requireValidConfigSnapshot } from "./config-validation.js";
 
-const { readConfigFileSnapshot, buildPluginCompatibilityNotices } = vi.hoisted(() => ({
+const { readConfigFileSnapshot, buildPluginCompatibilitySnapshotNotices } = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
-  buildPluginCompatibilityNotices: vi.fn<(_params?: unknown) => PluginCompatibilityNotice[]>(
-    () => [],
-  ),
+  buildPluginCompatibilitySnapshotNotices: vi.fn<
+    (_params?: unknown) => PluginCompatibilityNotice[]
+  >(() => []),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -15,7 +15,7 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../plugins/status.js", () => ({
-  buildPluginCompatibilityNotices,
+  buildPluginCompatibilitySnapshotNotices,
   formatPluginCompatibilityNotice: (notice: { pluginId: string; message: string }) =>
     `${notice.pluginId} ${notice.message}`,
 }));
@@ -32,7 +32,7 @@ describe("requireValidConfigSnapshot", () => {
       config: { plugins: {} },
       issues: [],
     });
-    buildPluginCompatibilityNotices.mockReturnValue([
+    buildPluginCompatibilitySnapshotNotices.mockReturnValue([
       createCompatibilityNotice({ pluginId: "legacy-plugin", code: "legacy-before-agent-start" }),
     ]);
   }
@@ -54,7 +54,7 @@ describe("requireValidConfigSnapshot", () => {
     expect(config).toEqual({ plugins: {} });
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
-    expect(buildPluginCompatibilityNotices).not.toHaveBeenCalled();
+    expect(buildPluginCompatibilitySnapshotNotices).not.toHaveBeenCalled();
     expect(runtime.log).not.toHaveBeenCalled();
   });
 

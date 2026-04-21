@@ -186,7 +186,7 @@ describe("scanStatus", () => {
     });
   });
 
-  it("preloads configured channel plugins for status --json when channel config exists", async () => {
+  it("keeps status --json on read-only channel metadata when channel config exists", async () => {
     configureScanStatus({
       hasConfiguredChannels: true,
       sourceConfig: createStatusScanConfig({
@@ -204,13 +204,7 @@ describe("scanStatus", () => {
 
     await scanStatus({ json: true }, {} as never);
 
-    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
-      expect.objectContaining({
-        scope: "configured-channels",
-        config: expect.objectContaining({ marker: "resolved-preload" }),
-        activationSourceConfig: expect.objectContaining({ marker: "source-preload" }),
-      }),
-    );
+    expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
     // Verify plugin logs were routed to stderr during loading and restored after
     expect(loggingStateRef.forceConsoleToStderr).toBe(false);
     expect(mocks.probeGateway).toHaveBeenCalledWith(
@@ -221,7 +215,7 @@ describe("scanStatus", () => {
     );
   });
 
-  it("preloads configured channel plugins for status --json when channel auth is env-only", async () => {
+  it("keeps status --json on read-only channel metadata when channel auth is env-only", async () => {
     configureScanStatus({
       hasConfiguredChannels: true,
       sourceConfig: createStatusScanConfig({
@@ -239,12 +233,6 @@ describe("scanStatus", () => {
       await scanStatus({ json: true }, {} as never);
     });
 
-    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
-      expect.objectContaining({
-        scope: "configured-channels",
-        config: expect.objectContaining({ marker: "resolved-env-only" }),
-        activationSourceConfig: expect.objectContaining({ marker: "source-env-only" }),
-      }),
-    );
+    expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
   });
 });

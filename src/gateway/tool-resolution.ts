@@ -3,8 +3,12 @@ import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import {
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
-  resolveSubagentToolPolicy,
+  resolveSubagentToolPolicyForSession,
 } from "../agents/pi-tools.policy.js";
+import {
+  isSubagentEnvelopeSession,
+  resolveSubagentCapabilityStore,
+} from "../agents/subagent-capabilities.js";
 import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
@@ -18,7 +22,6 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
-import { isSubagentSessionKey } from "../routing/session-key.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "../security/dangerous-tools.js";
 
 export type GatewayScopedToolSurface = "http" | "loopback";
@@ -61,8 +64,16 @@ export function resolveGatewayScopedTools(params: {
     messageProvider: params.messageProvider,
     accountId: params.accountId ?? null,
   });
-  const subagentPolicy = isSubagentSessionKey(params.sessionKey)
-    ? resolveSubagentToolPolicy(params.cfg)
+  const subagentStore = resolveSubagentCapabilityStore(params.sessionKey, {
+    cfg: params.cfg,
+  });
+  const subagentPolicy = isSubagentEnvelopeSession(params.sessionKey, {
+    cfg: params.cfg,
+    store: subagentStore,
+  })
+    ? resolveSubagentToolPolicyForSession(params.cfg, params.sessionKey, {
+        store: subagentStore,
+      })
     : undefined;
   const workspaceDir = resolveAgentWorkspaceDir(
     params.cfg,

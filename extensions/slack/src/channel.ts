@@ -3,13 +3,9 @@ import {
   createAccountScopedAllowlistNameResolver,
   createFlatAllowlistOverrideResolver,
 } from "openclaw/plugin-sdk/allowlist-config-edit";
-import {
-  adaptScopedAccountAccessor,
-  createScopedDmSecurityResolver,
-} from "openclaw/plugin-sdk/channel-config-helpers";
+import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
-import { createOpenProviderConfiguredRouteWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import {
   createChannelDirectoryAdapter,
   createRuntimeDirectoryLiveAdapter,
@@ -62,7 +58,7 @@ import type { SlackProbe } from "./probe.js";
 import { resolveSlackReplyBlocks } from "./reply-blocks.js";
 import { getOptionalSlackRuntime, getSlackRuntime } from "./runtime.js";
 import { fetchSlackScopes } from "./scopes.js";
-import { collectSlackSecurityAuditFindings } from "./security-audit.js";
+import { slackSecurityAdapter } from "./security.js";
 import { slackSetupAdapter } from "./setup-core.js";
 import { slackSetupWizard } from "./setup-surface.js";
 import {
@@ -73,18 +69,6 @@ import {
 } from "./shared.js";
 import { parseSlackTarget } from "./target-parsing.js";
 import { buildSlackThreadingToolContext } from "./threading-tool-context.js";
-
-const resolveSlackDmPolicy = createScopedDmSecurityResolver<ResolvedSlackAccount>({
-  channelKey: "slack",
-  resolvePolicy: (account) => account.dm?.policy,
-  resolveAllowFrom: (account) => account.dm?.allowFrom,
-  allowFromPathSuffix: "dm.",
-  normalizeEntry: (raw) =>
-    raw
-      .trim()
-      .replace(/^(slack|user):/i, "")
-      .trim(),
-});
 
 async function resolveSlackHandleAction() {
   return (
@@ -288,26 +272,6 @@ const resolveSlackAllowlistNames = createAccountScopedAllowlistNameResolver({
   resolveNames: async ({ token, entries }) =>
     (await loadSlackResolveUsersModule()).resolveSlackUserAllowlist({ token, entries }),
 });
-
-const collectSlackSecurityWarnings =
-  createOpenProviderConfiguredRouteWarningCollector<ResolvedSlackAccount>({
-    providerConfigPresent: (cfg) => cfg.channels?.slack !== undefined,
-    resolveGroupPolicy: (account) => account.config.groupPolicy,
-    resolveRouteAllowlistConfigured: (account) =>
-      Boolean(account.config.channels) && Object.keys(account.config.channels ?? {}).length > 0,
-    configureRouteAllowlist: {
-      surface: "Slack channels",
-      openScope: "any channel not explicitly denied",
-      groupPolicyPath: "channels.slack.groupPolicy",
-      routeAllowlistPath: "channels.slack.channels",
-    },
-    missingRouteAllowlist: {
-      surface: "Slack channels",
-      openBehavior: "with no channel allowlist; any channel can trigger (mention-gated)",
-      remediation:
-        'Set channels.slack.groupPolicy="allowlist" and configure channels.slack.channels',
-    },
-  });
 
 export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = createChatChannelPlugin<
   ResolvedSlackAccount,
@@ -554,11 +518,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
       },
     },
   },
-  security: {
-    resolveDmPolicy: resolveSlackDmPolicy,
-    collectWarnings: collectSlackSecurityWarnings,
-    collectAuditFindings: collectSlackSecurityAuditFindings,
-  },
+  security: slackSecurityAdapter,
   threading: {
     scopedAccountReplyToMode: {
       resolveAccount: adaptScopedAccountAccessor(resolveSlackAccount),

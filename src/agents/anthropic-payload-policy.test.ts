@@ -86,7 +86,7 @@ describe("anthropic payload policy", () => {
     });
   });
 
-  it("denies proxied Anthropic service tier and omits long-TTL upgrades for custom hosts", () => {
+  it("denies proxied Anthropic service tier but honors explicit long TTL for custom hosts", () => {
     const policy = resolveAnthropicPayloadPolicy({
       provider: "anthropic",
       api: "anthropic-messages",
@@ -103,6 +103,59 @@ describe("anthropic payload policy", () => {
     applyAnthropicPayloadPolicyToParams(payload, policy);
 
     expect(payload).not.toHaveProperty("service_tier");
+    expect(payload.system).toEqual([textBlock("Follow policy.", { type: "ephemeral", ttl: "1h" })]);
+    expect(payload.messages[0]).toEqual({
+      role: "user",
+      content: [{ type: "text", text: "Hello", cache_control: { type: "ephemeral", ttl: "1h" } }],
+    });
+  });
+
+  it("keeps implicit env-driven long retention conservative for custom hosts", () => {
+    const previous = process.env.PI_CACHE_RETENTION;
+    process.env.PI_CACHE_RETENTION = "long";
+    try {
+      const policy = resolveAnthropicPayloadPolicy({
+        provider: "anthropic",
+        api: "anthropic-messages",
+        baseUrl: "https://proxy.example.com/anthropic",
+        enableCacheControl: true,
+      });
+      const payload: TestPayload = {
+        system: [{ type: "text", text: "Follow policy." }],
+        messages: [{ role: "user", content: "Hello" }],
+      };
+
+      applyAnthropicPayloadPolicyToParams(payload, policy);
+
+      expect(payload.system).toEqual([textBlock("Follow policy.", { type: "ephemeral" })]);
+      expect(payload.messages[0]).toEqual({
+        role: "user",
+        content: [{ type: "text", text: "Hello", cache_control: { type: "ephemeral" } }],
+      });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.PI_CACHE_RETENTION;
+      } else {
+        process.env.PI_CACHE_RETENTION = previous;
+      }
+    }
+  });
+
+  it("keeps explicit short retention unchanged for custom hosts", () => {
+    const policy = resolveAnthropicPayloadPolicy({
+      provider: "anthropic",
+      api: "anthropic-messages",
+      baseUrl: "https://proxy.example.com/anthropic",
+      cacheRetention: "short",
+      enableCacheControl: true,
+    });
+    const payload: TestPayload = {
+      system: [{ type: "text", text: "Follow policy." }],
+      messages: [{ role: "user", content: "Hello" }],
+    };
+
+    applyAnthropicPayloadPolicyToParams(payload, policy);
+
     expect(payload.system).toEqual([textBlock("Follow policy.", { type: "ephemeral" })]);
     expect(payload.messages[0]).toEqual({
       role: "user",

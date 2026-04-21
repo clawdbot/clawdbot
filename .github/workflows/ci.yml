@@ -2004,7 +2004,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight, build-artifacts]
     if: always() && needs.preflight.outputs.run_macos_node == 'true' && needs.build-artifacts.result == 'success'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-6vcpu-macos-latest' || 'macos-latest' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-latest' || 'macos-latest' }}
     timeout-minutes: 20
     strategy:
       fail-fast: false

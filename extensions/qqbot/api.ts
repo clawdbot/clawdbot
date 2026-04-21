@@ -1,9 +1,10 @@
 export { qqbotPlugin } from "./src/channel.js";
 export { qqbotSetupPlugin } from "./src/channel.setup.js";
-export { getFrameworkCommands } from "./src/slash-commands.js";
-export { registerChannelTool } from "./src/tools/channel.js";
-export { registerRemindTool } from "./src/tools/remind.js";
+export { getFrameworkCommands } from "./src/engine/commands/slash-commands-impl.js";
+export { registerChannelTool } from "./src/bridge/tools/channel.js";
+export { registerRemindTool } from "./src/bridge/tools/remind.js";
+export { registerQQBotTools } from "./src/bridge/tools/index.js";
+export { registerQQBotFull } from "./src/bridge/channel-entry.js";
 export * from "./src/types.js";
-export * from "./src/config.js";
-export * from "./src/outbound.js";
-export * from "./src/proactive.js";
+export * from "./src/bridge/config.js";
+export * from "./src/engine/messaging/outbound.js";

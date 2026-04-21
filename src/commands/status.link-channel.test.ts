@@ -3,8 +3,8 @@ import type { OpenClawConfig } from "../config/config.js";
 
 const pluginRegistry = vi.hoisted(() => ({ list: [] as unknown[] }));
 
-vi.mock("../channels/plugins/index.js", () => ({
-  listChannelPlugins: () => pluginRegistry.list,
+vi.mock("../channels/plugins/read-only.js", () => ({
+  listReadOnlyChannelPluginsForConfig: () => pluginRegistry.list,
 }));
 
 vi.mock("../channels/read-only-account-inspect.js", () => ({

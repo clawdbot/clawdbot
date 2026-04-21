@@ -1,4 +1,7 @@
 import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
+import type { QQBotDmPolicy, QQBotGroupPolicy } from "./engine/access/index.js";
+
+export type { QQBotDmPolicy, QQBotGroupPolicy };
 
 /** QQ Bot base config. */
 export interface QQBotConfig {
@@ -22,6 +25,15 @@ export interface ResolvedQQBotAccount {
   config: QQBotAccountConfig;
 }
 
+/** QQBot-native exec approval delivery + approver authorization. */
+export interface QQBotExecApprovalConfig {
+  enabled?: boolean | "auto";
+  approvers?: string[];
+  agentFilter?: string[];
+  sessionFilter?: string[];
+  target?: "dm" | "channel" | "both";
+}
+
 /** QQ Bot account config from user settings. */
 export interface QQBotAccountConfig {
   enabled?: boolean;
@@ -29,11 +41,45 @@ export interface QQBotAccountConfig {
   appId?: string;
   clientSecret?: SecretInput;
   clientSecretFile?: string;
+  /**
+   * Sender allowlist for direct-message access control and command
+   * authorization. Entries accept raw openids, `qqbot:OPENID` prefixed
+   * form, and the `"*"` wildcard. Matching is case-insensitive.
+   *
+   * Semantics depend on {@link dmPolicy}:
+   *   - `dmPolicy="open"` (default when allowFrom is empty or contains `"*"`)
+   *     — everyone can DM the bot; the list only influences command gating.
+   *   - `dmPolicy="allowlist"` (default when a non-wildcard list is configured)
+   *     — only listed openids may DM the bot; other DMs are dropped.
+   *   - `dmPolicy="disabled"` — all DMs are dropped regardless of this list.
+   *
+   * For group access, see {@link groupAllowFrom} / {@link groupPolicy}.
+   */
   allowFrom?: string[];
+  /**
+   * Group-scoped sender allowlist. If omitted, group access falls back to
+   * {@link allowFrom}. Set explicitly when the group whitelist needs to
+   * differ from the DM whitelist.
+   */
+  groupAllowFrom?: string[];
+  /**
+   * DM access policy. Defaults:
+   *   - omitted + allowFrom empty/wildcard → `"open"`
+   *   - omitted + allowFrom non-wildcard   → `"allowlist"`
+   */
+  dmPolicy?: QQBotDmPolicy;
+  /**
+   * Group access policy. Defaults mirror {@link dmPolicy}: if either
+   * `groupAllowFrom` or `allowFrom` has a non-wildcard entry the policy
+   * is `"allowlist"`, otherwise `"open"`.
+   */
+  groupPolicy?: QQBotGroupPolicy;
   /** Optional system prompt prepended to user messages. */
   systemPrompt?: string;
   /** Whether markdown output is enabled. Defaults to true. */
   markdownSupport?: boolean;
+  /** QQBot-native exec approval delivery + approver authorization. */
+  execApprovals?: QQBotExecApprovalConfig;
   /**
    * @deprecated Use audioFormatPolicy.uploadDirectFormats instead.
    * Legacy list of formats that can upload directly without SILK conversion.

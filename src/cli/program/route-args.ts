@@ -242,3 +242,22 @@ export function parseModelsStatusRouteArgs(argv: string[]) {
     probe: hasFlag(argv, "--probe"),
   };
 }
+
+export function parseChannelsListRouteArgs(argv: string[]) {
+  return {
+    json: hasFlag(argv, "--json"),
+    usage: !hasFlag(argv, "--no-usage"),
+  };
+}
+
+export function parseChannelsStatusRouteArgs(argv: string[]) {
+  const timeout = parseOptionalFlagValue(argv, "--timeout");
+  if (!timeout.ok) {
+    return null;
+  }
+  return {
+    json: hasFlag(argv, "--json"),
+    probe: hasFlag(argv, "--probe"),
+    timeout: timeout.value,
+  };
+}

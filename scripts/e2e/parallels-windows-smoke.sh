@@ -937,10 +937,11 @@ EOF
 }
 
 ensure_mingit_zip() {
-  local mingit_name mingit_url
-  mapfile -t mingit_meta < <(resolve_mingit_download)
-  mingit_name="${mingit_meta[0]}"
-  mingit_url="${mingit_meta[1]}"
+  local mingit_name mingit_url mingit_meta
+  mingit_meta="$(resolve_mingit_download)"
+  mingit_name="${mingit_meta%%$'\n'*}"
+  mingit_url="${mingit_meta#*$'\n'}"
+  [[ "$mingit_name" != "$mingit_url" ]] || die "failed to resolve MinGit download metadata"
   MINGIT_ZIP_NAME="$mingit_name"
   MINGIT_ZIP_PATH="$MAIN_TGZ_DIR/$mingit_name"
   if [[ ! -f "$MINGIT_ZIP_PATH" ]]; then

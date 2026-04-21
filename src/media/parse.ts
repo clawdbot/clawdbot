@@ -184,7 +184,7 @@ export function splitMediaFromOutput(raw: string): {
     }
 
     const trimmedStart = line.trimStart();
-    if (!trimmedStart.startsWith("MEDIA:")) {
+    if (!trimmedStart.toUpperCase().startsWith("MEDIA:")) {
       keptLines.push(line);
       pushTextSegment(line);
       lineOffset += line.length + 1; // +1 for newline

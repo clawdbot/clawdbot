@@ -9,7 +9,9 @@ export type CliRoutedCommandId =
   | "config-get"
   | "config-unset"
   | "models-list"
-  | "models-status";
+  | "models-status"
+  | "channels-list"
+  | "channels-status";
 
 export type CliCommandPathPolicy = {
   bypassConfigGuard: boolean;
@@ -39,16 +41,16 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["status"],
     policy: {
-      loadPlugins: "text-only",
+      loadPlugins: "never",
       routeConfigGuard: "when-suppressed",
       ensureCliPath: false,
     },
-    route: { id: "status", preloadPlugins: true },
+    route: { id: "status" },
   },
   {
     commandPath: ["health"],
-    policy: { loadPlugins: "text-only", ensureCliPath: false },
-    route: { id: "health", preloadPlugins: true },
+    policy: { loadPlugins: "never", ensureCliPath: false },
+    route: { id: "health" },
   },
   {
     commandPath: ["gateway", "status"],
@@ -125,5 +127,17 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     commandPath: ["channels", "add"],
     exact: true,
     policy: { loadPlugins: "never" },
+  },
+  {
+    commandPath: ["channels", "status"],
+    exact: true,
+    policy: { loadPlugins: "never" },
+    route: { id: "channels-status" },
+  },
+  {
+    commandPath: ["channels", "list"],
+    exact: true,
+    policy: { loadPlugins: "never" },
+    route: { id: "channels-list" },
   },
 ];

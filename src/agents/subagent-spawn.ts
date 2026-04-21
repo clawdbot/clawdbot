@@ -36,6 +36,7 @@ import {
 import {
   ADMIN_SCOPE,
   AGENT_LANE_SUBAGENT,
+  DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT,
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
   buildSubagentSystemPrompt,
   callGateway,
@@ -436,7 +437,8 @@ export async function spawnSubagentDirect(
     };
   }
 
-  const maxChildren = cfg.agents?.defaults?.subagents?.maxChildrenPerAgent ?? 5;
+  const maxChildren =
+    cfg.agents?.defaults?.subagents?.maxChildrenPerAgent ?? DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT;
   const activeChildren = countActiveRunsForSession(requesterInternalKey);
   if (activeChildren >= maxChildren) {
     return {

@@ -1,5 +1,8 @@
 export { formatThinkingLevels, normalizeThinkLevel } from "../auto-reply/thinking.js";
-export { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
+export {
+  DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT,
+  DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
+} from "../config/agent-limits.js";
 export { loadConfig } from "../config/config.js";
 export { mergeSessionEntry, updateSessionStore } from "../config/sessions.js";
 export { callGateway } from "../gateway/call.js";

@@ -1,5 +1,8 @@
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
-import { qqbotBasePluginFields } from "./channel-base.js";
+import "./bridge/bootstrap.js";
+import { qqbotConfigAdapter, qqbotMeta, qqbotSetupAdapterShared } from "./bridge/config-shared.js";
+import { qqbotSetupWizard } from "./bridge/setup/surface.js";
+import { qqbotChannelConfigSchema } from "./config-schema.js";
 import type { ResolvedQQBotAccount } from "./types.js";
 
 /**
@@ -7,5 +10,24 @@ import type { ResolvedQQBotAccount } from "./types.js";
  * and `openclaw configure` without pulling the full runtime dependencies.
  */
 export const qqbotSetupPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
-  ...qqbotBasePluginFields,
+  id: "qqbot",
+  setupWizard: qqbotSetupWizard,
+  meta: {
+    ...qqbotMeta,
+  },
+  capabilities: {
+    chatTypes: ["direct", "group"],
+    media: true,
+    reactions: false,
+    threads: false,
+    blockStreaming: true,
+  },
+  reload: { configPrefixes: ["channels.qqbot"] },
+  configSchema: qqbotChannelConfigSchema,
+  config: {
+    ...qqbotConfigAdapter,
+  },
+  setup: {
+    ...qqbotSetupAdapterShared,
+  },
 };

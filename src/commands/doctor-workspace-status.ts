@@ -2,10 +2,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  buildPluginCompatibilityWarnings,
-  buildPluginDiagnosticsReport,
-} from "../plugins/status.js";
+import { buildPluginCompatibilityWarnings, buildPluginSnapshotReport } from "../plugins/status.js";
 import { listTasksForFlowId } from "../tasks/runtime-internal.js";
 import { listTaskFlowRecords } from "../tasks/task-flow-runtime-internal.js";
 import { note } from "../terminal/note.js";
@@ -72,7 +69,7 @@ export function noteWorkspaceStatus(cfg: OpenClawConfig) {
     "Skills status",
   );
 
-  const pluginRegistry = buildPluginDiagnosticsReport({
+  const pluginRegistry = buildPluginSnapshotReport({
     config: cfg,
     workspaceDir,
   });

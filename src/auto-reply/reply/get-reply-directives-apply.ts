@@ -248,7 +248,7 @@ export async function applyInlineDirectiveOverrides(params: {
       }
       const modelSelection = modelResolution.modelSelection;
       if (modelSelection) {
-        await (
+        const persisted = await (
           await loadDirectivePersist()
         ).persistInlineDirectives({
           directives,
@@ -279,6 +279,9 @@ export async function applyInlineDirectiveOverrides(params: {
         const label = `${modelSelection.provider}/${modelSelection.model}`;
         const labelWithAlias = modelSelection.alias ? `${modelSelection.alias} (${label})` : label;
         const parts = [
+          persisted.thinkingRemap
+            ? `Thinking level set to ${persisted.thinkingRemap.to} (${persisted.thinkingRemap.from} not supported for ${persisted.thinkingRemap.provider}/${persisted.thinkingRemap.model}).`
+            : undefined,
           modelSelection.isDefault
             ? `Model reset to default (${labelWithAlias}).`
             : `Model set to ${labelWithAlias}.`,

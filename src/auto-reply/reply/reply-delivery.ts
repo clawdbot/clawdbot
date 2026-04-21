@@ -26,7 +26,7 @@ export function normalizeReplyPayloadDirectives(params: {
     parseMode === "always" ||
     (parseMode === "auto" &&
       (sourceText.includes("[[") ||
-        sourceText.includes("MEDIA:") ||
+        /media:/i.test(sourceText) ||
         sourceText.includes(silentToken)));
 
   const parsed = shouldParse

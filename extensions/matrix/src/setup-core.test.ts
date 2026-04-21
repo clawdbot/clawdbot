@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { matrixSetupAdapter } from "./setup-core.js";
+import type { ChannelSetupWizardAdapter } from "openclaw/plugin-sdk/setup";
+import { describe, expect, it, vi } from "vitest";
+import { createMatrixSetupWizardProxy, matrixSetupAdapter } from "./setup-core.js";
 import type { CoreConfig } from "./types.js";
 
 function applyOpsAccountConfig(cfg: CoreConfig): CoreConfig {
@@ -34,6 +35,138 @@ function expectOpsAccount(next: CoreConfig): void {
     accessToken: "ops-token",
   });
 }
+
+function makeFakeSetupWizard(
+  overrides: Partial<ChannelSetupWizardAdapter> = {},
+): ChannelSetupWizardAdapter {
+  return {
+    channel: "matrix",
+    getStatus: vi.fn(async () => ({
+      channel: "matrix",
+      configured: false,
+      statusLines: [],
+    })),
+    configure: vi.fn(async ({ cfg }) => ({ cfg })),
+    ...overrides,
+  } as ChannelSetupWizardAdapter;
+}
+
+describe("createMatrixSetupWizardProxy", () => {
+  it("does not load the setup surface when constructing the proxy", () => {
+    const loader = vi.fn(async () => ({ matrixSetupWizard: makeFakeSetupWizard() }));
+
+    const proxy = createMatrixSetupWizardProxy(loader);
+
+    expect(proxy.channel).toBe("matrix");
+    expect(loader).not.toHaveBeenCalled();
+  });
+
+  it("loads the setup surface when setup status is requested", async () => {
+    const status = {
+      channel: "matrix" as const,
+      configured: true,
+      statusLines: ["Matrix: configured"],
+    };
+    const getStatus = vi.fn(async () => status);
+    const configure = vi.fn(async ({ cfg }) => ({ cfg }));
+    const loader = vi.fn(async () => ({
+      matrixSetupWizard: makeFakeSetupWizard({ configure, getStatus }),
+    }));
+    const proxy = createMatrixSetupWizardProxy(loader);
+    const cfg = { channels: { matrix: {} } } as CoreConfig;
+
+    const result = await proxy.getStatus({ cfg, accountOverrides: {} });
+    const configured = await proxy.configure({
+      cfg,
+      runtime: {} as never,
+      prompter: {} as never,
+      forceAllowFrom: false,
+      accountOverrides: {},
+      shouldPromptAccountIds: false,
+    });
+
+    expect(loader).toHaveBeenCalledTimes(1);
+    expect(getStatus).toHaveBeenCalledWith({ cfg, accountOverrides: {} });
+    expect(configure).toHaveBeenCalledTimes(1);
+    expect(result).toBe(status);
+    expect(configured).toEqual({ cfg });
+  });
+
+  it("keeps sync dmPolicy helpers local and lazy-loads only promptAllowFrom", async () => {
+    const promptAllowFrom = vi.fn(async ({ cfg }) => cfg);
+    const loader = vi.fn(async () => ({
+      matrixSetupWizard: makeFakeSetupWizard({
+        dmPolicy: {
+          label: "Matrix",
+          channel: "matrix",
+          policyKey: "unused",
+          allowFromKey: "unused",
+          getCurrent: () => "pairing",
+          setPolicy: (cfg) => cfg,
+          promptAllowFrom,
+        },
+      }),
+    }));
+    const proxy = createMatrixSetupWizardProxy(loader);
+    const cfg = {
+      channels: {
+        matrix: {
+          accounts: {
+            ops: {
+              dm: {
+                allowFrom: ["  @ops:example.org  ", "", "*"],
+              },
+            },
+          },
+        },
+      },
+    } as CoreConfig;
+
+    expect(proxy.dmPolicy?.getCurrent(cfg, "ops")).toBe("pairing");
+    const next = proxy.dmPolicy?.setPolicy(cfg, "open", "ops") as CoreConfig;
+
+    expect(next.channels?.matrix?.accounts?.ops?.dm).toMatchObject({
+      policy: "open",
+      allowFrom: ["@ops:example.org", "*"],
+    });
+    expect(loader).not.toHaveBeenCalled();
+
+    await proxy.dmPolicy?.promptAllowFrom?.({
+      cfg,
+      prompter: {} as never,
+    });
+
+    expect(loader).toHaveBeenCalledTimes(1);
+    expect(promptAllowFrom).toHaveBeenCalledTimes(1);
+  });
+
+  it("removes wildcard allowFrom when switching from open to a restrictive policy", () => {
+    const loader = vi.fn(async () => ({ matrixSetupWizard: makeFakeSetupWizard() }));
+    const proxy = createMatrixSetupWizardProxy(loader);
+    const cfg = {
+      channels: {
+        matrix: {
+          accounts: {
+            ops: {
+              dm: {
+                policy: "open",
+                allowFrom: ["*", "  @ops:example.org  "],
+              },
+            },
+          },
+        },
+      },
+    } as CoreConfig;
+
+    const next = proxy.dmPolicy?.setPolicy(cfg, "allowlist", "ops") as CoreConfig;
+
+    expect(next.channels?.matrix?.accounts?.ops?.dm).toMatchObject({
+      policy: "allowlist",
+      allowFrom: ["@ops:example.org"],
+    });
+    expect(loader).not.toHaveBeenCalled();
+  });
+});
 
 describe("matrixSetupAdapter", () => {
   it("moves legacy default config before writing a named account", () => {

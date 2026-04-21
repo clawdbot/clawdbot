@@ -43,9 +43,13 @@ function resolveActiveThinkingProvider(providerId: string): ThinkingProviderPlug
   const state = (
     globalThis as typeof globalThis & { [PLUGIN_REGISTRY_STATE]?: ThinkingRegistryState }
   )[PLUGIN_REGISTRY_STATE];
-  return state?.activeRegistry?.providers?.find((entry) => {
+  const activeProvider = state?.activeRegistry?.providers?.find((entry) => {
     return matchesProviderId(entry.provider, providerId);
   })?.provider;
+  if (activeProvider) {
+    return activeProvider;
+  }
+  return undefined;
 }
 
 type ThinkingHookParams<TContext> = {

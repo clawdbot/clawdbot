@@ -4,14 +4,12 @@ import {
   createAccountScopedAllowlistNameResolver,
   createNestedAllowlistOverrideResolver,
 } from "openclaw/plugin-sdk/allowlist-config-edit";
-import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageToolDiscovery,
 } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
-import { createOpenProviderConfiguredRouteWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import {
   createChannelDirectoryAdapter,
   createRuntimeDirectoryLiveAdapter,
@@ -65,12 +63,13 @@ import {
 import { resolveDiscordOutboundSessionRoute } from "./outbound-session-route.js";
 import type { DiscordProbe } from "./probe.js";
 import { getDiscordRuntime } from "./runtime.js";
+import { discordSecurityAdapter } from "./security.js";
 import { normalizeExplicitDiscordSessionKey } from "./session-key-normalization.js";
 import { discordSetupAdapter } from "./setup-adapter.js";
 import { createDiscordPluginBase, discordConfigAdapter } from "./shared.js";
 import { collectDiscordStatusIssues } from "./status-issues.js";
 import { parseDiscordTarget } from "./target-parsing.js";
-import { DiscordUiContainer } from "./ui.js";
+import { normalizeDiscordAccentColor, resolveDiscordAccentColor } from "./ui-colors.js";
 
 type DiscordSendFn = typeof import("./send.js").sendMessageDiscord;
 type DiscordCarbonModule = typeof import("@buape/carbon");
@@ -88,9 +87,6 @@ let discordCarbonModuleCache: DiscordCarbonModule | null = null;
 
 const loadDiscordDirectoryConfigModule = createLazyRuntimeModule(
   () => import("./directory-config.js"),
-);
-const loadDiscordSecurityAuditModule = createLazyRuntimeModule(
-  () => import("./security-audit.runtime.js"),
 );
 const loadDiscordResolveChannelsModule = createLazyRuntimeModule(
   () => import("./resolve-channels.js"),
@@ -218,18 +214,6 @@ function resolveDiscordStartupDelayMs(cfg: OpenClawConfig, accountId: string): n
   return startupIndex <= 0 ? 0 : startupIndex * DISCORD_ACCOUNT_STARTUP_STAGGER_MS;
 }
 
-const resolveDiscordDmPolicy = createScopedDmSecurityResolver<ResolvedDiscordAccount>({
-  channelKey: "discord",
-  resolvePolicy: (account) => account.config.dm?.policy,
-  resolveAllowFrom: (account) => account.config.dm?.allowFrom,
-  allowFromPathSuffix: "dm.",
-  normalizeEntry: (raw) =>
-    raw
-      .trim()
-      .replace(/^(discord|user):/i, "")
-      .replace(/^<@!?(\d+)>$/, "$1"),
-});
-
 function formatDiscordIntents(intents?: {
   messageContent?: string;
   guildMembers?: string;
@@ -251,7 +235,7 @@ function buildDiscordCrossContextComponents(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }) {
-  const { Separator, TextDisplay } = loadDiscordCarbonModule();
+  const { Container, Separator, TextDisplay } = loadDiscordCarbonModule();
   const trimmed = params.message.trim();
   const components: Array<DiscordTextDisplay | DiscordSeparator> = [];
   if (trimmed) {
@@ -259,7 +243,15 @@ function buildDiscordCrossContextComponents(params: {
     components.push(new Separator({ divider: true, spacing: "small" }));
   }
   components.push(new TextDisplay(`*From ${params.originLabel}*`));
-  return [new DiscordUiContainer({ cfg: params.cfg, accountId: params.accountId, components })];
+  const configuredAccent = resolveDiscordAccentColor({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
+  return [
+    new Container(components, {
+      accentColor: normalizeDiscordAccentColor(configuredAccent) ?? configuredAccent,
+    }),
+  ];
 }
 
 const resolveDiscordAllowlistGroupOverrides = createNestedAllowlistOverrideResolver({
@@ -277,26 +269,6 @@ const resolveDiscordAllowlistNames = createAccountScopedAllowlistNameResolver({
   resolveNames: async ({ token, entries }) =>
     (await loadDiscordResolveUsersModule()).resolveDiscordUserAllowlist({ token, entries }),
 });
-
-const collectDiscordSecurityWarnings =
-  createOpenProviderConfiguredRouteWarningCollector<ResolvedDiscordAccount>({
-    providerConfigPresent: (cfg) => cfg.channels?.discord !== undefined,
-    resolveGroupPolicy: (account) => account.config.groupPolicy,
-    resolveRouteAllowlistConfigured: (account) =>
-      Object.keys(account.config.guilds ?? {}).length > 0,
-    configureRouteAllowlist: {
-      surface: "Discord guilds",
-      openScope: "any channel not explicitly denied",
-      groupPolicyPath: "channels.discord.groupPolicy",
-      routeAllowlistPath: "channels.discord.guilds.<id>.channels",
-    },
-    missingRouteAllowlist: {
-      surface: "Discord guilds",
-      openBehavior: "with no guild/channel allowlist; any channel can trigger (mention-gated)",
-      remediation:
-        'Set channels.discord.groupPolicy="allowlist" and configure channels.discord.guilds.<id>.channels',
-    },
-  });
 
 function normalizeDiscordAcpConversationId(conversationId: string) {
   const normalized = conversationId.trim();
@@ -821,12 +793,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
         },
       },
     },
-    security: {
-      resolveDmPolicy: resolveDiscordDmPolicy,
-      collectWarnings: collectDiscordSecurityWarnings,
-      collectAuditFindings: async (params) =>
-        (await loadDiscordSecurityAuditModule()).collectDiscordSecurityAuditFindings(params),
-    },
+    security: discordSecurityAdapter,
     threading: {
       scopedAccountReplyToMode: {
         resolveAccount: (cfg, accountId) => resolveDiscordAccount({ cfg, accountId }),

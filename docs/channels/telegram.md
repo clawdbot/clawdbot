@@ -275,6 +275,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     - `channels.telegram.streaming` is `off | partial | block | progress` (default: `partial`)
     - `progress` maps to `partial` on Telegram (compat with cross-channel naming)
+    - `streaming.preview.toolProgress` controls whether tool/progress updates reuse the same edited preview message (default: `true`). Set `false` to keep separate tool/progress messages.
     - legacy `channels.telegram.streamMode` and boolean `streaming` values are auto-mapped
 
     For text-only replies:
@@ -1028,6 +1029,7 @@ Primary reference:
 - `channels.telegram.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.telegram.linkPreview`: toggle link previews for outbound messages (default: true).
 - `channels.telegram.streaming`: `off | partial | block | progress` (live stream preview; default: `partial`; `progress` maps to `partial`; `block` is legacy preview mode compatibility). Telegram preview streaming uses a single preview message that is edited in place.
+- `channels.telegram.streaming.preview.toolProgress`: reuse the live preview message for tool/progress updates when preview streaming is active (default: `true`). Set `false` to keep separate tool/progress messages.
 - `channels.telegram.mediaMaxMb`: inbound/outbound Telegram media cap (MB, default: 100).
 - `channels.telegram.retry`: retry policy for Telegram send helpers (CLI/tools/actions) on recoverable outbound API errors (attempts, minDelayMs, maxDelayMs, jitter).
 - `channels.telegram.network.autoSelectFamily`: override Node autoSelectFamily (true=enable, false=disable). Defaults to enabled on Node 22+, with WSL2 defaulting to disabled.
@@ -1057,7 +1059,7 @@ Telegram-specific high-signal fields:
 - exec approvals: `execApprovals`, `accounts.*.execApprovals`
 - command/menu: `commands.native`, `commands.nativeSkills`, `customCommands`
 - threading/replies: `replyToMode`
-- streaming: `streaming` (preview), `blockStreaming`
+- streaming: `streaming` (preview), `streaming.preview.toolProgress`, `blockStreaming`
 - formatting/delivery: `textChunkLimit`, `chunkMode`, `linkPreview`, `responsePrefix`
 - media/network: `mediaMaxMb`, `timeoutSeconds`, `pollingStallThresholdMs`, `retry`, `network.autoSelectFamily`, `network.dangerouslyAllowPrivateNetwork`, `proxy`
 - webhook: `webhookUrl`, `webhookSecret`, `webhookPath`, `webhookHost`

@@ -88,4 +88,33 @@ describe("zalo send", () => {
     expect(sendMessageMock).not.toHaveBeenCalled();
     expect(sendPhotoMock).not.toHaveBeenCalled();
   });
+
+  it("sends cfg-backed media directly without hosted-media rewrites", async () => {
+    sendPhotoMock.mockResolvedValueOnce({
+      ok: true,
+      result: { message_id: "z-photo-2" },
+    });
+
+    const result = await sendPhotoZalo("dm-chat-5", "https://example.com/photo.jpg", {
+      cfg: {
+        channels: {
+          zalo: {
+            botToken: "zalo-token",
+            webhookUrl: "https://gateway.example.com/zalo-webhook",
+          },
+        },
+      } as never,
+    });
+
+    expect(sendPhotoMock).toHaveBeenCalledWith(
+      "zalo-token",
+      {
+        chat_id: "dm-chat-5",
+        photo: "https://example.com/photo.jpg",
+        caption: undefined,
+      },
+      undefined,
+    );
+    expect(result).toEqual({ ok: true, messageId: "z-photo-2" });
+  });
 });

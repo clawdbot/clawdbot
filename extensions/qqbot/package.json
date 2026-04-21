@@ -5,6 +5,7 @@
   "description": "OpenClaw QQ Bot channel plugin",
   "type": "module",
   "dependencies": {
+    "@tencent-connect/qqbot-connector": "^1.1.0",
     "mpg123-decoder": "^1.0.3",
     "silk-wasm": "^3.7.1",
     "ws": "^8.20.0",

@@ -23,6 +23,14 @@ function createDefaultSpawnConfig(): OpenClawConfig {
       backend: "acpx",
       allowedAgents: ["codex"],
     },
+    agents: {
+      defaults: {
+        subagents: {
+          allowAgents: ["codex"],
+          maxSpawnDepth: 2,
+        },
+      },
+    },
     session: {
       mainKey: "main",
       scope: "per-sender",
@@ -61,6 +69,9 @@ const hoisted = vi.hoisted(() => {
   });
   const cleanupFailedAcpSpawnMock = vi.fn();
   const createRunningTaskRunMock = vi.fn();
+  const countActiveRunsForSessionMock = vi.fn();
+  const getSubagentRunByChildSessionKeyMock = vi.fn();
+  const listTasksForOwnerKeyMock = vi.fn();
   const state = {
     cfg: createDefaultSpawnConfig(),
   };
@@ -84,6 +95,9 @@ const hoisted = vi.hoisted(() => {
     normalizeChannelIdMock,
     cleanupFailedAcpSpawnMock,
     createRunningTaskRunMock,
+    countActiveRunsForSessionMock,
+    getSubagentRunByChildSessionKeyMock,
+    listTasksForOwnerKeyMock,
     state,
   };
 });
@@ -110,6 +124,11 @@ vi.mock("../config/sessions/store.js", () => ({
   loadSessionStore: hoisted.loadSessionStoreMock,
 }));
 
+vi.mock("../config/sessions.js", () => ({
+  loadSessionStore: hoisted.loadSessionStoreMock,
+  resolveStorePath: hoisted.resolveStorePathMock,
+}));
+
 vi.mock("../config/sessions/transcript.js", () => ({
   resolveSessionTranscriptFile: hoisted.resolveSessionTranscriptFileMock,
 }));
@@ -129,6 +148,15 @@ vi.mock("../tasks/detached-task-runtime.js", () => ({
 vi.mock("./acp-spawn-parent-stream.js", () => ({
   resolveAcpSpawnStreamLogPath: hoisted.resolveAcpSpawnStreamLogPathMock,
   startAcpSpawnParentStreamRelay: hoisted.startAcpSpawnParentStreamRelayMock,
+}));
+
+vi.mock("./subagent-registry.js", () => ({
+  countActiveRunsForSession: hoisted.countActiveRunsForSessionMock,
+  getSubagentRunByChildSessionKey: hoisted.getSubagentRunByChildSessionKeyMock,
+}));
+
+vi.mock("../tasks/runtime-internal.js", () => ({
+  listTasksForOwnerKey: hoisted.listTasksForOwnerKeyMock,
 }));
 
 const { isSpawnAcpAcceptedResult, spawnAcpDirect } = await import("./acp-spawn.js");
@@ -490,6 +518,9 @@ describe("spawnAcpDirect", () => {
     hoisted.getLoadedChannelPluginMock.mockReset().mockReturnValue(undefined);
     hoisted.cleanupFailedAcpSpawnMock.mockReset().mockResolvedValue(undefined);
     hoisted.createRunningTaskRunMock.mockReset().mockReturnValue(undefined);
+    hoisted.countActiveRunsForSessionMock.mockReset().mockReturnValue(0);
+    hoisted.getSubagentRunByChildSessionKeyMock.mockReset().mockReturnValue(null);
+    hoisted.listTasksForOwnerKeyMock.mockReset().mockReturnValue([]);
 
     hoisted.callGatewayMock.mockReset();
     hoisted.callGatewayMock.mockImplementation(async (argsUnknown: unknown) => {
@@ -685,6 +716,244 @@ describe("spawnAcpDirect", () => {
     expect(transcriptCalls).toHaveLength(2);
     expect(transcriptCalls[0]?.threadId).toBeUndefined();
     expect(transcriptCalls[1]?.threadId).toBe("child-thread");
+  });
+
+  it("inherits subagent envelope fields onto ACP children", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      agents: {
+        defaults: {
+          ...hoisted.state.cfg.agents?.defaults,
+          subagents: {
+            ...hoisted.state.cfg.agents?.defaults?.subagents,
+            maxSpawnDepth: 2,
+          },
+        },
+      },
+    });
+
+    const result = await spawnAcpDirect(createSpawnRequest(), {
+      ...createRequesterContext(),
+      agentSessionKey: "agent:main:subagent:parent",
+    });
+
+    const accepted = expectAcceptedSpawn(result);
+    const patchCall = hoisted.callGatewayMock.mock.calls
+      .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
+      .find((request) => request.method === "sessions.patch");
+    expect(patchCall?.params).toMatchObject({
+      key: accepted.childSessionKey,
+      spawnedBy: "agent:main:subagent:parent",
+      spawnDepth: 2,
+      subagentRole: "leaf",
+      subagentControlScope: "none",
+    });
+  });
+
+  it("rejects ACP spawns that exceed subagent max depth", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      agents: {
+        defaults: {
+          ...hoisted.state.cfg.agents?.defaults,
+          subagents: {
+            ...hoisted.state.cfg.agents?.defaults?.subagents,
+            maxSpawnDepth: 2,
+          },
+        },
+      },
+    });
+
+    const result = await spawnAcpDirect(createSpawnRequest(), {
+      ...createRequesterContext(),
+      agentSessionKey: "agent:main:subagent:parent:subagent:leaf",
+    });
+
+    const failed = expectFailedSpawn(result, "forbidden");
+    expect(failed.errorCode).toBe("subagent_policy");
+    expect(failed.error).toContain("current depth: 2, max: 2");
+  });
+
+  it("rejects ACP spawns that exceed subagent child caps", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      agents: {
+        defaults: {
+          ...hoisted.state.cfg.agents?.defaults,
+          subagents: {
+            ...hoisted.state.cfg.agents?.defaults?.subagents,
+            maxChildrenPerAgent: 1,
+          },
+        },
+      },
+    });
+    hoisted.countActiveRunsForSessionMock.mockReturnValueOnce(1);
+
+    const result = await spawnAcpDirect(createSpawnRequest(), {
+      ...createRequesterContext(),
+      agentSessionKey: "agent:main:subagent:parent",
+    });
+
+    const failed = expectFailedSpawn(result, "forbidden");
+    expect(failed.errorCode).toBe("subagent_policy");
+    expect(failed.error).toContain("max active children");
+  });
+
+  it('counts streamTo="parent" ACP runs toward subagent child caps', async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      agents: {
+        defaults: {
+          ...hoisted.state.cfg.agents?.defaults,
+          subagents: {
+            ...hoisted.state.cfg.agents?.defaults?.subagents,
+            maxChildrenPerAgent: 1,
+          },
+        },
+      },
+    });
+    hoisted.listTasksForOwnerKeyMock.mockReturnValueOnce([
+      {
+        runtime: "acp",
+        status: "running",
+        childSessionKey: "agent:codex:acp:existing-parent-stream",
+      },
+    ]);
+
+    const result = await spawnAcpDirect(
+      createSpawnRequest({
+        streamTo: "parent",
+      }),
+      {
+        ...createRequesterContext(),
+        agentSessionKey: "agent:main:subagent:parent",
+      },
+    );
+
+    const failed = expectFailedSpawn(result, "forbidden");
+    expect(failed.errorCode).toBe("subagent_policy");
+    expect(failed.error).toContain("max active children");
+  });
+
+  it("does not double-count duplicate ACP task rows for the same child session", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      agents: {
+        defaults: {
+          ...hoisted.state.cfg.agents?.defaults,
+          subagents: {
+            ...hoisted.state.cfg.agents?.defaults?.subagents,
+            maxChildrenPerAgent: 2,
+          },
+        },
+      },
+    });
+    hoisted.listTasksForOwnerKeyMock.mockReturnValueOnce([
+      {
+        runtime: "acp",
+        status: "running",
+        childSessionKey: "agent:codex:acp:existing-parent-stream",
+      },
+      {
+        runtime: "acp",
+        status: "queued",
+        childSessionKey: "agent:codex:acp:existing-parent-stream",
+      },
+    ]);
+
+    const result = await spawnAcpDirect(
+      createSpawnRequest({
+        streamTo: "parent",
+      }),
+      {
+        ...createRequesterContext(),
+        agentSessionKey: "agent:main:subagent:parent",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+  });
+
+  it("does not double-count ACP task rows for active registry-tracked ACP children", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      agents: {
+        defaults: {
+          ...hoisted.state.cfg.agents?.defaults,
+          subagents: {
+            ...hoisted.state.cfg.agents?.defaults?.subagents,
+            maxChildrenPerAgent: 2,
+          },
+        },
+      },
+    });
+    hoisted.countActiveRunsForSessionMock.mockReturnValueOnce(1);
+    hoisted.getSubagentRunByChildSessionKeyMock.mockImplementationOnce((childSessionKey: string) =>
+      childSessionKey === "agent:codex:acp:existing-parent-stream"
+        ? {
+            childSessionKey,
+            createdAt: Date.now(),
+          }
+        : null,
+    );
+    hoisted.listTasksForOwnerKeyMock.mockReturnValueOnce([
+      {
+        runtime: "acp",
+        status: "running",
+        childSessionKey: "agent:codex:acp:existing-parent-stream",
+      },
+    ]);
+
+    const result = await spawnAcpDirect(
+      createSpawnRequest({
+        streamTo: "parent",
+      }),
+      {
+        ...createRequesterContext(),
+        agentSessionKey: "agent:main:subagent:parent",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+  });
+
+  it("rejects ACP spawns to agents outside the subagent allowlist", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      acp: {
+        ...hoisted.state.cfg.acp,
+        allowedAgents: ["codex", "writer"],
+      },
+      agents: {
+        ...hoisted.state.cfg.agents,
+        list: [
+          {
+            id: "main",
+            default: true,
+            subagents: {
+              allowAgents: ["codex"],
+            },
+          },
+          {
+            id: "writer",
+          },
+        ],
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      createSpawnRequest({
+        agentId: "writer",
+      }),
+      {
+        ...createRequesterContext(),
+        agentSessionKey: "agent:main:subagent:parent",
+      },
+    );
+
+    const failed = expectFailedSpawn(result, "forbidden");
+    expect(failed.errorCode).toBe("subagent_policy");
+    expect(failed.error).toContain("agentId is not allowed");
   });
 
   it("spawns Matrix thread-bound ACP sessions from top-level room targets", async () => {
@@ -1522,6 +1791,7 @@ describe("spawnAcpDirect", () => {
       ...hoisted.state.cfg,
       agents: {
         defaults: {
+          ...hoisted.state.cfg.agents?.defaults,
           sandbox: { mode: "all" },
         },
       },
@@ -1623,6 +1893,7 @@ describe("spawnAcpDirect", () => {
       ...hoisted.state.cfg,
       agents: {
         defaults: {
+          ...hoisted.state.cfg.agents?.defaults,
           heartbeat: {
             every: "30m",
             target: "last",
@@ -1701,11 +1972,81 @@ describe("spawnAcpDirect", () => {
     expect(secondHandle.notifyStarted).toHaveBeenCalledTimes(1);
   });
 
+  it("does not implicitly stream for ACP requester sessions inside a subagent envelope", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      agents: {
+        defaults: {
+          ...hoisted.state.cfg.agents?.defaults,
+          heartbeat: {
+            every: "30m",
+            target: "last",
+          },
+        },
+      },
+    });
+    hoisted.loadSessionStoreMock.mockReset().mockImplementation(() => {
+      const store: Record<
+        string,
+        {
+          sessionId: string;
+          updatedAt: number;
+          deliveryContext?: unknown;
+          spawnedBy?: string;
+          spawnDepth?: number;
+          subagentRole?: string;
+          subagentControlScope?: string;
+        }
+      > = {
+        "agent:main:acp:child": {
+          sessionId: "parent-sess-1",
+          updatedAt: Date.now(),
+          deliveryContext: {
+            channel: "discord",
+            to: "channel:parent-channel",
+            accountId: "default",
+          },
+          spawnedBy: "agent:main:subagent:parent",
+          spawnDepth: 2,
+          subagentRole: "leaf",
+          subagentControlScope: "none",
+        },
+      };
+      return new Proxy(store, {
+        get(target, prop) {
+          if (typeof prop === "string" && prop.startsWith("agent:codex:acp:")) {
+            return { sessionId: "sess-123", updatedAt: Date.now() };
+          }
+          return target[prop as keyof typeof target];
+        },
+      });
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+      },
+      {
+        agentSessionKey: "agent:main:acp:child",
+        agentChannel: "discord",
+        agentAccountId: "default",
+        agentTo: "channel:parent-channel",
+      },
+    );
+
+    const accepted = expectAcceptedSpawn(result);
+    expect(accepted.mode).toBe("run");
+    expect(accepted.streamLogPath).toBeUndefined();
+    expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
+  });
+
   it("does not implicitly stream when heartbeat target is not session-local", async () => {
     replaceSpawnConfig({
       ...hoisted.state.cfg,
       agents: {
         defaults: {
+          ...hoisted.state.cfg.agents?.defaults,
           heartbeat: {
             every: "30m",
             target: "discord",
@@ -1740,6 +2081,7 @@ describe("spawnAcpDirect", () => {
       },
       agents: {
         defaults: {
+          ...hoisted.state.cfg.agents?.defaults,
           heartbeat: {
             every: "30m",
             target: "last",
@@ -1768,6 +2110,7 @@ describe("spawnAcpDirect", () => {
     replaceSpawnConfig({
       ...hoisted.state.cfg,
       agents: {
+        ...hoisted.state.cfg.agents,
         list: [{ id: "main", heartbeat: { every: "30m" } }, { id: "research" }],
       },
     });
@@ -1792,6 +2135,7 @@ describe("spawnAcpDirect", () => {
     replaceSpawnConfig({
       ...hoisted.state.cfg,
       agents: {
+        ...hoisted.state.cfg.agents,
         list: [
           {
             id: "research",

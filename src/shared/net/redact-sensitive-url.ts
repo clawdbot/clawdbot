@@ -15,6 +15,7 @@ const SENSITIVE_URL_QUERY_PARAM_NAMES = new Set([
   "auth",
   "client_secret",
   "refresh_token",
+  "signature",
 ]);
 
 export function isSensitiveUrlQueryParamName(name: string): boolean {

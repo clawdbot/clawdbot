@@ -90,6 +90,7 @@ Current source-of-truth:
 Built-in commands available today:
 
 - `/new [model]` starts a new session; `/reset` is the reset alias.
+- `/reset soft [message]` keeps the current transcript, drops reused CLI backend session ids, and reruns startup/system-prompt loading in-place.
 - `/compact [instructions]` compacts the session context. See [/concepts/compaction](/concepts/compaction).
 - `/stop` aborts the current run.
 - `/session idle <duration|off>` and `/session max-age <duration|off>` manage thread-binding expiry.

@@ -13,6 +13,15 @@ export function resolveBuildRequirement(deps: {
   configFiles: string[];
 }): { shouldBuild: boolean; reason: string };
 
+export function acquireRunNodeBuildLock(deps: {
+  cwd: string;
+  args: readonly string[];
+  env: NodeJS.ProcessEnv;
+  fs: unknown;
+  process: NodeJS.Process;
+  stderr: { write: (value: string) => void };
+}): Promise<() => void>;
+
 export function runNodeMain(params?: {
   spawn?: (
     cmd: string,

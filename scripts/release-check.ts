@@ -204,6 +204,24 @@ function resolveGlobalRoot(prefixDir: string, cwd: string): string {
   }).trim();
 }
 
+export function createPackedBundledPluginPostinstallEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  return {
+    ...env,
+    OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
+    OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS: "1",
+  };
+}
+
+function runPackedBundledPluginPostinstall(packageRoot: string): void {
+  execFileSync(process.execPath, [join(packageRoot, "scripts/postinstall-bundled-plugins.mjs")], {
+    cwd: packageRoot,
+    stdio: "inherit",
+    env: createPackedBundledPluginPostinstallEnv(),
+  });
+}
+
 function runPackedBundledChannelEntrySmoke(): void {
   const tmpRoot = mkdtempSync(join(tmpdir(), "openclaw-release-pack-smoke-"));
   try {
@@ -216,6 +234,7 @@ function runPackedBundledChannelEntrySmoke(): void {
     installPackedTarball(prefixDir, tarballPath, tmpRoot);
 
     const packageRoot = join(resolveGlobalRoot(prefixDir, tmpRoot), "openclaw");
+    runPackedBundledPluginPostinstall(packageRoot);
     execFileSync(
       process.execPath,
       [

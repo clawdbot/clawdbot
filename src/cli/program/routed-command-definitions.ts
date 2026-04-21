@@ -1,6 +1,8 @@
 import { defaultRuntime } from "../../runtime.js";
 import {
   parseAgentsListRouteArgs,
+  parseChannelsListRouteArgs,
+  parseChannelsStatusRouteArgs,
   parseConfigGetRouteArgs,
   parseConfigUnsetRouteArgs,
   parseGatewayStatusRouteArgs,
@@ -121,6 +123,20 @@ export const routedCommandDefinitions = {
     runParsedArgs: async (args) => {
       const { modelsStatusCommand } = await loadModelsCommands();
       await modelsStatusCommand(args, defaultRuntime);
+    },
+  }),
+  "channels-list": defineRoutedCommand({
+    parseArgs: parseChannelsListRouteArgs,
+    runParsedArgs: async (args) => {
+      const { channelsListCommand } = await import("../../commands/channels/list.js");
+      await channelsListCommand(args, defaultRuntime);
+    },
+  }),
+  "channels-status": defineRoutedCommand({
+    parseArgs: parseChannelsStatusRouteArgs,
+    runParsedArgs: async (args) => {
+      const { channelsStatusCommand } = await import("../../commands/channels/status.js");
+      await channelsStatusCommand(args, defaultRuntime);
     },
   }),
 };

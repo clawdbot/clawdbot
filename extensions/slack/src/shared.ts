@@ -19,6 +19,7 @@ import { SlackChannelConfigSchema } from "./config-schema.js";
 import { slackDoctor } from "./doctor.js";
 import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
+import { slackSecurityAdapter } from "./security.js";
 
 export const SLACK_CHANNEL = "slack" as const;
 
@@ -175,6 +176,7 @@ export function createSlackPluginBase(params: {
   | "configSchema"
   | "config"
   | "setup"
+  | "security"
   | "secrets"
 > {
   return {
@@ -224,6 +226,7 @@ export function createSlackPluginBase(params: {
       blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
     },
     reload: { configPrefixes: ["channels.slack"] },
+    security: slackSecurityAdapter,
     configSchema: SlackChannelConfigSchema,
     config: {
       ...slackConfigAdapter,
@@ -261,6 +264,7 @@ export function createSlackPluginBase(params: {
     | "configSchema"
     | "config"
     | "setup"
+    | "security"
     | "secrets"
   >;
 }

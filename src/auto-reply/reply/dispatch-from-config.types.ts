@@ -14,7 +14,7 @@ export type DispatchFromConfigParams = {
   ctx: FinalizedMsgContext;
   cfg: OpenClawConfig;
   dispatcher: ReplyDispatcher;
-  replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
+  replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
   replyResolver?: GetReplyFromConfig;
   fastAbortResolver?: TryFastAbortFromMessage;
   formatAbortReplyTextResolver?: FormatAbortReplyText;

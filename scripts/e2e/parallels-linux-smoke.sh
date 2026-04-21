@@ -230,6 +230,7 @@ import json
 import os
 import re
 import sys
+from typing import Optional
 
 payload = json.loads(os.environ["PRL_VM_JSON"])
 requested = os.environ["REQUESTED_VM_NAME"].strip()
@@ -237,7 +238,7 @@ requested_lower = requested.lower()
 explicit = os.environ["VM_NAME_EXPLICIT"] == "1"
 names = [str(item.get("name", "")).strip() for item in payload if str(item.get("name", "")).strip()]
 
-def parse_ubuntu_version(name: str) -> tuple[int, ...] | None:
+def parse_ubuntu_version(name: str) -> Optional[tuple[int, ...]]:
     match = re.search(r"ubuntu\s+(\d+(?:\.\d+)*)", name, re.IGNORECASE)
     if not match:
         return None
@@ -594,12 +595,12 @@ start_server() {
 }
 
 install_latest_release() {
-  local version_args=()
-  if [[ -n "$INSTALL_VERSION" ]]; then
-    version_args=(--version "$INSTALL_VERSION")
-  fi
   guest_exec curl -fsSL "$INSTALL_URL" -o /tmp/openclaw-install.sh
-  guest_exec /usr/bin/env OPENCLAW_NO_ONBOARD=1 bash /tmp/openclaw-install.sh "${version_args[@]}" --no-onboard
+  if [[ -n "$INSTALL_VERSION" ]]; then
+    guest_exec /usr/bin/env OPENCLAW_NO_ONBOARD=1 bash /tmp/openclaw-install.sh --version "$INSTALL_VERSION" --no-onboard
+  else
+    guest_exec /usr/bin/env OPENCLAW_NO_ONBOARD=1 bash /tmp/openclaw-install.sh --no-onboard
+  fi
   guest_exec openclaw --version
 }
 

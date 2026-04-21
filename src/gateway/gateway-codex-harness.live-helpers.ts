@@ -38,6 +38,7 @@ export const EXPECTED_CODEX_MODELS_COMMAND_TEXT = [
   "This harness is configured with a single Codex model: `codex/",
   "Primary model: `codex/",
   "Registered models: `codex/",
+  "Active model: `codex/",
   "Current active model is `codex/",
   "Current OpenClaw session status reports the active model as:",
 ] as const;
@@ -56,6 +57,12 @@ export function isExpectedCodexModelsCommandText(text: string): boolean {
       normalized.includes("fails to start") ||
       normalized.includes("repo-local fallback") ||
       normalized.includes("sandbox blocks") ||
+      ((normalized.includes("rejected") || normalized.includes("not approved")) &&
+        (normalized.includes("sandbox") ||
+          normalized.includes("permission") ||
+          normalized.includes("permissions") ||
+          normalized.includes("escalation") ||
+          normalized.includes("elevated execution"))) ||
       normalized.includes("interactive in this environment") ||
       normalized.includes("sandboxed session") ||
       normalized.includes("required user namespace") ||

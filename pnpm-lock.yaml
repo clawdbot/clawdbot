@@ -77,6 +77,9 @@ importers:
       '@sinclair/typebox':
         specifier: 0.34.49
         version: 0.34.49
+      '@tencent-connect/qqbot-connector':
+        specifier: ^1.1.0
+        version: 1.1.0
       ajv:
         specifier: ^8.18.0
         version: 8.18.0
@@ -1043,6 +1046,9 @@ importers:
 
   extensions/qqbot:
     dependencies:
+      '@tencent-connect/qqbot-connector':
+        specifier: ^1.1.0
+        version: 1.1.0
       mpg123-decoder:
         specifier: ^1.0.3
         version: 1.0.3
@@ -4090,6 +4096,10 @@ packages:
 
   '@telegraf/types@7.1.0':
     resolution: {integrity: sha512-kGevOIbpMcIlCDeorKGpwZmdH7kHbqlk/Yj6dEpJMKEQw5lk0KVQY0OLXaCswy8GqlIVLd5625OB+rAntP9xVw==}
+
+  '@tencent-connect/qqbot-connector@1.1.0':
+    resolution: {integrity: sha512-3nQ2mdyzPRKpBHjd3QiKZDwNzw1F7fBN+rSq8Xms2gg+JWZR4SY2Zdf+doqTyXdyVjG4Y0QM7IA4U42zT9xxzw==}
+    engines: {node: '>=18.0.0'}
 
   '@thi.ng/bitstream@2.4.46':
     resolution: {integrity: sha512-p2cZshqkY/YX8EtNZEw29wbNF2vAJfi6A+yTkLUzERMpYIIdQz6bIt8rSJFyPqZcB5cI+tauXWwBXFbbsXuqKg==}
@@ -11061,6 +11071,10 @@ snapshots:
       tslib: 2.8.1
 
   '@telegraf/types@7.1.0': {}
+
+  '@tencent-connect/qqbot-connector@1.1.0':
+    dependencies:
+      qrcode-terminal: 0.12.0
 
   '@thi.ng/bitstream@2.4.46':
     dependencies:

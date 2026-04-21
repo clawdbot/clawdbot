@@ -185,24 +185,19 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
   afterEach(() => {
     __testing.setSleepSyncOverride(null);
     __testing.setDateNowOverride(null);
+    __testing.setParentPidOverride(null);
     vi.restoreAllMocks();
   });
 
-  // Temporarily rewrites `process.ppid` for a block of test code. Used by the
+  // Temporarily overrides the parent PID for a block of test code. Used by the
   // ancestor-exclusion tests to drive the real `getSelfAndAncestorPidsSync`
-  // walk without installing a runtime-reachable override on the module. Node
-  // always exposes `process.ppid` as an own property so the captured
-  // descriptor is non-null in practice; the `if (orig)` guard is defensive
-  // against a broken environment, not a reachable branch.
+  // walk without depending on runtime-specific `process.ppid` descriptors.
   function withStubbedPpid<T>(ppid: number, fn: () => T): T {
-    const orig = Object.getOwnPropertyDescriptor(process, "ppid");
-    Object.defineProperty(process, "ppid", { value: ppid, configurable: true });
+    __testing.setParentPidOverride(() => ppid);
     try {
       return fn();
     } finally {
-      if (orig) {
-        Object.defineProperty(process, "ppid", orig);
-      }
+      __testing.setParentPidOverride(null);
     }
   }
 

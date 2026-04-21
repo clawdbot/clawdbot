@@ -1,12 +1,15 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginToolMeta } from "../../plugins/tools.js";
-import { isSubagentSessionKey } from "../../routing/session-key.js";
 import {
   resolveEffectiveToolPolicy,
   resolveGroupContextFromSessionKey,
   resolveGroupToolPolicy,
   resolveSubagentToolPolicyForSession,
 } from "../pi-tools.policy.js";
+import {
+  isSubagentEnvelopeSession,
+  resolveSubagentCapabilityStore,
+} from "../subagent-capabilities.js";
 import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
@@ -133,9 +136,18 @@ export function applyFinalEffectiveToolPolicy(
     providerProfilePolicy,
     providerProfileAlsoAllow,
   );
+  const subagentStore = resolveSubagentCapabilityStore(params.sessionKey, {
+    cfg: params.config,
+  });
   const subagentPolicy =
-    isSubagentSessionKey(params.sessionKey) && params.sessionKey
-      ? resolveSubagentToolPolicyForSession(params.config, params.sessionKey)
+    params.sessionKey &&
+    isSubagentEnvelopeSession(params.sessionKey, {
+      cfg: params.config,
+      store: subagentStore,
+    })
+      ? resolveSubagentToolPolicyForSession(params.config, params.sessionKey, {
+          store: subagentStore,
+        })
       : undefined;
   const ownerFiltered = applyOwnerOnlyToolPolicy(
     params.bundledTools,

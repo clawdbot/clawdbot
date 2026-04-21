@@ -22,7 +22,7 @@ vi.mock("./src/cli.js", () => {
 });
 
 vi.mock("./plugin-entry.handlers.runtime.js", () => runtimeMocks);
-vi.mock("./runtime-api.js", () => ({ setMatrixRuntime: runtimeMocks.setMatrixRuntime }));
+vi.mock("./runtime-setter-api.js", () => ({ setMatrixRuntime: runtimeMocks.setMatrixRuntime }));
 
 describe("matrix plugin", () => {
   it("registers matrix CLI through a descriptor-backed lazy registrar", async () => {
@@ -66,6 +66,7 @@ describe("matrix plugin", () => {
     expect(entry.kind).toBe("bundled-channel-entry");
     expect(entry.id).toBe("matrix");
     expect(entry.name).toBe("Matrix");
+    expect(entry.setChannelRuntime).toEqual(expect.any(Function));
   });
 
   it("registers subagent lifecycle hooks during full runtime registration", () => {
