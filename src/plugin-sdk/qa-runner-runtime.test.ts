@@ -1,8 +1,13 @@
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  cleanupTempDirs,
+  expectPrivateQaLabRuntimeSurfaceLoad,
+  expectQaLabRuntimeSurfaceLoad,
+  makePrivateQaSourceRoot,
+  restorePrivateQaCliEnv,
+} from "./qa-runtime.test-helpers.js";
 
 const loadPluginManifestRegistry = vi.hoisted(() => vi.fn());
 const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
@@ -38,14 +43,8 @@ describe("plugin-sdk qa-runner-runtime", () => {
   });
 
   afterEach(() => {
-    for (const dir of tempDirs.splice(0)) {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-    if (originalPrivateQaCli === undefined) {
-      delete process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
-    } else {
-      process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = originalPrivateQaCli;
-    }
+    cleanupTempDirs(tempDirs);
+    restorePrivateQaCliEnv(originalPrivateQaCli);
   });
 
   it("stays cold until runner discovery is requested", async () => {
@@ -57,56 +56,23 @@ describe("plugin-sdk qa-runner-runtime", () => {
   });
 
   it("loads the qa-lab runtime public surface through the public runner seam", async () => {
-    const runtimeSurface = {
-      defaultQaRuntimeModelForMode: vi.fn(),
-      startQaLiveLaneGateway: vi.fn(),
-    };
-    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue(runtimeSurface);
-
-    const module = await import("./qa-runner-runtime.js");
-
-    expect(module.loadQaRuntimeModule()).toBe(runtimeSurface);
-    expect(loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
-      dirName: "qa-lab",
-      artifactBasename: "runtime-api.js",
+    await expectQaLabRuntimeSurfaceLoad({
+      importRuntime: () => import("./qa-runner-runtime.js"),
+      loadBundledPluginPublicSurfaceModuleSync,
     });
   });
 
   it("uses the source bundled tree for qa-lab runtime loading in private qa mode", async () => {
-    const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-qa-runtime-root-"));
-    tempDirs.push(sourceRoot);
-    fs.mkdirSync(path.join(sourceRoot, "src"), { recursive: true });
-    fs.mkdirSync(path.join(sourceRoot, "extensions"), { recursive: true });
-    fs.writeFileSync(path.join(sourceRoot, ".git"), "gitdir: /tmp/mock\n", "utf8");
-    process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
-    resolveOpenClawPackageRootSync.mockReturnValue(sourceRoot);
-
-    const runtimeSurface = {
-      defaultQaRuntimeModelForMode: vi.fn(),
-      startQaLiveLaneGateway: vi.fn(),
-    };
-    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue(runtimeSurface);
-
-    const module = await import("./qa-runner-runtime.js");
-
-    expect(module.loadQaRuntimeModule()).toBe(runtimeSurface);
-    expect(loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
-      dirName: "qa-lab",
-      artifactBasename: "runtime-api.js",
-      env: expect.objectContaining({
-        OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
-        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(sourceRoot, "extensions"),
-      }),
+    await expectPrivateQaLabRuntimeSurfaceLoad({
+      tempDirs,
+      importRuntime: () => import("./qa-runner-runtime.js"),
+      loadBundledPluginPublicSurfaceModuleSync,
+      resolveOpenClawPackageRootSync,
     });
   });
 
   it("loads bundled plugin test APIs with the private QA source tree override", async () => {
-    const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-qa-test-api-root-"));
-    tempDirs.push(sourceRoot);
-    fs.mkdirSync(path.join(sourceRoot, "src"), { recursive: true });
-    fs.mkdirSync(path.join(sourceRoot, "extensions"), { recursive: true });
-    fs.writeFileSync(path.join(sourceRoot, ".git"), "gitdir: /tmp/mock\n", "utf8");
-    process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
+    const sourceRoot = makePrivateQaSourceRoot(tempDirs, "openclaw-qa-test-api-root-");
     resolveOpenClawPackageRootSync.mockReturnValue(sourceRoot);
 
     const testApi = { marker: "matrix-test-api" };
@@ -203,12 +169,7 @@ describe("plugin-sdk qa-runner-runtime", () => {
   });
 
   it("prefers the source bundled tree for private qa discovery in repo checkouts", async () => {
-    const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-qa-runner-root-"));
-    tempDirs.push(sourceRoot);
-    fs.mkdirSync(path.join(sourceRoot, "src"), { recursive: true });
-    fs.mkdirSync(path.join(sourceRoot, "extensions"), { recursive: true });
-    fs.writeFileSync(path.join(sourceRoot, ".git"), "gitdir: /tmp/mock\n", "utf8");
-    process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
+    const sourceRoot = makePrivateQaSourceRoot(tempDirs, "openclaw-qa-runner-root-");
     resolveOpenClawPackageRootSync.mockReturnValue(sourceRoot);
 
     const register = vi.fn((qa: Command) => qa);

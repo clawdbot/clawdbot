@@ -159,7 +159,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
   });
 
   it("rejects non-alias agent:main sessions when main is no longer configured", async () => {
-    const staleMainKey = "agent:main:discord:direct:u1";
+    const staleMainKey = "agent:main:guildchat:direct:u1";
     hoisted.resolveGatewaySessionStoreTargetMock.mockReturnValue({
       canonicalKey: staleMainKey,
       storeKeys: [staleMainKey],

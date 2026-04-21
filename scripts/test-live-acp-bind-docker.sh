@@ -14,6 +14,18 @@ DOCKER_USER="${OPENCLAW_DOCKER_USER:-node}"
 DOCKER_HOME_MOUNT=()
 DOCKER_AUTH_PRESTAGED=0
 
+openclaw_live_acp_bind_append_build_extension() {
+  local extension="${1:?extension required}"
+  local current="${OPENCLAW_DOCKER_BUILD_EXTENSIONS:-${OPENCLAW_EXTENSIONS:-}}"
+  case " $current " in
+    *" $extension "*)
+      ;;
+    *)
+      export OPENCLAW_DOCKER_BUILD_EXTENSIONS="${current:+$current }$extension"
+      ;;
+  esac
+}
+
 openclaw_live_acp_bind_resolve_auth_provider() {
   case "${1:-}" in
     claude) printf '%s\n' "claude-cli" ;;
@@ -170,6 +182,7 @@ export OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND="${OPENCLAW_LIVE_ACP_BIND_AGENT_COMM
 pnpm test:live src/gateway/gateway-acp-bind.live.test.ts
 EOF
 
+openclaw_live_acp_bind_append_build_extension acpx
 "$ROOT_DIR/scripts/test-live-build-docker.sh"
 
 IFS=',' read -r -a ACP_AGENT_TOKENS <<<"$ACP_AGENT_LIST_RAW"

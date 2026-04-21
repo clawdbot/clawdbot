@@ -1,7 +1,7 @@
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
-import { encodeQuery, isRecord, readString } from "./comment-shared.js";
+import { encodeQuery, formatFeishuApiError } from "./comment-shared.js";
 import { parseFeishuCommentTarget, type CommentFileType } from "./comment-target.js";
 
 const COMMENT_TYPING_REACTION_TYPE = "Typing";
@@ -95,29 +95,7 @@ async function requestCommentTypingReactionWithClient(params: {
 }
 
 function formatCommentReactionFailure(error: unknown): string {
-  if (!isRecord(error)) {
-    return typeof error === "string" ? error : JSON.stringify(error);
-  }
-  const response = isRecord(error.response) ? error.response : undefined;
-  const responseData = isRecord(response?.data) ? response?.data : undefined;
-  return JSON.stringify({
-    message:
-      typeof error.message === "string"
-        ? error.message
-        : typeof error === "string"
-          ? error
-          : JSON.stringify(error),
-    code: readString(error.code),
-    method: readString(isRecord(error.config) ? error.config.method : undefined),
-    url: readString(isRecord(error.config) ? error.config.url : undefined),
-    http_status: typeof response?.status === "number" ? response.status : undefined,
-    feishu_code:
-      typeof responseData?.code === "number" ? responseData.code : readString(responseData?.code),
-    feishu_msg: readString(responseData?.msg),
-    feishu_log_id:
-      readString(responseData?.log_id) ||
-      readString(isRecord(responseData?.error) ? responseData.error.log_id : undefined),
-  });
+  return formatFeishuApiError(error, { includeNestedErrorLogId: true });
 }
 
 async function requestCommentTypingReaction(params: {

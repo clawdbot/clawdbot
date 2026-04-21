@@ -16,12 +16,16 @@ Related:
 
 Tip: run `openclaw cron --help` for the full command surface.
 
+Note: `openclaw cron list` and `openclaw cron show <job-id>` preview the
+resolved delivery route. For `channel: "last"`, the preview shows whether the
+route resolved from the main/current session or will fail closed.
+
 Note: isolated `cron add` jobs default to `--announce` delivery. Use `--no-deliver` to keep
 output internal. `--deliver` remains as a deprecated alias for `--announce`.
 
-Note: cron-owned isolated runs expect a plain-text summary and the runner owns
-the final send path. `--no-deliver` keeps the run internal; it does not hand
-delivery back to the agent's message tool.
+Note: isolated cron chat delivery is shared. `--announce` is runner fallback
+delivery for the final reply; `--no-deliver` disables that fallback but does
+not remove the agent's `message` tool when a chat route is available.
 
 Note: one-shot (`--at`) jobs delete after success by default. Use `--keep-after-run` to keep them.
 
@@ -124,21 +128,26 @@ openclaw cron add \
 
 Delivery ownership note:
 
-- Cron-owned isolated jobs always route final user-visible delivery through the
-  cron runner (`announce`, `webhook`, or internal-only `none`).
-- If the task mentions messaging some external recipient, the agent should
-  describe the intended destination in its result instead of trying to send it
-  directly.
+- Isolated cron chat delivery is shared. The agent can send directly with the
+  `message` tool when a chat route is available.
+- `announce` fallback-delivers the final reply only when the agent did not send
+  directly to the resolved target. `webhook` posts the finished payload to a URL.
+  `none` disables runner fallback delivery.
 
 ## Common admin commands
 
 Manual run:
 
 ```bash
+openclaw cron list
+openclaw cron show <job-id>
 openclaw cron run <job-id>
 openclaw cron run <job-id> --due
 openclaw cron runs --id <job-id> --limit 50
 ```
+
+`cron runs` entries include delivery diagnostics with the intended cron target,
+the resolved target, message-tool sends, fallback use, and delivered state.
 
 Agent/session retargeting:
 

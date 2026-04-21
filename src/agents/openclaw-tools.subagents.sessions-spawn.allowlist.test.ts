@@ -63,7 +63,7 @@ async function spawn(params: {
     },
     {
       agentSessionKey: params.requesterSessionKey ?? "main",
-      agentChannel: params.requesterChannel ?? "whatsapp",
+      agentChannel: params.requesterChannel ?? "mobilechat",
     },
   );
 }

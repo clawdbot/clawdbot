@@ -51,6 +51,13 @@ const cleanStaleGatewayProcessesSync = vi.hoisted(() =>
 );
 const defaultProgramArguments = ["node", "-e", "process.exit(0)"];
 
+function createDefaultLaunchdEnv(): Record<string, string | undefined> {
+  return {
+    HOME: "/Users/test",
+    OPENCLAW_PROFILE: "default",
+  };
+}
+
 async function runStopLaunchAgentWithFakeTimers(args: Parameters<typeof stopLaunchAgent>[0]) {
   vi.useFakeTimers();
   try {
@@ -85,6 +92,17 @@ function expectLaunchctlEnableBootstrapOrder(env: Record<string, string | undefi
   expect(enableIndex).toBeLessThan(bootstrapIndex);
 
   return { domain, label, serviceId, bootstrapIndex };
+}
+
+async function expectRestartLaunchAgentKickstartFailure(
+  env: Record<string, string | undefined>,
+): Promise<void> {
+  await expect(
+    restartLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+    }),
+  ).rejects.toThrow("launchctl kickstart failed: Input/output error");
 }
 
 function normalizeLaunchctlArgs(file: string, args: string[]): string[] {
@@ -338,10 +356,7 @@ describe("launchctl list detection", () => {
 
 describe("launchd bootstrap repair", () => {
   it("enables, bootstraps, and kickstarts the resolved label", async () => {
-    const env: Record<string, string | undefined> = {
-      HOME: "/Users/test",
-      OPENCLAW_PROFILE: "default",
-    };
+    const env = createDefaultLaunchdEnv();
     const repair = await repairLaunchAgentBootstrap({ env });
     expect(repair).toEqual({ ok: true, status: "repaired" });
 
@@ -357,10 +372,7 @@ describe("launchd bootstrap repair", () => {
   it("treats bootstrap exit 130 as success", async () => {
     state.bootstrapError = "Service already loaded";
     state.bootstrapCode = 130;
-    const env: Record<string, string | undefined> = {
-      HOME: "/Users/test",
-      OPENCLAW_PROFILE: "default",
-    };
+    const env = createDefaultLaunchdEnv();
 
     const repair = await repairLaunchAgentBootstrap({ env });
 
@@ -371,10 +383,7 @@ describe("launchd bootstrap repair", () => {
   it("treats 'already exists in domain' bootstrap failures as success", async () => {
     state.bootstrapError =
       "Could not bootstrap service: 5: Input/output error: already exists in domain for gui/501";
-    const env: Record<string, string | undefined> = {
-      HOME: "/Users/test",
-      OPENCLAW_PROFILE: "default",
-    };
+    const env = createDefaultLaunchdEnv();
 
     const repair = await repairLaunchAgentBootstrap({ env });
 
@@ -384,10 +393,7 @@ describe("launchd bootstrap repair", () => {
 
   it("keeps genuine bootstrap failures as failures", async () => {
     state.bootstrapError = "Could not find specified service";
-    const env: Record<string, string | undefined> = {
-      HOME: "/Users/test",
-      OPENCLAW_PROFILE: "default",
-    };
+    const env = createDefaultLaunchdEnv();
 
     const repair = await repairLaunchAgentBootstrap({ env });
 
@@ -402,10 +408,7 @@ describe("launchd bootstrap repair", () => {
   it("returns a typed kickstart failure", async () => {
     state.kickstartError = "launchctl kickstart failed: permission denied";
     state.kickstartFailuresRemaining = 1;
-    const env: Record<string, string | undefined> = {
-      HOME: "/Users/test",
-      OPENCLAW_PROFILE: "default",
-    };
+    const env = createDefaultLaunchdEnv();
 
     const repair = await repairLaunchAgentBootstrap({ env });
 
@@ -418,13 +421,6 @@ describe("launchd bootstrap repair", () => {
 });
 
 describe("launchd install", () => {
-  function createDefaultLaunchdEnv(): Record<string, string | undefined> {
-    return {
-      HOME: "/Users/test",
-      OPENCLAW_PROFILE: "default",
-    };
-  }
-
   it("enables service before bootstrap without self-restarting the fresh agent", async () => {
     const env = createDefaultLaunchdEnv();
     await installLaunchAgent({
@@ -725,12 +721,7 @@ describe("launchd install", () => {
     state.kickstartError = "Input/output error";
     state.kickstartFailuresRemaining = 1;
 
-    await expect(
-      restartLaunchAgent({
-        env,
-        stdout: new PassThrough(),
-      }),
-    ).rejects.toThrow("launchctl kickstart failed: Input/output error");
+    await expectRestartLaunchAgentKickstartFailure(env);
 
     expect(state.launchctlCalls.some((call) => call[0] === "enable")).toBe(true);
     expect(state.launchctlCalls.some((call) => call[0] === "bootstrap")).toBe(false);
@@ -742,12 +733,7 @@ describe("launchd install", () => {
     state.kickstartFailuresRemaining = 1;
     state.printNotLoadedRemaining = 1;
 
-    await expect(
-      restartLaunchAgent({
-        env,
-        stdout: new PassThrough(),
-      }),
-    ).rejects.toThrow("launchctl kickstart failed: Input/output error");
+    await expectRestartLaunchAgentKickstartFailure(env);
 
     expect(state.launchctlCalls.some((call) => call[0] === "enable")).toBe(true);
     expect(state.launchctlCalls.some((call) => call[0] === "bootstrap")).toBe(true);
@@ -758,12 +744,7 @@ describe("launchd install", () => {
     state.kickstartError = "Input/output error";
     state.kickstartFailuresRemaining = 1;
 
-    await expect(
-      restartLaunchAgent({
-        env,
-        stdout: new PassThrough(),
-      }),
-    ).rejects.toThrow("launchctl kickstart failed: Input/output error");
+    await expectRestartLaunchAgentKickstartFailure(env);
 
     expect(state.launchctlCalls.some((call) => call[0] === "enable")).toBe(true);
     expect(state.launchctlCalls.some((call) => call[0] === "bootstrap")).toBe(false);

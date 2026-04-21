@@ -3,11 +3,7 @@ import type {
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import {
-  asObjectRecord,
-  normalizeLegacyDmAliases,
-  normalizeLegacyStreamingAliases,
-} from "openclaw/plugin-sdk/runtime-doctor";
+import { asObjectRecord, normalizeLegacyChannelAliases } from "openclaw/plugin-sdk/runtime-doctor";
 import { resolveDiscordPreviewStreamMode } from "./preview-streaming.js";
 
 const LEGACY_TTS_PROVIDER_KEYS = ["openai", "elevenlabs", "microsoft", "edge"] as const;
@@ -137,77 +133,40 @@ export function normalizeCompatibilityConfig({
   let changed = false;
   const shouldPromoteRootDmAllowFrom = !asObjectRecord(updated.accounts);
 
-  const dm = normalizeLegacyDmAliases({
-    entry: updated,
+  const aliases = normalizeLegacyChannelAliases({
+    entry: rawEntry,
     pathPrefix: "channels.discord",
     changes,
-    promoteAllowFrom: shouldPromoteRootDmAllowFrom,
-  });
-  updated = dm.entry;
-  changed = changed || dm.changed;
-
-  const streaming = normalizeLegacyStreamingAliases({
-    entry: updated,
-    pathPrefix: "channels.discord",
-    changes,
-    resolvedMode: resolveDiscordPreviewStreamMode(updated),
-    includePreviewChunk: true,
-  });
-  updated = streaming.entry;
-  changed = changed || streaming.changed;
-
-  const rawAccounts = asObjectRecord(updated.accounts);
-  if (rawAccounts) {
-    let accountsChanged = false;
-    const accounts = { ...rawAccounts };
-    for (const [accountId, rawAccount] of Object.entries(rawAccounts)) {
-      const account = asObjectRecord(rawAccount);
-      if (!account) {
-        continue;
-      }
-      let accountEntry = account;
-      let accountChanged = false;
-      const accountDm = normalizeLegacyDmAliases({
-        entry: accountEntry,
-        pathPrefix: `channels.discord.accounts.${accountId}`,
-        changes,
-      });
-      accountEntry = accountDm.entry;
-      accountChanged = accountDm.changed;
-      const accountStreaming = normalizeLegacyStreamingAliases({
-        entry: accountEntry,
-        pathPrefix: `channels.discord.accounts.${accountId}`,
-        changes,
-        resolvedMode: resolveDiscordPreviewStreamMode(accountEntry),
-        includePreviewChunk: true,
-      });
-      accountEntry = accountStreaming.entry;
-      accountChanged = accountChanged || accountStreaming.changed;
-      const accountVoice = asObjectRecord(accountEntry.voice);
+    normalizeDm: true,
+    rootDmPromoteAllowFrom: shouldPromoteRootDmAllowFrom,
+    normalizeAccountDm: true,
+    resolveStreamingOptions: (entry) => ({
+      resolvedMode: resolveDiscordPreviewStreamMode(entry),
+      includePreviewChunk: true,
+    }),
+    normalizeAccountExtra: ({ account, pathPrefix }) => {
+      const accountVoice = asObjectRecord(account.voice);
       if (
-        accountVoice &&
-        migrateLegacyTtsConfig(
+        !accountVoice ||
+        !migrateLegacyTtsConfig(
           asObjectRecord(accountVoice.tts),
-          `channels.discord.accounts.${accountId}.voice.tts`,
+          `${pathPrefix}.voice.tts`,
           changes,
         )
       ) {
-        accountEntry = {
-          ...accountEntry,
+        return { entry: account, changed: false };
+      }
+      return {
+        entry: {
+          ...account,
           voice: accountVoice,
-        };
-        accountChanged = true;
-      }
-      if (accountChanged) {
-        accounts[accountId] = accountEntry;
-        accountsChanged = true;
-      }
-    }
-    if (accountsChanged) {
-      updated = { ...updated, accounts };
-      changed = true;
-    }
-  }
+        },
+        changed: true,
+      };
+    },
+  });
+  updated = aliases.entry;
+  changed = aliases.changed;
 
   const voice = asObjectRecord(updated.voice);
   if (

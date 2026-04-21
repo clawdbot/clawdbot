@@ -258,7 +258,7 @@ async function executeThink(
       return {
         content: formatDirectiveOptions(
           `Current thinking level: ${resolveCurrentThinkingLevel(session, models)}.`,
-          formatThinkingLevels(session?.modelProvider),
+          formatThinkingOptionsForSession(session),
         ),
       };
     } catch (err) {
@@ -271,7 +271,7 @@ async function executeThink(
     try {
       const session = await loadCurrentSession(client, sessionKey);
       return {
-        content: `Unrecognized thinking level "${rawLevel}". Valid levels: ${formatThinkingLevels(session?.modelProvider)}.`,
+        content: `Unrecognized thinking level "${rawLevel}". Valid levels: ${formatThinkingOptionsForSession(session)}.`,
       };
     } catch (err) {
       return { content: `Failed to validate thinking level: ${String(err)}` };
@@ -279,6 +279,12 @@ async function executeThink(
   }
 
   try {
+    const session = await loadCurrentSession(client, sessionKey);
+    if (!isThinkingLevelOptionForSession(session, level)) {
+      return {
+        content: `Unsupported thinking level "${rawLevel}" for this model. Valid levels: ${formatThinkingOptionsForSession(session)}.`,
+      };
+    }
     await client.request("sessions.patch", { key: sessionKey, thinkingLevel: level });
     return {
       content: `Thinking level set to **${level}**.`,
@@ -594,6 +600,26 @@ function formatDirectiveOptions(text: string, options: string): string {
   return `${text}\nOptions: ${options}.`;
 }
 
+function formatThinkingOptionsForSession(
+  session: GatewaySessionRow | undefined,
+  separator = ", ",
+): string {
+  if (session?.thinkingOptions?.length) {
+    return session.thinkingOptions.join(separator);
+  }
+  return formatThinkingLevels(session?.modelProvider, session?.model);
+}
+
+function isThinkingLevelOptionForSession(
+  session: GatewaySessionRow | undefined,
+  level: string,
+): boolean {
+  const labels = session?.thinkingOptions?.length
+    ? session.thinkingOptions
+    : formatThinkingOptionsForSession(session).split(/\s*,\s*/);
+  return labels.some((label) => normalizeThinkLevel(label) === level);
+}
+
 async function loadCurrentSession(
   client: GatewayBrowserClient,
   sessionKey: string,
@@ -651,7 +677,13 @@ function resolveCurrentThinkingLevel(
 ): string {
   const persisted = normalizeThinkLevel(session?.thinkingLevel);
   if (persisted) {
-    return persisted;
+    return (
+      session?.thinkingOptions?.find((label) => normalizeThinkLevel(label) === persisted) ??
+      persisted
+    );
+  }
+  if (session?.thinkingDefault) {
+    return session.thinkingDefault;
   }
   if (!session?.modelProvider || !session.model) {
     return "off";
@@ -743,6 +775,7 @@ async function resolveSteerTarget(
     return { error: "empty" };
   }
   const spaceIdx = trimmed.indexOf(" ");
+  let resolvedSessions: SessionsListResult | undefined;
   if (spaceIdx > 0) {
     const maybeTarget = trimmed.slice(0, spaceIdx);
     const rest = trimmed.slice(spaceIdx + 1).trim();
@@ -751,6 +784,7 @@ async function resolveSteerTarget(
     if (rest && normalizeLowercaseStringOrEmpty(maybeTarget) !== "all") {
       const sessions =
         context.sessionsResult ?? (await client.request<SessionsListResult>("sessions.list", {}));
+      resolvedSessions = sessions;
       const matched = resolveSteerSubagent(sessions?.sessions ?? [], sessionKey, maybeTarget);
       if (matched.length === 1) {
         return { key: matched[0], message: rest, label: maybeTarget, sessions };
@@ -760,7 +794,11 @@ async function resolveSteerTarget(
       }
     }
   }
-  return { key: sessionKey, message: trimmed };
+  return {
+    key: sessionKey,
+    message: trimmed,
+    sessions: resolvedSessions ?? context.sessionsResult ?? undefined,
+  };
 }
 
 function isActiveSteerSession(session: GatewaySessionRow | undefined): boolean {

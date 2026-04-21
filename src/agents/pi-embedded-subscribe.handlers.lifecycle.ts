@@ -16,8 +16,8 @@ import { isPromiseLike } from "./pi-embedded-subscribe.promise.js";
 import { isAssistantMessage } from "./pi-embedded-utils.js";
 
 export {
-  handleAutoCompactionEnd,
-  handleAutoCompactionStart,
+  handleCompactionEnd,
+  handleCompactionStart,
 } from "./pi-embedded-subscribe.handlers.compaction.js";
 
 export function handleAgentStart(ctx: EmbeddedPiSubscribeContext) {

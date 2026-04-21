@@ -18,19 +18,20 @@ describe("tryResolveLoadedOutboundTarget", () => {
   it("returns undefined when no loaded plugin exists", () => {
     mocks.getLoadedChannelPlugin.mockReturnValue(undefined);
 
-    expect(tryResolveLoadedOutboundTarget({ channel: "telegram", to: "123" })).toBeUndefined();
+    expect(tryResolveLoadedOutboundTarget({ channel: "alpha", to: "room-one" })).toBeUndefined();
   });
 
   it("uses loaded plugin config defaultTo fallback", () => {
     const cfg: OpenClawConfig = {
-      channels: { telegram: { defaultTo: "123456789" } },
+      channels: { alpha: { defaultTo: "room-one" } },
     };
     mocks.getLoadedChannelPlugin.mockReturnValue({
-      id: "telegram",
-      meta: { label: "Telegram" },
+      id: "alpha",
+      meta: { label: "Alpha" },
       capabilities: {},
       config: {
-        resolveDefaultTo: ({ cfg }: { cfg: OpenClawConfig }) => cfg.channels?.telegram?.defaultTo,
+        resolveDefaultTo: ({ cfg }: { cfg: OpenClawConfig }) =>
+          (cfg.channels?.alpha as { defaultTo?: string } | undefined)?.defaultTo,
       },
       outbound: {},
       messaging: {},
@@ -38,17 +39,17 @@ describe("tryResolveLoadedOutboundTarget", () => {
 
     expect(
       tryResolveLoadedOutboundTarget({
-        channel: "telegram",
+        channel: "alpha",
         to: "",
         cfg,
         mode: "implicit",
       }),
-    ).toEqual({ ok: true, to: "123456789" });
+    ).toEqual({ ok: true, to: "room-one" });
   });
 
   it("trims channel ids before reading the loaded registry", () => {
-    tryResolveLoadedOutboundTarget({ channel: " telegram " as never, to: "123" });
+    tryResolveLoadedOutboundTarget({ channel: " alpha " as never, to: "room-one" });
 
-    expect(mocks.getLoadedChannelPlugin).toHaveBeenCalledWith("telegram");
+    expect(mocks.getLoadedChannelPlugin).toHaveBeenCalledWith("alpha");
   });
 });

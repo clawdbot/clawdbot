@@ -141,6 +141,7 @@ function parseResumeFlowParams(params: Record<string, unknown>): ManagedFlowResu
   const currentStep = readOptionalTrimmedString(params.flowCurrentStep, "flowCurrentStep");
   const waitingStep = readOptionalTrimmedString(params.flowWaitingStep, "flowWaitingStep");
   const token = readOptionalTrimmedString(params.token, "token");
+  const approvalId = readOptionalTrimmedString(params.approvalId, "approvalId");
   const approve = readOptionalBoolean(params.approve, "approve");
   const runControllerId = readOptionalTrimmedString(params.flowControllerId, "flowControllerId");
   const runGoal = readOptionalTrimmedString(params.flowGoal, "flowGoal");
@@ -164,8 +165,8 @@ function parseResumeFlowParams(params: Record<string, unknown>): ManagedFlowResu
   if (expectedRevision === undefined) {
     throw new Error("flowExpectedRevision required when using managed TaskFlow resume mode");
   }
-  if (!token) {
-    throw new Error("token required when using managed TaskFlow resume mode");
+  if (!token && !approvalId) {
+    throw new Error("token or approvalId required when using managed TaskFlow resume mode");
   }
   if (approve === undefined) {
     throw new Error("approve required when using managed TaskFlow resume mode");
@@ -221,6 +222,7 @@ export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolO
       pipeline: Type.Optional(Type.String()),
       argsJson: Type.Optional(Type.String()),
       token: Type.Optional(Type.String()),
+      approvalId: Type.Optional(Type.String()),
       approve: Type.Optional(Type.Boolean()),
       cwd: Type.Optional(
         Type.String({
@@ -261,6 +263,7 @@ export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolO
         ...(typeof params.pipeline === "string" ? { pipeline: params.pipeline } : {}),
         ...(typeof params.argsJson === "string" ? { argsJson: params.argsJson } : {}),
         ...(typeof params.token === "string" ? { token: params.token } : {}),
+        ...(typeof params.approvalId === "string" ? { approvalId: params.approvalId } : {}),
         ...(typeof params.approve === "boolean" ? { approve: params.approve } : {}),
         cwd,
         timeoutMs,
@@ -293,9 +296,8 @@ export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolO
               runner,
               runnerParams: runnerParams as LobsterRunnerParams & {
                 action: "resume";
-                token: string;
                 approve: boolean;
-              },
+              } & ({ token: string } | { approvalId: string }),
               flowId: flowParams.flowId,
               expectedRevision: flowParams.expectedRevision,
               ...(flowParams.currentStep ? { currentStep: flowParams.currentStep } : {}),

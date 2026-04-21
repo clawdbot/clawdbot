@@ -16,7 +16,7 @@ function makeParams(
   return {
     command: {
       commandBodyNormalized,
-      channel: "telegram",
+      channel: "forum",
       senderIsOwner: true,
     },
     sessionKey: "agent:default:main",

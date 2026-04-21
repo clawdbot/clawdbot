@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  makeCatalogEntry,
+  makeChannelSetupEntries,
+  makeMeta,
+} from "./channel-setup.test-helpers.js";
 
-type ChannelMeta = import("../channels/plugins/types.core.js").ChannelMeta;
-type ChannelPluginCatalogEntry = import("../channels/plugins/catalog.js").ChannelPluginCatalogEntry;
 type ChannelSetupPlugin = import("../channels/plugins/setup-wizard-types.js").ChannelSetupPlugin;
 type ResolveChannelSetupEntries =
   typeof import("../commands/channel-setup/discovery.js").resolveChannelSetupEntries;
@@ -9,31 +12,6 @@ type CollectChannelStatus = typeof import("./channel-setup.status.js").collectCh
 type LoadChannelSetupPluginRegistrySnapshotForChannel =
   typeof import("../commands/channel-setup/plugin-install.js").loadChannelSetupPluginRegistrySnapshotForChannel;
 type PluginRegistry = ReturnType<LoadChannelSetupPluginRegistrySnapshotForChannel>;
-
-function makeMeta(id: string, label: string, overrides: Partial<ChannelMeta> = {}): ChannelMeta {
-  return {
-    id: id as ChannelMeta["id"],
-    label,
-    selectionLabel: overrides.selectionLabel ?? label,
-    docsPath: overrides.docsPath ?? `/channels/${id}`,
-    blurb: overrides.blurb ?? "",
-    ...overrides,
-  };
-}
-
-function makeCatalogEntry(
-  id: string,
-  label: string,
-  overrides: Partial<ChannelPluginCatalogEntry> = {},
-): ChannelPluginCatalogEntry {
-  return {
-    id,
-    pluginId: overrides.pluginId ?? id,
-    origin: overrides.origin,
-    meta: makeMeta(id, label, overrides.meta),
-    install: overrides.install ?? { npmSpec: `@openclaw/${id}` },
-  };
-}
 
 function makeSetupPlugin(params: {
   id: string;
@@ -49,6 +27,18 @@ function makeSetupPlugin(params: {
     } as unknown as ChannelSetupPlugin["config"],
     ...(params.setupWizard ? { setupWizard: params.setupWizard } : {}),
   };
+}
+
+function externalChatSetupEntries(overrides: Partial<ReturnType<ResolveChannelSetupEntries>> = {}) {
+  return makeChannelSetupEntries({
+    entries: [
+      {
+        id: "external-chat",
+        meta: makeMeta("external-chat", "External Chat"),
+      },
+    ],
+    ...overrides,
+  });
 }
 
 function makePluginRegistry(overrides: Partial<PluginRegistry> = {}): PluginRegistry {
@@ -199,13 +189,7 @@ describe("setupChannels workspace shadow exclusion", () => {
     listActiveChannelSetupPlugins.mockReturnValue([]);
     listChannelSetupPlugins.mockReturnValue([]);
     loadChannelSetupPluginRegistrySnapshotForChannel.mockReturnValue(makePluginRegistry());
-    resolveChannelSetupEntries.mockReturnValue({
-      entries: [],
-      installedCatalogEntries: [],
-      installableCatalogEntries: [],
-      installedCatalogById: new Map(),
-      installableCatalogById: new Map(),
-    });
+    resolveChannelSetupEntries.mockReturnValue(makeChannelSetupEntries());
     collectChannelStatus.mockResolvedValue({
       installedPlugins: [],
       catalogEntries: [],
@@ -270,18 +254,7 @@ describe("setupChannels workspace shadow exclusion", () => {
   });
 
   it("defers status and setup-plugin loads until a channel is selected", async () => {
-    resolveChannelSetupEntries.mockReturnValue({
-      entries: [
-        {
-          id: "external-chat",
-          meta: makeMeta("external-chat", "External Chat"),
-        },
-      ],
-      installedCatalogEntries: [],
-      installableCatalogEntries: [],
-      installedCatalogById: new Map(),
-      installableCatalogById: new Map(),
-    });
+    resolveChannelSetupEntries.mockReturnValue(externalChatSetupEntries());
     const select = vi.fn(async () => "__done__");
 
     await setupChannels(
@@ -366,18 +339,20 @@ describe("setupChannels workspace shadow exclusion", () => {
       setupWizard,
     });
     listActiveChannelSetupPlugins.mockReturnValue([activePlugin]);
-    resolveChannelSetupEntries.mockReturnValue({
-      entries: [
-        {
-          id: "custom-chat",
-          meta: makeMeta("custom-chat", "Custom Chat"),
-        },
-      ],
-      installedCatalogEntries: [],
-      installableCatalogEntries: [],
-      installedCatalogById: new Map(),
-      installableCatalogById: new Map(),
-    });
+    resolveChannelSetupEntries.mockReturnValue(
+      makeChannelSetupEntries({
+        entries: [
+          {
+            id: "custom-chat",
+            meta: makeMeta("custom-chat", "Custom Chat"),
+          },
+        ],
+        installedCatalogEntries: [],
+        installableCatalogEntries: [],
+        installedCatalogById: new Map(),
+        installableCatalogById: new Map(),
+      }),
+    );
     const select = vi.fn().mockResolvedValueOnce("custom-chat").mockResolvedValueOnce("__done__");
 
     const next = await setupChannels(
@@ -435,18 +410,12 @@ describe("setupChannels workspace shadow exclusion", () => {
       pluginId: "external-chat",
       origin: "bundled",
     });
-    resolveChannelSetupEntries.mockReturnValue({
-      entries: [
-        {
-          id: "external-chat",
-          meta: makeMeta("external-chat", "External Chat"),
-        },
-      ],
-      installedCatalogEntries: [installedCatalogEntry],
-      installableCatalogEntries: [],
-      installedCatalogById: new Map([["external-chat", installedCatalogEntry]]),
-      installableCatalogById: new Map(),
-    });
+    resolveChannelSetupEntries.mockReturnValue(
+      externalChatSetupEntries({
+        installedCatalogEntries: [installedCatalogEntry],
+        installedCatalogById: new Map([["external-chat", installedCatalogEntry]]),
+      }),
+    );
     loadChannelSetupPluginRegistrySnapshotForChannel.mockReturnValue(
       makePluginRegistry({
         channels: [
@@ -507,18 +476,7 @@ describe("setupChannels workspace shadow exclusion", () => {
       })),
       configure: vi.fn(),
     };
-    resolveChannelSetupEntries.mockReturnValue({
-      entries: [
-        {
-          id: "external-chat",
-          meta: makeMeta("external-chat", "External Chat"),
-        },
-      ],
-      installedCatalogEntries: [],
-      installableCatalogEntries: [],
-      installedCatalogById: new Map(),
-      installableCatalogById: new Map(),
-    });
+    resolveChannelSetupEntries.mockReturnValue(externalChatSetupEntries());
     const select = vi.fn().mockResolvedValueOnce("external-chat").mockResolvedValueOnce("__done__");
     const note = vi.fn(async () => undefined);
     const cfg = {
@@ -556,18 +514,7 @@ describe("setupChannels workspace shadow exclusion", () => {
   });
 
   it("honors global plugin disablement before lazy channel setup loads plugins", async () => {
-    resolveChannelSetupEntries.mockReturnValue({
-      entries: [
-        {
-          id: "external-chat",
-          meta: makeMeta("external-chat", "External Chat"),
-        },
-      ],
-      installedCatalogEntries: [],
-      installableCatalogEntries: [],
-      installedCatalogById: new Map(),
-      installableCatalogById: new Map(),
-    });
+    resolveChannelSetupEntries.mockReturnValue(externalChatSetupEntries());
     const select = vi.fn().mockResolvedValueOnce("external-chat").mockResolvedValueOnce("__done__");
     const note = vi.fn(async () => undefined);
     const cfg = {

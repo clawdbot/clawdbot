@@ -126,29 +126,7 @@ describe("sandbox pinned mutation helper", () => {
         const result = runWritePlan(
           ["write", workspace, "nested/deeper", "note.txt", "1"],
           "hello",
-        );
-
-        expect(result.status).toBe(0);
-        await expect(
-          fs.readFile(path.join(workspace, "nested", "deeper", "note.txt"), "utf8"),
-        ).resolves.toBe("hello");
-      });
-    },
-  );
-
-  it.runIf(process.platform !== "win32" && hasAbsolutePythonCandidate)(
-    "finds an absolute python when the write plan runs with an empty PATH",
-    async () => {
-      await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
-        const workspace = path.join(root, "workspace");
-        await fs.mkdir(workspace, { recursive: true });
-
-        const result = runWritePlan(
-          ["write", workspace, "nested/deeper", "note.txt", "1"],
-          "hello",
-          {
-            PATH: "",
-          },
+          hasAbsolutePythonCandidate ? { PATH: "" } : undefined,
         );
 
         expect(result.status).toBe(0);

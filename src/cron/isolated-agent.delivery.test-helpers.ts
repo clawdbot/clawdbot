@@ -56,7 +56,6 @@ export async function runTelegramAnnounceTurn(params: {
     to?: string;
     bestEffort?: boolean;
   };
-  deliveryContract?: "cron-owned" | "shared";
 }): Promise<Awaited<ReturnType<typeof runCronIsolatedAgentTurn>>> {
   return runCronIsolatedAgentTurn({
     cfg: makeCfg(params.home, params.storePath, {
@@ -70,6 +69,5 @@ export async function runTelegramAnnounceTurn(params: {
     message: "do it",
     sessionKey: "cron:job-1",
     lane: "cron",
-    deliveryContract: params.deliveryContract,
   });
 }

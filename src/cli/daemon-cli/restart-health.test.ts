@@ -89,6 +89,7 @@ async function inspectAmbiguousOwnershipWithProbe(
 }
 
 async function waitForStoppedFreeGatewayRestart() {
+  const attempts = process.platform === "win32" ? 360 : 120;
   const service = makeGatewayService({ status: "stopped" });
   inspectPortUsage.mockResolvedValue({
     port: 18789,
@@ -101,7 +102,7 @@ async function waitForStoppedFreeGatewayRestart() {
   return waitForGatewayHealthyRestart({
     service,
     port: 18789,
-    attempts: 120,
+    attempts,
     delayMs: 500,
   });
 }
@@ -292,9 +293,9 @@ describe("inspectGatewayRestart", () => {
       runtime: { status: "stopped" },
       portUsage: { status: "free" },
       waitOutcome: "stopped-free",
-      elapsedMs: 27_500,
+      elapsedMs: 92_500,
     });
-    expect(sleep).toHaveBeenCalledTimes(55);
+    expect(sleep).toHaveBeenCalledTimes(185);
   });
 
   it("annotates timeout waits when the health loop exhausts all attempts", async () => {

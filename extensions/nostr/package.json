@@ -4,7 +4,8 @@
   "description": "OpenClaw Nostr channel plugin for NIP-04 encrypted DMs",
   "type": "module",
   "dependencies": {
-    "nostr-tools": "^2.23.3"
+    "nostr-tools": "^2.23.3",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

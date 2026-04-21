@@ -51,7 +51,7 @@ describe("sessions_spawn tool", () => {
   it("uses subagent runtime by default", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
-      agentChannel: "discord",
+      agentChannel: "quietchat",
       agentAccountId: "default",
       agentTo: "channel:123",
       agentThreadId: "456",
@@ -209,7 +209,7 @@ describe("sessions_spawn tool", () => {
   it("routes to ACP runtime when runtime=acp", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
-      agentChannel: "discord",
+      agentChannel: "quietchat",
       agentAccountId: "default",
       agentTo: "channel:123",
       agentThreadId: "456",
@@ -346,7 +346,7 @@ describe("sessions_spawn tool", () => {
   it("rejects attachments for ACP runtime", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
-      agentChannel: "discord",
+      agentChannel: "quietchat",
       agentAccountId: "default",
       agentTo: "channel:123",
       agentThreadId: "456",

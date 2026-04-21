@@ -1,5 +1,28 @@
+import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createNodeTestShards } from "../../scripts/lib/ci-node-test-plan.mjs";
+
+function listTestFiles(rootDir: string): string[] {
+  if (!existsSync(rootDir)) {
+    return [];
+  }
+
+  const files: string[] = [];
+  const visit = (dir: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        visit(path);
+      } else if (entry.isFile() && entry.name.endsWith(".test.ts")) {
+        files.push(path.replaceAll("\\", "/"));
+      }
+    }
+  };
+
+  visit(rootDir);
+  return files.toSorted((a, b) => a.localeCompare(b));
+}
 
 describe("scripts/lib/ci-node-test-plan.mjs", () => {
   it("names the node shard checks as core test lanes", () => {
@@ -32,16 +55,67 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
 
     expect(requiresDistShardNames).toEqual([
       "core-support-boundary",
-      "core-runtime",
-      "agentic-agents-plugins",
+      "core-runtime-infra",
+      "core-runtime-media-ui",
+      "core-runtime-shared",
+      "agentic-plugins",
     ]);
   });
 
-  it("splits the agentic lane into control-plane, commands, and agent/plugin shards", () => {
+  it("splits core runtime configs into smaller dist-dependent shards", () => {
+    const runtimeShards = createNodeTestShards()
+      .filter((shard) => shard.shardName.startsWith("core-runtime-"))
+      .map((shard) => ({
+        configs: shard.configs,
+        requiresDist: shard.requiresDist,
+        shardName: shard.shardName,
+      }));
+
+    expect(runtimeShards).toEqual([
+      {
+        configs: [
+          "test/vitest/vitest.infra.config.ts",
+          "test/vitest/vitest.hooks.config.ts",
+          "test/vitest/vitest.runtime-config.config.ts",
+          "test/vitest/vitest.secrets.config.ts",
+          "test/vitest/vitest.logging.config.ts",
+          "test/vitest/vitest.process.config.ts",
+        ],
+        requiresDist: true,
+        shardName: "core-runtime-infra",
+      },
+      {
+        configs: [
+          "test/vitest/vitest.media.config.ts",
+          "test/vitest/vitest.media-understanding.config.ts",
+          "test/vitest/vitest.tui.config.ts",
+          "test/vitest/vitest.ui.config.ts",
+          "test/vitest/vitest.wizard.config.ts",
+        ],
+        requiresDist: true,
+        shardName: "core-runtime-media-ui",
+      },
+      {
+        configs: [
+          "test/vitest/vitest.acp.config.ts",
+          "test/vitest/vitest.cron.config.ts",
+          "test/vitest/vitest.shared-core.config.ts",
+          "test/vitest/vitest.tasks.config.ts",
+          "test/vitest/vitest.utils.config.ts",
+        ],
+        requiresDist: true,
+        shardName: "core-runtime-shared",
+      },
+    ]);
+  });
+
+  it("splits the agentic lane into control-plane, commands, agent, SDK, and plugin shards", () => {
     const shards = createNodeTestShards();
     const controlPlaneShard = shards.find((shard) => shard.shardName === "agentic-control-plane");
     const commandsShard = shards.find((shard) => shard.shardName === "agentic-commands");
-    const agentPluginShard = shards.find((shard) => shard.shardName === "agentic-agents-plugins");
+    const agentShard = shards.find((shard) => shard.shardName === "agentic-agents");
+    const pluginSdkShard = shards.find((shard) => shard.shardName === "agentic-plugin-sdk");
+    const pluginsShard = shards.find((shard) => shard.shardName === "agentic-plugins");
 
     expect(controlPlaneShard).toEqual({
       checkName: "checks-node-agentic-control-plane",
@@ -65,16 +139,123 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       ],
       requiresDist: false,
     });
-    expect(agentPluginShard).toEqual({
-      checkName: "checks-node-agentic-agents-plugins",
-      shardName: "agentic-agents-plugins",
+    expect(agentShard).toEqual({
+      checkName: "checks-node-agentic-agents",
+      shardName: "agentic-agents",
+      configs: ["test/vitest/vitest.agents.config.ts"],
+      requiresDist: false,
+    });
+    expect(pluginSdkShard).toEqual({
+      checkName: "checks-node-agentic-plugin-sdk",
+      shardName: "agentic-plugin-sdk",
       configs: [
-        "test/vitest/vitest.agents.config.ts",
         "test/vitest/vitest.plugin-sdk-light.config.ts",
         "test/vitest/vitest.plugin-sdk.config.ts",
-        "test/vitest/vitest.plugins.config.ts",
       ],
+      requiresDist: false,
+    });
+    expect(pluginsShard).toEqual({
+      checkName: "checks-node-agentic-plugins",
+      shardName: "agentic-plugins",
+      configs: ["test/vitest/vitest.plugins.config.ts"],
       requiresDist: true,
     });
+  });
+
+  it("splits auto-reply into independent core, top-level, and reply subtree shards", () => {
+    const shards = createNodeTestShards();
+    const autoReplyShards = shards
+      .filter((shard) => shard.shardName.startsWith("auto-reply"))
+      .map((shard) => ({
+        checkName: shard.checkName,
+        configs: shard.configs,
+        requiresDist: shard.requiresDist,
+        shardName: shard.shardName,
+      }));
+
+    expect(autoReplyShards).toEqual([
+      {
+        checkName: "checks-node-auto-reply-core",
+        configs: ["test/vitest/vitest.auto-reply-core.config.ts"],
+        requiresDist: false,
+        shardName: "auto-reply-core",
+      },
+      {
+        checkName: "checks-node-auto-reply-top-level",
+        configs: ["test/vitest/vitest.auto-reply-top-level.config.ts"],
+        requiresDist: false,
+        shardName: "auto-reply-top-level",
+      },
+      {
+        checkName: "checks-node-auto-reply-reply-agent-runner-a",
+        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
+        requiresDist: false,
+        shardName: "auto-reply-reply-agent-runner-a",
+      },
+      {
+        checkName: "checks-node-auto-reply-reply-agent-runner-b",
+        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
+        requiresDist: false,
+        shardName: "auto-reply-reply-agent-runner-b",
+      },
+      {
+        checkName: "checks-node-auto-reply-reply-commands-a",
+        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
+        requiresDist: false,
+        shardName: "auto-reply-reply-commands-a",
+      },
+      {
+        checkName: "checks-node-auto-reply-reply-commands-b",
+        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
+        requiresDist: false,
+        shardName: "auto-reply-reply-commands-b",
+      },
+      {
+        checkName: "checks-node-auto-reply-reply-commands-c",
+        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
+        requiresDist: false,
+        shardName: "auto-reply-reply-commands-c",
+      },
+      {
+        checkName: "checks-node-auto-reply-reply-commands-d",
+        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
+        requiresDist: false,
+        shardName: "auto-reply-reply-commands-d",
+      },
+      {
+        checkName: "checks-node-auto-reply-reply-dispatch-a",
+        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
+        requiresDist: false,
+        shardName: "auto-reply-reply-dispatch-a",
+      },
+      {
+        checkName: "checks-node-auto-reply-reply-dispatch-b",
+        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
+        requiresDist: false,
+        shardName: "auto-reply-reply-dispatch-b",
+      },
+      {
+        checkName: "checks-node-auto-reply-reply-state-routing-a",
+        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
+        requiresDist: false,
+        shardName: "auto-reply-reply-state-routing-a",
+      },
+      {
+        checkName: "checks-node-auto-reply-reply-state-routing-b",
+        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
+        requiresDist: false,
+        shardName: "auto-reply-reply-state-routing-b",
+      },
+    ]);
+  });
+
+  it("covers every auto-reply reply test exactly once across split shards", () => {
+    const actual = createNodeTestShards()
+      .filter((shard) => shard.shardName.startsWith("auto-reply-reply-"))
+      .flatMap((shard) => shard.includePatterns ?? [])
+      .toSorted((a, b) => a.localeCompare(b));
+
+    expect(actual).toEqual(listTestFiles("src/auto-reply/reply"));
+    expect(new Set(actual).size).toBe(actual.length);
   });
 });

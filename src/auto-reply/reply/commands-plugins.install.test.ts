@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../../config/home-env.test-harness.js";
 import { createCommandWorkspaceHarness } from "./commands-filesystem.test-support.js";
 import { handlePluginsCommand } from "./commands-plugins.js";
-import type { HandleCommandsParams } from "./commands-types.js";
+import { buildPluginsCommandParams } from "./commands.test-harness.js";
 
 const { installPluginFromPathMock, installPluginFromClawHubMock, persistPluginInstallMock } =
   vi.hoisted(() => ({
@@ -39,45 +39,12 @@ vi.mock("../../cli/plugins-install-persist.js", () => ({
 
 const workspaceHarness = createCommandWorkspaceHarness("openclaw-command-plugins-install-");
 
-function buildPluginsParams(
-  commandBodyNormalized: string,
-  workspaceDir: string,
-): HandleCommandsParams {
-  return {
-    cfg: {
-      commands: {
-        text: true,
-        plugins: true,
-      },
-      plugins: { enabled: true },
-    },
-    ctx: {
-      Provider: "whatsapp",
-      Surface: "whatsapp",
-      CommandSource: "text",
-      GatewayClientScopes: ["operator.admin", "operator.write", "operator.pairing"],
-      AccountId: undefined,
-    },
-    command: {
-      commandBodyNormalized,
-      rawBodyNormalized: commandBodyNormalized,
-      isAuthorizedSender: true,
-      senderIsOwner: true,
-      senderId: "owner",
-      channel: "whatsapp",
-      channelId: "whatsapp",
-      surface: "whatsapp",
-      ownerList: [],
-      from: "test-user",
-      to: "test-bot",
-    },
-    sessionKey: "agent:main:whatsapp:direct:test-user",
-    sessionEntry: {
-      sessionId: "session-plugin-command",
-      updatedAt: Date.now(),
-    },
+function buildPluginsParams(commandBodyNormalized: string, workspaceDir: string) {
+  return buildPluginsCommandParams({
+    commandBodyNormalized,
     workspaceDir,
-  } as unknown as HandleCommandsParams;
+    gatewayClientScopes: ["operator.admin", "operator.write", "operator.pairing"],
+  });
 }
 
 describe("handleCommands /plugins install", () => {

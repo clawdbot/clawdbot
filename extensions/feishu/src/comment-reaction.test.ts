@@ -37,16 +37,30 @@ describe("createCommentTypingReactionLifecycle", () => {
     });
   });
 
-  it("adds and removes a comment typing reaction using reply_id", async () => {
-    const lifecycle = createCommentTypingReactionLifecycle({
+  function createTypingReactionLifecycle(...args: [replyId?: string]) {
+    return createCommentTypingReactionLifecycle({
       cfg: {} as ClawdbotConfig,
       fileToken: "doc_token_1",
       fileType: "docx",
-      replyId: "reply_1",
+      replyId: args.length === 0 ? "reply_1" : args[0],
       runtime: {
         log: vi.fn(),
       } as never,
     });
+  }
+
+  const cleanupAmbientReply = () =>
+    cleanupAmbientCommentTypingReaction({
+      client: { request } as never,
+      deliveryContext: {
+        channel: "feishu",
+        to: "comment:docx:doc_token_1:comment_1",
+        threadId: "reply_1",
+      },
+    });
+
+  it("adds and removes a comment typing reaction using reply_id", async () => {
+    const lifecycle = createTypingReactionLifecycle();
 
     await lifecycle.start();
     await lifecycle.cleanup();
@@ -78,15 +92,7 @@ describe("createCommentTypingReactionLifecycle", () => {
   });
 
   it("skips requests when reply_id is missing", async () => {
-    const lifecycle = createCommentTypingReactionLifecycle({
-      cfg: {} as ClawdbotConfig,
-      fileToken: "doc_token_1",
-      fileType: "docx",
-      replyId: undefined,
-      runtime: {
-        log: vi.fn(),
-      } as never,
-    });
+    const lifecycle = createTypingReactionLifecycle(undefined);
 
     await lifecycle.start();
     await lifecycle.cleanup();
@@ -95,25 +101,10 @@ describe("createCommentTypingReactionLifecycle", () => {
   });
 
   it("shares cleanup state so ambient cleanup and finally cleanup do not delete twice", async () => {
-    const lifecycle = createCommentTypingReactionLifecycle({
-      cfg: {} as ClawdbotConfig,
-      fileToken: "doc_token_1",
-      fileType: "docx",
-      replyId: "reply_1",
-      runtime: {
-        log: vi.fn(),
-      } as never,
-    });
+    const lifecycle = createTypingReactionLifecycle();
 
     await lifecycle.start();
-    await cleanupAmbientCommentTypingReaction({
-      client: { request } as never,
-      deliveryContext: {
-        channel: "feishu",
-        to: "comment:docx:doc_token_1:comment_1",
-        threadId: "reply_1",
-      },
-    });
+    await cleanupAmbientReply();
     await lifecycle.cleanup();
 
     expect(request).toHaveBeenCalledTimes(2);
@@ -144,25 +135,10 @@ describe("createCommentTypingReactionLifecycle", () => {
         data: {},
       });
 
-    const lifecycle = createCommentTypingReactionLifecycle({
-      cfg: {} as ClawdbotConfig,
-      fileToken: "doc_token_1",
-      fileType: "docx",
-      replyId: "reply_1",
-      runtime: {
-        log: vi.fn(),
-      } as never,
-    });
+    const lifecycle = createTypingReactionLifecycle();
 
     await lifecycle.start();
-    await cleanupAmbientCommentTypingReaction({
-      client: { request } as never,
-      deliveryContext: {
-        channel: "feishu",
-        to: "comment:docx:doc_token_1:comment_1",
-        threadId: "reply_1",
-      },
-    });
+    await cleanupAmbientReply();
     await lifecycle.cleanup();
 
     expect(request).toHaveBeenCalledTimes(3);

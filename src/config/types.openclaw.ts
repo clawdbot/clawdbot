@@ -1,3 +1,7 @@
+import type {
+  SilentReplyPolicyShape,
+  SilentReplyRewriteShape,
+} from "../shared/silent-reply-policy.js";
 import type { AcpConfig } from "./types.acp.js";
 import type { AgentBinding, AgentsConfig } from "./types.agents.js";
 import type { ApprovalsConfig } from "./types.approvals.js";
@@ -29,8 +33,12 @@ import type { SecretsConfig } from "./types.secrets.js";
 import type { SkillsConfig } from "./types.skills.js";
 import type { ToolsConfig } from "./types.tools.js";
 
+export type SurfaceConfigEntry = {
+  silentReply?: SilentReplyPolicyShape;
+  silentReplyRewrite?: SilentReplyRewriteShape;
+};
+
 export type OpenClawConfig = {
-  /** JSON Schema URL for editor tooling (VS Code, etc.). Preserved across config rewrites. */
   $schema?: string;
   meta?: {
     /** Last OpenClaw version that wrote this config. */
@@ -97,6 +105,7 @@ export type OpenClawConfig = {
   secrets?: SecretsConfig;
   skills?: SkillsConfig;
   plugins?: PluginsConfig;
+  surfaces?: Record<string, SurfaceConfigEntry>;
   models?: ModelsConfig;
   nodeHost?: NodeHostConfig;
   agents?: AgentsConfig;

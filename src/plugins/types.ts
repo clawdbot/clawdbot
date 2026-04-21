@@ -109,6 +109,7 @@ import type { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import type {
   ProviderDefaultThinkingPolicyContext,
+  ProviderThinkingProfile,
   ProviderThinkingPolicyContext,
 } from "./provider-thinking.types.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -902,6 +903,7 @@ export type ProviderBuiltInModelSuppressionResult = {
 
 export type {
   ProviderDefaultThinkingPolicyContext,
+  ProviderThinkingProfile,
   ProviderThinkingPolicyContext,
 } from "./provider-thinking.types.js";
 
@@ -1399,19 +1401,36 @@ export type ProviderPlugin = {
    *
    * Return true when the provider exposes a coarse on/off reasoning control
    * instead of the normal multi-level ladder shown by `/think`.
+   *
+   * @deprecated Prefer `resolveThinkingProfile`.
    */
   isBinaryThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
   /**
    * Provider-owned xhigh reasoning support.
    *
    * Return true only for models that should expose the `xhigh` thinking level.
+   *
+   * @deprecated Prefer `resolveThinkingProfile`.
    */
   supportsXHighThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
+  /**
+   * Provider-owned thinking level profile.
+   *
+   * Prefer this over the individual thinking capability hooks when a provider
+   * or model exposes a custom set of thinking levels. OpenClaw stores the
+   * canonical `id`, shows `label` when provided, and downgrades stale stored
+   * values by profile rank.
+   */
+  resolveThinkingProfile?: (
+    ctx: ProviderDefaultThinkingPolicyContext,
+  ) => ProviderThinkingProfile | null | undefined;
   /**
    * Provider-owned default thinking level.
    *
    * Use this to keep model-family defaults (for example Claude 4.6 =>
    * adaptive) out of core command logic.
+   *
+   * @deprecated Prefer `resolveThinkingProfile`.
    */
   resolveDefaultThinkingLevel?: (
     ctx: ProviderDefaultThinkingPolicyContext,

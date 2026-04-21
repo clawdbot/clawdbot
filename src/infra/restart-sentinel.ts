@@ -96,6 +96,15 @@ export async function readRestartSentinel(
   }
 }
 
+export async function hasRestartSentinel(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
+  try {
+    await fs.access(resolveRestartSentinelPath(env));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function consumeRestartSentinel(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<RestartSentinel | null> {

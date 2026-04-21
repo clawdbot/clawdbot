@@ -47,13 +47,15 @@ The Ansible playbook installs and configures:
 
 1. **Tailscale** -- mesh VPN for secure remote access
 2. **UFW firewall** -- SSH + Tailscale ports only
-3. **Docker CE + Compose V2** -- for agent sandboxes
+3. **Docker CE + Compose V2** -- for the default agent sandbox backend
 4. **Node.js 24 + pnpm** -- runtime dependencies (Node 22 LTS, currently `22.14+`, remains supported)
 5. **OpenClaw** -- host-based, not containerized
 6. **Systemd service** -- auto-start with security hardening
 
 <Note>
-The gateway runs directly on the host (not in Docker), but agent sandboxes use Docker for isolation. See [Sandboxing](/gateway/sandboxing) for details.
+The gateway runs directly on the host (not in Docker). Agent sandboxing is
+optional; this playbook installs Docker because it is the default sandbox
+backend. See [Sandboxing](/gateway/sandboxing) for details and other backends.
 </Note>
 
 ## Post-Install Setup

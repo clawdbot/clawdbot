@@ -81,7 +81,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: "false"
 
       - name: Setup Python
         if: matrix.needs_python

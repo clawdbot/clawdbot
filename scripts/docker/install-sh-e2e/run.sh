@@ -17,6 +17,7 @@ SKIP_PREVIOUS="${OPENCLAW_INSTALL_E2E_SKIP_PREVIOUS:-0}"
 OPENAI_API_KEY="${OPENAI_API_KEY:-}"
 ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
 ANTHROPIC_API_TOKEN="${ANTHROPIC_API_TOKEN:-}"
+AGENT_TURN_TIMEOUT_SECONDS="${OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS:-600}"
 
 # This image runs as a non-root user, so seed a user-local npm prefix before we
 # preinstall an older global version to exercise the upgrade path.
@@ -194,12 +195,21 @@ run_agent_turn() {
   # Installer E2E validates install + onboard + embedded agent tooling. It does
   # not need a paired Gateway control-plane hop, which is flaky/non-deterministic
   # in the isolated container and already covered by gateway-specific lanes.
-  openclaw --profile "$profile" agent \
+  set +e
+  timeout --kill-after=15s "${AGENT_TURN_TIMEOUT_SECONDS}s" \
+    openclaw --profile "$profile" agent \
     --local \
     --session-id "$session_id" \
     --message "$prompt" \
     --thinking off \
     --json >"$out_json" 2>&1
+  local status="$?"
+  set -e
+  if [[ "$status" -ne 0 ]]; then
+    echo "ERROR: agent turn failed ($profile, status=$status, output=$out_json)" >&2
+    dump_profile_debug "$profile" "$out_json" >&2 || true
+    return "$status"
+  fi
   node - <<'NODE' "$out_json"
 const fs = require("node:fs");
 
@@ -231,6 +241,47 @@ function extractTrailingJsonObject(input) {
 const parsed = extractTrailingJsonObject(raw);
 fs.writeFileSync(path, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
 NODE
+}
+
+dump_profile_debug() {
+  local profile="$1"
+  local turn_output="$2"
+
+  echo "---- agent turn output ($profile) ----"
+  if [[ -f "$turn_output" ]]; then
+    tail -n 200 "$turn_output"
+  else
+    echo "missing: $turn_output"
+  fi
+
+  echo "---- gateway log ($profile) ----"
+  if [[ -n "${GATEWAY_LOG:-}" && -f "$GATEWAY_LOG" ]]; then
+    tail -n 200 "$GATEWAY_LOG"
+  else
+    echo "missing: ${GATEWAY_LOG:-<unset>}"
+  fi
+
+  echo "---- session transcript ($profile) ----"
+  if [[ -n "${SESSION_JSONL:-}" && -f "$SESSION_JSONL" ]]; then
+    tail -n 80 "$SESSION_JSONL"
+  else
+    echo "missing: ${SESSION_JSONL:-<unset>}"
+    if [[ -n "${SESSION_JSONL:-}" ]]; then
+      ls -la "$(dirname "$SESSION_JSONL")" 2>/dev/null || true
+    fi
+  fi
+
+  echo "---- openclaw processes ($profile) ----"
+  for cmdline in /proc/[0-9]*/cmdline; do
+    [[ -r "$cmdline" ]] || continue
+    local pid
+    pid="$(basename "$(dirname "$cmdline")")"
+    local command
+    command="$(tr '\0' ' ' <"$cmdline" | sed 's/[[:space:]]*$//')"
+    if [[ "$command" == *openclaw* || "$command" == *node* ]]; then
+      echo "$pid $command"
+    fi
+  done
 }
 
 assert_agent_json_has_text() {

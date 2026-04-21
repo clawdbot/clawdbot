@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
 import {
@@ -7,12 +8,21 @@ import {
   setSerializedSessionStore,
   writeSessionStoreCache,
 } from "./store-cache.js";
+import {
+  capEntryCount,
+  pruneStaleEntries,
+  resolveMaintenanceConfigFromInput,
+  type ResolvedSessionMaintenanceConfig,
+} from "./store-maintenance.js";
 import { applySessionStoreMigrations } from "./store-migrations.js";
 import { normalizeSessionRuntimeModelFields, type SessionEntry } from "./types.js";
 
 export type LoadSessionStoreOptions = {
   skipCache?: boolean;
+  maintenanceConfig?: ResolvedSessionMaintenanceConfig;
 };
+
+const log = createSubsystemLogger("sessions/store");
 
 function isSessionStoreRecord(value: unknown): value is Record<string, SessionEntry> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -118,6 +128,25 @@ export function loadSessionStore(
 
   applySessionStoreMigrations(store);
   normalizeSessionStore(store);
+  const maintenance = opts.maintenanceConfig ?? resolveMaintenanceConfigFromInput();
+  if (maintenance.mode === "enforce" && Object.keys(store).length > maintenance.maxEntries) {
+    const beforeCount = Object.keys(store).length;
+    const pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, { log: false });
+    const capped = capEntryCount(store, maintenance.maxEntries, { log: false });
+    const afterCount = Object.keys(store).length;
+    if (pruned > 0 || capped > 0) {
+      serializedFromDisk = undefined;
+      setSerializedSessionStore(storePath, undefined);
+      log.info("applied load-time maintenance to oversized session store", {
+        storePath,
+        before: beforeCount,
+        after: afterCount,
+        pruned,
+        capped,
+        maxEntries: maintenance.maxEntries,
+      });
+    }
+  }
 
   if (!opts.skipCache && isSessionStoreCacheEnabled()) {
     writeSessionStoreCache({

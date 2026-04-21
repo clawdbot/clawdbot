@@ -2,7 +2,7 @@ import fs from "node:fs";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { BrowserResetUnsupportedError } from "./errors.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
-import { getPwAiModule } from "./pw-ai-module.js";
+import { closePlaywrightBrowserConnectionForProfile } from "./server-context.lifecycle.js";
 import type { ProfileRuntimeState } from "./server-context.types.js";
 import { movePathToTrash } from "./trash.js";
 
@@ -17,15 +17,6 @@ type ResetDeps = {
 type ResetOps = {
   resetProfile: () => Promise<{ moved: boolean; from: string; to?: string }>;
 };
-
-async function closePlaywrightBrowserConnectionForProfile(cdpUrl?: string): Promise<void> {
-  try {
-    const mod = await getPwAiModule({ mode: "soft" });
-    await mod?.closePlaywrightBrowserConnection(cdpUrl ? { cdpUrl } : undefined);
-  } catch {
-    // ignore
-  }
-}
 
 export function createProfileResetOps({
   profile,

@@ -1,7 +1,11 @@
 import { createRequire } from "node:module";
 import os from "node:os";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { readPluginPackageVersion } from "openclaw/plugin-sdk/extension-shared";
+import {
+  fetchWithSsrFGuard,
+  resolvePinnedHostnameWithPolicy,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { debugLog, debugError } from "./utils/debug-log.js";
 import { sanitizeFileName } from "./utils/platform.js";
@@ -12,26 +16,7 @@ const TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken";
 
 // Plugin User-Agent format: QQBotPlugin/{version} (Node/{nodeVersion}; {os})
 const _require = createRequire(import.meta.url);
-const PACKAGE_JSON_CANDIDATES = [
-  "../package.json",
-  "./package.json",
-  "../../package.json",
-] as const;
-
-function readPluginVersion(): string {
-  for (const candidate of PACKAGE_JSON_CANDIDATES) {
-    try {
-      const version = (_require(candidate) as { version?: unknown }).version;
-      if (typeof version === "string" && version.trim().length > 0) {
-        return version;
-      }
-    } catch {
-      // Ignore missing candidate paths across source and bundled layouts.
-    }
-  }
-  return "unknown";
-}
-const _pluginVersion = readPluginVersion();
+const _pluginVersion = readPluginPackageVersion({ require: _require });
 export const PLUGIN_USER_AGENT = `QQBotPlugin/${_pluginVersion} (Node/${process.versions.node}; ${os.platform()})`;
 
 // =========================================================================
@@ -552,6 +537,22 @@ export interface UploadMediaResponse {
   id?: string;
 }
 
+async function assertDirectUploadUrlAllowed(url: string): Promise<string> {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch (err) {
+    throw new Error(`Invalid media URL: ${formatErrorMessage(err)}`, { cause: err });
+  }
+
+  if (parsed.protocol !== "https:") {
+    throw new Error("Direct-upload media URL must use HTTPS");
+  }
+
+  await resolvePinnedHostnameWithPolicy(parsed.hostname);
+  return parsed.toString();
+}
+
 export async function uploadC2CMedia(
   accessToken: string,
   openid: string,
@@ -575,7 +576,7 @@ export async function uploadC2CMedia(
 
   const body: Record<string, unknown> = { file_type: fileType, srv_send_msg: srvSendMsg };
   if (url) {
-    body.url = url;
+    body.url = await assertDirectUploadUrlAllowed(url);
   } else if (fileData) {
     body.file_data = fileData;
   }
@@ -628,7 +629,7 @@ export async function uploadGroupMedia(
 
   const body: Record<string, unknown> = { file_type: fileType, srv_send_msg: srvSendMsg };
   if (url) {
-    body.url = url;
+    body.url = await assertDirectUploadUrlAllowed(url);
   } else if (fileData) {
     body.file_data = fileData;
   }

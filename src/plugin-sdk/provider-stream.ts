@@ -3,6 +3,7 @@ import {
   sanitizeGoogleThinkingPayload,
 } from "../agents/pi-embedded-runner/google-stream-wrappers.js";
 import { createMinimaxFastModeWrapper } from "../agents/pi-embedded-runner/minimax-stream-wrappers.js";
+import { resolveMoonshotThinkingKeep } from "../agents/pi-embedded-runner/moonshot-thinking-stream-wrappers.js";
 import {
   createCodexNativeWebSearchWrapper,
   createOpenAIAttributionHeadersWrapper,
@@ -10,7 +11,9 @@ import {
   createOpenAIReasoningCompatibilityWrapper,
   createOpenAIResponsesContextManagementWrapper,
   createOpenAIServiceTierWrapper,
+  createOpenAIStringContentWrapper,
   createOpenAITextVerbosityWrapper,
+  createOpenAIThinkingLevelWrapper,
   resolveOpenAIFastMode,
   resolveOpenAIServiceTier,
   resolveOpenAITextVerbosity,
@@ -73,7 +76,10 @@ export function buildProviderStreamFamilyHooks(
             configuredThinking: ctx.extraParams?.thinking,
             thinkingLevel: ctx.thinkingLevel,
           });
-          return createMoonshotThinkingWrapper(ctx.streamFn, thinkingType);
+          const thinkingKeep = resolveMoonshotThinkingKeep({
+            configuredThinking: ctx.extraParams?.thinking,
+          });
+          return createMoonshotThinkingWrapper(ctx.streamFn, thinkingType, thinkingKeep);
         },
       };
     case "kilocode-thinking":
@@ -114,8 +120,11 @@ export function buildProviderStreamFamilyHooks(
             config: ctx.config,
             agentDir: ctx.agentDir,
           });
+          nextStreamFn = createOpenAIStringContentWrapper(nextStreamFn);
           return createOpenAIResponsesContextManagementWrapper(
-            createOpenAIReasoningCompatibilityWrapper(nextStreamFn),
+            createOpenAIReasoningCompatibilityWrapper(
+              createOpenAIThinkingLevelWrapper(nextStreamFn, ctx.thinkingLevel),
+            ),
             ctx.extraParams,
           );
         },

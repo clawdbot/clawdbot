@@ -10,6 +10,50 @@ type QaMemorySearchResult = {
   results?: Array<{ snippet?: string; text?: string; path?: string }>;
 };
 
+const ANSI_ESCAPE_PATTERN = new RegExp(String.raw`\x1B\[[0-?]*[ -/]*[@-~]`, "g");
+
+function stripAnsiCodes(text: string) {
+  return text.replace(ANSI_ESCAPE_PATTERN, "");
+}
+
+function parseQaCliJsonOutput(text: string) {
+  const cleaned = stripAnsiCodes(text).trim();
+  if (!cleaned) {
+    return {};
+  }
+  try {
+    return JSON.parse(cleaned) as unknown;
+  } catch {
+    // Some startup repair logs are emitted on stdout before command JSON.
+    const lines = cleaned.split(/\r?\n/);
+    for (let index = 0; index < lines.length; index += 1) {
+      const candidate = lines[index].trim();
+      if (!candidate.startsWith("{") && !candidate.startsWith("[")) {
+        continue;
+      }
+      try {
+        return JSON.parse(lines.slice(index).join("\n")) as unknown;
+      } catch {
+        // Keep looking for the actual payload start.
+      }
+    }
+
+    // Keep a line-oriented fallback for compact payloads followed by diagnostics.
+    for (const line of lines.toReversed()) {
+      const candidate = line.trim();
+      if (!candidate.startsWith("{") && !candidate.startsWith("[")) {
+        continue;
+      }
+      try {
+        return JSON.parse(candidate) as unknown;
+      } catch {
+        // Keep looking for the actual payload line.
+      }
+    }
+    throw new Error(`qa cli returned non-JSON stdout: ${cleaned.slice(0, 240)}`);
+  }
+}
+
 async function runQaCli(
   env: Pick<
     QaSuiteRuntimeEnv,
@@ -55,7 +99,7 @@ async function runQaCli(
   if (!opts?.json) {
     return text;
   }
-  return text ? (JSON.parse(text) as unknown) : {};
+  return parseQaCliJsonOutput(text);
 }
 
 async function startAgentRun(

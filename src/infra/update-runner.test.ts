@@ -701,6 +701,7 @@ describe("runGatewayUpdate", () => {
       );
       expect(result.steps.map((step) => step.name)).toContain("deps install (ignore scripts)");
       expect(calls).toContain("pnpm install --ignore-scripts");
+      expect(calls).not.toContain("pnpm lint");
     } finally {
       platformSpy.mockRestore();
     }

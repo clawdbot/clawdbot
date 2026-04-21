@@ -3,7 +3,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
-import { capEntryCount, pruneStaleEntries, rotateSessionFile } from "./store.js";
+import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
+import {
+  capEntryCount,
+  getActiveSessionMaintenanceWarning,
+  pruneStaleEntries,
+  rotateSessionFile,
+} from "./store.js";
 import type { SessionEntry } from "./types.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -67,6 +73,56 @@ describe("capEntryCount", () => {
     expect(store.mid).toBeDefined();
     expect(store.oldest).toBeUndefined();
     expect(store.old).toBeUndefined();
+  });
+});
+
+describe("resolveMaintenanceConfigFromInput", () => {
+  it("defaults to enforcing session maintenance", () => {
+    const maintenance = resolveMaintenanceConfigFromInput();
+
+    expect(maintenance.mode).toBe("enforce");
+  });
+});
+
+describe("getActiveSessionMaintenanceWarning", () => {
+  it("warns when the active session is outside the retained recent entries", () => {
+    const now = Date.now();
+    const store = makeStore([
+      ["newest", makeEntry(now)],
+      ["recent", makeEntry(now - 1)],
+      ["active", makeEntry(now - 2)],
+      ["old", makeEntry(now - 3)],
+    ]);
+
+    const warning = getActiveSessionMaintenanceWarning({
+      store,
+      activeSessionKey: "active",
+      pruneAfterMs: DAY_MS,
+      maxEntries: 2,
+      nowMs: now,
+    });
+
+    expect(warning?.wouldCap).toBe(true);
+    expect(warning?.wouldPrune).toBe(false);
+  });
+
+  it("preserves insertion order tie behavior from stable sorting", () => {
+    const now = Date.now();
+    const store = makeStore([
+      ["same-before", makeEntry(now)],
+      ["active", makeEntry(now)],
+      ["same-after", makeEntry(now)],
+    ]);
+
+    const warning = getActiveSessionMaintenanceWarning({
+      store,
+      activeSessionKey: "active",
+      pruneAfterMs: DAY_MS,
+      maxEntries: 1,
+      nowMs: now,
+    });
+
+    expect(warning?.wouldCap).toBe(true);
   });
 });
 

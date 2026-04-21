@@ -3,12 +3,17 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { MsgContext } from "../templating.js";
 import {
   initFastReplySessionState,
   markCompleteReplyConfig,
   withFastReplyConfig,
 } from "./get-reply-fast-path.js";
+import {
+  buildGetReplyCtx,
+  createGetReplySessionState,
+  expectResolvedTelegramTimezone,
+  registerGetReplyRuntimeOverrides,
+} from "./get-reply.test-fixtures.js";
 import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
 import "./get-reply.test-runtime-mocks.js";
 
@@ -22,22 +27,7 @@ vi.mock("../../agents/workspace.js", () => ({
   DEFAULT_AGENT_WORKSPACE_DIR: "/tmp/openclaw-workspace",
   ensureAgentWorkspace: (...args: unknown[]) => mocks.ensureAgentWorkspace(...args),
 }));
-vi.mock("./directive-handling.defaults.js", () => ({
-  resolveDefaultModel: vi.fn(() => ({
-    defaultProvider: "openai",
-    defaultModel: "gpt-4o-mini",
-    aliasIndex: new Map(),
-  })),
-}));
-vi.mock("./get-reply-directives.js", () => ({
-  resolveReplyDirectives: (...args: unknown[]) => mocks.resolveReplyDirectives(...args),
-}));
-vi.mock("./get-reply-inline-actions.js", () => ({
-  handleInlineActions: vi.fn(async () => ({ kind: "reply", reply: { text: "ok" } })),
-}));
-vi.mock("./session.js", () => ({
-  initSessionState: (...args: unknown[]) => mocks.initSessionState(...args),
-}));
+registerGetReplyRuntimeOverrides(mocks);
 
 let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
 let loadConfigMock: typeof import("../../config/config.js").loadConfig;
@@ -47,23 +37,6 @@ async function loadGetReplyRuntimeForTest() {
   ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
   ({ loadConfig: loadConfigMock } = await import("../../config/config.js"));
   ({ runPreparedReply: runPreparedReplyMock } = await import("./get-reply-run.js"));
-}
-
-function buildCtx(overrides: Partial<MsgContext> = {}): MsgContext {
-  return {
-    Provider: "telegram",
-    Surface: "telegram",
-    ChatType: "direct",
-    Body: "hello",
-    BodyForAgent: "hello",
-    RawBody: "hello",
-    CommandBody: "hello",
-    SessionKey: "agent:main:telegram:123",
-    From: "telegram:user:42",
-    To: "telegram:123",
-    Timestamp: 1710000000000,
-    ...overrides,
-  };
 }
 
 describe("getReplyFromConfig fast test bootstrap", () => {
@@ -81,24 +54,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     vi.mocked(loadConfigMock).mockReturnValue({});
     mocks.resolveReplyDirectives.mockResolvedValue({ kind: "reply", reply: { text: "ok" } });
     vi.mocked(runPreparedReplyMock).mockResolvedValue({ text: "ok" });
-    mocks.initSessionState.mockResolvedValue({
-      sessionCtx: {},
-      sessionEntry: {},
-      previousSessionEntry: {},
-      sessionStore: {},
-      sessionKey: "agent:main:telegram:123",
-      sessionId: "session-1",
-      isNewSession: false,
-      resetTriggered: false,
-      systemSent: false,
-      abortedLastRun: false,
-      storePath: "/tmp/sessions.json",
-      sessionScope: "per-chat",
-      groupResolution: undefined,
-      isGroup: false,
-      triggerBodyNormalized: "",
-      bodyStripped: "",
-    });
+    mocks.initSessionState.mockResolvedValue(createGetReplySessionState());
   });
 
   afterEach(() => {
@@ -106,9 +62,9 @@ describe("getReplyFromConfig fast test bootstrap", () => {
   });
 
   it("fails fast on unmarked config overrides in strict fast-test mode", async () => {
-    await expect(getReplyFromConfig(buildCtx(), undefined, {} as OpenClawConfig)).rejects.toThrow(
-      /withFastReplyConfig\(\)\/markCompleteReplyConfig\(\)/,
-    );
+    await expect(
+      getReplyFromConfig(buildGetReplyCtx(), undefined, {} as OpenClawConfig),
+    ).rejects.toThrow(/withFastReplyConfig\(\)\/markCompleteReplyConfig\(\)/);
     expect(vi.mocked(loadConfigMock)).not.toHaveBeenCalled();
   });
 
@@ -125,7 +81,9 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       session: { store: path.join(home, "sessions.json") },
     } as OpenClawConfig);
 
-    await expect(getReplyFromConfig(buildCtx(), undefined, cfg)).resolves.toEqual({ text: "ok" });
+    await expect(getReplyFromConfig(buildGetReplyCtx(), undefined, cfg)).resolves.toEqual({
+      text: "ok",
+    });
     expect(vi.mocked(loadConfigMock)).not.toHaveBeenCalled();
     expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
     expect(mocks.initSessionState).not.toHaveBeenCalled();
@@ -147,7 +105,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       },
     } satisfies OpenClawConfig);
 
-    await getReplyFromConfig(buildCtx(), undefined, {
+    await getReplyFromConfig(buildGetReplyCtx(), undefined, {
       agents: {
         defaults: {
           userTimezone: "America/New_York",
@@ -157,28 +115,15 @@ describe("getReplyFromConfig fast test bootstrap", () => {
 
     expect(vi.mocked(loadConfigMock)).toHaveBeenCalledOnce();
     expect(mocks.initSessionState).toHaveBeenCalledOnce();
-    expect(mocks.resolveReplyDirectives).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: expect.objectContaining({
-          channels: expect.objectContaining({
-            telegram: expect.objectContaining({
-              botToken: "resolved-telegram-token",
-            }),
-          }),
-          agents: expect.objectContaining({
-            defaults: expect.objectContaining({
-              userTimezone: "America/New_York",
-            }),
-          }),
-        }),
-      }),
-    );
+    expectResolvedTelegramTimezone(mocks.resolveReplyDirectives);
   });
 
   it("marks configs through withFastReplyConfig()", async () => {
     const cfg = withFastReplyConfig({ session: { store: "/tmp/sessions.json" } } as OpenClawConfig);
 
-    await expect(getReplyFromConfig(buildCtx(), undefined, cfg)).resolves.toEqual({ text: "ok" });
+    await expect(getReplyFromConfig(buildGetReplyCtx(), undefined, cfg)).resolves.toEqual({
+      text: "ok",
+    });
     expect(vi.mocked(loadConfigMock)).not.toHaveBeenCalled();
     expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
     expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
@@ -186,7 +131,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
 
   it("uses native command target session keys during fast bootstrap", () => {
     const result = initFastReplySessionState({
-      ctx: buildCtx({
+      ctx: buildGetReplyCtx({
         SessionKey: "telegram:slash:123",
         CommandSource: "native",
         CommandTargetSessionKey: "agent:main:main",

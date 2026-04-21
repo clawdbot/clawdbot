@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { resolveProviderPluginChoice } from "../../src/plugins/provider-auth-choice.runtime.js";
 import { resolveProviderAuthEnvVarCandidates } from "../../src/secrets/provider-env-vars.js";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
+import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import arceePlugin from "./index.js";
 
 describe("arcee provider plugin", () => {
@@ -77,28 +78,14 @@ describe("arcee provider plugin", () => {
 
   it("builds the direct Arcee AI model catalog", async () => {
     const provider = await registerSingleProviderPlugin(arceePlugin);
-    expect(provider.catalog).toBeDefined();
-
-    const catalog = await provider.catalog!.run({
-      config: {},
-      env: {},
-      resolveProviderApiKey: (id: string) =>
+    const catalogProvider = await runSingleProviderCatalog(provider, {
+      resolveProviderApiKey: (id?: string) =>
         id === "arcee" ? { apiKey: "test-key" } : { apiKey: undefined },
-      resolveProviderAuth: () => ({
-        apiKey: "test-key",
-        mode: "api_key",
-        source: "env",
-      }),
-    } as never);
+    });
 
-    expect(catalog && "provider" in catalog).toBe(true);
-    if (!catalog || !("provider" in catalog)) {
-      throw new Error("expected single-provider catalog");
-    }
-
-    expect(catalog.provider.api).toBe("openai-completions");
-    expect(catalog.provider.baseUrl).toBe("https://api.arcee.ai/api/v1");
-    expect(catalog.provider.models?.map((model) => model.id)).toEqual([
+    expect(catalogProvider.api).toBe("openai-completions");
+    expect(catalogProvider.baseUrl).toBe("https://api.arcee.ai/api/v1");
+    expect(catalogProvider.models?.map((model) => model.id)).toEqual([
       "trinity-mini",
       "trinity-large-preview",
       "trinity-large-thinking",
@@ -107,26 +94,18 @@ describe("arcee provider plugin", () => {
 
   it("builds the OpenRouter-backed Arcee AI model catalog", async () => {
     const provider = await registerSingleProviderPlugin(arceePlugin);
-
-    const catalog = await provider.catalog!.run({
-      config: {},
-      env: {},
-      resolveProviderApiKey: (id: string) =>
+    const catalogProvider = await runSingleProviderCatalog(provider, {
+      resolveProviderApiKey: (id?: string) =>
         id === "openrouter" ? { apiKey: "sk-or-test" } : { apiKey: undefined },
       resolveProviderAuth: () => ({
         apiKey: "sk-or-test",
         mode: "api_key",
         source: "env",
       }),
-    } as never);
+    });
 
-    expect(catalog && "provider" in catalog).toBe(true);
-    if (!catalog || !("provider" in catalog)) {
-      throw new Error("expected single-provider catalog");
-    }
-
-    expect(catalog.provider.baseUrl).toBe("https://openrouter.ai/api/v1");
-    expect(catalog.provider.models?.map((model) => model.id)).toEqual([
+    expect(catalogProvider.baseUrl).toBe("https://openrouter.ai/api/v1");
+    expect(catalogProvider.models?.map((model) => model.id)).toEqual([
       "arcee/trinity-mini",
       "arcee/trinity-large-preview",
       "arcee/trinity-large-thinking",

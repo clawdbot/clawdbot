@@ -300,8 +300,8 @@ describe("deliverAgentCommandResult", () => {
       opts: {
         message: "hello",
         deliver: false,
-        lane: "nested:agent:ebao-next:discord:channel:1",
-        sessionKey: "agent:ebao-next:discord:channel:1",
+        lane: "nested:agent:ebao-next:quietchat:channel:1",
+        sessionKey: "agent:ebao-next:quietchat:channel:1",
         runId: "run-announce",
         messageChannel: "webchat",
       },
@@ -311,7 +311,7 @@ describe("deliverAgentCommandResult", () => {
     expect(runtime.log).toHaveBeenCalledTimes(1);
     const line = String((runtime.log as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]);
     expect(line).toContain("[agent:nested]");
-    expect(line).toContain("session=agent:ebao-next:discord:channel:1");
+    expect(line).toContain("session=agent:ebao-next:quietchat:channel:1");
     expect(line).toContain("ANNOUNCE_SKIP");
   });
 

@@ -1,6 +1,7 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { describe, expect, it } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
 import {
   createOutboundPayloadPlan,
@@ -184,6 +185,124 @@ describe("normalizeReplyPayloadsForDelivery", () => {
         replyToTag: false,
         audioAsVoice: false,
       },
+    ]);
+  });
+
+  it("rewrites bare silent replies for direct conversations when requested", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          silentReply: {
+            direct: "disallow",
+            group: "allow",
+            internal: "allow",
+          },
+          silentReplyRewrite: {
+            direct: true,
+          },
+        },
+      },
+    };
+
+    const sessionKey = "agent:main:telegram:direct:123";
+    const projected = projectOutboundPayloadPlanForDelivery(
+      createOutboundPayloadPlan([{ text: "NO_REPLY" }], {
+        cfg,
+        sessionKey,
+        surface: "telegram",
+      }),
+    );
+    expect(projected).toHaveLength(1);
+    expect(projected[0]?.text).toEqual(expect.any(String));
+    expect(projected[0]?.text?.trim()).not.toBe("NO_REPLY");
+  });
+
+  it("drops bare silent replies for groups when policy allows silence", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          silentReply: {
+            direct: "disallow",
+            group: "allow",
+            internal: "allow",
+          },
+          silentReplyRewrite: {
+            direct: true,
+          },
+        },
+      },
+    };
+
+    expect(
+      projectOutboundPayloadPlanForDelivery(
+        createOutboundPayloadPlan([{ text: "NO_REPLY" }], {
+          cfg,
+          sessionKey: "agent:main:telegram:group:123",
+          surface: "telegram",
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("does not add rewrite chatter when visible content is already being delivered", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          silentReply: {
+            direct: "disallow",
+            group: "allow",
+            internal: "allow",
+          },
+          silentReplyRewrite: {
+            direct: true,
+          },
+        },
+      },
+    };
+
+    expect(
+      projectOutboundPayloadPlanForDelivery(
+        createOutboundPayloadPlan([{ text: "NO_REPLY" }, { text: "visible reply" }], {
+          cfg,
+          sessionKey: "agent:main:telegram:direct:123",
+          surface: "telegram",
+        }),
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        text: "visible reply",
+      }),
+    ]);
+  });
+
+  it("keeps bare NO_REPLY visible when silence is disallowed but rewrite is off", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          silentReply: {
+            direct: "disallow",
+            group: "allow",
+            internal: "allow",
+          },
+          silentReplyRewrite: {
+            direct: false,
+          },
+        },
+      },
+    };
+
+    expect(
+      projectOutboundPayloadPlanForDelivery(
+        createOutboundPayloadPlan([{ text: "NO_REPLY" }], {
+          cfg,
+          sessionKey: "agent:main:telegram:direct:123",
+          surface: "telegram",
+        }),
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        text: "NO_REPLY",
+      }),
     ]);
   });
 

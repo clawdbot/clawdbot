@@ -2,6 +2,7 @@ import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   extractAssistantText,
+  extractAssistantThinking,
   extractAssistantVisibleText,
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
@@ -637,6 +638,27 @@ describe("formatReasoningMessage", () => {
   it("trims leading/trailing whitespace", () => {
     expect(formatReasoningMessage("  \n  Reasoning here  \n  ")).toBe(
       "Reasoning:\n_Reasoning here_",
+    );
+  });
+});
+
+describe("extractAssistantThinking", () => {
+  it("surfaces signed native reasoning even when the provider returns an empty summary", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "thinking",
+          thinking: "",
+          thinkingSignature: JSON.stringify({ type: "reasoning", id: "rs_live", summary: [] }),
+        },
+        { type: "text", text: "Done." },
+      ],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantThinking(msg)).toBe(
+      "Native reasoning was produced; no summary text was returned.",
     );
   });
 });

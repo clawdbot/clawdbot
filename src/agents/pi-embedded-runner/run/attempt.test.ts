@@ -10,6 +10,7 @@ import {
   buildAfterTurnRuntimeContextFromUsage,
   composeSystemPromptWithHookContext,
   decodeHtmlEntitiesInObject,
+  applyEmbeddedAttemptToolsAllow,
   isPrimaryBootstrapRun,
   mergeOrphanedTrailingUserPrompt,
   prependSystemPromptAddition,
@@ -60,6 +61,16 @@ async function invokeWrappedTestStream(
   const wrappedFn = wrap(baseFn);
   return await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
 }
+
+describe("applyEmbeddedAttemptToolsAllow", () => {
+  it("keeps explicit toolsAllow authoritative after force-added tools are built", () => {
+    const tools = [{ name: "exec" }, { name: "read" }, { name: "message" }];
+
+    expect(
+      applyEmbeddedAttemptToolsAllow(tools, ["exec", "read"]).map((tool) => tool.name),
+    ).toEqual(["exec", "read"]);
+  });
+});
 
 describe("resolvePromptBuildHookResult", () => {
   function createLegacyOnlyHookRunner() {

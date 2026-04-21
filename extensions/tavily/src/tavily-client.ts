@@ -65,6 +65,27 @@ function resolveEndpoint(baseUrl: string, pathname: string): string {
   }
 }
 
+async function postTavilyJson(params: {
+  baseUrl: string;
+  pathname: "/extract" | "/search";
+  timeoutSeconds: number;
+  apiKey: string;
+  body: Record<string, unknown>;
+  errorLabel: string;
+}): Promise<Record<string, unknown>> {
+  return postTrustedWebToolsJson(
+    {
+      url: resolveEndpoint(params.baseUrl, params.pathname),
+      timeoutSeconds: params.timeoutSeconds,
+      apiKey: params.apiKey,
+      body: params.body,
+      errorLabel: params.errorLabel,
+      extraHeaders: { "X-Client-Source": "openclaw" },
+    },
+    async (response) => (await response.json()) as Record<string, unknown>,
+  );
+}
+
 export async function runTavilySearch(
   params: TavilySearchParams,
 ): Promise<Record<string, unknown>> {
@@ -124,17 +145,14 @@ export async function runTavilySearch(
   }
 
   const start = Date.now();
-  const payload = await postTrustedWebToolsJson(
-    {
-      url: resolveEndpoint(baseUrl, "/search"),
-      timeoutSeconds,
-      apiKey,
-      body,
-      errorLabel: "Tavily Search",
-      extraHeaders: { "X-Client-Source": "openclaw" },
-    },
-    async (response) => (await response.json()) as Record<string, unknown>,
-  );
+  const payload = await postTavilyJson({
+    baseUrl,
+    pathname: "/search",
+    timeoutSeconds,
+    apiKey,
+    body,
+    errorLabel: "Tavily Search",
+  });
 
   const rawResults = Array.isArray(payload.results) ? payload.results : [];
   const results = rawResults.map((r: Record<string, unknown>) =>
@@ -218,17 +236,14 @@ export async function runTavilyExtract(
   }
 
   const start = Date.now();
-  const payload = await postTrustedWebToolsJson(
-    {
-      url: resolveEndpoint(baseUrl, "/extract"),
-      timeoutSeconds,
-      apiKey,
-      body,
-      errorLabel: "Tavily Extract",
-      extraHeaders: { "X-Client-Source": "openclaw" },
-    },
-    async (response) => (await response.json()) as Record<string, unknown>,
-  );
+  const payload = await postTavilyJson({
+    baseUrl,
+    pathname: "/extract",
+    timeoutSeconds,
+    apiKey,
+    body,
+    errorLabel: "Tavily Extract",
+  });
 
   const rawResults = Array.isArray(payload.results) ? payload.results : [];
   const results = rawResults.map((r: Record<string, unknown>) =>

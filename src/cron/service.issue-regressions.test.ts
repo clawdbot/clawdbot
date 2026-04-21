@@ -8,6 +8,7 @@ import {
   writeCronStoreSnapshot,
 } from "./service.issue-regressions.test-helpers.js";
 import { CronService } from "./service.js";
+import { loadCronStore } from "./store.js";
 import type { CronJob, CronJobState } from "./types.js";
 
 describe("Cron issue regressions", () => {
@@ -92,9 +93,7 @@ describe("Cron issue regressions", () => {
     expect(Number.isFinite(isolated?.state.nextRunAtMs)).toBe(true);
     expect(Number.isFinite(status.nextWakeAtMs)).toBe(true);
 
-    const persisted = JSON.parse(await fs.readFile(store.storePath, "utf8")) as {
-      jobs: Array<{ id: string; state?: { nextRunAtMs?: number | null } }>;
-    };
+    const persisted = await loadCronStore(store.storePath);
     const persistedIsolated = persisted.jobs.find((job) => job.id === "legacy-isolated");
     expect(typeof persistedIsolated?.state?.nextRunAtMs).toBe("number");
     expect(Number.isFinite(persistedIsolated?.state?.nextRunAtMs)).toBe(true);
@@ -187,9 +186,7 @@ describe("Cron issue regressions", () => {
       payload: { kind: "systemEvent", text: "other-updated" },
     });
 
-    const storeData = JSON.parse(await fs.readFile(store.storePath, "utf8")) as {
-      jobs: Array<{ id: string; state?: { nextRunAtMs?: number } }>;
-    };
+    const storeData = await loadCronStore(store.storePath);
     const persistedDueJob = storeData.jobs.find((job) => job.id === dueJob.id);
     expect(persistedDueJob?.state?.nextRunAtMs).toBe(originalDueNextRunAtMs);
 
@@ -300,9 +297,7 @@ describe("Cron issue regressions", () => {
     const result = await cron.run(job.id, "force");
     expect(result).toEqual({ ok: true, ran: true });
 
-    const persisted = JSON.parse(await fs.readFile(store.storePath, "utf8")) as {
-      jobs: CronJob[];
-    };
+    const persisted = await loadCronStore(store.storePath);
     const persistedJob = persisted.jobs.find((entry) => entry.id === job.id);
     expect(persistedJob?.delivery?.to).toBe(rewrittenTarget);
     expect(persistedJob?.state.lastStatus).toBe("ok");

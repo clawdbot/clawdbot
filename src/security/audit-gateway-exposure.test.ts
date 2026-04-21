@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { collectGatewayConfigFindings } from "./audit.js";
+import { collectGatewayConfigFindings } from "./audit-gateway-config.js";
 
 function hasFinding(
   checkId: string,
@@ -59,22 +59,6 @@ describe("security audit gateway exposure findings", () => {
           "hooks.mappings[0].allowUnsafeExternalContent=true",
           "tools.exec.applyPatch.workspaceOnly=false",
         ],
-      },
-      {
-        name: "acpx approve-all is treated as a dangerous break-glass flag",
-        cfg: {
-          plugins: {
-            entries: {
-              acpx: {
-                enabled: true,
-                config: {
-                  permissionMode: "approve-all",
-                },
-              },
-            },
-          },
-        } satisfies OpenClawConfig,
-        expectedDangerousDetails: ["plugins.entries.acpx.config.permissionMode=approve-all"],
       },
     ] as const;
 

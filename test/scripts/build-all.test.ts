@@ -12,6 +12,45 @@ import {
   writeBuildAllStepCacheStamp,
 } from "../../scripts/build-all.mjs";
 
+function withBuildCacheFixture(
+  run: (fixture: {
+    rootDir: string;
+    inputPath: string;
+    outputPath: string;
+    step: {
+      label: string;
+      cache: {
+        inputs: string[];
+        outputs: string[];
+      };
+    };
+  }) => void,
+) {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-build-cache-"));
+  try {
+    const inputPath = path.join(rootDir, "src/input.ts");
+    const outputPath = path.join(rootDir, "dist/output.js");
+    fs.mkdirSync(path.dirname(inputPath), { recursive: true });
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+    fs.writeFileSync(inputPath, "input");
+    fs.writeFileSync(outputPath, "output");
+    run({
+      rootDir,
+      inputPath,
+      outputPath,
+      step: {
+        label: "cached",
+        cache: {
+          inputs: ["src"],
+          outputs: ["dist"],
+        },
+      },
+    });
+  } finally {
+    fs.rmSync(rootDir, { force: true, recursive: true });
+  }
+}
+
 describe("resolveBuildAllStep", () => {
   it("routes pnpm steps through the npm_execpath pnpm runner on Windows", () => {
     const step = BUILD_ALL_STEPS.find((entry) => entry.label === "canvas:a2ui:bundle");
@@ -104,6 +143,18 @@ describe("resolveBuildAllSteps", () => {
     ]);
   });
 
+  it("does not cache plugin-sdk entry shims over compiled JS", () => {
+    const step = BUILD_ALL_STEPS.find((entry) => entry.label === "write-plugin-sdk-entry-dts");
+    expect(step).toBeTruthy();
+    expect(step?.cache).toBeUndefined();
+  });
+
+  it("does not cache hook metadata over compiled hook handlers", () => {
+    const step = BUILD_ALL_STEPS.find((entry) => entry.label === "copy-hook-metadata");
+    expect(step).toBeTruthy();
+    expect(step?.cache).toBeUndefined();
+  });
+
   it("rejects unknown build profiles", () => {
     expect(() => resolveBuildAllSteps("wat")).toThrow("Unknown build profile: wat");
   });
@@ -111,21 +162,7 @@ describe("resolveBuildAllSteps", () => {
 
 describe("resolveBuildAllStepCacheState", () => {
   it("marks cacheable steps fresh when the input signature matches", () => {
-    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-build-cache-"));
-    try {
-      const inputPath = path.join(rootDir, "src/input.ts");
-      const outputPath = path.join(rootDir, "dist/output.js");
-      fs.mkdirSync(path.dirname(inputPath), { recursive: true });
-      fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-      fs.writeFileSync(inputPath, "input");
-      fs.writeFileSync(outputPath, "output");
-      const step = {
-        label: "cached",
-        cache: {
-          inputs: ["src"],
-          outputs: ["dist"],
-        },
-      };
+    withBuildCacheFixture(({ rootDir, step }) => {
       const cacheState = resolveBuildAllStepCacheState(step, { rootDir });
       writeBuildAllStepCacheStamp(step, cacheState, { rootDir });
 
@@ -136,27 +173,11 @@ describe("resolveBuildAllStepCacheState", () => {
         inputFiles: 1,
         outputFiles: 1,
       });
-    } finally {
-      fs.rmSync(rootDir, { force: true, recursive: true });
-    }
+    });
   });
 
   it("marks cacheable steps stale when an input changes", () => {
-    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-build-cache-"));
-    try {
-      const inputPath = path.join(rootDir, "src/input.ts");
-      const outputPath = path.join(rootDir, "dist/output.js");
-      fs.mkdirSync(path.dirname(inputPath), { recursive: true });
-      fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-      fs.writeFileSync(inputPath, "input");
-      fs.writeFileSync(outputPath, "output");
-      const step = {
-        label: "cached",
-        cache: {
-          inputs: ["src"],
-          outputs: ["dist"],
-        },
-      };
+    withBuildCacheFixture(({ rootDir, inputPath, step }) => {
       const cacheState = resolveBuildAllStepCacheState(step, { rootDir });
       writeBuildAllStepCacheStamp(step, cacheState, { rootDir });
       fs.writeFileSync(inputPath, "changed");
@@ -166,27 +187,11 @@ describe("resolveBuildAllStepCacheState", () => {
         fresh: false,
         reason: "stale",
       });
-    } finally {
-      fs.rmSync(rootDir, { force: true, recursive: true });
-    }
+    });
   });
 
   it("restores cached outputs when generated files were removed", () => {
-    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-build-cache-"));
-    try {
-      const inputPath = path.join(rootDir, "src/input.ts");
-      const outputPath = path.join(rootDir, "dist/output.js");
-      fs.mkdirSync(path.dirname(inputPath), { recursive: true });
-      fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-      fs.writeFileSync(inputPath, "input");
-      fs.writeFileSync(outputPath, "output");
-      const step = {
-        label: "cached",
-        cache: {
-          inputs: ["src"],
-          outputs: ["dist"],
-        },
-      };
+    withBuildCacheFixture(({ rootDir, outputPath, step }) => {
       const cacheState = resolveBuildAllStepCacheState(step, { rootDir });
       writeBuildAllStepCacheStamp(step, cacheState, { rootDir });
       fs.rmSync(path.join(rootDir, "dist"), { force: true, recursive: true });
@@ -200,8 +205,6 @@ describe("resolveBuildAllStepCacheState", () => {
       });
       expect(restoreBuildAllStepCacheOutputs(restorable, { rootDir })).toBe(true);
       expect(fs.readFileSync(outputPath, "utf8")).toBe("output");
-    } finally {
-      fs.rmSync(rootDir, { force: true, recursive: true });
-    }
+    });
   });
 });

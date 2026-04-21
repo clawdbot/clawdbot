@@ -19,6 +19,7 @@ import {
   getGatewayModelPricingCacheMeta as getGatewayModelPricingCacheMetaState,
   replaceGatewayModelPricingCache,
   type CachedModelPricing,
+  type CachedPricingTier,
 } from "./model-pricing-cache-state.js";
 
 type OpenRouterPricingEntry = {
@@ -36,8 +37,11 @@ type OpenRouterModelPayload = {
 export { getCachedGatewayModelPricing };
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
+const LITELLM_PRICING_URL =
+  "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
 const CACHE_TTL_MS = 24 * 60 * 60_000;
 const FETCH_TIMEOUT_MS = 15_000;
+const MAX_PRICING_CATALOG_BYTES = 5 * 1024 * 1024;
 const PROVIDER_ALIAS_TO_OPENROUTER: Record<string, string> = {
   "google-gemini-cli": "google",
   kimi: "moonshotai",
@@ -94,11 +98,37 @@ function parseNumberString(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function formatTimeoutSeconds(timeoutMs: number): string {
+  const seconds = timeoutMs / 1000;
+  return Number.isInteger(seconds) ? `${seconds}s` : `${seconds.toFixed(1)}s`;
+}
+
+function readErrorName(error: unknown): string | undefined {
+  return error && typeof error === "object" && "name" in error
+    ? String((error as { name?: unknown }).name)
+    : undefined;
+}
+
+function isTimeoutError(error: unknown): boolean {
+  if (readErrorName(error) === "TimeoutError") {
+    return true;
+  }
+  return /\bTimeoutError\b/u.test(String(error));
+}
+
+function formatPricingFetchFailure(source: "LiteLLM" | "OpenRouter", error: unknown): string {
+  if (isTimeoutError(error)) {
+    return `${source} pricing fetch failed (timeout ${formatTimeoutSeconds(FETCH_TIMEOUT_MS)}): ${String(error)}`;
+  }
+  return `${source} pricing fetch failed: ${String(error)}`;
+}
+
 function toPricePerMillion(value: number | null): number {
   if (value === null || value < 0 || !Number.isFinite(value)) {
     return 0;
   }
-  return value * 1_000_000;
+  const scaled = value * 1_000_000;
+  return Number.isFinite(scaled) ? scaled : 0;
 }
 
 function parseOpenRouterPricing(value: unknown): CachedModelPricing | null {
@@ -117,6 +147,137 @@ function parseOpenRouterPricing(value: unknown): CachedModelPricing | null {
     cacheRead: toPricePerMillion(parseNumberString(pricing.input_cache_read)),
     cacheWrite: toPricePerMillion(parseNumberString(pricing.input_cache_write)),
   };
+}
+
+async function readPricingJsonObject(
+  response: Response,
+  source: string,
+): Promise<Record<string, unknown>> {
+  const contentLength = parseNumberString(response.headers.get("content-length"));
+  if (contentLength !== null && contentLength > MAX_PRICING_CATALOG_BYTES) {
+    throw new Error(`${source} pricing response too large: ${contentLength} bytes`);
+  }
+  const buffer = await response.arrayBuffer();
+  if (buffer.byteLength > MAX_PRICING_CATALOG_BYTES) {
+    throw new Error(`${source} pricing response too large: ${buffer.byteLength} bytes`);
+  }
+  const payload = JSON.parse(Buffer.from(buffer).toString("utf8")) as unknown;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error(`${source} pricing response is not a JSON object`);
+  }
+  return payload as Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
+// LiteLLM tiered-pricing parsing
+// ---------------------------------------------------------------------------
+
+type LiteLLMModelEntry = Record<string, unknown>;
+
+type LiteLLMTierRaw = {
+  input_cost_per_token?: unknown;
+  output_cost_per_token?: unknown;
+  cache_read_input_token_cost?: unknown;
+  cache_creation_input_token_cost?: unknown;
+  range?: unknown;
+};
+
+function parseLiteLLMTieredPricing(tiers: unknown): CachedPricingTier[] | undefined {
+  if (!Array.isArray(tiers) || tiers.length === 0) {
+    return undefined;
+  }
+  const result: CachedPricingTier[] = [];
+  for (const raw of tiers) {
+    if (!raw || typeof raw !== "object") {
+      continue;
+    }
+    const tier = raw as LiteLLMTierRaw;
+    const inputPerToken = parseNumberString(tier.input_cost_per_token);
+    const outputPerToken = parseNumberString(tier.output_cost_per_token);
+    if (inputPerToken === null || outputPerToken === null) {
+      continue;
+    }
+    const range = tier.range;
+    if (!Array.isArray(range) || range.length < 1) {
+      continue;
+    }
+    const start = parseNumberString(range[0]);
+    if (start === null) {
+      continue;
+    }
+    // Allow open-ended ranges: [128000], [128000, -1], [128000, null]
+    const rawEnd = range.length >= 2 ? parseNumberString(range[1]) : null;
+    const end = rawEnd === null || rawEnd <= start ? Infinity : rawEnd;
+    if (
+      !Number.isFinite(inputPerToken) ||
+      !Number.isFinite(outputPerToken) ||
+      inputPerToken < 0 ||
+      outputPerToken < 0
+    ) {
+      continue;
+    }
+    result.push({
+      input: toPricePerMillion(inputPerToken),
+      output: toPricePerMillion(outputPerToken),
+      cacheRead: toPricePerMillion(parseNumberString(tier.cache_read_input_token_cost)),
+      cacheWrite: toPricePerMillion(parseNumberString(tier.cache_creation_input_token_cost)),
+      range: [start, end],
+    });
+  }
+  return result.length > 0 ? result.toSorted((a, b) => a.range[0] - b.range[0]) : undefined;
+}
+
+function parseLiteLLMPricing(entry: LiteLLMModelEntry): CachedModelPricing | null {
+  const inputPerToken = parseNumberString(entry.input_cost_per_token);
+  const outputPerToken = parseNumberString(entry.output_cost_per_token);
+  if (inputPerToken === null || outputPerToken === null) {
+    return null;
+  }
+  const pricing: CachedModelPricing = {
+    input: toPricePerMillion(inputPerToken),
+    output: toPricePerMillion(outputPerToken),
+    cacheRead: toPricePerMillion(parseNumberString(entry.cache_read_input_token_cost)),
+    cacheWrite: toPricePerMillion(parseNumberString(entry.cache_creation_input_token_cost)),
+  };
+  const tieredPricing = parseLiteLLMTieredPricing(entry.tiered_pricing);
+  if (tieredPricing) {
+    pricing.tieredPricing = tieredPricing;
+  }
+  return pricing;
+}
+
+type LiteLLMPricingCatalog = Map<string, CachedModelPricing>;
+
+async function fetchLiteLLMPricingCatalog(fetchImpl: typeof fetch): Promise<LiteLLMPricingCatalog> {
+  const response = await fetchImpl(LITELLM_PRICING_URL, {
+    headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    throw new Error(`LiteLLM pricing fetch failed: HTTP ${response.status}`);
+  }
+  const payload = await readPricingJsonObject(response, "LiteLLM");
+  const catalog: LiteLLMPricingCatalog = new Map();
+  for (const [key, value] of Object.entries(payload)) {
+    if (!value || typeof value !== "object") {
+      continue;
+    }
+    const entry = value as LiteLLMModelEntry;
+    const pricing = parseLiteLLMPricing(entry);
+    if (!pricing) {
+      continue;
+    }
+    catalog.set(key, pricing);
+  }
+  return catalog;
+}
+
+function resolveLiteLLMPricingForRef(params: {
+  ref: ModelRef;
+  catalog: LiteLLMPricingCatalog;
+}): CachedModelPricing | undefined {
+  // Only use provider-qualified key to avoid cross-provider pricing collisions.
+  return params.catalog.get(`${params.ref.provider}/${params.ref.model}`);
 }
 
 function canonicalizeOpenRouterProvider(provider: string): string {
@@ -328,7 +489,7 @@ async function fetchOpenRouterPricingCatalog(
   if (!response.ok) {
     throw new Error(`OpenRouter /models failed: HTTP ${response.status}`);
   }
-  const payload = (await response.json()) as { data?: unknown };
+  const payload = await readPricingJsonObject(response, "OpenRouter");
   const entries = Array.isArray(payload.data) ? payload.data : [];
   const catalog = new Map<string, OpenRouterPricingEntry>();
   for (const entry of entries) {
@@ -393,7 +554,23 @@ export async function refreshGatewayModelPricingCache(params: {
       return;
     }
 
-    const catalogById = await fetchOpenRouterPricingCatalog(fetchImpl);
+    // Fetch both pricing catalogs in parallel.  Each source is
+    // independently optional — a failure in one does not block the other.
+    let openRouterFailed = false;
+    let litellmFailed = false;
+    const [catalogById, litellmCatalog] = await Promise.all([
+      fetchOpenRouterPricingCatalog(fetchImpl).catch((error: unknown) => {
+        log.warn(formatPricingFetchFailure("OpenRouter", error));
+        openRouterFailed = true;
+        return new Map<string, OpenRouterPricingEntry>();
+      }),
+      fetchLiteLLMPricingCatalog(fetchImpl).catch((error: unknown) => {
+        log.warn(formatPricingFetchFailure("LiteLLM", error));
+        litellmFailed = true;
+        return new Map<string, CachedModelPricing>() as LiteLLMPricingCatalog;
+      }),
+    ]);
+
     const catalogByNormalizedId = new Map<string, OpenRouterPricingEntry>();
     for (const entry of catalogById.values()) {
       const normalizedId = canonicalizeOpenRouterLookupId(entry.id);
@@ -405,15 +582,62 @@ export async function refreshGatewayModelPricingCache(params: {
 
     const nextPricing = new Map<string, CachedModelPricing>();
     for (const ref of refs) {
-      const pricing = resolveCatalogPricingForRef({
+      // 1. Try OpenRouter first (existing behavior — flat pricing)
+      const openRouterPricing = resolveCatalogPricingForRef({
         ref,
         catalogById,
         catalogByNormalizedId,
       });
-      if (!pricing) {
-        continue;
+
+      // 2. Try LiteLLM (may contain tiered pricing)
+      const litellmPricing = resolveLiteLLMPricingForRef({
+        ref,
+        catalog: litellmCatalog,
+      });
+
+      // Merge strategy: OpenRouter provides the base flat pricing;
+      // LiteLLM enriches with tieredPricing when available.
+      // If only one source has data, use that one.
+      if (openRouterPricing && litellmPricing?.tieredPricing) {
+        // Both sources present and LiteLLM has tiers — merge.
+        nextPricing.set(modelKey(ref.provider, ref.model), {
+          ...openRouterPricing,
+          tieredPricing: litellmPricing.tieredPricing,
+        });
+      } else if (openRouterPricing) {
+        // Prefer OpenRouter flat pricing when LiteLLM has no tiers to contribute.
+        nextPricing.set(modelKey(ref.provider, ref.model), openRouterPricing);
+      } else if (litellmPricing) {
+        // Only LiteLLM has data — use it as-is.
+        nextPricing.set(modelKey(ref.provider, ref.model), litellmPricing);
       }
-      nextPricing.set(modelKey(ref.provider, ref.model), pricing);
+    }
+
+    // When either upstream source failed, preserve previously-cached entries
+    // for any models that the refresh could not resolve.  This prevents a
+    // single-source outage from silently dropping pricing for models that
+    // depended on the failed source.
+    if (openRouterFailed || litellmFailed) {
+      const existingMeta = getGatewayModelPricingCacheMetaState();
+      if (nextPricing.size === 0 && existingMeta.size > 0) {
+        // Both sources failed — retain the entire existing cache.
+        log.warn("Both pricing sources returned empty data — retaining existing cache");
+        scheduleRefresh({ config: params.config, fetchImpl });
+        return;
+      }
+      // Partial failure — back-fill missing models from the existing cache.
+      for (const ref of refs) {
+        const key = modelKey(ref.provider, ref.model);
+        if (!nextPricing.has(key)) {
+          const existing = getCachedGatewayModelPricing({
+            provider: ref.provider,
+            model: ref.model,
+          });
+          if (existing) {
+            nextPricing.set(key, existing);
+          }
+        }
+      }
     }
 
     replaceGatewayModelPricingCache(nextPricing);

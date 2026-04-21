@@ -22,16 +22,24 @@ import { resolveMatrixConfigFieldPath } from "../config-paths.js";
 import type { MatrixStoredCredentials } from "../credentials-read.js";
 import {
   DEFAULT_ACCOUNT_ID,
-  assertHttpUrlTargetsPrivateNetwork,
-  isPrivateOrLoopbackHost,
   isPrivateNetworkOptInEnabled,
-  type LookupFn,
   normalizeAccountId,
   normalizeOptionalAccountId,
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
 } from "./config-runtime-api.js";
+import {
+  hasReadyMatrixEnvAuth,
+  resolveGlobalMatrixEnvConfig,
+  resolveMatrixEnvAuthReadiness,
+  resolveScopedMatrixEnvConfig,
+  type MatrixEnvConfig,
+} from "./env-auth.js";
 import { repairCurrentTokenStorageMetaDeviceId } from "./storage.js";
 import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
+import {
+  resolveValidatedMatrixHomeserverUrl,
+  validateMatrixHomeserverUrl,
+} from "./url-validation.js";
 
 type MatrixAuthClientDeps = {
   MatrixClient: typeof import("../sdk.js").MatrixClient;
@@ -234,15 +242,6 @@ function clean(
   );
 }
 
-type MatrixEnvConfig = {
-  homeserver: string;
-  userId: string;
-  accessToken?: string;
-  password?: string;
-  deviceId?: string;
-  deviceName?: string;
-};
-
 type MatrixConfigStringField =
   | "homeserver"
   | "userId"
@@ -425,9 +424,6 @@ function clampMatrixInitialSyncLimit(value: unknown): number | undefined {
   return typeof value === "number" ? Math.max(0, Math.floor(value)) : undefined;
 }
 
-const MATRIX_HTTP_HOMESERVER_ERROR =
-  "Matrix homeserver must use https:// unless it targets a private or loopback host";
-
 function buildMatrixNetworkFields(params: {
   allowPrivateNetwork: boolean | undefined;
   proxy?: string;
@@ -450,74 +446,18 @@ function buildMatrixNetworkFields(params: {
   };
 }
 
-export function resolveGlobalMatrixEnvConfig(env: NodeJS.ProcessEnv): MatrixEnvConfig {
-  return {
-    homeserver: clean(env.MATRIX_HOMESERVER, "MATRIX_HOMESERVER"),
-    userId: clean(env.MATRIX_USER_ID, "MATRIX_USER_ID"),
-    accessToken: clean(env.MATRIX_ACCESS_TOKEN, "MATRIX_ACCESS_TOKEN") || undefined,
-    password: clean(env.MATRIX_PASSWORD, "MATRIX_PASSWORD") || undefined,
-    deviceId: clean(env.MATRIX_DEVICE_ID, "MATRIX_DEVICE_ID") || undefined,
-    deviceName: clean(env.MATRIX_DEVICE_NAME, "MATRIX_DEVICE_NAME") || undefined,
-  };
-}
-
 export { getMatrixScopedEnvVarNames } from "../../env-vars.js";
-
-export function resolveMatrixEnvAuthReadiness(
-  accountId: string,
-  env: NodeJS.ProcessEnv = process.env,
-): {
-  ready: boolean;
-  homeserver?: string;
-  userId?: string;
-  sourceHint: string;
-  missingMessage: string;
-} {
-  const normalizedAccountId = normalizeAccountId(accountId);
-  const scoped = resolveScopedMatrixEnvConfig(normalizedAccountId, env);
-  const scopedReady = hasReadyMatrixEnvAuth(scoped);
-  if (normalizedAccountId !== DEFAULT_ACCOUNT_ID) {
-    const keys = getMatrixScopedEnvVarNames(normalizedAccountId);
-    return {
-      ready: scopedReady,
-      homeserver: scoped.homeserver || undefined,
-      userId: scoped.userId || undefined,
-      sourceHint: `${keys.homeserver} (+ auth vars)`,
-      missingMessage: `Set per-account env vars for "${normalizedAccountId}" (for example ${keys.homeserver} + ${keys.accessToken} or ${keys.userId} + ${keys.password}).`,
-    };
-  }
-
-  const defaultScoped = resolveScopedMatrixEnvConfig(DEFAULT_ACCOUNT_ID, env);
-  const global = resolveGlobalMatrixEnvConfig(env);
-  const defaultScopedReady = hasReadyMatrixEnvAuth(defaultScoped);
-  const globalReady = hasReadyMatrixEnvAuth(global);
-  const defaultKeys = getMatrixScopedEnvVarNames(DEFAULT_ACCOUNT_ID);
-  return {
-    ready: defaultScopedReady || globalReady,
-    homeserver: defaultScoped.homeserver || global.homeserver || undefined,
-    userId: defaultScoped.userId || global.userId || undefined,
-    sourceHint: "MATRIX_* or MATRIX_DEFAULT_*",
-    missingMessage:
-      `Set Matrix env vars for the default account ` +
-      `(for example MATRIX_HOMESERVER + MATRIX_ACCESS_TOKEN, MATRIX_USER_ID + MATRIX_PASSWORD, ` +
-      `or ${defaultKeys.homeserver} + ${defaultKeys.accessToken}).`,
-  };
-}
-
-export function resolveScopedMatrixEnvConfig(
-  accountId: string,
-  env: NodeJS.ProcessEnv = process.env,
-): MatrixEnvConfig {
-  const keys = getMatrixScopedEnvVarNames(accountId);
-  return {
-    homeserver: clean(env[keys.homeserver], keys.homeserver),
-    userId: clean(env[keys.userId], keys.userId),
-    accessToken: clean(env[keys.accessToken], keys.accessToken) || undefined,
-    password: clean(env[keys.password], keys.password) || undefined,
-    deviceId: clean(env[keys.deviceId], keys.deviceId) || undefined,
-    deviceName: clean(env[keys.deviceName], keys.deviceName) || undefined,
-  };
-}
+export {
+  hasReadyMatrixEnvAuth,
+  resolveGlobalMatrixEnvConfig,
+  resolveMatrixEnvAuthReadiness,
+  resolveScopedMatrixEnvConfig,
+  type MatrixEnvConfig,
+} from "./env-auth.js";
+export {
+  resolveValidatedMatrixHomeserverUrl,
+  validateMatrixHomeserverUrl,
+} from "./url-validation.js";
 
 function hasScopedMatrixEnvConfig(accountId: string, env: NodeJS.ProcessEnv): boolean {
   const scoped = resolveScopedMatrixEnvConfig(accountId, env);
@@ -529,82 +469,6 @@ function hasScopedMatrixEnvConfig(accountId: string, env: NodeJS.ProcessEnv): bo
     scoped.deviceId ||
     scoped.deviceName,
   );
-}
-
-export function hasReadyMatrixEnvAuth(config: {
-  homeserver?: string;
-  userId?: string;
-  accessToken?: string;
-  password?: string;
-}): boolean {
-  const homeserver = clean(config.homeserver, "matrix.env.homeserver");
-  const userId = clean(config.userId, "matrix.env.userId");
-  const accessToken = clean(config.accessToken, "matrix.env.accessToken");
-  const password = clean(config.password, "matrix.env.password");
-  return Boolean(homeserver && (accessToken || (userId && password)));
-}
-
-export function validateMatrixHomeserverUrl(
-  homeserver: string,
-  opts?: { allowPrivateNetwork?: boolean },
-): string {
-  const trimmed = clean(homeserver, "matrix.homeserver");
-  if (!trimmed) {
-    throw new Error("Matrix homeserver is required (matrix.homeserver)");
-  }
-
-  let parsed: URL;
-  try {
-    parsed = new URL(trimmed);
-  } catch {
-    throw new Error("Matrix homeserver must be a valid http(s) URL");
-  }
-
-  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
-    throw new Error("Matrix homeserver must use http:// or https://");
-  }
-  if (!parsed.hostname) {
-    throw new Error("Matrix homeserver must include a hostname");
-  }
-  if (parsed.username || parsed.password) {
-    throw new Error("Matrix homeserver URL must not include embedded credentials");
-  }
-  if (parsed.search || parsed.hash) {
-    throw new Error("Matrix homeserver URL must not include query strings or fragments");
-  }
-  if (
-    parsed.protocol === "http:" &&
-    opts?.allowPrivateNetwork !== true &&
-    !isPrivateOrLoopbackHost(parsed.hostname)
-  ) {
-    throw new Error(MATRIX_HTTP_HOMESERVER_ERROR);
-  }
-
-  return trimmed;
-}
-
-export async function resolveValidatedMatrixHomeserverUrl(
-  homeserver: string,
-  opts?: {
-    dangerouslyAllowPrivateNetwork?: boolean;
-    allowPrivateNetwork?: boolean;
-    lookupFn?: LookupFn;
-  },
-): Promise<string> {
-  const allowPrivateNetwork =
-    typeof opts?.dangerouslyAllowPrivateNetwork === "boolean"
-      ? opts.dangerouslyAllowPrivateNetwork
-      : opts?.allowPrivateNetwork;
-  const normalized = validateMatrixHomeserverUrl(homeserver, {
-    allowPrivateNetwork,
-  });
-  await assertHttpUrlTargetsPrivateNetwork(normalized, {
-    dangerouslyAllowPrivateNetwork: opts?.dangerouslyAllowPrivateNetwork,
-    allowPrivateNetwork,
-    lookupFn: opts?.lookupFn,
-    errorMessage: MATRIX_HTTP_HOMESERVER_ERROR,
-  });
-  return normalized;
 }
 
 export function resolveMatrixConfigForAccount(

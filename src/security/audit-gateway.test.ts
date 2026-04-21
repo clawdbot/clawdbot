@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { collectGatewayConfigFindings } from "./audit.js";
+import { collectGatewayConfigFindings } from "./audit-gateway-config.js";
 
 function hasFinding(checkId: string, findings: ReturnType<typeof collectGatewayConfigFindings>) {
   return findings.some((finding) => finding.checkId === checkId);

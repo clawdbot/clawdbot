@@ -110,6 +110,7 @@ type DispatchCronDeliveryParams = {
   deliveryRequested: boolean;
   skipHeartbeatDelivery: boolean;
   skipMessagingToolDelivery?: boolean;
+  unverifiedMessagingToolDelivery?: boolean;
   deliveryBestEffort: boolean;
   deliveryPayloadHasStructuredContent: boolean;
   deliveryPayloads: ReplyPayload[];
@@ -445,10 +446,14 @@ export async function dispatchCronDelivery(
   let delivered = skipMessagingToolDelivery;
   let deliveryAttempted = skipMessagingToolDelivery;
   let directCronSessionDeleted = false;
+  const formatDeliveryTargetError = (error: string) =>
+    params.unverifiedMessagingToolDelivery === true
+      ? `${error}; the agent used the message tool, but OpenClaw could not verify that message matched the cron delivery target`
+      : error;
   const failDeliveryTarget = (error: string) =>
     params.withRunSession({
       status: "error",
-      error,
+      error: formatDeliveryTargetError(error),
       errorKind: "delivery-target",
       summary,
       outputText,

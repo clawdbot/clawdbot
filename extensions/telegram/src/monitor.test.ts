@@ -87,6 +87,7 @@ const { resolveTelegramTransportSpy } = vi.hoisted(() => ({
   resolveTelegramTransportSpy: vi.fn(() => ({
     fetch: globalThis.fetch,
     sourceFetch: globalThis.fetch,
+    close: vi.fn(async () => undefined),
   })),
 }));
 
@@ -358,6 +359,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     resolveTelegramTransportSpy.mockReset().mockImplementation(() => ({
       fetch: globalThis.fetch,
       sourceFetch: globalThis.fetch,
+      close: vi.fn(async () => undefined),
     }));
     registerUnhandledRejectionHandlerMock.mockClear();
     resetUnhandledRejection();
@@ -565,10 +567,12 @@ describe("monitorTelegramProvider (grammY)", () => {
       const telegramTransport = {
         fetch: globalThis.fetch,
         sourceFetch: globalThis.fetch,
+        close: vi.fn(async () => undefined),
       };
       const rebuiltTransport = {
         fetch: globalThis.fetch,
         sourceFetch: globalThis.fetch,
+        close: vi.fn(async () => undefined),
       };
       resolveTelegramTransportSpy
         .mockReturnValueOnce(telegramTransport)
@@ -581,7 +585,7 @@ describe("monitorTelegramProvider (grammY)", () => {
       const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
       await firstCycle.waitForRunStart();
 
-      vi.advanceTimersByTime(120_000);
+      vi.advanceTimersByTime(150_000);
       await secondCycle.waitForRunStart();
       await monitor;
 
@@ -600,10 +604,12 @@ describe("monitorTelegramProvider (grammY)", () => {
     const telegramTransport = {
       fetch: globalThis.fetch,
       sourceFetch: globalThis.fetch,
+      close: vi.fn(async () => undefined),
     };
     const rebuiltTransport = {
       fetch: globalThis.fetch,
       sourceFetch: globalThis.fetch,
+      close: vi.fn(async () => undefined),
     };
     resolveTelegramTransportSpy
       .mockReturnValueOnce(telegramTransport)
@@ -722,12 +728,37 @@ describe("monitorTelegramProvider (grammY)", () => {
     const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
     await firstCycle.waitForRunStart();
 
-    // Advance time past the stall threshold (90s) + watchdog interval (30s)
-    vi.advanceTimersByTime(120_000);
+    // Advance time past the stall threshold (120s) + watchdog interval (30s)
+    vi.advanceTimersByTime(150_000);
     await secondCycle.waitForRunStart();
     await monitor;
 
     expect(stop.mock.calls.length).toBeGreaterThanOrEqual(1);
+    expectRecoverableRetryState(2);
+    vi.useRealTimers();
+  });
+
+  it("uses configured Telegram polling stall threshold", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const abort = new AbortController();
+    const firstCycle = mockRunOnceWithStalledPollingRunner();
+    const secondCycle = mockRunOnceAndAbort(abort);
+
+    const monitor = monitorTelegramProvider({
+      token: "tok",
+      abortSignal: abort.signal,
+      config: {
+        agents: { defaults: { maxConcurrent: 2 } },
+        channels: { telegram: { pollingStallThresholdMs: 30_000 } },
+      },
+    });
+    await firstCycle.waitForRunStart();
+
+    vi.advanceTimersByTime(60_000);
+    await secondCycle.waitForRunStart();
+    await monitor;
+
+    expect(firstCycle.stop.mock.calls.length).toBeGreaterThanOrEqual(1);
     expectRecoverableRetryState(2);
     vi.useRealTimers();
   });
@@ -737,7 +768,10 @@ describe("monitorTelegramProvider (grammY)", () => {
       persistedOffset: 549076203,
     });
 
-    expect(api.getUpdates).toHaveBeenCalledWith({ offset: 549076204, limit: 1, timeout: 0 });
+    expect(api.getUpdates).toHaveBeenCalledWith(
+      { offset: 549076204, limit: 1, timeout: 0 },
+      expect.any(AbortSignal),
+    );
     expect(order).toEqual(["deleteWebhook", "getUpdates", "run"]);
   });
 
@@ -760,6 +794,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     const telegramTransport = {
       fetch: globalThis.fetch,
       sourceFetch: globalThis.fetch,
+      close: vi.fn(async () => undefined),
     };
     resolveTelegramTransportSpy.mockReturnValueOnce(telegramTransport);
 

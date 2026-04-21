@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import * as tar from "tar";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { expectSingleNpmPackIgnoreScriptsCall } from "../test-utils/exec-assertions.js";
 import {
@@ -8,6 +7,7 @@ import {
   mockNpmPackMetadataResult,
 } from "../test-utils/npm-spec-install-test-helpers.js";
 import { installPluginFromNpmSpec, PLUGIN_INSTALL_ERROR_CODE } from "./install.js";
+import { packToArchive } from "./test-helpers/archive-fixtures.js";
 import { createSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
 
 const runCommandWithTimeoutMock = vi.fn();
@@ -22,26 +22,6 @@ const suiteTempRootTracker = createSuiteTempRootTracker("openclaw-plugin-install
 
 function readVoiceCallArchiveBuffer(version: string): Buffer {
   return fs.readFileSync(path.join(pluginFixturesDir, `voice-call-${version}.tgz`));
-}
-
-async function packToArchive(params: {
-  pkgDir: string;
-  outDir: string;
-  outName: string;
-  flatRoot?: boolean;
-}) {
-  const dest = path.join(params.outDir, params.outName);
-  fs.rmSync(dest, { force: true });
-  const entries = params.flatRoot ? fs.readdirSync(params.pkgDir) : [path.basename(params.pkgDir)];
-  await tar.c(
-    {
-      gzip: true,
-      file: dest,
-      cwd: params.flatRoot ? params.pkgDir : path.dirname(params.pkgDir),
-    },
-    entries,
-  );
-  return dest;
 }
 
 function buildDynamicArchiveTemplateKey(params: {

@@ -1094,15 +1094,14 @@ for usage/billing and raise limits as needed.
   <Accordion title="Cron fired, but nothing was sent to the channel. Why?">
     Check the delivery mode first:
 
-    - `--no-deliver` / `delivery.mode: "none"` means no external message is expected.
+    - `--no-deliver` / `delivery.mode: "none"` means no runner fallback send is expected.
     - Missing or invalid announce target (`channel` / `to`) means the runner skipped outbound delivery.
     - Channel auth failures (`unauthorized`, `Forbidden`) mean the runner tried to deliver but credentials blocked it.
     - A silent isolated result (`NO_REPLY` / `no_reply` only) is treated as intentionally non-deliverable, so the runner also suppresses queued fallback delivery.
 
-    For isolated cron jobs, the runner owns final delivery. The agent is expected
-    to return a plain-text summary for the runner to send. `--no-deliver` keeps
-    that result internal; it does not let the agent send directly with the
-    message tool instead.
+    For isolated cron jobs, the agent can still send directly with the `message`
+    tool when a chat route is available. `--announce` only controls the runner
+    fallback path for final text that the agent did not already send.
 
     Debug:
 
@@ -1293,7 +1292,7 @@ for usage/billing and raise limits as needed.
   <Accordion title="Can I keep DMs personal but make groups public/sandboxed with one agent?">
     Yes - if your private traffic is **DMs** and your public traffic is **groups**.
 
-    Use `agents.defaults.sandbox.mode: "non-main"` so group/channel sessions (non-main keys) run in Docker, while the main DM session stays on-host. Then restrict what tools are available in sandboxed sessions via `tools.sandbox.tools`.
+    Use `agents.defaults.sandbox.mode: "non-main"` so group/channel sessions (non-main keys) run in the configured sandbox backend, while the main DM session stays on-host. Docker is the default backend if you do not choose one. Then restrict what tools are available in sandboxed sessions via `tools.sandbox.tools`.
 
     Setup walkthrough + example config: [Groups: personal DMs + public groups](/channels/groups#pattern-personal-dms-public-groups-single-agent)
 

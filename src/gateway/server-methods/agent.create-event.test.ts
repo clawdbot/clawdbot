@@ -2,7 +2,44 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { testState, writeSessionStore } from "../test-helpers.js";
+
+const configMocks = vi.hoisted(() => ({
+  storePath: "",
+  workspaceDir: "",
+  loadConfig: vi.fn(() => ({
+    agents: {
+      defaults: {
+        model: { primary: "anthropic/claude-opus-4-6" },
+        workspace: configMocks.workspaceDir || "/tmp/openclaw-agent-create-event",
+      },
+    },
+    session: {
+      mainKey: "main",
+      store: configMocks.storePath,
+    },
+  })),
+}));
+
+const agentIngressMocks = vi.hoisted(() => ({
+  agentCommandFromIngress: vi.fn(async () => ({ ok: true })),
+}));
+
+vi.mock("../../config/config.js", () => ({
+  loadConfig: configMocks.loadConfig,
+}));
+
+vi.mock("../../commands/agent.js", () => ({
+  agentCommandFromIngress: agentIngressMocks.agentCommandFromIngress,
+}));
+
+vi.mock("../../runtime.js", () => ({
+  defaultRuntime: {},
+}));
+
+vi.mock("../../tasks/detached-task-runtime.js", () => ({
+  createRunningTaskRun: vi.fn(),
+}));
+
 import { agentHandlers } from "./agent.js";
 
 describe("agent handler session create events", () => {
@@ -12,8 +49,12 @@ describe("agent handler session create events", () => {
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-create-event-"));
     storePath = path.join(tempDir, "sessions.json");
-    testState.sessionStorePath = storePath;
-    await writeSessionStore({ entries: {} });
+    configMocks.storePath = storePath;
+    configMocks.workspaceDir = tempDir;
+    configMocks.loadConfig.mockClear();
+    agentIngressMocks.agentCommandFromIngress.mockClear();
+    agentIngressMocks.agentCommandFromIngress.mockResolvedValue({ ok: true });
+    await fs.writeFile(storePath, "{}\n", "utf8");
   });
 
   afterEach(async () => {

@@ -19,18 +19,25 @@ import {
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 const { createCronPromptExecutor } = await import("./run-executor.js");
 
+function makeMessageToolPolicyJob(
+  delivery: Record<string, unknown> = { mode: "none" },
+  payload: Record<string, unknown> = { kind: "agentTurn", message: "send a message" },
+) {
+  return {
+    id: "message-tool-policy",
+    name: "Message Tool Policy",
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "isolated",
+    payload,
+    delivery,
+  } as never;
+}
+
 function makeParams() {
   return {
     cfg: {},
     deps: {} as never,
-    job: {
-      id: "message-tool-policy",
-      name: "Message Tool Policy",
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      payload: { kind: "agentTurn", message: "send a message" },
-      delivery: { mode: "none" },
-    } as never,
+    job: makeMessageToolPolicyJob(),
     message: "send a message",
     sessionKey: "cron:message-tool-policy",
   };
@@ -50,6 +57,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     await runCronIsolatedAgentTurn(makeParams());
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
     expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.disableMessageTool).toBe(true);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.forceMessageTool).toBe(false);
   }
 
   async function expectMessageToolEnabledForPlan(plan: {
@@ -63,6 +71,35 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     await runCronIsolatedAgentTurn(makeParams());
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
     expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.disableMessageTool).toBe(false);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.forceMessageTool).toBe(true);
+  }
+
+  async function runModeNoneDeliveryCase(params: {
+    delivery: Record<string, unknown>;
+    plan: Record<string, unknown>;
+  }) {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: false,
+      mode: "none",
+      channel: "last",
+      ...params.plan,
+    });
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeMessageToolPolicyJob(params.delivery),
+    });
+
+    expect(resolveDeliveryTargetMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
+      disableMessageTool: false,
+      forceMessageTool: true,
+      messageChannel: "telegram",
+      messageTo: "123",
+      currentChannelId: "123",
+    });
   }
 
   beforeEach(() => {
@@ -83,6 +120,41 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     resolvedSkills: [],
     version: 1,
   };
+
+  function createMessageToolExecutor(
+    overrides: Partial<Parameters<typeof createCronPromptExecutor>[0]>,
+  ) {
+    const resolvedDelivery = overrides.resolvedDelivery ?? {};
+
+    return createCronPromptExecutor({
+      cfg: {},
+      cfgWithAgentDefaults: {},
+      job: makeMessageToolPolicyJob(),
+      agentId: "default",
+      agentDir: "/tmp/agent-dir",
+      agentSessionKey: "cron:message-tool-policy",
+      workspaceDir: "/tmp/workspace",
+      resolvedVerboseLevel: "off",
+      thinkLevel: undefined,
+      timeoutMs: 60_000,
+      messageChannel: "telegram",
+      toolPolicy: {
+        requireExplicitMessageTarget: false,
+        disableMessageTool: false,
+        forceMessageTool: true,
+      },
+      skillsSnapshot: emptySkillsSnapshot,
+      agentPayload: null,
+      liveSelection: {
+        provider: "openai",
+        model: "gpt-5.4",
+      },
+      cronSession: makeCronSession() as MutableCronSession,
+      abortReason: () => "aborted",
+      ...overrides,
+      resolvedDelivery,
+    });
+  }
 
   afterEach(() => {
     restoreFastTestEnv(previousFastTestEnv);
@@ -135,7 +207,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     });
   });
 
-  it("does not resolve implicit last-target context for bare delivery.mode none", async () => {
+  it("resolves implicit last-target context for bare delivery.mode none", async () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue({
       requested: false,
@@ -155,114 +227,43 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       } as never,
     });
 
-    expect(resolveDeliveryTargetMock).not.toHaveBeenCalled();
+    expect(resolveDeliveryTargetMock).toHaveBeenCalledTimes(1);
+    expect(resolveDeliveryTargetMock.mock.calls[0]?.[2]).toMatchObject({
+      channel: "last",
+      sessionKey: undefined,
+    });
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
     expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
       disableMessageTool: false,
-      messageChannel: undefined,
-      messageTo: undefined,
-      messageThreadId: undefined,
-      currentChannelId: undefined,
+      forceMessageTool: true,
+      messageChannel: "telegram",
+      messageTo: "123",
+      currentChannelId: "123",
     });
   });
 
-  it("does not resolve implicit last-target context for delivery.mode none with only accountId", async () => {
-    mockRunCronFallbackPassthrough();
-    resolveCronDeliveryPlanMock.mockReturnValue({
-      requested: false,
-      mode: "none",
-      channel: "last",
-      accountId: "ops",
-    });
-
-    await runCronIsolatedAgentTurn({
-      ...makeParams(),
-      job: {
-        id: "message-tool-policy",
-        name: "Message Tool Policy",
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "isolated",
-        payload: { kind: "agentTurn", message: "send a message" },
-        delivery: { mode: "none", accountId: "ops" },
-      } as never,
-    });
-
-    expect(resolveDeliveryTargetMock).not.toHaveBeenCalled();
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
-      disableMessageTool: false,
-      messageChannel: undefined,
-      messageTo: undefined,
-      messageThreadId: undefined,
-      currentChannelId: undefined,
-      agentAccountId: undefined,
+  it("resolves implicit last-target context for delivery.mode none with only accountId", async () => {
+    await runModeNoneDeliveryCase({
+      delivery: { mode: "none", accountId: "ops" },
+      plan: { accountId: "ops" },
     });
   });
 
-  it("does not resolve implicit last-target context for delivery.mode none with only threadId", async () => {
-    mockRunCronFallbackPassthrough();
-    resolveCronDeliveryPlanMock.mockReturnValue({
-      requested: false,
-      mode: "none",
-      channel: "last",
-      threadId: 42,
-    });
-
-    await runCronIsolatedAgentTurn({
-      ...makeParams(),
-      job: {
-        id: "message-tool-policy",
-        name: "Message Tool Policy",
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "isolated",
-        payload: { kind: "agentTurn", message: "send a message" },
-        delivery: { mode: "none", threadId: 42 },
-      } as never,
-    });
-
-    expect(resolveDeliveryTargetMock).not.toHaveBeenCalled();
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
-      disableMessageTool: false,
-      messageChannel: undefined,
-      messageTo: undefined,
-      messageThreadId: undefined,
-      currentChannelId: undefined,
-      agentAccountId: undefined,
+  it("resolves implicit last-target context for delivery.mode none with only threadId", async () => {
+    await runModeNoneDeliveryCase({
+      delivery: { mode: "none", threadId: 42 },
+      plan: { threadId: 42 },
     });
   });
 
   it("forwards explicit message targets into the embedded run", async () => {
     mockRunCronFallbackPassthrough();
-    const executor = createCronPromptExecutor({
-      cfg: {},
-      cfgWithAgentDefaults: {},
-      job: makeParams().job,
-      agentId: "default",
-      agentDir: "/tmp/agent-dir",
-      agentSessionKey: "cron:message-tool-policy",
-      workspaceDir: "/tmp/workspace",
-      resolvedVerboseLevel: "off",
-      thinkLevel: undefined,
-      timeoutMs: 60_000,
-      messageChannel: "telegram",
+    const executor = createMessageToolExecutor({
       resolvedDelivery: {
         accountId: "ops",
         to: "123:topic:42",
         threadId: 42,
       },
-      toolPolicy: {
-        requireExplicitMessageTarget: false,
-        disableMessageTool: false,
-      },
-      skillsSnapshot: emptySkillsSnapshot,
-      agentPayload: null,
-      liveSelection: {
-        provider: "openai",
-        model: "gpt-5.4",
-      },
-      cronSession: makeCronSession() as MutableCronSession,
-      abortReason: () => "aborted",
     });
 
     await executor.runPrompt("send a message");
@@ -279,35 +280,12 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
 
   it("preserves topic routing when inferred currentChannelId is built from split delivery fields", async () => {
     mockRunCronFallbackPassthrough();
-    const executor = createCronPromptExecutor({
-      cfg: {},
-      cfgWithAgentDefaults: {},
-      job: makeParams().job,
-      agentId: "default",
-      agentDir: "/tmp/agent-dir",
-      agentSessionKey: "cron:message-tool-policy",
-      workspaceDir: "/tmp/workspace",
-      resolvedVerboseLevel: "off",
-      thinkLevel: undefined,
-      timeoutMs: 60_000,
-      messageChannel: "telegram",
+    const executor = createMessageToolExecutor({
       resolvedDelivery: {
         accountId: "ops",
         to: "123",
         threadId: 42,
       },
-      toolPolicy: {
-        requireExplicitMessageTarget: false,
-        disableMessageTool: false,
-      },
-      skillsSnapshot: emptySkillsSnapshot,
-      agentPayload: null,
-      liveSelection: {
-        provider: "openai",
-        model: "gpt-5.4",
-      },
-      cronSession: makeCronSession() as MutableCronSession,
-      abortReason: () => "aborted",
     });
 
     await executor.runPrompt("send a message");
@@ -322,8 +300,8 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     });
   });
 
-  it("disables the message tool when cron delivery is active", async () => {
-    await expectMessageToolDisabledForPlan({
+  it("keeps the message tool enabled when announce delivery is active", async () => {
+    await expectMessageToolEnabledForPlan({
       requested: true,
       mode: "announce",
       channel: "telegram",
@@ -339,17 +317,14 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     });
   });
 
-  it("keeps the message tool enabled for shared callers when delivery is not requested", async () => {
+  it("keeps the message tool enabled when delivery is not requested", async () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue({
       requested: false,
       mode: "none",
     });
 
-    await runCronIsolatedAgentTurn({
-      ...makeParams(),
-      deliveryContract: "shared",
-    });
+    await runCronIsolatedAgentTurn(makeParams());
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
     expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.disableMessageTool).toBe(false);
@@ -386,7 +361,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     );
   });
 
-  it("skips cron delivery when a shared caller already sent to the same target", async () => {
+  it("skips cron fallback delivery when the message tool already sent to the same target", async () => {
     mockRunCronFallbackPassthrough();
     const params = makeParams();
     const job = {
@@ -410,9 +385,8 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       meta: { agentMeta: { usage: { input: 10, output: 20 } } },
     });
 
-    await runCronIsolatedAgentTurn({
+    const result = await runCronIsolatedAgentTurn({
       ...params,
-      deliveryContract: "shared",
       job: job as never,
     });
 
@@ -423,6 +397,137 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
         skipMessagingToolDelivery: true,
       }),
     );
+    expect(result.delivery).toEqual(
+      expect.objectContaining({
+        intended: { channel: "telegram", to: "123", source: "explicit" },
+        resolved: { ok: true, channel: "telegram", to: "123", source: "explicit" },
+        messageToolSentTo: [{ channel: "telegram", to: "123" }],
+        fallbackUsed: false,
+        delivered: true,
+      }),
+    );
+  });
+
+  it("skips cron fallback delivery when the message tool sends to the bound target", async () => {
+    mockRunCronFallbackPassthrough();
+    const params = makeParams();
+    const job = {
+      id: "message-tool-bound-target",
+      name: "Message Tool Bound Target",
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: "send a message" },
+      delivery: { mode: "announce", channel: "telegram", to: "123" },
+    } as const;
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "telegram",
+      to: "123",
+    });
+    runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "sent" }],
+      didSendViaMessagingTool: true,
+      messagingToolSentTargets: [],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+
+    const result = await runCronIsolatedAgentTurn({
+      ...params,
+      job: job as never,
+    });
+
+    expect(dispatchCronDeliveryMock).toHaveBeenCalledTimes(1);
+    expect(dispatchCronDeliveryMock.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        deliveryRequested: true,
+        skipMessagingToolDelivery: true,
+      }),
+    );
+    expect(result.delivery).toEqual(
+      expect.objectContaining({
+        intended: { channel: "telegram", to: "123", source: "explicit" },
+        resolved: { ok: true, channel: "telegram", to: "123", source: "explicit" },
+        messageToolSentTo: [{ channel: "telegram", to: "123" }],
+        fallbackUsed: false,
+        delivered: true,
+      }),
+    );
+  });
+
+  it("does not mark message tool delivery as matched when cron target resolution failed", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "last",
+    });
+    resolveDeliveryTargetMock.mockResolvedValue({
+      ok: false,
+      channel: undefined,
+      to: undefined,
+      accountId: undefined,
+      threadId: undefined,
+      mode: "implicit",
+      error: new Error("sessionKey is required to resolve delivery.channel=last"),
+    });
+    runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "sent" }],
+      didSendViaMessagingTool: true,
+      messagingToolSentTargets: [{ tool: "message", provider: "telegram", to: "123" }],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+
+    const result = await runCronIsolatedAgentTurn(makeParams());
+
+    expect(dispatchCronDeliveryMock).toHaveBeenCalledTimes(1);
+    expect(dispatchCronDeliveryMock.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        deliveryRequested: true,
+        skipMessagingToolDelivery: false,
+        unverifiedMessagingToolDelivery: true,
+      }),
+    );
+    expect(result.delivery).toEqual(
+      expect.objectContaining({
+        intended: { channel: "last", to: null, source: "last" },
+        resolved: expect.objectContaining({
+          ok: false,
+          source: "last",
+          error: "sessionKey is required to resolve delivery.channel=last",
+        }),
+        messageToolSentTo: [{ channel: "telegram", to: "123" }],
+        fallbackUsed: false,
+        delivered: false,
+      }),
+    );
+  });
+
+  it("marks no-deliver runs delivered when the message tool sends to the current target", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: false,
+      mode: "none",
+      channel: "last",
+    });
+    runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "sent" }],
+      didSendViaMessagingTool: true,
+      messagingToolSentTargets: [{ tool: "message", provider: "telegram", to: "123" }],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+
+    const result = await runCronIsolatedAgentTurn(makeParams());
+
+    expect(dispatchCronDeliveryMock).toHaveBeenCalledTimes(1);
+    expect(dispatchCronDeliveryMock.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        deliveryRequested: false,
+        skipMessagingToolDelivery: true,
+      }),
+    );
+    expect(result.delivered).toBe(true);
+    expect(result.deliveryAttempted).toBe(true);
   });
 });
 
@@ -445,7 +550,7 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
     restoreFastTestEnv(previousFastTestEnv);
   });
 
-  it("appends a plain-text delivery instruction to the prompt when delivery is requested", async () => {
+  it("appends shared delivery guidance to the prompt when announce delivery is requested", async () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue({
       requested: true,
@@ -458,8 +563,32 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
     const prompt: string = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.prompt ?? "";
+    expect(prompt).toContain("Use the message tool");
+    expect(prompt).toContain("will be delivered automatically");
+    expect(prompt).not.toContain("note who/where");
+  });
+
+  it("does not prompt for the message tool when toolsAllow excludes it", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "telegram",
+      to: "123",
+    });
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeMessageToolPolicyJob(
+        { mode: "announce", channel: "telegram", to: "123" },
+        { kind: "agentTurn", message: "send a message", toolsAllow: ["read"] },
+      ),
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const prompt: string = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.prompt ?? "";
+    expect(prompt).not.toContain("Use the message tool");
     expect(prompt).toContain("Return your response as plain text");
-    expect(prompt).toContain("it will be delivered automatically");
   });
 
   it("does not append a delivery instruction when delivery is not requested", async () => {

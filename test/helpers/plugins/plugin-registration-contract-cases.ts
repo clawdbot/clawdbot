@@ -93,8 +93,8 @@ export const pluginRegistrationContractCases = {
       choiceId: "kimi-code-api-key",
       choiceLabel: "Kimi Code API key (subscription)",
       groupId: "moonshot",
-      groupLabel: "Moonshot AI (Kimi K2.5)",
-      groupHint: "Kimi K2.5",
+      groupLabel: "Moonshot AI (Kimi K2.6)",
+      groupHint: "Kimi K2.6",
     },
   },
   openai: {

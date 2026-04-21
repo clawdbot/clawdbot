@@ -9,7 +9,7 @@ import {
 } from "../../plugins/memory-state.js";
 import type { TemplateContext } from "../templating.js";
 import { runMemoryFlushIfNeeded, setAgentRunnerMemoryTestDeps } from "./agent-runner-memory.js";
-import type { FollowupRun } from "./queue.js";
+import { createTestFollowupRun, writeTestSessionStore } from "./agent-runner.test-fixtures.js";
 
 const runWithModelFallbackMock = vi.fn();
 const runEmbeddedPiAgentMock = vi.fn();
@@ -22,44 +22,6 @@ function createReplyOperation() {
     setPhase: vi.fn(),
     updateSessionId: vi.fn(),
   } as never;
-}
-
-function createFollowupRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun {
-  return {
-    prompt: "hello",
-    summaryLine: "hello",
-    enqueuedAt: Date.now(),
-    run: {
-      agentId: "main",
-      agentDir: "/tmp/agent",
-      sessionId: "session",
-      sessionKey: "main",
-      messageProvider: "whatsapp",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      config: {},
-      skillsSnapshot: {},
-      provider: "anthropic",
-      model: "claude",
-      thinkLevel: "low",
-      verboseLevel: "off",
-      elevatedLevel: "off",
-      bashElevated: { enabled: false, allowed: false, defaultLevel: "off" },
-      timeoutMs: 1_000,
-      blockReplyBreak: "message_end",
-      skipProviderRuntimeHints: true,
-      ...overrides,
-    },
-  } as unknown as FollowupRun;
-}
-
-async function writeSessionStore(
-  storePath: string,
-  sessionKey: string,
-  entry: SessionEntry,
-): Promise<void> {
-  await fs.mkdir(path.dirname(storePath), { recursive: true });
-  await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: entry }, null, 2), "utf8");
 }
 
 describe("runMemoryFlushIfNeeded", () => {
@@ -100,7 +62,7 @@ describe("runMemoryFlushIfNeeded", () => {
       }
       params.sessionStore[sessionKey] = nextEntry;
       if (typeof params.storePath === "string") {
-        await writeSessionStore(params.storePath, sessionKey, nextEntry);
+        await writeTestSessionStore(params.storePath, sessionKey, nextEntry);
       }
       return nextEntry.compactionCount;
     });
@@ -131,7 +93,7 @@ describe("runMemoryFlushIfNeeded", () => {
       compactionCount: 1,
     };
     const sessionStore = { [sessionKey]: sessionEntry };
-    await writeSessionStore(storePath, sessionKey, sessionEntry);
+    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
 
     runEmbeddedPiAgentMock.mockImplementationOnce(
       async (params: {
@@ -145,7 +107,7 @@ describe("runMemoryFlushIfNeeded", () => {
       },
     );
 
-    const followupRun = createFollowupRun();
+    const followupRun = createTestFollowupRun();
     const entry = await runMemoryFlushIfNeeded({
       cfg: {
         agents: {
@@ -206,7 +168,7 @@ describe("runMemoryFlushIfNeeded", () => {
 
     const entry = await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { cliBackends: { "codex-cli": { command: "codex" } } } } },
-      followupRun: createFollowupRun({ provider: "codex-cli" }),
+      followupRun: createTestFollowupRun({ provider: "codex-cli" }),
       sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
       defaultModel: "codex-cli/gpt-5.4",
       agentCfgContextTokens: 100_000,
@@ -257,7 +219,7 @@ describe("runMemoryFlushIfNeeded", () => {
 
     await runMemoryFlushIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
-      followupRun: createFollowupRun({ extraSystemPrompt: "extra system" }),
+      followupRun: createTestFollowupRun({ extraSystemPrompt: "extra system" }),
       sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
       defaultModel: "anthropic/claude-opus-4-6",
       agentCfgContextTokens: 100_000,

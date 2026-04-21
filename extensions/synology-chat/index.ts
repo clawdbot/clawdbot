@@ -6,7 +6,7 @@ export default defineBundledChannelEntry({
   description: "Native Synology Chat channel plugin for OpenClaw",
   importMetaUrl: import.meta.url,
   plugin: {
-    specifier: "./api.js",
+    specifier: "./channel-plugin-api.js",
     exportName: "synologyChatPlugin",
   },
   runtime: {

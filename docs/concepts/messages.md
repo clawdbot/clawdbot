@@ -62,7 +62,7 @@ Config (global default + per-channel overrides):
 Notes:
 
 - Debounce applies to **text-only** messages; media/attachments flush immediately.
-- Control commands bypass debouncing so they remain standalone.
+- Control commands bypass debouncing so they remain standalone — **except** when a channel explicitly opts in to same-sender DM coalescing (e.g. [BlueBubbles `coalesceSameSenderDms`](/channels/bluebubbles#coalescing-split-send-dms-command--url-in-one-composition)), where DM commands wait inside the debounce window so a split-send payload can join the same agent turn.
 
 ## Sessions and devices
 
@@ -152,6 +152,20 @@ Outbound message formatting is centralized in `messages`:
 - Reply threading via `replyToMode` and per-channel defaults
 
 Details: [Configuration](/gateway/configuration-reference#messages) and channel docs.
+
+## Silent replies
+
+The exact silent token `NO_REPLY` / `no_reply` means “do not deliver a user-visible reply”.
+OpenClaw resolves that behavior by conversation type:
+
+- Direct conversations disallow silence by default and rewrite a bare silent
+  reply to a short visible fallback.
+- Groups/channels allow silence by default.
+- Internal orchestration allows silence by default.
+
+Defaults live under `agents.defaults.silentReply` and
+`agents.defaults.silentReplyRewrite`; `surfaces.<id>.silentReply` and
+`surfaces.<id>.silentReplyRewrite` can override them per surface.
 
 ## Related
 

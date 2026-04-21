@@ -18,12 +18,21 @@ import { loadSessionStore, resolveSessionKey } from "../config/sessions.js";
 import { registerGroupIntroPromptCases } from "./reply.triggers.group-intro-prompts.cases.js";
 import { registerTriggerHandlingUsageSummaryCases } from "./reply.triggers.trigger-handling.filters-usage-summary-current-model-provider.cases.js";
 import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./reply/queue.js";
+import type { MsgContext } from "./templating.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
 type GetReplyFromConfig = typeof import("./reply.js").getReplyFromConfig;
 
 const TEST_PRIMARY_PROFILE_ID = "openai-codex:primary@example.test";
 const TEST_SECONDARY_PROFILE_ID = "openai-codex:secondary@example.test";
+const TEST_TIME_ZONE = "America/Chicago";
+const TELEGRAM_DIRECT_MESSAGE = {
+  From: "telegram:111",
+  To: "telegram:111",
+  ChatType: "direct",
+  Provider: "telegram",
+  Surface: "telegram",
+} as const;
 
 vi.mock("./reply/agent-runner.runtime.js", () => ({
   runReplyAgent: async (params: {
@@ -113,6 +122,111 @@ function formatDateStampForZone(nowMs: number, timeZone: string): string {
 
 function mockEmbeddedOkPayload() {
   return mockRunEmbeddedPiAgentOk("ok");
+}
+
+function mockRunEmbeddedPiAgentText(text: string, durationMs: number) {
+  const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+  runEmbeddedPiAgentMock.mockReset();
+  runEmbeddedPiAgentMock.mockResolvedValue({
+    payloads: [{ text }],
+    meta: {
+      durationMs,
+      agentMeta: { sessionId: "s", provider: "p", model: "m" },
+    },
+  });
+  return runEmbeddedPiAgentMock;
+}
+
+async function writeDailyMemoryNotes(
+  workspaceDir: string,
+  notes: Array<{ stamp: string; text: string }>,
+) {
+  const memoryDir = join(workspaceDir, "memory");
+  await fs.mkdir(memoryDir, { recursive: true });
+  for (const note of notes) {
+    await fs.writeFile(join(memoryDir, `${note.stamp}.md`), note.text, "utf-8");
+  }
+}
+
+async function seedTargetSession(storePath: string, targetSessionKey: string) {
+  await fs.writeFile(
+    storePath,
+    JSON.stringify({
+      [targetSessionKey]: {
+        sessionId: "session-target",
+        updatedAt: Date.now(),
+      },
+    }),
+  );
+}
+
+function makeNativeTelegramCommandMessage(params: {
+  body: string;
+  slashSessionKey: string;
+  targetSessionKey: string;
+}): MsgContext {
+  return {
+    Body: params.body,
+    ...TELEGRAM_DIRECT_MESSAGE,
+    SessionKey: params.slashSessionKey,
+    CommandSource: "native",
+    CommandTargetSessionKey: params.targetSessionKey,
+    CommandAuthorized: true,
+  };
+}
+
+function makeTelegramSessionMessage(body: string, sessionKey: string) {
+  return {
+    Body: body,
+    ...TELEGRAM_DIRECT_MESSAGE,
+    SessionKey: sessionKey,
+  };
+}
+
+function makeAuthorizedSmsCommandMessage(body: string) {
+  return {
+    Body: body,
+    From: "+1003",
+    To: "+2000",
+    CommandAuthorized: true,
+  };
+}
+
+function makeStartupContextCfg(home: string, startupContext?: { applyOn: Array<"new" | "reset"> }) {
+  const cfg = makeCfg(home);
+  cfg.agents ??= {};
+  cfg.agents.defaults ??= {};
+  cfg.agents.defaults.userTimezone = TEST_TIME_ZONE;
+  if (startupContext) {
+    cfg.agents.defaults.startupContext = startupContext;
+  }
+  return cfg;
+}
+
+async function runAuthorizedSmsCommand(body: string, cfg: ReturnType<typeof makeCfg>) {
+  return await getReplyFromConfig(makeAuthorizedSmsCommandMessage(body), {}, cfg);
+}
+
+async function expectNextRunUsesTargetSession(
+  params: {
+    cfg: ReturnType<typeof makeCfg>;
+    targetSessionKey: string;
+    runEmbeddedPiAgentMock: ReturnType<typeof getRunEmbeddedPiAgentMock>;
+  },
+  expected: Record<string, unknown>,
+) {
+  mockRunEmbeddedPiAgentText("ok", 5);
+
+  await getReplyFromConfig(
+    makeTelegramSessionMessage("hi", params.targetSessionKey),
+    {},
+    params.cfg,
+  );
+
+  expect(params.runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
+  expect(params.runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toEqual(
+    expect.objectContaining(expected),
+  );
 }
 
 async function writeStoredModelOverride(cfg: ReturnType<typeof makeCfg>): Promise<void> {
@@ -264,50 +378,21 @@ describe("trigger handling", () => {
   it("prepends runtime-loaded daily memory context on bare /new", async () => {
     await withTempHome(async (home) => {
       const workspaceDir = join(home, "openclaw");
-      const timeZone = "America/Chicago";
       const nowMs = Date.now();
-      const todayStamp = formatDateStampForZone(nowMs, timeZone);
-      const yesterdayStamp = formatDateStampForZone(nowMs - 24 * 60 * 60 * 1000, timeZone);
-      await fs.mkdir(join(workspaceDir, "memory"), { recursive: true });
-      await fs.writeFile(
-        join(workspaceDir, "memory", `${todayStamp}.md`),
-        "today startup note",
-        "utf-8",
-      );
-      await fs.writeFile(
-        join(workspaceDir, "memory", `${yesterdayStamp}.md`),
-        "yesterday startup note",
-        "utf-8",
-      );
+      const todayStamp = formatDateStampForZone(nowMs, TEST_TIME_ZONE);
+      const yesterdayStamp = formatDateStampForZone(nowMs - 24 * 60 * 60 * 1000, TEST_TIME_ZONE);
+      await writeDailyMemoryNotes(workspaceDir, [
+        { stamp: todayStamp, text: "today startup note" },
+        { stamp: yesterdayStamp, text: "yesterday startup note" },
+      ]);
 
-      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
-      runEmbeddedPiAgentMock.mockReset();
-      runEmbeddedPiAgentMock.mockResolvedValue({
-        payloads: [{ text: "hello" }],
-        meta: {
-          durationMs: 1,
-          agentMeta: { sessionId: "s", provider: "p", model: "m" },
-        },
-      });
+      const runEmbeddedPiAgentMock = mockRunEmbeddedPiAgentText("hello", 1);
 
-      const cfg = makeCfg(home);
-      cfg.agents ??= {};
-      cfg.agents.defaults ??= {};
-      cfg.agents.defaults.userTimezone = timeZone;
+      const cfg = makeStartupContextCfg(home);
 
-      const res = await getReplyFromConfig(
-        {
-          Body: "/new",
-          From: "+1003",
-          To: "+2000",
-          CommandAuthorized: true,
-        },
-        {},
-        cfg,
-      );
+      const res = await runAuthorizedSmsCommand("/new", cfg);
 
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toBe("hello");
+      expect(maybeReplyText(res)).toBe("hello");
       const prompt = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0]?.prompt ?? "";
       expect(prompt).toContain("[Startup context loaded by runtime]");
       expect(prompt).toContain(`[Untrusted daily memory: memory/${todayStamp}.md]`);
@@ -321,47 +406,19 @@ describe("trigger handling", () => {
   it("treats normalized /RESET as reset for startupContext.applyOn", async () => {
     await withTempHome(async (home) => {
       const workspaceDir = join(home, "openclaw");
-      const timeZone = "America/Chicago";
       const nowMs = Date.now();
-      const todayStamp = formatDateStampForZone(nowMs, timeZone);
-      await fs.mkdir(join(workspaceDir, "memory"), { recursive: true });
-      await fs.writeFile(
-        join(workspaceDir, "memory", `${todayStamp}.md`),
-        "reset startup note",
-        "utf-8",
-      );
+      const todayStamp = formatDateStampForZone(nowMs, TEST_TIME_ZONE);
+      await writeDailyMemoryNotes(workspaceDir, [
+        { stamp: todayStamp, text: "reset startup note" },
+      ]);
 
-      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
-      runEmbeddedPiAgentMock.mockReset();
-      runEmbeddedPiAgentMock.mockResolvedValue({
-        payloads: [{ text: "hello" }],
-        meta: {
-          durationMs: 1,
-          agentMeta: { sessionId: "s", provider: "p", model: "m" },
-        },
-      });
+      const runEmbeddedPiAgentMock = mockRunEmbeddedPiAgentText("hello", 1);
 
-      const cfg = makeCfg(home);
-      cfg.agents ??= {};
-      cfg.agents.defaults ??= {};
-      cfg.agents.defaults.userTimezone = timeZone;
-      cfg.agents.defaults.startupContext = {
-        applyOn: ["reset"],
-      };
+      const cfg = makeStartupContextCfg(home, { applyOn: ["reset"] });
 
-      const res = await getReplyFromConfig(
-        {
-          Body: "/RESET",
-          From: "+1003",
-          To: "+2000",
-          CommandAuthorized: true,
-        },
-        {},
-        cfg,
-      );
+      const res = await runAuthorizedSmsCommand("/RESET", cfg);
 
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toBe("hello");
+      expect(maybeReplyText(res)).toBe("hello");
       const prompt = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0]?.prompt ?? "";
       expect(prompt).toContain(`[Untrusted daily memory: memory/${todayStamp}.md]`);
       expect(prompt).toContain("reset startup note");
@@ -594,77 +651,35 @@ describe("trigger handling", () => {
       cfg.session = { ...cfg.session, store: join(home, "native-model.sessions.json") };
       const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
       runEmbeddedPiAgentMock.mockReset();
-      const storePath = cfg.session?.store;
-      if (!storePath) {
-        throw new Error("missing session store path");
-      }
+      const storePath = requireSessionStorePath(cfg);
       const slashSessionKey = "telegram:slash:111";
       const targetSessionKey = MAIN_SESSION_KEY;
 
-      await fs.writeFile(
-        storePath,
-        JSON.stringify({
-          [targetSessionKey]: {
-            sessionId: "session-target",
-            updatedAt: Date.now(),
-          },
-        }),
-      );
+      await seedTargetSession(storePath, targetSessionKey);
 
       const res = await getReplyFromConfig(
-        {
-          Body: "/model openai/gpt-4.1-mini",
-          From: "telegram:111",
-          To: "telegram:111",
-          ChatType: "direct",
-          Provider: "telegram",
-          Surface: "telegram",
-          SessionKey: slashSessionKey,
-          CommandSource: "native",
-          CommandTargetSessionKey: targetSessionKey,
-          CommandAuthorized: true,
-        },
+        makeNativeTelegramCommandMessage({
+          body: "/model openai/gpt-4.1-mini",
+          slashSessionKey,
+          targetSessionKey,
+        }),
         {},
         cfg,
       );
 
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("Model set to openai/gpt-4.1-mini");
+      expect(maybeReplyText(res)).toContain("Model set to openai/gpt-4.1-mini");
 
       const store = loadSessionStore(storePath);
       expect(store[targetSessionKey]?.providerOverride).toBe("openai");
       expect(store[targetSessionKey]?.modelOverride).toBe("gpt-4.1-mini");
       expect(store[slashSessionKey]).toBeUndefined();
 
-      runEmbeddedPiAgentMock.mockReset();
-      runEmbeddedPiAgentMock.mockResolvedValue({
-        payloads: [{ text: "ok" }],
-        meta: {
-          durationMs: 5,
-          agentMeta: { sessionId: "s", provider: "p", model: "m" },
-        },
-      });
-
-      await getReplyFromConfig(
+      await expectNextRunUsesTargetSession(
+        { cfg, targetSessionKey, runEmbeddedPiAgentMock },
         {
-          Body: "hi",
-          From: "telegram:111",
-          To: "telegram:111",
-          ChatType: "direct",
-          Provider: "telegram",
-          Surface: "telegram",
-          SessionKey: targetSessionKey,
-        },
-        {},
-        cfg,
-      );
-
-      expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-      expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toEqual(
-        expect.objectContaining({
           provider: "openai",
           model: "gpt-4.1-mini",
-        }),
+        },
       );
     });
   });
@@ -675,10 +690,7 @@ describe("trigger handling", () => {
       cfg.session = { ...cfg.session, store: join(home, "native-model-auth.sessions.json") };
       const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
       runEmbeddedPiAgentMock.mockReset();
-      const storePath = cfg.session?.store;
-      if (!storePath) {
-        throw new Error("missing session store path");
-      }
+      const storePath = requireSessionStorePath(cfg);
       const authDir = join(home, ".openclaw", "agents", "main", "agent");
       await fs.mkdir(authDir, { recursive: true });
       await fs.writeFile(
@@ -720,72 +732,33 @@ describe("trigger handling", () => {
       const slashSessionKey = "telegram:slash:111";
       const targetSessionKey = MAIN_SESSION_KEY;
 
-      await fs.writeFile(
-        storePath,
-        JSON.stringify({
-          [targetSessionKey]: {
-            sessionId: "session-target",
-            updatedAt: Date.now(),
-          },
-        }),
-      );
+      await seedTargetSession(storePath, targetSessionKey);
 
       const res = await getReplyFromConfig(
-        {
-          Body: `/model openai-codex/gpt-5.4@${TEST_SECONDARY_PROFILE_ID}`,
-          From: "telegram:111",
-          To: "telegram:111",
-          ChatType: "direct",
-          Provider: "telegram",
-          Surface: "telegram",
-          SessionKey: slashSessionKey,
-          CommandSource: "native",
-          CommandTargetSessionKey: targetSessionKey,
-          CommandAuthorized: true,
-        },
+        makeNativeTelegramCommandMessage({
+          body: `/model openai-codex/gpt-5.4@${TEST_SECONDARY_PROFILE_ID}`,
+          slashSessionKey,
+          targetSessionKey,
+        }),
         {},
         cfg,
       );
 
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain(`Auth profile set to ${TEST_SECONDARY_PROFILE_ID}`);
+      expect(maybeReplyText(res)).toContain(`Auth profile set to ${TEST_SECONDARY_PROFILE_ID}`);
 
       const store = loadSessionStore(storePath);
       expect(store[targetSessionKey]?.authProfileOverride).toBe(TEST_SECONDARY_PROFILE_ID);
       expect(store[targetSessionKey]?.authProfileOverrideSource).toBe("user");
       expect(store[slashSessionKey]).toBeUndefined();
 
-      runEmbeddedPiAgentMock.mockReset();
-      runEmbeddedPiAgentMock.mockResolvedValue({
-        payloads: [{ text: "ok" }],
-        meta: {
-          durationMs: 5,
-          agentMeta: { sessionId: "s", provider: "p", model: "m" },
-        },
-      });
-
-      await getReplyFromConfig(
+      await expectNextRunUsesTargetSession(
+        { cfg, targetSessionKey, runEmbeddedPiAgentMock },
         {
-          Body: "hi",
-          From: "telegram:111",
-          To: "telegram:111",
-          ChatType: "direct",
-          Provider: "telegram",
-          Surface: "telegram",
-          SessionKey: targetSessionKey,
-        },
-        {},
-        cfg,
-      );
-
-      expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-      expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toEqual(
-        expect.objectContaining({
           provider: "openai-codex",
           model: "gpt-5.4",
           authProfileId: TEST_SECONDARY_PROFILE_ID,
           authProfileIdSource: "user",
-        }),
+        },
       );
     });
   });

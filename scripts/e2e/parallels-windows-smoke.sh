@@ -41,14 +41,14 @@ BUILD_LOCK_DIR="${TMPDIR:-/tmp}/openclaw-parallels-build.lock"
 TIMEOUT_SNAPSHOT_S=240
 TIMEOUT_GIT_SETUP_S=1200
 TIMEOUT_INSTALL_S=420
-TIMEOUT_UPDATE_S=300
+TIMEOUT_UPDATE_S="${OPENCLAW_PARALLELS_WINDOWS_UPDATE_TIMEOUT_S:-1800}"
 TIMEOUT_UPDATE_POLL_GRACE_S=60
 TIMEOUT_VERIFY_S=120
-TIMEOUT_ONBOARD_S=240
+TIMEOUT_ONBOARD_S=600
 TIMEOUT_ONBOARD_PHASE_S=$((TIMEOUT_ONBOARD_S + 120))
 # verify_gateway_reachable runs six 30s probes plus short retry sleeps.
-TIMEOUT_GATEWAY_S=240
-TIMEOUT_AGENT_S=180
+TIMEOUT_GATEWAY_S=420
+TIMEOUT_AGENT_S=600
 
 FRESH_MAIN_STATUS="skip"
 FRESH_MAIN_VERSION="skip"
@@ -860,6 +860,10 @@ else:
 PY
 }
 
+source_tree_dirty_for_build() {
+  [[ -n "$(git status --porcelain -- src ui packages extensions package.json pnpm-lock.yaml 'tsconfig*.json' 2>/dev/null)" ]]
+}
+
 acquire_build_lock() {
   local owner_pid=""
   while ! mkdir "$BUILD_LOCK_DIR" 2>/dev/null; do
@@ -887,7 +891,7 @@ ensure_current_build() {
   acquire_build_lock
   head="$(git rev-parse HEAD)"
   build_commit="$(current_build_commit)"
-  if [[ "$build_commit" == "$head" ]]; then
+  if [[ "$build_commit" == "$head" ]] && ! source_tree_dirty_for_build; then
     release_build_lock
     return
   fi
@@ -896,6 +900,11 @@ ensure_current_build() {
   build_commit="$(current_build_commit)"
   release_build_lock
   [[ "$build_commit" == "$head" ]] || die "dist/build-info.json still does not match HEAD after build"
+}
+
+write_package_dist_inventory() {
+  node --import tsx --input-type=module --eval \
+    'import { writePackageDistInventory } from "./src/infra/package-dist-inventory.ts"; await writePackageDistInventory(process.cwd());'
 }
 
 ensure_guest_git() {
@@ -957,6 +966,7 @@ pack_main_tgz() {
   fi
   say "Pack current main tgz"
   ensure_current_build
+  write_package_dist_inventory
   short_head="$(git rev-parse --short HEAD)"
   pkg="$(
     npm pack --ignore-scripts --json --pack-destination "$MAIN_TGZ_DIR" \

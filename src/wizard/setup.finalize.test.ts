@@ -4,7 +4,8 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 
-const runTui = vi.hoisted(() => vi.fn(async () => {}));
+const launchTuiCli = vi.hoisted(() => vi.fn(async () => {}));
+const restoreTerminalState = vi.hoisted(() => vi.fn());
 const probeGatewayReachable = vi.hoisted(() =>
   vi.fn<() => Promise<{ ok: boolean; detail?: string }>>(async () => ({ ok: true })),
 );
@@ -134,11 +135,11 @@ vi.mock("../infra/control-ui-assets.js", () => ({
 }));
 
 vi.mock("../terminal/restore.js", () => ({
-  restoreTerminalState: vi.fn(),
+  restoreTerminalState,
 }));
 
-vi.mock("../tui/tui.js", () => ({
-  runTui,
+vi.mock("../tui/tui-launch.js", () => ({
+  launchTuiCli,
 }));
 
 vi.mock("./setup.secret-input.js", () => ({
@@ -236,7 +237,8 @@ function createAdvancedFinalizeArgs(params: AdvancedFinalizeArgs = {}) {
 
 describe("finalizeSetupWizard", () => {
   beforeEach(() => {
-    runTui.mockClear();
+    launchTuiCli.mockClear();
+    restoreTerminalState.mockClear();
     probeGatewayReachable.mockClear();
     waitForGatewayReachable.mockReset();
     waitForGatewayReachable.mockResolvedValue({ ok: true });
@@ -265,7 +267,7 @@ describe("finalizeSetupWizard", () => {
     listConfiguredWebSearchProviders.mockReturnValue([]);
   });
 
-  it("resolves gateway password SecretRef for probe and TUI", async () => {
+  it("resolves gateway password SecretRef for probe but omits auth from TUI hatch", async () => {
     const previous = process.env.OPENCLAW_GATEWAY_PASSWORD;
     process.env.OPENCLAW_GATEWAY_PASSWORD = "resolved-gateway-password"; // pragma: allowlist secret
     resolveSetupSecretInputString.mockResolvedValueOnce("resolved-gateway-password");
@@ -337,12 +339,60 @@ describe("finalizeSetupWizard", () => {
         password: "resolved-gateway-password", // pragma: allowlist secret
       }),
     );
-    expect(runTui).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "ws://127.0.0.1:18789",
-        password: "resolved-gateway-password", // pragma: allowlist secret
-      }),
+    expect(launchTuiCli).toHaveBeenCalledWith(
+      {
+        deliver: false,
+        message: undefined,
+      },
+      {
+        authSource: "config",
+        gatewayUrl: "ws://127.0.0.1:18789",
+      },
     );
+  });
+
+  it("restores terminal state after failed TUI hatch", async () => {
+    launchTuiCli.mockRejectedValueOnce(new Error("TUI exited with code 1"));
+    const select = vi.fn(async (params: { message: string }) => {
+      if (params.message === "How do you want to hatch your bot?") {
+        return "tui";
+      }
+      return "later";
+    });
+    const prompter = buildWizardPrompter({ select: select as never });
+
+    await expect(
+      finalizeSetupWizard({
+        flow: "advanced",
+        opts: {
+          acceptRisk: true,
+          authChoice: "skip",
+          installDaemon: false,
+          skipHealth: true,
+          skipUi: false,
+        },
+        baseConfig: {},
+        nextConfig: {},
+        workspaceDir: "/tmp",
+        settings: {
+          port: 18789,
+          bind: "loopback",
+          authMode: "token",
+          gatewayToken: "test-token",
+          tailscaleMode: "off",
+          tailscaleResetOnExit: false,
+        },
+        prompter,
+        runtime: createRuntime(),
+      }),
+    ).rejects.toThrow("TUI exited with code 1");
+
+    expect(restoreTerminalState).toHaveBeenCalledWith("pre-setup tui", {
+      resumeStdinIfPaused: true,
+    });
+    expect(restoreTerminalState).toHaveBeenCalledWith("post-setup tui", {
+      resumeStdinIfPaused: true,
+    });
   });
 
   it("does not persist resolved SecretRef token in daemon install plan", async () => {

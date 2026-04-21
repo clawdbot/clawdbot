@@ -12,8 +12,8 @@ function buildMoonshotProvider(): ModelProviderConfig {
     api: "openai-completions",
     models: [
       {
-        id: "kimi-k2.5",
-        name: "Kimi K2.5",
+        id: "kimi-k2.6",
+        name: "Kimi K2.6",
         reasoning: false,
         input: ["text", "image"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

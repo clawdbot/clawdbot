@@ -113,6 +113,7 @@ export async function maybeRepairLegacyPluginManifestContracts(params: {
   env?: NodeJS.ProcessEnv;
   runtime: RuntimeEnv;
   prompter: DoctorPrompter;
+  note?: typeof note;
 }): Promise<void> {
   const migrations = collectLegacyPluginManifestContractMigrations(
     params.env ? { env: params.env } : undefined,
@@ -121,7 +122,8 @@ export async function maybeRepairLegacyPluginManifestContracts(params: {
     return;
   }
 
-  note(
+  const emitNote = params.note ?? note;
+  emitNote(
     [
       "Legacy plugin manifest capability keys detected.",
       ...migrations.flatMap((migration) => migration.changeLines),
@@ -156,6 +158,6 @@ export async function maybeRepairLegacyPluginManifestContracts(params: {
   }
 
   if (applied.length > 0) {
-    note(applied.join("\n"), "Doctor changes");
+    emitNote(applied.join("\n"), "Doctor changes");
   }
 }

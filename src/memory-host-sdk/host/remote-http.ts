@@ -1,23 +1,7 @@
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
-import type { SsrFPolicy } from "../../infra/net/ssrf.js";
+import { ssrfPolicyFromHttpBaseUrlAllowedHostname, type SsrFPolicy } from "../../infra/net/ssrf.js";
 
-export function buildRemoteBaseUrlPolicy(baseUrl: string): SsrFPolicy | undefined {
-  const trimmed = baseUrl.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  try {
-    const parsed = new URL(trimmed);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    // Keep policy tied to the configured host so private operator endpoints
-    // continue to work, while cross-host redirects stay blocked.
-    return { allowedHostnames: [parsed.hostname] };
-  } catch {
-    return undefined;
-  }
-}
+export const buildRemoteBaseUrlPolicy = ssrfPolicyFromHttpBaseUrlAllowedHostname;
 
 export async function withRemoteHttpResponse<T>(params: {
   url: string;

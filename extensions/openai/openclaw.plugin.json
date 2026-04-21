@@ -52,7 +52,7 @@
         "type": "string",
         "enum": ["friendly", "on", "off"],
         "default": "friendly",
-        "description": "Controls the default OpenAI-specific personality used for OpenAI and OpenAI Codex runs. `friendly` and `on` enable the overlay; `off` disables it."
+        "description": "Controls the OpenAI-specific friendly interaction-style overlay for GPT-5 OpenAI and OpenAI Codex runs. `friendly` and `on` enable the style overlay; `off` disables only that style layer."
       }
     }
   }

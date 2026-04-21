@@ -1,13 +1,20 @@
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { z } from "zod";
+import {
+  isQaCredentialTruthyOptIn,
+  joinQaCredentialEndpoint,
+  normalizeQaCredentialConvexSiteUrl,
+  normalizeQaCredentialEndpointPrefix,
+  parseQaCredentialPositiveIntegerEnv,
+  QA_CREDENTIALS_DEFAULT_ENDPOINT_PREFIX,
+} from "../../qa-credentials-common.runtime.js";
 
 const DEFAULT_ACQUIRE_TIMEOUT_MS = 90_000;
-const DEFAULT_ENDPOINT_PREFIX = "/qa-credentials/v1";
+const DEFAULT_ENDPOINT_PREFIX = QA_CREDENTIALS_DEFAULT_ENDPOINT_PREFIX;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_HTTP_TIMEOUT_MS = 15_000;
 const DEFAULT_LEASE_TTL_MS = 20 * 60 * 1_000;
-const ALLOW_INSECURE_HTTP_ENV_KEY = "OPENCLAW_QA_ALLOW_INSECURE_HTTP";
 const RETRY_BACKOFF_MS = [500, 1_000, 2_000, 4_000, 5_000] as const;
 const RETRYABLE_ACQUIRE_CODES = new Set(["POOL_EXHAUSTED", "NO_CREDENTIAL_AVAILABLE"]);
 
@@ -95,15 +102,7 @@ class QaCredentialBrokerError extends Error {
 }
 
 function parsePositiveIntegerEnv(env: NodeJS.ProcessEnv, key: string, fallback: number): number {
-  const raw = env[key]?.trim();
-  if (!raw) {
-    return fallback;
-  }
-  const value = Number(raw);
-  if (!Number.isFinite(value) || !Number.isInteger(value) || value < 1) {
-    throw new Error(`${key} must be a positive integer.`);
-  }
-  return value;
+  return parseQaCredentialPositiveIntegerEnv({ env, key, fallback });
 }
 
 function normalizeQaCredentialSource(value: string | undefined): QaCredentialLeaseSource {
@@ -118,7 +117,7 @@ function normalizeQaCredentialRole(
   value: string | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): QaCredentialRole {
-  const defaultRole = isTruthyOptIn(env.CI) ? "ci" : "maintainer";
+  const defaultRole = isQaCredentialTruthyOptIn(env.CI) ? "ci" : "maintainer";
   const normalized = value?.trim().toLowerCase() || defaultRole;
   if (normalized === "maintainer" || normalized === "ci") {
     return normalized;
@@ -126,57 +125,19 @@ function normalizeQaCredentialRole(
   throw new Error(`Credential role must be one of maintainer or ci, got "${value}".`);
 }
 
-function isTruthyOptIn(value: string | undefined) {
-  const normalized = value?.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes";
-}
-
-function isLoopbackHostname(hostname: string) {
-  return hostname === "localhost" || hostname === "::1" || hostname.startsWith("127.");
-}
-
 function normalizeConvexSiteUrl(raw: string, env: NodeJS.ProcessEnv): string {
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    throw new Error(`OPENCLAW_QA_CONVEX_SITE_URL must be a valid URL, got "${raw || "<empty>"}".`);
-  }
-  if (url.protocol === "https:") {
-    const text = url.toString();
-    return text.endsWith("/") ? text.slice(0, -1) : text;
-  }
-  if (url.protocol !== "http:") {
-    throw new Error("OPENCLAW_QA_CONVEX_SITE_URL must use https://.");
-  }
-  const allowInsecureHttp = isTruthyOptIn(env[ALLOW_INSECURE_HTTP_ENV_KEY]);
-  if (!allowInsecureHttp || !isLoopbackHostname(url.hostname)) {
-    throw new Error(
-      `OPENCLAW_QA_CONVEX_SITE_URL must use https://. http:// is only allowed for loopback hosts when ${ALLOW_INSECURE_HTTP_ENV_KEY}=1.`,
-    );
-  }
-  const text = url.toString();
-  return text.endsWith("/") ? text.slice(0, -1) : text;
+  return normalizeQaCredentialConvexSiteUrl({ raw, env });
 }
 
 function normalizeEndpointPrefix(value: string | undefined): string {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    return DEFAULT_ENDPOINT_PREFIX;
-  }
-  const prefixed = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  const normalized = prefixed.endsWith("/") ? prefixed.slice(0, -1) : prefixed;
-  if (!normalized.startsWith("/") || normalized.startsWith("//")) {
-    throw new Error(
+  return normalizeQaCredentialEndpointPrefix({
+    value,
+    fallback: DEFAULT_ENDPOINT_PREFIX,
+    invalidAbsoluteMessage:
       "OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX must be an absolute path like /qa-credentials/v1.",
-    );
-  }
-  if (normalized.includes("\\") || normalized.split("/").some((segment) => segment === "..")) {
-    throw new Error(
+    invalidSegmentsMessage:
       "OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX must not contain backslashes or .. path segments.",
-    );
-  }
-  return normalized;
+  });
 }
 
 function resolveConvexAuthToken(env: NodeJS.ProcessEnv, role: QaCredentialRole): string {
@@ -192,15 +153,6 @@ function resolveConvexAuthToken(env: NodeJS.ProcessEnv, role: QaCredentialRole):
     throw new Error("Missing OPENCLAW_QA_CONVEX_SECRET_CI for CI credential access.");
   }
   throw new Error("Missing OPENCLAW_QA_CONVEX_SECRET_MAINTAINER for maintainer credential access.");
-}
-
-function joinConvexEndpoint(baseUrl: string, prefix: string, suffix: string): string {
-  const normalizedSuffix = suffix.startsWith("/") ? suffix : `/${suffix}`;
-  const url = new URL(baseUrl);
-  url.pathname = `${prefix}${normalizedSuffix}`.replace(/\/{2,}/gu, "/");
-  url.search = "";
-  url.hash = "";
-  return url.toString();
 }
 
 function resolveConvexCredentialBrokerConfig(params: {
@@ -242,9 +194,9 @@ function resolveConvexCredentialBrokerConfig(params: {
       "OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS",
       DEFAULT_HTTP_TIMEOUT_MS,
     ),
-    acquireUrl: joinConvexEndpoint(baseUrl, endpointPrefix, "acquire"),
-    heartbeatUrl: joinConvexEndpoint(baseUrl, endpointPrefix, "heartbeat"),
-    releaseUrl: joinConvexEndpoint(baseUrl, endpointPrefix, "release"),
+    acquireUrl: joinQaCredentialEndpoint(baseUrl, endpointPrefix, "acquire"),
+    heartbeatUrl: joinQaCredentialEndpoint(baseUrl, endpointPrefix, "heartbeat"),
+    releaseUrl: joinQaCredentialEndpoint(baseUrl, endpointPrefix, "release"),
   };
 }
 

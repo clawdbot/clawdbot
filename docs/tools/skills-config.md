@@ -122,12 +122,12 @@ Per-skill fields:
 
 ### Sandboxed skills + env vars
 
-When a session is **sandboxed**, skill processes run inside Docker. The sandbox
-does **not** inherit the host `process.env`.
+When a session is **sandboxed**, skill processes run inside the configured
+sandbox backend. The sandbox does **not** inherit the host `process.env`.
 
 Use one of:
 
-- `agents.defaults.sandbox.docker.env` (or per-agent `agents.list[].sandbox.docker.env`)
-- bake the env into your custom sandbox image
+- `agents.defaults.sandbox.docker.env` for the Docker backend (or per-agent `agents.list[].sandbox.docker.env`)
+- bake the env into your custom sandbox image or remote sandbox environment
 
 Global `env` and `skills.entries.<skill>.env/apiKey` apply to **host** runs only.

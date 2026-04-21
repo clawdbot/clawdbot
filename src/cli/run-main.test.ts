@@ -96,7 +96,7 @@ describe("resolveMissingPluginCommandMessage", () => {
     expect(
       resolveMissingPluginCommandMessage("browser", {
         plugins: {
-          allow: ["telegram"],
+          allow: ["quietchat"],
         },
       }),
     ).toContain('`plugins.allow` excludes "browser"');
@@ -187,7 +187,7 @@ describe("resolveMissingPluginCommandMessage", () => {
       "wiki",
       {
         plugins: {
-          allow: ["telegram"],
+          allow: ["quietchat"],
         },
       },
       { registry: memoryWikiCommandAliasRegistry },

@@ -7,7 +7,6 @@ import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "../../agents/subagent-registry.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   completeTaskRunByRunId,
   createQueuedTaskRun,
@@ -15,15 +14,14 @@ import {
   failTaskRunByRunId,
 } from "../../tasks/task-executor.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
-import { configureTaskRegistryRuntime } from "../../tasks/task-registry.store.js";
 import { buildStatusReply, buildStatusText } from "./commands-status.js";
-import { buildCommandTestParams } from "./commands.test-harness.js";
+import {
+  baseCommandTestConfig,
+  buildCommandTestParams,
+  configureInMemoryTaskRegistryStoreForTests,
+} from "./commands.test-harness.js";
 
-const baseCfg = {
-  commands: { text: true },
-  channels: { whatsapp: { allowFrom: ["*"] } },
-  session: { mainKey: "main", scope: "per-sender" },
-} as OpenClawConfig;
+const baseCfg = baseCommandTestConfig;
 
 async function buildStatusReplyForTest(params: { sessionKey?: string; verbose?: boolean }) {
   const commandParams = buildCommandTestParams("/status", baseCfg);
@@ -85,25 +83,6 @@ function writeTranscriptUsageLog(params: {
     }),
     "utf-8",
   );
-}
-
-function configureInMemoryTaskRegistryStoreForTests(): void {
-  configureTaskRegistryRuntime({
-    store: {
-      loadSnapshot: () => ({
-        tasks: new Map(),
-        deliveryStates: new Map(),
-      }),
-      saveSnapshot: () => {},
-      upsertTaskWithDeliveryState: () => {},
-      upsertTask: () => {},
-      deleteTaskWithDeliveryState: () => {},
-      deleteTask: () => {},
-      upsertDeliveryState: () => {},
-      deleteDeliveryState: () => {},
-      close: () => {},
-    },
-  });
 }
 
 describe("buildStatusReply subagent summary", () => {
@@ -465,7 +444,7 @@ describe("buildStatusReply subagent summary", () => {
         sessionKey: "agent:main:main",
         parentSessionKey: "agent:main:main",
         sessionScope: "per-sender",
-        statusChannel: "whatsapp",
+        statusChannel: "mobilechat",
         provider: "anthropic",
         model: "claude-opus-4-5",
         contextTokens: 32_000,

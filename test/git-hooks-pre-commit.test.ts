@@ -64,7 +64,8 @@ describe("git-hooks/pre-commit (integration)", () => {
 
     // Use the real hook script and lightweight helper stubs.
     const fakeBinDir = installPreCommitFixture(dir);
-    // The hook ends with `pnpm check`, but this fixture is only exercising staged-file handling.
+    // The hook can end with `pnpm check:changed --staged`, but this fixture is only
+    // exercising staged-file handling.
     // Stub pnpm too so Windows CI does not invoke a real package-manager command in the temp repo.
     writeExecutable(fakeBinDir, "pnpm", "#!/usr/bin/env bash\nexit 0\n");
 
@@ -84,7 +85,30 @@ describe("git-hooks/pre-commit (integration)", () => {
     expect(staged).toEqual(["--all"]);
   });
 
-  it("skips pnpm check when FAST_COMMIT is enabled", () => {
+  it("runs changed-scope check for non-doc staged changes", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-check-changed-");
+    run(dir, "git", ["init", "-q", "--initial-branch=main"]);
+
+    const fakeBinDir = installPreCommitFixture(dir);
+    writeFileSync(path.join(dir, "package.json"), '{"name":"tmp"}\n', "utf8");
+    writeFileSync(path.join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
+    writeExecutable(
+      fakeBinDir,
+      "pnpm",
+      "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" > pnpm-args.txt\n",
+    );
+
+    writeFileSync(path.join(dir, "tracked.txt"), "hello\n", "utf8");
+    run(dir, "git", ["add", "--", "tracked.txt"]);
+
+    run(dir, "bash", ["git-hooks/pre-commit"], {
+      PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
+    });
+
+    expect(run(dir, "cat", ["pnpm-args.txt"])).toBe("check:changed --staged");
+  });
+
+  it("skips changed-scope check when FAST_COMMIT is enabled", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-yolo-");
     run(dir, "git", ["init", "-q", "--initial-branch=main"]);
 
@@ -106,6 +130,8 @@ describe("git-hooks/pre-commit (integration)", () => {
       FAST_COMMIT: "1",
     });
 
-    expect(output).toContain("FAST_COMMIT enabled: skipping pnpm check in pre-commit hook.");
+    expect(output).toContain(
+      "FAST_COMMIT enabled: skipping changed-scope check in pre-commit hook.",
+    );
   });
 });

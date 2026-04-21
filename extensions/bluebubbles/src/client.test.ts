@@ -1,4 +1,3 @@
-import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-mocks.js";
 import {
@@ -11,12 +10,15 @@ import {
   resolveBlueBubblesClientSsrfPolicy,
 } from "./client.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
-import type { PluginRuntime } from "./runtime-api.js";
 import { setBlueBubblesRuntime } from "./runtime.js";
 import {
   createBlueBubblesFetchGuardPassthroughInstaller,
   installBlueBubblesFetchTestHooks,
 } from "./test-harness.js";
+import {
+  createBlueBubblesFetchRemoteMediaMock,
+  createBlueBubblesRuntimeStub,
+} from "./test-helpers.js";
 import type { BlueBubblesAttachment } from "./types.js";
 import { _setFetchGuardForTesting } from "./types.js";
 
@@ -24,47 +26,16 @@ import { _setFetchGuardForTesting } from "./types.js";
 
 const mockFetch = vi.fn();
 
-const fetchRemoteMediaMock = vi.fn(
-  async (params: {
-    url: string;
-    maxBytes?: number;
-    ssrfPolicy?: SsrFPolicy;
-    fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-  }) => {
-    const fetchFn = params.fetchImpl ?? fetch;
-    const res = await fetchFn(params.url);
-    if (!res.ok) {
-      throw new Error(`media fetch failed: HTTP ${res.status}`);
-    }
-    const buffer = Buffer.from(await res.arrayBuffer());
-    if (typeof params.maxBytes === "number" && buffer.byteLength > params.maxBytes) {
-      const error = new Error(`payload exceeds maxBytes ${params.maxBytes}`) as Error & {
-        code?: string;
-      };
-      error.code = "max_bytes";
-      throw error;
-    }
-    return {
-      buffer,
-      contentType: res.headers.get("content-type") ?? undefined,
-      fileName: undefined,
-    };
-  },
-);
+const fetchRemoteMediaMock = createBlueBubblesFetchRemoteMediaMock({
+  createHttpError: ({ response }) => new Error(`media fetch failed: HTTP ${response.status}`),
+});
 
 installBlueBubblesFetchTestHooks({
   mockFetch,
   privateApiStatusMock: vi.mocked(getCachedBlueBubblesPrivateApiStatus),
 });
 
-const runtimeStub = {
-  channel: {
-    media: {
-      fetchRemoteMedia:
-        fetchRemoteMediaMock as unknown as PluginRuntime["channel"]["media"]["fetchRemoteMedia"],
-    },
-  },
-} as unknown as PluginRuntime;
+const runtimeStub = createBlueBubblesRuntimeStub(fetchRemoteMediaMock);
 
 beforeEach(() => {
   fetchRemoteMediaMock.mockClear();

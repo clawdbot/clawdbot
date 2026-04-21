@@ -58,7 +58,7 @@ describe("subscribeEmbeddedPiSession", () => {
 
     for (const listener of listeners) {
       listener({
-        type: "auto_compaction_end",
+        type: "compaction_end",
         willRetry: true,
       });
     }
@@ -96,7 +96,7 @@ describe("subscribeEmbeddedPiSession", () => {
     });
 
     for (const listener of listeners) {
-      listener({ type: "auto_compaction_start" });
+      listener({ type: "compaction_start" });
     }
 
     expect(subscription.isCompacting()).toBe(true);
@@ -110,7 +110,7 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(resolved).toBe(false);
 
     for (const listener of listeners) {
-      listener({ type: "auto_compaction_end", willRetry: false });
+      listener({ type: "compaction_end", willRetry: false });
     }
 
     await waitPromise;
@@ -147,7 +147,7 @@ describe("subscribeEmbeddedPiSession", () => {
     });
 
     for (const listener of listeners) {
-      listener({ type: "auto_compaction_end", willRetry: false });
+      listener({ type: "compaction_end", willRetry: false });
     }
 
     const usage = (session.messages?.[0] as { usage?: unknown } | undefined)?.usage;

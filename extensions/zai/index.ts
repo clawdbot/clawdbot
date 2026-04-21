@@ -280,7 +280,13 @@ export default definePluginEntry({
       ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
       prepareExtraParams: (ctx) => defaultToolStreamExtraParams(ctx.extraParams),
       ...TOOL_STREAM_DEFAULT_ON_HOOKS,
-      isBinaryThinking: () => true,
+      resolveThinkingProfile: () => ({
+        levels: [
+          { id: "off", label: "off" },
+          { id: "low", label: "on" },
+        ],
+        defaultLevel: "off",
+      }),
       isModernModelRef: ({ modelId }) => {
         const lower = normalizeLowercaseStringOrEmpty(modelId);
         return (

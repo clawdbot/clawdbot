@@ -1,7 +1,7 @@
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { parseAbsoluteTimeMs } from "../../cron/parse.js";
 import { resolveCronStaggerMs } from "../../cron/stagger.js";
-import type { CronJob, CronSchedule } from "../../cron/types.js";
+import type { CronDeliveryPreview, CronJob, CronSchedule } from "../../cron/types.js";
 import { danger } from "../../globals.js";
 import { formatDurationHuman } from "../../infra/format-time/format-duration.ts";
 import {
@@ -152,6 +152,7 @@ const CRON_NEXT_PAD = 10;
 const CRON_LAST_PAD = 10;
 const CRON_STATUS_PAD = 9;
 const CRON_TARGET_PAD = 9;
+const CRON_DELIVERY_PAD = 64;
 const CRON_AGENT_PAD = 10;
 const CRON_MODEL_PAD = 20;
 
@@ -224,7 +225,33 @@ const formatStatus = (job: CronJob) => {
   return job.state.lastStatus ?? "idle";
 };
 
-export function printCronList(jobs: CronJob[], runtime: RuntimeEnv = defaultRuntime) {
+export function coerceCronDeliveryPreviews(value: unknown): Map<string, CronDeliveryPreview> {
+  const previews =
+    value && typeof value === "object"
+      ? (value as { deliveryPreviews?: unknown }).deliveryPreviews
+      : undefined;
+  if (!previews || typeof previews !== "object") {
+    return new Map();
+  }
+  return new Map(
+    Object.entries(previews as Record<string, unknown>).flatMap(([jobId, preview]) => {
+      if (!preview || typeof preview !== "object") {
+        return [];
+      }
+      const record = preview as { label?: unknown; detail?: unknown };
+      if (typeof record.label !== "string" || typeof record.detail !== "string") {
+        return [];
+      }
+      return [[jobId, { label: record.label, detail: record.detail }]];
+    }),
+  );
+}
+
+export function printCronList(
+  jobs: CronJob[],
+  runtime: RuntimeEnv = defaultRuntime,
+  opts?: { deliveryPreviews?: Map<string, CronDeliveryPreview> },
+) {
   if (jobs.length === 0) {
     runtime.log("No cron jobs.");
     return;
@@ -239,6 +266,7 @@ export function printCronList(jobs: CronJob[], runtime: RuntimeEnv = defaultRunt
     pad("Last", CRON_LAST_PAD),
     pad("Status", CRON_STATUS_PAD),
     pad("Target", CRON_TARGET_PAD),
+    pad("Delivery", CRON_DELIVERY_PAD),
     pad("Agent ID", CRON_AGENT_PAD),
     pad("Model", CRON_MODEL_PAD),
   ].join(" ");
@@ -261,6 +289,11 @@ export function printCronList(jobs: CronJob[], runtime: RuntimeEnv = defaultRunt
     const statusRaw = formatStatus(job);
     const statusLabel = pad(statusRaw, CRON_STATUS_PAD);
     const targetLabel = pad(job.sessionTarget ?? "-", CRON_TARGET_PAD);
+    const deliveryPreview = opts?.deliveryPreviews?.get(job.id);
+    const deliveryText = deliveryPreview
+      ? `${deliveryPreview.label} (${deliveryPreview.detail})`
+      : "-";
+    const deliveryLabel = pad(truncate(deliveryText, CRON_DELIVERY_PAD), CRON_DELIVERY_PAD);
     const agentLabel = pad(truncate(job.agentId ?? "-", CRON_AGENT_PAD), CRON_AGENT_PAD);
     const modelLabel = pad(
       truncate(
@@ -302,6 +335,9 @@ export function printCronList(jobs: CronJob[], runtime: RuntimeEnv = defaultRunt
       colorize(rich, theme.muted, lastLabel),
       coloredStatus,
       coloredTarget,
+      deliveryPreview
+        ? colorize(rich, theme.info, deliveryLabel)
+        : colorize(rich, theme.muted, deliveryLabel),
       coloredAgent,
       job.payload.kind === "agentTurn" && job.payload.model
         ? colorize(rich, theme.info, modelLabel)
@@ -310,4 +346,23 @@ export function printCronList(jobs: CronJob[], runtime: RuntimeEnv = defaultRunt
 
     runtime.log(line.trimEnd());
   }
+}
+
+export function printCronShow(
+  job: CronJob,
+  runtime: RuntimeEnv = defaultRuntime,
+  opts?: { deliveryPreview?: CronDeliveryPreview },
+) {
+  const preview = opts?.deliveryPreview ?? { label: "-", detail: "unavailable" };
+  runtime.log(`id: ${job.id}`);
+  runtime.log(`name: ${job.name}`);
+  runtime.log(`enabled: ${job.enabled ? "yes" : "no"}`);
+  runtime.log(`schedule: ${formatSchedule(job.schedule)}`);
+  runtime.log(`session: ${job.sessionTarget ?? "-"}`);
+  runtime.log(`agent: ${job.agentId ?? "-"}`);
+  runtime.log(`model: ${job.payload.kind === "agentTurn" ? (job.payload.model ?? "-") : "-"}`);
+  runtime.log(`delivery: ${preview.label} (${preview.detail})`);
+  runtime.log(`next: ${formatRelative(job.state.nextRunAtMs, Date.now())}`);
+  runtime.log(`last: ${formatRelative(job.state.lastRunAtMs, Date.now())}`);
+  runtime.log(`status: ${formatStatus(job)}`);
 }

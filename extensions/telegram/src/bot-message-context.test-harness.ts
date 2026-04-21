@@ -1,4 +1,5 @@
 import type { BuildTelegramMessageContextParams, TelegramMediaRef } from "./bot-message-context.js";
+import { finalizeTelegramInboundContextForTest } from "./bot-message-context.session-runtime-test-support.js";
 
 export const baseTelegramMessageContextConfig = {
   agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" } },
@@ -7,27 +8,9 @@ export const baseTelegramMessageContextConfig = {
 } as never;
 
 type TelegramTestSessionRuntime = NonNullable<BuildTelegramMessageContextParams["sessionRuntime"]>;
-const finalizeInboundContextForTest = ((ctx) => {
-  const next = ctx as Record<string, unknown>;
-  const body = typeof next.Body === "string" ? next.Body : "";
-  next.Body = body;
-  next.BodyForAgent =
-    typeof next.BodyForAgent === "string"
-      ? next.BodyForAgent
-      : typeof next.RawBody === "string"
-        ? next.RawBody
-        : body;
-  next.BodyForCommands =
-    typeof next.BodyForCommands === "string"
-      ? next.BodyForCommands
-      : typeof next.CommandBody === "string"
-        ? next.CommandBody
-        : typeof next.RawBody === "string"
-          ? next.RawBody
-          : body;
-  next.CommandAuthorized = Boolean(next.CommandAuthorized);
-  return next;
-}) as NonNullable<TelegramTestSessionRuntime["finalizeInboundContext"]>;
+const finalizeInboundContextForTest = finalizeTelegramInboundContextForTest as NonNullable<
+  TelegramTestSessionRuntime["finalizeInboundContext"]
+>;
 
 type BuildTelegramMessageContextForTestParams = {
   message: Record<string, unknown>;

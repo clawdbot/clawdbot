@@ -3,16 +3,14 @@ import {
   type CompactEmbeddedPiSessionParams,
   type EmbeddedPiCompactResult,
 } from "openclaw/plugin-sdk/agent-harness";
+import {
+  createCodexAppServerClientFactoryTestHooks,
+  defaultCodexAppServerClientFactory,
+} from "./client-factory.js";
 import type { CodexAppServerClient, CodexServerNotificationHandler } from "./client.js";
-import { resolveCodexAppServerRuntimeOptions, type CodexAppServerStartOptions } from "./config.js";
+import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { isJsonObject, type CodexServerNotification, type JsonObject } from "./protocol.js";
 import { readCodexAppServerBinding } from "./session-binding.js";
-import { getSharedCodexAppServerClient } from "./shared-client.js";
-
-type CodexAppServerClientFactory = (
-  startOptions?: CodexAppServerStartOptions,
-  authProfileId?: string,
-) => Promise<CodexAppServerClient>;
 type CodexNativeCompactionCompletion = {
   signal: "thread/compacted" | "item/completed";
   turnId?: string;
@@ -26,8 +24,7 @@ type CodexNativeCompactionWaiter = {
 
 const DEFAULT_CODEX_COMPACTION_WAIT_TIMEOUT_MS = 5 * 60 * 1000;
 
-let clientFactory: CodexAppServerClientFactory = (startOptions, authProfileId) =>
-  getSharedCodexAppServerClient({ startOptions, authProfileId });
+let clientFactory = defaultCodexAppServerClientFactory;
 
 export async function maybeCompactCodexAppServerSession(
   params: CompactEmbeddedPiSessionParams,
@@ -219,12 +216,6 @@ function formatCompactionError(error: unknown): string {
   return String(error);
 }
 
-export const __testing = {
-  setCodexAppServerClientFactoryForTests(factory: CodexAppServerClientFactory): void {
-    clientFactory = factory;
-  },
-  resetCodexAppServerClientFactoryForTests(): void {
-    clientFactory = (startOptions, authProfileId) =>
-      getSharedCodexAppServerClient({ startOptions, authProfileId });
-  },
-} as const;
+export const __testing = createCodexAppServerClientFactoryTestHooks((factory) => {
+  clientFactory = factory;
+});

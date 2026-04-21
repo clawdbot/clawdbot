@@ -345,6 +345,7 @@ describe("resolveMedia getFile retry", () => {
       fetch: callerFetch,
       sourceFetch: callerFetch,
       dispatcherAttempts,
+      close: async () => {},
     };
     fetchRemoteMedia.mockResolvedValueOnce({
       buffer: Buffer.from("pdf-data"),
@@ -379,7 +380,7 @@ describe("resolveMedia getFile retry", () => {
   it("uses caller-provided fetch impl for sticker downloads", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "stickers/file_0.webp" });
     const callerFetch = vi.fn() as unknown as typeof fetch;
-    const callerTransport = { fetch: callerFetch, sourceFetch: callerFetch };
+    const callerTransport = { fetch: callerFetch, sourceFetch: callerFetch, close: async () => {} };
     fetchRemoteMedia.mockResolvedValueOnce({
       buffer: Buffer.from("sticker-data"),
       contentType: "image/webp",

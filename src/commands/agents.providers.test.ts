@@ -44,8 +44,8 @@ describe("buildProviderStatusIndex", () => {
       throw new Error("should not be used when inspectAccount exists");
     });
     const plugin = {
-      id: "slack",
-      meta: { label: "Slack" },
+      id: "workchat",
+      meta: { label: "WorkChat" },
       config: {
         listAccountIds: () => ["work"],
         inspectAccount,
@@ -62,8 +62,8 @@ describe("buildProviderStatusIndex", () => {
 
     expect(resolveAccount).not.toHaveBeenCalled();
     expect(inspectAccount).toHaveBeenCalledWith({}, "work");
-    expect(map.get("slack:work")).toMatchObject({
-      provider: "slack",
+    expect(map.get("workchat:work")).toMatchObject({
+      provider: "workchat",
       accountId: "work",
       state: "linked",
       configured: true,
@@ -74,8 +74,8 @@ describe("buildProviderStatusIndex", () => {
 
   it("records accounts that throw during read-only resolution as not configured", async () => {
     const plugin = {
-      id: "telegram",
-      meta: { label: "Telegram" },
+      id: "quietchat",
+      meta: { label: "QuietChat" },
       config: {
         listAccountIds: () => ["default"],
         resolveAccount: () => {
@@ -91,9 +91,9 @@ describe("buildProviderStatusIndex", () => {
     await expect(buildProviderStatusIndex({} as OpenClawConfig)).resolves.toEqual(
       new Map([
         [
-          "telegram:default",
+          "quietchat:default",
           {
-            provider: "telegram",
+            provider: "quietchat",
             accountId: "default",
             state: "not configured",
             configured: false,
@@ -105,8 +105,8 @@ describe("buildProviderStatusIndex", () => {
 
   it("rethrows unexpected read-only account resolution errors", async () => {
     const plugin = {
-      id: "telegram",
-      meta: { label: "Telegram" },
+      id: "quietchat",
+      meta: { label: "QuietChat" },
       config: {
         listAccountIds: () => ["default"],
         resolveAccount: () => {

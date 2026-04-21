@@ -67,7 +67,7 @@ function createAudioCtxWithProvider(mediaPath: string, extra?: Partial<MsgContex
     Body: "<media:audio>",
     MediaPath: mediaPath,
     MediaType: "audio/ogg",
-    Provider: "whatsapp",
+    Provider: "voicechat",
     From: "+10000000001",
     AccountId: "acc1",
     ...extra,
@@ -174,6 +174,9 @@ describe("applyMediaUnderstanding – echo transcript", () => {
     vi.doMock("../infra/outbound/deliver-runtime.js", () => ({
       deliverOutboundPayloads: (...args: unknown[]) => mockDeliverOutboundPayloads(...args),
     }));
+    vi.doMock("../utils/message-channel.js", () => ({
+      isDeliverableMessageChannel: (channel: string) => channel === "voicechat",
+    }));
     vi.doMock("./provider-registry.js", async () => {
       const actual =
         await vi.importActual<typeof import("./provider-registry.js")>("./provider-registry.js");
@@ -220,7 +223,7 @@ describe("applyMediaUnderstanding – echo transcript", () => {
     runExecMock.mockReset();
     runCommandWithTimeoutMock.mockReset();
     mockDeliverOutboundPayloads.mockClear();
-    mockDeliverOutboundPayloads.mockResolvedValue([{ channel: "whatsapp", messageId: "echo-1" }]);
+    mockDeliverOutboundPayloads.mockResolvedValue([{ channel: "voicechat", messageId: "echo-1" }]);
   });
 
   afterAll(async () => {
@@ -262,7 +265,7 @@ describe("applyMediaUnderstanding – echo transcript", () => {
     await applyMediaUnderstanding({ ctx, cfg, providers });
 
     const callArgs = expectSingleEchoDeliveryCall();
-    expect(callArgs.channel).toBe("whatsapp");
+    expect(callArgs.channel).toBe("voicechat");
     expect(callArgs.to).toBe("+10000000001");
     expect(callArgs.accountId).toBe("acc1");
     expect(callArgs.payloads).toHaveLength(1);
@@ -279,7 +282,7 @@ describe("applyMediaUnderstanding – echo transcript", () => {
       Body: "<media:image>",
       MediaPath: imgPath,
       MediaType: "image/jpeg",
-      Provider: "whatsapp",
+      Provider: "voicechat",
       From: "+10000000001",
     };
 

@@ -50,7 +50,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "false"
-          use-sticky-disk: "false"
 
       - name: Ensure matching GitHub release exists
         env:

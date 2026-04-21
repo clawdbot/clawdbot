@@ -63,6 +63,11 @@ Notes:
 - `--raw-stream`: log raw model stream events to jsonl.
 - `--raw-stream-path <path>`: raw stream jsonl path.
 
+Startup profiling:
+
+- Set `OPENCLAW_GATEWAY_STARTUP_TRACE=1` to log phase timings during Gateway startup.
+- Run `pnpm test:startup:gateway -- --runs 5 --warmup 1` to benchmark Gateway startup. The benchmark records first process output, `/healthz`, `/readyz`, and startup trace timings.
+
 ## Query a running Gateway
 
 All query commands use WebSocket RPC.
@@ -89,6 +94,8 @@ Pass `--token` or `--password` explicitly. Missing explicit credentials is an er
 ```bash
 openclaw gateway health --url ws://127.0.0.1:18789
 ```
+
+The HTTP `/healthz` endpoint is a liveness probe: it returns once the server can answer HTTP. The HTTP `/readyz` endpoint is stricter and stays red while startup sidecars, channels, or configured hooks are still settling.
 
 ### `gateway usage-cost`
 

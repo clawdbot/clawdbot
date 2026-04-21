@@ -1,6 +1,7 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type {
   ProviderDefaultThinkingPolicyContext,
+  ProviderThinkingProfile,
   ProviderThinkingPolicyContext,
 } from "./provider-thinking.types.js";
 
@@ -9,6 +10,9 @@ type ThinkingProviderPlugin = {
   aliases?: string[];
   isBinaryThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
   supportsXHighThinking?: (ctx: ProviderThinkingPolicyContext) => boolean | undefined;
+  resolveThinkingProfile?: (
+    ctx: ProviderDefaultThinkingPolicyContext,
+  ) => ProviderThinkingProfile | null | undefined;
   resolveDefaultThinkingLevel?: (
     ctx: ProviderDefaultThinkingPolicyContext,
   ) => "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | null | undefined;
@@ -59,6 +63,12 @@ export function resolveProviderXHighThinking(
   params: ThinkingHookParams<ProviderThinkingPolicyContext>,
 ) {
   return resolveActiveThinkingProvider(params.provider)?.supportsXHighThinking?.(params.context);
+}
+
+export function resolveProviderThinkingProfile(
+  params: ThinkingHookParams<ProviderDefaultThinkingPolicyContext>,
+) {
+  return resolveActiveThinkingProvider(params.provider)?.resolveThinkingProfile?.(params.context);
 }
 
 export function resolveProviderDefaultThinkingLevel(

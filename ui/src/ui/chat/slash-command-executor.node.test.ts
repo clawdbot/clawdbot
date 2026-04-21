@@ -207,7 +207,7 @@ describe("executeSlashCommand /kill", () => {
               spawnedBy: "agent:main:subagent:mine",
             }),
             row("agent:main:subagent:other-root", {
-              spawnedBy: "agent:main:discord:dm:alice",
+              spawnedBy: "agent:main:quietchat:dm:alice",
             }),
           ],
         };
@@ -520,14 +520,28 @@ describe("executeSlashCommand directives", () => {
     );
 
     expect(result.content).toBe(
-      "Current thinking level: low.\nOptions: off, minimal, low, medium, high, adaptive.",
+      "Current thinking level: low.\nOptions: off, minimal, low, medium, high.",
     );
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
     expect(request).toHaveBeenNthCalledWith(2, "models.list", {});
   });
 
   it("accepts minimal and xhigh thinking levels", async () => {
-    const request = vi.fn().mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ ok: true });
+    const request = vi.fn(async (method: string, payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          sessions: [
+            row("agent:main:main", {
+              thinkingOptions: ["off", "minimal", "low", "medium", "high", "xhigh"],
+            }),
+          ],
+        };
+      }
+      if (method === "sessions.patch") {
+        return { ok: true, ...((payload ?? {}) as object) };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
 
     const minimal = await executeSlashCommand(
       { request } as unknown as GatewayBrowserClient,
@@ -544,11 +558,13 @@ describe("executeSlashCommand directives", () => {
 
     expect(minimal.content).toBe("Thinking level set to **minimal**.");
     expect(xhigh.content).toBe("Thinking level set to **xhigh**.");
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.patch", {
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.patch", {
       key: "agent:main:main",
       thinkingLevel: "minimal",
     });
-    expect(request).toHaveBeenNthCalledWith(2, "sessions.patch", {
+    expect(request).toHaveBeenNthCalledWith(3, "sessions.list", {});
+    expect(request).toHaveBeenNthCalledWith(4, "sessions.patch", {
       key: "agent:main:main",
       thinkingLevel: "xhigh",
     });

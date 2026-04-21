@@ -28,6 +28,7 @@ export const MISTRAL_SMALL_LATEST_REASONING_EFFORT_MAP: Record<string, string> =
   high: "high",
   xhigh: "high",
   adaptive: "high",
+  max: "high",
 };
 
 export const MISTRAL_SMALL_LATEST_ID = "mistral-small-latest";

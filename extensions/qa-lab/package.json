@@ -6,7 +6,10 @@
   "type": "module",
   "dependencies": {
     "@copilotkit/aimock": "1.14.3",
-    "playwright-core": "1.59.1"
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "playwright-core": "1.59.1",
+    "yaml": "^2.8.3",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

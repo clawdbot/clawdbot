@@ -433,7 +433,8 @@ export async function stopOpenClawChrome(
     if (!(await isChromeReachable(cdpUrlForPort(running.cdpPort), CHROME_STOP_PROBE_TIMEOUT_MS))) {
       return;
     }
-    await new Promise((r) => setTimeout(r, 100));
+    const remainingMs = timeoutMs - (Date.now() - start);
+    await new Promise((r) => setTimeout(r, Math.max(1, Math.min(100, remainingMs))));
   }
 
   try {

@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import * as tar from "tar";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { expectSingleNpmInstallIgnoreScriptsCall } from "../test-utils/exec-assertions.js";
@@ -11,6 +10,7 @@ import {
   installPluginFromPath,
   PLUGIN_INSTALL_ERROR_CODE,
 } from "./install.js";
+import { packToArchive } from "./test-helpers/archive-fixtures.js";
 import { createSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
 
 vi.mock("../process/exec.js", () => ({
@@ -18,26 +18,6 @@ vi.mock("../process/exec.js", () => ({
 }));
 
 const suiteTempRootTracker = createSuiteTempRootTracker("openclaw-plugin-install-path");
-
-async function packToArchive(params: {
-  pkgDir: string;
-  outDir: string;
-  outName: string;
-  flatRoot?: boolean;
-}) {
-  const dest = path.join(params.outDir, params.outName);
-  fs.rmSync(dest, { force: true });
-  const entries = params.flatRoot ? fs.readdirSync(params.pkgDir) : [path.basename(params.pkgDir)];
-  await tar.c(
-    {
-      gzip: true,
-      file: dest,
-      cwd: params.flatRoot ? params.pkgDir : path.dirname(params.pkgDir),
-    },
-    entries,
-  );
-  return dest;
-}
 
 function setupBundleInstallFixture(params: {
   bundleFormat: "codex" | "claude" | "cursor";

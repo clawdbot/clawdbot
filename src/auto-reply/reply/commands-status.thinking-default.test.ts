@@ -33,6 +33,25 @@ vi.mock("./queue.js", () => ({
 
 const { buildStatusReply } = await import("./commands-status.js");
 
+async function buildKiraStatusReply(cfg: OpenClawConfig) {
+  return await buildStatusReply({
+    cfg,
+    command: {
+      isAuthorizedSender: true,
+      channel: "whatsapp",
+    } as never,
+    sessionKey: "agent:kira:main",
+    provider: "openai",
+    model: "gpt-5.4",
+    contextTokens: 0,
+    resolvedVerboseLevel: "off",
+    resolvedReasoningLevel: "off",
+    resolveDefaultThinkingLevel: async () => undefined,
+    isGroup: false,
+    defaultGroupActivation: () => "mention",
+  });
+}
+
 describe("buildStatusReply", () => {
   it("shows per-agent thinkingDefault in the status card", async () => {
     const cfg = {
@@ -54,22 +73,7 @@ describe("buildStatusReply", () => {
       },
     } as OpenClawConfig;
 
-    const reply = await buildStatusReply({
-      cfg,
-      command: {
-        isAuthorizedSender: true,
-        channel: "whatsapp",
-      } as never,
-      sessionKey: "agent:kira:main",
-      provider: "openai",
-      model: "gpt-5.4",
-      contextTokens: 0,
-      resolvedVerboseLevel: "off",
-      resolvedReasoningLevel: "off",
-      resolveDefaultThinkingLevel: async () => undefined,
-      isGroup: false,
-      defaultGroupActivation: () => "mention",
-    });
+    const reply = await buildKiraStatusReply(cfg);
 
     expect(reply?.text).toContain("Think: xhigh");
   });
@@ -99,22 +103,7 @@ describe("buildStatusReply", () => {
       },
     } as OpenClawConfig;
 
-    const reply = await buildStatusReply({
-      cfg,
-      command: {
-        isAuthorizedSender: true,
-        channel: "whatsapp",
-      } as never,
-      sessionKey: "agent:kira:main",
-      provider: "openai",
-      model: "gpt-5.4",
-      contextTokens: 0,
-      resolvedVerboseLevel: "off",
-      resolvedReasoningLevel: "off",
-      resolveDefaultThinkingLevel: async () => undefined,
-      isGroup: false,
-      defaultGroupActivation: () => "mention",
-    });
+    const reply = await buildKiraStatusReply(cfg);
 
     expect(reply?.text).toContain("Fallbacks: google/gemini-2.5-flash");
     expect(reply?.text).not.toContain("Fallbacks: anthropic/claude-sonnet-4-6");
@@ -144,22 +133,7 @@ describe("buildStatusReply", () => {
       },
     } as OpenClawConfig;
 
-    const reply = await buildStatusReply({
-      cfg,
-      command: {
-        isAuthorizedSender: true,
-        channel: "whatsapp",
-      } as never,
-      sessionKey: "agent:kira:main",
-      provider: "openai",
-      model: "gpt-5.4",
-      contextTokens: 0,
-      resolvedVerboseLevel: "off",
-      resolvedReasoningLevel: "off",
-      resolveDefaultThinkingLevel: async () => undefined,
-      isGroup: false,
-      defaultGroupActivation: () => "mention",
-    });
+    const reply = await buildKiraStatusReply(cfg);
 
     expect(reply?.text).toContain("Fallbacks: anthropic/claude-sonnet-4-6");
   });
@@ -189,22 +163,7 @@ describe("buildStatusReply", () => {
       },
     } as OpenClawConfig;
 
-    const reply = await buildStatusReply({
-      cfg,
-      command: {
-        isAuthorizedSender: true,
-        channel: "whatsapp",
-      } as never,
-      sessionKey: "agent:kira:main",
-      provider: "openai",
-      model: "gpt-5.4",
-      contextTokens: 0,
-      resolvedVerboseLevel: "off",
-      resolvedReasoningLevel: "off",
-      resolveDefaultThinkingLevel: async () => undefined,
-      isGroup: false,
-      defaultGroupActivation: () => "mention",
-    });
+    const reply = await buildKiraStatusReply(cfg);
 
     expect(reply?.text).not.toContain("Fallbacks:");
   });

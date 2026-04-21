@@ -118,7 +118,7 @@ describe("task-flow-registry store runtime", () => {
         expectedRevision: created.revision,
         currentStep: "ask_user",
         stateJson: { phase: "ask_user" },
-        waitJson: { kind: "external_event", topic: "telegram" },
+        waitJson: { kind: "external_event", topic: "forum" },
       });
       expect(waiting).toMatchObject({
         applied: true,
@@ -142,7 +142,7 @@ describe("task-flow-registry store runtime", () => {
         status: "waiting",
         currentStep: "ask_user",
         stateJson: { phase: "ask_user" },
-        waitJson: { kind: "external_event", topic: "telegram" },
+        waitJson: { kind: "external_event", topic: "forum" },
         cancelRequestedAt: 444,
       });
     });

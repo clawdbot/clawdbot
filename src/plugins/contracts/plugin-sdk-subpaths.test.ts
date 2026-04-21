@@ -977,6 +977,7 @@ describe("plugin-sdk subpath exports", () => {
     expectSourceOmitsImportPattern("provider-setup", "./sglang.js");
     expectSourceMentions("provider-auth", [
       "buildOauthProviderAuthResult",
+      "generateHexPkceVerifierChallenge",
       "generatePkceVerifierChallenge",
       "toFormUrlEncoded",
     ]);

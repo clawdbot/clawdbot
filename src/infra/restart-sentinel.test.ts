@@ -33,7 +33,7 @@ describe("restart sentinel", () => {
         kind: "update" as const,
         status: "ok" as const,
         ts: Date.now(),
-        sessionKey: "agent:main:whatsapp:dm:+15555550123",
+        sessionKey: "agent:main:mobilechat:dm:+15555550123",
         stats: { mode: "git" },
       };
       const filePath = await writeRestartSentinel(payload);

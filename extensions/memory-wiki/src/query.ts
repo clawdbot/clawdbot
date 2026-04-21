@@ -226,18 +226,35 @@ function buildDigestPageSearchText(page: QueryDigestPage, claims: QueryDigestCla
     .join("\n");
 }
 
-function scoreDigestClaimMatch(claim: QueryDigestClaim, queryLower: string): number {
-  let score = 0;
+function isClaimTextOrIdMatch(
+  claim: Pick<QueryDigestClaim, "id" | "text"> | Pick<WikiClaim, "id" | "text">,
+  queryLower: string,
+): boolean {
   if (normalizeLowercaseStringOrEmpty(claim.text).includes(queryLower)) {
+    return true;
+  }
+  return normalizeLowercaseStringOrEmpty(claim.id).includes(queryLower);
+}
+
+function scoreClaimMatch(params: {
+  text: string;
+  id?: string;
+  confidence?: number;
+  status?: string;
+  freshnessLevel?: string;
+  queryLower: string;
+}): number {
+  let score = 0;
+  if (normalizeLowercaseStringOrEmpty(params.text).includes(params.queryLower)) {
     score += 25;
   }
-  if (normalizeLowercaseStringOrEmpty(claim.id).includes(queryLower)) {
+  if (normalizeLowercaseStringOrEmpty(params.id).includes(params.queryLower)) {
     score += 10;
   }
-  if (typeof claim.confidence === "number") {
-    score += Math.round(claim.confidence * 10);
+  if (typeof params.confidence === "number") {
+    score += Math.round(params.confidence * 10);
   }
-  switch (claim.freshnessLevel) {
+  switch (params.freshnessLevel) {
     case "fresh":
       score += 8;
       break;
@@ -251,7 +268,50 @@ function scoreDigestClaimMatch(claim: QueryDigestClaim, queryLower: string): num
       score -= 4;
       break;
   }
-  score += isClaimContestedStatus(claim.status) ? -6 : 4;
+  score += isClaimContestedStatus(params.status) ? -6 : 4;
+  return score;
+}
+
+function scoreDigestClaimMatch(claim: QueryDigestClaim, queryLower: string): number {
+  return scoreClaimMatch({
+    text: claim.text,
+    id: claim.id,
+    confidence: claim.confidence,
+    status: claim.status,
+    freshnessLevel: claim.freshnessLevel,
+    queryLower,
+  });
+}
+
+function scoreWikiMetadataMatch(params: {
+  title: string;
+  path: string;
+  id?: string;
+  sourceIds: readonly string[];
+  queryLower: string;
+}): number {
+  let score = 0;
+  const titleLower = normalizeLowercaseStringOrEmpty(params.title);
+  const pathLower = normalizeLowercaseStringOrEmpty(params.path);
+  const idLower = normalizeLowercaseStringOrEmpty(params.id);
+  if (titleLower === params.queryLower) {
+    score += 50;
+  } else if (titleLower.includes(params.queryLower)) {
+    score += 20;
+  }
+  if (pathLower.includes(params.queryLower)) {
+    score += 10;
+  }
+  if (idLower.includes(params.queryLower)) {
+    score += 20;
+  }
+  if (
+    params.sourceIds.some((sourceId) =>
+      normalizeLowercaseStringOrEmpty(sourceId).includes(params.queryLower),
+    )
+  ) {
+    score += 12;
+  }
   return score;
 }
 
@@ -277,35 +337,17 @@ function buildDigestCandidatePaths(params: {
       if (!metadataLower.includes(queryLower)) {
         return { path: page.path, score: 0 };
       }
-      let score = 1;
-      const titleLower = normalizeLowercaseStringOrEmpty(page.title);
-      const pathLower = normalizeLowercaseStringOrEmpty(page.path);
-      const idLower = normalizeLowercaseStringOrEmpty(page.id);
-      if (titleLower === queryLower) {
-        score += 50;
-      } else if (titleLower.includes(queryLower)) {
-        score += 20;
-      }
-      if (pathLower.includes(queryLower)) {
-        score += 10;
-      }
-      if (idLower.includes(queryLower)) {
-        score += 20;
-      }
-      if (
-        page.sourceIds.some((sourceId) =>
-          normalizeLowercaseStringOrEmpty(sourceId).includes(queryLower),
-        )
-      ) {
-        score += 12;
-      }
+      let score =
+        1 +
+        scoreWikiMetadataMatch({
+          title: page.title,
+          path: page.path,
+          id: page.id,
+          sourceIds: page.sourceIds,
+          queryLower,
+        });
       const matchingClaims = claims
-        .filter((claim) => {
-          if (normalizeLowercaseStringOrEmpty(claim.text).includes(queryLower)) {
-            return true;
-          }
-          return normalizeLowercaseStringOrEmpty(claim.id).includes(queryLower);
-        })
+        .filter((claim) => isClaimTextOrIdMatch(claim, queryLower))
         .toSorted(
           (left, right) =>
             scoreDigestClaimMatch(right, queryLower) - scoreDigestClaimMatch(left, queryLower),
@@ -328,40 +370,19 @@ function buildDigestCandidatePaths(params: {
 }
 
 function isClaimMatch(claim: WikiClaim, queryLower: string): boolean {
-  if (normalizeLowercaseStringOrEmpty(claim.text).includes(queryLower)) {
-    return true;
-  }
-  return normalizeLowercaseStringOrEmpty(claim.id).includes(queryLower);
+  return isClaimTextOrIdMatch(claim, queryLower);
 }
 
 function rankClaimMatch(page: QueryableWikiPage, claim: WikiClaim, queryLower: string): number {
-  let score = 0;
-  if (normalizeLowercaseStringOrEmpty(claim.text).includes(queryLower)) {
-    score += 25;
-  }
-  if (normalizeLowercaseStringOrEmpty(claim.id).includes(queryLower)) {
-    score += 10;
-  }
-  if (typeof claim.confidence === "number") {
-    score += Math.round(claim.confidence * 10);
-  }
   const freshness = assessClaimFreshness({ page, claim });
-  switch (freshness.level) {
-    case "fresh":
-      score += 8;
-      break;
-    case "aging":
-      score += 4;
-      break;
-    case "stale":
-      score -= 2;
-      break;
-    case "unknown":
-      score -= 4;
-      break;
-  }
-  score += isClaimContestedStatus(claim.status) ? -6 : 4;
-  return score;
+  return scoreClaimMatch({
+    text: claim.text,
+    id: claim.id,
+    confidence: claim.confidence,
+    status: claim.status,
+    freshnessLevel: freshness.level,
+    queryLower,
+  });
 }
 
 function getMatchingClaims(page: QueryableWikiPage, queryLower: string): WikiClaim[] {
@@ -401,25 +422,15 @@ function scorePage(page: QueryableWikiPage, query: string): number {
     return 0;
   }
 
-  let score = 1;
-  if (titleLower === queryLower) {
-    score += 50;
-  } else if (titleLower.includes(queryLower)) {
-    score += 20;
-  }
-  if (pathLower.includes(queryLower)) {
-    score += 10;
-  }
-  if (idLower.includes(queryLower)) {
-    score += 20;
-  }
-  if (
-    page.sourceIds.some((sourceId) =>
-      normalizeLowercaseStringOrEmpty(sourceId).includes(queryLower),
-    )
-  ) {
-    score += 12;
-  }
+  let score =
+    1 +
+    scoreWikiMetadataMatch({
+      title: page.title,
+      path: page.relativePath,
+      id: page.id,
+      sourceIds: page.sourceIds,
+      queryLower,
+    });
   const matchingClaims = getMatchingClaims(page, queryLower);
   if (matchingClaims.length > 0) {
     score += rankClaimMatch(page, matchingClaims[0], queryLower);
@@ -539,6 +550,35 @@ function buildWikiProvenanceLabel(
   return undefined;
 }
 
+function buildWikiResultMetadata(
+  page: Pick<
+    WikiPageSummary,
+    | "id"
+    | "sourceType"
+    | "provenanceMode"
+    | "sourcePath"
+    | "updatedAt"
+    | "bridgeRelativePath"
+    | "unsafeLocalRelativePath"
+    | "relativePath"
+  >,
+): Partial<
+  Pick<
+    WikiSearchResult,
+    "id" | "sourceType" | "provenanceMode" | "sourcePath" | "provenanceLabel" | "updatedAt"
+  >
+> {
+  const provenanceLabel = buildWikiProvenanceLabel(page);
+  return {
+    ...(page.id ? { id: page.id } : {}),
+    ...(page.sourceType ? { sourceType: page.sourceType } : {}),
+    ...(page.provenanceMode ? { provenanceMode: page.provenanceMode } : {}),
+    ...(page.sourcePath ? { sourcePath: page.sourcePath } : {}),
+    ...(provenanceLabel ? { provenanceLabel } : {}),
+    ...(page.updatedAt ? { updatedAt: page.updatedAt } : {}),
+  };
+}
+
 function toWikiSearchResult(page: QueryableWikiPage, query: string): WikiSearchResult {
   return {
     corpus: "wiki",
@@ -547,12 +587,7 @@ function toWikiSearchResult(page: QueryableWikiPage, query: string): WikiSearchR
     kind: page.kind,
     score: scorePage(page, query),
     snippet: buildPageSnippet(page, query),
-    ...(page.id ? { id: page.id } : {}),
-    ...(page.sourceType ? { sourceType: page.sourceType } : {}),
-    ...(page.provenanceMode ? { provenanceMode: page.provenanceMode } : {}),
-    ...(page.sourcePath ? { sourcePath: page.sourcePath } : {}),
-    ...(buildWikiProvenanceLabel(page) ? { provenanceLabel: buildWikiProvenanceLabel(page) } : {}),
-    ...(page.updatedAt ? { updatedAt: page.updatedAt } : {}),
+    ...buildWikiResultMetadata(page),
   };
 }
 
@@ -725,14 +760,7 @@ export async function getMemoryWikiPage(params: {
         lineCount,
         totalLines,
         truncated,
-        ...(page.id ? { id: page.id } : {}),
-        ...(page.sourceType ? { sourceType: page.sourceType } : {}),
-        ...(page.provenanceMode ? { provenanceMode: page.provenanceMode } : {}),
-        ...(page.sourcePath ? { sourcePath: page.sourcePath } : {}),
-        ...(buildWikiProvenanceLabel(page)
-          ? { provenanceLabel: buildWikiProvenanceLabel(page) }
-          : {}),
-        ...(page.updatedAt ? { updatedAt: page.updatedAt } : {}),
+        ...buildWikiResultMetadata(page),
       };
     }
   }

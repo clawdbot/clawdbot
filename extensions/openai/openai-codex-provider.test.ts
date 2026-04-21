@@ -21,6 +21,38 @@ vi.mock("./openai-codex-cli-auth.js", async (importOriginal) => {
 let buildOpenAICodexProviderPlugin: typeof import("./openai-codex-provider.js").buildOpenAICodexProviderPlugin;
 const tempDirs: string[] = [];
 
+function createCodexTemplate(overrides: {
+  id?: string;
+  name?: string;
+  cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  contextWindow?: number;
+  contextTokens?: number;
+}) {
+  return {
+    id: overrides.id ?? "gpt-5.3-codex",
+    name: overrides.name ?? overrides.id ?? "gpt-5.3-codex",
+    provider: "openai-codex",
+    api: "openai-codex-responses",
+    baseUrl: "https://chatgpt.com/backend-api",
+    reasoning: true,
+    input: ["text", "image"] as const,
+    cost: overrides.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: overrides.contextWindow ?? 272_000,
+    ...(overrides.contextTokens === undefined ? {} : { contextTokens: overrides.contextTokens }),
+    maxTokens: 128_000,
+  };
+}
+
+function createSingleModelRegistry(
+  template: ReturnType<typeof createCodexTemplate>,
+  missValue?: null,
+) {
+  return {
+    find: (providerId: string, modelId: string) =>
+      providerId === "openai-codex" && modelId === template.id ? template : missValue,
+  };
+}
+
 describe("openai codex provider", () => {
   beforeAll(async () => {
     ({ buildOpenAICodexProviderPlugin } = await import("./openai-codex-provider.js"));
@@ -219,25 +251,7 @@ describe("openai codex provider", () => {
     const model = provider.resolveDynamicModel?.({
       provider: "openai-codex",
       modelId: "gpt-5.4",
-      modelRegistry: {
-        find: (providerId: string, modelId: string) => {
-          if (providerId === "openai-codex" && modelId === "gpt-5.3-codex") {
-            return {
-              id: "gpt-5.3-codex",
-              name: "gpt-5.3-codex",
-              provider: "openai-codex",
-              api: "openai-codex-responses",
-              baseUrl: "https://chatgpt.com/backend-api",
-              reasoning: true,
-              input: ["text", "image"] as const,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 272_000,
-              maxTokens: 128_000,
-            };
-          }
-          return undefined;
-        },
-      } as never,
+      modelRegistry: createSingleModelRegistry(createCodexTemplate({})) as never,
     });
 
     expect(model).toMatchObject({
@@ -254,25 +268,7 @@ describe("openai codex provider", () => {
     const model = provider.resolveDynamicModel?.({
       provider: "openai-codex",
       modelId: "gpt-5.4-pro",
-      modelRegistry: {
-        find: (providerId: string, modelId: string) => {
-          if (providerId === "openai-codex" && modelId === "gpt-5.3-codex") {
-            return {
-              id: "gpt-5.3-codex",
-              name: "gpt-5.3-codex",
-              provider: "openai-codex",
-              api: "openai-codex-responses",
-              baseUrl: "https://chatgpt.com/backend-api",
-              reasoning: true,
-              input: ["text", "image"] as const,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 272_000,
-              maxTokens: 128_000,
-            };
-          }
-          return undefined;
-        },
-      } as never,
+      modelRegistry: createSingleModelRegistry(createCodexTemplate({})) as never,
     });
 
     expect(model).toMatchObject({
@@ -290,26 +286,14 @@ describe("openai codex provider", () => {
     const model = provider.resolveDynamicModel?.({
       provider: "openai-codex",
       modelId: "gpt-5.4-pro",
-      modelRegistry: {
-        find: (providerId: string, modelId: string) => {
-          if (providerId === "openai-codex" && modelId === "gpt-5.4") {
-            return {
-              id: "gpt-5.4",
-              name: "gpt-5.4",
-              provider: "openai-codex",
-              api: "openai-codex-responses",
-              baseUrl: "https://chatgpt.com/backend-api",
-              reasoning: true,
-              input: ["text", "image"] as const,
-              cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
-              contextWindow: 1_050_000,
-              contextTokens: 272_000,
-              maxTokens: 128_000,
-            };
-          }
-          return undefined;
-        },
-      } as never,
+      modelRegistry: createSingleModelRegistry(
+        createCodexTemplate({
+          id: "gpt-5.4",
+          cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
+          contextWindow: 1_050_000,
+          contextTokens: 272_000,
+        }),
+      ) as never,
     });
 
     expect(model).toMatchObject({
@@ -329,25 +313,7 @@ describe("openai codex provider", () => {
     const model = provider.resolveDynamicModel?.({
       provider: "openai-codex",
       modelId: "gpt-5.4-codex",
-      modelRegistry: {
-        find: (providerId: string, modelId: string) => {
-          if (providerId === "openai-codex" && modelId === "gpt-5.3-codex") {
-            return {
-              id: "gpt-5.3-codex",
-              name: "gpt-5.3-codex",
-              provider: "openai-codex",
-              api: "openai-codex-responses",
-              baseUrl: "https://chatgpt.com/backend-api",
-              reasoning: true,
-              input: ["text", "image"] as const,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 272_000,
-              maxTokens: 128_000,
-            };
-          }
-          return undefined;
-        },
-      } as never,
+      modelRegistry: createSingleModelRegistry(createCodexTemplate({})) as never,
     });
 
     expect(model).toMatchObject({
@@ -365,25 +331,13 @@ describe("openai codex provider", () => {
     const model = provider.resolveDynamicModel?.({
       provider: "openai-codex",
       modelId: "gpt-5.4-mini",
-      modelRegistry: {
-        find: (providerId: string, modelId: string) => {
-          if (providerId === "openai-codex" && modelId === "gpt-5.1-codex-mini") {
-            return {
-              id: "gpt-5.1-codex-mini",
-              name: "gpt-5.1-codex-mini",
-              provider: "openai-codex",
-              api: "openai-codex-responses",
-              baseUrl: "https://chatgpt.com/backend-api",
-              reasoning: true,
-              input: ["text", "image"],
-              cost: { input: 0.25, output: 2, cacheRead: 0.025, cacheWrite: 0 },
-              contextWindow: 272_000,
-              maxTokens: 128_000,
-            };
-          }
-          return null;
-        },
-      } as never,
+      modelRegistry: createSingleModelRegistry(
+        createCodexTemplate({
+          id: "gpt-5.1-codex-mini",
+          cost: { input: 0.25, output: 2, cacheRead: 0.025, cacheWrite: 0 },
+        }),
+        null,
+      ) as never,
     } as never);
 
     expect(model).toMatchObject({
@@ -511,7 +465,7 @@ describe("openai codex provider", () => {
 
     expect(model).toMatchObject({
       api: "openai-codex-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
     });
   });
 
@@ -537,7 +491,59 @@ describe("openai codex provider", () => {
 
     expect(model).toMatchObject({
       api: "openai-codex-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    });
+  });
+
+  it("normalizes legacy completions metadata to the codex transport", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    const model = provider.normalizeResolvedModel?.({
+      provider: "openai-codex",
+      model: {
+        id: "gpt-5.4",
+        name: "gpt-5.4",
+        provider: "openai-codex",
+        api: "openai-completions",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_050_000,
+        contextTokens: 272_000,
+        maxTokens: 128_000,
+      },
+    } as never);
+
+    expect(model).toMatchObject({
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    });
+  });
+
+  it("normalizes legacy GitHub Copilot Codex metadata to the codex transport", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    const model = provider.normalizeResolvedModel?.({
+      provider: "openai-codex",
+      model: {
+        id: "gpt-5.4",
+        name: "gpt-5.4",
+        provider: "openai-codex",
+        api: "openai-completions",
+        baseUrl: "https://api.githubcopilot.com",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_050_000,
+        contextTokens: 272_000,
+        maxTokens: 128_000,
+      },
+    } as never);
+
+    expect(model).toMatchObject({
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
     });
   });
 
@@ -552,7 +558,49 @@ describe("openai codex provider", () => {
       } as never),
     ).toEqual({
       api: "openai-codex-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
     });
+  });
+
+  it("normalizes transport metadata for legacy completions codex routes", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    expect(
+      provider.normalizeTransport?.({
+        provider: "openai-codex",
+        api: "openai-completions",
+        baseUrl: "https://api.openai.com/v1",
+      } as never),
+    ).toEqual({
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    });
+  });
+
+  it("normalizes transport metadata for legacy GitHub Copilot Codex routes", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    expect(
+      provider.normalizeTransport?.({
+        provider: "openai-codex",
+        api: "openai-completions",
+        baseUrl: "https://api.githubcopilot.com/v1",
+      } as never),
+    ).toEqual({
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    });
+  });
+
+  it("leaves custom proxy completions transport metadata unchanged", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    expect(
+      provider.normalizeTransport?.({
+        provider: "openai-codex",
+        api: "openai-completions",
+        baseUrl: "https://proxy.example.com/v1",
+      } as never),
+    ).toBeUndefined();
   });
 });

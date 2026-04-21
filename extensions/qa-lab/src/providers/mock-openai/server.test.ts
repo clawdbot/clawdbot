@@ -8,6 +8,10 @@ const QA_REASONING_ONLY_RECOVERY_PROMPT =
   "Reasoning-only continuation QA check: read QA_KICKOFF_TASK.md, then answer with exactly REASONING-RECOVERED-OK.";
 const QA_REASONING_ONLY_SIDE_EFFECT_PROMPT =
   "Reasoning-only after write safety check: write reasoning-only-side-effect.txt, then answer with exactly SIDE-EFFECT-GUARD-OK.";
+const QA_THINKING_VISIBILITY_OFF_PROMPT =
+  "QA thinking visibility check off: answer exactly THINKING-OFF-OK.";
+const QA_THINKING_VISIBILITY_MAX_PROMPT =
+  "QA thinking visibility check max: verify 17+24=41 internally, then answer exactly THINKING-MAX-OK.";
 const QA_EMPTY_RESPONSE_RECOVERY_PROMPT =
   "Empty response continuation QA check: read QA_KICKOFF_TASK.md, then answer with exactly EMPTY-RECOVERED-OK.";
 const QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT =
@@ -2047,6 +2051,54 @@ describe("qa mock openai server", () => {
       { allInputText: expect.stringContaining(QA_REASONING_ONLY_RECOVERY_PROMPT) },
       { allInputText: expect.stringContaining(QA_REASONING_ONLY_RETRY_INSTRUCTION) },
     ]);
+  });
+
+  it("scripts the GPT-5.4 thinking visibility switch prompts", async () => {
+    const server = await startMockServer();
+
+    expect(
+      await expectResponsesJson<{
+        output?: Array<{ type?: string; content?: Array<{ text?: string }> }>;
+      }>(server, {
+        stream: false,
+        model: "gpt-5.4",
+        input: [makeUserInput(QA_THINKING_VISIBILITY_OFF_PROMPT)],
+      }),
+    ).toMatchObject({
+      output: [
+        {
+          type: "message",
+          content: [{ text: "THINKING-OFF-OK" }],
+        },
+      ],
+    });
+
+    expect(
+      await expectResponsesJson<{
+        output?: Array<{
+          type?: string;
+          id?: string;
+          summary?: Array<{ text?: string }>;
+          content?: Array<{ text?: string }>;
+        }>;
+      }>(server, {
+        stream: false,
+        model: "gpt-5.4",
+        input: [makeUserInput(QA_THINKING_VISIBILITY_MAX_PROMPT)],
+      }),
+    ).toMatchObject({
+      output: [
+        {
+          type: "reasoning",
+          id: "rs_mock_thinking_visibility_max",
+          summary: [],
+        },
+        {
+          type: "message",
+          content: [{ text: "THINKING-MAX-OK" }],
+        },
+      ],
+    });
   });
 
   it("keeps the reasoning-only side-effect path ready for no-auto-retry QA coverage", async () => {

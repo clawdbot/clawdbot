@@ -1,29 +1,21 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   _setComfyFetchGuardForTesting,
   buildComfyImageGenerationProvider,
 } from "./image-generation-provider.js";
+import {
+  buildComfyConfig,
+  mockComfyCloudJobResponses,
+  mockComfyProviderApiKey,
+  parseComfyJsonBody,
+} from "./test-helpers.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
 }));
 
 function parseJsonBody(call: number): Record<string, unknown> {
-  const request = fetchWithSsrFGuardMock.mock.calls[call - 1]?.[0];
-  expect(request?.init?.body).toBeTruthy();
-  return JSON.parse(String(request.init.body)) as Record<string, unknown>;
-}
-
-function buildComfyConfig(config: Record<string, unknown>): OpenClawConfig {
-  return {
-    models: {
-      providers: {
-        comfy: config,
-      },
-    },
-  } as unknown as OpenClawConfig;
+  return parseComfyJsonBody(fetchWithSsrFGuardMock, call);
 }
 
 describe("comfy image-generation provider", () => {
@@ -234,59 +226,16 @@ describe("comfy image-generation provider", () => {
   });
 
   it("uses cloud endpoints, auth headers, and partner-node extra_data", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "comfy-test-key",
-      source: "env",
-      mode: "api-key",
-    });
+    mockComfyProviderApiKey();
     _setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(JSON.stringify({ prompt_id: "cloud-job-1" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(JSON.stringify({ status: "completed" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            "cloud-job-1": {
-              outputs: {
-                "9": {
-                  images: [{ filename: "cloud.png", subfolder: "", type: "output" }],
-                },
-              },
-            },
-          }),
-          {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(null, {
-          status: 302,
-          headers: { location: "https://cdn.example.com/cloud.png" },
-        }),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("cloud-data"), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        }),
-        release: vi.fn(async () => {}),
-      });
+    mockComfyCloudJobResponses(fetchWithSsrFGuardMock, {
+      body: Buffer.from("cloud-data"),
+      contentType: "image/png",
+      filename: "cloud.png",
+      outputKind: "images",
+      promptId: "cloud-job-1",
+      redirectLocation: "https://cdn.example.com/cloud.png",
+    });
 
     const provider = buildComfyImageGenerationProvider();
     const result = await provider.generateImage({

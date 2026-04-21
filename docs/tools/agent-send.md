@@ -65,7 +65,7 @@ programmatic delivery.
 | `--reply-to \<target\>`       | Delivery target override                                    |
 | `--reply-channel \<name\>`    | Delivery channel override                                   |
 | `--reply-account \<id\>`      | Delivery account id override                                |
-| `--thinking \<level\>`        | Set thinking level (off, minimal, low, medium, high, xhigh) |
+| `--thinking \<level\>`        | Set thinking level for the selected model profile           |
 | `--verbose \<on\|full\|off\>` | Set verbose level                                           |
 | `--timeout \<seconds\>`       | Override agent timeout                                      |
 | `--json`                      | Output structured JSON                                      |

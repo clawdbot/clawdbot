@@ -1,6 +1,26 @@
 // Manual facade. Keep loader boundary explicit.
-import type { BaseProbeResult } from "../channels/plugins/types.public.js";
 import { loadActivatedBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
+import type { Action } from "./line-surface.js";
+export type {
+  Action,
+  CardAction,
+  LineChannelData,
+  LineConfig,
+  LineGroupConfig,
+  LineProbeResult,
+  LineThreadBindingsConfig,
+  ListItem,
+  ResolvedLineAccount,
+} from "./line-surface.js";
+
+export type FlexBox = Record<string, unknown>;
+export type FlexBubble = Record<string, unknown>;
+export type FlexButton = Record<string, unknown>;
+export type FlexCarousel = Record<string, unknown>;
+export type FlexComponent = Record<string, unknown>;
+export type FlexContainer = Record<string, unknown>;
+export type FlexImage = Record<string, unknown>;
+export type FlexText = Record<string, unknown>;
 
 type FacadeFunction = (...args: unknown[]) => unknown;
 type FacadeModule = Record<
@@ -191,99 +211,6 @@ export const uploadRichMenuImage: FacadeModule["uploadRichMenuImage"] = ((...arg
   loadFacadeModule()["uploadRichMenuImage"](...args)) as FacadeModule["uploadRichMenuImage"];
 export const uriAction: FacadeModule["uriAction"] = ((...args) =>
   loadFacadeModule()["uriAction"](...args)) as FacadeModule["uriAction"];
-export type Action = Record<string, unknown>;
-export type FlexBox = Record<string, unknown>;
-export type FlexBubble = Record<string, unknown>;
-export type FlexButton = Record<string, unknown>;
-export type FlexCarousel = Record<string, unknown>;
-export type FlexComponent = Record<string, unknown>;
-export type FlexContainer = Record<string, unknown>;
-export type FlexImage = Record<string, unknown>;
-export type FlexText = Record<string, unknown>;
-
-export interface ListItem {
-  title: string;
-  subtitle?: string;
-  action?: Action;
-}
-
-export interface CardAction {
-  label: string;
-  action: Action;
-}
-
-export interface LineThreadBindingsConfig {
-  enabled?: boolean;
-  idleHours?: number;
-  maxAgeHours?: number;
-  spawnSubagentSessions?: boolean;
-  spawnAcpSessions?: boolean;
-}
-
-interface LineAccountBaseConfig {
-  enabled?: boolean;
-  channelAccessToken?: string;
-  channelSecret?: string;
-  tokenFile?: string;
-  secretFile?: string;
-  name?: string;
-  allowFrom?: Array<string | number>;
-  groupAllowFrom?: Array<string | number>;
-  dmPolicy?: "open" | "allowlist" | "pairing" | "disabled";
-  groupPolicy?: "open" | "allowlist" | "disabled";
-  responsePrefix?: string;
-  mediaMaxMb?: number;
-  webhookPath?: string;
-  threadBindings?: LineThreadBindingsConfig;
-  groups?: Record<string, LineGroupConfig>;
-}
-
-export interface LineConfig extends LineAccountBaseConfig {
-  accounts?: Record<string, LineAccountBaseConfig>;
-  defaultAccount?: string;
-}
-
-export interface LineGroupConfig {
-  enabled?: boolean;
-  allowFrom?: Array<string | number>;
-  requireMention?: boolean;
-  systemPrompt?: string;
-  skills?: string[];
-}
-
-export interface ResolvedLineAccount {
-  accountId: string;
-  name?: string;
-  enabled: boolean;
-  channelAccessToken: string;
-  channelSecret: string;
-  tokenSource: "config" | "env" | "file" | "none";
-  config: LineConfig & LineAccountBaseConfig;
-}
-
-export type LineProbeResult = BaseProbeResult<string> & {
-  bot?: {
-    displayName?: string;
-    userId?: string;
-    basicId?: string;
-    pictureUrl?: string;
-  };
-};
-
-export type LineChannelData = {
-  quickReplies?: string[];
-  location?: {
-    title: string;
-    address: string;
-    latitude: number;
-    longitude: number;
-  };
-  flexMessage?: {
-    altText: string;
-    contents: unknown;
-  };
-  templateMessage?: unknown;
-};
 
 export interface RichMenuSize {
   width: 2500;

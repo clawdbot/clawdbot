@@ -58,7 +58,7 @@ describe("openai responses payload policy", () => {
     expect(payload).not.toHaveProperty("prompt_cache_retention");
   });
 
-  it("keeps disabled reasoning payloads on native OpenAI responses routes", () => {
+  it("keeps disabled reasoning payloads on native OpenAI responses models that support none", () => {
     const payload = {
       reasoning: {
         effort: "none",
@@ -71,6 +71,7 @@ describe("openai responses payload policy", () => {
         {
           api: "openai-responses",
           provider: "openai",
+          id: "gpt-5.4",
           baseUrl: "https://api.openai.com/v1",
         },
         { storeMode: "disable" },
@@ -81,6 +82,31 @@ describe("openai responses payload policy", () => {
       reasoning: {
         effort: "none",
       },
+      store: false,
+    });
+  });
+
+  it("strips disabled reasoning payloads on native OpenAI responses models that do not support none", () => {
+    const payload = {
+      reasoning: {
+        effort: "none",
+      },
+    } satisfies Record<string, unknown>;
+
+    applyOpenAIResponsesPayloadPolicy(
+      payload,
+      resolveOpenAIResponsesPayloadPolicy(
+        {
+          api: "openai-responses",
+          provider: "openai",
+          id: "gpt-5",
+          baseUrl: "https://api.openai.com/v1",
+        },
+        { storeMode: "disable" },
+      ),
+    );
+
+    expect(payload).toEqual({
       store: false,
     });
   });

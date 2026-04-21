@@ -1,11 +1,9 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { initApiConfig } from "./api.js";
-import { qqbotConfigAdapter, qqbotMeta, qqbotSetupAdapterShared } from "./channel-config-shared.js";
-import { qqbotChannelConfigSchema } from "./config-schema.js";
+import { qqbotBasePluginFields } from "./channel-base.js";
 import { DEFAULT_ACCOUNT_ID, resolveQQBotAccount } from "./config.js";
 import { getQQBotRuntime } from "./runtime.js";
-import { qqbotSetupWizard } from "./setup-surface.js";
 // Re-export text helpers so existing consumers of channel.ts are unaffected.
 // The canonical definition lives in text-utils.ts to avoid a circular
 // dependency: channel.ts → (dynamic) gateway.ts → outbound-deliver.ts → channel.ts.
@@ -30,31 +28,7 @@ function loadOutboundModule(): Promise<QQBotOutboundModule> {
 }
 
 export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
-  id: "qqbot",
-  setupWizard: qqbotSetupWizard,
-  meta: {
-    ...qqbotMeta,
-  },
-  capabilities: {
-    chatTypes: ["direct", "group"],
-    media: true,
-    reactions: false,
-    threads: false,
-    /**
-     * blockStreaming=true means the channel supports block streaming.
-     * The framework collects streamed blocks and sends them through deliver().
-     */
-    blockStreaming: true,
-  },
-  reload: { configPrefixes: ["channels.qqbot"] },
-  configSchema: qqbotChannelConfigSchema,
-
-  config: {
-    ...qqbotConfigAdapter,
-  },
-  setup: {
-    ...qqbotSetupAdapterShared,
-  },
+  ...qqbotBasePluginFields,
   messaging: {
     /** Normalize common QQ Bot target formats into the canonical qqbot:... form. */
     normalizeTarget: (target: string): string | undefined => {

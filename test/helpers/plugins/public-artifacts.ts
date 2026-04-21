@@ -1,20 +1,7 @@
-import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../../../src/plugins/runtime-sidecar-paths.js";
-
-function assertUniqueValues<T extends string>(values: readonly T[], label: string): readonly T[] {
-  const seen = new Set<string>();
-  const duplicates = new Set<string>();
-  for (const value of values) {
-    if (seen.has(value)) {
-      duplicates.add(value);
-      continue;
-    }
-    seen.add(value);
-  }
-  if (duplicates.size > 0) {
-    throw new Error(`Duplicate ${label}: ${Array.from(duplicates).join(", ")}`);
-  }
-  return values;
-}
+import {
+  assertUniqueValues,
+  BUNDLED_RUNTIME_SIDECAR_PATHS,
+} from "../../../src/plugins/runtime-sidecar-paths.js";
 
 export function getPublicArtifactBasename(relativePath: string): string {
   return relativePath.split("/").at(-1) ?? relativePath;

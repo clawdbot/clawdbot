@@ -1,12 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { buildAgentSessionKey } from "./resolve-route.js";
 
-describe("Discord Session Key Continuity", () => {
+describe("Channel Session Key Continuity", () => {
   const agentId = "main";
-  const channel = "discord";
+  const channel = "quietchat";
   const accountId = "default";
 
-  function buildDiscordSessionKey(params: {
+  function buildChannelSessionKey(params: {
     peer: { kind: "direct" | "channel"; id: string };
     dmScope?: "main" | "per-peer";
   }) {
@@ -23,22 +23,22 @@ describe("Discord Session Key Continuity", () => {
     dmScope: "main" | "per-peer";
     expectedDmKey: string;
   }) {
-    const dmKey = buildDiscordSessionKey({
+    const dmKey = buildChannelSessionKey({
       peer: { kind: "direct", id: "user123" },
       dmScope: params.dmScope,
     });
 
-    const groupKey = buildDiscordSessionKey({
+    const groupKey = buildChannelSessionKey({
       peer: { kind: "channel", id: "channel456" },
     });
 
     expect(dmKey).toBe(params.expectedDmKey);
-    expect(groupKey).toBe("agent:main:discord:channel:channel456");
+    expect(groupKey).toBe("agent:main:quietchat:channel:channel456");
     expect(dmKey).not.toBe(groupKey);
   }
 
   function expectUnknownChannelKeyCase(channelId: string) {
-    const missingIdKey = buildDiscordSessionKey({
+    const missingIdKey = buildChannelSessionKey({
       peer: { kind: "channel", id: channelId },
     });
 

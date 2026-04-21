@@ -3,7 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
-import { getShellConfig, resolvePowerShellPath, resolveShellFromPath } from "./shell-utils.js";
+import {
+  detectRuntimeShell,
+  getShellConfig,
+  resolvePowerShellPath,
+  resolveShellFromPath,
+} from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
 
@@ -74,6 +79,30 @@ describe("getShellConfig", () => {
     const { shell } = getShellConfig();
     expect(shell).toBe("sh");
   });
+
+  it("falls back to sh on PATH when SHELL is /usr/bin/false", () => {
+    const binDir = createTempCommandDir(tempDirs, [{ name: "sh" }]);
+    process.env.SHELL = "/usr/bin/false";
+    process.env.PATH = binDir;
+    const { shell, args } = getShellConfig();
+    expect(shell).toBe(path.join(binDir, "sh"));
+    expect(args).toEqual(["-c"]);
+  });
+
+  it("falls back to sh on PATH when SHELL is /sbin/nologin", () => {
+    const binDir = createTempCommandDir(tempDirs, [{ name: "sh" }]);
+    process.env.SHELL = "/sbin/nologin";
+    process.env.PATH = binDir;
+    const { shell } = getShellConfig();
+    expect(shell).toBe(path.join(binDir, "sh"));
+  });
+
+  it("falls back to bare sh when SHELL is a placeholder and no sh is on PATH", () => {
+    process.env.SHELL = "/usr/bin/false";
+    process.env.PATH = "";
+    const { shell } = getShellConfig();
+    expect(shell).toBe("sh");
+  });
 });
 
 describe("resolveShellFromPath", () => {
@@ -113,6 +142,45 @@ describe("resolveShellFromPath", () => {
     process.env.PATH = dir;
     expect(resolveShellFromPath("bash")).toBeUndefined();
   });
+});
+
+describe("detectRuntimeShell", () => {
+  let envSnapshot: ReturnType<typeof captureEnv>;
+
+  beforeEach(() => {
+    envSnapshot = captureEnv([
+      "OPENCLAW_SHELL",
+      "SHELL",
+      "POWERSHELL_DISTRIBUTION_CHANNEL",
+      "BASH_VERSION",
+      "ZSH_VERSION",
+      "FISH_VERSION",
+      "KSH_VERSION",
+      "NU_VERSION",
+      "NUSHELL_VERSION",
+    ]);
+    delete process.env.OPENCLAW_SHELL;
+    delete process.env.POWERSHELL_DISTRIBUTION_CHANNEL;
+    delete process.env.BASH_VERSION;
+    delete process.env.ZSH_VERSION;
+    delete process.env.FISH_VERSION;
+    delete process.env.KSH_VERSION;
+    delete process.env.NU_VERSION;
+    delete process.env.NUSHELL_VERSION;
+  });
+
+  afterEach(() => {
+    envSnapshot.restore();
+  });
+
+  if (!isWin) {
+    it("ignores non-interactive SHELL placeholders and falls through to runtime hints", () => {
+      process.env.SHELL = "/usr/bin/false";
+      process.env.BASH_VERSION = "5.2.0";
+
+      expect(detectRuntimeShell()).toBe("bash");
+    });
+  }
 });
 
 describe("resolvePowerShellPath", () => {

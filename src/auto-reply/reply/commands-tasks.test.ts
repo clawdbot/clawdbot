@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   completeTaskRunByRunId,
   createQueuedTaskRun,
@@ -8,9 +7,12 @@ import {
   failTaskRunByRunId,
 } from "../../tasks/task-executor.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
-import { configureTaskRegistryRuntime } from "../../tasks/task-registry.store.js";
 import { buildTasksReply, handleTasksCommand } from "./commands-tasks.js";
-import { buildCommandTestParams } from "./commands.test-harness.js";
+import {
+  baseCommandTestConfig,
+  buildCommandTestParams,
+  configureInMemoryTaskRegistryStoreForTests,
+} from "./commands.test-harness.js";
 
 vi.mock("../../agents/agent-scope.js", async () => {
   const actual = await vi.importActual<typeof import("../../agents/agent-scope.js")>(
@@ -22,36 +24,13 @@ vi.mock("../../agents/agent-scope.js", async () => {
   };
 });
 
-const baseCfg = {
-  commands: { text: true },
-  channels: { whatsapp: { allowFrom: ["*"] } },
-  session: { mainKey: "main", scope: "per-sender" },
-} as OpenClawConfig;
+const baseCfg = baseCommandTestConfig;
 
 async function buildTasksReplyForTest(params: { sessionKey?: string } = {}) {
   const commandParams = buildCommandTestParams("/tasks", baseCfg);
   return await buildTasksReply({
     ...commandParams,
     sessionKey: params.sessionKey ?? commandParams.sessionKey,
-  });
-}
-
-function configureInMemoryTaskRegistryStoreForTests(): void {
-  configureTaskRegistryRuntime({
-    store: {
-      loadSnapshot: () => ({
-        tasks: new Map(),
-        deliveryStates: new Map(),
-      }),
-      saveSnapshot: () => {},
-      upsertTaskWithDeliveryState: () => {},
-      upsertTask: () => {},
-      deleteTaskWithDeliveryState: () => {},
-      deleteTask: () => {},
-      upsertDeliveryState: () => {},
-      deleteDeliveryState: () => {},
-      close: () => {},
-    },
   });
 }
 

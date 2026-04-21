@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { handleStopCommand } from "./commands-session-abort.js";
+import "./commands-session-abort.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const abortEmbeddedPiRunMock = vi.hoisted(() => vi.fn());
@@ -38,10 +39,6 @@ vi.mock("./abort.js", () => ({
 
 vi.mock("./commands-session-store.js", () => ({
   persistAbortTargetEntry: persistAbortTargetEntryMock,
-}));
-
-vi.mock("./queue.js", () => ({
-  clearSessionQueues: vi.fn(() => ({ followupCleared: 0, laneCleared: 0, keys: [] })),
 }));
 
 vi.mock("./reply-run-registry.js", () => ({

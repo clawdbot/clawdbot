@@ -92,6 +92,18 @@ describe("Ollama provider", () => {
     json: async () => ({}),
   });
 
+  const stubTagsFetch = (names: string[] = []) => {
+    const fetchMock = vi.fn(async (input: unknown) => {
+      const url = String(input);
+      if (url.endsWith("/api/tags")) {
+        return tagsResponse(names);
+      }
+      return notFoundJsonResponse();
+    });
+    vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
+    return fetchMock;
+  };
+
   it("should not include ollama when no API key is configured", async () => {
     const provider = await runOllamaCatalog({
       env: { OLLAMA_API_KEY: undefined },
@@ -101,14 +113,7 @@ describe("Ollama provider", () => {
   });
 
   it("should use native ollama api type", async () => {
-    const fetchMock = vi.fn(async (input: unknown) => {
-      const url = String(input);
-      if (url.endsWith("/api/tags")) {
-        return tagsResponse([]);
-      }
-      return notFoundJsonResponse();
-    });
-    vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
+    const fetchMock = stubTagsFetch();
 
     await withOllamaApiKey(async () => {
       const provider = await runOllamaCatalog({});
@@ -122,14 +127,7 @@ describe("Ollama provider", () => {
   });
 
   it("should preserve explicit ollama baseUrl on implicit provider injection", async () => {
-    const fetchMock = vi.fn(async (input: unknown) => {
-      const url = String(input);
-      if (url.endsWith("/api/tags")) {
-        return tagsResponse([]);
-      }
-      return notFoundJsonResponse();
-    });
-    vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
+    const fetchMock = stubTagsFetch();
 
     await withOllamaApiKey(async () => {
       const provider = await runOllamaCatalog({

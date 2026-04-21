@@ -1,9 +1,6 @@
-import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
-import type {
-  ProviderResolveDynamicModelContext,
-  ProviderRuntimeModel,
-} from "openclaw/plugin-sdk/plugin-entry";
+import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it } from "vitest";
+import { createProviderDynamicModelContext as createContext } from "../test-support/provider-model-test-helpers.js";
 import { isModernGoogleModel, resolveGoogleGeminiForwardCompatModel } from "./provider-models.js";
 
 function createTemplateModel(
@@ -27,27 +24,6 @@ function createTemplateModel(
     maxTokens: 64_000,
     ...overrides,
   } as ProviderRuntimeModel;
-}
-
-function createContext(params: {
-  provider: string;
-  modelId: string;
-  models: ProviderRuntimeModel[];
-}): ProviderResolveDynamicModelContext {
-  return {
-    provider: params.provider,
-    modelId: params.modelId,
-    modelRegistry: {
-      find(providerId: string, modelId: string) {
-        return (
-          params.models.find(
-            (model) =>
-              model.provider === providerId && model.id.toLowerCase() === modelId.toLowerCase(),
-          ) ?? null
-        );
-      },
-    } as ModelRegistry,
-  };
 }
 
 describe("resolveGoogleGeminiForwardCompatModel", () => {

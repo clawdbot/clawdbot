@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
+import type { OpenClawConfig } from "../runtime-api.js";
 import {
   type MSTeamsActivityHandler,
   type MSTeamsMessageHandlerDeps,
@@ -8,8 +8,8 @@ import {
 import {
   createActivityHandler as baseCreateActivityHandler,
   createMSTeamsMessageHandlerDeps,
+  installMSTeamsTestRuntime,
 } from "./monitor-handler.test-helpers.js";
-import { setMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 import { createMSTeamsSsoTokenStoreMemory } from "./sso-token-store.js";
 import {
@@ -19,46 +19,6 @@ import {
   parseSigninTokenExchangeValue,
   parseSigninVerifyStateValue,
 } from "./sso.js";
-
-function installTestRuntime(): void {
-  setMSTeamsRuntime({
-    logging: { shouldLogVerbose: () => false },
-    system: { enqueueSystemEvent: vi.fn() },
-    channel: {
-      debounce: {
-        resolveInboundDebounceMs: () => 0,
-        createInboundDebouncer: <T>(params: {
-          onFlush: (entries: T[]) => Promise<void>;
-        }): { enqueue: (entry: T) => Promise<void> } => ({
-          enqueue: async (entry: T) => {
-            await params.onFlush([entry]);
-          },
-        }),
-      },
-      pairing: {
-        readAllowFromStore: vi.fn(async () => []),
-        upsertPairingRequest: vi.fn(async () => null),
-      },
-      text: {
-        hasControlCommand: () => false,
-      },
-      routing: {
-        resolveAgentRoute: ({ peer }: { peer: { kind: string; id: string } }) => ({
-          sessionKey: `msteams:${peer.kind}:${peer.id}`,
-          agentId: "default",
-          accountId: "default",
-        }),
-      },
-      reply: {
-        formatAgentEnvelope: ({ body }: { body: string }) => body,
-        finalizeInboundContext: <T extends Record<string, unknown>>(ctx: T) => ctx,
-      },
-      session: {
-        recordInboundSession: vi.fn(async () => undefined),
-      },
-    },
-  } as unknown as PluginRuntime);
-}
 
 function createActivityHandler() {
   const run = vi.fn(async () => undefined);
@@ -88,6 +48,15 @@ function createSsoDeps(params: { fetchImpl: MSTeamsSsoFetch }) {
     tokenStore,
     tokenProvider,
   };
+}
+
+function createRegisteredSsoHandler(sso: MSTeamsMessageHandlerDeps["sso"]) {
+  const deps = createDepsWithoutSso({ sso });
+  const { handler } = createActivityHandler();
+  const registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
+    run: NonNullable<MSTeamsActivityHandler["run"]>;
+  };
+  return { deps, registered };
 }
 
 function createSigninInvokeContext(params: {
@@ -400,7 +369,7 @@ describe("handleSigninVerifyStateInvoke", () => {
 
 describe("msteams signin invoke handler registration", () => {
   beforeAll(() => {
-    installTestRuntime();
+    installMSTeamsTestRuntime();
   });
 
   const blockedSigninScenarios = createBlockedSigninScenarios();
@@ -506,11 +475,7 @@ describe("msteams signin invoke handler registration", () => {
       }),
     ]);
     const { sso, tokenStore } = createSsoDeps({ fetchImpl });
-    const deps = createDepsWithoutSso({ sso });
-    const { handler } = createActivityHandler();
-    const registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
-      run: NonNullable<MSTeamsActivityHandler["run"]>;
-    };
+    const { deps, registered } = createRegisteredSsoHandler(sso);
 
     const ctx = createSigninInvokeContext({
       name: "signin/tokenExchange",
@@ -541,11 +506,7 @@ describe("msteams signin invoke handler registration", () => {
       () => ({ ok: false, status: 400, body: "bad request" }),
     ]);
     const { sso } = createSsoDeps({ fetchImpl });
-    const deps = createDepsWithoutSso({ sso });
-    const { handler } = createActivityHandler();
-    const registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
-      run: NonNullable<MSTeamsActivityHandler["run"]>;
-    };
+    const { deps, registered } = createRegisteredSsoHandler(sso);
 
     const ctx = createSigninInvokeContext({
       name: "signin/tokenExchange",

@@ -17,6 +17,13 @@ import type { ConfigFileSnapshot } from "./types.js";
 describe("config observe recovery", () => {
   let fixtureRoot = "";
   let homeCaseId = 0;
+  const clobberedUpdateChannelConfig = { update: { channel: "beta" } };
+  const clobberedUpdateChannelRaw = `${JSON.stringify(clobberedUpdateChannelConfig, null, 2)}\n`;
+  const recoverableTelegramConfig = {
+    update: { channel: "beta" },
+    gateway: { mode: "local" },
+    channels: { telegram: { enabled: true, dmPolicy: "pairing", groupPolicy: "allowlist" } },
+  };
 
   async function withSuiteHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
     const home = path.join(fixtureRoot, `case-${homeCaseId++}`);
@@ -35,6 +42,56 @@ describe("config observe recovery", () => {
   async function seedConfig(configPath: string, config: Record<string, unknown>): Promise<void> {
     await fsp.mkdir(path.dirname(configPath), { recursive: true });
     await fsp.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
+  }
+
+  async function seedConfigBackup(configPath: string, config: Record<string, unknown>) {
+    await seedConfig(configPath, config);
+    await fsp.copyFile(configPath, `${configPath}.bak`);
+  }
+
+  async function writeClobberedUpdateChannel(configPath: string) {
+    await fsp.writeFile(configPath, clobberedUpdateChannelRaw, "utf-8");
+    return {
+      raw: clobberedUpdateChannelRaw,
+      parsed: clobberedUpdateChannelConfig,
+    };
+  }
+
+  async function readObserveEvents(auditPath: string): Promise<Record<string, unknown>[]> {
+    const lines = (await fsp.readFile(auditPath, "utf-8")).trim().split("\n").filter(Boolean);
+    return lines
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((line) => line.event === "config.observe");
+  }
+
+  async function readLastObserveEvent(
+    auditPath: string,
+  ): Promise<Record<string, unknown> | undefined> {
+    return (await readObserveEvents(auditPath)).at(-1);
+  }
+
+  async function recoverClobberedUpdateChannel(params: {
+    deps: ObserveRecoveryDeps;
+    configPath: string;
+  }) {
+    return await maybeRecoverSuspiciousConfigRead({
+      deps: params.deps,
+      configPath: params.configPath,
+      raw: clobberedUpdateChannelRaw,
+      parsed: clobberedUpdateChannelConfig,
+    });
+  }
+
+  function recoverClobberedUpdateChannelSync(params: {
+    deps: ObserveRecoveryDeps;
+    configPath: string;
+  }) {
+    return maybeRecoverSuspiciousConfigReadSync({
+      deps: params.deps,
+      configPath: params.configPath,
+      raw: clobberedUpdateChannelRaw,
+      parsed: clobberedUpdateChannelConfig,
+    });
   }
 
   async function makeSnapshot(configPath: string, config: Record<string, unknown>) {
@@ -84,34 +141,23 @@ describe("config observe recovery", () => {
   it("auto-restores suspicious update-channel-only roots from backup", async () => {
     await withSuiteHome(async (home) => {
       const { deps, configPath, auditPath, warn } = makeDeps(home);
-      await seedConfig(configPath, {
+      await seedConfigBackup(configPath, {
         update: { channel: "beta" },
         browser: { enabled: true },
         gateway: { mode: "local", auth: { mode: "token", token: "secret-token" } },
         channels: { discord: { enabled: true, dmPolicy: "pairing" } },
       });
-      await fsp.copyFile(configPath, `${configPath}.bak`);
+      await writeClobberedUpdateChannel(configPath);
 
-      const clobberedRaw = `${JSON.stringify({ update: { channel: "beta" } }, null, 2)}\n`;
-      await fsp.writeFile(configPath, clobberedRaw, "utf-8");
-
-      const recovered = await maybeRecoverSuspiciousConfigRead({
-        deps,
-        configPath,
-        raw: clobberedRaw,
-        parsed: { update: { channel: "beta" } },
-      });
+      const recovered = await recoverClobberedUpdateChannel({ deps, configPath });
 
       expect((recovered.parsed as { gateway?: { mode?: string } }).gateway?.mode).toBe("local");
-      await expect(fsp.readFile(configPath, "utf-8")).resolves.not.toBe(clobberedRaw);
+      await expect(fsp.readFile(configPath, "utf-8")).resolves.not.toBe(clobberedUpdateChannelRaw);
       expect(warn).toHaveBeenCalledWith(
         expect.stringContaining("Config auto-restored from backup:"),
       );
 
-      const lines = (await fsp.readFile(auditPath, "utf-8")).trim().split("\n").filter(Boolean);
-      const observe = lines
-        .map((line) => JSON.parse(line) as Record<string, unknown>)
-        .findLast((line) => line.event === "config.observe");
+      const observe = await readLastObserveEvent(auditPath);
       expect(observe?.restoredFromBackup).toBe(true);
       expect(observe?.suspicious).toEqual(
         expect.arrayContaining(["gateway-mode-missing-vs-last-good", "update-channel-only-root"]),
@@ -122,33 +168,13 @@ describe("config observe recovery", () => {
   it("dedupes repeated suspicious hashes", async () => {
     await withSuiteHome(async (home) => {
       const { deps, configPath, auditPath } = makeDeps(home);
-      await seedConfig(configPath, {
-        update: { channel: "beta" },
-        gateway: { mode: "local" },
-        channels: { telegram: { enabled: true, dmPolicy: "pairing", groupPolicy: "allowlist" } },
-      });
-      await fsp.copyFile(configPath, `${configPath}.bak`);
+      await seedConfigBackup(configPath, recoverableTelegramConfig);
+      await writeClobberedUpdateChannel(configPath);
 
-      const clobberedRaw = `${JSON.stringify({ update: { channel: "beta" } }, null, 2)}\n`;
-      await fsp.writeFile(configPath, clobberedRaw, "utf-8");
+      await recoverClobberedUpdateChannel({ deps, configPath });
+      await recoverClobberedUpdateChannel({ deps, configPath });
 
-      await maybeRecoverSuspiciousConfigRead({
-        deps,
-        configPath,
-        raw: clobberedRaw,
-        parsed: { update: { channel: "beta" } },
-      });
-      await maybeRecoverSuspiciousConfigRead({
-        deps,
-        configPath,
-        raw: clobberedRaw,
-        parsed: { update: { channel: "beta" } },
-      });
-
-      const lines = (await fsp.readFile(auditPath, "utf-8")).trim().split("\n").filter(Boolean);
-      const observeEvents = lines
-        .map((line) => JSON.parse(line) as Record<string, unknown>)
-        .filter((line) => line.event === "config.observe");
+      const observeEvents = await readObserveEvents(auditPath);
       expect(observeEvents).toHaveLength(1);
     });
   });
@@ -156,28 +182,13 @@ describe("config observe recovery", () => {
   it("sync recovery uses backup baseline when health state is absent", async () => {
     await withSuiteHome(async (home) => {
       const { deps, configPath, auditPath } = makeDeps(home);
-      await seedConfig(configPath, {
-        update: { channel: "beta" },
-        gateway: { mode: "local" },
-        channels: { telegram: { enabled: true, dmPolicy: "pairing", groupPolicy: "allowlist" } },
-      });
-      await fsp.copyFile(configPath, `${configPath}.bak`);
+      await seedConfigBackup(configPath, recoverableTelegramConfig);
+      await writeClobberedUpdateChannel(configPath);
 
-      const clobberedRaw = `${JSON.stringify({ update: { channel: "beta" } }, null, 2)}\n`;
-      await fsp.writeFile(configPath, clobberedRaw, "utf-8");
-
-      const recovered = maybeRecoverSuspiciousConfigReadSync({
-        deps,
-        configPath,
-        raw: clobberedRaw,
-        parsed: { update: { channel: "beta" } },
-      });
+      const recovered = recoverClobberedUpdateChannelSync({ deps, configPath });
 
       expect((recovered.parsed as { gateway?: { mode?: string } }).gateway?.mode).toBe("local");
-      const lines = (await fsp.readFile(auditPath, "utf-8")).trim().split("\n").filter(Boolean);
-      const observe = lines
-        .map((line) => JSON.parse(line) as Record<string, unknown>)
-        .findLast((line) => line.event === "config.observe");
+      const observe = await readLastObserveEvent(auditPath);
       expect(observe?.backupHash).toBeTypeOf("string");
       expect(observe?.lastKnownGoodIno ?? null).toBeNull();
     });
@@ -217,10 +228,7 @@ describe("config observe recovery", () => {
       expect(warn).toHaveBeenCalledWith(
         expect.stringContaining("Config auto-restored from last-known-good:"),
       );
-      const lines = (await fsp.readFile(auditPath, "utf-8")).trim().split("\n").filter(Boolean);
-      const observe = lines
-        .map((line) => JSON.parse(line) as Record<string, unknown>)
-        .findLast((line) => line.event === "config.observe");
+      const observe = await readLastObserveEvent(auditPath);
       expect(observe?.restoredFromBackup).toBe(true);
       expect(observe?.restoredBackupPath).toBe(resolveLastKnownGoodConfigPath(configPath));
     });

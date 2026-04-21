@@ -33,12 +33,12 @@ function findExtensionWithoutTests() {
 }
 
 describe("scripts/test-extension.mjs", () => {
-  it("resolves channel-root extensions onto the channel vitest config", () => {
+  it("resolves split channel extensions onto their own vitest configs", () => {
     const plan = resolveExtensionTestPlan({ targetArg: "slack", cwd: process.cwd() });
 
     expect(plan.extensionId).toBe("slack");
     expect(plan.extensionDir).toBe(bundledPluginRoot("slack"));
-    expect(plan.config).toBe("test/vitest/vitest.extension-channels.config.ts");
+    expect(plan.config).toBe("test/vitest/vitest.extension-slack.config.ts");
     expect(plan.roots).toContain(bundledPluginRoot("slack"));
     expect(plan.hasTests).toBe(true);
   });
@@ -79,11 +79,11 @@ describe("scripts/test-extension.mjs", () => {
     expect(plan.hasTests).toBe(true);
   });
 
-  it("resolves provider extensions onto the provider vitest config", () => {
+  it("resolves OpenAI onto its own provider vitest config", () => {
     const plan = resolveExtensionTestPlan({ targetArg: "openai", cwd: process.cwd() });
 
     expect(plan.extensionId).toBe("openai");
-    expect(plan.config).toBe("test/vitest/vitest.extension-providers.config.ts");
+    expect(plan.config).toBe("test/vitest/vitest.extension-provider-openai.config.ts");
     expect(plan.roots).toContain(bundledPluginRoot("openai"));
     expect(plan.hasTests).toBe(true);
   });
@@ -183,7 +183,7 @@ describe("scripts/test-extension.mjs", () => {
 
     expect(plan.roots).toContain(bundledPluginRoot("line"));
     expect(plan.roots).not.toContain("src/line");
-    expect(plan.config).toBe("test/vitest/vitest.extension-channels.config.ts");
+    expect(plan.config).toBe("test/vitest/vitest.extension-line.config.ts");
     expect(plan.hasTests).toBe(true);
   });
 
@@ -295,13 +295,6 @@ describe("scripts/test-extension.mjs", () => {
         testFileCount: expect.any(Number),
       },
       {
-        config: "test/vitest/vitest.extension-channels.config.ts",
-        estimatedCost: expect.any(Number),
-        extensionIds: ["line", "slack"],
-        roots: [bundledPluginRoot("slack"), bundledPluginRoot("line")],
-        testFileCount: expect.any(Number),
-      },
-      {
         config: "test/vitest/vitest.extension-diffs.config.ts",
         estimatedCost: expect.any(Number),
         extensionIds: ["diffs"],
@@ -320,6 +313,13 @@ describe("scripts/test-extension.mjs", () => {
         estimatedCost: expect.any(Number),
         extensionIds: ["irc"],
         roots: [bundledPluginRoot("irc")],
+        testFileCount: expect.any(Number),
+      },
+      {
+        config: "test/vitest/vitest.extension-line.config.ts",
+        estimatedCost: expect.any(Number),
+        extensionIds: ["line"],
+        roots: [bundledPluginRoot("line")],
         testFileCount: expect.any(Number),
       },
       {
@@ -351,10 +351,17 @@ describe("scripts/test-extension.mjs", () => {
         testFileCount: expect.any(Number),
       },
       {
-        config: "test/vitest/vitest.extension-providers.config.ts",
+        config: "test/vitest/vitest.extension-provider-openai.config.ts",
         estimatedCost: expect.any(Number),
         extensionIds: ["openai"],
         roots: [bundledPluginRoot("openai")],
+        testFileCount: expect.any(Number),
+      },
+      {
+        config: "test/vitest/vitest.extension-slack.config.ts",
+        estimatedCost: expect.any(Number),
+        extensionIds: ["slack"],
+        roots: [bundledPluginRoot("slack")],
         testFileCount: expect.any(Number),
       },
       {

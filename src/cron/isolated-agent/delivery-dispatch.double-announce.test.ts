@@ -848,6 +848,39 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     );
   });
 
+  it("keeps unresolved message-tool delivery out of delivered status", async () => {
+    const params = makeBaseParams({ synthesizedText: "hello from cron" });
+    params.resolvedDelivery = {
+      ok: false,
+      channel: undefined,
+      to: undefined,
+      accountId: undefined,
+      threadId: undefined,
+      mode: "implicit",
+      error: new Error("sessionKey is required to resolve delivery.channel=last"),
+    };
+    params.unverifiedMessagingToolDelivery = true;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(state.delivered).toBe(false);
+    expect(state.deliveryAttempted).toBe(false);
+    expect(state.result).toEqual(
+      expect.objectContaining({
+        status: "error",
+        errorKind: "delivery-target",
+        deliveryAttempted: false,
+      }),
+    );
+    expect(state.result?.error).toContain(
+      "sessionKey is required to resolve delivery.channel=last",
+    );
+    expect(state.result?.error).toContain(
+      "the agent used the message tool, but OpenClaw could not verify",
+    );
+  });
+
   it("builds outbound session context from the run session key under per-channel-peer scoping", async () => {
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);

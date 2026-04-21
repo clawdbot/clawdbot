@@ -17,6 +17,31 @@ vi.mock("../progress.js", () => ({
 }));
 
 describe("probeGatewayStatus", () => {
+  const pairingPendingAuth = {
+    role: null,
+    scopes: [],
+    capability: "pairing_pending",
+  } as const;
+
+  function mockPairingPendingCloseProbe(error: string | null) {
+    probeGatewayMock.mockResolvedValueOnce({
+      ok: false,
+      error,
+      close: { code: 1008, reason: "pairing required" },
+      auth: pairingPendingAuth,
+    });
+  }
+
+  function expectPairingPendingCloseResult(result: Awaited<ReturnType<typeof probeGatewayStatus>>) {
+    expect(result).toEqual({
+      ok: false,
+      kind: "connect",
+      capability: "pairing_pending",
+      auth: pairingPendingAuth,
+      error: "gateway closed (1008): pairing required",
+    });
+  }
+
   it("uses lightweight token-only probing for daemon status", async () => {
     callGatewayMock.mockReset();
     probeGatewayMock.mockResolvedValueOnce({
@@ -148,65 +173,27 @@ describe("probeGatewayStatus", () => {
   it("surfaces probe close details when the handshake fails", async () => {
     callGatewayMock.mockReset();
     probeGatewayMock.mockReset();
-    probeGatewayMock.mockResolvedValueOnce({
-      ok: false,
-      error: null,
-      close: { code: 1008, reason: "pairing required" },
-      auth: {
-        role: null,
-        scopes: [],
-        capability: "pairing_pending",
-      },
-    });
+    mockPairingPendingCloseProbe(null);
 
     const result = await probeGatewayStatus({
       url: "ws://127.0.0.1:19191",
       timeoutMs: 5_000,
     });
 
-    expect(result).toEqual({
-      ok: false,
-      kind: "connect",
-      capability: "pairing_pending",
-      auth: {
-        role: null,
-        scopes: [],
-        capability: "pairing_pending",
-      },
-      error: "gateway closed (1008): pairing required",
-    });
+    expectPairingPendingCloseResult(result);
   });
 
   it("prefers the close reason over a generic timeout when both are present", async () => {
     callGatewayMock.mockReset();
     probeGatewayMock.mockReset();
-    probeGatewayMock.mockResolvedValueOnce({
-      ok: false,
-      error: "timeout",
-      close: { code: 1008, reason: "pairing required" },
-      auth: {
-        role: null,
-        scopes: [],
-        capability: "pairing_pending",
-      },
-    });
+    mockPairingPendingCloseProbe("timeout");
 
     const result = await probeGatewayStatus({
       url: "ws://127.0.0.1:19191",
       timeoutMs: 5_000,
     });
 
-    expect(result).toEqual({
-      ok: false,
-      kind: "connect",
-      capability: "pairing_pending",
-      auth: {
-        role: null,
-        scopes: [],
-        capability: "pairing_pending",
-      },
-      error: "gateway closed (1008): pairing required",
-    });
+    expectPairingPendingCloseResult(result);
   });
 
   it("keeps actionable probe errors when the close reason stays generic", async () => {

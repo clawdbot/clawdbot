@@ -366,6 +366,36 @@ function makeSnapshot(partial: Partial<ConfigFileSnapshot> = {}): ConfigFileSnap
   };
 }
 
+function makeZeroDebounceHookSnapshot(hash: string): ConfigFileSnapshot {
+  return makeSnapshot({
+    sourceConfig: {
+      gateway: { reload: { debounceMs: 0 } },
+    },
+    runtimeConfig: {
+      gateway: { reload: { debounceMs: 0 } },
+      hooks: { enabled: true },
+    },
+    config: {
+      gateway: { reload: { debounceMs: 0 } },
+      hooks: { enabled: true },
+    },
+    hash,
+  });
+}
+
+function makeZeroDebounceHookWrite(persistedHash: string): ConfigWriteNotification {
+  return {
+    configPath: "/tmp/openclaw.json",
+    sourceConfig: { gateway: { reload: { debounceMs: 0 } } },
+    runtimeConfig: {
+      gateway: { reload: { debounceMs: 0 } },
+      hooks: { enabled: true },
+    },
+    persistedHash,
+    writtenAtMs: Date.now(),
+  };
+}
+
 function createReloaderHarness(
   readSnapshot: () => Promise<ConfigFileSnapshot>,
   options: {
@@ -669,38 +699,8 @@ describe("startGatewayConfigReloader", () => {
   it("reuses in-process write notifications and dedupes watcher rereads by persisted hash", async () => {
     const readSnapshot = vi
       .fn<() => Promise<ConfigFileSnapshot>>()
-      .mockResolvedValueOnce(
-        makeSnapshot({
-          sourceConfig: {
-            gateway: { reload: { debounceMs: 0 } },
-          },
-          runtimeConfig: {
-            gateway: { reload: { debounceMs: 0 } },
-            hooks: { enabled: true },
-          },
-          config: {
-            gateway: { reload: { debounceMs: 0 } },
-            hooks: { enabled: true },
-          },
-          hash: "internal-1",
-        }),
-      )
-      .mockResolvedValueOnce(
-        makeSnapshot({
-          sourceConfig: {
-            gateway: { reload: { debounceMs: 0 } },
-          },
-          runtimeConfig: {
-            gateway: { reload: { debounceMs: 0 } },
-            hooks: { enabled: true },
-          },
-          config: {
-            gateway: { reload: { debounceMs: 0 } },
-            hooks: { enabled: true },
-          },
-          hash: "internal-1",
-        }),
-      )
+      .mockResolvedValueOnce(makeZeroDebounceHookSnapshot("internal-1"))
+      .mockResolvedValueOnce(makeZeroDebounceHookSnapshot("internal-1"))
       .mockResolvedValueOnce(
         makeSnapshot({
           sourceConfig: {
@@ -718,16 +718,7 @@ describe("startGatewayConfigReloader", () => {
     const promoteSnapshot = vi.fn(async () => true);
     const harness = createReloaderHarness(readSnapshot, { promoteSnapshot });
 
-    harness.emitWrite({
-      configPath: "/tmp/openclaw.json",
-      sourceConfig: { gateway: { reload: { debounceMs: 0 } } },
-      runtimeConfig: {
-        gateway: { reload: { debounceMs: 0 } },
-        hooks: { enabled: true },
-      },
-      persistedHash: "internal-1",
-      writtenAtMs: Date.now(),
-    });
+    harness.emitWrite(makeZeroDebounceHookWrite("internal-1"));
     await vi.runOnlyPendingTimersAsync();
 
     expect(readSnapshot).toHaveBeenCalledTimes(1);
@@ -772,16 +763,7 @@ describe("startGatewayConfigReloader", () => {
     const promoteSnapshot = vi.fn(async () => true);
     const harness = createReloaderHarness(readSnapshot, { promoteSnapshot });
 
-    harness.emitWrite({
-      configPath: "/tmp/openclaw.json",
-      sourceConfig: { gateway: { reload: { debounceMs: 0 } } },
-      runtimeConfig: {
-        gateway: { reload: { debounceMs: 0 } },
-        hooks: { enabled: true },
-      },
-      persistedHash: "internal-1",
-      writtenAtMs: Date.now(),
-    });
+    harness.emitWrite(makeZeroDebounceHookWrite("internal-1"));
     await vi.runOnlyPendingTimersAsync();
 
     expect(harness.onHotReload).toHaveBeenCalledTimes(1);

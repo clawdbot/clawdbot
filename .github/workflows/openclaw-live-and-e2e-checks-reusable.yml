@@ -230,7 +230,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
-          use-sticky-disk: "false"
 
       - name: Validate live cache credentials
         run: |
@@ -267,7 +266,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
-          use-sticky-disk: "false"
 
       - name: Build dist for repo E2E
         run: pnpm build
@@ -313,7 +311,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
-          use-sticky-disk: "false"
 
       - name: Build dist for special E2E
         if: |
@@ -381,6 +378,12 @@ jobs:
           - suite_id: docker-plugins
             label: Plugins Docker E2E
             command: pnpm test:docker:plugins
+            timeout_minutes: 75
+            release_path: true
+            openwebui_only: false
+          - suite_id: docker-bundled-channel-deps
+            label: Bundled Channel Runtime Deps Docker E2E
+            command: pnpm test:docker:bundled-channel-deps
             timeout_minutes: 75
             release_path: true
             openwebui_only: false
@@ -465,7 +468,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
-          use-sticky-disk: "false"
 
       - name: Hydrate live auth/profile inputs
         run: bash scripts/ci-hydrate-live-auth.sh
@@ -608,7 +610,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
-          use-sticky-disk: "false"
 
       - name: Hydrate live auth/profile inputs
         run: bash scripts/ci-hydrate-live-auth.sh

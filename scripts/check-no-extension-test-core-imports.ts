@@ -27,6 +27,10 @@ const FORBIDDEN_PATTERNS: Array<{ pattern: RegExp; hint: string }> = [
     pattern: /["'](?:\.\.\/)+(?:src\/plugins\/types\.js)["']/,
     hint: "Use public plugin-sdk/core types or test/helpers/plugins/* instead.",
   },
+  {
+    pattern: /["'](?:\.\.\/)+(?:src\/channels\/plugins\/contracts\/test-helpers\.js)["']/,
+    hint: "Use openclaw/plugin-sdk/testing for channel contract test helpers.",
+  },
 ];
 
 function isExtensionTestFile(filePath: string): boolean {

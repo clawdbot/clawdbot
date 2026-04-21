@@ -1,29 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
+import "./message-handler-mock-support.test-support.js";
 import { createMSTeamsMessageHandler } from "./message-handler.js";
 import {
   buildChannelActivity,
   channelConversationId,
   createMessageHandlerDeps,
 } from "./message-handler.test-support.js";
-
-const runtimeApiMockState = vi.hoisted(() => ({
-  dispatchReplyFromConfigWithSettledDispatcher: vi.fn(async (params: { ctxPayload: unknown }) => ({
-    queuedFinal: false,
-    counts: {},
-    capturedCtxPayload: params.ctxPayload,
-  })),
-}));
-
-vi.mock("../../runtime-api.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../runtime-api.js")>("../../runtime-api.js");
-  return {
-    ...actual,
-    dispatchReplyFromConfigWithSettledDispatcher:
-      runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher,
-  };
-});
 
 vi.mock("../graph-thread.js", async () => {
   const actual = await vi.importActual<typeof import("../graph-thread.js")>("../graph-thread.js");
@@ -34,14 +17,6 @@ vi.mock("../graph-thread.js", async () => {
     fetchThreadReplies: vi.fn(async () => []),
   };
 });
-
-vi.mock("../reply-dispatcher.js", () => ({
-  createMSTeamsReplyDispatcher: () => ({
-    dispatcher: {},
-    replyOptions: {},
-    markDispatchIdle: vi.fn(),
-  }),
-}));
 
 describe("msteams thread session isolation", () => {
   it("appends thread suffix to session key for channel thread replies", async () => {

@@ -6,7 +6,7 @@ export default defineBundledChannelEntry({
   description: "Synthetic QA channel plugin",
   importMetaUrl: import.meta.url,
   plugin: {
-    specifier: "./api.js",
+    specifier: "./channel-plugin-api.js",
     exportName: "qaChannelPlugin",
   },
   runtime: {

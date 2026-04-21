@@ -14,7 +14,7 @@ Docker is **optional**. Use it only if you want a containerized gateway or to va
 
 - **Yes**: you want an isolated, throwaway gateway environment or to run OpenClaw on a host without local installs.
 - **No**: you are running on your own machine and just want the fastest dev loop. Use the normal install flow instead.
-- **Sandboxing note**: agent sandboxing uses Docker too, but it does **not** require the full gateway to run in Docker. See [Sandboxing](/gateway/sandboxing).
+- **Sandboxing note**: the default sandbox backend uses Docker when sandboxing is enabled, but sandboxing is off by default and does **not** require the full gateway to run in Docker. SSH and OpenShell sandbox backends are also available. See [Sandboxing](/gateway/sandboxing).
 
 ## Prerequisites
 
@@ -311,10 +311,11 @@ including binary baking, persistence, and updates.
 
 ## Agent Sandbox
 
-When `agents.defaults.sandbox` is enabled, the gateway runs agent tool execution
-(shell, file read/write, etc.) inside isolated Docker containers while the
-gateway itself stays on the host. This gives you a hard wall around untrusted or
-multi-tenant agent sessions without containerizing the entire gateway.
+When `agents.defaults.sandbox` is enabled with the Docker backend, the gateway
+runs agent tool execution (shell, file read/write, etc.) inside isolated Docker
+containers while the gateway itself stays on the host. This gives you a hard wall
+around untrusted or multi-tenant agent sessions without containerizing the entire
+gateway.
 
 Sandbox scope can be per-agent (default), per-session, or shared. Each scope
 gets its own workspace mounted at `/workspace`. You can also configure

@@ -29,16 +29,26 @@ import {
   waitForMemorySearchMatch,
 } from "./suite-runtime-agent-process.js";
 
+type MockEmitter = {
+  emit: (eventName: string | symbol, ...args: unknown[]) => boolean;
+  on: (eventName: string | symbol, listener: (...args: unknown[]) => void) => MockEmitter;
+  once: (eventName: string | symbol, listener: (...args: unknown[]) => void) => MockEmitter;
+};
+
+type MockChildProcess = MockEmitter & {
+  stdout: MockEmitter;
+  stderr: MockEmitter;
+  kill: ReturnType<typeof vi.fn>;
+};
+
+function createMockEmitter() {
+  return new EventEmitter() as unknown as MockEmitter;
+}
+
 function createSpawnedProcess() {
-  const child = new EventEmitter() as EventEmitter & {
-    stdout: EventEmitter;
-    stderr: EventEmitter;
-    kill: ReturnType<typeof vi.fn>;
-    once: (event: string, listener: (...args: unknown[]) => void) => unknown;
-    on: (event: string, listener: (...args: unknown[]) => void) => unknown;
-  };
-  child.stdout = new EventEmitter();
-  child.stderr = new EventEmitter();
+  const child = createMockEmitter() as MockChildProcess;
+  child.stdout = createMockEmitter();
+  child.stderr = createMockEmitter();
   child.kill = vi.fn();
   return child;
 }
@@ -115,6 +125,68 @@ describe("qa suite runtime agent process helpers", () => {
     child.emit("exit", 0);
 
     await expect(pending).resolves.toEqual({ ok: true });
+  });
+
+  it("parses json qa cli output after colored startup logs", async () => {
+    const child = createSpawnedProcess();
+    spawnMock.mockReturnValue(child);
+
+    const pending = runQaCli(
+      {
+        repoRoot: "/repo",
+        gateway: {
+          tempRoot: "/tmp/runtime",
+          runtimeEnv: {},
+        },
+        primaryModel: "openai/gpt-5.4",
+        alternateModel: "openai/gpt-5.4-mini",
+        providerMode: "mock-openai",
+      } as never,
+      ["memory", "search", "--json"],
+      { json: true },
+    );
+
+    await waitForSpawnCount(1);
+    child.stdout.emit(
+      "data",
+      Buffer.from(
+        '\u001b[35m[plugins]\u001b[39m \u001b[36mcodex installed bundled runtime deps\u001b[39m\n{"results":[{"text":"ORBIT-10"}]}\n',
+      ),
+    );
+    child.emit("exit", 0);
+
+    await expect(pending).resolves.toEqual({ results: [{ text: "ORBIT-10" }] });
+  });
+
+  it("parses pretty json qa cli output after startup logs", async () => {
+    const child = createSpawnedProcess();
+    spawnMock.mockReturnValue(child);
+
+    const pending = runQaCli(
+      {
+        repoRoot: "/repo",
+        gateway: {
+          tempRoot: "/tmp/runtime",
+          runtimeEnv: {},
+        },
+        primaryModel: "openai/gpt-5.4",
+        alternateModel: "openai/gpt-5.4-mini",
+        providerMode: "mock-openai",
+      } as never,
+      ["memory", "search", "--json"],
+      { json: true },
+    );
+
+    await waitForSpawnCount(1);
+    child.stdout.emit(
+      "data",
+      Buffer.from(
+        '[plugins] memory-core installed bundled runtime deps\n{\n  "results": [\n    {\n      "text": "ORBIT-10"\n    }\n  ]\n}\n',
+      ),
+    );
+    child.emit("exit", 0);
+
+    await expect(pending).resolves.toEqual({ results: [{ text: "ORBIT-10" }] });
   });
 
   it("starts an agent run with transport-derived delivery metadata", async () => {

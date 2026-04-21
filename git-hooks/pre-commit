@@ -67,13 +67,13 @@ if [[ -f "$ROOT_DIR/package.json" ]] && [[ -f "$ROOT_DIR/pnpm-lock.yaml" ]]; the
   cd "$ROOT_DIR"
   case "${FAST_COMMIT:-}" in
     1|true|TRUE|yes|YES|on|ON)
-      echo "FAST_COMMIT enabled: skipping pnpm check in pre-commit hook."
+      echo "FAST_COMMIT enabled: skipping changed-scope check in pre-commit hook."
       ;;
     *)
       if [[ "$docs_only" == true ]]; then
         echo "Docs-only staged changes detected: skipping pnpm check in pre-commit hook."
       else
-        pnpm check
+        pnpm check:changed --staged
       fi
       ;;
   esac

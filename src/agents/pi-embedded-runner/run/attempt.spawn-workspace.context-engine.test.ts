@@ -111,7 +111,7 @@ async function finalizeTurn(
 }
 
 describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
-  const sessionKey = "agent:main:discord:channel:test-ctx-engine";
+  const sessionKey = "agent:main:guildchat:channel:test-ctx-engine";
   const tempPaths: string[] = [];
   beforeEach(() => {
     resetEmbeddedAttemptHarness();

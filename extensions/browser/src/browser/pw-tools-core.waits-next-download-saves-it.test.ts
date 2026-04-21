@@ -2,40 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getPwToolsCoreSessionMocks,
+  installPwToolsCoreTestHooks,
+  setPwToolsCoreCurrentPage,
+  setPwToolsCoreCurrentRefLocator,
+} from "./pw-tools-core.test-harness.js";
 
-let currentPage: Record<string, unknown> | null = null;
-let currentRefLocator: Record<string, unknown> | null = null;
-let pageState: {
-  console: unknown[];
-  armIdUpload: number;
-  armIdDialog: number;
-  armIdDownload: number;
-} = {
-  console: [],
-  armIdUpload: 0,
-  armIdDialog: 0,
-  armIdDownload: 0,
-};
-
-const sessionMocks = vi.hoisted(() => ({
-  getPageForTargetId: vi.fn(async () => {
-    if (!currentPage) {
-      throw new Error("missing page");
-    }
-    return currentPage;
-  }),
-  ensurePageState: vi.fn(() => pageState),
-  forceDisconnectPlaywrightForTarget: vi.fn(async () => {}),
-  restoreRoleRefsForTarget: vi.fn(() => {}),
-  storeRoleRefsForTarget: vi.fn(() => {}),
-  refLocator: vi.fn(() => {
-    if (!currentRefLocator) {
-      throw new Error("missing locator");
-    }
-    return currentRefLocator;
-  }),
-  rememberRoleRefsForTarget: vi.fn(() => {}),
-}));
 const tmpDirMocks = vi.hoisted(() => ({
   resolvePreferredOpenClawTmpDir: vi.fn(() => "/tmp/openclaw"),
 }));
@@ -45,9 +18,11 @@ const chromeMocks = vi.hoisted(() => ({
 const clientFetchMocks = vi.hoisted(() => ({
   resolveBrowserRateLimitMessage: vi.fn(() => undefined),
 }));
-vi.mock("./pw-session.js", () => sessionMocks);
 vi.mock("./chrome.js", () => chromeMocks);
 vi.mock("./client-fetch.js", () => clientFetchMocks);
+
+const sessionMocks = getPwToolsCoreSessionMocks();
+
 let mod: Pick<
   typeof import("./pw-tools-core.downloads.js"),
   "downloadViaPlaywright" | "waitForDownloadViaPlaywright"
@@ -56,6 +31,8 @@ let mod: Pick<
 let tmpDirModule: typeof import("../infra/tmp-openclaw-dir.js");
 
 describe("pw-tools-core", () => {
+  installPwToolsCoreTestHooks();
+
   beforeAll(async () => {
     vi.doMock("./pw-session.js", () => sessionMocks);
     vi.doMock("./chrome.js", () => chromeMocks);
@@ -75,18 +52,6 @@ describe("pw-tools-core", () => {
   });
 
   beforeEach(() => {
-    currentPage = null;
-    currentRefLocator = null;
-    pageState = {
-      console: [],
-      armIdUpload: 0,
-      armIdDialog: 0,
-      armIdDownload: 0,
-    };
-
-    for (const fn of Object.values(sessionMocks)) {
-      fn.mockClear();
-    }
     for (const fn of Object.values(tmpDirMocks)) {
       fn.mockClear();
     }
@@ -144,7 +109,7 @@ describe("pw-tools-core", () => {
       }
     });
     const off = vi.fn();
-    currentPage = { on, off };
+    setPwToolsCoreCurrentPage({ on, off });
     return {
       trigger: (download: unknown) => {
         downloadHandler?.(download);
@@ -209,7 +174,7 @@ describe("pw-tools-core", () => {
       const harness = createDownloadEventHarness();
 
       const click = vi.fn(async () => {});
-      currentRefLocator = { click };
+      setPwToolsCoreCurrentRefLocator({ click });
 
       const saveAs = vi.fn(async (outPath: string) => {
         await fs.writeFile(outPath, "report-content", "utf8");
@@ -316,7 +281,7 @@ describe("pw-tools-core", () => {
       }
     });
     const off = vi.fn();
-    currentPage = { on, off };
+    setPwToolsCoreCurrentPage({ on, off });
 
     const resp = {
       url: () => "https://example.com/api/data",

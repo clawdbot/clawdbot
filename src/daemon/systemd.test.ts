@@ -6,14 +6,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const execFileMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", async () => {
-  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
-  return mockNodeBuiltinModule(
-    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
-    {
-      execFile: Object.assign(execFileMock, {
-        __promisify__: vi.fn(),
-      }) as typeof import("node:child_process").execFile,
-    },
+  const { mockNodeChildProcessExecFile } = await import("../../test/helpers/node-builtin-mocks.js");
+  return mockNodeChildProcessExecFile(
+    Object.assign(execFileMock, {
+      __promisify__: vi.fn(),
+    }) as typeof import("node:child_process").execFile,
   );
 });
 
@@ -643,12 +640,14 @@ describe("readSystemdServiceExecStart", () => {
 });
 
 describe("stageSystemdService", () => {
-  beforeEach(() => {
-    vi.restoreAllMocks();
-    execFileMock.mockReset();
-  });
-
-  it("writes dotenv-backed values to a separate env file and keeps inline env minimal", async () => {
+  async function withStageFixture(
+    run: (context: {
+      env: Record<string, string>;
+      stateDir: string;
+      unitPath: string;
+      envFilePath: string;
+    }) => Promise<void>,
+  ): Promise<void> {
     const tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-stage-"));
     const home = path.join(tempHomeRoot, "home");
     const stateDir = path.join(home, ".openclaw");
@@ -660,19 +659,36 @@ describe("stageSystemdService", () => {
     const unitPath = resolveSystemdUserUnitPath(env);
     const envFilePath = path.join(stateDir, "gateway.systemd.env");
 
-    await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(
-      path.join(stateDir, ".env"),
-      ["OPENCLAW_GATEWAY_TOKEN=dotenv-token", "LLM_API_KEY=dotenv-key"].join("\n"),
-      "utf8",
-    );
+    try {
+      await fs.mkdir(stateDir, { recursive: true });
+      await run({ env, stateDir, unitPath, envFilePath });
+    } finally {
+      await fs.rm(tempHomeRoot, { recursive: true, force: true });
+    }
+  }
 
+  function mockSystemctlStatusOk(): void {
     execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
       assertUserSystemctlArgs(args, "status");
       cb(null, "", "");
     });
+  }
 
-    try {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    execFileMock.mockReset();
+  });
+
+  it("writes dotenv-backed values to a separate env file and keeps inline env minimal", async () => {
+    await withStageFixture(async ({ env, stateDir, unitPath, envFilePath }) => {
+      await fs.writeFile(
+        path.join(stateDir, ".env"),
+        ["OPENCLAW_GATEWAY_TOKEN=dotenv-token", "LLM_API_KEY=dotenv-key"].join("\n"),
+        "utf8",
+      );
+
+      mockSystemctlStatusOk();
+
       await stageSystemdService({
         env,
         stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
@@ -697,36 +713,19 @@ describe("stageSystemdService", () => {
       expect(unit).not.toContain("Environment=LLM_API_KEY=dotenv-key");
       expect(envFile).toBe("OPENCLAW_GATEWAY_TOKEN=dotenv-token\nLLM_API_KEY=dotenv-key\n");
       expect(envFileStat.mode & 0o777).toBe(0o600);
-    } finally {
-      await fs.rm(tempHomeRoot, { recursive: true, force: true });
-    }
+    });
   });
 
   it("keeps inline overrides out of the generated env file", async () => {
-    const tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-stage-"));
-    const home = path.join(tempHomeRoot, "home");
-    const stateDir = path.join(home, ".openclaw");
-    const env = {
-      HOME: home,
-      OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-stage-test",
-    };
-    const unitPath = resolveSystemdUserUnitPath(env);
-    const envFilePath = path.join(stateDir, "gateway.systemd.env");
+    await withStageFixture(async ({ env, stateDir, unitPath, envFilePath }) => {
+      await fs.writeFile(
+        path.join(stateDir, ".env"),
+        ["OPENCLAW_GATEWAY_TOKEN=stale-token", "LLM_API_KEY=dotenv-key"].join("\n"),
+        "utf8",
+      );
 
-    await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(
-      path.join(stateDir, ".env"),
-      ["OPENCLAW_GATEWAY_TOKEN=stale-token", "LLM_API_KEY=dotenv-key"].join("\n"),
-      "utf8",
-    );
+      mockSystemctlStatusOk();
 
-    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
-      assertUserSystemctlArgs(args, "status");
-      cb(null, "", "");
-    });
-
-    try {
       await stageSystemdService({
         env,
         stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
@@ -746,9 +745,7 @@ describe("stageSystemdService", () => {
       expect(unit).toContain(`EnvironmentFile=-${envFilePath}`);
       expect(unit).toContain("Environment=OPENCLAW_GATEWAY_TOKEN=fresh-token");
       expect(envFile).toBe("LLM_API_KEY=dotenv-key\n");
-    } finally {
-      await fs.rm(tempHomeRoot, { recursive: true, force: true });
-    }
+    });
   });
 });
 

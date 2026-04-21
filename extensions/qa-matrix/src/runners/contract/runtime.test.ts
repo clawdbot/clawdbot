@@ -7,6 +7,72 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+type MatrixQaSummaryInput = Parameters<typeof liveTesting.buildMatrixQaSummary>[0];
+type MatrixQaSummaryInputOverrides = Partial<Omit<MatrixQaSummaryInput, "timings">> & {
+  timings?: Partial<MatrixQaSummaryInput["timings"]>;
+};
+
+function buildMatrixQaSummaryInput(
+  overrides: MatrixQaSummaryInputOverrides = {},
+): MatrixQaSummaryInput {
+  const timings: MatrixQaSummaryInput["timings"] = {
+    artifactWriteMs: 5,
+    canaryMs: 40,
+    harnessBootMs: 100,
+    initialGatewayBootMs: 200,
+    provisioningMs: 300,
+    scenarioGatewayBootMs: 50,
+    scenarioRestartGatewayMs: 60,
+    scenarioTransportInterruptMs: 70,
+    scenarios: [],
+    totalMs: 825,
+    ...overrides.timings,
+  };
+
+  return {
+    artifactPaths: {
+      observedEvents: "/tmp/observed.json",
+      report: "/tmp/report.md",
+      summary: "/tmp/summary.json",
+    },
+    checks: [{ name: "Matrix harness ready", status: "pass" }],
+    config: {
+      default: liveTesting.buildMatrixQaConfigSnapshot({
+        driverUserId: "@driver:matrix-qa.test",
+        observerUserId: "@observer:matrix-qa.test",
+        sutUserId: "@sut:matrix-qa.test",
+        topology: {
+          defaultRoomId: "!room:matrix-qa.test",
+          defaultRoomKey: "main",
+          rooms: [],
+        },
+      }),
+      scenarios: [],
+    },
+    finishedAt: "2026-04-10T10:05:00.000Z",
+    harness: {
+      baseUrl: "http://127.0.0.1:28008/",
+      composeFile: "/tmp/docker-compose.yml",
+      dmRoomIds: [],
+      image: "ghcr.io/matrix-construct/tuwunel:v1.5.1",
+      roomId: "!room:matrix-qa.test",
+      roomIds: ["!room:matrix-qa.test"],
+      serverName: "matrix-qa.test",
+    },
+    observedEventCount: 4,
+    scenarios: [],
+    startedAt: "2026-04-10T10:00:00.000Z",
+    sutAccountId: "sut",
+    userIds: {
+      driver: "@driver:matrix-qa.test",
+      observer: "@observer:matrix-qa.test",
+      sut: "@sut:matrix-qa.test",
+    },
+    ...overrides,
+    timings,
+  };
+}
+
 describe("matrix live qa runtime", () => {
   it("injects a temporary Matrix account into the QA gateway config", () => {
     const baseCfg: OpenClawConfig = {
@@ -265,81 +331,38 @@ describe("matrix live qa runtime", () => {
 
   it("preserves negative-scenario artifacts in the Matrix summary", () => {
     expect(
-      liveTesting.buildMatrixQaSummary({
-        artifactPaths: {
-          observedEvents: "/tmp/observed.json",
-          report: "/tmp/report.md",
-          summary: "/tmp/summary.json",
-        },
-        checks: [{ name: "Matrix harness ready", status: "pass" }],
-        config: {
-          default: liveTesting.buildMatrixQaConfigSnapshot({
-            driverUserId: "@driver:matrix-qa.test",
-            observerUserId: "@observer:matrix-qa.test",
-            sutUserId: "@sut:matrix-qa.test",
-            topology: {
-              defaultRoomId: "!room:matrix-qa.test",
-              defaultRoomKey: "main",
-              rooms: [],
-            },
-          }),
-          scenarios: [],
-        },
-        finishedAt: "2026-04-10T10:05:00.000Z",
-        harness: {
-          baseUrl: "http://127.0.0.1:28008/",
-          composeFile: "/tmp/docker-compose.yml",
-          dmRoomIds: [],
-          image: "ghcr.io/matrix-construct/tuwunel:v1.5.1",
-          roomId: "!room:matrix-qa.test",
-          roomIds: ["!room:matrix-qa.test"],
-          serverName: "matrix-qa.test",
-        },
-        observedEventCount: 4,
-        scenarios: [
-          {
-            id: "matrix-mention-gating",
-            title: "Matrix room message without mention does not trigger",
-            status: "pass",
-            details: "no reply",
-            artifacts: {
-              actorUserId: "@driver:matrix-qa.test",
-              driverEventId: "$driver",
-              expectedNoReplyWindowMs: 8_000,
-              token: "MATRIX_QA_NOMENTION_TOKEN",
-              triggerBody: "reply with only this exact marker: MATRIX_QA_NOMENTION_TOKEN",
-            },
-          },
-        ],
-        startedAt: "2026-04-10T10:00:00.000Z",
-        sutAccountId: "sut",
-        timings: {
-          artifactWriteMs: 5,
-          canaryMs: 40,
-          harnessBootMs: 100,
-          initialGatewayBootMs: 200,
-          provisioningMs: 300,
-          scenarioGatewayBootMs: 50,
-          scenarioRestartGatewayMs: 60,
-          scenarioTransportInterruptMs: 70,
+      liveTesting.buildMatrixQaSummary(
+        buildMatrixQaSummaryInput({
           scenarios: [
             {
-              durationMs: 80,
-              gatewayBootMs: 0,
-              gatewayRestartMs: 0,
               id: "matrix-mention-gating",
               title: "Matrix room message without mention does not trigger",
-              transportInterruptMs: 0,
+              status: "pass",
+              details: "no reply",
+              artifacts: {
+                actorUserId: "@driver:matrix-qa.test",
+                driverEventId: "$driver",
+                expectedNoReplyWindowMs: 8_000,
+                token: "MATRIX_QA_NOMENTION_TOKEN",
+                triggerBody: "reply with only this exact marker: MATRIX_QA_NOMENTION_TOKEN",
+              },
             },
           ],
-          totalMs: 905,
-        },
-        userIds: {
-          driver: "@driver:matrix-qa.test",
-          observer: "@observer:matrix-qa.test",
-          sut: "@sut:matrix-qa.test",
-        },
-      }),
+          timings: {
+            scenarios: [
+              {
+                durationMs: 80,
+                gatewayBootMs: 0,
+                gatewayRestartMs: 0,
+                id: "matrix-mention-gating",
+                title: "Matrix room message without mention does not trigger",
+                transportInterruptMs: 0,
+              },
+            ],
+            totalMs: 905,
+          },
+        }),
+      ),
     ).toMatchObject({
       counts: {
         total: 2,
@@ -363,78 +386,36 @@ describe("matrix live qa runtime", () => {
   });
 
   it("keeps failing Matrix scenario details and timings complete in summary + report output", () => {
-    const summary = liveTesting.buildMatrixQaSummary({
-      artifactPaths: {
-        observedEvents: "/tmp/observed.json",
-        report: "/tmp/report.md",
-        summary: "/tmp/summary.json",
-      },
-      checks: [{ name: "Matrix harness ready", status: "pass" }],
-      config: {
-        default: liveTesting.buildMatrixQaConfigSnapshot({
-          driverUserId: "@driver:matrix-qa.test",
-          observerUserId: "@observer:matrix-qa.test",
-          sutUserId: "@sut:matrix-qa.test",
-          topology: {
-            defaultRoomId: "!room:matrix-qa.test",
-            defaultRoomKey: "main",
-            rooms: [],
-          },
-        }),
-        scenarios: [],
-      },
-      finishedAt: "2026-04-10T10:05:00.000Z",
-      harness: {
-        baseUrl: "http://127.0.0.1:28008/",
-        composeFile: "/tmp/docker-compose.yml",
-        dmRoomIds: [],
-        image: "ghcr.io/matrix-construct/tuwunel:v1.5.1",
-        roomId: "!room:matrix-qa.test",
-        roomIds: ["!room:matrix-qa.test"],
-        serverName: "matrix-qa.test",
-      },
-      observedEventCount: 6,
-      scenarios: [
-        {
-          id: "matrix-reaction-not-a-reply",
-          title: "Matrix reactions do not trigger a fresh bot reply",
-          status: "fail",
-          details: [
-            "unexpected SUT reply after reaction from @driver:matrix-qa.test",
-            "reaction event: $reaction",
-            "unexpected reply event: $reply",
-          ].join("\n"),
-        },
-      ],
-      startedAt: "2026-04-10T10:00:00.000Z",
-      sutAccountId: "sut",
-      timings: {
-        artifactWriteMs: 5,
-        canaryMs: 40,
-        harnessBootMs: 100,
-        initialGatewayBootMs: 200,
-        provisioningMs: 300,
-        scenarioGatewayBootMs: 50,
-        scenarioRestartGatewayMs: 60,
-        scenarioTransportInterruptMs: 70,
+    const summary = liveTesting.buildMatrixQaSummary(
+      buildMatrixQaSummaryInput({
+        observedEventCount: 6,
         scenarios: [
           {
-            durationMs: 8_000,
-            gatewayBootMs: 0,
-            gatewayRestartMs: 0,
             id: "matrix-reaction-not-a-reply",
             title: "Matrix reactions do not trigger a fresh bot reply",
-            transportInterruptMs: 0,
+            status: "fail",
+            details: [
+              "unexpected SUT reply after reaction from @driver:matrix-qa.test",
+              "reaction event: $reaction",
+              "unexpected reply event: $reply",
+            ].join("\n"),
           },
         ],
-        totalMs: 825,
-      },
-      userIds: {
-        driver: "@driver:matrix-qa.test",
-        observer: "@observer:matrix-qa.test",
-        sut: "@sut:matrix-qa.test",
-      },
-    });
+        timings: {
+          scenarios: [
+            {
+              durationMs: 8_000,
+              gatewayBootMs: 0,
+              gatewayRestartMs: 0,
+              id: "matrix-reaction-not-a-reply",
+              title: "Matrix reactions do not trigger a fresh bot reply",
+              transportInterruptMs: 0,
+            },
+          ],
+          totalMs: 825,
+        },
+      }),
+    );
 
     expect(summary).toMatchObject({
       counts: {

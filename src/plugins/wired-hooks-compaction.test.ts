@@ -22,8 +22,8 @@ vi.mock("../infra/agent-events.js", () => ({
 }));
 
 import {
-  handleAutoCompactionEnd,
-  handleAutoCompactionStart,
+  handleCompactionEnd,
+  handleCompactionStart,
 } from "../agents/pi-embedded-subscribe.handlers.compaction.js";
 
 describe("compaction hook wiring", () => {
@@ -111,16 +111,16 @@ describe("compaction hook wiring", () => {
       aborted?: boolean;
     },
   ) {
-    handleAutoCompactionEnd(
+    handleCompactionEnd(
       ctx as never,
       {
-        type: "auto_compaction_end",
+        type: "compaction_end",
         ...event,
       } as never,
     );
   }
 
-  it("calls runBeforeCompaction in handleAutoCompactionStart", () => {
+  it("calls runBeforeCompaction in handleCompactionStart", () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
 
     const ctx = {
@@ -136,7 +136,7 @@ describe("compaction hook wiring", () => {
       ensureCompactionPromise: vi.fn(),
     };
 
-    handleAutoCompactionStart(ctx as never);
+    handleCompactionStart(ctx as never);
 
     expect(hookMocks.runner.runBeforeCompaction).toHaveBeenCalledTimes(1);
     expectCompactionEvent({

@@ -123,6 +123,7 @@ describe("doctor plugin manifest legacy contract repair", () => {
       },
       runtime: createRuntime(),
       prompter: createPrompter(),
+      note: vi.fn(),
     });
 
     const next = JSON.parse(fs.readFileSync(path.join(root, "openclaw.plugin.json"), "utf-8")) as {

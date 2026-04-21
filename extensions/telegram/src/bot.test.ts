@@ -1334,6 +1334,7 @@ describe("createTelegramBot", () => {
         telegramTransport: {
           fetch: mediaFetch as typeof fetch,
           sourceFetch: mediaFetch as typeof fetch,
+          close: async () => {},
         },
       });
       const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
@@ -1447,6 +1448,7 @@ describe("createTelegramBot", () => {
         telegramTransport: {
           fetch: mediaFetch as typeof fetch,
           sourceFetch: mediaFetch as typeof fetch,
+          close: async () => {},
         },
       });
       const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;

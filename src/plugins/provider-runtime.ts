@@ -19,6 +19,7 @@ import {
 } from "./provider-hook-runtime.js";
 import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
+import type { ProviderThinkingProfile } from "./provider-thinking.types.js";
 import { resolveCatalogHookProviderPluginIds } from "./providers.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
 import { resolveRuntimeTextTransforms } from "./text-transforms.runtime.js";
@@ -638,6 +639,16 @@ export function resolveProviderXHighThinking(params: {
   context: ProviderThinkingPolicyContext;
 }) {
   return resolveProviderRuntimePlugin(params)?.supportsXHighThinking?.(params.context);
+}
+
+export function resolveProviderThinkingProfile(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderDefaultThinkingPolicyContext;
+}): ProviderThinkingProfile | null | undefined {
+  return resolveProviderRuntimePlugin(params)?.resolveThinkingProfile?.(params.context);
 }
 
 export function resolveProviderDefaultThinkingLevel(params: {

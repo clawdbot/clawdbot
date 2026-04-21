@@ -13,3 +13,10 @@ export function generatePkceVerifierChallenge(): { verifier: string; challenge: 
   const challenge = createHash("sha256").update(verifier).digest("base64url");
   return { verifier, challenge };
 }
+
+/** Generate a PKCE verifier/challenge pair with a 64-character hex verifier. */
+export function generateHexPkceVerifierChallenge(): { verifier: string; challenge: string } {
+  const verifier = randomBytes(32).toString("hex");
+  const challenge = createHash("sha256").update(verifier).digest("base64url");
+  return { verifier, challenge };
+}

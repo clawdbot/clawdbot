@@ -30,6 +30,7 @@ export async function promptAuthChoiceGrouped(params: {
     const providerSelection = (await params.prompter.select({
       message: "Model/auth provider",
       options: providerOptions,
+      searchable: true,
     })) as string;
 
     if (providerSelection === "skip") {

@@ -159,6 +159,16 @@ export function normalizeAnthropicProviderConfig<T extends { api?: string; model
   return { ...providerConfig, api: ANTHROPIC_PROVIDER_API };
 }
 
+export function normalizeAnthropicProviderConfigForProvider<
+  T extends { api?: string; models?: unknown[] },
+>(params: { provider: string; providerConfig: T }): T {
+  const provider = normalizeProviderId(params.provider);
+  if (provider !== "anthropic" && provider !== CLAUDE_CLI_BACKEND_ID) {
+    return params.providerConfig;
+  }
+  return normalizeAnthropicProviderConfig(params.providerConfig);
+}
+
 export function applyAnthropicConfigDefaults(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;

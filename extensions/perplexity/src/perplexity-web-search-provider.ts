@@ -1,13 +1,13 @@
 import {
-  createWebSearchProviderContractFields,
   mergeScopedSearchConfig,
   resolveProviderWebSearchPluginConfig,
   type WebSearchProviderPlugin,
   type WebSearchProviderToolDefinition,
 } from "openclaw/plugin-sdk/provider-web-search-config-contract";
-import { resolvePerplexityRuntimeTransport } from "./perplexity-web-search-provider.shared.js";
-
-const PERPLEXITY_CREDENTIAL_PATH = "plugins.entries.perplexity.config.webSearch.apiKey";
+import {
+  createPerplexityWebSearchProviderBase,
+  resolvePerplexityWebSearchRuntimeMetadata,
+} from "./perplexity-web-search-provider.shared.js";
 
 type PerplexityWebSearchRuntime = typeof import("./perplexity-web-search-provider.runtime.js");
 
@@ -112,34 +112,8 @@ function createPerplexityToolDefinition(
 
 export function createPerplexityWebSearchProvider(): WebSearchProviderPlugin {
   return {
-    id: "perplexity",
-    label: "Perplexity Search",
-    hint: "Requires Perplexity API key or OpenRouter API key · structured results",
-    onboardingScopes: ["text-inference"],
-    credentialLabel: "Perplexity API key",
-    envVars: ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"],
-    placeholder: "pplx-...",
-    signupUrl: "https://www.perplexity.ai/settings/api",
-    docsUrl: "https://docs.openclaw.ai/perplexity",
-    autoDetectOrder: 50,
-    credentialPath: PERPLEXITY_CREDENTIAL_PATH,
-    ...createWebSearchProviderContractFields({
-      credentialPath: PERPLEXITY_CREDENTIAL_PATH,
-      searchCredential: { type: "scoped", scopeId: "perplexity" },
-      configuredCredential: { pluginId: "perplexity" },
-    }),
-    resolveRuntimeMetadata: (ctx) => ({
-      perplexityTransport: resolvePerplexityRuntimeTransport({
-        searchConfig: mergeScopedSearchConfig(
-          ctx.searchConfig,
-          "perplexity",
-          resolveProviderWebSearchPluginConfig(ctx.config, "perplexity"),
-        ),
-        resolvedKey: ctx.resolvedCredential?.value,
-        keySource: ctx.resolvedCredential?.source ?? "missing",
-        fallbackEnvVar: ctx.resolvedCredential?.fallbackEnvVar,
-      }),
-    }),
+    ...createPerplexityWebSearchProviderBase(),
+    resolveRuntimeMetadata: resolvePerplexityWebSearchRuntimeMetadata,
     createTool: (ctx) =>
       createPerplexityToolDefinition(
         mergeScopedSearchConfig(

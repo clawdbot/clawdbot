@@ -167,7 +167,7 @@ surfaces:
 - `openclaw/plugin-sdk/messaging-targets` for target parsing/matching
 - `openclaw/plugin-sdk/outbound-media` and
   `openclaw/plugin-sdk/outbound-runtime` for media loading plus outbound
-  identity/send delegates
+  identity/send delegates and payload planning
 - `openclaw/plugin-sdk/thread-bindings-runtime` for thread-binding lifecycle
   and adapter registration
 - `openclaw/plugin-sdk/agent-media-payload` only when a legacy agent/media

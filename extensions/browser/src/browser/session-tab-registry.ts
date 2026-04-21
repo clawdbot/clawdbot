@@ -38,6 +38,25 @@ function toTrackedTabId(params: { targetId: string; baseUrl?: string; profile?: 
   return `${params.targetId}\u0000${params.baseUrl ?? ""}\u0000${params.profile ?? ""}`;
 }
 
+function resolveTrackedTabIdentity(params: {
+  sessionKey?: string;
+  targetId?: string;
+  baseUrl?: string;
+  profile?: string;
+}): Omit<TrackedSessionBrowserTab, "trackedAt"> | undefined {
+  const sessionKeyRaw = params.sessionKey?.trim();
+  const targetIdRaw = params.targetId?.trim();
+  if (!sessionKeyRaw || !targetIdRaw) {
+    return undefined;
+  }
+  return {
+    sessionKey: normalizeSessionKey(sessionKeyRaw),
+    targetId: normalizeTargetId(targetIdRaw),
+    baseUrl: normalizeBaseUrl(params.baseUrl),
+    profile: normalizeProfile(params.profile),
+  };
+}
+
 function isIgnorableCloseError(err: unknown): boolean {
   const message = normalizeLowercaseStringOrEmpty(String(err));
   return (
@@ -54,27 +73,19 @@ export function trackSessionBrowserTab(params: {
   baseUrl?: string;
   profile?: string;
 }): void {
-  const sessionKeyRaw = params.sessionKey?.trim();
-  const targetIdRaw = params.targetId?.trim();
-  if (!sessionKeyRaw || !targetIdRaw) {
+  const identity = resolveTrackedTabIdentity(params);
+  if (!identity) {
     return;
   }
-  const sessionKey = normalizeSessionKey(sessionKeyRaw);
-  const targetId = normalizeTargetId(targetIdRaw);
-  const baseUrl = normalizeBaseUrl(params.baseUrl);
-  const profile = normalizeProfile(params.profile);
   const tracked: TrackedSessionBrowserTab = {
-    sessionKey,
-    targetId,
-    baseUrl,
-    profile,
+    ...identity,
     trackedAt: Date.now(),
   };
   const trackedId = toTrackedTabId(tracked);
-  let trackedForSession = trackedTabsBySession.get(sessionKey);
+  let trackedForSession = trackedTabsBySession.get(identity.sessionKey);
   if (!trackedForSession) {
     trackedForSession = new Map();
-    trackedTabsBySession.set(sessionKey, trackedForSession);
+    trackedTabsBySession.set(identity.sessionKey, trackedForSession);
   }
   trackedForSession.set(trackedId, tracked);
 }
@@ -85,24 +96,18 @@ export function untrackSessionBrowserTab(params: {
   baseUrl?: string;
   profile?: string;
 }): void {
-  const sessionKeyRaw = params.sessionKey?.trim();
-  const targetIdRaw = params.targetId?.trim();
-  if (!sessionKeyRaw || !targetIdRaw) {
+  const identity = resolveTrackedTabIdentity(params);
+  if (!identity) {
     return;
   }
-  const sessionKey = normalizeSessionKey(sessionKeyRaw);
-  const trackedForSession = trackedTabsBySession.get(sessionKey);
+  const trackedForSession = trackedTabsBySession.get(identity.sessionKey);
   if (!trackedForSession) {
     return;
   }
-  const trackedId = toTrackedTabId({
-    targetId: normalizeTargetId(targetIdRaw),
-    baseUrl: normalizeBaseUrl(params.baseUrl),
-    profile: normalizeProfile(params.profile),
-  });
+  const trackedId = toTrackedTabId(identity);
   trackedForSession.delete(trackedId);
   if (trackedForSession.size === 0) {
-    trackedTabsBySession.delete(sessionKey);
+    trackedTabsBySession.delete(identity.sessionKey);
   }
 }
 

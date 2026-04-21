@@ -26,12 +26,19 @@ OpenClaw has three public release lanes:
 - `latest` means the current promoted stable npm release
 - `beta` means the current beta install target
 - Stable and stable correction releases publish to npm `beta` by default; release operators can target `latest` explicitly, or promote a vetted beta build later
-- Every OpenClaw release ships the npm package and macOS app together
+- Every stable OpenClaw release ships the npm package and macOS app together;
+  beta releases normally validate and publish the npm/package path first, with
+  mac app build/sign/notarize reserved for stable unless explicitly requested
 
 ## Release cadence
 
 - Releases move beta-first
 - Stable follows only after the latest beta is validated
+- Maintainers normally cut releases from a `release/YYYY.M.D` branch created
+  from current `main`, so release validation and fixes do not block new
+  development on `main`
+- If a beta tag has been pushed or published and needs a fix, maintainers cut
+  the next `-beta.N` tag instead of deleting or recreating the old beta tag
 - Detailed release procedure, approvals, credentials, and recovery notes are
   maintainer-only
 
@@ -55,14 +62,15 @@ OpenClaw has three public release lanes:
 - This split is intentional: keep the real npm release path short,
   deterministic, and artifact-focused, while slower live checks stay in their
   own lane so they do not stall or block publish
-- Release checks must be dispatched from the `main` workflow ref so the
-  workflow logic and secrets stay canonical
+- Release checks must be dispatched from the `main` workflow ref or from a
+  `release/YYYY.M.D` workflow ref so the workflow logic and secrets stay
+  controlled
 - That workflow accepts either an existing release tag or the current full
-  40-character `main` commit SHA
-- In commit-SHA mode it only accepts the current `origin/main` HEAD; use a
+  40-character workflow-branch commit SHA
+- In commit-SHA mode it only accepts the current workflow-branch HEAD; use a
   release tag for older release commits
 - `OpenClaw NPM Release` validation-only preflight also accepts the current
-  full 40-character `main` commit SHA without requiring a pushed tag
+  full 40-character workflow-branch commit SHA without requiring a pushed tag
 - That SHA path is validation-only and cannot be promoted into a real publish
 - In SHA mode the workflow synthesizes `v<package.json version>` only for the
   package metadata check; real publish still requires a real release tag
@@ -81,6 +89,8 @@ OpenClaw has three public release lanes:
   install path in a fresh temp prefix
 - Maintainer release automation now uses preflight-then-promote:
   - real npm publish must pass a successful npm `preflight_run_id`
+  - the real npm publish must be dispatched from the same `main` or
+    `release/YYYY.M.D` branch as the successful preflight run
   - stable npm releases default to `beta`
   - stable npm publish can target `latest` explicitly via workflow input
   - token-based npm dist-tag mutation now lives in
@@ -119,7 +129,7 @@ OpenClaw has three public release lanes:
 
 - `tag`: required release tag such as `v2026.4.2`, `v2026.4.2-1`, or
   `v2026.4.2-beta.1`; when `preflight_only=true`, it may also be the current
-  full 40-character `main` commit SHA for validation-only preflight
+  full 40-character workflow-branch commit SHA for validation-only preflight
 - `preflight_only`: `true` for validation/build/package only, `false` for the
   real publish path
 - `preflight_run_id`: required on the real publish path so the workflow reuses
@@ -129,14 +139,19 @@ OpenClaw has three public release lanes:
 `OpenClaw Release Checks` accepts these operator-controlled inputs:
 
 - `ref`: existing release tag or the current full 40-character `main` commit
-  SHA to validate
+  SHA to validate when dispatched from `main`; from a release branch, use an
+  existing release tag or the current full 40-character release-branch commit
+  SHA
 
 Rules:
 
 - Stable and correction tags may publish to either `beta` or `latest`
 - Beta prerelease tags may publish only to `beta`
-- Full commit SHA input is allowed only when `preflight_only=true`
-- Release checks commit-SHA mode also requires the current `origin/main` HEAD
+- For `OpenClaw NPM Release`, full commit SHA input is allowed only when
+  `preflight_only=true`
+- `OpenClaw Release Checks` is always validation-only and also accepts the
+  current workflow-branch commit SHA
+- Release checks commit-SHA mode also requires the current workflow-branch HEAD
 - The real publish path must use the same `npm_dist_tag` used during preflight;
   the workflow verifies that metadata before publish continues
 
@@ -145,12 +160,13 @@ Rules:
 When cutting a stable npm release:
 
 1. Run `OpenClaw NPM Release` with `preflight_only=true`
-   - Before a tag exists, you may use the current full `main` commit SHA for a
-     validation-only dry run of the preflight workflow
+   - Before a tag exists, you may use the current full workflow-branch commit
+     SHA for a validation-only dry run of the preflight workflow
 2. Choose `npm_dist_tag=beta` for the normal beta-first flow, or `latest` only
    when you intentionally want a direct stable publish
 3. Run `OpenClaw Release Checks` separately with the same tag or the
-   full current `main` commit SHA when you want live prompt cache coverage
+   full current workflow-branch commit SHA when you want live prompt cache
+   coverage
    - This is separate on purpose so live coverage stays available without
      recoupling long-running or flaky checks to the publish workflow
 4. Save the successful `preflight_run_id`

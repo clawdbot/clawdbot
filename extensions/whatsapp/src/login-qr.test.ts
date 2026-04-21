@@ -11,19 +11,7 @@ import {
 
 vi.mock("./session.js", async () => {
   const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
-  const createWaSocket = vi.fn(
-    async (
-      _printQr: boolean,
-      _verbose: boolean,
-      opts?: { authDir?: string; onQr?: (qr: string) => void },
-    ) => {
-      const sock = { ws: { close: vi.fn() } };
-      if (opts?.onQr) {
-        setImmediate(() => opts.onQr?.("qr-data"));
-      }
-      return sock as never;
-    },
-  );
+  const createWaSocket = vi.fn();
   const waitForWaConnection = vi.fn();
   const formatError = vi.fn((err: unknown) => `formatted:${String(err)}`);
   const getStatusCode = vi.fn(

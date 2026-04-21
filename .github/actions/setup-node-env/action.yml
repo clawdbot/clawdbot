@@ -19,10 +19,6 @@ inputs:
     description: Whether to install Bun alongside Node.
     required: false
     default: "true"
-  use-sticky-disk:
-    description: Request Blacksmith sticky-disk pnpm caching on trusted runs; pull_request runs fall back to actions/cache.
-    required: false
-    default: "false"
   install-deps:
     description: Whether to run pnpm install after environment setup.
     required: false
@@ -45,7 +41,6 @@ runs:
       with:
         pnpm-version: ${{ inputs.pnpm-version }}
         cache-key-suffix: ${{ inputs.cache-key-suffix }}
-        use-sticky-disk: ${{ inputs.use-sticky-disk }}
 
     - name: Setup Bun
       if: inputs.install-bun == 'true'
@@ -64,7 +59,12 @@ runs:
     - name: Capture node path
       if: inputs.install-deps == 'true'
       shell: bash
-      run: echo "NODE_BIN=$(dirname "$(node -p "process.execPath")")" >> "$GITHUB_ENV"
+      run: |
+        node_bin="$(dirname "$(node -p 'process.execPath')")"
+        if command -v cygpath >/dev/null 2>&1; then
+          node_bin="$(cygpath -u "$node_bin")"
+        fi
+        echo "NODE_BIN=$node_bin" >> "$GITHUB_ENV"
 
     - name: Install dependencies
       if: inputs.install-deps == 'true'

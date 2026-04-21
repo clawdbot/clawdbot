@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { visibleWidth } from "./ansi.js";
-import { wrapNoteMessage } from "./note.js";
+import { resolveNoteColumns, wrapNoteMessage } from "./note.js";
 import { renderTable } from "./table.js";
 
 describe("renderTable", () => {
@@ -269,5 +269,13 @@ describe("wrapNoteMessage", () => {
     const input = "\\\\\\\\server\\\\share\\\\some\\\\really\\\\long\\\\path\\\\file.txt";
     const wrapped = wrapNoteMessage(input, { maxWidth: 12, columns: 80 });
     expect(wrapped).toBe(input);
+  });
+
+  it("clamps bogus TTY columns before clack wraps note text", () => {
+    expect(resolveNoteColumns(undefined)).toBe(80);
+    expect(resolveNoteColumns(0)).toBe(80);
+    expect(resolveNoteColumns(1)).toBe(80);
+    expect(resolveNoteColumns(79)).toBe(80);
+    expect(resolveNoteColumns(120)).toBe(120);
   });
 });

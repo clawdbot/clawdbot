@@ -123,6 +123,32 @@ describe("qa scenario catalog", () => {
     );
   });
 
+  it("includes the GPT-5.4 thinking visibility switch scenario", () => {
+    const scenario = readQaScenarioById("gpt54-thinking-visibility-switch");
+    const config = readQaScenarioExecutionConfig("gpt54-thinking-visibility-switch") as
+      | {
+          requiredLiveProvider?: string;
+          requiredLiveModel?: string;
+          offDirective?: string;
+          maxDirective?: string;
+          reasoningDirective?: string;
+        }
+      | undefined;
+
+    expect(scenario.sourcePath).toBe("qa/scenarios/models/gpt54-thinking-visibility-switch.md");
+    expect(config?.requiredLiveProvider).toBe("openai");
+    expect(config?.requiredLiveModel).toBe("gpt-5.4");
+    expect(config?.offDirective).toBe("/think off");
+    expect(config?.maxDirective).toBe("/think max");
+    expect(config?.reasoningDirective).toBe("/reasoning on");
+    expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
+      "enables reasoning display and disables thinking",
+      "switches to max thinking",
+      "verifies max thinking emits visible reasoning",
+      "verifies max thinking completes the answer",
+    ]);
+  });
+
   it("includes the seeded mock-only broken-turn scenarios in the markdown pack", () => {
     const scenarioIds = [
       "reasoning-only-recovery-replay-safe-read",

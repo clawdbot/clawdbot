@@ -61,8 +61,8 @@ describe("plugin-registry-loader", () => {
   });
 
   it("forwards explicit config snapshots to plugin loading", async () => {
-    const config = { channels: { telegram: { enabled: true } } } as never;
-    const activationSourceConfig = { channels: { telegram: { enabled: true } } } as never;
+    const config = { channels: { quietchat: { enabled: true } } } as never;
+    const activationSourceConfig = { channels: { quietchat: { enabled: true } } } as never;
 
     await ensureCliPluginRegistryLoaded({
       scope: "configured-channels",

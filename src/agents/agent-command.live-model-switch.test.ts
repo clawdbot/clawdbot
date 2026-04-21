@@ -90,6 +90,8 @@ vi.mock("../auto-reply/thinking.js", () => ({
   formatXHighModelHint: () => "model-x",
   normalizeThinkLevel: (v?: string) => v || undefined,
   normalizeVerboseLevel: (v?: string) => v || undefined,
+  isThinkingLevelSupported: () => true,
+  resolveSupportedThinkingLevel: ({ level }: { level?: string }) => level,
   supportsXHighThinking: () => false,
 }));
 

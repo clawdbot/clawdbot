@@ -4,15 +4,16 @@ import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vite
 
 // Mock http and https modules before importing the client
 vi.mock("node:https", () => {
-  const mockRequest = vi.fn();
-  const mockGet = vi.fn();
-  return { default: { request: mockRequest, get: mockGet }, request: mockRequest, get: mockGet };
+  const httpsRequest = vi.fn();
+  const httpsGet = vi.fn();
+  const httpsModule = { request: httpsRequest, get: httpsGet };
+  return { default: httpsModule, request: httpsRequest, get: httpsGet };
 });
 
 vi.mock("node:http", () => {
-  const mockRequest = vi.fn();
-  const mockGet = vi.fn();
-  return { default: { request: mockRequest, get: mockGet }, request: mockRequest, get: mockGet };
+  const httpRequest = vi.fn();
+  const httpGet = vi.fn();
+  return { default: { request: httpRequest, get: httpGet }, request: httpRequest, get: httpGet };
 });
 
 const https = await import("node:https");
@@ -158,22 +159,15 @@ describe("sendFileUrl", () => {
 });
 
 // Helper to mock the user_list API response for fetchChatUsers / resolveLegacyWebhookNameToChatUserId
-function mockUserListResponse(
-  users: Array<{ user_id: number; username: string; nickname: string }>,
-) {
+function mockUserListResponse(users: Array<Record<string, unknown>>) {
   mockUserListResponseImpl(users, false);
 }
 
-function mockUserListResponseOnce(
-  users: Array<{ user_id: number; username: string; nickname: string }>,
-) {
+function mockUserListResponseOnce(users: Array<Record<string, unknown>>) {
   mockUserListResponseImpl(users, true);
 }
 
-function mockUserListResponseImpl(
-  users: Array<{ user_id: number; username: string; nickname: string }>,
-  once: boolean,
-) {
+function mockUserListResponseImpl(users: Array<Record<string, unknown>>, once: boolean) {
   const httpsGet = vi.mocked(https.get);
   const impl: MockRequestHandler = (_url, _opts, callback) => {
     const res = createMockResponseEmitter(200);
@@ -298,29 +292,10 @@ describe("fetchChatUsers", () => {
   installFakeTimerHarness();
 
   it("filters malformed user entries while keeping valid ones", async () => {
-    const httpsGet = vi.mocked(https.get);
-    httpsGet.mockImplementation(((_url, _opts, callback) => {
-      const res = createMockResponseEmitter(200);
-      process.nextTick(() => {
-        callback?.(res);
-        res.emit(
-          "data",
-          Buffer.from(
-            JSON.stringify({
-              success: true,
-              data: {
-                users: [
-                  { user_id: 4, username: "jmn67", nickname: "jmn" },
-                  { user_id: "bad", username: "broken" },
-                ],
-              },
-            }),
-          ),
-        );
-        res.emit("end");
-      });
-      return createMockRequestEmitter();
-    }) as MockRequestHandler);
+    mockUserListResponse([
+      { user_id: 4, username: "jmn67", nickname: "jmn" },
+      { user_id: "bad", username: "broken" },
+    ]);
 
     const users = await fetchChatUsers(
       "https://nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2&token=%22test%22",

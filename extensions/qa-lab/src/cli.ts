@@ -339,7 +339,7 @@ export function registerQaLabCli(program: Command) {
     .option("--fast", "Enable provider fast mode for all candidate runs")
     .option(
       "--thinking <level>",
-      "Candidate thinking default: off|minimal|low|medium|high|xhigh|adaptive",
+      "Candidate thinking default: off|minimal|low|medium|high|xhigh|adaptive|max",
     )
     .option(
       "--model-thinking <ref=level>",

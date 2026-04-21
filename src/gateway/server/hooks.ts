@@ -87,7 +87,6 @@ export function createGatewayHooksRequestHandler(params: {
           message: value.message,
           sessionKey,
           lane: "cron",
-          deliveryContract: "shared",
         });
         const summary =
           normalizeOptionalString(result.summary) ||

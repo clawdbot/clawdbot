@@ -243,7 +243,11 @@ export async function resolveLmstudioRuntimeApiKey(params: {
   if (shouldSuppressResolvedRuntimeApiKeyForHeaderAuth(resolved.source, hasAuthorizationHeader)) {
     return await resolveConfiguredApiKeyOrThrow();
   }
-  if (isNonSecretApiKeyMarker(resolvedApiKey) && resolvedApiKey !== CUSTOM_LOCAL_AUTH_MARKER) {
+  if (
+    isNonSecretApiKeyMarker(resolvedApiKey) &&
+    resolvedApiKey !== CUSTOM_LOCAL_AUTH_MARKER &&
+    resolvedApiKey !== LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER
+  ) {
     return await resolveConfiguredApiKeyOrThrow();
   }
   return resolvedApiKey;

@@ -112,6 +112,58 @@ describe("handleControlUiHttpRequest", () => {
     return { res, end, handled };
   }
 
+  function createTrustedProxyAuth(): ResolvedGatewayAuth {
+    return {
+      mode: "trusted-proxy",
+      allowTailscale: false,
+      trustedProxy: {
+        userHeader: "x-forwarded-user",
+      },
+    };
+  }
+
+  function createTrustedProxyHeaders(
+    extraHeaders: IncomingMessage["headers"] = {},
+  ): IncomingMessage["headers"] {
+    return {
+      host: "gateway.example.com",
+      "x-forwarded-user": "nick@example.com",
+      "x-forwarded-proto": "https",
+      ...extraHeaders,
+    };
+  }
+
+  async function runTrustedProxyAssistantMediaRequest(params: {
+    filePath: string;
+    meta?: boolean;
+    headers?: IncomingMessage["headers"];
+  }) {
+    return await runAssistantMediaRequest({
+      url: `/__openclaw__/assistant-media?${params.meta ? "meta=1&" : ""}source=${encodeURIComponent(params.filePath)}`,
+      method: "GET",
+      auth: createTrustedProxyAuth(),
+      trustedProxies: ["10.0.0.1"],
+      remoteAddress: "10.0.0.1",
+      headers: createTrustedProxyHeaders(params.headers),
+    });
+  }
+
+  function expectMissingOperatorReadResponse(params: {
+    handled: boolean;
+    res: ReturnType<typeof makeMockHttpResponse>["res"];
+    end: ReturnType<typeof makeMockHttpResponse>["end"];
+  }) {
+    expect(params.handled).toBe(true);
+    expect(params.res.statusCode).toBe(403);
+    expect(JSON.parse(String(params.end.mock.calls[0]?.[0] ?? ""))).toMatchObject({
+      ok: false,
+      error: {
+        type: "forbidden",
+        message: "missing scope: operator.read",
+      },
+    });
+  }
+
   async function writeAssetFile(rootPath: string, filename: string, contents: string) {
     const assetsDir = path.join(rootPath, "assets");
     await fs.mkdir(assetsDir, { recursive: true });
@@ -268,23 +320,10 @@ describe("handleControlUiHttpRequest", () => {
       fn: async (tmpRoot) => {
         const filePath = path.join(tmpRoot, "photo.png");
         await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
-        const { res, handled, end } = await runAssistantMediaRequest({
-          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}`,
-          method: "GET",
-          auth: {
-            mode: "trusted-proxy",
-            allowTailscale: false,
-            trustedProxy: {
-              userHeader: "x-forwarded-user",
-            },
-          },
-          trustedProxies: ["10.0.0.1"],
-          remoteAddress: "10.0.0.1",
+        const { res, handled, end } = await runTrustedProxyAssistantMediaRequest({
+          filePath,
           headers: {
-            host: "gateway.example.com",
             origin: "https://evil.example",
-            "x-forwarded-user": "nick@example.com",
-            "x-forwarded-proto": "https",
           },
         });
         expect(handled).toBe(true);
@@ -300,34 +339,13 @@ describe("handleControlUiHttpRequest", () => {
       fn: async (tmpRoot) => {
         const filePath = path.join(tmpRoot, "photo.png");
         await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
-        const { res, handled, end } = await runAssistantMediaRequest({
-          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}`,
-          method: "GET",
-          auth: {
-            mode: "trusted-proxy",
-            allowTailscale: false,
-            trustedProxy: {
-              userHeader: "x-forwarded-user",
-            },
-          },
-          trustedProxies: ["10.0.0.1"],
-          remoteAddress: "10.0.0.1",
+        const { res, handled, end } = await runTrustedProxyAssistantMediaRequest({
+          filePath,
           headers: {
-            host: "gateway.example.com",
-            "x-forwarded-user": "nick@example.com",
-            "x-forwarded-proto": "https",
             "x-openclaw-scopes": "operator.approvals",
           },
         });
-        expect(handled).toBe(true);
-        expect(res.statusCode).toBe(403);
-        expect(JSON.parse(String(end.mock.calls[0]?.[0] ?? ""))).toMatchObject({
-          ok: false,
-          error: {
-            type: "forbidden",
-            message: "missing scope: operator.read",
-          },
-        });
+        expectMissingOperatorReadResponse({ handled, res, end });
       },
     });
   });
@@ -338,34 +356,14 @@ describe("handleControlUiHttpRequest", () => {
       fn: async (tmpRoot) => {
         const filePath = path.join(tmpRoot, "photo.png");
         await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
-        const { res, handled, end } = await runAssistantMediaRequest({
-          url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent(filePath)}`,
-          method: "GET",
-          auth: {
-            mode: "trusted-proxy",
-            allowTailscale: false,
-            trustedProxy: {
-              userHeader: "x-forwarded-user",
-            },
-          },
-          trustedProxies: ["10.0.0.1"],
-          remoteAddress: "10.0.0.1",
+        const { res, handled, end } = await runTrustedProxyAssistantMediaRequest({
+          filePath,
+          meta: true,
           headers: {
-            host: "gateway.example.com",
-            "x-forwarded-user": "nick@example.com",
-            "x-forwarded-proto": "https",
             "x-openclaw-scopes": "",
           },
         });
-        expect(handled).toBe(true);
-        expect(res.statusCode).toBe(403);
-        expect(JSON.parse(String(end.mock.calls[0]?.[0] ?? ""))).toMatchObject({
-          ok: false,
-          error: {
-            type: "forbidden",
-            message: "missing scope: operator.read",
-          },
-        });
+        expectMissingOperatorReadResponse({ handled, res, end });
       },
     });
   });

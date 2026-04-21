@@ -27,12 +27,15 @@ import {
 } from "./defaults.js";
 import {
   buildOllamaBaseUrlSsrFPolicy,
+  buildOllamaProvider,
   buildOllamaModelDefinition,
   enrichOllamaModelsWithContext,
   fetchOllamaModels,
   resolveOllamaApiBase,
   type OllamaModelWithContext,
 } from "./provider-models.js";
+
+export { buildOllamaProvider };
 
 const OLLAMA_SUGGESTED_MODELS_LOCAL = [OLLAMA_DEFAULT_MODEL];
 const OLLAMA_SUGGESTED_MODELS_CLOUD = ["kimi-k2.5:cloud", "minimax-m2.7:cloud", "glm-5.1:cloud"];
@@ -47,12 +50,6 @@ type OllamaSetupResult = {
   config: OpenClawConfig;
   credential: SecretInput;
   credentialMode?: SecretInputMode;
-};
-
-type ProviderConfig = {
-  baseUrl: string;
-  api: "ollama";
-  models: ReturnType<typeof buildOllamaModelDefinition>[];
 };
 
 type OllamaInteractiveMode = "cloud-local" | "cloud-only" | "local-only";
@@ -469,28 +466,6 @@ async function promptAndConfigureHostBackedOllama(params: {
       baseUrl,
       mergeUniqueModelNames(suggestedModelNames, discoveredModelNames),
       discoveredModelsByName,
-    ),
-  };
-}
-
-export async function buildOllamaProvider(
-  configuredBaseUrl?: string,
-  opts?: { quiet?: boolean },
-): Promise<ProviderConfig> {
-  const apiBase = resolveOllamaApiBase(configuredBaseUrl);
-  const { reachable, models } = await fetchOllamaModels(apiBase);
-  if (!reachable && !opts?.quiet) {
-    console.warn(`Ollama could not be reached at ${apiBase}.`);
-  }
-  const discovered = await enrichOllamaModelsWithContext(
-    apiBase,
-    models.slice(0, OLLAMA_CONTEXT_ENRICH_LIMIT),
-  );
-  return {
-    baseUrl: apiBase,
-    api: "ollama",
-    models: discovered.map((model) =>
-      buildOllamaModelDefinition(model.name, model.contextWindow, model.capabilities),
     ),
   };
 }

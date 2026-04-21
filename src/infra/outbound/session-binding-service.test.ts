@@ -26,10 +26,10 @@ function setMinimalCurrentConversationRegistry(): void {
   setActivePluginRegistry(
     createTestRegistry([
       {
-        pluginId: "slack",
+        pluginId: "workspace",
         source: "test",
         plugin: {
-          id: "slack",
+          id: "workspace",
           meta: { aliases: [] },
           conversationBindings: {
             supportsCurrentConversationBinding: true,
@@ -37,10 +37,10 @@ function setMinimalCurrentConversationRegistry(): void {
         },
       },
       {
-        pluginId: "msteams",
+        pluginId: "teamchat",
         source: "test",
         plugin: {
-          id: "msteams",
+          id: "teamchat",
           meta: { aliases: [] },
           conversationBindings: {
             supportsCurrentConversationBinding: true,
@@ -251,12 +251,12 @@ describe("session binding service", () => {
     });
   });
 
-  it("falls back to generic current-conversation bindings for built-in channels", async () => {
+  it("falls back to generic current-conversation bindings for registered channels", async () => {
     const service = getSessionBindingService();
 
     expect(
       service.getCapabilities({
-        channel: "Slack",
+        channel: "Workspace",
         accountId: " DEFAULT ",
       }),
     ).toEqual({
@@ -267,62 +267,62 @@ describe("session binding service", () => {
     });
 
     const bound = await service.bind({
-      targetSessionKey: "agent:codex:acp:slack-dm",
+      targetSessionKey: "agent:codex:acp:workspace-dm",
       targetKind: "session",
       conversation: {
-        channel: " Slack ",
+        channel: " Workspace ",
         accountId: " DEFAULT ",
         conversationId: " user:U123 ",
       },
       metadata: {
-        label: "slack-dm",
+        label: "workspace-dm",
       },
       ttlMs: 60_000,
     });
 
     expect(bound).toMatchObject({
-      bindingId: "generic:slack\u241fdefault\u241f\u241fuser:U123",
-      targetSessionKey: "agent:codex:acp:slack-dm",
+      bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:U123",
+      targetSessionKey: "agent:codex:acp:workspace-dm",
       targetKind: "session",
       conversation: {
-        channel: "slack",
+        channel: "workspace",
         accountId: "default",
         conversationId: "user:U123",
       },
       status: "active",
       metadata: expect.objectContaining({
-        label: "slack-dm",
+        label: "workspace-dm",
       }),
     });
 
     const resolved = service.resolveByConversation({
-      channel: "slack",
+      channel: "workspace",
       accountId: "default",
       conversationId: "user:U123",
     });
     expect(resolved).toMatchObject({
       bindingId: bound.bindingId,
-      targetSessionKey: "agent:codex:acp:slack-dm",
+      targetSessionKey: "agent:codex:acp:workspace-dm",
     });
-    expect(service.listBySession("agent:codex:acp:slack-dm")).toEqual([resolved]);
+    expect(service.listBySession("agent:codex:acp:workspace-dm")).toEqual([resolved]);
 
     service.touch(bound.bindingId, 1234);
     expect(
       service.resolveByConversation({
-        channel: "slack",
+        channel: "workspace",
         accountId: "default",
         conversationId: "user:U123",
       })?.metadata,
     ).toEqual(
       expect.objectContaining({
-        label: "slack-dm",
+        label: "workspace-dm",
         lastActivityAt: 1234,
       }),
     );
 
     await expect(
       service.unbind({
-        targetSessionKey: "agent:codex:acp:slack-dm",
+        targetSessionKey: "agent:codex:acp:workspace-dm",
         reason: "test cleanup",
       }),
     ).resolves.toEqual([
@@ -332,7 +332,7 @@ describe("session binding service", () => {
     ]);
     expect(
       service.resolveByConversation({
-        channel: "slack",
+        channel: "workspace",
         accountId: "default",
         conversationId: "user:U123",
       }),
@@ -344,7 +344,7 @@ describe("session binding service", () => {
 
     expect(
       service.getCapabilities({
-        channel: "msteams",
+        channel: "teamchat",
         accountId: "default",
       }),
     ).toEqual({
@@ -356,10 +356,10 @@ describe("session binding service", () => {
 
     await expect(
       service.bind({
-        targetSessionKey: "agent:codex:acp:msteams-room",
+        targetSessionKey: "agent:codex:acp:teamchat-room",
         targetKind: "session",
         conversation: {
-          channel: "msteams",
+          channel: "teamchat",
           accountId: "default",
           conversationId: "19:chatid@thread.v2",
         },
@@ -368,7 +368,7 @@ describe("session binding service", () => {
     ).rejects.toMatchObject({
       code: "BINDING_CAPABILITY_UNSUPPORTED",
       details: {
-        channel: "msteams",
+        channel: "teamchat",
         accountId: "default",
         placement: "child",
       },
@@ -376,17 +376,17 @@ describe("session binding service", () => {
 
     await expect(
       service.bind({
-        targetSessionKey: "agent:codex:acp:msteams-room",
+        targetSessionKey: "agent:codex:acp:teamchat-room",
         targetKind: "session",
         conversation: {
-          channel: "msteams",
+          channel: "teamchat",
           accountId: "default",
           conversationId: "19:chatid@thread.v2",
         },
       }),
     ).resolves.toMatchObject({
       conversation: {
-        channel: "msteams",
+        channel: "teamchat",
         accountId: "default",
         conversationId: "19:chatid@thread.v2",
       },

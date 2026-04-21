@@ -515,6 +515,11 @@ export type ChannelMessagingAdapter = {
    * steer peer-vs-group resolution without reimplementing host search flow.
    */
   inferTargetChatType?: (params: { to: string }) => ChatType | undefined;
+  /**
+   * Preserve the session thread/topic id for heartbeat replies when that thread
+   * is part of the destination identity, not a transient reply thread.
+   */
+  preserveHeartbeatThreadIdForGroupRoute?: boolean;
   buildCrossContextComponents?: ChannelCrossContextComponentsFactory;
   transformReplyPayload?: (params: {
     payload: ReplyPayload;

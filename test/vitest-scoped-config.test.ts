@@ -22,14 +22,20 @@ import { createExtensionAcpxVitestConfig } from "./vitest/vitest.extension-acpx.
 import { createExtensionBlueBubblesVitestConfig } from "./vitest/vitest.extension-bluebubbles.config.ts";
 import { createExtensionChannelsVitestConfig } from "./vitest/vitest.extension-channels.config.ts";
 import { createExtensionDiffsVitestConfig } from "./vitest/vitest.extension-diffs.config.ts";
+import { createExtensionDiscordVitestConfig } from "./vitest/vitest.extension-discord.config.ts";
 import { createExtensionFeishuVitestConfig } from "./vitest/vitest.extension-feishu.config.ts";
+import { createExtensionImessageVitestConfig } from "./vitest/vitest.extension-imessage.config.ts";
 import { createExtensionIrcVitestConfig } from "./vitest/vitest.extension-irc.config.ts";
+import { createExtensionLineVitestConfig } from "./vitest/vitest.extension-line.config.ts";
 import { createExtensionMatrixVitestConfig } from "./vitest/vitest.extension-matrix.config.ts";
 import { createExtensionMattermostVitestConfig } from "./vitest/vitest.extension-mattermost.config.ts";
 import { createExtensionMemoryVitestConfig } from "./vitest/vitest.extension-memory.config.ts";
 import { createExtensionMessagingVitestConfig } from "./vitest/vitest.extension-messaging.config.ts";
 import { createExtensionMsTeamsVitestConfig } from "./vitest/vitest.extension-msteams.config.ts";
+import { createExtensionProviderOpenAiVitestConfig } from "./vitest/vitest.extension-provider-openai.config.ts";
 import { createExtensionProvidersVitestConfig } from "./vitest/vitest.extension-providers.config.ts";
+import { createExtensionSignalVitestConfig } from "./vitest/vitest.extension-signal.config.ts";
+import { createExtensionSlackVitestConfig } from "./vitest/vitest.extension-slack.config.ts";
 import { createExtensionTelegramVitestConfig } from "./vitest/vitest.extension-telegram.config.ts";
 import { createExtensionVoiceCallVitestConfig } from "./vitest/vitest.extension-voice-call.config.ts";
 import { createExtensionWhatsAppVitestConfig } from "./vitest/vitest.extension-whatsapp.config.ts";
@@ -183,14 +189,20 @@ describe("scoped vitest configs", () => {
   const defaultExtensionBlueBubblesConfig = createExtensionBlueBubblesVitestConfig({});
   const defaultExtensionChannelsConfig = createExtensionChannelsVitestConfig({});
   const defaultExtensionDiffsConfig = createExtensionDiffsVitestConfig({});
+  const defaultExtensionDiscordConfig = createExtensionDiscordVitestConfig({});
   const defaultExtensionFeishuConfig = createExtensionFeishuVitestConfig({});
+  const defaultExtensionImessageConfig = createExtensionImessageVitestConfig({});
   const defaultExtensionIrcConfig = createExtensionIrcVitestConfig({});
+  const defaultExtensionLineConfig = createExtensionLineVitestConfig({});
   const defaultExtensionMatrixConfig = createExtensionMatrixVitestConfig({});
   const defaultExtensionMattermostConfig = createExtensionMattermostVitestConfig({});
   const defaultExtensionMemoryConfig = createExtensionMemoryVitestConfig({});
   const defaultExtensionMsTeamsConfig = createExtensionMsTeamsVitestConfig({});
   const defaultExtensionMessagingConfig = createExtensionMessagingVitestConfig({});
+  const defaultExtensionProviderOpenAiConfig = createExtensionProviderOpenAiVitestConfig({});
   const defaultExtensionProvidersConfig = createExtensionProvidersVitestConfig({});
+  const defaultExtensionSignalConfig = createExtensionSignalVitestConfig({});
+  const defaultExtensionSlackConfig = createExtensionSlackVitestConfig({});
   const defaultExtensionTelegramConfig = createExtensionTelegramVitestConfig({});
   const defaultExtensionVoiceCallConfig = createExtensionVoiceCallVitestConfig({});
   const defaultExtensionWhatsAppConfig = createExtensionWhatsAppVitestConfig({});
@@ -230,7 +242,13 @@ describe("scoped vitest configs", () => {
       defaultAcpConfig,
       defaultExtensionsConfig,
       defaultExtensionChannelsConfig,
+      defaultExtensionDiscordConfig,
+      defaultExtensionImessageConfig,
+      defaultExtensionLineConfig,
+      defaultExtensionProviderOpenAiConfig,
       defaultExtensionProvidersConfig,
+      defaultExtensionSignalConfig,
+      defaultExtensionSlackConfig,
       defaultInfraConfig,
       defaultAutoReplyConfig,
       defaultAutoReplyCoreConfig,
@@ -337,17 +355,17 @@ describe("scoped vitest configs", () => {
     );
   });
 
-  it("normalizes extension channel include patterns relative to the scoped dir", () => {
-    expect(defaultExtensionChannelsConfig.test?.dir).toBe(path.join(process.cwd(), "extensions"));
-    expect(defaultExtensionChannelsConfig.test?.include).toEqual(
-      expect.arrayContaining([
-        "discord/**/*.test.ts",
-        "line/**/*.test.ts",
-        "slack/**/*.test.ts",
-        "signal/**/*.test.ts",
-        "imessage/**/*.test.ts",
-      ]),
-    );
+  it("normalizes split extension channel include patterns relative to the scoped dir", () => {
+    for (const [config, include] of [
+      [defaultExtensionDiscordConfig, "discord/**/*.test.ts"],
+      [defaultExtensionLineConfig, "line/**/*.test.ts"],
+      [defaultExtensionSlackConfig, "slack/**/*.test.ts"],
+      [defaultExtensionSignalConfig, "signal/**/*.test.ts"],
+      [defaultExtensionImessageConfig, "imessage/**/*.test.ts"],
+    ] as const) {
+      expect(config.test?.dir).toBe(path.join(process.cwd(), "extensions"));
+      expect(config.test?.include).toEqual([include]);
+    }
   });
 
   it("normalizes bluebubbles extension include patterns relative to the scoped dir", () => {
@@ -385,8 +403,13 @@ describe("scoped vitest configs", () => {
   it("normalizes extension provider include patterns relative to the scoped dir", () => {
     expect(defaultExtensionProvidersConfig.test?.dir).toBe(path.join(process.cwd(), "extensions"));
     expect(defaultExtensionProvidersConfig.test?.include).toEqual(
-      expect.arrayContaining(["openai/**/*.test.ts", "xai/**/*.test.ts", "google/**/*.test.ts"]),
+      expect.arrayContaining(["xai/**/*.test.ts", "google/**/*.test.ts"]),
     );
+    expect(defaultExtensionProvidersConfig.test?.include).not.toContain("openai/**/*.test.ts");
+    expect(defaultExtensionProviderOpenAiConfig.test?.dir).toBe(
+      path.join(process.cwd(), "extensions"),
+    );
+    expect(defaultExtensionProviderOpenAiConfig.test?.include).toEqual(["openai/**/*.test.ts"]);
   });
 
   it("normalizes extension messaging include patterns relative to the scoped dir", () => {

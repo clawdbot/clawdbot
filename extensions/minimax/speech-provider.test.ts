@@ -86,7 +86,7 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(config.pitch).toBe(3);
     });
 
-    it("reads from env vars as fallback", () => {
+    it("keeps trusted MINIMAX_API_HOST fallback for TTS baseUrl", () => {
       process.env.MINIMAX_API_HOST = "https://env.api.com";
       process.env.MINIMAX_TTS_MODEL = "speech-01-240228";
       process.env.MINIMAX_TTS_VOICE_ID = "Chinese (Mandarin)_Gentle_Boy";

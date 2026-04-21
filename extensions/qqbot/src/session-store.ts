@@ -56,6 +56,16 @@ function getCandidateSessionPaths(accountId: string): string[] {
   return primaryPath === legacyPath ? [primaryPath] : [primaryPath, legacyPath];
 }
 
+function isSessionFileName(file: string): boolean {
+  return file.startsWith("session-") && file.endsWith(".json");
+}
+
+function readSessionStateFile(file: string): { filePath: string; state: SessionState } {
+  const filePath = path.join(SESSION_DIR, file);
+  const data = fs.readFileSync(filePath, "utf-8");
+  return { filePath, state: JSON.parse(data) as SessionState };
+}
+
 /** Load a saved session, rejecting expired or mismatched appId entries. */
 export function loadSession(accountId: string, expectedAppId?: string): SessionState | null {
   try {
@@ -227,11 +237,9 @@ export function getAllSessions(): SessionState[] {
     const files = fs.readdirSync(SESSION_DIR);
 
     for (const file of files) {
-      if (file.startsWith("session-") && file.endsWith(".json")) {
-        const filePath = path.join(SESSION_DIR, file);
+      if (isSessionFileName(file)) {
         try {
-          const data = fs.readFileSync(filePath, "utf-8");
-          const state = JSON.parse(data) as SessionState;
+          const { state } = readSessionStateFile(file);
           if (typeof state.accountId !== "string" || !state.accountId) {
             continue;
           }
@@ -263,11 +271,10 @@ export function cleanupExpiredSessions(): number {
     const now = Date.now();
 
     for (const file of files) {
-      if (file.startsWith("session-") && file.endsWith(".json")) {
+      if (isSessionFileName(file)) {
         const filePath = path.join(SESSION_DIR, file);
         try {
-          const data = fs.readFileSync(filePath, "utf-8");
-          const state = JSON.parse(data) as SessionState;
+          const { state } = readSessionStateFile(file);
 
           if (now - state.savedAt > SESSION_EXPIRE_TIME) {
             fs.unlinkSync(filePath);

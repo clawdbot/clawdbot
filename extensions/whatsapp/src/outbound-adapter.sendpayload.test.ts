@@ -89,4 +89,15 @@ describe("whatsappOutbound sendPayload", () => {
     expect(result).toEqual({ channel: "whatsapp", messageId: "" });
     expect(sendWhatsApp).not.toHaveBeenCalled();
   });
+
+  it("sanitizes HTML-only text to whitespace-only payload", () => {
+    expect(
+      whatsappOutbound
+        .sanitizeText?.({
+          text: "<br><br>",
+          payload: { text: "<br><br>" },
+        })
+        ?.trim(),
+    ).toBe("");
+  });
 });

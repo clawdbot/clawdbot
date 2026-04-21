@@ -27,10 +27,11 @@ import { resolveEnvelopeFormatOptions } from "../envelope.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import {
   type ElevatedLevel,
-  formatXHighModelHint,
+  formatThinkingLevels,
+  isThinkingLevelSupported,
   normalizeThinkLevel,
   type ReasoningLevel,
-  supportsXHighThinking,
+  resolveSupportedThinkingLevel,
   type ThinkLevel,
   type VerboseLevel,
 } from "../thinking.js";
@@ -42,6 +43,7 @@ import type { InlineDirectives } from "./directive-handling.js";
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import { resolvePreparedReplyQueueState } from "./get-reply-run-queue.js";
 import { buildGroupChatContext, buildGroupIntro } from "./groups.js";
+import { hasInboundMedia } from "./inbound-media.js";
 import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
@@ -376,9 +378,7 @@ export async function runPreparedReply(
     ? [startupContextPrelude, baseBodyFinal].filter(Boolean).join("\n\n")
     : [inboundUserContext, baseBodyFinal].filter(Boolean).join("\n\n");
   const hasUserBody = baseBodyFinal.trim().length > 0;
-  const hasMediaAttachment = Boolean(
-    sessionCtx.MediaPath || (sessionCtx.MediaPaths && sessionCtx.MediaPaths.length > 0),
-  );
+  const hasMediaAttachment = hasInboundMedia(sessionCtx) || (opts?.images?.length ?? 0) > 0;
   if (!hasUserBody && !hasMediaAttachment) {
     // Skip onReplyStart when typing is suppressed (e.g. sendPolicy deny) —
     // otherwise channels that wire onReplyStart to typing indicators leak
@@ -392,9 +392,8 @@ export async function runPreparedReply(
       text: "I didn't receive any text in your message. Please resend or add a caption.",
     };
   }
-  // Prefix-only inbound metadata should not force a run on empty turns. When media
-  // arrives without text, keep the contextual prefix but append a minimal placeholder
-  // so the embedded runner can inject the attachment.
+  // When the user sends media without text, provide a minimal body so the agent
+  // run proceeds and the image/document is injected by the embedded runner.
   const effectiveBaseBody = hasUserBody
     ? baseBodyForPrompt
     : [inboundUserContext, "[User sent media without caption]"].filter(Boolean).join("\n\n");
@@ -415,7 +414,7 @@ export async function runPreparedReply(
   if (!resolvedThinkLevel && prefixedBodyBase) {
     const parts = prefixedBodyBase.split(/\s+/);
     const maybeLevel = normalizeThinkLevel(parts[0]);
-    if (maybeLevel && (maybeLevel !== "xhigh" || supportsXHighThinking(provider, model))) {
+    if (maybeLevel && isThinkingLevelSupported({ provider, model, level: maybeLevel })) {
       resolvedThinkLevel = maybeLevel;
       prefixedBodyBase = parts.slice(1).join(" ").trim();
     }
@@ -485,24 +484,37 @@ export async function runPreparedReply(
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
   }
-  if (resolvedThinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
+  if (!isThinkingLevelSupported({ provider, model, level: resolvedThinkLevel })) {
     const explicitThink = directives.hasThinkDirective && directives.thinkLevel !== undefined;
     if (explicitThink) {
       typing.cleanup();
       return {
-        text: `Thinking level "xhigh" is only supported for ${formatXHighModelHint()}. Use /think high or switch to one of those models.`,
+        text: `Thinking level "${resolvedThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model)}.`,
       };
     }
-    resolvedThinkLevel = "high";
-    if (sessionEntry && sessionStore && sessionKey && sessionEntry.thinkingLevel === "xhigh") {
-      sessionEntry.thinkingLevel = "high";
-      sessionEntry.updatedAt = Date.now();
-      sessionStore[sessionKey] = sessionEntry;
-      if (storePath) {
-        const { updateSessionStore } = await loadSessionStoreRuntime();
-        await updateSessionStore(storePath, (store) => {
-          store[sessionKey] = sessionEntry;
-        });
+    const fallbackThinkLevel = resolveSupportedThinkingLevel({
+      provider,
+      model,
+      level: resolvedThinkLevel,
+    });
+    if (fallbackThinkLevel !== resolvedThinkLevel) {
+      const previousThinkLevel = resolvedThinkLevel;
+      resolvedThinkLevel = fallbackThinkLevel;
+      if (
+        sessionEntry &&
+        sessionStore &&
+        sessionKey &&
+        sessionEntry.thinkingLevel === previousThinkLevel
+      ) {
+        sessionEntry.thinkingLevel = fallbackThinkLevel;
+        sessionEntry.updatedAt = Date.now();
+        sessionStore[sessionKey] = sessionEntry;
+        if (storePath) {
+          const { updateSessionStore } = await loadSessionStoreRuntime();
+          await updateSessionStore(storePath, (store) => {
+            store[sessionKey] = sessionEntry;
+          });
+        }
       }
     }
   }

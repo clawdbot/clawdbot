@@ -222,6 +222,41 @@ describe("routeReply", () => {
     });
   });
 
+  it("passes policySessionKey through to outbound delivery targets", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          silentReply: {
+            direct: "disallow",
+            group: "allow",
+            internal: "allow",
+          },
+          silentReplyRewrite: {
+            direct: true,
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const res = await routeReply({
+      payload: { text: "native command response" },
+      channel: "slack",
+      to: "channel:C123",
+      cfg,
+      sessionKey: "agent:main:main",
+      policySessionKey: "agent:main:direct:U123",
+    });
+
+    expect(res.ok).toBe(true);
+    expectLastDelivery({
+      payloads: [expect.objectContaining({ text: "native command response" })],
+      session: expect.objectContaining({
+        key: "agent:main:main",
+        policyKey: "agent:main:direct:U123",
+      }),
+    });
+  });
+
   it("applies responsePrefix when routing", async () => {
     const cfg = {
       messages: { responsePrefix: "[openclaw]" },

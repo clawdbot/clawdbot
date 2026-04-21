@@ -79,7 +79,7 @@ export type AgentConfig = {
   embeddedHarness?: AgentEmbeddedHarnessConfig;
   model?: AgentModelConfig;
   /** Optional per-agent default thinking level (overrides agents.defaults.thinkingDefault). */
-  thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
+  thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
   /** Optional per-agent default verbosity level. */
   verboseDefault?: "off" | "on" | "full";
   /** Optional per-agent default reasoning visibility. */

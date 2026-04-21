@@ -13,17 +13,7 @@ function createMockRequestConfig() {
 describe("fal video generation provider", () => {
   const fetchGuardMock = vi.fn();
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-    fetchGuardMock.mockReset();
-    _setFalVideoFetchGuardForTesting(null);
-  });
-
-  it("declares explicit mode capabilities", () => {
-    expectExplicitVideoGenerationCapabilities(buildFalVideoGenerationProvider());
-  });
-
-  it("submits fal video jobs through the queue API and downloads the completed result", async () => {
+  function mockFalProviderRuntime() {
     vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "fal-key",
       source: "env",
@@ -41,43 +31,75 @@ describe("fal video generation provider", () => {
     });
     vi.spyOn(providerHttp, "assertOkOrThrowHttpError").mockResolvedValue(undefined);
     _setFalVideoFetchGuardForTesting(fetchGuardMock as never);
+  }
+
+  function releasedJson(value: unknown) {
+    return {
+      response: {
+        json: async () => value,
+      },
+      release: vi.fn(async () => {}),
+    };
+  }
+
+  function releasedVideo(params: { contentType: string; bytes: string }) {
+    return {
+      response: {
+        headers: new Headers({ "content-type": params.contentType }),
+        arrayBuffer: async () => Buffer.from(params.bytes),
+      },
+      release: vi.fn(async () => {}),
+    };
+  }
+
+  function mockCompletedFalVideoJob(params: {
+    requestId: string;
+    statusUrl: string;
+    responseUrl: string;
+    videoUrl: string;
+    bytes: string;
+    responseExtras?: Record<string, unknown>;
+  }) {
     fetchGuardMock
-      .mockResolvedValueOnce({
-        response: {
-          json: async () => ({
-            request_id: "req-123",
-            status_url: "https://queue.fal.run/fal-ai/minimax/requests/req-123/status",
-            response_url: "https://queue.fal.run/fal-ai/minimax/requests/req-123",
-          }),
-        },
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: {
-          json: async () => ({
-            status: "COMPLETED",
-          }),
-        },
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: {
-          json: async () => ({
-            status: "COMPLETED",
-            response: {
-              video: { url: "https://fal.run/files/video.mp4" },
-            },
-          }),
-        },
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: {
-          headers: new Headers({ "content-type": "video/mp4" }),
-          arrayBuffer: async () => Buffer.from("mp4-bytes"),
-        },
-        release: vi.fn(async () => {}),
-      });
+      .mockResolvedValueOnce(
+        releasedJson({
+          request_id: params.requestId,
+          status_url: params.statusUrl,
+          response_url: params.responseUrl,
+        }),
+      )
+      .mockResolvedValueOnce(releasedJson({ status: "COMPLETED" }))
+      .mockResolvedValueOnce(
+        releasedJson({
+          status: "COMPLETED",
+          response: {
+            video: { url: params.videoUrl },
+            ...params.responseExtras,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(releasedVideo({ contentType: "video/mp4", bytes: params.bytes }));
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    fetchGuardMock.mockReset();
+    _setFalVideoFetchGuardForTesting(null);
+  });
+
+  it("declares explicit mode capabilities", () => {
+    expectExplicitVideoGenerationCapabilities(buildFalVideoGenerationProvider());
+  });
+
+  it("submits fal video jobs through the queue API and downloads the completed result", async () => {
+    mockFalProviderRuntime();
+    mockCompletedFalVideoJob({
+      requestId: "req-123",
+      statusUrl: "https://queue.fal.run/fal-ai/minimax/requests/req-123/status",
+      responseUrl: "https://queue.fal.run/fal-ai/minimax/requests/req-123",
+      videoUrl: "https://fal.run/files/video.mp4",
+      bytes: "mp4-bytes",
+    });
 
     const provider = buildFalVideoGenerationProvider();
     const result = await provider.generateVideo({
@@ -136,62 +158,15 @@ describe("fal video generation provider", () => {
   });
 
   it("submits HeyGen video-agent requests without unsupported fal controls", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-key",
-      source: "env",
-      mode: "api-key",
+    mockFalProviderRuntime();
+    mockCompletedFalVideoJob({
+      requestId: "heygen-req-123",
+      statusUrl:
+        "https://queue.fal.run/fal-ai/heygen/v2/video-agent/requests/heygen-req-123/status",
+      responseUrl: "https://queue.fal.run/fal-ai/heygen/v2/video-agent/requests/heygen-req-123",
+      videoUrl: "https://fal.run/files/heygen.mp4",
+      bytes: "heygen-mp4-bytes",
     });
-    vi.spyOn(providerHttp, "resolveProviderHttpRequestConfig").mockReturnValue({
-      baseUrl: "https://fal.run",
-      allowPrivateNetwork: false,
-      headers: new Headers({
-        Authorization: "Key fal-key",
-        "Content-Type": "application/json",
-      }),
-      dispatcherPolicy: undefined,
-      requestConfig: createMockRequestConfig(),
-    });
-    vi.spyOn(providerHttp, "assertOkOrThrowHttpError").mockResolvedValue(undefined);
-    _setFalVideoFetchGuardForTesting(fetchGuardMock as never);
-    fetchGuardMock
-      .mockResolvedValueOnce({
-        response: {
-          json: async () => ({
-            request_id: "heygen-req-123",
-            status_url:
-              "https://queue.fal.run/fal-ai/heygen/v2/video-agent/requests/heygen-req-123/status",
-            response_url:
-              "https://queue.fal.run/fal-ai/heygen/v2/video-agent/requests/heygen-req-123",
-          }),
-        },
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: {
-          json: async () => ({
-            status: "COMPLETED",
-          }),
-        },
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: {
-          json: async () => ({
-            status: "COMPLETED",
-            response: {
-              video: { url: "https://fal.run/files/heygen.mp4" },
-            },
-          }),
-        },
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: {
-          headers: new Headers({ "content-type": "video/mp4" }),
-          arrayBuffer: async () => Buffer.from("heygen-mp4-bytes"),
-        },
-        release: vi.fn(async () => {}),
-      });
 
     const provider = buildFalVideoGenerationProvider();
     const result = await provider.generateVideo({
@@ -223,63 +198,17 @@ describe("fal video generation provider", () => {
   });
 
   it("submits Seedance 2 requests with fal schema fields", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-key",
-      source: "env",
-      mode: "api-key",
+    mockFalProviderRuntime();
+    mockCompletedFalVideoJob({
+      requestId: "seedance-req-123",
+      statusUrl:
+        "https://queue.fal.run/bytedance/seedance-2.0/fast/text-to-video/requests/seedance-req-123/status",
+      responseUrl:
+        "https://queue.fal.run/bytedance/seedance-2.0/fast/text-to-video/requests/seedance-req-123",
+      videoUrl: "https://fal.run/files/seedance.mp4",
+      bytes: "seedance-mp4-bytes",
+      responseExtras: { seed: 42 },
     });
-    vi.spyOn(providerHttp, "resolveProviderHttpRequestConfig").mockReturnValue({
-      baseUrl: "https://fal.run",
-      allowPrivateNetwork: false,
-      headers: new Headers({
-        Authorization: "Key fal-key",
-        "Content-Type": "application/json",
-      }),
-      dispatcherPolicy: undefined,
-      requestConfig: createMockRequestConfig(),
-    });
-    vi.spyOn(providerHttp, "assertOkOrThrowHttpError").mockResolvedValue(undefined);
-    _setFalVideoFetchGuardForTesting(fetchGuardMock as never);
-    fetchGuardMock
-      .mockResolvedValueOnce({
-        response: {
-          json: async () => ({
-            request_id: "seedance-req-123",
-            status_url:
-              "https://queue.fal.run/bytedance/seedance-2.0/fast/text-to-video/requests/seedance-req-123/status",
-            response_url:
-              "https://queue.fal.run/bytedance/seedance-2.0/fast/text-to-video/requests/seedance-req-123",
-          }),
-        },
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: {
-          json: async () => ({
-            status: "COMPLETED",
-          }),
-        },
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: {
-          json: async () => ({
-            status: "COMPLETED",
-            response: {
-              video: { url: "https://fal.run/files/seedance.mp4" },
-              seed: 42,
-            },
-          }),
-        },
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: {
-          headers: new Headers({ "content-type": "video/mp4" }),
-          arrayBuffer: async () => Buffer.from("seedance-mp4-bytes"),
-        },
-        release: vi.fn(async () => {}),
-      });
 
     const provider = buildFalVideoGenerationProvider();
     const result = await provider.generateVideo({

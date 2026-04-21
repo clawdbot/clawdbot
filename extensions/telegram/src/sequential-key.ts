@@ -1,4 +1,4 @@
-import { type Message, type UserFromGetMe } from "@grammyjs/types";
+import type { Message, UserFromGetMe } from "@grammyjs/types";
 import {
   listChatCommands,
   maybeResolveTextAlias,

@@ -117,15 +117,9 @@ describe("security audit workspace skill path escape findings", () => {
     const skillsRoot = path.join(workspaceDir, "skills");
     await fs.mkdir(skillsRoot, { recursive: true });
 
-    // Strategy: the first readdir (on skillsRoot) returns 41 001 unique subdir
-    // entries, filling the queue beyond the BFS visit cap
-    // (MAX_TOTAL_DIR_VISITS = 2000 * 20 = 40 000). All subsequent readdir calls
-    // return [] so no further queue growth occurs. After 40 000 dequeues the
-    // loop exits with ~1 001 entries still in queue → truncated = true.
-    //
-    // fs.realpath is also mocked to return paths immediately (no real I/O),
-    // keeping the 40 000 iterations fast (pure microtask overhead, <200 ms).
-    const FAKE_DIRS = 41_001;
+    // Use a tiny injected visit cap to exercise the truncation branch without
+    // forcing the test to await tens of thousands of mocked readdir calls.
+    const FAKE_DIRS = 3;
     const fakeDirEntries = Array.from({ length: FAKE_DIRS }, (_, i) => ({
       name: `d${i}`,
       isDirectory: () => true,
@@ -150,6 +144,7 @@ describe("security audit workspace skill path escape findings", () => {
     try {
       const findings = await collectWorkspaceSkillSymlinkEscapeFindings({
         cfg: { agents: { defaults: { workspace: workspaceDir } } } satisfies OpenClawConfig,
+        skillScanLimits: { maxDirVisits: 2 },
       });
       const truncFinding = findings.find((f) => f.checkId === "skills.workspace.scan_truncated");
       expect(truncFinding).toBeDefined();

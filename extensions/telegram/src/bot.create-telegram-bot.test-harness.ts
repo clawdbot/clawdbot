@@ -80,7 +80,7 @@ export function getLoadSessionStoreMock(): AnyMock {
 }
 
 export function setSessionStoreEntriesForTest(entries: SessionStore) {
-  sessionStoreEntries.value = JSON.parse(JSON.stringify(entries)) as SessionStore;
+  sessionStoreEntries.value = structuredClone(entries);
 }
 
 const { readChannelAllowFromStore, upsertChannelPairingRequest } = vi.hoisted(

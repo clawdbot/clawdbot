@@ -30,6 +30,17 @@ describe("embedded acpx plugin config", () => {
     expect(resolved.timeoutSeconds).toBe(300);
   });
 
+  it("keeps explicit probeAgent config", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        probeAgent: "claude",
+      },
+      workspaceDir: "/tmp/openclaw-acpx",
+    });
+
+    expect(resolved.probeAgent).toBe("claude");
+  });
+
   it("accepts agent command overrides", () => {
     const resolved = resolveAcpxPluginConfig({
       rawConfig: {
@@ -74,6 +85,7 @@ describe("embedded acpx plugin config", () => {
       properties: expect.objectContaining({
         cwd: expect.any(Object),
         stateDir: expect.any(Object),
+        probeAgent: expect.any(Object),
         timeoutSeconds: expect.objectContaining({
           default: 120,
         }),

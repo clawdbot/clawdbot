@@ -3191,7 +3191,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent.reasoning).toEqual({ effort: "medium" });
   });
 
-  it("omits response.create reasoning when reasoningEffort is none", async () => {
+  it("sends response.create reasoning none when the model supports it", async () => {
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-reason-none");
     const opts = { reasoningEffort: "none" };
     const stream = streamFn(
@@ -3218,7 +3218,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
     });
     const sent = MockManager.lastInstance!.sentEvents[0] as Record<string, unknown>;
     expect(sent.type).toBe("response.create");
-    expect(sent).not.toHaveProperty("reasoning");
+    expect(sent.reasoning).toEqual({ effort: "none" });
   });
 
   it("applies onPayload mutations before sending response.create", async () => {

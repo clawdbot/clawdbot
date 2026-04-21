@@ -1,4 +1,5 @@
 import { vi, type Mock } from "vitest";
+import { finalizeTelegramInboundContextForTest } from "./bot-message-context.session-runtime-test-support.js";
 
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
 type BuildTelegramMessageContextForTest =
@@ -13,27 +14,9 @@ const hoisted = vi.hoisted((): { recordInboundSessionMock: AsyncUnknownMock } =>
 }));
 
 export const recordInboundSessionMock: AsyncUnknownMock = hoisted.recordInboundSessionMock;
-const finalizeInboundContextForTest = ((ctx) => {
-  const next = ctx as Record<string, unknown>;
-  const body = typeof next.Body === "string" ? next.Body : "";
-  next.Body = body;
-  next.BodyForAgent =
-    typeof next.BodyForAgent === "string"
-      ? next.BodyForAgent
-      : typeof next.RawBody === "string"
-        ? next.RawBody
-        : body;
-  next.BodyForCommands =
-    typeof next.BodyForCommands === "string"
-      ? next.BodyForCommands
-      : typeof next.CommandBody === "string"
-        ? next.CommandBody
-        : typeof next.RawBody === "string"
-          ? next.RawBody
-          : body;
-  next.CommandAuthorized = Boolean(next.CommandAuthorized);
-  return next;
-}) as NonNullable<TelegramTestSessionRuntime["finalizeInboundContext"]>;
+const finalizeInboundContextForTest = finalizeTelegramInboundContextForTest as NonNullable<
+  TelegramTestSessionRuntime["finalizeInboundContext"]
+>;
 const recordInboundSessionForTest: NonNullable<
   TelegramTestSessionRuntime["recordInboundSession"]
 > = async (params) => {

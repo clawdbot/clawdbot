@@ -4,8 +4,55 @@ import type {
   ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+
+function readTestDefaultTo(cfg: OpenClawConfig, channelId: string): string | undefined {
+  const channels = cfg.channels as Record<string, { defaultTo?: unknown }> | undefined;
+  const value = channels?.[channelId]?.defaultTo;
+  return typeof value === "string" ? value : undefined;
+}
+
+function stripTestPrefix(raw: string, channelId: string): string {
+  return raw.replace(new RegExp(`^${channelId}:`, "i"), "").trim();
+}
+
+function parseForumTargetForTest(raw: string): {
+  roomId: string;
+  threadId?: number;
+  chatType: "direct" | "group" | "unknown";
+} {
+  const trimmed = stripTestPrefix(raw.trim(), "forum");
+  const topicMatch = /^(.*):topic:(\d+)$/i.exec(trimmed);
+  const roomId = topicMatch?.[1]?.trim() || trimmed;
+  const threadId = topicMatch?.[2] ? Number.parseInt(topicMatch[2], 10) : undefined;
+  const chatType = roomId.startsWith("dm:")
+    ? "direct"
+    : roomId.startsWith("room:")
+      ? "group"
+      : "unknown";
+  return { roomId, threadId, chatType };
+}
+
+function normalizeGenericTargetForTest(raw: string, channelId: string): string | null {
+  const normalized = stripTestPrefix(raw, channelId).toLowerCase().replace(/\s+/gu, "-");
+  if (!normalized || normalized === "invalid") {
+    return null;
+  }
+  return normalized;
+}
+
+function createGenericResolveTarget(
+  channelId: string,
+  label: string,
+): ChannelOutboundAdapter["resolveTarget"] {
+  return ({ to }) => {
+    const normalized = to ? normalizeGenericTargetForTest(to, channelId) : null;
+    if (!normalized) {
+      return { ok: false, error: new Error(`${label} target is required`) };
+    }
+    return { ok: true, to: normalized };
+  };
+}
 
 function parseTelegramTargetForTest(raw: string): {
   chatId: string;
@@ -27,44 +74,6 @@ function parseTelegramTargetForTest(raw: string): {
   return { chatId, messageThreadId, chatType };
 }
 
-function normalizeWhatsAppTargetForTest(raw: string): string | null {
-  const trimmed = raw
-    .trim()
-    .replace(/^whatsapp:/i, "")
-    .trim();
-  if (!trimmed) {
-    return null;
-  }
-  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
-  if (lowered.endsWith("@g.us")) {
-    const normalized = lowered.replace(/\s+/gu, "");
-    return /^\d+@g\.us$/u.test(normalized) ? normalized : null;
-  }
-  const digits = trimmed.replace(/\D/gu, "");
-  const normalized = digits ? `+${digits}` : "";
-  return /^\+\d{7,15}$/u.test(normalized) ? normalized : null;
-}
-
-function createWhatsAppResolveTarget(label = "WhatsApp"): ChannelOutboundAdapter["resolveTarget"] {
-  return ({ to }) => {
-    const normalized = to ? normalizeWhatsAppTargetForTest(to) : null;
-    if (!normalized) {
-      return { ok: false, error: new Error(`${label} target is required`) };
-    }
-    return { ok: true, to: normalized };
-  };
-}
-
-function createTelegramResolveTarget(label = "Telegram"): ChannelOutboundAdapter["resolveTarget"] {
-  return ({ to }) => {
-    const trimmed = to?.trim();
-    if (!trimmed) {
-      return { ok: false, error: new Error(`${label} target is required`) };
-    }
-    return { ok: true, to: parseTelegramTargetForTest(trimmed).chatId };
-  };
-}
-
 export const telegramMessagingForTest: ChannelMessagingAdapter = {
   parseExplicitTarget: ({ raw }) => {
     const target = parseTelegramTargetForTest(raw);
@@ -80,17 +89,23 @@ export const telegramMessagingForTest: ChannelMessagingAdapter = {
   },
 };
 
-export const whatsappMessagingForTest: ChannelMessagingAdapter = {
+export const forumMessagingForTest: ChannelMessagingAdapter = {
+  parseExplicitTarget: ({ raw }) => {
+    const target = parseForumTargetForTest(raw);
+    return {
+      to: target.roomId,
+      threadId: target.threadId,
+      chatType: target.chatType === "unknown" ? undefined : target.chatType,
+    };
+  },
   inferTargetChatType: ({ to }) => {
-    const normalized = normalizeWhatsAppTargetForTest(to);
-    if (!normalized) {
-      return undefined;
-    }
-    return normalized.endsWith("@g.us") ? "group" : "direct";
+    const target = parseForumTargetForTest(to);
+    return target.chatType === "unknown" ? undefined : target.chatType;
   },
   targetResolver: {
-    hint: "<E.164|group JID>",
+    hint: "<room|dm target>",
   },
+  preserveHeartbeatThreadIdForGroupRoute: true,
 };
 
 export function createTestChannelPlugin(params: {
@@ -124,54 +139,42 @@ export function createTestChannelPlugin(params: {
   };
 }
 
-export function createTelegramTestPlugin(): ChannelPlugin {
-  return createTestChannelPlugin({
-    id: "telegram",
-    label: "Telegram",
-    outbound: {
-      deliveryMode: "direct",
-      sendText: async () => ({ channel: "telegram", messageId: "telegram-msg" }),
-      resolveTarget: createTelegramResolveTarget(),
-    },
-    messaging: telegramMessagingForTest,
-    resolveDefaultTo: ({ cfg }) =>
-      typeof cfg.channels?.telegram?.defaultTo === "string"
-        ? cfg.channels.telegram.defaultTo
-        : undefined,
-  });
-}
-
-export function createWhatsAppTestPlugin(): ChannelPlugin {
-  return createTestChannelPlugin({
-    id: "whatsapp",
-    label: "WhatsApp",
-    outbound: {
-      deliveryMode: "direct",
-      sendText: async () => ({ channel: "whatsapp", messageId: "whatsapp-msg" }),
-      resolveTarget: createWhatsAppResolveTarget(),
-    },
-    messaging: whatsappMessagingForTest,
-    resolveDefaultTo: ({ cfg }) =>
-      typeof cfg.channels?.whatsapp?.defaultTo === "string"
-        ? cfg.channels.whatsapp.defaultTo
-        : undefined,
-  });
-}
-
-export function createNoopOutboundChannelPlugin(
-  id: "discord" | "imessage" | "slack",
+export function createGenericTargetTestPlugin(
+  id: ChannelPlugin["id"],
+  label = String(id),
 ): ChannelPlugin {
   return createTestChannelPlugin({
     id,
+    label,
     outbound: {
       deliveryMode: "direct",
       sendText: async () => ({ channel: id, messageId: `${id}-msg` }),
+      resolveTarget: createGenericResolveTarget(String(id), label),
     },
+    resolveDefaultTo: ({ cfg }) => readTestDefaultTo(cfg, String(id)),
+  });
+}
+
+export function createForumTargetTestPlugin(): ChannelPlugin {
+  return createTestChannelPlugin({
+    id: "forum",
+    label: "Forum",
+    outbound: {
+      deliveryMode: "direct",
+      sendText: async () => ({ channel: "forum", messageId: "forum-msg" }),
+      resolveTarget: createGenericResolveTarget("forum", "Forum"),
+    },
+    messaging: forumMessagingForTest,
+    resolveDefaultTo: ({ cfg }) => readTestDefaultTo(cfg, "forum"),
   });
 }
 
 export function createTargetsTestRegistry(
-  plugins: ChannelPlugin[] = [createWhatsAppTestPlugin(), createTelegramTestPlugin()],
+  plugins: ChannelPlugin[] = [
+    createGenericTargetTestPlugin("alpha", "Alpha"),
+    createGenericTargetTestPlugin("beta", "Beta"),
+    createForumTargetTestPlugin(),
+  ],
 ) {
   return createTestRegistry(
     plugins.map((plugin) => ({

@@ -6,7 +6,6 @@ import {
   createFeishuLifecycleConfig,
   createFeishuLifecycleReplyDispatcher,
   createFeishuTextMessageEvent,
-  createResolvedFeishuLifecycleAccount,
   expectFeishuReplyDispatcherSentFinalReplyOnce,
   expectFeishuReplyPipelineDedupedAcrossReplay,
   expectFeishuReplyPipelineDedupedAfterPostSendFailure,
@@ -14,22 +13,20 @@ import {
   mockFeishuReplyOnceDispatch,
   restoreFeishuLifecycleStateDir,
   setFeishuLifecycleStateDir,
-  setupFeishuLifecycleHandler,
+  setupFeishuMessageReceiveLifecycleHandler,
 } from "./test-support/lifecycle-test-support.js";
 
 const {
-  createEventDispatcherMock,
   createFeishuReplyDispatcherMock,
   dispatchReplyFromConfigMock,
   finalizeInboundContextMock,
   resolveAgentRouteMock,
-  resolveBoundConversationMock,
-  touchBindingMock,
   withReplyDispatcherMock,
 } = getFeishuLifecycleTestMocks();
 
-let _handlers: Record<string, (data: unknown) => Promise<void>> = {};
 let lastRuntime: ReturnType<typeof createRuntimeEnv> | null = null;
+let lifecycleCore: ReturnType<typeof installFeishuLifecycleReplyRuntime>;
+const handleMessageMock = vi.fn();
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 const lifecycleConfig = createFeishuLifecycleConfig({
   accountId: "acct-lifecycle",
@@ -47,34 +44,18 @@ const lifecycleConfig = createFeishuLifecycleConfig({
   },
 });
 
-const lifecycleAccount = createResolvedFeishuLifecycleAccount({
-  accountId: "acct-lifecycle",
-  appId: "cli_test",
-  appSecret: "secret_test",
-  config: {
-    groupPolicy: "open",
-    groups: {
-      oc_group_1: {
-        requireMention: false,
-        groupSessionScope: "group_topic_sender",
-        replyInThread: "enabled",
-      },
-    },
-  },
-});
-
 async function setupLifecycleMonitor() {
   lastRuntime = createRuntimeEnv();
-  return setupFeishuLifecycleHandler({
-    createEventDispatcherMock,
-    onRegister: (registered) => {
-      _handlers = registered;
-    },
+  return setupFeishuMessageReceiveLifecycleHandler({
     runtime: lastRuntime,
+    core: lifecycleCore,
     cfg: lifecycleConfig,
-    account: lifecycleAccount,
-    handlerKey: "im.message.receive_v1",
-    missingHandlerMessage: "missing im.message.receive_v1 handler",
+    accountId: "acct-lifecycle",
+    handleMessage: handleMessageMock,
+    resolveDebounceText: ({ event }) => {
+      const parsed = JSON.parse(event.message.content) as { text?: string };
+      return parsed.text ?? "";
+    },
   });
 }
 
@@ -82,16 +63,10 @@ describe("Feishu reply-once lifecycle", () => {
   beforeEach(() => {
     vi.useRealTimers();
     vi.clearAllMocks();
-    _handlers = {};
     lastRuntime = null;
     setFeishuLifecycleStateDir("openclaw-feishu-lifecycle");
 
     createFeishuReplyDispatcherMock.mockReturnValue(createFeishuLifecycleReplyDispatcher());
-
-    resolveBoundConversationMock.mockReturnValue({
-      bindingId: "binding-1",
-      targetSessionKey: "agent:bound-agent:feishu:topic:om_root_topic_1:ou_sender_1",
-    });
 
     resolveAgentRouteMock.mockReturnValue({
       agentId: "main",
@@ -108,8 +83,33 @@ describe("Feishu reply-once lifecycle", () => {
     });
 
     withReplyDispatcherMock.mockImplementation(async ({ run }) => await run());
+    handleMessageMock.mockImplementation(async ({ event }) => {
+      const reply = createFeishuReplyDispatcherMock({
+        accountId: "acct-lifecycle",
+        chatId: event.message.chat_id,
+        replyToMessageId: event.message.root_id ?? event.message.message_id,
+        replyInThread: true,
+        rootId: event.message.root_id,
+      });
+      try {
+        await withReplyDispatcherMock({
+          dispatcher: reply.dispatcher,
+          onSettled: () => reply.markDispatchIdle(),
+          run: () =>
+            dispatchReplyFromConfigMock({
+              ctx: {
+                AccountId: "acct-lifecycle",
+                MessageSid: event.message.message_id,
+              },
+              dispatcher: reply.dispatcher,
+            }),
+        });
+      } catch (err) {
+        lastRuntime?.error(`feishu[acct-lifecycle]: failed to dispatch message: ${String(err)}`);
+      }
+    });
 
-    installFeishuLifecycleReplyRuntime({
+    lifecycleCore = installFeishuLifecycleReplyRuntime({
       resolveAgentRouteMock,
       finalizeInboundContextMock,
       dispatchReplyFromConfigMock,
@@ -141,6 +141,7 @@ describe("Feishu reply-once lifecycle", () => {
     });
 
     expect(lastRuntime?.error).not.toHaveBeenCalled();
+    expect(handleMessageMock).toHaveBeenCalledTimes(1);
     expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
     expect(createFeishuReplyDispatcherMock).toHaveBeenCalledTimes(1);
     expect(createFeishuReplyDispatcherMock).toHaveBeenCalledWith(
@@ -152,15 +153,6 @@ describe("Feishu reply-once lifecycle", () => {
         rootId: "om_root_topic_1",
       }),
     );
-    expect(finalizeInboundContextMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        AccountId: "acct-lifecycle",
-        SessionKey: "agent:bound-agent:feishu:topic:om_root_topic_1:ou_sender_1",
-        MessageSid: "om_lifecycle_once",
-        MessageThreadId: "om_root_topic_1",
-      }),
-    );
-    expect(touchBindingMock).toHaveBeenCalledWith("binding-1");
     expectFeishuReplyDispatcherSentFinalReplyOnce({ createFeishuReplyDispatcherMock });
   });
 
@@ -187,6 +179,7 @@ describe("Feishu reply-once lifecycle", () => {
     });
 
     expect(lastRuntime?.error).toHaveBeenCalledTimes(1);
+    expect(handleMessageMock).toHaveBeenCalledTimes(1);
     expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
     expectFeishuReplyDispatcherSentFinalReplyOnce({ createFeishuReplyDispatcherMock });
   });

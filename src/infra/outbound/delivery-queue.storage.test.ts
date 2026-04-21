@@ -21,7 +21,7 @@ describe("delivery-queue storage", () => {
     it("creates and removes a queue entry", async () => {
       const id = await enqueueTextDelivery(
         {
-          channel: "whatsapp",
+          channel: "directchat",
           to: "+1555",
           payloads: [{ text: "hello" }],
           bestEffort: true,
@@ -48,7 +48,7 @@ describe("delivery-queue storage", () => {
       const entry = readQueuedEntry(tmpDir(), id);
       expect(entry).toMatchObject({
         id,
-        channel: "whatsapp",
+        channel: "directchat",
         to: "+1555",
         bestEffort: true,
         gifPlayback: true,
@@ -80,18 +80,18 @@ describe("delivery-queue storage", () => {
     it.each([
       {
         name: "ack cleans up leftover .delivered marker when .json is already gone",
-        payload: { channel: "whatsapp", to: "+1", payloads: [{ text: "stale-marker" }] },
+        payload: { channel: "directchat", to: "+1", payloads: [{ text: "stale-marker" }] },
         prepareDeliveredMarker: true,
         action: (id: string) => ackDelivery(id, tmpDir()),
       },
       {
         name: "ack removes .delivered marker so recovery does not replay",
-        payload: { channel: "whatsapp", to: "+1", payloads: [{ text: "ack-test" }] },
+        payload: { channel: "directchat", to: "+1", payloads: [{ text: "ack-test" }] },
         action: (id: string) => ackDelivery(id, tmpDir()),
       },
       {
         name: "loadPendingDeliveries cleans up stale .delivered markers without replaying",
-        payload: { channel: "telegram", to: "99", payloads: [{ text: "stale" }] },
+        payload: { channel: "forum", to: "99", payloads: [{ text: "stale" }] },
         prepareDeliveredMarker: true,
         action: () => loadPendingDeliveries(tmpDir()),
         expectedEntriesLength: 0,
@@ -118,7 +118,7 @@ describe("delivery-queue storage", () => {
     it("increments retryCount, records attempt time, and sets lastError", async () => {
       const id = await enqueueTextDelivery(
         {
-          channel: "telegram",
+          channel: "forum",
           to: "123",
           payloads: [{ text: "test" }],
         },
@@ -139,7 +139,7 @@ describe("delivery-queue storage", () => {
     it("moves entry to failed/ subdirectory", async () => {
       const id = await enqueueTextDelivery(
         {
-          channel: "slack",
+          channel: "workspace",
           to: "#general",
           payloads: [{ text: "hi" }],
         },
@@ -160,8 +160,8 @@ describe("delivery-queue storage", () => {
     });
 
     it("loads multiple entries", async () => {
-      await enqueueTextDelivery({ channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] });
-      await enqueueTextDelivery({ channel: "telegram", to: "2", payloads: [{ text: "b" }] });
+      await enqueueTextDelivery({ channel: "directchat", to: "+1", payloads: [{ text: "a" }] });
+      await enqueueTextDelivery({ channel: "forum", to: "2", payloads: [{ text: "b" }] });
 
       expect(await loadPendingDeliveries(tmpDir())).toHaveLength(2);
     });
@@ -169,7 +169,7 @@ describe("delivery-queue storage", () => {
     it("persists gateway caller scopes for replay", async () => {
       const id = await enqueueTextDelivery(
         {
-          channel: "telegram",
+          channel: "forum",
           to: "2",
           payloads: [{ text: "b" }],
           gatewayClientScopes: ["operator.write"],
@@ -184,7 +184,7 @@ describe("delivery-queue storage", () => {
     it("persists session context for recovery replay", async () => {
       const id = await enqueueTextDelivery(
         {
-          channel: "telegram",
+          channel: "forum",
           to: "2",
           payloads: [{ text: "b" }],
           session: {
@@ -214,7 +214,7 @@ describe("delivery-queue storage", () => {
 
     it("backfills lastAttemptAt for legacy retry entries during load", async () => {
       const id = await enqueueTextDelivery({
-        channel: "whatsapp",
+        channel: "directchat",
         to: "+1",
         payloads: [{ text: "legacy" }],
       });

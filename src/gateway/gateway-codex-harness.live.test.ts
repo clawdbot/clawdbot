@@ -6,9 +6,12 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { DeviceIdentity } from "../infra/device-identity.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { GatewayClient } from "./client.js";
+import {
+  connectTestGatewayClient,
+  ensurePairedTestGatewayClientIdentity,
+} from "./gateway-cli-backend.live-helpers.js";
 import {
   EXPECTED_CODEX_MODELS_COMMAND_TEXT,
   isExpectedCodexModelsCommandText,
@@ -114,99 +117,6 @@ async function getFreeGatewayPort(): Promise<number> {
     throw new Error("failed to allocate gateway port");
   }
   return port;
-}
-
-async function ensurePairedTestGatewayClientIdentity(): Promise<DeviceIdentity> {
-  const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
-    await import("../infra/device-identity.js");
-  const { approveDevicePairing, getPairedDevice, requestDevicePairing } =
-    await import("../infra/device-pairing.js");
-  const { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } =
-    await import("../utils/message-channel.js");
-  const identity = loadOrCreateDeviceIdentity();
-  const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
-  const requiredScopes = ["operator.admin"];
-  const paired = await getPairedDevice(identity.deviceId);
-  const pairedScopes = Array.isArray(paired?.approvedScopes)
-    ? paired.approvedScopes
-    : Array.isArray(paired?.scopes)
-      ? paired.scopes
-      : [];
-  if (
-    paired?.publicKey === publicKey &&
-    requiredScopes.every((scope) => pairedScopes.includes(scope))
-  ) {
-    return identity;
-  }
-  const pairing = await requestDevicePairing({
-    deviceId: identity.deviceId,
-    publicKey,
-    displayName: "vitest-codex-harness-live",
-    platform: process.platform,
-    clientId: GATEWAY_CLIENT_NAMES.TEST,
-    clientMode: GATEWAY_CLIENT_MODES.TEST,
-    role: "operator",
-    scopes: requiredScopes,
-    silent: true,
-  });
-  const approved = await approveDevicePairing(pairing.request.requestId, {
-    callerScopes: requiredScopes,
-  });
-  if (approved?.status !== "approved") {
-    throw new Error(`failed to pre-pair live test device: ${approved?.status ?? "missing"}`);
-  }
-  return identity;
-}
-
-async function connectTestGatewayClient(params: {
-  deviceIdentity: DeviceIdentity;
-  token: string;
-  url: string;
-}): Promise<GatewayClient> {
-  const { GatewayClient } = await import("./client.js");
-  const { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } =
-    await import("../utils/message-channel.js");
-  return await new Promise<GatewayClient>((resolve, reject) => {
-    let done = false;
-    let client: GatewayClient | undefined;
-    const connectTimeout = setTimeout(() => {
-      finish({ error: new Error("gateway connect timeout") });
-    }, GATEWAY_CONNECT_TIMEOUT_MS);
-    connectTimeout.unref();
-
-    function finish(result: { client?: GatewayClient; error?: Error }): void {
-      if (done) {
-        return;
-      }
-      done = true;
-      clearTimeout(connectTimeout);
-      if (result.error) {
-        if (client) {
-          void client.stopAndWait({ timeoutMs: 1_000 }).catch(() => {});
-        }
-        reject(result.error);
-        return;
-      }
-      resolve(result.client as GatewayClient);
-    }
-
-    client = new GatewayClient({
-      url: params.url,
-      token: params.token,
-      clientName: GATEWAY_CLIENT_NAMES.TEST,
-      clientDisplayName: "vitest-codex-harness-live",
-      clientVersion: "dev",
-      mode: GATEWAY_CLIENT_MODES.TEST,
-      connectChallengeTimeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
-      deviceIdentity: params.deviceIdentity,
-      onHelloOk: () => finish({ client }),
-      onConnectError: (error) => finish({ error }),
-      onClose: (code, reason) => {
-        finish({ error: new Error(`gateway closed during connect (${code}): ${reason}`) });
-      },
-    });
-    client.start();
-  });
 }
 
 async function createLiveWorkspace(tempDir: string): Promise<string> {
@@ -459,7 +369,9 @@ describeLive("gateway live (Codex harness)", () => {
 
       await fs.mkdir(stateDir, { recursive: true });
       await writeLiveGatewayConfig({ configPath, modelKey, port, token, workspace });
-      const deviceIdentity = await ensurePairedTestGatewayClientIdentity();
+      const deviceIdentity = await ensurePairedTestGatewayClientIdentity({
+        displayName: "vitest-codex-harness-live",
+      });
       logCodexLiveStep("config-written", { configPath, modelKey, port });
 
       const server = await startGatewayServer(port, {
@@ -471,6 +383,8 @@ describeLive("gateway live (Codex harness)", () => {
         url: `ws://127.0.0.1:${port}`,
         token,
         deviceIdentity,
+        timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
+        clientDisplayName: "vitest-codex-harness-live",
       });
       logCodexLiveStep("client-connected");
 

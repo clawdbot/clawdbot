@@ -32,6 +32,55 @@ const KIMI_TOOL_TEXT =
   ' <|tool_calls_section_begin|> <|tool_call_begin|> functions.read:0 <|tool_call_argument_begin|> {"file_path":"./package.json"} <|tool_call_end|> <|tool_calls_section_end|>';
 const KIMI_MULTI_TOOL_TEXT =
   ' <|tool_calls_section_begin|> <|tool_call_begin|> functions.read:0 <|tool_call_argument_begin|> {"file_path":"./package.json"} <|tool_call_end|> <|tool_call_begin|> functions.write:1 <|tool_call_argument_begin|> {"file_path":"./out.txt","content":"done"} <|tool_call_end|> <|tool_calls_section_end|>';
+const KIMI_MODEL = {
+  api: "anthropic-messages",
+  provider: "kimi",
+  id: "k2p5",
+} as Model<"anthropic-messages">;
+const KIMI_CONTEXT = { messages: [] } as Context;
+
+function createReadToolCall() {
+  return {
+    type: "toolCall",
+    id: "functions.read:0",
+    name: "functions.read",
+    arguments: { file_path: "./package.json" },
+  };
+}
+
+function createAssistantTextMessage(text: string) {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text }],
+    stopReason: "stop",
+  };
+}
+
+function createResultStreamFn(resultMessage: unknown): StreamFn {
+  return () =>
+    createFakeStream({
+      events: [],
+      resultMessage,
+    }) as ReturnType<StreamFn>;
+}
+
+async function callKimiStream(wrapped: StreamFn): Promise<FakeStream> {
+  return (await wrapped(KIMI_MODEL, KIMI_CONTEXT, {})) as FakeStream;
+}
+
+function createPayloadCapturingStream(initialPayload: Record<string, unknown> = {}) {
+  let capturedPayload: Record<string, unknown> | undefined;
+  const streamFn: StreamFn = (model, _context, options) => {
+    const payload: Record<string, unknown> = { ...initialPayload };
+    options?.onPayload?.(payload as never, model as never);
+    capturedPayload = payload;
+    return createFakeStream({
+      events: [],
+      resultMessage: { role: "assistant", content: [] },
+    }) as never;
+  };
+  return { streamFn, getCapturedPayload: () => capturedPayload };
+}
 
 describe("kimi tool-call markup wrapper", () => {
   it("defaults Kimi thinking to disabled unless explicitly enabled", () => {
@@ -96,10 +145,7 @@ describe("kimi tool-call markup wrapper", () => {
           role: "assistant",
           content: [
             {
-              type: "toolCall",
-              id: "functions.read:0",
-              name: "functions.read",
-              arguments: { file_path: "./package.json" },
+              ...createReadToolCall(),
             },
           ],
           stopReason: "toolUse",
@@ -108,10 +154,7 @@ describe("kimi tool-call markup wrapper", () => {
           role: "assistant",
           content: [
             {
-              type: "toolCall",
-              id: "functions.read:0",
-              name: "functions.read",
-              arguments: { file_path: "./package.json" },
+              ...createReadToolCall(),
             },
           ],
           stopReason: "toolUse",
@@ -123,10 +166,7 @@ describe("kimi tool-call markup wrapper", () => {
       content: [
         { type: "thinking", thinking: "Need to read the file first." },
         {
-          type: "toolCall",
-          id: "functions.read:0",
-          name: "functions.read",
-          arguments: { file_path: "./package.json" },
+          ...createReadToolCall(),
         },
       ],
       stopReason: "toolUse",
@@ -156,32 +196,18 @@ describe("kimi tool-call markup wrapper", () => {
   });
 
   it("supports async stream functions", async () => {
-    const finalMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: KIMI_TOOL_TEXT }],
-      stopReason: "stop",
-    };
-    const baseStreamFn: StreamFn = async () =>
-      createFakeStream({
-        events: [],
-        resultMessage: finalMessage,
-      }) as ReturnType<StreamFn>;
+    const finalMessage = createAssistantTextMessage(KIMI_TOOL_TEXT);
+    const baseStreamFn: StreamFn = async (model, context, options) =>
+      createResultStreamFn(finalMessage)(model, context, options);
 
     const wrapped = createKimiToolCallMarkupWrapper(baseStreamFn);
-    const stream = (await wrapped(
-      { api: "anthropic-messages", provider: "kimi", id: "k2p5" } as Model<"anthropic-messages">,
-      { messages: [] } as Context,
-      {},
-    )) as FakeStream;
+    const stream = await callKimiStream(wrapped);
 
     await expect(stream.result()).resolves.toEqual({
       role: "assistant",
       content: [
         {
-          type: "toolCall",
-          id: "functions.read:0",
-          name: "functions.read",
-          arguments: { file_path: "./package.json" },
+          ...createReadToolCall(),
         },
       ],
       stopReason: "toolUse",
@@ -189,32 +215,17 @@ describe("kimi tool-call markup wrapper", () => {
   });
 
   it("parses multiple tagged tool calls in one section", async () => {
-    const finalMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: KIMI_MULTI_TOOL_TEXT }],
-      stopReason: "stop",
-    };
-    const baseStreamFn: StreamFn = () =>
-      createFakeStream({
-        events: [],
-        resultMessage: finalMessage,
-      }) as ReturnType<StreamFn>;
+    const finalMessage = createAssistantTextMessage(KIMI_MULTI_TOOL_TEXT);
+    const baseStreamFn = createResultStreamFn(finalMessage);
 
     const wrapped = createKimiToolCallMarkupWrapper(baseStreamFn);
-    const stream = wrapped(
-      { api: "anthropic-messages", provider: "kimi", id: "k2p5" } as Model<"anthropic-messages">,
-      { messages: [] } as Context,
-      {},
-    ) as FakeStream;
+    const stream = await callKimiStream(wrapped);
 
     await expect(stream.result()).resolves.toEqual({
       role: "assistant",
       content: [
         {
-          type: "toolCall",
-          id: "functions.read:0",
-          name: "functions.read",
-          arguments: { file_path: "./package.json" },
+          ...createReadToolCall(),
         },
         {
           type: "toolCall",
@@ -228,34 +239,19 @@ describe("kimi tool-call markup wrapper", () => {
   });
 
   it("adapts provider stream context without changing wrapper behavior", async () => {
-    const finalMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: KIMI_TOOL_TEXT }],
-      stopReason: "stop",
-    };
-    const baseStreamFn: StreamFn = () =>
-      createFakeStream({
-        events: [],
-        resultMessage: finalMessage,
-      }) as ReturnType<StreamFn>;
+    const finalMessage = createAssistantTextMessage(KIMI_TOOL_TEXT);
+    const baseStreamFn = createResultStreamFn(finalMessage);
 
     const wrapped = wrapKimiProviderStream({
       streamFn: baseStreamFn,
     } as never);
-    const stream = wrapped(
-      { api: "anthropic-messages", provider: "kimi", id: "k2p5" } as Model<"anthropic-messages">,
-      { messages: [] } as Context,
-      {},
-    ) as FakeStream;
+    const stream = await callKimiStream(wrapped);
 
     await expect(stream.result()).resolves.toEqual({
       role: "assistant",
       content: [
         {
-          type: "toolCall",
-          id: "functions.read:0",
-          name: "functions.read",
-          arguments: { file_path: "./package.json" },
+          ...createReadToolCall(),
         },
       ],
       stopReason: "toolUse",
@@ -263,20 +259,11 @@ describe("kimi tool-call markup wrapper", () => {
   });
 
   it("forces Kimi thinking disabled and strips proxy reasoning fields", () => {
-    let capturedPayload: Record<string, unknown> | undefined;
-    const baseStreamFn: StreamFn = (model, _context, options) => {
-      const payload: Record<string, unknown> = {
-        reasoning: { effort: "high" },
-        reasoning_effort: "high",
-        reasoningEffort: "high",
-      };
-      options?.onPayload?.(payload as never, model as never);
-      capturedPayload = payload;
-      return createFakeStream({
-        events: [],
-        resultMessage: { role: "assistant", content: [] },
-      }) as never;
-    };
+    const { streamFn: baseStreamFn, getCapturedPayload } = createPayloadCapturingStream({
+      reasoning: { effort: "high" },
+      reasoning_effort: "high",
+      reasoningEffort: "high",
+    });
 
     const wrapped = createKimiThinkingWrapper(baseStreamFn, "disabled");
     void wrapped(
@@ -289,22 +276,13 @@ describe("kimi tool-call markup wrapper", () => {
       {},
     );
 
-    expect(capturedPayload).toEqual({
+    expect(getCapturedPayload()).toEqual({
       thinking: { type: "disabled" },
     });
   });
 
   it("lets explicit model params keep Kimi thinking disabled even when session thinking is on", () => {
-    let capturedPayload: Record<string, unknown> | undefined;
-    const baseStreamFn: StreamFn = (model, _context, options) => {
-      const payload: Record<string, unknown> = {};
-      options?.onPayload?.(payload as never, model as never);
-      capturedPayload = payload;
-      return createFakeStream({
-        events: [],
-        resultMessage: { role: "assistant", content: [] },
-      }) as never;
-    };
+    const { streamFn: baseStreamFn, getCapturedPayload } = createPayloadCapturingStream();
 
     const wrapped = wrapKimiProviderStream({
       provider: "kimi",
@@ -324,22 +302,13 @@ describe("kimi tool-call markup wrapper", () => {
       {},
     );
 
-    expect(capturedPayload).toEqual({
+    expect(getCapturedPayload()).toEqual({
       thinking: { type: "disabled" },
     });
   });
 
   it("enables Kimi thinking only when explicitly requested", () => {
-    let capturedPayload: Record<string, unknown> | undefined;
-    const baseStreamFn: StreamFn = (model, _context, options) => {
-      const payload: Record<string, unknown> = {};
-      options?.onPayload?.(payload as never, model as never);
-      capturedPayload = payload;
-      return createFakeStream({
-        events: [],
-        resultMessage: { role: "assistant", content: [] },
-      }) as never;
-    };
+    const { streamFn: baseStreamFn, getCapturedPayload } = createPayloadCapturingStream();
 
     const wrapped = wrapKimiProviderStream({
       provider: "kimi",
@@ -358,7 +327,7 @@ describe("kimi tool-call markup wrapper", () => {
       {},
     );
 
-    expect(capturedPayload).toEqual({
+    expect(getCapturedPayload()).toEqual({
       thinking: { type: "enabled" },
     });
   });

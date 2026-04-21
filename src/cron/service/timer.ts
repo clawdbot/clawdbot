@@ -14,6 +14,7 @@ import { createCronExecutionId } from "../run-id.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
 import type {
   CronDeliveryStatus,
+  CronDeliveryTrace,
   CronJob,
   CronMessageChannel,
   CronRunOutcome,
@@ -1134,7 +1135,12 @@ export async function executeJobCore(
   job: CronJob,
   abortSignal?: AbortSignal,
 ): Promise<
-  CronRunOutcome & CronRunTelemetry & { delivered?: boolean; deliveryAttempted?: boolean }
+  CronRunOutcome &
+    CronRunTelemetry & {
+      delivered?: boolean;
+      deliveryAttempted?: boolean;
+      delivery?: CronDeliveryTrace;
+    }
 > {
   const resolveAbortError = () => ({
     status: "error" as const,
@@ -1178,7 +1184,12 @@ async function executeMainSessionCronJob(
   abortSignal: AbortSignal | undefined,
   waitWithAbort: (ms: number) => Promise<void>,
 ): Promise<
-  CronRunOutcome & CronRunTelemetry & { delivered?: boolean; deliveryAttempted?: boolean }
+  CronRunOutcome &
+    CronRunTelemetry & {
+      delivered?: boolean;
+      deliveryAttempted?: boolean;
+      delivery?: CronDeliveryTrace;
+    }
 > {
   const text = resolveJobPayloadTextForMain(job);
   if (!text) {
@@ -1275,7 +1286,12 @@ async function executeDetachedCronJob(
   abortSignal: AbortSignal | undefined,
   resolveAbortError: () => { status: "error"; error: string },
 ): Promise<
-  CronRunOutcome & CronRunTelemetry & { delivered?: boolean; deliveryAttempted?: boolean }
+  CronRunOutcome &
+    CronRunTelemetry & {
+      delivered?: boolean;
+      deliveryAttempted?: boolean;
+      delivery?: CronDeliveryTrace;
+    }
 > {
   if (job.payload.kind !== "agentTurn") {
     return { status: "skipped", error: "isolated job requires payload.kind=agentTurn" };
@@ -1300,6 +1316,7 @@ async function executeDetachedCronJob(
     summary: res.summary,
     delivered: res.delivered,
     deliveryAttempted: res.deliveryAttempted,
+    delivery: res.delivery,
     sessionId: res.sessionId,
     sessionKey: res.sessionKey,
     model: res.model,
@@ -1330,6 +1347,7 @@ export async function executeJob(
   let coreResult: {
     status: CronRunStatus;
     delivered?: boolean;
+    delivery?: CronDeliveryTrace;
   } & CronRunOutcome &
     CronRunTelemetry;
   try {
@@ -1362,6 +1380,7 @@ function emitJobFinished(
   result: {
     status: CronRunStatus;
     delivered?: boolean;
+    delivery?: CronDeliveryTrace;
   } & CronRunOutcome &
     CronRunTelemetry,
   runAtMs: number,
@@ -1375,6 +1394,7 @@ function emitJobFinished(
     delivered: result.delivered,
     deliveryStatus: job.state.lastDeliveryStatus,
     deliveryError: job.state.lastDeliveryError,
+    delivery: result.delivery,
     sessionId: result.sessionId,
     sessionKey: result.sessionKey,
     runAtMs,

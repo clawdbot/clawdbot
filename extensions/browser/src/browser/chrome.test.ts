@@ -430,7 +430,7 @@ describe("browser chrome helpers", () => {
       // Simulate a stale command channel: WS opens but never responds to commands.
       onConnection: (wss) => wss.on("connection", (_ws) => {}),
       run: async (baseUrl) => {
-        await expect(isChromeCdpReady(baseUrl, 300, 150)).resolves.toBe(false);
+        await expect(isChromeCdpReady(baseUrl, 300, 5)).resolves.toBe(false);
       },
     });
   });
@@ -440,7 +440,7 @@ describe("browser chrome helpers", () => {
       wsPath: "/devtools/browser/stale-diagnostic",
       onConnection: (wss) => wss.on("connection", (_ws) => {}),
       run: async (baseUrl) => {
-        const diagnostic = await diagnoseChromeCdp(baseUrl, 300, 150);
+        const diagnostic = await diagnoseChromeCdp(baseUrl, 300, 5);
         expect(diagnostic).toMatchObject({
           ok: false,
           code: "websocket_health_command_timeout",

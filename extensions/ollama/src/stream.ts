@@ -202,7 +202,7 @@ export function createConfiguredOllamaCompatStreamWrapper(
   if (ctx.thinkingLevel === "off") {
     streamFn = createOllamaThinkingWrapper(streamFn, false);
   } else if (ctx.thinkingLevel) {
-    // Any non-off ThinkLevel (minimal, low, medium, high, xhigh, adaptive)
+    // Any non-off ThinkLevel (minimal, low, medium, high, xhigh, adaptive, max)
     // should enable Ollama's native thinking mode.
     streamFn = createOllamaThinkingWrapper(streamFn, true);
   }

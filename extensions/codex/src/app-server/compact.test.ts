@@ -9,6 +9,26 @@ import { writeCodexAppServerBinding } from "./session-binding.js";
 
 let tempDir: string;
 
+async function writeTestBinding(options: { authProfileId?: string } = {}): Promise<string> {
+  const sessionFile = path.join(tempDir, "session.jsonl");
+  await writeCodexAppServerBinding(sessionFile, {
+    threadId: "thread-1",
+    cwd: tempDir,
+    ...options,
+  });
+  return sessionFile;
+}
+
+function startCompaction(sessionFile: string, options: { currentTokenCount?: number } = {}) {
+  return maybeCompactCodexAppServerSession({
+    sessionId: "session-1",
+    sessionKey: "agent:main:session-1",
+    sessionFile,
+    workspaceDir: tempDir,
+    ...options,
+  });
+}
+
 describe("maybeCompactCodexAppServerSession", () => {
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-compact-"));
@@ -22,19 +42,9 @@ describe("maybeCompactCodexAppServerSession", () => {
   it("waits for native app-server compaction before reporting success", async () => {
     const fake = createFakeCodexClient();
     __testing.setCodexAppServerClientFactoryForTests(async () => fake.client);
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-1",
-      cwd: tempDir,
-    });
+    const sessionFile = await writeTestBinding();
 
-    const pendingResult = maybeCompactCodexAppServerSession({
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      sessionFile,
-      workspaceDir: tempDir,
-      currentTokenCount: 123,
-    });
+    const pendingResult = startCompaction(sessionFile, { currentTokenCount: 123 });
     await vi.waitFor(() => {
       expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
     });
@@ -70,18 +80,9 @@ describe("maybeCompactCodexAppServerSession", () => {
   it("accepts native context-compaction item completion as success", async () => {
     const fake = createFakeCodexClient();
     __testing.setCodexAppServerClientFactoryForTests(async () => fake.client);
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-1",
-      cwd: tempDir,
-    });
+    const sessionFile = await writeTestBinding();
 
-    const pendingResult = maybeCompactCodexAppServerSession({
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      sessionFile,
-      workspaceDir: tempDir,
-    });
+    const pendingResult = startCompaction(sessionFile);
     await vi.waitFor(() => {
       expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
     });
@@ -113,19 +114,9 @@ describe("maybeCompactCodexAppServerSession", () => {
       seenAuthProfileId = authProfileId;
       return fake.client;
     });
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-1",
-      cwd: tempDir,
-      authProfileId: "openai-codex:work",
-    });
+    const sessionFile = await writeTestBinding({ authProfileId: "openai-codex:work" });
 
-    const pendingResult = maybeCompactCodexAppServerSession({
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      sessionFile,
-      workspaceDir: tempDir,
-    });
+    const pendingResult = startCompaction(sessionFile);
     await vi.waitFor(() => {
       expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
     });

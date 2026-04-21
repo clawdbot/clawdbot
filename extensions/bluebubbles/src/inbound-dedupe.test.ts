@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   _resetBlueBubblesInboundDedupForTest,
   claimBlueBubblesInboundMessage,
+  commitBlueBubblesCoalescedMessageIds,
   resolveBlueBubblesInboundDedupeKey,
 } from "./inbound-dedupe.js";
 
@@ -55,6 +56,47 @@ describe("claimBlueBubblesInboundMessage", () => {
     }
     // Released claims should be re-claimable on the next delivery.
     expect(await claimAndFinalize("g1", "acc")).toBe("claimed");
+  });
+});
+
+describe("commitBlueBubblesCoalescedMessageIds", () => {
+  beforeEach(() => {
+    _resetBlueBubblesInboundDedupForTest();
+  });
+
+  it("marks every coalesced source messageId as seen so a later replay dedupes", async () => {
+    // Primary was processed via claim+finalize by the debouncer flush.
+    expect(await claimAndFinalize("primary", "acc")).toBe("claimed");
+    // Secondaries reach dedupe through the bulk-commit path.
+    await commitBlueBubblesCoalescedMessageIds({
+      messageIds: ["secondary-1", "secondary-2"],
+      accountId: "acc",
+    });
+    // A MessagePoller replay of any individual source event is now a duplicate
+    // rather than a fresh agent turn — the core bug this helper exists to fix.
+    expect(await claimAndFinalize("primary", "acc")).toBe("duplicate");
+    expect(await claimAndFinalize("secondary-1", "acc")).toBe("duplicate");
+    expect(await claimAndFinalize("secondary-2", "acc")).toBe("duplicate");
+  });
+
+  it("scopes coalesced commits per account", async () => {
+    await commitBlueBubblesCoalescedMessageIds({
+      messageIds: ["g1"],
+      accountId: "a",
+    });
+    // Same messageId under a different account is still claimable.
+    expect(await claimAndFinalize("g1", "a")).toBe("duplicate");
+    expect(await claimAndFinalize("g1", "b")).toBe("claimed");
+  });
+
+  it("skips empty or overlong guids without throwing", async () => {
+    await commitBlueBubblesCoalescedMessageIds({
+      messageIds: ["", "   ", "x".repeat(10_000), "valid"],
+      accountId: "acc",
+    });
+    expect(await claimAndFinalize("valid", "acc")).toBe("duplicate");
+    // Overlong guid was skipped by sanitization, not committed.
+    expect(await claimAndFinalize("x".repeat(10_000), "acc")).toBe("skip");
   });
 });
 

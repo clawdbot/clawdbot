@@ -220,7 +220,8 @@ export function resolveHeartbeatDeliveryTarget(params: {
     }
   }
 
-  const inheritedHeartbeatThreadId = shouldReuseHeartbeatTelegramTopicThread({
+  const inheritedHeartbeatThreadId = shouldReuseHeartbeatRouteThreadId({
+    cfg,
     target,
     heartbeat,
     turnSource: params.turnSource,
@@ -235,10 +236,8 @@ export function resolveHeartbeatDeliveryTarget(params: {
     to: resolved.to,
     reason,
     accountId: effectiveAccountId,
-    // Heartbeats normally avoid inheriting session reply-thread IDs, but
-    // Telegram forum-topic sessions encode the topic as part of the
-    // destination identity. Preserve that topic routing when the heartbeat is
-    // still targeting the same group session.
+    // Heartbeats normally avoid inheriting session reply-thread IDs, but some
+    // plugins encode thread/topic ids as part of the destination identity.
     threadId: resolvedTarget.threadId ?? inheritedHeartbeatThreadId,
     lastChannel: resolvedTarget.lastChannel,
     lastAccountId: resolvedTarget.lastAccountId,
@@ -299,20 +298,24 @@ function resolveHeartbeatDeliveryChatType(params: {
   });
 }
 
-function shouldReuseHeartbeatTelegramTopicThread(params: {
+function shouldReuseHeartbeatRouteThreadId(params: {
+  cfg: OpenClawConfig;
   target: HeartbeatTarget;
   heartbeat?: AgentDefaultsConfig["heartbeat"];
   turnSource?: DeliveryContext;
   entry?: SessionEntry;
   resolvedTarget: SessionDeliveryTarget;
 }): boolean {
+  const channel = params.resolvedTarget.channel;
+  const messaging =
+    channel && resolveOutboundChannelPlugin({ channel, cfg: params.cfg })?.messaging;
   return (
+    messaging?.preserveHeartbeatThreadIdForGroupRoute === true &&
     params.resolvedTarget.threadId == null &&
     params.target === "last" &&
     !params.heartbeat?.to &&
     params.turnSource?.threadId == null &&
-    params.resolvedTarget.channel === "telegram" &&
-    params.resolvedTarget.lastChannel === "telegram" &&
+    params.resolvedTarget.channel === params.resolvedTarget.lastChannel &&
     Boolean(params.resolvedTarget.to) &&
     Boolean(params.resolvedTarget.lastTo) &&
     params.resolvedTarget.to === params.resolvedTarget.lastTo &&

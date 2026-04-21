@@ -9,16 +9,12 @@ inputs:
     description: Suffix appended to the cache key.
     required: false
     default: "node24"
-  use-sticky-disk:
-    description: Use Blacksmith sticky disks instead of actions/cache for pnpm store on trusted runs; pull_request runs fall back to actions/cache.
-    required: false
-    default: "false"
   use-restore-keys:
     description: Whether to use restore-keys fallback for actions/cache.
     required: false
     default: "true"
   use-actions-cache:
-    description: Whether to restore/save pnpm store with actions/cache, including pull_request fallback when sticky disks are disabled.
+    description: Whether to restore/save pnpm store with actions/cache.
     required: false
     default: "true"
 runs:
@@ -50,24 +46,15 @@ runs:
       shell: bash
       run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
 
-    - name: Mount pnpm store sticky disk
-      # Keep persistent sticky-disk state off untrusted PR runs.
-      if: inputs.use-sticky-disk == 'true' && github.event_name != 'pull_request'
-      uses: useblacksmith/stickydisk@v1
-      with:
-        key: ${{ github.repository }}-pnpm-store-${{ runner.os }}-${{ github.ref_name }}-${{ inputs.cache-key-suffix }}-${{ hashFiles('pnpm-lock.yaml') }}
-        path: ${{ steps.pnpm-store.outputs.path }}
-
     - name: Restore pnpm store cache (exact key only)
-      # PRs that request sticky disks still need a safe cache restore path.
-      if: inputs.use-actions-cache == 'true' && (inputs.use-sticky-disk != 'true' || github.event_name == 'pull_request') && inputs.use-restore-keys != 'true'
+      if: inputs.use-actions-cache == 'true' && inputs.use-restore-keys != 'true'
       uses: actions/cache@v5
       with:
         path: ${{ steps.pnpm-store.outputs.path }}
         key: ${{ runner.os }}-pnpm-store-${{ inputs.cache-key-suffix }}-${{ hashFiles('pnpm-lock.yaml') }}
 
     - name: Restore pnpm store cache (with fallback keys)
-      if: inputs.use-actions-cache == 'true' && (inputs.use-sticky-disk != 'true' || github.event_name == 'pull_request') && inputs.use-restore-keys == 'true'
+      if: inputs.use-actions-cache == 'true' && inputs.use-restore-keys == 'true'
       uses: actions/cache@v5
       with:
         path: ${{ steps.pnpm-store.outputs.path }}

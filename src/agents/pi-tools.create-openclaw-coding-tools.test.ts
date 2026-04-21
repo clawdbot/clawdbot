@@ -266,6 +266,36 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("browser")).toBe(false);
   });
 
+  it("can keep message available when a cron route needs it under the coding profile", () => {
+    const codingTools = createOpenClawCodingTools({
+      config: { tools: { profile: "coding" } },
+    });
+    expect(codingTools.some((tool) => tool.name === "message")).toBe(false);
+
+    const cronTools = createOpenClawCodingTools({
+      config: { tools: { profile: "coding" } },
+      forceMessageTool: true,
+    });
+    expect(cronTools.some((tool) => tool.name === "message")).toBe(true);
+  });
+
+  it("can keep message available when a cron route needs it under a provider coding profile", () => {
+    const providerProfileTools = createOpenClawCodingTools({
+      config: { tools: { byProvider: { openai: { profile: "coding" } } } },
+      modelProvider: "openai",
+      modelId: "gpt-5.4",
+    });
+    expect(providerProfileTools.some((tool) => tool.name === "message")).toBe(false);
+
+    const cronTools = createOpenClawCodingTools({
+      config: { tools: { byProvider: { openai: { profile: "coding" } } } },
+      modelProvider: "openai",
+      modelId: "gpt-5.4",
+      forceMessageTool: true,
+    });
+    expect(cronTools.some((tool) => tool.name === "message")).toBe(true);
+  });
+
   it("expands group shorthands in global tool policy", () => {
     const tools = createOpenClawCodingTools({
       config: { tools: { allow: ["group:fs"] } },

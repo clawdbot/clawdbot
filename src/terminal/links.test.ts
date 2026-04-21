@@ -3,8 +3,8 @@ import { formatDocsLink } from "./links.js";
 
 describe("formatDocsLink", () => {
   it("prepends the docs root when given a relative path", () => {
-    const out = formatDocsLink("/channels/telegram", "telegram");
-    expect(out).toContain("https://docs.openclaw.ai/channels/telegram");
+    const out = formatDocsLink("/channels/quietchat", "quietchat");
+    expect(out).toContain("https://docs.openclaw.ai/channels/quietchat");
   });
 
   it("preserves an absolute http url", () => {

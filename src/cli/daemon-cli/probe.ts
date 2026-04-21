@@ -3,6 +3,13 @@ import { withProgress } from "../progress.js";
 
 type GatewayStatusProbeKind = "connect" | "read";
 
+let probeGatewayModulePromise: Promise<typeof import("../../gateway/probe.js")> | undefined;
+
+async function loadProbeGatewayModule(): Promise<typeof import("../../gateway/probe.js")> {
+  probeGatewayModulePromise ??= import("../../gateway/probe.js");
+  return await probeGatewayModulePromise;
+}
+
 function resolveProbeFailureMessage(result: {
   error?: string | null;
   close?: { code: number; reason: string } | null;
@@ -46,7 +53,7 @@ export async function probeGatewayStatus(opts: {
             timeoutMs: opts.timeoutMs,
             ...(opts.configPath ? { configPath: opts.configPath } : {}),
           });
-          const { probeGateway } = await import("../../gateway/probe.js");
+          const { probeGateway } = await loadProbeGatewayModule();
           const authProbe = await probeGateway({
             url: opts.url,
             auth: {
@@ -59,7 +66,7 @@ export async function probeGatewayStatus(opts: {
           }).catch(() => null);
           return { ok: true as const, authProbe };
         }
-        const { probeGateway } = await import("../../gateway/probe.js");
+        const { probeGateway } = await loadProbeGatewayModule();
         return await probeGateway({
           url: opts.url,
           auth: {

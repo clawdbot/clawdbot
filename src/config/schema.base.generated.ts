@@ -2767,6 +2767,51 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           cacheWrite: {
                             type: "number",
                           },
+                          tieredPricing: {
+                            type: "array",
+                            items: {
+                              type: "object",
+                              properties: {
+                                input: {
+                                  type: "number",
+                                },
+                                output: {
+                                  type: "number",
+                                },
+                                cacheRead: {
+                                  type: "number",
+                                },
+                                cacheWrite: {
+                                  type: "number",
+                                },
+                                range: {
+                                  anyOf: [
+                                    {
+                                      type: "array",
+                                      items: [
+                                        {
+                                          type: "number",
+                                        },
+                                        {
+                                          type: "number",
+                                        },
+                                      ],
+                                    },
+                                    {
+                                      type: "array",
+                                      items: [
+                                        {
+                                          type: "number",
+                                        },
+                                      ],
+                                    },
+                                  ],
+                                },
+                              },
+                              required: ["input", "output", "cacheRead", "cacheWrite", "range"],
+                              additionalProperties: false,
+                            },
+                          },
                         },
                         additionalProperties: false,
                       },
@@ -3209,6 +3254,63 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 title: "Skills",
                 description:
                   "Optional default skill allowlist inherited by agents that omit agents.list[].skills. Omit for unrestricted skills, set [] to give inheriting agents no skills, and remember explicit agents.list[].skills replaces this default instead of merging with it.",
+              },
+              silentReply: {
+                type: "object",
+                properties: {
+                  direct: {
+                    anyOf: [
+                      {
+                        type: "string",
+                        const: "allow",
+                      },
+                      {
+                        type: "string",
+                        const: "disallow",
+                      },
+                    ],
+                  },
+                  group: {
+                    anyOf: [
+                      {
+                        type: "string",
+                        const: "allow",
+                      },
+                      {
+                        type: "string",
+                        const: "disallow",
+                      },
+                    ],
+                  },
+                  internal: {
+                    anyOf: [
+                      {
+                        type: "string",
+                        const: "allow",
+                      },
+                      {
+                        type: "string",
+                        const: "disallow",
+                      },
+                    ],
+                  },
+                },
+                additionalProperties: false,
+              },
+              silentReplyRewrite: {
+                type: "object",
+                properties: {
+                  direct: {
+                    type: "boolean",
+                  },
+                  group: {
+                    type: "boolean",
+                  },
+                  internal: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
               },
               repoRoot: {
                 type: "string",
@@ -4590,7 +4692,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     type: "boolean",
                     title: "Compaction Notify User",
                     description:
-                      "When enabled, sends a brief compaction notice to the user (e.g. '🧹 Compacting context...') when compaction starts. Disabled by default to keep compaction silent and non-intrusive.",
+                      "When enabled, sends brief compaction notices to the user when compaction starts and when it completes (for example, '🧹 Compacting context...' and '🧹 Compaction complete'). Disabled by default to keep compaction silent and non-intrusive.",
                   },
                 },
                 additionalProperties: false,
@@ -4670,6 +4772,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   {
                     type: "string",
                     const: "adaptive",
+                  },
+                  {
+                    type: "string",
+                    const: "max",
                   },
                 ],
               },
@@ -5641,7 +5747,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 },
                 thinkingDefault: {
                   type: "string",
-                  enum: ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"],
+                  enum: ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"],
                   title: "Agent Thinking Default",
                   description:
                     "Optional per-agent default thinking level. Overrides agents.defaults.thinkingDefault for this agent when no per-message or session override is set.",
@@ -22719,6 +22825,75 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
         description:
           "Plugin system controls for enabling extensions, constraining load scope, configuring entries, and tracking installs. Keep plugin policy explicit and least-privilege in production environments.",
       },
+      surfaces: {
+        type: "object",
+        propertyNames: {
+          type: "string",
+        },
+        additionalProperties: {
+          type: "object",
+          properties: {
+            silentReply: {
+              type: "object",
+              properties: {
+                direct: {
+                  anyOf: [
+                    {
+                      type: "string",
+                      const: "allow",
+                    },
+                    {
+                      type: "string",
+                      const: "disallow",
+                    },
+                  ],
+                },
+                group: {
+                  anyOf: [
+                    {
+                      type: "string",
+                      const: "allow",
+                    },
+                    {
+                      type: "string",
+                      const: "disallow",
+                    },
+                  ],
+                },
+                internal: {
+                  anyOf: [
+                    {
+                      type: "string",
+                      const: "allow",
+                    },
+                    {
+                      type: "string",
+                      const: "disallow",
+                    },
+                  ],
+                },
+              },
+              additionalProperties: false,
+            },
+            silentReplyRewrite: {
+              type: "object",
+              properties: {
+                direct: {
+                  type: "boolean",
+                },
+                group: {
+                  type: "boolean",
+                },
+                internal: {
+                  type: "boolean",
+                },
+              },
+              additionalProperties: false,
+            },
+          },
+          additionalProperties: false,
+        },
+      },
     },
     required: ["commands"],
     additionalProperties: false,
@@ -25716,7 +25891,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.defaults.compaction.notifyUser": {
       label: "Compaction Notify User",
-      help: "When enabled, sends a brief compaction notice to the user (e.g. '🧹 Compacting context...') when compaction starts. Disabled by default to keep compaction silent and non-intrusive.",
+      help: "When enabled, sends brief compaction notices to the user when compaction starts and when it completes (for example, '🧹 Compacting context...' and '🧹 Compaction complete'). Disabled by default to keep compaction silent and non-intrusive.",
       tags: ["advanced"],
     },
     "agents.defaults.compaction.memoryFlush": {

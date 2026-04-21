@@ -6,10 +6,12 @@
   "dependencies": {
     "@buape/carbon": "0.16.0",
     "@discordjs/voice": "^0.19.2",
-    "@snazzah/davey": "^0.1.11",
+    "@sinclair/typebox": "0.34.49",
     "discord-api-types": "^0.38.47",
     "https-proxy-agent": "^9.0.0",
-    "opusscript": "^0.0.8"
+    "opusscript": "^0.0.8",
+    "undici": "8.1.0",
+    "ws": "^8.20.0"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

@@ -5,7 +5,7 @@ import type { OutboundDeliveryJson } from "./format.js";
 
 describe("buildOutboundResultEnvelope", () => {
   const delivery: OutboundDeliveryJson = {
-    channel: "telegram",
+    channel: "alpha",
     via: "direct",
     to: "123",
     messageId: "m1",

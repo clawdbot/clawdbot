@@ -57,6 +57,7 @@ describe("qa channel transport", () => {
     await transport.waitReady({
       gateway: { call },
       timeoutMs: 2_000,
+      pollIntervalMs: 1,
     });
 
     expect(call).toHaveBeenCalledTimes(2);

@@ -298,6 +298,38 @@ describe("gateway startup config secret preflight", () => {
     expect(activateRuntimeSecretsSnapshot).toHaveBeenCalledTimes(1);
   });
 
+  it("skips inactive gateway auth secret preflight when auth has plain strings", async () => {
+    const prepareRuntimeSecretsSnapshot = vi.fn(async ({ config }) => preparedSnapshot(config));
+    const result = await prepareGatewayStartupConfig({
+      configSnapshot: buildSnapshot(gatewayTokenConfig({})),
+      activateRuntimeSecrets: createRuntimeSecretsActivator({
+        logSecrets: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+        },
+        emitStateEvent: vi.fn(),
+        prepareRuntimeSecretsSnapshot,
+        activateRuntimeSecretsSnapshot: vi.fn(),
+      }),
+    });
+
+    expect(result.auth).toMatchObject({
+      mode: "token",
+      token: "startup-test-token",
+    });
+    expect(prepareRuntimeSecretsSnapshot).toHaveBeenCalledTimes(1);
+    expect(prepareRuntimeSecretsSnapshot).toHaveBeenCalledWith({
+      config: expect.objectContaining({
+        gateway: expect.objectContaining({
+          auth: expect.objectContaining({
+            token: "startup-test-token",
+          }),
+        }),
+      }),
+    });
+  });
+
   it("uses gateway auth strings resolved during startup preflight for bootstrap auth", async () => {
     const prepareRuntimeSecretsSnapshot = vi.fn(async ({ config }) =>
       preparedSnapshot({

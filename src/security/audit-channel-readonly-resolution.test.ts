@@ -23,6 +23,7 @@ function stubChannelPlugin(params: {
     security: {},
     config: {
       listAccountIds: () => ["default"],
+      inspectAccount: () => null,
       resolveAccount: (cfg, accountId) => params.resolveAccount(cfg, accountId),
       isEnabled: () => true,
       isConfigured: () => true,

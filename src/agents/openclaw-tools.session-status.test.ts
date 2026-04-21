@@ -896,7 +896,7 @@ describe("session_status tool", () => {
       main: {
         sessionId: "status-origin-provider",
         updatedAt: 10,
-        origin: { provider: "discord" },
+        origin: { provider: "quietchat" },
       },
     });
 
@@ -906,9 +906,9 @@ describe("session_status tool", () => {
 
     expect(resolveQueueSettingsMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        channel: "discord",
+        channel: "quietchat",
         sessionEntry: expect.objectContaining({
-          origin: { provider: "discord" },
+          origin: { provider: "quietchat" },
         }),
       }),
     );

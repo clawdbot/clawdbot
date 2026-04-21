@@ -313,6 +313,20 @@ describe("setup surface helpers", () => {
   });
 
   describe("setup wizard account routing", () => {
+    type FinalizeArgs = Parameters<NonNullable<typeof twitchSetupWizard.finalize>>[0];
+
+    async function finalizeTwitchSetupForAccount(cfg: FinalizeArgs["cfg"]) {
+      return await twitchSetupWizard.finalize?.({
+        cfg,
+        accountId: "secondary",
+        credentialValues: {},
+        runtime: {} as FinalizeArgs["runtime"],
+        prompter: mockPrompter,
+        options: {},
+        forceAllowFrom: false,
+      });
+    }
+
     it("rejects reserved account ids before using them as config keys", () => {
       expect(() =>
         setTwitchAccount(
@@ -390,29 +404,21 @@ describe("setup surface helpers", () => {
         .mockResolvedValueOnce("#secondary" as never);
       mockPromptConfirm.mockReset().mockResolvedValue(false as never);
 
-      const result = await twitchSetupWizard.finalize?.({
-        cfg: {
-          channels: {
-            twitch: {
-              defaultAccount: "secondary",
-              accounts: {
-                default: {
-                  username: "default-bot",
-                  accessToken: "oauth:default",
-                  clientId: "default-client",
-                  channel: "#default",
-                },
+      const result = await finalizeTwitchSetupForAccount({
+        channels: {
+          twitch: {
+            defaultAccount: "secondary",
+            accounts: {
+              default: {
+                username: "default-bot",
+                accessToken: "oauth:default",
+                clientId: "default-client",
+                channel: "#default",
               },
             },
           },
-        } as Parameters<NonNullable<typeof twitchSetupWizard.finalize>>[0]["cfg"],
-        accountId: "secondary",
-        credentialValues: {},
-        runtime: {} as Parameters<NonNullable<typeof twitchSetupWizard.finalize>>[0]["runtime"],
-        prompter: mockPrompter,
-        options: {},
-        forceAllowFrom: false,
-      });
+        },
+      } as FinalizeArgs["cfg"]);
 
       const twitch = result?.cfg?.channels?.twitch;
       expect(twitch?.accounts?.secondary?.username).toBe("secondary-bot");
@@ -430,21 +436,13 @@ describe("setup surface helpers", () => {
         .mockResolvedValueOnce("#secondary" as never);
       mockPromptConfirm.mockReset().mockResolvedValue(false as never);
 
-      const result = await twitchSetupWizard.finalize?.({
-        cfg: {
-          channels: {
-            twitch: {
-              accounts: {},
-            },
+      const result = await finalizeTwitchSetupForAccount({
+        channels: {
+          twitch: {
+            accounts: {},
           },
-        } as Parameters<NonNullable<typeof twitchSetupWizard.finalize>>[0]["cfg"],
-        accountId: "secondary",
-        credentialValues: {},
-        runtime: {} as Parameters<NonNullable<typeof twitchSetupWizard.finalize>>[0]["runtime"],
-        prompter: mockPrompter,
-        options: {},
-        forceAllowFrom: false,
-      });
+        },
+      } as FinalizeArgs["cfg"]);
 
       const twitch = result?.cfg?.channels?.twitch;
       expect(twitch?.accounts?.secondary?.accessToken).toBe("oauth:persisted");

@@ -28,7 +28,10 @@ export function registerAgentCommands(program: Command, args: { agentChannelOpti
     .option("-t, --to <number>", "Recipient number in E.164 used to derive the session key")
     .option("--session-id <id>", "Use an explicit session id")
     .option("--agent <id>", "Agent id (overrides routing bindings)")
-    .option("--thinking <level>", "Thinking level: off | minimal | low | medium | high | xhigh")
+    .option(
+      "--thinking <level>",
+      "Thinking level: off | minimal | low | medium | high | xhigh | adaptive | max where supported",
+    )
     .option("--verbose <on|off>", "Persist agent verbose level for the session")
     .option(
       "--channel <channel>",

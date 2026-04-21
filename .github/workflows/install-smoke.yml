@@ -64,7 +64,6 @@ jobs:
         with:
           install-bun: "false"
           install-deps: "false"
-          use-sticky-disk: "false"
 
       - name: Build install-smoke CI manifest
         id: manifest
@@ -86,7 +85,7 @@ jobs:
   install-smoke:
     needs: [preflight]
     if: needs.preflight.outputs.run_install_smoke == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: blacksmith-32vcpu-ubuntu-2404
     env:
       DOCKER_BUILD_SUMMARY: "false"
       DOCKER_BUILD_RECORD_UPLOAD: "false"
@@ -94,11 +93,11 @@ jobs:
       - name: Checkout CLI
         uses: actions/checkout@v6
 
-      - name: Set up Docker Builder
-        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
+      - name: Set up Blacksmith Docker Builder
+        uses: useblacksmith/setup-docker-builder@ac083cc84672d01c60d5e8561d0a939b697de542 # v1
 
-      # Blacksmith can fall back to the local docker driver, which rejects gha
-      # cache export/import. Keep smoke builds driver-agnostic.
+      # Blacksmith's builder owns the Docker layer cache; keep smoke builds off
+      # explicit gha cache directives so local tags still load cleanly.
       - name: Build root Dockerfile smoke image
         uses: useblacksmith/build-push-action@cbd1f60d194a98cb3be5523b15134501eaf0fbf3 # v2
         with:
@@ -202,7 +201,6 @@ jobs:
         with:
           install-bun: "false"
           install-deps: "true"
-          use-sticky-disk: "false"
 
       - name: Run installer docker tests
         env:

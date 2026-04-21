@@ -1,11 +1,9 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   applyAuthProfileConfig,
-  upsertAuthProfile,
   validateAnthropicSetupToken,
 } from "openclaw/plugin-sdk/provider-auth";
+import { resolveQaAgentAuthDir, writeQaAuthProfiles } from "../shared/auth-store.js";
 
 export const QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV = "OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN";
 export const QA_LIVE_SETUP_TOKEN_VALUE_ENV = "OPENCLAW_LIVE_SETUP_TOKEN_VALUE";
@@ -40,16 +38,15 @@ export async function stageQaLiveAnthropicSetupToken(params: {
   if (!resolved) {
     return params.cfg;
   }
-  const agentDir = path.join(params.stateDir, "agents", "main", "agent");
-  await fs.mkdir(agentDir, { recursive: true });
-  upsertAuthProfile({
-    profileId: resolved.profileId,
-    credential: {
-      type: "token",
-      provider: "anthropic",
-      token: resolved.token,
+  await writeQaAuthProfiles({
+    agentDir: resolveQaAgentAuthDir({ stateDir: params.stateDir, agentId: "main" }),
+    profiles: {
+      [resolved.profileId]: {
+        type: "token",
+        provider: "anthropic",
+        token: resolved.token,
+      },
     },
-    agentDir,
   });
   return applyAuthProfileConfig(params.cfg, {
     profileId: resolved.profileId,

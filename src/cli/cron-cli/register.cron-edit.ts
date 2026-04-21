@@ -66,9 +66,9 @@ export function registerCronEditCommand(cron: Command) {
       .option("--no-light-context", "Disable lightweight bootstrap context for agent jobs")
       .option("--tools <list>", "Tool allow-list (e.g. exec,read,write or exec read write)")
       .option("--clear-tools", "Remove tool allow-list (use all tools)", false)
-      .option("--announce", "Announce summary to a chat (subagent-style)")
-      .option("--deliver", "Deprecated (use --announce). Announces a summary to a chat.")
-      .option("--no-deliver", "Disable announce delivery")
+      .option("--announce", "Fallback-deliver final text to a chat")
+      .option("--deliver", "Deprecated (use --announce). Fallback-delivers final text to a chat.")
+      .option("--no-deliver", "Disable runner fallback delivery")
       .option("--channel <channel>", `Delivery channel (${getCronChannelOptions()})`)
       .option(
         "--to <dest>",

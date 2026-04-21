@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeChannel } from "../plugins/runtime/runtime-channel.js";
 import { startChannelApprovalHandlerBootstrap } from "./approval-handler-bootstrap.js";
+import { createApprovalNativeRuntimeAdapterStubs } from "./approval-handler.test-helpers.js";
 
 const { createChannelApprovalHandlerFromCapability } = vi.hoisted(() => ({
   createChannelApprovalHandlerFromCapability: vi.fn(),
@@ -33,21 +34,7 @@ describe("startChannelApprovalHandlerBootstrap", () => {
       id: "slack",
       meta: { label: "Slack" },
       approvalCapability: {
-        nativeRuntime: {
-          availability: {
-            isConfigured: vi.fn().mockReturnValue(true),
-            shouldHandle: vi.fn().mockReturnValue(true),
-          },
-          presentation: {
-            buildPendingPayload: vi.fn(),
-            buildResolvedResult: vi.fn(),
-            buildExpiredResult: vi.fn(),
-          },
-          transport: {
-            prepareTarget: vi.fn(),
-            deliverPending: vi.fn(),
-          },
-        },
+        nativeRuntime: createApprovalNativeRuntimeAdapterStubs(),
       },
     }) as never;
 

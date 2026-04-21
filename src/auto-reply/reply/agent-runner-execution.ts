@@ -623,6 +623,33 @@ export async function runAgentTurnWithFallback(params: {
     didNotifyAgentRunStart = true;
     params.opts?.onAgentRunStart?.(runId);
   };
+  const currentMessageId = params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid;
+  const shouldNotifyUserAboutCompaction =
+    runtimeConfig?.agents?.defaults?.compaction?.notifyUser === true;
+  const sendCompactionNotice = async (phase: "start" | "end" | "incomplete") => {
+    if (!params.opts?.onBlockReply) {
+      return;
+    }
+    const text =
+      phase === "start"
+        ? "🧹 Compacting context..."
+        : phase === "end"
+          ? "🧹 Compaction complete"
+          : "🧹 Compaction incomplete";
+    const noticePayload = params.applyReplyToMode({
+      text,
+      replyToId: currentMessageId,
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
+    try {
+      await params.opts.onBlockReply(noticePayload);
+    } catch (err) {
+      // Non-critical notice delivery failure should not bubble out of the
+      // fire-and-forget event handler.
+      logVerbose(`compaction ${phase} notice delivery failed (non-fatal): ${String(err)}`);
+    }
+  };
   const shouldSurfaceToControlUi = isInternalMessageChannel(
     params.followupRun.run.messageProvider ??
       params.sessionCtx.Surface ??
@@ -1142,37 +1169,27 @@ export async function runAgentTurnWithFallback(params: {
                     if (phase === "start") {
                       // Keep custom compaction callbacks active, but gate the
                       // fallback user-facing notice behind explicit opt-in.
-                      const notifyUser =
-                        runtimeConfig?.agents?.defaults?.compaction?.notifyUser === true;
                       if (params.opts?.onCompactionStart) {
                         await params.opts.onCompactionStart();
-                      } else if (notifyUser && params.opts?.onBlockReply) {
+                      } else if (shouldNotifyUserAboutCompaction) {
                         // Send directly via opts.onBlockReply (bypassing the
                         // pipeline) so the notice does not cause final payloads
                         // to be discarded on non-streaming model paths.
-                        const currentMessageId =
-                          params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid;
-                        const noticePayload = params.applyReplyToMode({
-                          text: "🧹 Compacting context...",
-                          replyToId: currentMessageId,
-                          replyToCurrent: true,
-                          isCompactionNotice: true,
-                        });
-                        try {
-                          await params.opts.onBlockReply(noticePayload);
-                        } catch (err) {
-                          // Non-critical notice delivery failure should not
-                          // bubble out of the fire-and-forget event handler.
-                          logVerbose(
-                            `compaction start notice delivery failed (non-fatal): ${String(err)}`,
-                          );
-                        }
+                        await sendCompactionNotice("start");
                       }
                     }
-                    const completed = evt.data?.completed === true;
-                    if (phase === "end" && completed) {
-                      attemptCompactionCount += 1;
-                      await params.opts?.onCompactionEnd?.();
+                    if (phase === "end") {
+                      const completed = evt.data?.completed === true;
+                      if (completed) {
+                        attemptCompactionCount += 1;
+                        if (params.opts?.onCompactionEnd) {
+                          await params.opts.onCompactionEnd();
+                        } else if (shouldNotifyUserAboutCompaction) {
+                          await sendCompactionNotice("end");
+                        }
+                      } else if (shouldNotifyUserAboutCompaction) {
+                        await sendCompactionNotice("incomplete");
+                      }
                     }
                   }
                 },

@@ -19,7 +19,7 @@ describe("resolveSessionAgentIds", () => {
 
   it("falls back to the configured default when sessionKey is non-agent", () => {
     const { sessionAgentId } = resolveSessionAgentIds({
-      sessionKey: "telegram:slash:123",
+      sessionKey: "quietchat:slash:123",
       config: cfg,
     });
     expect(sessionAgentId).toBe("beta");
@@ -35,7 +35,7 @@ describe("resolveSessionAgentIds", () => {
 
   it("keeps the agent id for provider-qualified agent sessions", () => {
     const { sessionAgentId } = resolveSessionAgentIds({
-      sessionKey: "agent:beta:slack:channel:c1",
+      sessionKey: "agent:beta:quietchat:channel:c1",
       config: cfg,
     });
     expect(sessionAgentId).toBe("beta");
@@ -59,7 +59,7 @@ describe("resolveSessionAgentIds", () => {
 
   it("prefers explicit agentId over non-agent session keys", () => {
     const { sessionAgentId } = resolveSessionAgentIds({
-      sessionKey: "telegram:slash:123",
+      sessionKey: "quietchat:slash:123",
       agentId: "main",
       config: cfg,
     });

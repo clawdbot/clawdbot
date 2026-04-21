@@ -92,7 +92,7 @@ describe("agents tools panel (browser)", () => {
                     description: "Send and manage messages in this channel",
                     rawDescription: "Send and manage messages in this channel",
                     source: "channel",
-                    channelId: "discord",
+                    channelId: "guildchat",
                   },
                 ],
               },
@@ -110,7 +110,7 @@ describe("agents tools panel (browser)", () => {
     expect(text).toContain("optional");
     expect(text).toContain("Available Right Now");
     expect(text).toContain("Message Actions");
-    expect(text).toContain("Channel: discord");
+    expect(text).toContain("Channel: guildchat");
   });
 
   it("shows fallback warning when runtime catalog fails", async () => {

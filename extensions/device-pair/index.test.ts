@@ -60,6 +60,7 @@ type ApprovedPairingResult = Extract<
   { status: "approved" }
 >;
 type ApprovedPairingDevice = ApprovedPairingResult["device"];
+const INTERNAL_PAIRING_SCOPES = ["operator.write", "operator.pairing"];
 
 function createApi(params?: {
   runtime?: OpenClawPluginApi["runtime"];
@@ -204,6 +205,28 @@ function makeApprovedPairingResult(
     device: makeApprovedPairingDevice(device),
     ...resultOverrides,
   };
+}
+
+function mockPendingPairingList() {
+  vi.mocked(listDevicePairing).mockResolvedValueOnce({
+    pending: [makePendingPairingRequest()],
+    paired: [],
+  });
+}
+
+function createInternalApproveLatestContext() {
+  return createCommandContext({
+    channel: "webchat",
+    args: "approve latest",
+    commandBody: "/pair approve latest",
+    gatewayClientScopes: INTERNAL_PAIRING_SCOPES,
+  });
+}
+
+function expectApproveCalledWithInternalPairingScopes() {
+  expect(vi.mocked(approveDevicePairing)).toHaveBeenCalledWith("req-1", {
+    callerScopes: INTERNAL_PAIRING_SCOPES,
+  });
 }
 
 describe("device-pair /pair qr", () => {
@@ -628,10 +651,7 @@ describe("device-pair /pair approve", () => {
   });
 
   it("rejects internal gateway callers without operator.pairing", async () => {
-    vi.mocked(listDevicePairing).mockResolvedValueOnce({
-      pending: [makePendingPairingRequest()],
-      paired: [],
-    });
+    mockPendingPairingList();
 
     const command = registerPairCommand();
     const result = await command.handler(
@@ -650,33 +670,18 @@ describe("device-pair /pair approve", () => {
   });
 
   it("allows internal gateway callers with operator.pairing", async () => {
-    vi.mocked(listDevicePairing).mockResolvedValueOnce({
-      pending: [makePendingPairingRequest()],
-      paired: [],
-    });
+    mockPendingPairingList();
     vi.mocked(approveDevicePairing).mockResolvedValueOnce(makeApprovedPairingResult());
 
     const command = registerPairCommand();
-    const result = await command.handler(
-      createCommandContext({
-        channel: "webchat",
-        args: "approve latest",
-        commandBody: "/pair approve latest",
-        gatewayClientScopes: ["operator.write", "operator.pairing"],
-      }),
-    );
+    const result = await command.handler(createInternalApproveLatestContext());
 
-    expect(vi.mocked(approveDevicePairing)).toHaveBeenCalledWith("req-1", {
-      callerScopes: ["operator.write", "operator.pairing"],
-    });
+    expectApproveCalledWithInternalPairingScopes();
     expect(result).toEqual({ text: "✅ Paired Victim Phone (ios)." });
   });
 
   it("does not force an empty caller scope context for external approvals", async () => {
-    vi.mocked(listDevicePairing).mockResolvedValueOnce({
-      pending: [makePendingPairingRequest()],
-      paired: [],
-    });
+    mockPendingPairingList();
     vi.mocked(approveDevicePairing).mockResolvedValueOnce(makeApprovedPairingResult());
 
     const command = registerPairCommand();
@@ -694,10 +699,7 @@ describe("device-pair /pair approve", () => {
   });
 
   it("fails closed for approvals when internal gateway scopes are absent", async () => {
-    vi.mocked(listDevicePairing).mockResolvedValueOnce({
-      pending: [makePendingPairingRequest()],
-      paired: [],
-    });
+    mockPendingPairingList();
 
     const command = registerPairCommand();
     const result = await command.handler(
@@ -716,10 +718,7 @@ describe("device-pair /pair approve", () => {
   });
 
   it("rejects approvals that request scopes above the caller session", async () => {
-    vi.mocked(listDevicePairing).mockResolvedValueOnce({
-      pending: [makePendingPairingRequest()],
-      paired: [],
-    });
+    mockPendingPairingList();
     vi.mocked(approveDevicePairing).mockResolvedValueOnce({
       status: "forbidden",
       reason: "caller-missing-scope",
@@ -727,28 +726,16 @@ describe("device-pair /pair approve", () => {
     });
 
     const command = registerPairCommand();
-    const result = await command.handler(
-      createCommandContext({
-        channel: "webchat",
-        args: "approve latest",
-        commandBody: "/pair approve latest",
-        gatewayClientScopes: ["operator.write", "operator.pairing"],
-      }),
-    );
+    const result = await command.handler(createInternalApproveLatestContext());
 
-    expect(vi.mocked(approveDevicePairing)).toHaveBeenCalledWith("req-1", {
-      callerScopes: ["operator.write", "operator.pairing"],
-    });
+    expectApproveCalledWithInternalPairingScopes();
     expect(result).toEqual({
       text: "⚠️ This command requires operator.admin to approve this pairing request.",
     });
   });
 
   it("preserves approvals for non-gateway command surfaces", async () => {
-    vi.mocked(listDevicePairing).mockResolvedValueOnce({
-      pending: [makePendingPairingRequest()],
-      paired: [],
-    });
+    mockPendingPairingList();
     vi.mocked(approveDevicePairing).mockResolvedValueOnce(
       makeApprovedPairingResult({
         device: {

@@ -236,6 +236,82 @@ describe("createEmbeddedLobsterRunner", () => {
     });
   });
 
+  it("forwards approvalId through resume when token is absent", async () => {
+    const runtime = {
+      runToolRequest: vi.fn(),
+      resumeToolRequest: vi.fn().mockResolvedValue({
+        ok: true,
+        protocolVersion: 1,
+        status: "ok",
+        output: [],
+        requiresApproval: null,
+      }),
+    };
+
+    const runner = createEmbeddedLobsterRunner({
+      loadRuntime: vi.fn().mockResolvedValue(runtime),
+    });
+
+    await runner.run({
+      action: "resume",
+      approvalId: "dbc98d05",
+      approve: true,
+      cwd: process.cwd(),
+      timeoutMs: 2000,
+      maxStdoutBytes: 4096,
+    });
+
+    expect(runtime.resumeToolRequest).toHaveBeenCalledWith({
+      approvalId: "dbc98d05",
+      approved: true,
+      ctx: expect.objectContaining({ mode: "tool" }),
+    });
+  });
+
+  it("passes approvalId through the normalized needs_approval envelope", async () => {
+    const runtime = {
+      runToolRequest: vi.fn().mockResolvedValue({
+        ok: true,
+        protocolVersion: 1,
+        status: "needs_approval",
+        output: [],
+        requiresApproval: {
+          type: "approval_request",
+          prompt: "ok?",
+          items: [],
+          resumeToken: "eyJ...",
+          approvalId: "dbc98d05",
+        },
+      }),
+      resumeToolRequest: vi.fn(),
+    };
+
+    const runner = createEmbeddedLobsterRunner({
+      loadRuntime: vi.fn().mockResolvedValue(runtime),
+    });
+
+    const envelope = await runner.run({
+      action: "run",
+      pipeline: "exec --json=true echo hi",
+      cwd: process.cwd(),
+      timeoutMs: 2000,
+      maxStdoutBytes: 4096,
+    });
+
+    expect(envelope).toEqual({
+      ok: true,
+      status: "needs_approval",
+      output: [],
+      requiresApproval: {
+        type: "approval_request",
+        prompt: "ok?",
+        items: [],
+        resumeToken: "eyJ...",
+        approvalId: "dbc98d05",
+      },
+    });
+  });
+
   it("loads the embedded runtime once per runner", async () => {
     const runtime = {
       runToolRequest: vi.fn().mockResolvedValue({
@@ -310,7 +386,7 @@ describe("createEmbeddedLobsterRunner", () => {
         timeoutMs: 2000,
         maxStdoutBytes: 4096,
       }),
-    ).rejects.toThrow(/token required/);
+    ).rejects.toThrow(/token or approvalId required/);
 
     await expect(
       runner.run({

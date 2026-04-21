@@ -37,8 +37,7 @@ function normalizeReplyAgentPayload(payload: Record<string, unknown>, params: un
   };
 }
 
-export async function runDirectiveBehaviorReplyAgent(params: unknown) {
-  const runParams = objectRecord(objectRecord(params)?.followupRun)?.run ?? {};
+async function runMockedReplyAgent(runParams: unknown, params: unknown) {
   const result = await runEmbeddedPiAgentMock(runParams);
   const payloadsRaw = objectRecord(result)?.payloads;
   const payloads = Array.isArray(payloadsRaw)
@@ -52,6 +51,11 @@ export async function runDirectiveBehaviorReplyAgent(params: unknown) {
     return undefined;
   }
   return normalized.length === 1 ? normalized[0] : normalized;
+}
+
+export async function runDirectiveBehaviorReplyAgent(params: unknown) {
+  const runParams = objectRecord(objectRecord(params)?.followupRun)?.run ?? {};
+  return await runMockedReplyAgent(runParams, params);
 }
 
 export const runReplyAgentMock: Mock = vi.fn(runDirectiveBehaviorReplyAgent);
@@ -71,19 +75,7 @@ export async function runDirectiveBehaviorPreparedReply(params: unknown) {
       fullAccessAvailable: true,
     },
   };
-  const result = await runEmbeddedPiAgentMock(runParams);
-  const payloadsRaw = objectRecord(result)?.payloads;
-  const payloads = Array.isArray(payloadsRaw)
-    ? payloadsRaw.flatMap((payload) => {
-        const record = objectRecord(payload);
-        return record ? [record] : [];
-      })
-    : [];
-  const normalized = payloads.map((payload) => normalizeReplyAgentPayload(payload, params));
-  if (normalized.length === 0) {
-    return undefined;
-  }
-  return normalized.length === 1 ? normalized[0] : normalized;
+  return await runMockedReplyAgent(runParams, params);
 }
 
 export const runPreparedReplyMock: Mock = vi.fn(runDirectiveBehaviorPreparedReply);

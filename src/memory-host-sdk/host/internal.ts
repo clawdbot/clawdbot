@@ -388,7 +388,7 @@ export function chunkMarkdown(
       }
     }
     current = kept;
-    currentChars = kept.reduce((sum, entry) => sum + estimateStringChars(entry.line) + 1, 0);
+    currentChars = acc;
   };
 
   for (let i = 0; i < lines.length; i += 1) {

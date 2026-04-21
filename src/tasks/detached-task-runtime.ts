@@ -1,4 +1,7 @@
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type {
+  DetachedTaskRecoveryAttemptParams,
+  DetachedTaskRecoveryAttemptResult,
   DetachedTaskLifecycleRuntime,
   DetachedTaskLifecycleRuntimeRegistration,
 } from "./detached-task-runtime-contract.js";
@@ -18,6 +21,9 @@ import {
   setDetachedTaskDeliveryStatusByRunId as setDetachedTaskDeliveryStatusByRunIdFromExecutor,
   startTaskRunByRunId as startTaskRunByRunIdFromExecutor,
 } from "./task-executor.js";
+
+const log = createSubsystemLogger("tasks/detached-runtime");
+const DETACHED_TASK_RECOVERY_WARN_MS = 5_000;
 
 export type { DetachedTaskLifecycleRuntime, DetachedTaskLifecycleRuntimeRegistration };
 
@@ -103,4 +109,42 @@ export function cancelDetachedTaskRunById(
   ...args: Parameters<DetachedTaskLifecycleRuntime["cancelDetachedTaskRunById"]>
 ): ReturnType<DetachedTaskLifecycleRuntime["cancelDetachedTaskRunById"]> {
   return getDetachedTaskLifecycleRuntime().cancelDetachedTaskRunById(...args);
+}
+
+export async function tryRecoverTaskBeforeMarkLost(
+  params: DetachedTaskRecoveryAttemptParams,
+): Promise<DetachedTaskRecoveryAttemptResult> {
+  const hook = getDetachedTaskLifecycleRuntime().tryRecoverTaskBeforeMarkLost;
+  if (!hook) {
+    return { recovered: false };
+  }
+  const startedAt = Date.now();
+  try {
+    const result = await hook(params);
+    const elapsedMs = Date.now() - startedAt;
+    if (elapsedMs >= DETACHED_TASK_RECOVERY_WARN_MS) {
+      log.warn("Detached task recovery hook was slow", {
+        taskId: params.taskId,
+        runtime: params.runtime,
+        elapsedMs,
+      });
+    }
+    if (result && typeof result.recovered === "boolean") {
+      return result;
+    }
+    log.warn("Detached task recovery hook returned invalid result, proceeding with markTaskLost", {
+      taskId: params.taskId,
+      runtime: params.runtime,
+      result,
+    });
+    return { recovered: false };
+  } catch (err) {
+    log.warn("Detached task recovery hook threw, proceeding with markTaskLost", {
+      taskId: params.taskId,
+      runtime: params.runtime,
+      elapsedMs: Date.now() - startedAt,
+      error: err,
+    });
+    return { recovered: false };
+  }
 }

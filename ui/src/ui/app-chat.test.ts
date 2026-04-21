@@ -2,6 +2,7 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatHost } from "./app-chat.ts";
+import type { GatewaySessionRow, SessionsListResult } from "./types.ts";
 
 const { setLastActiveSessionKeyMock } = vi.hoisted(() => ({
   setLastActiveSessionKeyMock: vi.fn(),
@@ -15,10 +16,7 @@ let handleSendChat: typeof import("./app-chat.ts").handleSendChat;
 let refreshChatAvatar: typeof import("./app-chat.ts").refreshChatAvatar;
 let clearPendingQueueItemsForRun: typeof import("./app-chat.ts").clearPendingQueueItemsForRun;
 
-async function loadChatHelpers(params?: { reload?: boolean }): Promise<void> {
-  if (params?.reload) {
-    vi.resetModules();
-  }
+async function loadChatHelpers(): Promise<void> {
   ({ handleSendChat, refreshChatAvatar, clearPendingQueueItemsForRun } =
     await import("./app-chat.ts"));
 }
@@ -56,6 +54,25 @@ function makeHost(overrides?: Partial<ChatHost>): ChatHost {
     chatModelCatalog: [],
     refreshSessionsAfterChat: new Set<string>(),
     updateComplete: Promise.resolve(),
+    ...overrides,
+  };
+}
+
+function createSessionsResult(sessions: GatewaySessionRow[]): SessionsListResult {
+  return {
+    ts: 0,
+    path: "",
+    count: sessions.length,
+    defaults: { modelProvider: null, model: null, contextTokens: null },
+    sessions,
+  };
+}
+
+function row(key: string, overrides?: Partial<GatewaySessionRow>): GatewaySessionRow {
+  return {
+    key,
+    kind: "direct",
+    updatedAt: null,
     ...overrides,
   };
 }
@@ -172,7 +189,6 @@ describe("handleSendChat", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
-    vi.doUnmock("./chat/slash-command-executor.ts");
   });
 
   it("keeps slash-command model changes in sync with the chat header cache", async () => {
@@ -354,24 +370,19 @@ describe("handleSendChat", () => {
   });
 
   it("shows a visible pending item for /steer on the active run", async () => {
-    vi.doMock("./chat/slash-command-executor.ts", async () => {
-      const actual = await vi.importActual<typeof import("./chat/slash-command-executor.ts")>(
-        "./chat/slash-command-executor.ts",
-      );
-      return {
-        ...actual,
-        executeSlashCommand: vi.fn(async () => ({
-          content: "Steered.",
-          pendingCurrentRun: true,
-        })),
-      };
-    });
-    await loadChatHelpers({ reload: true });
-
     const host = makeHost({
-      client: { request: vi.fn() } as unknown as ChatHost["client"],
+      client: {
+        request: vi.fn(async (method: string) => {
+          if (method === "chat.send") {
+            return { status: "started", runId: "run-1", messageSeq: 2 };
+          }
+          throw new Error(`Unexpected request: ${method}`);
+        }),
+      } as unknown as ChatHost["client"],
       chatRunId: "run-1",
       chatMessage: "/steer tighten the plan",
+      sessionKey: "agent:main:main",
+      sessionsResult: createSessionsResult([row("agent:main:main", { status: "running" })]),
     });
 
     await handleSendChat(host);

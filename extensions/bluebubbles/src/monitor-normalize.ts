@@ -479,6 +479,15 @@ export type NormalizedWebhookMessage = {
   replyToSender?: string;
   /** Webhook event type preserved for dedup key differentiation. */
   eventType?: string;
+  /**
+   * When the debouncer merges multiple source webhook events into one
+   * processed message (see `combineDebounceEntries` in `monitor-debounce.ts`),
+   * this preserves every source `messageId` that contributed to the merged
+   * view. Downstream inbound-dedupe commits all of them so a later BlueBubbles
+   * MessagePoller replay of any individual source event is recognized as a
+   * duplicate rather than re-processed. Unset for single-event messages.
+   */
+  coalescedMessageIds?: string[];
 };
 
 export type NormalizedWebhookReaction = {

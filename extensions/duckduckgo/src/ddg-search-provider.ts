@@ -1,8 +1,6 @@
 import { readNumberParam, readStringParam } from "openclaw/plugin-sdk/param-readers";
-import {
-  createWebSearchProviderContractFields,
-  type WebSearchProviderPlugin,
-} from "openclaw/plugin-sdk/provider-web-search-contract";
+import type { WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-contract";
+import { createDuckDuckGoWebSearchProviderBase } from "./ddg-search-provider.shared.js";
 
 type DuckDuckGoClientModule = typeof import("./ddg-client.js");
 
@@ -37,21 +35,7 @@ const DuckDuckGoSearchSchema = {
 
 export function createDuckDuckGoWebSearchProvider(): WebSearchProviderPlugin {
   return {
-    id: "duckduckgo",
-    label: "DuckDuckGo Search (experimental)",
-    hint: "Free web search fallback with no API key required",
-    requiresCredential: false,
-    envVars: [],
-    placeholder: "(no key needed)",
-    signupUrl: "https://duckduckgo.com/",
-    docsUrl: "https://docs.openclaw.ai/tools/web",
-    autoDetectOrder: 100,
-    credentialPath: "",
-    ...createWebSearchProviderContractFields({
-      credentialPath: "",
-      searchCredential: { type: "scoped", scopeId: "duckduckgo" },
-      selectionPluginId: "duckduckgo",
-    }),
+    ...createDuckDuckGoWebSearchProviderBase(),
     createTool: (ctx) => ({
       description:
         "Search the web using DuckDuckGo. Returns titles, URLs, and snippets with no API key required.",

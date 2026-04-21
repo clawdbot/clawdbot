@@ -35,6 +35,34 @@ describe("anthropic provider policy public artifact", () => {
     });
   });
 
+  it("normalizes Claude CLI provider config", () => {
+    expect(
+      normalizeConfig({
+        provider: "claude-cli",
+        providerConfig: {
+          baseUrl: "https://api.anthropic.com",
+          models: [createModel("claude-sonnet-4-6", "Claude Sonnet 4.6")],
+        },
+      }),
+    ).toMatchObject({
+      api: "anthropic-messages",
+    });
+  });
+
+  it("does not normalize non-Anthropic provider config", () => {
+    const providerConfig = {
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      models: [createModel("gpt-5.4", "GPT-5.4")],
+    };
+
+    expect(
+      normalizeConfig({
+        provider: "openai-codex",
+        providerConfig,
+      }),
+    ).toBe(providerConfig);
+  });
+
   it("applies Anthropic API-key defaults without loading the full provider plugin", () => {
     const nextConfig = applyConfigDefaults({
       config: {

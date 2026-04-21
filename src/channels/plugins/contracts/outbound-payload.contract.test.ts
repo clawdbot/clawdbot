@@ -1,35 +1,40 @@
-import { describe } from "vitest";
+import { describe, vi } from "vitest";
+import { createDirectTextMediaOutbound } from "../outbound/direct-text-media.js";
 import {
-  installDirectTextMediaOutboundPayloadContractSuite,
-  installDiscordOutboundPayloadContractSuite,
-  installSlackOutboundPayloadContractSuite,
-  installWhatsAppOutboundPayloadContractSuite,
-  installZaloOutboundPayloadContractSuite,
-  installZalouserOutboundPayloadContractSuite,
-} from "../../../../test/helpers/channels/outbound-payload-contract.js";
+  installChannelOutboundPayloadContractSuite,
+  type OutboundPayloadHarnessParams,
+} from "./outbound-payload-testkit.js";
+import { primeChannelOutboundSendMock } from "./test-helpers.js";
+
+function createDirectTextMediaHarness(params: OutboundPayloadHarnessParams) {
+  const sendFn = vi.fn();
+  primeChannelOutboundSendMock(sendFn, { messageId: "m1" }, params.sendResults);
+  const outbound = createDirectTextMediaOutbound({
+    channel: "direct-text-media",
+    resolveSender: () => sendFn,
+    resolveMaxBytes: () => undefined,
+    buildTextOptions: (opts) => opts as never,
+    buildMediaOptions: (opts) => opts as never,
+  });
+  const ctx = {
+    cfg: {},
+    to: "user1",
+    text: "",
+    payload: params.payload,
+  };
+  return {
+    run: async () => await outbound.sendPayload!(ctx),
+    sendMock: sendFn,
+    to: ctx.to,
+  };
+}
 
 describe("outbound payload contracts", () => {
-  describe("discord", () => {
-    installDiscordOutboundPayloadContractSuite();
-  });
-
-  describe("imessage", () => {
-    installDirectTextMediaOutboundPayloadContractSuite();
-  });
-
-  describe("slack", () => {
-    installSlackOutboundPayloadContractSuite();
-  });
-
-  describe("whatsapp", () => {
-    installWhatsAppOutboundPayloadContractSuite();
-  });
-
-  describe("zalo", () => {
-    installZaloOutboundPayloadContractSuite();
-  });
-
-  describe("zalouser", () => {
-    installZalouserOutboundPayloadContractSuite();
+  describe("direct text/media", () => {
+    installChannelOutboundPayloadContractSuite({
+      channel: "direct-text-media",
+      chunking: { mode: "split", longTextLength: 5000, maxChunkLength: 4000 },
+      createHarness: createDirectTextMediaHarness,
+    });
   });
 });

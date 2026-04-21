@@ -4,6 +4,21 @@ import { describe, expect, it } from "vitest";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 import plugin from "./index.js";
 
+function createGlm47Template() {
+  return {
+    id: "glm-4.7",
+    name: "GLM-4.7",
+    provider: "zai",
+    api: "openai-completions",
+    baseUrl: "https://api.z.ai/api/paas/v4",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0.6, output: 2.2, cacheRead: 0.11, cacheWrite: 0 },
+    contextWindow: 204800,
+    maxTokens: 131072,
+  };
+}
+
 describe("zai provider plugin", () => {
   it("owns replay policy for OpenAI-compatible Z.ai transports", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
@@ -39,18 +54,7 @@ describe("zai provider plugin", () => {
 
   it("resolves persisted GLM-5 family models with provider-owned metadata", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
-    const template = {
-      id: "glm-4.7",
-      name: "GLM-4.7",
-      provider: "zai",
-      api: "openai-completions",
-      baseUrl: "https://api.z.ai/api/paas/v4",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 0.6, output: 2.2, cacheRead: 0.11, cacheWrite: 0 },
-      contextWindow: 204800,
-      maxTokens: 131072,
-    };
+    const template = createGlm47Template();
 
     const cases = [
       {
@@ -106,18 +110,7 @@ describe("zai provider plugin", () => {
       contextWindow: 123456,
       maxTokens: 54321,
     };
-    const template = {
-      id: "glm-4.7",
-      name: "GLM-4.7",
-      provider: "zai",
-      api: "openai-completions",
-      baseUrl: "https://api.z.ai/api/paas/v4",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 0.6, output: 2.2, cacheRead: 0.11, cacheWrite: 0 },
-      contextWindow: 204800,
-      maxTokens: 131072,
-    };
+    const template = createGlm47Template();
 
     expect(
       provider.resolveDynamicModel?.({
@@ -133,18 +126,7 @@ describe("zai provider plugin", () => {
 
   it("still synthesizes unknown GLM-5 variants from the GLM-4.7 template", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
-    const template = {
-      id: "glm-4.7",
-      name: "GLM-4.7",
-      provider: "zai",
-      api: "openai-completions",
-      baseUrl: "https://api.z.ai/api/paas/v4",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 0.6, output: 2.2, cacheRead: 0.11, cacheWrite: 0 },
-      contextWindow: 204800,
-      maxTokens: 131072,
-    };
+    const template = createGlm47Template();
 
     expect(
       provider.resolveDynamicModel?.({

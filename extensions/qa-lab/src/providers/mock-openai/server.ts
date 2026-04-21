@@ -140,6 +140,8 @@ const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0nQAAAAASUVORK5CYII=";
 const QA_REASONING_ONLY_RECOVERY_PROMPT_RE = /reasoning-only continuation qa check/i;
 const QA_REASONING_ONLY_SIDE_EFFECT_PROMPT_RE = /reasoning-only after write safety check/i;
+const QA_THINKING_VISIBILITY_OFF_PROMPT_RE = /qa thinking visibility check off/i;
+const QA_THINKING_VISIBILITY_MAX_PROMPT_RE = /qa thinking visibility check max/i;
 const QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE = /empty response continuation qa check/i;
 const QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE = /empty response exhaustion qa check/i;
 const QA_QUIET_STREAMING_PROMPT_RE = /quiet streaming qa check/i;
@@ -924,6 +926,61 @@ function buildReasoningOnlyEvents(summaryText: string, id: string): StreamEvent[
   ];
 }
 
+function buildReasoningAndAssistantEvents(params: {
+  reasoningId: string;
+  answerText: string;
+  answerId?: string;
+}): StreamEvent[] {
+  const reasoningItem = {
+    type: "reasoning",
+    id: params.reasoningId,
+    summary: [],
+  } as const;
+  const answerItem = buildAssistantOutputItem({
+    id: params.answerId ?? "msg_mock_reasoned_answer",
+    phase: "final_answer",
+    text: params.answerText,
+  });
+  return [
+    {
+      type: "response.output_item.added",
+      item: {
+        type: "reasoning",
+        id: params.reasoningId,
+        summary: [],
+      },
+    },
+    {
+      type: "response.output_item.done",
+      item: reasoningItem,
+    },
+    {
+      type: "response.output_item.added",
+      item: {
+        type: "message",
+        id: answerItem.id,
+        role: "assistant",
+        phase: "final_answer",
+        content: [],
+        status: "in_progress",
+      },
+    },
+    {
+      type: "response.output_item.done",
+      item: answerItem,
+    },
+    {
+      type: "response.completed",
+      response: {
+        id: `resp_${params.reasoningId}`,
+        status: "completed",
+        output: [reasoningItem, answerItem],
+        usage: { input_tokens: 64, output_tokens: 16, total_tokens: 80 },
+      },
+    },
+  ];
+}
+
 async function buildResponsesPayload(
   body: Record<string, unknown>,
   scenarioState: MockScenarioState,
@@ -980,6 +1037,15 @@ async function buildResponsesPayload(
       );
     }
     return buildAssistantEvents("BUG-SHOULD-NOT-AUTO-RETRY");
+  }
+  if (QA_THINKING_VISIBILITY_MAX_PROMPT_RE.test(prompt)) {
+    return buildReasoningAndAssistantEvents({
+      reasoningId: "rs_mock_thinking_visibility_max",
+      answerText: "THINKING-MAX-OK",
+    });
+  }
+  if (QA_THINKING_VISIBILITY_OFF_PROMPT_RE.test(prompt)) {
+    return buildAssistantEvents("THINKING-OFF-OK");
   }
   if (QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE.test(allInputText)) {
     if (!toolOutput) {

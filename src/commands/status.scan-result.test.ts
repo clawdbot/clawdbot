@@ -57,7 +57,7 @@ describe("buildStatusScanResult", () => {
     };
     const channelIssues = [
       {
-        channel: "discord",
+        channel: "quietchat",
         accountId: "default",
         kind: "runtime" as const,
         message: "warn",

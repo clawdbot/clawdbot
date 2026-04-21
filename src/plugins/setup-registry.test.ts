@@ -21,6 +21,108 @@ function makeTempDir(): string {
   return makeTrackedTempDir("openclaw-setup-registry", tempDirs);
 }
 
+function writeSetupApiStub(pluginRoot: string): void {
+  fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
+}
+
+function mockSinglePlugin(plugin: {
+  id: string;
+  rootDir: string;
+  setup?: unknown;
+  configContracts?: unknown;
+}) {
+  mocks.loadPluginManifestRegistry.mockReturnValue({
+    plugins: [plugin],
+    diagnostics: [],
+  });
+}
+
+function mockVoiceCallConfigMigrationRegistration(registerResult?: () => Promise<void>) {
+  const pluginRoot = makeTempDir();
+  writeSetupApiStub(pluginRoot);
+  mockSinglePlugin({ id: "voice-call", rootDir: pluginRoot });
+  mocks.createJiti.mockImplementation(() => {
+    return () => ({
+      default: {
+        register(api: {
+          registerConfigMigration: (migrate: (config: unknown) => unknown) => void;
+        }) {
+          api.registerConfigMigration((config) => ({ config, changes: ["voice-call"] }));
+          return registerResult?.();
+        },
+      },
+    });
+  });
+}
+
+function mockOpenAiCliBackendRegistration(params: {
+  requiresRuntime?: boolean;
+  registerResult?: () => Promise<void>;
+}) {
+  const pluginRoot = makeTempDir();
+  writeSetupApiStub(pluginRoot);
+  mockSinglePlugin({
+    id: "openai",
+    rootDir: pluginRoot,
+    setup: {
+      cliBackends: ["codex-cli"],
+      ...(params.requiresRuntime ? { requiresRuntime: true } : {}),
+    },
+  });
+  mocks.createJiti.mockImplementation(() => {
+    return () => ({
+      default: {
+        register(api: {
+          registerCliBackend: (backend: { id: string; config: { command: string } }) => void;
+        }) {
+          api.registerCliBackend({
+            id: "codex-cli",
+            config: { command: "codex" },
+          });
+          return params.registerResult?.();
+        },
+      },
+    });
+  });
+}
+
+function mockDuplicateSetupClaims(params: {
+  duplicatePluginId: boolean;
+  kind: "cliBackend" | "provider";
+}) {
+  const bundledRoot = makeTempDir();
+  const workspaceRoot = makeTempDir();
+  writeSetupApiStub(bundledRoot);
+  writeSetupApiStub(workspaceRoot);
+  const setup =
+    params.kind === "provider"
+      ? {
+          bundled: { providers: [{ id: "openai" }] },
+          workspace: { providers: [{ id: "OpenAI" }] },
+        }
+      : {
+          bundled: { cliBackends: ["codex-cli"] },
+          workspace: { cliBackends: ["CODEX-CLI"] },
+        };
+  mocks.loadPluginManifestRegistry.mockReturnValue({
+    plugins: [
+      {
+        id: "openai",
+        origin: "bundled",
+        rootDir: bundledRoot,
+        setup: setup.bundled,
+      },
+      {
+        id: params.duplicatePluginId ? "openai" : "workspace-shadow",
+        origin: "workspace",
+        rootDir: workspaceRoot,
+        setup: setup.workspace,
+      },
+    ],
+    diagnostics: [],
+  });
+}
+
 async function expectNoUnhandledRejection(run: () => void | Promise<void>): Promise<void> {
   const unhandledRejections: unknown[] = [];
   const onUnhandledRejection = (reason: unknown) => {
@@ -182,23 +284,7 @@ describe("setup-registry getJiti", () => {
   });
 
   it("still loads explicitly configured plugin entries without manifest trigger metadata", () => {
-    const pluginRoot = makeTempDir();
-    fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [{ id: "voice-call", rootDir: pluginRoot }],
-      diagnostics: [],
-    });
-    mocks.createJiti.mockImplementation(() => {
-      return () => ({
-        default: {
-          register(api: {
-            registerConfigMigration: (migrate: (config: unknown) => unknown) => void;
-          }) {
-            api.registerConfigMigration((config) => ({ config, changes: ["voice-call"] }));
-          },
-        },
-      });
-    });
+    mockVoiceCallConfigMigrationRegistration();
 
     const result = runPluginSetupConfigMigrations({
       config: {
@@ -322,35 +408,9 @@ describe("setup-registry getJiti", () => {
   });
 
   it("keeps synchronously registered cli backends even when register returns a promise", () => {
-    const pluginRoot = makeTempDir();
-    fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "openai",
-          rootDir: pluginRoot,
-          setup: {
-            cliBackends: ["codex-cli"],
-            requiresRuntime: true,
-          },
-        },
-      ],
-      diagnostics: [],
-    });
-    mocks.createJiti.mockImplementation(() => {
-      return () => ({
-        default: {
-          register(api: {
-            registerCliBackend: (backend: { id: string; config: { command: string } }) => void;
-          }) {
-            api.registerCliBackend({
-              id: "codex-cli",
-              config: { command: "codex" },
-            });
-            return Promise.resolve();
-          },
-        },
-      });
+    mockOpenAiCliBackendRegistration({
+      requiresRuntime: true,
+      registerResult: () => Promise.resolve(),
     });
 
     expect(resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} })).toEqual({
@@ -407,34 +467,8 @@ describe("setup-registry getJiti", () => {
   });
 
   it("swallows rejected async setup cli backend registration returns", async () => {
-    const pluginRoot = makeTempDir();
-    fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "openai",
-          rootDir: pluginRoot,
-          setup: {
-            cliBackends: ["codex-cli"],
-          },
-        },
-      ],
-      diagnostics: [],
-    });
-    mocks.createJiti.mockImplementation(() => {
-      return () => ({
-        default: {
-          register(api: {
-            registerCliBackend: (backend: { id: string; config: { command: string } }) => void;
-          }) {
-            api.registerCliBackend({
-              id: "codex-cli",
-              config: { command: "codex" },
-            });
-            return Promise.reject(new Error("async cli backend register failed"));
-          },
-        },
-      });
+    mockOpenAiCliBackendRegistration({
+      registerResult: () => Promise.reject(new Error("async cli backend register failed")),
     });
 
     await expectNoUnhandledRejection(() => {
@@ -451,24 +485,9 @@ describe("setup-registry getJiti", () => {
   });
 
   it("swallows rejected async setup registry registration returns", async () => {
-    const pluginRoot = makeTempDir();
-    fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [{ id: "voice-call", rootDir: pluginRoot }],
-      diagnostics: [],
-    });
-    mocks.createJiti.mockImplementation(() => {
-      return () => ({
-        default: {
-          register(api: {
-            registerConfigMigration: (migrate: (config: unknown) => unknown) => void;
-          }) {
-            api.registerConfigMigration((config) => ({ config, changes: ["voice-call"] }));
-            return Promise.reject(new Error("async setup registry register failed"));
-          },
-        },
-      });
-    });
+    mockVoiceCallConfigMigrationRegistration(() =>
+      Promise.reject(new Error("async setup registry register failed")),
+    );
 
     await expectNoUnhandledRejection(() => {
       expect(resolvePluginSetupRegistry({ env: {} }).configMigrations).toHaveLength(1);
@@ -476,30 +495,9 @@ describe("setup-registry getJiti", () => {
   });
 
   it("fails closed when multiple plugins claim the same setup provider id", () => {
-    const bundledRoot = makeTempDir();
-    const workspaceRoot = makeTempDir();
-    fs.writeFileSync(path.join(bundledRoot, "setup-api.js"), "export default {};\n", "utf-8");
-    fs.writeFileSync(path.join(workspaceRoot, "setup-api.js"), "export default {};\n", "utf-8");
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "openai",
-          origin: "bundled",
-          rootDir: bundledRoot,
-          setup: {
-            providers: [{ id: "openai" }],
-          },
-        },
-        {
-          id: "workspace-shadow",
-          origin: "workspace",
-          rootDir: workspaceRoot,
-          setup: {
-            providers: [{ id: "OpenAI" }],
-          },
-        },
-      ],
-      diagnostics: [],
+    mockDuplicateSetupClaims({
+      duplicatePluginId: false,
+      kind: "provider",
     });
 
     expect(resolvePluginSetupProvider({ provider: "openai", env: {} })).toBeUndefined();
@@ -507,30 +505,9 @@ describe("setup-registry getJiti", () => {
   });
 
   it("fails closed when duplicate plugin ids shadow the same setup provider id", () => {
-    const bundledRoot = makeTempDir();
-    const workspaceRoot = makeTempDir();
-    fs.writeFileSync(path.join(bundledRoot, "setup-api.js"), "export default {};\n", "utf-8");
-    fs.writeFileSync(path.join(workspaceRoot, "setup-api.js"), "export default {};\n", "utf-8");
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "openai",
-          origin: "bundled",
-          rootDir: bundledRoot,
-          setup: {
-            providers: [{ id: "openai" }],
-          },
-        },
-        {
-          id: "openai",
-          origin: "workspace",
-          rootDir: workspaceRoot,
-          setup: {
-            providers: [{ id: "OpenAI" }],
-          },
-        },
-      ],
-      diagnostics: [],
+    mockDuplicateSetupClaims({
+      duplicatePluginId: true,
+      kind: "provider",
     });
 
     expect(resolvePluginSetupProvider({ provider: "openai", env: {} })).toBeUndefined();
@@ -538,30 +515,9 @@ describe("setup-registry getJiti", () => {
   });
 
   it("fails closed when multiple plugins claim the same setup cli backend id", () => {
-    const bundledRoot = makeTempDir();
-    const workspaceRoot = makeTempDir();
-    fs.writeFileSync(path.join(bundledRoot, "setup-api.js"), "export default {};\n", "utf-8");
-    fs.writeFileSync(path.join(workspaceRoot, "setup-api.js"), "export default {};\n", "utf-8");
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "openai",
-          origin: "bundled",
-          rootDir: bundledRoot,
-          setup: {
-            cliBackends: ["codex-cli"],
-          },
-        },
-        {
-          id: "workspace-shadow",
-          origin: "workspace",
-          rootDir: workspaceRoot,
-          setup: {
-            cliBackends: ["CODEX-CLI"],
-          },
-        },
-      ],
-      diagnostics: [],
+    mockDuplicateSetupClaims({
+      duplicatePluginId: false,
+      kind: "cliBackend",
     });
 
     expect(resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} })).toBeUndefined();
@@ -569,30 +525,9 @@ describe("setup-registry getJiti", () => {
   });
 
   it("fails closed when duplicate plugin ids shadow the same setup cli backend id", () => {
-    const bundledRoot = makeTempDir();
-    const workspaceRoot = makeTempDir();
-    fs.writeFileSync(path.join(bundledRoot, "setup-api.js"), "export default {};\n", "utf-8");
-    fs.writeFileSync(path.join(workspaceRoot, "setup-api.js"), "export default {};\n", "utf-8");
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "openai",
-          origin: "bundled",
-          rootDir: bundledRoot,
-          setup: {
-            cliBackends: ["codex-cli"],
-          },
-        },
-        {
-          id: "openai",
-          origin: "workspace",
-          rootDir: workspaceRoot,
-          setup: {
-            cliBackends: ["CODEX-CLI"],
-          },
-        },
-      ],
-      diagnostics: [],
+    mockDuplicateSetupClaims({
+      duplicatePluginId: true,
+      kind: "cliBackend",
     });
 
     expect(resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} })).toBeUndefined();

@@ -7,6 +7,8 @@ import { ErrorCodes } from "./protocol/index.js";
 import { resolveSessionKeyFromResolveParams } from "./sessions-resolve.js";
 
 describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
+  const freshUpdatedAt = () => Date.now();
+
   it("resolves legacy main-alias matches by sessionId and label for the configured default agent", async () => {
     await withStateDirEnv("openclaw-sessions-resolve-alias-", async ({ stateDir }) => {
       const storePath = path.join(stateDir, "sessions.json");
@@ -18,7 +20,7 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
         "agent:main:main": {
           sessionId: "sess-default-alias",
           label: "default-alias",
-          updatedAt: 1,
+          updatedAt: freshUpdatedAt(),
         },
       });
 
@@ -46,10 +48,10 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
         agents: { list: [{ id: "ops", default: true }] },
       } satisfies OpenClawConfig;
       await saveSessionStore(storePath, {
-        "agent:main:discord:direct:u1": {
+        "agent:main:guildchat:direct:u1": {
           sessionId: "sess-stale-main",
           label: "stale-main",
-          updatedAt: 1,
+          updatedAt: freshUpdatedAt(),
         },
       });
 
@@ -78,7 +80,7 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
         "agent:main:main": {
           sessionId: "sess-discovered-main",
           label: "discovered-main",
-          updatedAt: 1,
+          updatedAt: freshUpdatedAt(),
         },
       });
 
@@ -119,14 +121,14 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
       await saveSessionStore(liveDefaultStorePath, {
         "agent:ops:main": {
           sessionId: "sess-live-default",
-          updatedAt: 10,
+          updatedAt: freshUpdatedAt(),
         },
       });
       const staleMainStorePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
       await saveSessionStore(staleMainStorePath, {
         "agent:main:main": {
           sessionId: "sess-deleted-main",
-          updatedAt: 20,
+          updatedAt: freshUpdatedAt(),
         },
       });
 

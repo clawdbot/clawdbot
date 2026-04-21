@@ -36,6 +36,7 @@ const LIVE_SETUP_TIMEOUT_MS = Math.max(
   1_000,
   toInt(process.env.OPENCLAW_LIVE_SETUP_TIMEOUT_MS, 45_000),
 );
+const LIVE_MODELS_JSON_TIMEOUT_MS = resolveLiveModelsJsonTimeoutMs();
 
 const describeLive = LIVE ? describe : describe.skip;
 
@@ -270,6 +271,23 @@ function toInt(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function resolveLiveModelsJsonTimeoutMs(
+  modelsJsonTimeoutRaw = process.env.OPENCLAW_LIVE_MODELS_JSON_TIMEOUT_MS,
+  setupTimeoutMs = LIVE_SETUP_TIMEOUT_MS,
+): number {
+  return Math.max(setupTimeoutMs, toInt(modelsJsonTimeoutRaw, 120_000));
+}
+
+describe("resolveLiveModelsJsonTimeoutMs", () => {
+  it("defaults models.json preparation to a longer setup timeout", () => {
+    expect(resolveLiveModelsJsonTimeoutMs(undefined, 45_000)).toBe(120_000);
+  });
+
+  it("never goes below the shared live setup timeout", () => {
+    expect(resolveLiveModelsJsonTimeoutMs("30000", 45_000)).toBe(45_000);
+  });
+});
+
 function resolveTestReasoning(
   model: Model<Api>,
 ): "minimal" | "low" | "medium" | "high" | "xhigh" | undefined {
@@ -427,6 +445,7 @@ describeLive("live models (profile keys)", () => {
       await withLiveStageTimeout(
         ensureOpenClawModelsJson(cfg),
         "[live-models] prepare models.json",
+        LIVE_MODELS_JSON_TIMEOUT_MS,
       );
       if (!DIRECT_ENABLED) {
         logProgress(

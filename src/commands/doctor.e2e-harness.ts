@@ -16,10 +16,6 @@ let originalStateDir: string | undefined;
 let originalUpdateInProgress: string | undefined;
 let tempStateDir: string | undefined;
 
-function buildBundledPluginModuleId(pluginId: string, artifactBasename: string): string {
-  return ["..", "..", "extensions", pluginId, artifactBasename].join("/");
-}
-
 function setStdinTty(value: boolean | undefined) {
   try {
     Object.defineProperty(process.stdin, "isTTY", {
@@ -394,6 +390,16 @@ vi.mock("../agents/auth-profiles.js", async () => {
   };
 });
 
+vi.mock("../agents/auth-profiles/store.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/auth-profiles/store.js")>(
+    "../agents/auth-profiles/store.js",
+  );
+  return {
+    ...actual,
+    ensureAuthProfileStore,
+  };
+});
+
 vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: () => ({
     label: "LaunchAgent",
@@ -412,10 +418,6 @@ vi.mock("../daemon/service.js", () => ({
 vi.mock("../pairing/pairing-store.js", () => ({
   readChannelAllowFromStore: vi.fn().mockResolvedValue([]),
   upsertChannelPairingRequest: vi.fn().mockResolvedValue({ code: "000000", created: false }),
-}));
-
-vi.mock(buildBundledPluginModuleId("telegram", "api.js"), () => ({
-  resolveTelegramToken: vi.fn(() => ({ token: "", source: "none" })),
 }));
 
 vi.mock("../runtime.js", () => ({

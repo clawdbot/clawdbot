@@ -1,8 +1,22 @@
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 
-type CompatMutationResult = {
+export type CompatMutationResult = {
   entry: Record<string, unknown>;
   changed: boolean;
+};
+
+export type LegacyStreamingAliasOptions = {
+  resolvedMode: string;
+  includePreviewChunk?: boolean;
+  resolvedNativeTransport?: unknown;
+  offModeLegacyNotice?: (pathPrefix: string) => string;
+};
+
+export type NormalizeLegacyChannelAccountParams = {
+  account: Record<string, unknown>;
+  accountId: string;
+  pathPrefix: string;
+  changes: string[];
 };
 
 export function asObjectRecord(value: unknown): Record<string, unknown> | null {
@@ -120,15 +134,13 @@ export function normalizeLegacyDmAliases(params: {
   return { entry: updated, changed };
 }
 
-export function normalizeLegacyStreamingAliases(params: {
-  entry: Record<string, unknown>;
-  pathPrefix: string;
-  changes: string[];
-  resolvedMode: string;
-  includePreviewChunk?: boolean;
-  resolvedNativeTransport?: unknown;
-  offModeLegacyNotice?: (pathPrefix: string) => string;
-}): CompatMutationResult {
+export function normalizeLegacyStreamingAliases(
+  params: {
+    entry: Record<string, unknown>;
+    pathPrefix: string;
+    changes: string[];
+  } & LegacyStreamingAliasOptions,
+): CompatMutationResult {
   const beforeStreaming = params.entry.streaming;
   const hadLegacyStreamMode = params.entry.streamMode !== undefined;
   const hasLegacyFlatFields =
@@ -251,6 +263,98 @@ export function normalizeLegacyStreamingAliases(params: {
   ) {
     params.changes.push(params.offModeLegacyNotice(params.pathPrefix));
   }
+  return { entry: updated, changed };
+}
+
+export function normalizeLegacyChannelAliases(params: {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+  normalizeDm?: boolean;
+  rootDmPromoteAllowFrom?: boolean;
+  normalizeAccountDm?: boolean;
+  resolveStreamingOptions: (entry: Record<string, unknown>) => LegacyStreamingAliasOptions;
+  normalizeAccountExtra?: (params: NormalizeLegacyChannelAccountParams) => CompatMutationResult;
+}): CompatMutationResult {
+  let updated = params.entry;
+  let changed = false;
+
+  if (params.normalizeDm === true) {
+    const dm = normalizeLegacyDmAliases({
+      entry: updated,
+      pathPrefix: params.pathPrefix,
+      changes: params.changes,
+      promoteAllowFrom: params.rootDmPromoteAllowFrom,
+    });
+    updated = dm.entry;
+    changed = dm.changed;
+  }
+
+  const streaming = normalizeLegacyStreamingAliases({
+    entry: updated,
+    pathPrefix: params.pathPrefix,
+    changes: params.changes,
+    ...params.resolveStreamingOptions(updated),
+  });
+  updated = streaming.entry;
+  changed = changed || streaming.changed;
+
+  const rawAccounts = asObjectRecord(updated.accounts);
+  if (!rawAccounts) {
+    return { entry: updated, changed };
+  }
+
+  let accountsChanged = false;
+  const accounts = { ...rawAccounts };
+  for (const [accountId, rawAccount] of Object.entries(rawAccounts)) {
+    const account = asObjectRecord(rawAccount);
+    if (!account) {
+      continue;
+    }
+    let accountEntry = account;
+    let accountChanged = false;
+    const accountPathPrefix = `${params.pathPrefix}.accounts.${accountId}`;
+
+    if (params.normalizeAccountDm === true) {
+      const accountDm = normalizeLegacyDmAliases({
+        entry: accountEntry,
+        pathPrefix: accountPathPrefix,
+        changes: params.changes,
+      });
+      accountEntry = accountDm.entry;
+      accountChanged = accountDm.changed;
+    }
+
+    const accountStreaming = normalizeLegacyStreamingAliases({
+      entry: accountEntry,
+      pathPrefix: accountPathPrefix,
+      changes: params.changes,
+      ...params.resolveStreamingOptions(accountEntry),
+    });
+    accountEntry = accountStreaming.entry;
+    accountChanged = accountChanged || accountStreaming.changed;
+
+    const accountExtra = params.normalizeAccountExtra?.({
+      account: accountEntry,
+      accountId,
+      pathPrefix: accountPathPrefix,
+      changes: params.changes,
+    });
+    if (accountExtra) {
+      accountEntry = accountExtra.entry;
+      accountChanged = accountChanged || accountExtra.changed;
+    }
+
+    if (accountChanged) {
+      accounts[accountId] = accountEntry;
+      accountsChanged = true;
+    }
+  }
+  if (accountsChanged) {
+    updated = { ...updated, accounts };
+    changed = true;
+  }
+
   return { entry: updated, changed };
 }
 

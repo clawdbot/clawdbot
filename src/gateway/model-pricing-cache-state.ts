@@ -2,11 +2,22 @@ import { normalizeModelRef } from "../agents/model-selection.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
+export type CachedPricingTier = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  /** [startTokens, endTokens) — half-open interval on the input token axis. */
+  range: [number, number];
+};
+
 export type CachedModelPricing = {
   input: number;
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  /** Optional tiered pricing tiers sourced from LiteLLM or local config. */
+  tieredPricing?: CachedPricingTier[];
 };
 
 let cachedPricing = new Map<string, CachedModelPricing>();

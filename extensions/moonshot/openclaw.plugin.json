@@ -12,8 +12,8 @@
       "choiceId": "moonshot-api-key",
       "choiceLabel": "Moonshot API key (.ai)",
       "groupId": "moonshot",
-      "groupLabel": "Moonshot AI (Kimi K2.5)",
-      "groupHint": "Kimi K2.5",
+      "groupLabel": "Moonshot AI (Kimi K2.6)",
+      "groupHint": "Kimi K2.6",
       "optionKey": "moonshotApiKey",
       "cliFlag": "--moonshot-api-key",
       "cliOption": "--moonshot-api-key <key>",
@@ -25,8 +25,8 @@
       "choiceId": "moonshot-api-key-cn",
       "choiceLabel": "Moonshot API key (.cn)",
       "groupId": "moonshot",
-      "groupLabel": "Moonshot AI (Kimi K2.5)",
-      "groupHint": "Kimi K2.5",
+      "groupLabel": "Moonshot AI (Kimi K2.6)",
+      "groupHint": "Kimi K2.6",
       "optionKey": "moonshotApiKey",
       "cliFlag": "--moonshot-api-key",
       "cliOption": "--moonshot-api-key <key>",
@@ -51,6 +51,9 @@
   "contracts": {
     "mediaUnderstandingProviders": ["moonshot"],
     "webSearchProviders": ["kimi"]
+  },
+  "configContracts": {
+    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
   },
   "configSchema": {
     "type": "object",

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const listDevicePairingMock = vi.fn();
 const loadApnsRegistrationMock = vi.fn();
@@ -6,6 +6,7 @@ const resolveApnsAuthConfigFromEnvMock = vi.fn();
 const resolveApnsRelayConfigFromEnvMock = vi.fn();
 const sendApnsExecApprovalAlertMock = vi.fn();
 const sendApnsExecApprovalResolvedWakeMock = vi.fn();
+let createExecApprovalIosPushDelivery: typeof import("./exec-approval-ios-push.js").createExecApprovalIosPushDelivery;
 
 type Deferred<T> = {
   promise: Promise<T>;
@@ -73,8 +74,11 @@ vi.mock("../infra/push-apns.js", () => ({
 }));
 
 describe("createExecApprovalIosPushDelivery", () => {
+  beforeAll(async () => {
+    ({ createExecApprovalIosPushDelivery } = await import("./exec-approval-ios-push.js"));
+  });
+
   beforeEach(() => {
-    vi.resetModules();
     vi.clearAllMocks();
     listDevicePairingMock.mockResolvedValue({ pending: [], paired: [] });
     loadApnsRegistrationMock.mockResolvedValue({
@@ -133,7 +137,6 @@ describe("createExecApprovalIosPushDelivery", () => {
       ],
     });
 
-    const { createExecApprovalIosPushDelivery } = await import("./exec-approval-ios-push.js");
     const delivery = createExecApprovalIosPushDelivery({ log: {} });
 
     const accepted = await delivery.handleRequested({
@@ -151,7 +154,6 @@ describe("createExecApprovalIosPushDelivery", () => {
   it("targets iOS devices when the active operator token includes operator.approvals", async () => {
     mockPairedIosOperator(["operator.approvals", "operator.read"]);
 
-    const { createExecApprovalIosPushDelivery } = await import("./exec-approval-ios-push.js");
     const delivery = createExecApprovalIosPushDelivery({ log: {} });
 
     const accepted = await delivery.handleRequested({
@@ -179,7 +181,6 @@ describe("createExecApprovalIosPushDelivery", () => {
       transport: "direct",
     });
 
-    const { createExecApprovalIosPushDelivery } = await import("./exec-approval-ios-push.js");
     const delivery = createExecApprovalIosPushDelivery({ log: { warn } });
 
     const accepted = await delivery.handleRequested({
@@ -211,7 +212,6 @@ describe("createExecApprovalIosPushDelivery", () => {
     }>();
     sendApnsExecApprovalAlertMock.mockReturnValue(requestedPush.promise);
 
-    const { createExecApprovalIosPushDelivery } = await import("./exec-approval-ios-push.js");
     const delivery = createExecApprovalIosPushDelivery({ log: {} });
 
     const requested = delivery.handleRequested({
@@ -245,7 +245,6 @@ describe("createExecApprovalIosPushDelivery", () => {
 
   it("skips cleanup pushes when the original request target set is unknown", async () => {
     const debug = vi.fn();
-    const { createExecApprovalIosPushDelivery } = await import("./exec-approval-ios-push.js");
     const delivery = createExecApprovalIosPushDelivery({ log: { debug } });
 
     await delivery.handleResolved({
@@ -265,7 +264,6 @@ describe("createExecApprovalIosPushDelivery", () => {
   it("sends cleanup pushes only to the original request targets", async () => {
     mockPairedIosOperator(["operator.approvals", "operator.read"]);
 
-    const { createExecApprovalIosPushDelivery } = await import("./exec-approval-ios-push.js");
     const delivery = createExecApprovalIosPushDelivery({ log: {} });
 
     await delivery.handleRequested({

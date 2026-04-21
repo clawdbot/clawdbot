@@ -7,6 +7,7 @@ export {
   fetchWithTimeout,
   fetchWithTimeoutGuarded,
   normalizeBaseUrl,
+  pollProviderOperationJson,
   postJsonRequest,
   postTranscriptionRequest,
   resolveProviderOperationTimeoutMs,

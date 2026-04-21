@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
+import { expectFirstSentCardUsesFillWidthOnly } from "./card-test-helpers.js";
 import { monitorSingleAccount } from "./monitor.account.js";
 import { setFeishuRuntime } from "./runtime.js";
 import type { ResolvedFeishuAccount } from "./types.js";
@@ -215,21 +216,7 @@ describe("Feishu bot menu handler", () => {
         }),
       );
     });
-    const firstSendArg = (sendCardFeishuMock.mock.calls as unknown[][]).at(0)?.[0] as
-      | {
-          card?: {
-            config?: {
-              width_mode?: string;
-              wide_screen_mode?: boolean;
-              enable_forward?: boolean;
-            };
-          };
-        }
-      | undefined;
-    const sentCard = firstSendArg?.card;
-    expect(sentCard).toBeDefined();
-    expect(sentCard?.config?.wide_screen_mode).toBeUndefined();
-    expect(sentCard?.config?.enable_forward).toBeUndefined();
+    expectFirstSentCardUsesFillWidthOnly(sendCardFeishuMock);
   });
 
   it("reopens replay for explicit retryable fallback failures", async () => {

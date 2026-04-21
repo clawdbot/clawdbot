@@ -48,6 +48,7 @@ function createDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntimeLike
     agentRegistry: createAgentRegistry({
       overrides: params.pluginConfig.agents,
     }),
+    probeAgent: params.pluginConfig.probeAgent,
     mcpServers: toAcpMcpServers(params.pluginConfig.mcpServers),
     permissionMode: params.pluginConfig.permissionMode,
     nonInteractivePermissions: params.pluginConfig.nonInteractivePermissions,

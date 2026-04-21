@@ -8,7 +8,7 @@ import {
 
 const TARGET_SESSION_KEY = "agent:main:subagent:child";
 
-function createDiscordBinding(
+function createRuntimeBinding(
   targetSessionKey: string,
   conversationId: string,
   boundAt: number,
@@ -19,7 +19,7 @@ function createDiscordBinding(
     targetSessionKey,
     targetKind: "subagent",
     conversation: {
-      channel: "discord",
+      channel: "richchat",
       accountId: "runtime",
       conversationId,
       parentConversationId,
@@ -29,12 +29,12 @@ function createDiscordBinding(
   };
 }
 
-function registerDiscordSessionBindings(
+function registerRuntimeSessionBindings(
   targetSessionKey: string,
   bindings: SessionBindingRecord[],
 ): void {
   registerSessionBindingAdapter({
-    channel: "discord",
+    channel: "richchat",
     accountId: "runtime",
     listBySession: (requestedSessionKey) =>
       requestedSessionKey === targetSessionKey ? bindings : [],
@@ -54,7 +54,7 @@ describe("bound delivery router", () => {
     failClosed?: boolean;
   }) => {
     if (params.bindings) {
-      registerDiscordSessionBindings(
+      registerRuntimeSessionBindings(
         params.targetSessionKey ?? TARGET_SESSION_KEY,
         params.bindings,
       );
@@ -65,7 +65,7 @@ describe("bound delivery router", () => {
       ...(params.requesterConversationId !== undefined
         ? {
             requester: {
-              channel: "discord",
+              channel: "richchat",
               accountId: "runtime",
               conversationId: params.requesterConversationId,
             },
@@ -78,7 +78,7 @@ describe("bound delivery router", () => {
   it.each([
     {
       name: "resolves to a bound destination when a single active binding exists",
-      bindings: [createDiscordBinding(TARGET_SESSION_KEY, "thread-1", 1, "parent-1")],
+      bindings: [createRuntimeBinding(TARGET_SESSION_KEY, "thread-1", 1, "parent-1")],
       requesterConversationId: "parent-1",
       expected: {
         mode: "bound",
@@ -98,8 +98,8 @@ describe("bound delivery router", () => {
     {
       name: "fails closed when multiple bindings exist without requester signal",
       bindings: [
-        createDiscordBinding(TARGET_SESSION_KEY, "thread-1", 1),
-        createDiscordBinding(TARGET_SESSION_KEY, "thread-2", 2),
+        createRuntimeBinding(TARGET_SESSION_KEY, "thread-1", 1),
+        createRuntimeBinding(TARGET_SESSION_KEY, "thread-2", 2),
       ],
       failClosed: true,
       expected: {
@@ -111,8 +111,8 @@ describe("bound delivery router", () => {
     {
       name: "selects requester-matching conversation when multiple bindings exist",
       bindings: [
-        createDiscordBinding(TARGET_SESSION_KEY, "thread-1", 1),
-        createDiscordBinding(TARGET_SESSION_KEY, "thread-2", 2),
+        createRuntimeBinding(TARGET_SESSION_KEY, "thread-1", 1),
+        createRuntimeBinding(TARGET_SESSION_KEY, "thread-2", 2),
       ],
       requesterConversationId: "thread-2",
       failClosed: true,
@@ -126,17 +126,17 @@ describe("bound delivery router", () => {
       name: "normalizes adapter binding conversations before requester matching",
       bindings: [
         {
-          ...createDiscordBinding(TARGET_SESSION_KEY, "thread-1", 1),
+          ...createRuntimeBinding(TARGET_SESSION_KEY, "thread-1", 1),
           conversation: {
-            channel: " discord ",
+            channel: " richchat ",
             accountId: " runtime ",
             conversationId: " thread-1 ",
           },
         },
         {
-          ...createDiscordBinding(TARGET_SESSION_KEY, "thread-2", 2),
+          ...createRuntimeBinding(TARGET_SESSION_KEY, "thread-2", 2),
           conversation: {
-            channel: " DISCORD ",
+            channel: " RICHCHAT ",
             accountId: " Runtime ",
             conversationId: " thread-2 ",
           },
@@ -152,7 +152,7 @@ describe("bound delivery router", () => {
     },
     {
       name: "falls back for invalid requester conversation values",
-      bindings: [createDiscordBinding(TARGET_SESSION_KEY, "thread-1", 1)],
+      bindings: [createRuntimeBinding(TARGET_SESSION_KEY, "thread-1", 1)],
       requesterConversationId: " ",
       failClosed: true,
       expected: {

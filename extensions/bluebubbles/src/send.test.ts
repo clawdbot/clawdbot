@@ -1386,6 +1386,118 @@ describe("send", () => {
         }
       });
     });
+
+    describe("send timeout (#67486)", () => {
+      // Capture the `timeoutMs` that the SSRF guard receives on each call.
+      // Index 0 is the `chat/query` preflight; index 1 is the actual
+      // `/api/v1/message/text` POST — that's the one we care about.
+      function installTimeoutCapture(): (number | undefined)[] {
+        const timeouts: (number | undefined)[] = [];
+        _setFetchGuardForTesting(async (guardParams) => {
+          timeouts.push(guardParams.timeoutMs);
+          const raw = await globalThis.fetch(guardParams.url, guardParams.init);
+          // Mirrors `createBlueBubblesFetchGuardPassthroughInstaller` so both
+          // `.json()`-only chat-query mocks and `.text()`-only send mocks work.
+          let body: ArrayBuffer;
+          if (
+            typeof (raw as { arrayBuffer?: () => Promise<ArrayBuffer> }).arrayBuffer === "function"
+          ) {
+            body = await (raw as { arrayBuffer: () => Promise<ArrayBuffer> }).arrayBuffer();
+          } else {
+            const text =
+              typeof (raw as { text?: () => Promise<string> }).text === "function"
+                ? await (raw as { text: () => Promise<string> }).text()
+                : typeof (raw as { json?: () => Promise<unknown> }).json === "function"
+                  ? JSON.stringify(await (raw as { json: () => Promise<unknown> }).json())
+                  : "";
+            body = new TextEncoder().encode(text).buffer;
+          }
+          return {
+            response: new Response(body, {
+              status: (raw as { status?: number }).status ?? 200,
+              headers: (raw as { headers?: HeadersInit }).headers,
+            }),
+            release: async () => {},
+            finalUrl: guardParams.url,
+          };
+        });
+        return timeouts;
+      }
+
+      it("defaults the /message/text send to DEFAULT_SEND_TIMEOUT_MS (30s), not 10s", async () => {
+        const timeouts = installTimeoutCapture();
+        mockResolvedHandleTarget();
+        mockSendResponse({ data: { guid: "msg-default-timeout" } });
+
+        try {
+          const result = await sendMessageBlueBubbles("+15551234567", "Hello", {
+            serverUrl: "http://localhost:1234",
+            password: "test",
+          });
+          expect(result.messageId).toBe("msg-default-timeout");
+          // chat/query preflight must stay at the short default; only the send POST rises.
+          expect(timeouts[0]).toBe(10_000);
+          expect(timeouts[1]).toBe(30_000);
+        } finally {
+          _setFetchGuardForTesting(null);
+        }
+      });
+
+      it("honors channels.bluebubbles.sendTimeoutMs from config for the send POST", async () => {
+        const timeouts = installTimeoutCapture();
+        mockResolvedHandleTarget();
+        mockSendResponse({ data: { guid: "msg-config-timeout" } });
+
+        try {
+          const result = await sendMessageBlueBubbles("+15551234567", "Hello", {
+            cfg: {
+              channels: {
+                bluebubbles: {
+                  serverUrl: "http://localhost:1234",
+                  password: "test",
+                  sendTimeoutMs: 45_000,
+                },
+              },
+            },
+          });
+          expect(result.messageId).toBe("msg-config-timeout");
+          // chat/query preflight must stay at the short default; only the send POST rises.
+          expect(timeouts[0]).toBe(10_000);
+          expect(timeouts[1]).toBe(45_000);
+        } finally {
+          _setFetchGuardForTesting(null);
+        }
+      });
+
+      it("explicit opts.timeoutMs wins over both config and default", async () => {
+        const timeouts = installTimeoutCapture();
+        mockResolvedHandleTarget();
+        mockSendResponse({ data: { guid: "msg-explicit-timeout" } });
+
+        try {
+          const result = await sendMessageBlueBubbles("+15551234567", "Hello", {
+            cfg: {
+              channels: {
+                bluebubbles: {
+                  serverUrl: "http://localhost:1234",
+                  password: "test",
+                  sendTimeoutMs: 45_000,
+                },
+              },
+            },
+            timeoutMs: 90_000,
+          });
+          expect(result.messageId).toBe("msg-explicit-timeout");
+          // Explicit opts.timeoutMs is forwarded to every call site, including
+          // the chat/query preflight — the only override that can push that
+          // preflight above the 10s default.
+          expect(timeouts[0]).toBe(90_000);
+          expect(timeouts[1]).toBe(90_000);
+        } finally {
+          _setFetchGuardForTesting(null);
+        }
+      });
+    });
   });
 
   describe("createChatForHandle", () => {

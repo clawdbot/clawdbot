@@ -147,7 +147,13 @@ export function extractAssistantThinking(msg: AssistantMessage): string {
       }
       const record = block as unknown as Record<string, unknown>;
       if (record.type === "thinking" && typeof record.thinking === "string") {
-        return record.thinking.trim();
+        const thinking = record.thinking.trim();
+        if (thinking) {
+          return thinking;
+        }
+        if (typeof record.thinkingSignature === "string" && record.thinkingSignature.trim()) {
+          return "Native reasoning was produced; no summary text was returned.";
+        }
       }
       return "";
     })

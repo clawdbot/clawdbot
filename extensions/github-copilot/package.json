@@ -4,6 +4,10 @@
   "private": true,
   "description": "OpenClaw GitHub Copilot provider plugin",
   "type": "module",
+  "dependencies": {
+    "@clack/prompts": "^1.2.0",
+    "@mariozechner/pi-ai": "0.67.68"
+  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },

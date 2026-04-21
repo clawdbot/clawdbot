@@ -18,8 +18,8 @@ describe("resolveLinkChannelContext", () => {
     const account = { configured: true, enabled: true };
     pluginRegistry.list = [
       {
-        id: "discord",
-        meta: { label: "Discord" },
+        id: "quietchat",
+        meta: { label: "QuietChat" },
         config: {
           listAccountIds: () => ["default"],
           inspectAccount: () => account,
@@ -42,8 +42,8 @@ describe("resolveLinkChannelContext", () => {
   it("degrades safely when account resolution throws", async () => {
     pluginRegistry.list = [
       {
-        id: "discord",
-        meta: { label: "Discord" },
+        id: "quietchat",
+        meta: { label: "QuietChat" },
         config: {
           listAccountIds: () => ["default"],
           resolveAccount: () => {

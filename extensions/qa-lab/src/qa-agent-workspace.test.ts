@@ -1,20 +1,12 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
+import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
-const tempDirs: string[] = [];
+const { cleanup, makeTempDir } = createTempDirHarness();
 
-async function makeTempDir(prefix: string) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  tempDirs.push(dir);
-  return dir;
-}
-
-afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
-});
+afterEach(cleanup);
 
 describe("seedQaAgentWorkspace", () => {
   it("creates a repo symlink when a repo root is provided", async () => {

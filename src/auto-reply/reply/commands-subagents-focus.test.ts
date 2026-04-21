@@ -2,10 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
+import { createEmptyInlineDirectives } from "./commands-subagents.test-helpers.js";
 import { handleSubagentsFocusAction } from "./commands-subagents/action-focus.js";
 import { handleSubagentsUnfocusAction } from "./commands-subagents/action-unfocus.js";
 import type { HandleCommandsParams } from "./commands-types.js";
-import type { InlineDirectives } from "./directive-handling.js";
 
 const THREAD_CHANNEL = "thread-chat";
 const ROOM_CHANNEL = "room-chat";
@@ -159,26 +159,6 @@ function buildCommandParams(params?: {
   senderId?: string;
   sessionEntry?: SessionEntry;
 }): HandleCommandsParams {
-  const directives: InlineDirectives = {
-    cleaned: "",
-    hasThinkDirective: false,
-    hasVerboseDirective: false,
-    hasFastDirective: false,
-    hasReasoningDirective: false,
-    hasTraceDirective: false,
-    hasElevatedDirective: false,
-    hasExecDirective: false,
-    hasExecOptions: false,
-    invalidExecHost: false,
-    invalidExecSecurity: false,
-    invalidExecAsk: false,
-    invalidExecNode: false,
-    hasStatusDirective: false,
-    hasModelDirective: false,
-    hasQueueDirective: false,
-    queueReset: false,
-    hasQueueOptions: false,
-  };
   return {
     cfg: params?.cfg ?? baseCfg,
     ctx: {
@@ -194,7 +174,7 @@ function buildCommandParams(params?: {
       rawBodyNormalized: "",
       commandBodyNormalized: "",
     },
-    directives,
+    directives: createEmptyInlineDirectives(),
     elevated: { enabled: false, allowed: false, failures: [] },
     sessionEntry: params?.sessionEntry,
     sessionKey: "agent:main:main",

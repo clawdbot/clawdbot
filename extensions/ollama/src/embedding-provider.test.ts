@@ -11,6 +11,10 @@ const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
   formatErrorMessage: (error: unknown) => (error instanceof Error ? error.message : String(error)),
+  ssrfPolicyFromHttpBaseUrlAllowedHostname: (baseUrl: string) => {
+    const parsed = new URL(baseUrl);
+    return { allowedHostnames: [parsed.hostname] };
+  },
 }));
 
 let createOllamaEmbeddingProvider: typeof import("./embedding-provider.js").createOllamaEmbeddingProvider;

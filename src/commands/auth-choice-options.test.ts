@@ -143,7 +143,7 @@ describe("buildAuthChoiceOptions", () => {
         choiceId: "moonshot-api-key",
         choiceLabel: "Kimi API key (.ai)",
         groupId: "moonshot",
-        groupLabel: "Moonshot AI (Kimi K2.5)",
+        groupLabel: "Moonshot AI (Kimi K2.6)",
       },
       {
         pluginId: "minimax",

@@ -3,26 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { rawDataToString } from "../infra/ws.js";
+import "../../test-support/browser-security-runtime.mock.js";
 import { isDirectCdpWebSocketEndpoint, isWebSocketUrl } from "./cdp.helpers.js";
 import { createTargetViaCdp, evaluateJavaScript, normalizeCdpWsUrl, snapshotAria } from "./cdp.js";
 import { parseHttpUrl } from "./config.js";
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
-
-vi.mock("openclaw/plugin-sdk/browser-security-runtime", async () => {
-  const actual = await vi.importActual<
-    typeof import("openclaw/plugin-sdk/browser-security-runtime")
-  >("openclaw/plugin-sdk/browser-security-runtime");
-  const lookupFn = async (_hostname: string, options?: { all?: boolean }) => {
-    const result = { address: "93.184.216.34", family: 4 };
-    return options?.all === true ? [result] : result;
-  };
-  return {
-    ...actual,
-    resolvePinnedHostnameWithPolicy: (hostname: string, params: object = {}) =>
-      actual.resolvePinnedHostnameWithPolicy(hostname, { ...params, lookupFn: lookupFn as never }),
-  };
-});
 
 describe("cdp", () => {
   let httpServer: ReturnType<typeof createServer> | null = null;

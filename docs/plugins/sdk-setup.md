@@ -529,6 +529,12 @@ openclaw plugins install <package-name>
   trees pure JS/TS and avoid packages that require `postinstall` builds.
 </Info>
 
+Bundled OpenClaw-owned plugins are the only startup repair exception: when a
+packaged install sees one enabled by plugin config, legacy channel config, or
+its bundled default-enabled manifest, startup installs that plugin's missing
+runtime dependencies before import. Third-party plugins should not rely on
+startup installs; keep using the explicit plugin installer.
+
 ## Related
 
 - [SDK Entry Points](/plugins/sdk-entrypoints) -- `definePluginEntry` and `defineChannelPluginEntry`

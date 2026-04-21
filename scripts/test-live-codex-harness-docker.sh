@@ -15,6 +15,18 @@ DOCKER_HOME_MOUNT=()
 DOCKER_EXTRA_ENV_FILES=()
 DOCKER_AUTH_PRESTAGED=0
 
+openclaw_live_codex_harness_append_build_extension() {
+  local extension="${1:?extension required}"
+  local current="${OPENCLAW_DOCKER_BUILD_EXTENSIONS:-${OPENCLAW_EXTENSIONS:-}}"
+  case " $current " in
+    *" $extension "*)
+      ;;
+    *)
+      export OPENCLAW_DOCKER_BUILD_EXTENSIONS="${current:+$current }$extension"
+      ;;
+  esac
+}
+
 case "$CODEX_HARNESS_AUTH_MODE" in
   codex-auth | api-key)
     ;;
@@ -169,6 +181,7 @@ cd "$tmp_dir"
 pnpm test:live src/gateway/gateway-codex-harness.live.test.ts
 EOF
 
+openclaw_live_codex_harness_append_build_extension codex
 "$ROOT_DIR/scripts/test-live-build-docker.sh"
 
 echo "==> Run Codex harness live test in Docker"

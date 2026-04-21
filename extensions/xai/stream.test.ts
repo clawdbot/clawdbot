@@ -6,14 +6,11 @@ import {
   createXaiToolPayloadCompatibilityWrapper,
   wrapXaiProviderStream,
 } from "./stream.js";
-
-type ToolPayload = {
-  function?: Record<string, unknown>;
-};
-type XaiTestPayload = Record<string, unknown> & {
-  tools?: Array<{ type?: string; function?: Record<string, unknown> }>;
-  input?: unknown[];
-};
+import {
+  createXaiPayloadCaptureStream,
+  expectXaiFastToolStreamShaping,
+  runXaiGrok4ResponseStream,
+} from "./test-helpers.js";
 type XaiStreamApi = Extract<Api, "openai-completions" | "openai-responses">;
 
 function captureWrappedModelId(params: {
@@ -94,51 +91,15 @@ describe("xai stream wrappers", () => {
   });
 
   it("composes the xai provider stream chain from extra params", () => {
-    let capturedModelId = "";
-    let capturedPayload: XaiTestPayload | undefined;
-    const baseStreamFn: StreamFn = (model, _context, options) => {
-      capturedModelId = model.id;
-      const payload: XaiTestPayload = {
-        reasoning: { effort: "high" },
-        tools: [
-          {
-            type: "function",
-            function: {
-              name: "write",
-              parameters: { type: "object", properties: {} },
-              strict: true,
-            },
-          },
-        ],
-      };
-      options?.onPayload?.(payload as never, model as never);
-      capturedPayload = payload;
-      return {
-        result: async () => ({}) as never,
-        async *[Symbol.asyncIterator]() {},
-      } as unknown as ReturnType<StreamFn>;
-    };
+    const capture = createXaiPayloadCaptureStream();
 
     const wrapped = wrapXaiProviderStream({
-      streamFn: baseStreamFn,
+      streamFn: capture.streamFn,
       extraParams: { fastMode: true },
     } as never);
 
-    void wrapped?.(
-      {
-        api: "openai-responses",
-        provider: "xai",
-        id: "grok-4",
-      } as Model<"openai-responses">,
-      { messages: [] } as Context,
-      {},
-    );
-
-    expect(capturedModelId).toBe("grok-4-fast");
-    expect(capturedPayload).toMatchObject({ tool_stream: true });
-    expect(capturedPayload).not.toHaveProperty("reasoning");
-    const payloadTools = capturedPayload?.tools as ToolPayload[] | undefined;
-    expect(payloadTools?.[0]?.function).not.toHaveProperty("strict");
+    runXaiGrok4ResponseStream(wrapped);
+    expectXaiFastToolStreamShaping(capture);
   });
 
   it("strips unsupported strict and reasoning controls from tool payloads", () => {

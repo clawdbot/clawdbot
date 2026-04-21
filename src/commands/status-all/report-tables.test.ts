@@ -56,7 +56,7 @@ describe("status-all report tables", () => {
         {
           title: "Channel detail",
           columns: ["Channel", "Status", "Notes"],
-          rows: [{ Channel: "telegram", Status: "WARN", Notes: "setup" }],
+          rows: [{ Channel: "quietchat", Status: "WARN", Notes: "setup" }],
         },
       ],
       width: 120,
@@ -75,7 +75,7 @@ describe("status-all report tables", () => {
         { key: "Status", header: "Status", flex: false, minWidth: 10 },
         { key: "Notes", header: "Notes", flex: true, minWidth: 28 },
       ],
-      rows: [{ Channel: "telegram", Status: "warn(WARN)", Notes: "setup" }],
+      rows: [{ Channel: "quietchat", Status: "warn(WARN)", Notes: "setup" }],
     });
   });
 

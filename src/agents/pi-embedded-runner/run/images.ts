@@ -41,6 +41,11 @@ const MESSAGE_IMAGE_REGEX_SOURCE =
 const FILE_URL_REGEX_SOURCE = "file://[^\\s<>\"'`\\]]+\\.(?:" + IMAGE_EXTENSION_PATTERN + ")";
 const PATH_REGEX_SOURCE =
   "(?:^|\\s|[\"'`(])((\\.\\.?/|[~/])[^\\s\"'`()\\[\\]]*\\.(?:" + IMAGE_EXTENSION_PATTERN + "))";
+const MEDIA_ATTACHED_PATTERN = /\[media attached(?:\s+\d+\/\d+)?:\s*([^\]]+)\]/gi;
+const MEDIA_ATTACHED_PATH_PATTERN = new RegExp(MEDIA_ATTACHED_PATH_REGEX_SOURCE, "i");
+const MESSAGE_IMAGE_PATTERN = new RegExp(MESSAGE_IMAGE_REGEX_SOURCE, "gi");
+const FILE_URL_PATTERN = new RegExp(FILE_URL_REGEX_SOURCE, "gi");
+const PATH_PATTERN = new RegExp(PATH_REGEX_SOURCE, "gi");
 
 /**
  * Matches the opaque media URI written by the Gateway's claim-check offload:
@@ -251,13 +256,12 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
   // Pattern for [media attached: path (type) | url] or [media attached N/M: path (type) | url] format
   // Each bracket = ONE file. The | separates path from URL, not multiple files.
   // Multi-file format uses separate brackets on separate lines.
-  const mediaAttachedPattern = /\[media attached(?:\s+\d+\/\d+)?:\s*([^\]]+)\]/gi;
-  const mediaAttachedPathPattern = new RegExp(MEDIA_ATTACHED_PATH_REGEX_SOURCE, "i");
-  const messageImagePattern = new RegExp(MESSAGE_IMAGE_REGEX_SOURCE, "gi");
-  const fileUrlPattern = new RegExp(FILE_URL_REGEX_SOURCE, "gi");
-  const pathPattern = new RegExp(PATH_REGEX_SOURCE, "gi");
+  MEDIA_ATTACHED_PATTERN.lastIndex = 0;
+  MESSAGE_IMAGE_PATTERN.lastIndex = 0;
+  FILE_URL_PATTERN.lastIndex = 0;
+  PATH_PATTERN.lastIndex = 0;
   let match: RegExpExecArray | null;
-  while ((match = mediaAttachedPattern.exec(prompt)) !== null) {
+  while ((match = MEDIA_ATTACHED_PATTERN.exec(prompt)) !== null) {
     const content = match[1];
 
     // Skip "[media attached: N files]" header lines
@@ -283,14 +287,14 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
     // Format is: path (type) | url  OR  just: path (type)
     // Path may contain spaces (e.g., "ChatGPT Image Apr 21.png")
     // Use non-greedy .+? to stop at first image extension
-    const pathMatch = content.match(mediaAttachedPathPattern);
+    const pathMatch = content.match(MEDIA_ATTACHED_PATH_PATTERN);
     if (pathMatch?.[1]) {
       addPathRef(pathMatch[1].trim());
     }
   }
 
   // Pattern for [Image: source: /path/...] format from messaging systems
-  while ((match = messageImagePattern.exec(prompt)) !== null) {
+  while ((match = MESSAGE_IMAGE_PATTERN.exec(prompt)) !== null) {
     const raw = match[1]?.trim();
     if (raw) {
       addPathRef(raw);
@@ -300,7 +304,7 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
   // Remote HTTP(S) URLs are intentionally ignored. Native image injection is local-only.
 
   // Pattern for file:// URLs - treat as paths since loadWebMedia handles them
-  while ((match = fileUrlPattern.exec(prompt)) !== null) {
+  while ((match = FILE_URL_PATTERN.exec(prompt)) !== null) {
     const raw = match[0];
     const dedupeKey = normalizeRefForDedupe(raw);
     if (seen.has(dedupeKey)) {
@@ -322,7 +326,7 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
   // - ./relative/path.ext
   // - ../parent/path.ext
   // - ~/home/path.ext
-  while ((match = pathPattern.exec(prompt)) !== null) {
+  while ((match = PATH_PATTERN.exec(prompt)) !== null) {
     // Use capture group 1 (the path without delimiter prefix); skip if undefined
     if (match[1]) {
       addPathRef(match[1]);

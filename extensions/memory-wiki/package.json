@@ -5,6 +5,7 @@
   "description": "OpenClaw persistent wiki plugin",
   "type": "module",
   "dependencies": {
+    "@sinclair/typebox": "0.34.49",
     "yaml": "^2.8.3"
   },
   "devDependencies": {

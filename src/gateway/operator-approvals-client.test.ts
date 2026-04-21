@@ -106,4 +106,19 @@ describe("withOperatorApprovalsGatewayClient", () => {
       ),
     ).rejects.toThrow("gateway closed (1008): pairing required");
   });
+
+  it("falls back to stop when stopAndWait rejects", async () => {
+    clientState.stopAndWaitSpy.mockRejectedValueOnce(new Error("close failed"));
+
+    await withOperatorApprovalsGatewayClient(
+      {
+        config: {} as never,
+        clientDisplayName: "Matrix approval (@owner:example.org)",
+      },
+      async () => undefined,
+    );
+
+    expect(clientState.stopAndWaitSpy).toHaveBeenCalledTimes(1);
+    expect(clientState.stopSpy).toHaveBeenCalledTimes(1);
+  });
 });

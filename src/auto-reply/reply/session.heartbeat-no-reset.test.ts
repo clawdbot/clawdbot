@@ -3,7 +3,6 @@ import path from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { saveSessionStore } from "../../config/sessions/store.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
 import type { MsgContext } from "../templating.js";
 import { initSessionState } from "./session.js";
 
@@ -56,26 +55,29 @@ describe("initSessionState - heartbeat should not trigger session reset", () => 
     From: "user123",
     To: "bot123",
     SessionKey: "main:user123",
-    Provider: "telegram",
-    Surface: "telegram",
+    Provider: "quietchat",
+    Surface: "quietchat",
     ChatType: "direct",
     CommandAuthorized: true,
     ...overrides,
   });
+
+  const saveExistingSession = async (sessionId: string, updatedAt: number): Promise<void> => {
+    await saveSessionStore(storePath, {
+      "main:user123": {
+        sessionId,
+        updatedAt,
+        systemSent: true,
+      },
+    });
+  };
 
   it("should NOT reset session when Provider is 'heartbeat'", async () => {
     // Setup: Create a session entry that is "stale" (older than idle timeout)
     const now = Date.now();
     const staleTime = now - 10 * 60 * 1000; // 10 minutes ago (exceeds 5min idle timeout)
 
-    const initialStore: Record<string, SessionEntry> = {
-      "main:user123": {
-        sessionId: "original-session-id-12345",
-        updatedAt: staleTime,
-        systemSent: true,
-      },
-    };
-    await saveSessionStore(storePath, initialStore);
+    await saveExistingSession("original-session-id-12345", staleTime);
 
     const cfg = createBaseConfig();
     const ctx = createBaseCtx({
@@ -101,18 +103,11 @@ describe("initSessionState - heartbeat should not trigger session reset", () => 
     const now = Date.now();
     const staleTime = now - 10 * 60 * 1000; // 10 minutes ago (exceeds 5min idle timeout)
 
-    const initialStore: Record<string, SessionEntry> = {
-      "main:user123": {
-        sessionId: "original-session-id-12345",
-        updatedAt: staleTime,
-        systemSent: true,
-      },
-    };
-    await saveSessionStore(storePath, initialStore);
+    await saveExistingSession("original-session-id-12345", staleTime);
 
     const cfg = createBaseConfig();
     const ctx = createBaseCtx({
-      Provider: "telegram", // Regular provider - SHOULD trigger reset if stale
+      Provider: "quietchat", // Regular provider - SHOULD trigger reset if stale
       Body: "test message",
     });
 
@@ -133,14 +128,7 @@ describe("initSessionState - heartbeat should not trigger session reset", () => 
     const now = Date.now();
     const yesterday = now - 25 * 60 * 60 * 1000; // 25 hours ago
 
-    const initialStore: Record<string, SessionEntry> = {
-      "main:user123": {
-        sessionId: "original-session-id-67890",
-        updatedAt: yesterday,
-        systemSent: true,
-      },
-    };
-    await saveSessionStore(storePath, initialStore);
+    await saveExistingSession("original-session-id-67890", yesterday);
 
     const cfg = createBaseConfig();
     cfg.session!.reset = {
@@ -169,14 +157,7 @@ describe("initSessionState - heartbeat should not trigger session reset", () => 
     const now = Date.now();
     const staleTime = now - 10 * 60 * 1000;
 
-    const initialStore: Record<string, SessionEntry> = {
-      "main:user123": {
-        sessionId: "cron-session-id-abcde",
-        updatedAt: staleTime,
-        systemSent: true,
-      },
-    };
-    await saveSessionStore(storePath, initialStore);
+    await saveExistingSession("cron-session-id-abcde", staleTime);
 
     const cfg = createBaseConfig();
     const ctx = createBaseCtx({
@@ -200,14 +181,7 @@ describe("initSessionState - heartbeat should not trigger session reset", () => 
     const now = Date.now();
     const staleTime = now - 10 * 60 * 1000;
 
-    const initialStore: Record<string, SessionEntry> = {
-      "main:user123": {
-        sessionId: "exec-session-id-fghij",
-        updatedAt: staleTime,
-        systemSent: true,
-      },
-    };
-    await saveSessionStore(storePath, initialStore);
+    await saveExistingSession("exec-session-id-fghij", staleTime);
 
     const cfg = createBaseConfig();
     const ctx = createBaseCtx({

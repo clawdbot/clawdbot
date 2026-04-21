@@ -1,21 +1,9 @@
 import type { ChannelStatusIssue } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import {
-  parseChatTargetPrefixesOrThrow,
-  resolveServicePrefixedTarget,
-  type ParsedChatTarget,
-} from "./channel-targets.js";
 import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
 
 // Narrow plugin-sdk surface for the bundled BlueBubbles plugin.
 // Keep this list additive and scoped to the conversation-binding seam only.
-
-type BlueBubblesService = "imessage" | "sms" | "auto";
-
-type BlueBubblesTarget =
-  | ParsedChatTarget
-  | { kind: "handle"; to: string; service: BlueBubblesService };
 
 export type BlueBubblesConversationBindingManager = {
   stop: () => void;
@@ -26,6 +14,14 @@ type BlueBubblesFacadeModule = {
     accountId?: string;
     cfg: OpenClawConfig;
   }) => BlueBubblesConversationBindingManager;
+  normalizeBlueBubblesAcpConversationId: (
+    conversationId: string,
+  ) => { conversationId: string } | null;
+  matchBlueBubblesAcpConversation: (params: {
+    bindingConversationId: string;
+    conversationId: string;
+  }) => { conversationId: string; matchPriority: number } | null;
+  resolveBlueBubblesConversationIdFromTarget: (target: string) => string | undefined;
   collectBlueBubblesStatusIssues: (accounts: unknown[]) => ChannelStatusIssue[];
 };
 
@@ -43,227 +39,21 @@ export function createBlueBubblesConversationBindingManager(params: {
   return loadBlueBubblesFacadeModule().createBlueBubblesConversationBindingManager(params);
 }
 
-const CHAT_ID_PREFIXES = ["chat_id:", "chatid:", "chat:"];
-const CHAT_GUID_PREFIXES = ["chat_guid:", "chatguid:", "guid:"];
-const CHAT_IDENTIFIER_PREFIXES = ["chat_identifier:", "chatidentifier:", "chatident:"];
-const SERVICE_PREFIXES: Array<{ prefix: string; service: BlueBubblesService }> = [
-  { prefix: "imessage:", service: "imessage" },
-  { prefix: "sms:", service: "sms" },
-  { prefix: "auto:", service: "auto" },
-];
-const CHAT_IDENTIFIER_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const CHAT_IDENTIFIER_HEX_RE = /^[0-9a-f]{24,64}$/i;
-
-function parseRawChatGuid(value: string): string | null {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const parts = trimmed.split(";");
-  if (parts.length !== 3) {
-    return null;
-  }
-  const service = parts[0]?.trim();
-  const separator = parts[1]?.trim();
-  const identifier = parts[2]?.trim();
-  if (!service || !identifier) {
-    return null;
-  }
-  if (separator !== "+" && separator !== "-") {
-    return null;
-  }
-  return `${service};${separator};${identifier}`;
-}
-
-function stripPrefix(value: string, prefix: string): string {
-  return value.slice(prefix.length).trim();
-}
-
-function stripBlueBubblesPrefix(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
-  }
-  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("bluebubbles:")) {
-    return trimmed;
-  }
-  return trimmed.slice("bluebubbles:".length).trim();
-}
-
-function looksLikeRawChatIdentifier(value: string): boolean {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return false;
-  }
-  if (/^chat\d+$/i.test(trimmed)) {
-    return true;
-  }
-  return CHAT_IDENTIFIER_UUID_RE.test(trimmed) || CHAT_IDENTIFIER_HEX_RE.test(trimmed);
-}
-
-function parseGroupTarget(params: {
-  trimmed: string;
-  lower: string;
-}): { kind: "chat_id"; chatId: number } | { kind: "chat_guid"; chatGuid: string } | null {
-  if (!params.lower.startsWith("group:")) {
-    return null;
-  }
-  const value = stripPrefix(params.trimmed, "group:");
-  const chatId = Number.parseInt(value, 10);
-  if (Number.isFinite(chatId)) {
-    return { kind: "chat_id", chatId };
-  }
-  if (value) {
-    return { kind: "chat_guid", chatGuid: value };
-  }
-  throw new Error("group target is required");
-}
-
-function parseRawChatIdentifierTarget(
-  trimmed: string,
-): { kind: "chat_identifier"; chatIdentifier: string } | null {
-  if (/^chat\d+$/i.test(trimmed)) {
-    return { kind: "chat_identifier", chatIdentifier: trimmed };
-  }
-  if (looksLikeRawChatIdentifier(trimmed)) {
-    return { kind: "chat_identifier", chatIdentifier: trimmed };
-  }
-  return null;
-}
-
-function normalizeBlueBubblesHandle(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return "";
-  }
-  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
-  if (lowered.startsWith("imessage:")) {
-    return normalizeBlueBubblesHandle(trimmed.slice(9));
-  }
-  if (lowered.startsWith("sms:")) {
-    return normalizeBlueBubblesHandle(trimmed.slice(4));
-  }
-  if (lowered.startsWith("auto:")) {
-    return normalizeBlueBubblesHandle(trimmed.slice(5));
-  }
-  if (trimmed.includes("@")) {
-    return normalizeLowercaseStringOrEmpty(trimmed);
-  }
-  return trimmed.replace(/\s+/g, "");
-}
-
-function extractHandleFromChatGuid(chatGuid: string): string | null {
-  const parts = chatGuid.split(";");
-  if (parts.length === 3 && parts[1] === "-") {
-    const handle = parts[2]?.trim();
-    if (handle) {
-      return normalizeBlueBubblesHandle(handle);
-    }
-  }
-  return null;
-}
-
-function parseBlueBubblesTarget(raw: string): BlueBubblesTarget {
-  const trimmed = stripBlueBubblesPrefix(raw);
-  if (!trimmed) {
-    throw new Error("BlueBubbles target is required");
-  }
-  const lower = normalizeLowercaseStringOrEmpty(trimmed);
-
-  const servicePrefixed = resolveServicePrefixedTarget({
-    trimmed,
-    lower,
-    servicePrefixes: SERVICE_PREFIXES,
-    isChatTarget: (remainderLower) =>
-      CHAT_ID_PREFIXES.some((p) => remainderLower.startsWith(p)) ||
-      CHAT_GUID_PREFIXES.some((p) => remainderLower.startsWith(p)) ||
-      CHAT_IDENTIFIER_PREFIXES.some((p) => remainderLower.startsWith(p)) ||
-      remainderLower.startsWith("group:"),
-    parseTarget: parseBlueBubblesTarget,
-  });
-  if (servicePrefixed) {
-    return servicePrefixed;
-  }
-
-  const chatTarget = parseChatTargetPrefixesOrThrow({
-    trimmed,
-    lower,
-    chatIdPrefixes: CHAT_ID_PREFIXES,
-    chatGuidPrefixes: CHAT_GUID_PREFIXES,
-    chatIdentifierPrefixes: CHAT_IDENTIFIER_PREFIXES,
-  });
-  if (chatTarget) {
-    return chatTarget;
-  }
-
-  const groupTarget = parseGroupTarget({ trimmed, lower });
-  if (groupTarget) {
-    return groupTarget;
-  }
-
-  const rawChatGuid = parseRawChatGuid(trimmed);
-  if (rawChatGuid) {
-    return { kind: "chat_guid", chatGuid: rawChatGuid };
-  }
-
-  const rawChatIdentifierTarget = parseRawChatIdentifierTarget(trimmed);
-  if (rawChatIdentifierTarget) {
-    return rawChatIdentifierTarget;
-  }
-
-  return { kind: "handle", to: trimmed, service: "auto" };
-}
-
 export function normalizeBlueBubblesAcpConversationId(
   conversationId: string,
 ): { conversationId: string } | null {
-  const trimmed = conversationId.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  try {
-    const parsed = parseBlueBubblesTarget(trimmed);
-    if (parsed.kind === "handle") {
-      const handle = normalizeBlueBubblesHandle(parsed.to);
-      return handle ? { conversationId: handle } : null;
-    }
-    if (parsed.kind === "chat_id") {
-      return { conversationId: String(parsed.chatId) };
-    }
-    if (parsed.kind === "chat_guid") {
-      const handle = extractHandleFromChatGuid(parsed.chatGuid);
-      return {
-        conversationId: handle || parsed.chatGuid,
-      };
-    }
-    return { conversationId: parsed.chatIdentifier };
-  } catch {
-    const handle = normalizeBlueBubblesHandle(trimmed);
-    return handle ? { conversationId: handle } : null;
-  }
+  return loadBlueBubblesFacadeModule().normalizeBlueBubblesAcpConversationId(conversationId);
 }
 
 export function matchBlueBubblesAcpConversation(params: {
   bindingConversationId: string;
   conversationId: string;
 }): { conversationId: string; matchPriority: number } | null {
-  const binding = normalizeBlueBubblesAcpConversationId(params.bindingConversationId);
-  const conversation = normalizeBlueBubblesAcpConversationId(params.conversationId);
-  if (!binding || !conversation) {
-    return null;
-  }
-  if (binding.conversationId !== conversation.conversationId) {
-    return null;
-  }
-  return {
-    conversationId: conversation.conversationId,
-    matchPriority: 2,
-  };
+  return loadBlueBubblesFacadeModule().matchBlueBubblesAcpConversation(params);
 }
 
 export function resolveBlueBubblesConversationIdFromTarget(target: string): string | undefined {
-  return normalizeBlueBubblesAcpConversationId(target)?.conversationId;
+  return loadBlueBubblesFacadeModule().resolveBlueBubblesConversationIdFromTarget(target);
 }
 
 export function collectBlueBubblesStatusIssues(accounts: unknown[]): ChannelStatusIssue[] {

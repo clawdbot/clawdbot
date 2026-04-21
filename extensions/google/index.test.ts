@@ -1,4 +1,3 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model } from "@mariozechner/pi-ai";
 import type {
   ProviderReplaySessionEntry,
@@ -9,6 +8,7 @@ import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "../../test/helpers/plugins/provider-registration.js";
+import { createCapturedThinkingConfigStream } from "../../test/helpers/plugins/stream-hooks.js";
 import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
 import { registerGoogleProvider } from "./provider-registration.js";
 
@@ -146,24 +146,14 @@ describe("google provider plugin hooks", () => {
     });
     const googleProvider = requireRegisteredProvider(providers, "google");
     const cliProvider = requireRegisteredProvider(providers, "google-gemini-cli");
-    let capturedPayload: Record<string, unknown> | undefined;
-
-    const baseStreamFn: StreamFn = (model, _context, options) => {
-      const payload = { config: { thinkingConfig: { thinkingBudget: -1 } } } as Record<
-        string,
-        unknown
-      >;
-      options?.onPayload?.(payload as never, model as never);
-      capturedPayload = payload;
-      return {} as never;
-    };
+    const capturedStream = createCapturedThinkingConfigStream();
 
     const runCase = (provider: typeof googleProvider, providerId: string) => {
       const wrapped = provider.wrapStreamFn?.({
         provider: providerId,
         modelId: "gemini-3.1-pro-preview",
         thinkingLevel: "high",
-        streamFn: baseStreamFn,
+        streamFn: capturedStream.streamFn,
       } as never);
 
       void wrapped?.(
@@ -176,6 +166,7 @@ describe("google provider plugin hooks", () => {
         {},
       );
 
+      const capturedPayload = capturedStream.getCapturedPayload();
       expect(capturedPayload).toMatchObject({
         config: { thinkingConfig: { thinkingLevel: "HIGH" } },
       });

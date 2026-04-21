@@ -29,6 +29,44 @@ export const asRecord = asOptionalRecord;
 
 export const hasNonEmptyString = sharedHasNonEmptyString;
 
+export function formatFeishuApiError(
+  error: unknown,
+  options: {
+    includeConfigParams?: boolean;
+    includeNestedErrorLogId?: boolean;
+  } = {},
+): string {
+  if (!isRecord(error)) {
+    return typeof error === "string" ? error : JSON.stringify(error);
+  }
+  const config = isRecord(error.config) ? error.config : undefined;
+  const response = isRecord(error.response) ? error.response : undefined;
+  const responseData = isRecord(response?.data) ? response?.data : undefined;
+  const feishuLogId =
+    readString(responseData?.log_id) ||
+    (options.includeNestedErrorLogId
+      ? readString(isRecord(responseData?.error) ? responseData.error.log_id : undefined)
+      : undefined);
+
+  return JSON.stringify({
+    message:
+      typeof error.message === "string"
+        ? error.message
+        : typeof error === "string"
+          ? error
+          : JSON.stringify(error),
+    code: readString(error.code),
+    method: readString(config?.method),
+    url: readString(config?.url),
+    ...(options.includeConfigParams ? { params: config?.params } : {}),
+    http_status: typeof response?.status === "number" ? response.status : undefined,
+    feishu_code:
+      typeof responseData?.code === "number" ? responseData.code : readString(responseData?.code),
+    feishu_msg: readString(responseData?.msg),
+    feishu_log_id: feishuLogId,
+  });
+}
+
 export type ParsedCommentDocumentRef = {
   fileType?: CommentFileType;
   fileToken?: string;

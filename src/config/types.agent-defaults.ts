@@ -1,4 +1,8 @@
 import type {
+  SilentReplyPolicyShape,
+  SilentReplyRewriteShape,
+} from "../shared/silent-reply-policy.js";
+import type {
   AgentEmbeddedHarnessConfig,
   AgentModelConfig,
   AgentSandboxConfig,
@@ -191,6 +195,10 @@ export type AgentDefaultsConfig = {
   workspace?: string;
   /** Optional default allowlist of skills for agents that do not set agents.list[].skills. */
   skills?: string[];
+  /** Silent-reply policy by conversation type. */
+  silentReply?: SilentReplyPolicyShape;
+  /** Whether disallowed silent replies should be rewritten by conversation type. */
+  silentReplyRewrite?: SilentReplyRewriteShape;
   /** Optional repository root for system prompt runtime line (overrides auto-detect). */
   repoRoot?: string;
   /** Optional full system prompt replacement. Primarily for prompt debugging and controlled experiments. */
@@ -205,9 +213,9 @@ export type AgentDefaultsConfig = {
    *   transcript already contains a completed assistant turn
    */
   contextInjection?: AgentContextInjection;
-  /** Max chars for injected bootstrap files before truncation (default: 12000). */
+  /** Max chars for injected bootstrap files before truncation (default: 20000). */
   bootstrapMaxChars?: number;
-  /** Max total chars across all injected bootstrap files (default: 60000). */
+  /** Max total chars across all injected bootstrap files (default: 150000). */
   bootstrapTotalMaxChars?: number;
   /** Experimental agent-default flags. Keep off unless you are intentionally testing a preview surface. */
   experimental?: {
@@ -273,7 +281,7 @@ export type AgentDefaultsConfig = {
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;
   /** Default thinking level when no /think directive is present. */
-  thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
+  thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
   /** Default verbose level when no /verbose directive is present. */
   verboseDefault?: "off" | "on" | "full";
   /** Default elevated level when no /elevated directive is present. */
@@ -450,7 +458,7 @@ export type AgentCompactionConfig = {
    */
   truncateAfterCompaction?: boolean;
   /**
-   * Send a "🧹 Compacting context..." notice to the user when compaction starts.
+   * Send brief compaction notices to the user when compaction starts and completes.
    * Default: false (silent by default).
    */
   notifyUser?: boolean;

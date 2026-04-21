@@ -82,6 +82,13 @@ function applyVitestCapabilityAliasOverrides(params: {
   };
 }
 
+function shouldApplyVitestCapabilityAliasOverrides(params: {
+  pluginSdkResolution?: PluginSdkResolutionPreference;
+  env?: PluginLoadOptions["env"];
+}): boolean {
+  return Boolean(params.env?.VITEST && params.pluginSdkResolution === "dist");
+}
+
 export function buildBundledCapabilityRuntimeConfig(
   pluginIds: readonly string[],
   env?: PluginLoadOptions["env"],
@@ -193,22 +200,28 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
   const getJiti = (modulePath: string) => {
     const tryNative =
       shouldPreferNativeJiti(modulePath) && !(env?.VITEST && params.pluginSdkResolution === "dist");
-    const aliasMap = applyVitestCapabilityAliasOverrides({
-      aliasMap: buildPluginLoaderAliasMap(
-        modulePath,
-        process.argv[1],
-        import.meta.url,
-        params.pluginSdkResolution,
-      ),
+    const aliasMap = shouldApplyVitestCapabilityAliasOverrides({
       pluginSdkResolution: params.pluginSdkResolution,
       env,
-    });
+    })
+      ? applyVitestCapabilityAliasOverrides({
+          aliasMap: buildPluginLoaderAliasMap(
+            modulePath,
+            process.argv[1],
+            import.meta.url,
+            params.pluginSdkResolution,
+          ),
+          pluginSdkResolution: params.pluginSdkResolution,
+          env,
+        })
+      : undefined;
     return getCachedPluginJitiLoader({
       cache: jitiLoaders,
       modulePath,
       importerUrl: import.meta.url,
       jitiFilename: import.meta.url,
-      aliasMap,
+      ...(aliasMap ? { aliasMap } : {}),
+      pluginSdkResolution: params.pluginSdkResolution,
       tryNative,
     });
   };

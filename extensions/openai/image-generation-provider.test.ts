@@ -28,6 +28,17 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
 }));
 
+function mockGeneratedPngResponse() {
+  postJsonRequestMock.mockResolvedValue({
+    response: {
+      json: async () => ({
+        data: [{ b64_json: Buffer.from("png-bytes").toString("base64") }],
+      }),
+    },
+    release: vi.fn(async () => {}),
+  });
+}
+
 describe("openai image generation provider", () => {
   afterEach(() => {
     resolveApiKeyForProviderMock.mockClear();
@@ -38,14 +49,7 @@ describe("openai image generation provider", () => {
   });
 
   it("does not auto-allow local baseUrl overrides for image requests", async () => {
-    postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          data: [{ b64_json: Buffer.from("png-bytes").toString("base64") }],
-        }),
-      },
-      release: vi.fn(async () => {}),
-    });
+    mockGeneratedPngResponse();
 
     const provider = buildOpenAIImageGenerationProvider();
     const result = await provider.generateImage({
@@ -79,14 +83,7 @@ describe("openai image generation provider", () => {
   });
 
   it("allows loopback image requests for the synthetic mock-openai provider", async () => {
-    postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          data: [{ b64_json: Buffer.from("png-bytes").toString("base64") }],
-        }),
-      },
-      release: vi.fn(async () => {}),
-    });
+    mockGeneratedPngResponse();
 
     const provider = buildOpenAIImageGenerationProvider();
     const result = await provider.generateImage({
@@ -120,14 +117,7 @@ describe("openai image generation provider", () => {
   });
 
   it("allows loopback image requests for openai only inside the QA harness envelope", async () => {
-    postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          data: [{ b64_json: Buffer.from("png-bytes").toString("base64") }],
-        }),
-      },
-      release: vi.fn(async () => {}),
-    });
+    mockGeneratedPngResponse();
     vi.stubEnv("OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER", "1");
 
     const provider = buildOpenAIImageGenerationProvider();
@@ -161,14 +151,7 @@ describe("openai image generation provider", () => {
   });
 
   it("uses JSON image_url edits for input-image requests", async () => {
-    postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          data: [{ b64_json: Buffer.from("png-bytes").toString("base64") }],
-        }),
-      },
-      release: vi.fn(async () => {}),
-    });
+    mockGeneratedPngResponse();
 
     const provider = buildOpenAIImageGenerationProvider();
     const result = await provider.generateImage({

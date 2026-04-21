@@ -1,7 +1,11 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { expectExplicitVideoGenerationCapabilities } from "../../test/helpers/media-generation/provider-capability-assertions.js";
+import {
+  buildComfyConfig,
+  mockComfyCloudJobResponses,
+  mockComfyProviderApiKey,
+  parseComfyJsonBody,
+} from "./test-helpers.js";
 import {
   _setComfyFetchGuardForTesting,
   buildComfyVideoGenerationProvider,
@@ -12,19 +16,7 @@ const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
 }));
 
 function parseJsonBody(call: number): Record<string, unknown> {
-  const request = fetchWithSsrFGuardMock.mock.calls[call - 1]?.[0];
-  expect(request?.init?.body).toBeTruthy();
-  return JSON.parse(String(request.init.body)) as Record<string, unknown>;
-}
-
-function buildComfyConfig(config: Record<string, unknown>): OpenClawConfig {
-  return {
-    models: {
-      providers: {
-        comfy: config,
-      },
-    },
-  } as unknown as OpenClawConfig;
+  return parseComfyJsonBody(fetchWithSsrFGuardMock, call);
 }
 
 describe("comfy video-generation provider", () => {
@@ -158,59 +150,16 @@ describe("comfy video-generation provider", () => {
   });
 
   it("uses cloud endpoints for video workflows", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "comfy-test-key",
-      source: "env",
-      mode: "api-key",
-    });
+    mockComfyProviderApiKey();
     _setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
-    fetchWithSsrFGuardMock
-      .mockResolvedValueOnce({
-        response: new Response(JSON.stringify({ prompt_id: "cloud-video-1" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(JSON.stringify({ status: "completed" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(
-          JSON.stringify({
-            "cloud-video-1": {
-              outputs: {
-                "9": {
-                  gifs: [{ filename: "cloud.mp4", subfolder: "", type: "output" }],
-                },
-              },
-            },
-          }),
-          {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          },
-        ),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(null, {
-          status: 302,
-          headers: { location: "https://cdn.example.com/cloud.mp4" },
-        }),
-        release: vi.fn(async () => {}),
-      })
-      .mockResolvedValueOnce({
-        response: new Response(Buffer.from("cloud-video-data"), {
-          status: 200,
-          headers: { "content-type": "video/mp4" },
-        }),
-        release: vi.fn(async () => {}),
-      });
+    mockComfyCloudJobResponses(fetchWithSsrFGuardMock, {
+      body: Buffer.from("cloud-video-data"),
+      contentType: "video/mp4",
+      filename: "cloud.mp4",
+      outputKind: "gifs",
+      promptId: "cloud-video-1",
+      redirectLocation: "https://cdn.example.com/cloud.mp4",
+    });
 
     const provider = buildComfyVideoGenerationProvider();
     const result = await provider.generateVideo({

@@ -2,6 +2,7 @@ import type { CronConfig } from "../../config/types.cron.js";
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
 import type {
   CronDeliveryStatus,
+  CronDeliveryTrace,
   CronJob,
   CronJobCreate,
   CronJobPatch,
@@ -23,6 +24,7 @@ export type CronEvent = {
   delivered?: boolean;
   deliveryStatus?: CronDeliveryStatus;
   deliveryError?: string;
+  delivery?: CronDeliveryTrace;
   sessionId?: string;
   sessionKey?: string;
   nextRunAtMs?: number;
@@ -100,6 +102,7 @@ export type CronServiceDeps = {
        * if the final per-message ack status is uncertain.
        */
       deliveryAttempted?: boolean;
+      delivery?: CronDeliveryTrace;
     } & CronRunOutcome &
       CronRunTelemetry
   >;

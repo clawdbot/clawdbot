@@ -598,6 +598,7 @@ export async function setupChannels(
         },
       ],
       initialValue: quickstartDefault,
+      searchable: true,
     });
     if (choice !== "__skip__") {
       await handleChannelChoice(choice);

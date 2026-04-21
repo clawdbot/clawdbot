@@ -32,6 +32,37 @@ vi.mock("../../plugin-sdk/facade-runtime.js", async () => {
 
 import { resolveSessionConversationRef, resolveSessionThreadInfo } from "./session-conversation.js";
 
+type ResolveSessionConversation = NonNullable<typeof fallbackState.resolveSessionConversation>;
+
+function enableBundledFallback(
+  dirName: string,
+  resolveSessionConversation: ResolveSessionConversation,
+) {
+  fallbackState.activeDirName = dirName;
+  fallbackState.resolveSessionConversation = resolveSessionConversation;
+  setRuntimeConfigSnapshot({
+    plugins: {
+      entries: {
+        [dirName]: {
+          enabled: true,
+        },
+      },
+    },
+  });
+}
+
+function enableThreadedFallback() {
+  enableBundledFallback("mock-threaded", ({ rawId }) => {
+    const [conversationId, threadId] = rawId.split(":topic:");
+    return {
+      id: conversationId,
+      threadId,
+      baseConversationId: conversationId,
+      parentConversationCandidates: [conversationId],
+    };
+  });
+}
+
 describe("session conversation bundled fallback", () => {
   beforeEach(() => {
     fallbackState.activeDirName = null;
@@ -45,25 +76,7 @@ describe("session conversation bundled fallback", () => {
   });
 
   it("delegates pre-bootstrap thread parsing to the active bundled channel plugin", () => {
-    fallbackState.activeDirName = "mock-threaded";
-    fallbackState.resolveSessionConversation = ({ rawId }) => {
-      const [conversationId, threadId] = rawId.split(":topic:");
-      return {
-        id: conversationId,
-        threadId,
-        baseConversationId: conversationId,
-        parentConversationCandidates: [conversationId],
-      };
-    };
-    setRuntimeConfigSnapshot({
-      plugins: {
-        entries: {
-          "mock-threaded": {
-            enabled: true,
-          },
-        },
-      },
-    });
+    enableThreadedFallback();
 
     expect(resolveSessionConversationRef("agent:main:mock-threaded:group:room:topic:42")).toEqual({
       channel: "mock-threaded",
@@ -78,25 +91,7 @@ describe("session conversation bundled fallback", () => {
   });
 
   it("can skip bundled fallback probing for hot generic-only callers", () => {
-    fallbackState.activeDirName = "mock-threaded";
-    fallbackState.resolveSessionConversation = ({ rawId }) => {
-      const [conversationId, threadId] = rawId.split(":topic:");
-      return {
-        id: conversationId,
-        threadId,
-        baseConversationId: conversationId,
-        parentConversationCandidates: [conversationId],
-      };
-    };
-    setRuntimeConfigSnapshot({
-      plugins: {
-        entries: {
-          "mock-threaded": {
-            enabled: true,
-          },
-        },
-      },
-    });
+    enableThreadedFallback();
 
     expect(
       resolveSessionConversationRef("agent:main:mock-threaded:group:room:topic:42", {
@@ -123,21 +118,11 @@ describe("session conversation bundled fallback", () => {
   });
 
   it("uses explicit bundled parent candidates before registry bootstrap", () => {
-    fallbackState.activeDirName = "mock-parent";
-    fallbackState.resolveSessionConversation = ({ rawId }) => ({
+    enableBundledFallback("mock-parent", ({ rawId }) => ({
       id: rawId,
       baseConversationId: "room",
       parentConversationCandidates: ["room:topic:root", "room"],
-    });
-    setRuntimeConfigSnapshot({
-      plugins: {
-        entries: {
-          "mock-parent": {
-            enabled: true,
-          },
-        },
-      },
-    });
+    }));
 
     expect(
       resolveSessionConversationRef("agent:main:mock-parent:group:room:topic:root:sender:user"),
@@ -154,25 +139,7 @@ describe("session conversation bundled fallback", () => {
   });
 
   it("reuses the bundled fallback loader result across repeated calls", () => {
-    fallbackState.activeDirName = "mock-threaded";
-    fallbackState.resolveSessionConversation = ({ rawId }) => {
-      const [conversationId, threadId] = rawId.split(":topic:");
-      return {
-        id: conversationId,
-        threadId,
-        baseConversationId: conversationId,
-        parentConversationCandidates: [conversationId],
-      };
-    };
-    setRuntimeConfigSnapshot({
-      plugins: {
-        entries: {
-          "mock-threaded": {
-            enabled: true,
-          },
-        },
-      },
-    });
+    enableThreadedFallback();
 
     expect(resolveSessionConversationRef("agent:main:mock-threaded:group:room:topic:42")).toEqual(
       expect.objectContaining({

@@ -9,6 +9,10 @@ import {
 } from "./card-action.js";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import {
+  expectFirstSentCardUsesFillWidthOnly,
+  expectSentCardHasP2pAction,
+} from "./card-test-helpers.js";
+import {
   FEISHU_APPROVAL_CANCEL_ACTION,
   FEISHU_APPROVAL_CONFIRM_ACTION,
   FEISHU_APPROVAL_REQUEST_ACTION,
@@ -239,21 +243,7 @@ describe("Feishu Card Action Handler", () => {
         }),
       }),
     );
-    const firstSendArg = (sendCardFeishuMock.mock.calls as unknown[][]).at(0)?.[0] as
-      | {
-          card?: {
-            config?: {
-              width_mode?: string;
-              wide_screen_mode?: boolean;
-              enable_forward?: boolean;
-            };
-          };
-        }
-      | undefined;
-    const sentCard = firstSendArg?.card;
-    expect(sentCard).toBeDefined();
-    expect(sentCard?.config?.wide_screen_mode).toBeUndefined();
-    expect(sentCard?.config?.enable_forward).toBeUndefined();
+    expectFirstSentCardUsesFillWidthOnly(sendCardFeishuMock);
     expect(handleFeishuMessage).not.toHaveBeenCalled();
   });
 
@@ -423,28 +413,7 @@ describe("Feishu Card Action Handler", () => {
 
     await handleFeishuCardAction({ cfg, event, runtime, accountId: "main" });
 
-    expect(sendCardFeishuMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        card: expect.objectContaining({
-          body: expect.objectContaining({
-            elements: expect.arrayContaining([
-              expect.objectContaining({
-                tag: "action",
-                actions: expect.arrayContaining([
-                  expect.objectContaining({
-                    value: expect.objectContaining({
-                      c: expect.objectContaining({
-                        t: "p2p",
-                      }),
-                    }),
-                  }),
-                ]),
-              }),
-            ]),
-          }),
-        }),
-      }),
-    );
+    expectSentCardHasP2pAction(sendCardFeishuMock);
     expect(createFeishuClientMock).toHaveBeenCalledTimes(1);
   });
 

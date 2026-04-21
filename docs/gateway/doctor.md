@@ -380,10 +380,14 @@ switch to legacy names if the current image is missing.
 
 ### 7b) Bundled plugin runtime deps
 
-Doctor verifies that bundled plugin runtime dependencies (for example the
-Discord plugin runtime packages) are present in the OpenClaw install root.
-If any are missing, doctor reports the packages and installs them in
-`openclaw doctor --fix` / `openclaw doctor --repair` mode.
+Doctor verifies runtime dependencies only for bundled plugins that are active in
+the current config or enabled by their bundled manifest default, for example
+`plugins.entries.discord.enabled: true`, legacy
+`channels.discord.enabled: true`, or a default-enabled bundled provider. If any
+are missing, doctor reports the packages and installs them in
+`openclaw doctor --fix` / `openclaw doctor --repair` mode. External plugins still
+use `openclaw plugins install` / `openclaw plugins update`; doctor does not
+install dependencies for arbitrary plugin paths.
 
 ### 8) Gateway service migrations and cleanup hints
 

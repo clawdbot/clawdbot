@@ -3,6 +3,54 @@ import { makeSessionStore } from "../../auto-reply.test-harness.js";
 import { loadSessionStore } from "../config.runtime.js";
 import { resolveGroupActivationFor } from "./group-activation.js";
 
+const GROUP_CONVERSATION_ID = "123@g.us";
+const LEGACY_GROUP_SESSION_KEY = "agent:main:whatsapp:group:123@g.us";
+const WORK_GROUP_SESSION_KEY = "agent:main:whatsapp:group:123@g.us:thread:whatsapp-account-work";
+
+type SessionStoreEntry = {
+  groupActivation?: unknown;
+  sessionId?: unknown;
+  updatedAt?: unknown;
+};
+
+const resolveWorkGroupActivation = (storePath: string) =>
+  resolveGroupActivationFor({
+    cfg: {
+      channels: {
+        whatsapp: {
+          accounts: {
+            work: {},
+          },
+        },
+      },
+      session: { store: storePath },
+    } as never,
+    accountId: "work",
+    agentId: "main",
+    sessionKey: WORK_GROUP_SESSION_KEY,
+    conversationId: GROUP_CONVERSATION_ID,
+  });
+
+const expectWorkGroupActivationEntry = async (
+  storePath: string,
+  assertEntry?: (entry: SessionStoreEntry | undefined) => void,
+) => {
+  await vi.waitFor(() => {
+    const scopedEntry = loadSessionStore(storePath, { skipCache: true })[WORK_GROUP_SESSION_KEY];
+    expect(scopedEntry?.groupActivation).toBe("always");
+    assertEntry?.(scopedEntry);
+  });
+};
+
+const expectResolvedWorkGroupActivation = async (
+  storePath: string,
+  assertEntry?: (entry: SessionStoreEntry | undefined) => void,
+) => {
+  const activation = await resolveWorkGroupActivation(storePath);
+  expect(activation).toBe("always");
+  await expectWorkGroupActivationEntry(storePath, assertEntry);
+};
+
 describe("resolveGroupActivationFor", () => {
   const cleanups: Array<() => Promise<void>> = [];
 
@@ -13,10 +61,8 @@ describe("resolveGroupActivationFor", () => {
   });
 
   it("reads legacy named-account group activation and backfills the scoped key", async () => {
-    const sessionKey = "agent:main:whatsapp:group:123@g.us:thread:whatsapp-account-work";
-    const legacySessionKey = "agent:main:whatsapp:group:123@g.us";
     const { storePath, cleanup } = await makeSessionStore({
-      [legacySessionKey]: {
+      [LEGACY_GROUP_SESSION_KEY]: {
         groupActivation: "always",
         sessionId: "legacy-session",
         updatedAt: 123,
@@ -24,75 +70,31 @@ describe("resolveGroupActivationFor", () => {
     });
     cleanups.push(cleanup);
 
-    const activation = await resolveGroupActivationFor({
-      cfg: {
-        channels: {
-          whatsapp: {
-            accounts: {
-              work: {},
-            },
-          },
-        },
-        session: { store: storePath },
-      } as never,
-      accountId: "work",
-      agentId: "main",
-      sessionKey,
-      conversationId: "123@g.us",
-    });
-
-    expect(activation).toBe("always");
-    await vi.waitFor(() => {
-      const scopedEntry = loadSessionStore(storePath, { skipCache: true })[sessionKey];
-      expect(scopedEntry?.groupActivation).toBe("always");
+    await expectResolvedWorkGroupActivation(storePath, (scopedEntry) => {
       expect(scopedEntry?.sessionId).toBeUndefined();
       expect(scopedEntry?.updatedAt).toBeUndefined();
     });
   });
 
   it("preserves legacy group activation when the scoped entry already exists without activation", async () => {
-    const sessionKey = "agent:main:whatsapp:group:123@g.us:thread:whatsapp-account-work";
-    const legacySessionKey = "agent:main:whatsapp:group:123@g.us";
     const { storePath, cleanup } = await makeSessionStore({
-      [legacySessionKey]: {
+      [LEGACY_GROUP_SESSION_KEY]: {
         groupActivation: "always",
       },
-      [sessionKey]: {
+      [WORK_GROUP_SESSION_KEY]: {
         sessionId: "scoped-session",
       },
     });
     cleanups.push(cleanup);
 
-    const activation = await resolveGroupActivationFor({
-      cfg: {
-        channels: {
-          whatsapp: {
-            accounts: {
-              work: {},
-            },
-          },
-        },
-        session: { store: storePath },
-      } as never,
-      accountId: "work",
-      agentId: "main",
-      sessionKey,
-      conversationId: "123@g.us",
-    });
-
-    expect(activation).toBe("always");
-    await vi.waitFor(() => {
-      const scopedEntry = loadSessionStore(storePath, { skipCache: true })[sessionKey];
-      expect(scopedEntry?.groupActivation).toBe("always");
+    await expectResolvedWorkGroupActivation(storePath, (scopedEntry) => {
       expect(scopedEntry?.sessionId).toBe("scoped-session");
     });
   });
 
   it("does not wake the default account from an activation-only legacy group entry in multi-account setups", async () => {
-    const defaultSessionKey = "agent:main:whatsapp:group:123@g.us";
-    const workSessionKey = "agent:main:whatsapp:group:123@g.us:thread:whatsapp-account-work";
     const { storePath, cleanup } = await makeSessionStore({
-      [defaultSessionKey]: {
+      [LEGACY_GROUP_SESSION_KEY]: {
         groupActivation: "always",
       },
     });
@@ -118,8 +120,8 @@ describe("resolveGroupActivationFor", () => {
       cfg,
       accountId: "work",
       agentId: "main",
-      sessionKey: workSessionKey,
-      conversationId: "123@g.us",
+      sessionKey: WORK_GROUP_SESSION_KEY,
+      conversationId: GROUP_CONVERSATION_ID,
     });
 
     expect(workActivation).toBe("always");
@@ -128,21 +130,17 @@ describe("resolveGroupActivationFor", () => {
       cfg,
       accountId: "default",
       agentId: "main",
-      sessionKey: defaultSessionKey,
-      conversationId: "123@g.us",
+      sessionKey: LEGACY_GROUP_SESSION_KEY,
+      conversationId: GROUP_CONVERSATION_ID,
     });
 
     expect(defaultActivation).toBe("mention");
-    await vi.waitFor(() => {
-      const scopedEntry = loadSessionStore(storePath, { skipCache: true })[workSessionKey];
-      expect(scopedEntry?.groupActivation).toBe("always");
-    });
+    await expectWorkGroupActivationEntry(storePath);
   });
 
   it("does not treat mixed-case default account keys as named accounts", async () => {
-    const defaultSessionKey = "agent:main:whatsapp:group:123@g.us";
     const { storePath, cleanup } = await makeSessionStore({
-      [defaultSessionKey]: {
+      [LEGACY_GROUP_SESSION_KEY]: {
         groupActivation: "always",
       },
     });
@@ -166,8 +164,8 @@ describe("resolveGroupActivationFor", () => {
       } as never,
       accountId: "default",
       agentId: "main",
-      sessionKey: defaultSessionKey,
-      conversationId: "123@g.us",
+      sessionKey: LEGACY_GROUP_SESSION_KEY,
+      conversationId: GROUP_CONVERSATION_ID,
     });
 
     expect(activation).toBe("always");

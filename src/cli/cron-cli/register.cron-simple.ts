@@ -1,7 +1,55 @@
 import type { Command } from "commander";
+import type { CronDeliveryPreview, CronJob } from "../../cron/types.js";
 import { defaultRuntime } from "../../runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
-import { handleCronCliError, printCronJson, warnIfCronSchedulerDisabled } from "./shared.js";
+import {
+  coerceCronDeliveryPreviews,
+  handleCronCliError,
+  printCronJson,
+  printCronShow,
+  warnIfCronSchedulerDisabled,
+} from "./shared.js";
+
+const CRON_SHOW_PAGE_SIZE = 200;
+
+function findCronJobInPage(jobs: CronJob[], idOrName: string): CronJob | undefined {
+  const needle = normalizeLowercaseStringOrEmpty(idOrName);
+  return jobs.find(
+    (job) =>
+      normalizeLowercaseStringOrEmpty(job.id) === needle ||
+      normalizeLowercaseStringOrEmpty(job.name) === needle,
+  );
+}
+
+async function loadCronJobForShow(
+  opts: GatewayRpcOpts,
+  idOrName: string,
+): Promise<{ job?: CronJob; deliveryPreview?: CronDeliveryPreview }> {
+  let offset = 0;
+  for (;;) {
+    const res = await callGatewayFromCli("cron.list", opts, {
+      includeDisabled: true,
+      limit: CRON_SHOW_PAGE_SIZE,
+      offset,
+    });
+    const page = res as {
+      jobs?: CronJob[];
+      hasMore?: boolean;
+      nextOffset?: number | null;
+    };
+    const jobs = page.jobs ?? [];
+    const job = findCronJobInPage(jobs, idOrName);
+    if (job) {
+      return { job, deliveryPreview: coerceCronDeliveryPreviews(res).get(job.id) };
+    }
+    if (!page.hasMore || typeof page.nextOffset !== "number") {
+      return {};
+    }
+    offset = page.nextOffset;
+  }
+}
 
 function registerCronToggleCommand(params: {
   cron: Command;
@@ -60,6 +108,29 @@ export function registerCronSimpleCommands(cron: Command) {
     description: "Disable a cron job",
     enabled: false,
   });
+
+  addGatewayClientOptions(
+    cron
+      .command("show")
+      .description("Show a cron job")
+      .argument("<id>", "Job id or exact name")
+      .option("--json", "Output JSON", false)
+      .action(async (id, opts) => {
+        try {
+          const { job, deliveryPreview } = await loadCronJobForShow(opts, String(id));
+          if (!job) {
+            throw new Error(`cron job not found: ${String(id)}`);
+          }
+          if (opts.json) {
+            printCronJson(job);
+            return;
+          }
+          printCronShow(job, defaultRuntime, { deliveryPreview });
+        } catch (err) {
+          handleCronCliError(err);
+        }
+      }),
+  );
 
   addGatewayClientOptions(
     cron

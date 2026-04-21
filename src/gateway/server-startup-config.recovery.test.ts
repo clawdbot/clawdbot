@@ -71,7 +71,10 @@ describe("gateway startup config recovery", () => {
         minimalTestGateway: true,
         log,
       }),
-    ).resolves.toBe(recoveredSnapshot);
+    ).resolves.toEqual({
+      snapshot: recoveredSnapshot,
+      wroteConfig: true,
+    });
 
     expect(configIo.recoverConfigFromLastKnownGood).toHaveBeenCalledWith({
       snapshot: invalidSnapshot,

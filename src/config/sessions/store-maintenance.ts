@@ -4,7 +4,6 @@ import { parseByteSize } from "../../cli/parse-bytes.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeStringifiedOptionalString } from "../../shared/string-coerce.js";
-import { loadConfig } from "../config.js";
 import type { SessionMaintenanceConfig, SessionMaintenanceMode } from "../types.base.js";
 import type { SessionEntry } from "./types.js";
 
@@ -13,7 +12,7 @@ const log = createSubsystemLogger("sessions/store");
 const DEFAULT_SESSION_PRUNE_AFTER_MS = 30 * 24 * 60 * 60 * 1000;
 const DEFAULT_SESSION_MAX_ENTRIES = 500;
 const DEFAULT_SESSION_ROTATE_BYTES = 10_485_760; // 10 MB
-const DEFAULT_SESSION_MAINTENANCE_MODE: SessionMaintenanceMode = "warn";
+const DEFAULT_SESSION_MAINTENANCE_MODE: SessionMaintenanceMode = "enforce";
 const DEFAULT_SESSION_DISK_BUDGET_HIGH_WATER_RATIO = 0.8;
 
 export type SessionMaintenanceWarning = {
@@ -149,16 +148,6 @@ export function resolveMaintenanceConfigFromInput(
   };
 }
 
-export function resolveMaintenanceConfig(): ResolvedSessionMaintenanceConfig {
-  let maintenance: SessionMaintenanceConfig | undefined;
-  try {
-    maintenance = loadConfig().session?.maintenance;
-  } catch {
-    // Config may not be available (e.g. in tests). Use defaults.
-  }
-  return resolveMaintenanceConfigFromInput(maintenance);
-}
-
 /**
  * Remove entries whose `updatedAt` is older than the configured threshold.
  * Entries without `updatedAt` are kept (cannot determine staleness).
@@ -169,7 +158,7 @@ export function pruneStaleEntries(
   overrideMaxAgeMs?: number,
   opts: { log?: boolean; onPruned?: (params: { key: string; entry: SessionEntry }) => void } = {},
 ): number {
-  const maxAgeMs = overrideMaxAgeMs ?? resolveMaintenanceConfig().pruneAfterMs;
+  const maxAgeMs = overrideMaxAgeMs ?? resolveMaintenanceConfigFromInput().pruneAfterMs;
   const cutoffMs = Date.now() - maxAgeMs;
   let pruned = 0;
   for (const [key, entry] of Object.entries(store)) {
@@ -208,12 +197,13 @@ export function getActiveSessionMaintenanceWarning(params: {
   const cutoffMs = now - params.pruneAfterMs;
   const wouldPrune = activeEntry.updatedAt != null ? activeEntry.updatedAt < cutoffMs : false;
   const keys = Object.keys(params.store);
-  const wouldCap =
-    keys.length > params.maxEntries &&
-    keys
-      .toSorted((a, b) => getEntryUpdatedAt(params.store[b]) - getEntryUpdatedAt(params.store[a]))
-      .slice(params.maxEntries)
-      .includes(activeSessionKey);
+  const wouldCap = wouldCapActiveSession({
+    store: params.store,
+    keys,
+    activeEntry,
+    activeSessionKey,
+    maxEntries: params.maxEntries,
+  });
 
   if (!wouldPrune && !wouldCap) {
     return null;
@@ -230,6 +220,40 @@ export function getActiveSessionMaintenanceWarning(params: {
   };
 }
 
+function wouldCapActiveSession(params: {
+  store: Record<string, SessionEntry>;
+  keys: string[];
+  activeEntry: SessionEntry;
+  activeSessionKey: string;
+  maxEntries: number;
+}): boolean {
+  if (params.keys.length <= params.maxEntries) {
+    return false;
+  }
+  if (params.maxEntries <= 0) {
+    return true;
+  }
+
+  const activeUpdatedAt = getEntryUpdatedAt(params.activeEntry);
+  let newerOrTieBeforeActive = 0;
+  let seenActive = false;
+  for (const key of params.keys) {
+    if (key === params.activeSessionKey) {
+      seenActive = true;
+      continue;
+    }
+    const entryUpdatedAt = getEntryUpdatedAt(params.store[key]);
+    if (entryUpdatedAt > activeUpdatedAt || (!seenActive && entryUpdatedAt === activeUpdatedAt)) {
+      newerOrTieBeforeActive++;
+      if (newerOrTieBeforeActive >= params.maxEntries) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 /**
  * Cap the store to the N most recently updated entries.
  * Entries without `updatedAt` are sorted last (removed first when over limit).
@@ -243,7 +267,7 @@ export function capEntryCount(
     onCapped?: (params: { key: string; entry: SessionEntry }) => void;
   } = {},
 ): number {
-  const maxEntries = overrideMax ?? resolveMaintenanceConfig().maxEntries;
+  const maxEntries = overrideMax ?? resolveMaintenanceConfigFromInput().maxEntries;
   const keys = Object.keys(store);
   if (keys.length <= maxEntries) {
     return 0;
@@ -288,7 +312,7 @@ export async function rotateSessionFile(
   storePath: string,
   overrideBytes?: number,
 ): Promise<boolean> {
-  const maxBytes = overrideBytes ?? resolveMaintenanceConfig().rotateBytes;
+  const maxBytes = overrideBytes ?? resolveMaintenanceConfigFromInput().rotateBytes;
 
   // Check current file size (file may not exist yet).
   const fileSize = await getSessionFileSize(storePath);

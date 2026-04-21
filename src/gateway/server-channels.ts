@@ -596,15 +596,25 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   };
 
   const startChannels = async () => {
-    for (const plugin of listChannelPlugins()) {
-      try {
-        await startChannel(plugin.id);
-      } catch (err) {
-        channelLogs[plugin.id]?.error?.(
-          `[${plugin.id}] channel startup failed: ${formatErrorMessage(err)}`,
-        );
-      }
-    }
+    const pending = [...listChannelPlugins()];
+    const workerCount = Math.min(8, pending.length);
+    await Promise.all(
+      Array.from({ length: workerCount }, async () => {
+        for (;;) {
+          const plugin = pending.shift();
+          if (!plugin) {
+            return;
+          }
+          try {
+            await startChannel(plugin.id);
+          } catch (err) {
+            channelLogs[plugin.id]?.error?.(
+              `[${plugin.id}] channel startup failed: ${formatErrorMessage(err)}`,
+            );
+          }
+        }
+      }),
+    );
   };
 
   const markChannelLoggedOut = (channelId: ChannelId, cleared: boolean, accountId?: string) => {

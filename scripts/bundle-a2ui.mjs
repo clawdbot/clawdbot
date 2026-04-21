@@ -2,7 +2,6 @@
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -14,7 +13,6 @@ const outputFile = path.join(rootDir, "src", "canvas-host", "a2ui", "a2ui.bundle
 const a2uiRendererDir = path.join(rootDir, "vendor", "a2ui", "renderers", "lit");
 const a2uiAppDir = path.join(rootDir, "apps", "shared", "OpenClawKit", "Tools", "CanvasA2UI");
 const uiPackageFile = path.join(rootDir, "ui", "package.json");
-const bundleDependencyIds = ["lit", "@lit/context", "@lit-labs/signals", "signal-utils"];
 const repoInputPaths = [uiPackageFile, a2uiRendererDir, a2uiAppDir];
 const ignoredBundleHashInputPrefixes = ["vendor/a2ui/renderers/lit/dist"];
 const relativeRepoInputPaths = repoInputPaths.map((inputPath) =>
@@ -73,28 +71,8 @@ export function getBundleHashRepoInputPaths(repoRoot = rootDir) {
   ];
 }
 
-export function getResolvedBundleDependencyPackageJsonPaths(repoRoot = rootDir) {
-  const uiNodeModules = path.join(repoRoot, "ui", "node_modules");
-  const repoNodeModules = path.join(repoRoot, "node_modules");
-  const paths = [];
-  for (const dependencyId of bundleDependencyIds) {
-    const candidates = [
-      path.join(uiNodeModules, dependencyId, "package.json"),
-      path.join(repoNodeModules, dependencyId, "package.json"),
-    ];
-    const match = candidates.find((candidate) => existsSync(candidate));
-    if (match) {
-      paths.push(match);
-    }
-  }
-  return [...new Set(paths)];
-}
-
 export function getBundleHashInputPaths(repoRoot = rootDir) {
-  return [
-    ...getBundleHashRepoInputPaths(repoRoot),
-    ...getResolvedBundleDependencyPackageJsonPaths(repoRoot),
-  ];
+  return getBundleHashRepoInputPaths(repoRoot);
 }
 
 export function compareNormalizedPaths(left, right) {
@@ -138,7 +116,7 @@ function listTrackedInputFiles() {
     .filter(Boolean)
     .map((filePath) => path.join(rootDir, filePath))
     .filter((filePath) => isBundleHashInputPath(filePath));
-  return [...trackedFiles, ...getResolvedBundleDependencyPackageJsonPaths(rootDir)];
+  return trackedFiles;
 }
 
 async function computeHash() {
@@ -148,7 +126,6 @@ async function computeHash() {
     for (const inputPath of getBundleHashRepoInputPaths(rootDir)) {
       await walkFiles(inputPath, files);
     }
-    files.push(...getResolvedBundleDependencyPackageJsonPaths(rootDir));
   }
   files = [...new Set(files)].toSorted(compareNormalizedPaths);
 

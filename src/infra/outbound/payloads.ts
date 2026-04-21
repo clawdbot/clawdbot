@@ -6,12 +6,18 @@ import {
   shouldSuppressReasoningPayload,
 } from "../../auto-reply/reply/reply-payloads.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import { resolveSilentReplySettings } from "../../config/silent-reply.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   hasInteractiveReplyBlocks,
   hasReplyChannelData,
   hasReplyPayloadContent,
   type InteractiveReply,
 } from "../../interactive/payload.js";
+import {
+  resolveSilentReplyRewriteText,
+  type SilentReplyConversationType,
+} from "../../shared/silent-reply-policy.js";
 
 export type NormalizedOutboundPayload = {
   text: string;
@@ -35,6 +41,13 @@ export type OutboundPayloadPlan = {
   parts: ReturnType<typeof resolveSendableOutboundReplyParts>;
   hasInteractive: boolean;
   hasChannelData: boolean;
+};
+
+type OutboundPayloadPlanContext = {
+  cfg?: OpenClawConfig;
+  sessionKey?: string;
+  surface?: string;
+  conversationType?: SilentReplyConversationType;
 };
 
 export type OutboundPayloadMirror = {
@@ -89,7 +102,16 @@ function mergeMediaUrls(...lists: Array<ReadonlyArray<string | undefined> | unde
   return merged;
 }
 
-function createOutboundPayloadPlanEntry(payload: ReplyPayload): OutboundPayloadPlan | null {
+type PreparedOutboundPayloadPlanEntry = {
+  payload: ReplyPayload;
+  hasInteractive: boolean;
+  hasChannelData: boolean;
+  isSilent: boolean;
+};
+
+function createOutboundPayloadPlanEntry(
+  payload: ReplyPayload,
+): PreparedOutboundPayloadPlanEntry | null {
   if (shouldSuppressReasoningPayload(payload)) {
     return null;
   }
@@ -104,9 +126,7 @@ function createOutboundPayloadPlanEntry(payload: ReplyPayload): OutboundPayloadP
   if (isSuppressedRelayStatusText(parsedText) && mergedMedia.length === 0) {
     return null;
   }
-  if (parsed.isSilent && mergedMedia.length === 0) {
-    return null;
-  }
+  const isSilent = parsed.isSilent && mergedMedia.length === 0;
   const hasMultipleMedia = (explicitMediaUrls?.length ?? 0) > 1;
   const resolvedMediaUrl = hasMultipleMedia ? undefined : explicitMediaUrl;
   const normalizedPayload: ReplyPayload = {
@@ -123,32 +143,94 @@ function createOutboundPayloadPlanEntry(payload: ReplyPayload): OutboundPayloadP
     replyToCurrent: payload.replyToCurrent || parsed.replyToCurrent,
     audioAsVoice: Boolean(payload.audioAsVoice || parsed.audioAsVoice),
   };
-  if (!isRenderablePayload(normalizedPayload)) {
+  if (!isRenderablePayload(normalizedPayload) && !isSilent) {
     return null;
   }
-  const parts = resolveSendableOutboundReplyParts(normalizedPayload);
   const hasChannelData = hasReplyChannelData(normalizedPayload.channelData);
   return {
     payload: normalizedPayload,
-    parts,
     hasInteractive: hasInteractiveReplyBlocks(normalizedPayload.interactive),
     hasChannelData,
+    isSilent,
   };
 }
 
 export function createOutboundPayloadPlan(
   payloads: readonly ReplyPayload[],
+  context: OutboundPayloadPlanContext = {},
 ): OutboundPayloadPlan[] {
   // Intentionally scoped to channel-agnostic normalization and projection inputs.
   // Transport concerns (queueing, hooks, retries), channel transforms, and
   // heartbeat-specific token semantics remain outside this plan boundary.
-  const plan: OutboundPayloadPlan[] = [];
+  const resolvedSilentReplySettings = resolveSilentReplySettings({
+    cfg: context.cfg,
+    sessionKey: context.sessionKey,
+    surface: context.surface,
+    conversationType: context.conversationType,
+  });
+  const prepared: PreparedOutboundPayloadPlanEntry[] = [];
   for (const payload of payloads) {
     const entry = createOutboundPayloadPlanEntry(payload);
     if (!entry) {
       continue;
     }
-    plan.push(entry);
+    prepared.push(entry);
+  }
+  const hasVisibleNonSilentContent = prepared.some((entry) => {
+    if (entry.isSilent) {
+      return false;
+    }
+    const parts = resolveSendableOutboundReplyParts(entry.payload);
+    return hasReplyPayloadContent(
+      { ...entry.payload, text: parts.text, mediaUrls: parts.mediaUrls },
+      { hasChannelData: entry.hasChannelData },
+    );
+  });
+  const plan: OutboundPayloadPlan[] = [];
+  for (const entry of prepared) {
+    if (!entry.isSilent) {
+      plan.push({
+        payload: entry.payload,
+        parts: resolveSendableOutboundReplyParts(entry.payload),
+        hasInteractive: entry.hasInteractive,
+        hasChannelData: entry.hasChannelData,
+      });
+      continue;
+    }
+    if (hasVisibleNonSilentContent || resolvedSilentReplySettings.policy === "allow") {
+      continue;
+    }
+    if (!resolvedSilentReplySettings.rewrite) {
+      const visibleSilentPayload: ReplyPayload = {
+        ...entry.payload,
+        text: entry.payload.text?.trim() || "NO_REPLY",
+      };
+      if (!isRenderablePayload(visibleSilentPayload)) {
+        continue;
+      }
+      plan.push({
+        payload: visibleSilentPayload,
+        parts: resolveSendableOutboundReplyParts(visibleSilentPayload),
+        hasInteractive: entry.hasInteractive,
+        hasChannelData: entry.hasChannelData,
+      });
+      continue;
+    }
+    const rewrittenPayload: ReplyPayload = {
+      ...entry.payload,
+      text: resolveSilentReplyRewriteText({
+        seed: `${context.sessionKey ?? context.surface ?? "silent-reply"}:${entry.payload.text ?? ""}`,
+      }),
+    };
+    if (!isRenderablePayload(rewrittenPayload)) {
+      continue;
+    }
+    plan.push({
+      payload: rewrittenPayload,
+      parts: resolveSendableOutboundReplyParts(rewrittenPayload),
+      hasInteractive: entry.hasInteractive,
+      hasChannelData: entry.hasChannelData,
+    });
   }
   return plan;
 }

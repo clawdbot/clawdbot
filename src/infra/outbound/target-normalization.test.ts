@@ -51,7 +51,7 @@ describe("normalizeChannelTargetInput", () => {
 
 describe("normalizeTargetForProvider", () => {
   it.each([undefined, "   "])("returns undefined for blank raw input %j", (raw) => {
-    expect(normalizeTargetForProvider("telegram", raw)).toBeUndefined();
+    expect(normalizeTargetForProvider("alpha", raw)).toBeUndefined();
   });
 
   it.each([
@@ -63,7 +63,7 @@ describe("normalizeTargetForProvider", () => {
       expected: "raw-id",
     },
     {
-      provider: "telegram",
+      provider: "alpha",
       setup: () => {
         getActivePluginChannelRegistryVersionMock.mockReturnValueOnce(1);
         getChannelPluginMock.mockReturnValueOnce(undefined);
@@ -93,9 +93,9 @@ describe("normalizeTargetForProvider", () => {
         messaging: { normalizeTarget: secondNormalizer },
       });
 
-    expect(normalizeTargetForProvider("telegram", "  abc  ")).toBe("ABC");
-    expect(normalizeTargetForProvider("telegram", "  def  ")).toBe("DEF");
-    expect(normalizeTargetForProvider("telegram", "  ghi  ")).toBe("next:ghi");
+    expect(normalizeTargetForProvider("alpha", "  abc  ")).toBe("ABC");
+    expect(normalizeTargetForProvider("alpha", "  def  ")).toBe("DEF");
+    expect(normalizeTargetForProvider("alpha", "  ghi  ")).toBe("next:ghi");
 
     expect(getChannelPluginMock).toHaveBeenCalledTimes(2);
     expect(firstNormalizer).toHaveBeenCalledTimes(2);
@@ -110,13 +110,13 @@ describe("normalizeTargetForProvider", () => {
       },
     });
 
-    expect(normalizeTargetForProvider("telegram", "  raw-id  ")).toBeUndefined();
+    expect(normalizeTargetForProvider("alpha", "  raw-id  ")).toBeUndefined();
   });
 });
 
 describe("resolveNormalizedTargetInput", () => {
   it("returns undefined for blank input", () => {
-    expect(resolveNormalizedTargetInput("telegram", "   ")).toBeUndefined();
+    expect(resolveNormalizedTargetInput("alpha", "   ")).toBeUndefined();
   });
 
   it("returns raw and normalized values", () => {
@@ -127,7 +127,7 @@ describe("resolveNormalizedTargetInput", () => {
       },
     });
 
-    expect(resolveNormalizedTargetInput("telegram", "  abc  ")).toEqual({
+    expect(resolveNormalizedTargetInput("alpha", "  abc  ")).toEqual({
       raw: "abc",
       normalized: "ABC",
     });
@@ -147,7 +147,7 @@ describe("looksLikeTargetId", () => {
 
     expect(
       looksLikeTargetId({
-        channel: "telegram",
+        channel: "alpha",
         raw: "room-1",
         normalized: "ROOM-1",
       }),
@@ -159,7 +159,7 @@ describe("looksLikeTargetId", () => {
     "falls back to built-in id-like heuristics for %s",
     (raw) => {
       getChannelPluginMock.mockReturnValueOnce(undefined);
-      expect(looksLikeTargetId({ channel: "slack", raw })).toBe(true);
+      expect(looksLikeTargetId({ channel: "workspace", raw })).toBe(true);
     },
   );
 });
@@ -180,7 +180,7 @@ describe("maybeResolvePluginMessagingTarget", () => {
     await expect(
       maybeResolvePluginMessagingTarget({
         cfg,
-        channel: "slack",
+        channel: "workspace",
         input: "general",
         requireIdLike: true,
       }),
@@ -211,7 +211,7 @@ describe("maybeResolvePluginMessagingTarget", () => {
     await expect(
       maybeResolvePluginMessagingTarget({
         cfg,
-        channel: "slack",
+        channel: "workspace",
         input: "  channel:c123abc  ",
       }),
     ).resolves.toEqual({
@@ -243,7 +243,7 @@ describe("buildTargetResolverSignature", () => {
       },
     });
 
-    const first = buildTargetResolverSignature("slack");
+    const first = buildTargetResolverSignature("workspace");
     getChannelPluginMock.mockReturnValueOnce({
       messaging: {
         targetResolver: {
@@ -252,7 +252,7 @@ describe("buildTargetResolverSignature", () => {
         },
       },
     });
-    const second = buildTargetResolverSignature("slack");
+    const second = buildTargetResolverSignature("workspace");
 
     expect(first).toBe(second);
   });
@@ -266,7 +266,7 @@ describe("buildTargetResolverSignature", () => {
         },
       },
     });
-    const first = buildTargetResolverSignature("slack");
+    const first = buildTargetResolverSignature("workspace");
 
     getChannelPluginMock.mockReturnValueOnce({
       messaging: {
@@ -276,7 +276,7 @@ describe("buildTargetResolverSignature", () => {
         },
       },
     });
-    const second = buildTargetResolverSignature("slack");
+    const second = buildTargetResolverSignature("workspace");
 
     expect(first).not.toBe(second);
   });

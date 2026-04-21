@@ -37,18 +37,18 @@ describe("qmd scope", () => {
   it("supports rawKeyPrefix matches for agent-prefixed keys", () => {
     const scope: ResolvedQmdConfig["scope"] = {
       default: "allow",
-      rules: [{ action: "deny", match: { rawKeyPrefix: "agent:main:discord:" } }],
+      rules: [{ action: "deny", match: { rawKeyPrefix: "agent:main:guildchat:" } }],
     };
-    expect(isQmdScopeAllowed(scope, "agent:main:discord:channel:c123")).toBe(false);
-    expect(isQmdScopeAllowed(scope, "agent:main:slack:channel:c123")).toBe(true);
+    expect(isQmdScopeAllowed(scope, "agent:main:guildchat:channel:c123")).toBe(false);
+    expect(isQmdScopeAllowed(scope, "agent:main:workspace:channel:c123")).toBe(true);
   });
 
   it("keeps legacy agent-prefixed keyPrefix rules working", () => {
     const scope: ResolvedQmdConfig["scope"] = {
       default: "allow",
-      rules: [{ action: "deny", match: { keyPrefix: "agent:main:discord:" } }],
+      rules: [{ action: "deny", match: { keyPrefix: "agent:main:guildchat:" } }],
     };
-    expect(isQmdScopeAllowed(scope, "agent:main:discord:channel:c123")).toBe(false);
-    expect(isQmdScopeAllowed(scope, "agent:main:slack:channel:c123")).toBe(true);
+    expect(isQmdScopeAllowed(scope, "agent:main:guildchat:channel:c123")).toBe(false);
+    expect(isQmdScopeAllowed(scope, "agent:main:workspace:channel:c123")).toBe(true);
   });
 });

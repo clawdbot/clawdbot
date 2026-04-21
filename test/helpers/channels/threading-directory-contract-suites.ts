@@ -7,9 +7,18 @@ import type {
 } from "../../../src/channels/plugins/types.core.js";
 import type { ChannelPlugin } from "../../../src/channels/plugins/types.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
-import { createNonExitingRuntime } from "../../../src/runtime.js";
+import type { RuntimeEnv } from "../../../src/runtime.js";
 
-const contractRuntime = createNonExitingRuntime();
+let contractRuntime: RuntimeEnv | undefined;
+
+async function getDirectoryContractRuntime(): Promise<RuntimeEnv> {
+  if (contractRuntime) {
+    return contractRuntime;
+  }
+  const { createNonExitingRuntime } = await import("../../../src/runtime.js");
+  contractRuntime = createNonExitingRuntime();
+  return contractRuntime;
+}
 
 function expectDirectoryEntryShape(entry: ChannelDirectoryEntry) {
   expect(["user", "group", "channel"]).toContain(entry.kind);
@@ -177,10 +186,11 @@ export function installChannelDirectoryContractSuite(params: {
     if (params.coverage === "presence") {
       return;
     }
+    const runtime = await getDirectoryContractRuntime();
     const self = await directory?.self?.({
       cfg: params.cfg ?? ({} as OpenClawConfig),
       accountId: params.accountId ?? "default",
-      runtime: contractRuntime,
+      runtime,
     });
     if (self) {
       expectDirectoryEntryShape(self);
@@ -192,7 +202,7 @@ export function installChannelDirectoryContractSuite(params: {
         accountId: params.accountId ?? "default",
         query: "",
         limit: 5,
-        runtime: contractRuntime,
+        runtime,
       })) ?? [];
     expect(Array.isArray(peers)).toBe(true);
     for (const peer of peers) {
@@ -205,7 +215,7 @@ export function installChannelDirectoryContractSuite(params: {
         accountId: params.accountId ?? "default",
         query: "",
         limit: 5,
-        runtime: contractRuntime,
+        runtime,
       })) ?? [];
     expect(Array.isArray(groups)).toBe(true);
     for (const group of groups) {
@@ -218,7 +228,7 @@ export function installChannelDirectoryContractSuite(params: {
         accountId: params.accountId ?? "default",
         groupId: groups[0].id,
         limit: 5,
-        runtime: contractRuntime,
+        runtime,
       });
       expect(Array.isArray(members)).toBe(true);
       for (const member of members) {

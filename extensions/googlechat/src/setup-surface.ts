@@ -11,6 +11,10 @@ import {
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup";
+import {
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { resolveDefaultGoogleChatAccountId, resolveGoogleChatAccount } from "./accounts.js";
 
 const channel = "googlechat" as const;
@@ -19,23 +23,8 @@ const ENV_SERVICE_ACCOUNT_FILE = "GOOGLE_CHAT_SERVICE_ACCOUNT_FILE";
 const USE_ENV_FLAG = "__googlechatUseEnv";
 const AUTH_METHOD_FLAG = "__googlechatAuthMethod";
 
-function normalizeOptionalString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-function normalizeStringifiedOptionalString(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    return normalizeOptionalString(value);
-  }
-  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-    return normalizeOptionalString(String(value));
-  }
-  return undefined;
-}
+type GoogleChatTextInput = NonNullable<ChannelSetupWizard["textInputs"]>[number];
+type GoogleChatTextInputKey = GoogleChatTextInput["inputKey"];
 
 const promptAllowFrom = createPromptParsedAllowFromForAccount({
   defaultAccountId: resolveDefaultGoogleChatAccountId,
@@ -104,6 +93,32 @@ const googlechatDmPolicy: ChannelSetupDmPolicy = {
 
 export { googlechatSetupAdapter } from "./setup-core.js";
 
+function createServiceAccountTextInput(params: {
+  inputKey: GoogleChatTextInputKey;
+  message: string;
+  placeholder: string;
+  authMethod: "file" | "inline";
+  patchKey: "serviceAccountFile" | "serviceAccount";
+}): GoogleChatTextInput {
+  return {
+    inputKey: params.inputKey,
+    message: params.message,
+    placeholder: params.placeholder,
+    shouldPrompt: ({ credentialValues }) =>
+      credentialValues[USE_ENV_FLAG] !== "1" &&
+      credentialValues[AUTH_METHOD_FLAG] === params.authMethod,
+    validate: ({ value }) => (normalizeStringifiedOptionalString(value) ? undefined : "Required"),
+    normalizeValue: ({ value }) => normalizeStringifiedOptionalString(value) ?? "",
+    applySet: async ({ cfg, accountId, value }) =>
+      applySetupAccountConfigPatch({
+        cfg,
+        channelKey: channel,
+        accountId,
+        patch: { [params.patchKey]: value },
+      }),
+  };
+}
+
 export const googlechatSetupWizard: ChannelSetupWizard = {
   channel,
   status: createStandardChannelSetupStatus({
@@ -169,38 +184,20 @@ export const googlechatSetupWizard: ChannelSetupWizard = {
   },
   credentials: [],
   textInputs: [
-    {
+    createServiceAccountTextInput({
       inputKey: "tokenFile",
       message: "Service account JSON path",
       placeholder: "/path/to/service-account.json",
-      shouldPrompt: ({ credentialValues }) =>
-        credentialValues[USE_ENV_FLAG] !== "1" && credentialValues[AUTH_METHOD_FLAG] === "file",
-      validate: ({ value }) => (normalizeStringifiedOptionalString(value) ? undefined : "Required"),
-      normalizeValue: ({ value }) => normalizeStringifiedOptionalString(value) ?? "",
-      applySet: async ({ cfg, accountId, value }) =>
-        applySetupAccountConfigPatch({
-          cfg,
-          channelKey: channel,
-          accountId,
-          patch: { serviceAccountFile: value },
-        }),
-    },
-    {
+      authMethod: "file",
+      patchKey: "serviceAccountFile",
+    }),
+    createServiceAccountTextInput({
       inputKey: "token",
       message: "Service account JSON (single line)",
       placeholder: '{"type":"service_account", ... }',
-      shouldPrompt: ({ credentialValues }) =>
-        credentialValues[USE_ENV_FLAG] !== "1" && credentialValues[AUTH_METHOD_FLAG] === "inline",
-      validate: ({ value }) => (normalizeStringifiedOptionalString(value) ? undefined : "Required"),
-      normalizeValue: ({ value }) => normalizeStringifiedOptionalString(value) ?? "",
-      applySet: async ({ cfg, accountId, value }) =>
-        applySetupAccountConfigPatch({
-          cfg,
-          channelKey: channel,
-          accountId,
-          patch: { serviceAccount: value },
-        }),
-    },
+      authMethod: "inline",
+      patchKey: "serviceAccount",
+    }),
   ],
   finalize: async ({ cfg, accountId, prompter }) => {
     const account = resolveGoogleChatAccount({

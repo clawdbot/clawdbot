@@ -6,6 +6,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { pathToFileURL } from "node:url";
 import { writeBuildStamp } from "./build-stamp.mjs";
 import { resolveBuildRequirement } from "./run-node.mjs";
 
@@ -32,6 +33,8 @@ const WATCH_GATEWAY_SKIP_ENV = {
   OPENCLAW_SKIP_CHANNELS: "1",
   OPENCLAW_SKIP_CRON: "1",
   OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+  OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+  NODE_ENV: "test",
 };
 
 function parseArgs(argv) {
@@ -176,6 +179,23 @@ function snapshotTree(rootName) {
   }
 
   return stats;
+}
+
+export function isIgnoredDistRuntimeWatchPath(entry) {
+  return (
+    entry === "dist-runtime/extensions/node_modules" ||
+    entry.startsWith("dist-runtime/extensions/node_modules/")
+  );
+}
+
+function summarizeDistRuntimeAddedPaths(added) {
+  const addedPaths = added.filter((entry) => entry.startsWith("dist-runtime/"));
+  const ignoredDependencyAddedPaths = addedPaths.filter(isIgnoredDistRuntimeWatchPath);
+  const topologyAddedPaths = addedPaths.filter((entry) => !isIgnoredDistRuntimeWatchPath(entry));
+  return {
+    ignoredDependencyAddedPaths,
+    topologyAddedPaths,
+  };
 }
 
 function writeSnapshot(snapshotDir) {
@@ -347,7 +367,7 @@ function buildTimedWatchCommand(pidFilePath, timeFilePath, isolatedHomeDir, port
   const shellSource = [
     'echo "$$" > "$OPENCLAW_WATCH_PID_FILE"',
     'mkdir -p "$OPENCLAW_HOME/.openclaw"',
-    `printf '%s\n' '{"gateway":{"controlUi":{"enabled":false}}}' > "$OPENCLAW_HOME/.openclaw/openclaw.json"`,
+    `printf '%s\n' '{"gateway":{"controlUi":{"enabled":false}},"plugins":{"enabled":false}}' > "$OPENCLAW_HOME/.openclaw/openclaw.json"`,
     `exec node scripts/watch-node.mjs gateway --force --allow-unconfigured --port ${String(port)} --token watch-regression-token`,
   ].join("\n");
   const env = {
@@ -604,11 +624,15 @@ async function main() {
   const post = writeSnapshot(postDir);
   const diff = writeDiffArtifacts(options.outputDir, preDir, postDir);
 
-  const distRuntimeFileGrowth = post.distRuntime.files - pre.distRuntime.files;
-  const distRuntimeByteGrowth = post.distRuntime.apparentBytes - pre.distRuntime.apparentBytes;
-  const distRuntimeAddedPaths = diff.added.filter((entry) =>
-    entry.startsWith("dist-runtime/"),
-  ).length;
+  const distRuntimeAddedPathSummary = summarizeDistRuntimeAddedPaths(diff.added);
+  const distRuntimeAddedPaths = distRuntimeAddedPathSummary.topologyAddedPaths.length;
+  const distRuntimeIgnoredDependencyAddedPaths =
+    distRuntimeAddedPathSummary.ignoredDependencyAddedPaths.length;
+  const distRuntimeFileGrowth = distRuntimeAddedPaths;
+  const distRuntimeByteGrowth =
+    distRuntimeAddedPaths === 0
+      ? 0
+      : post.distRuntime.apparentBytes - pre.distRuntime.apparentBytes;
   const totalCpuMs = Math.round(
     (watchResult.timing.userSeconds + watchResult.timing.sysSeconds) * 1000,
   );
@@ -637,6 +661,7 @@ async function main() {
     distRuntimeByteGrowth,
     distRuntimeByteGrowthMax: options.distRuntimeByteGrowthMax,
     distRuntimeAddedPaths,
+    distRuntimeIgnoredDependencyAddedPaths,
     addedPaths: diff.added.length,
     removedPaths: diff.removed.length,
     watchExit: watchResult.exit,
@@ -697,4 +722,6 @@ async function main() {
   process.exit(0);
 }
 
-await main();
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  await main();
+}

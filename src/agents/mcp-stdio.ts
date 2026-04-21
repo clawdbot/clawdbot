@@ -1,4 +1,4 @@
-import { isMcpConfigRecord, toMcpStringArray, toMcpStringRecord } from "./mcp-config-shared.js";
+import { isMcpConfigRecord, toMcpEnvRecord, toMcpStringArray } from "./mcp-config-shared.js";
 
 type StdioMcpServerLaunchConfig = {
   command: string;
@@ -11,7 +11,10 @@ type StdioMcpServerLaunchResult =
   | { ok: true; config: StdioMcpServerLaunchConfig }
   | { ok: false; reason: string };
 
-export function resolveStdioMcpServerLaunchConfig(raw: unknown): StdioMcpServerLaunchResult {
+export function resolveStdioMcpServerLaunchConfig(
+  raw: unknown,
+  options?: { onDroppedEnv?: (key: string, value: unknown) => void },
+): StdioMcpServerLaunchResult {
   if (!isMcpConfigRecord(raw)) {
     return { ok: false, reason: "server config must be an object" };
   }
@@ -35,7 +38,7 @@ export function resolveStdioMcpServerLaunchConfig(raw: unknown): StdioMcpServerL
     config: {
       command: raw.command,
       args: toMcpStringArray(raw.args),
-      env: toMcpStringRecord(raw.env),
+      env: toMcpEnvRecord(raw.env, { onDroppedEntry: options?.onDroppedEnv }),
       cwd,
     },
   };

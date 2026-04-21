@@ -23,6 +23,7 @@ export type LobsterApprovalWaitState = {
   prompt: string;
   items: JsonLike[];
   resumeToken?: string;
+  approvalId?: string;
 };
 
 export type RunManagedLobsterFlowParams = {
@@ -41,9 +42,8 @@ export type ResumeManagedLobsterFlowParams = {
   runner: LobsterRunner;
   runnerParams: LobsterRunnerParams & {
     action: "resume";
-    token: string;
     approve: boolean;
-  };
+  } & ({ token: string } | { approvalId: string });
   flowId: string;
   expectedRevision: number;
   currentStep?: string;
@@ -119,6 +119,9 @@ function buildApprovalWaitState(envelope: Extract<LobsterEnvelope, { ok: true }>
     items: envelope.requiresApproval.items.map((item) => toJsonLike(item)),
     ...(envelope.requiresApproval.resumeToken
       ? { resumeToken: envelope.requiresApproval.resumeToken }
+      : {}),
+    ...(envelope.requiresApproval.approvalId
+      ? { approvalId: envelope.requiresApproval.approvalId }
       : {}),
   } satisfies LobsterApprovalWaitState;
 }

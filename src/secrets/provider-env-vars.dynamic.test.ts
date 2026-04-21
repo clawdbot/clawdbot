@@ -1,4 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  __testing,
+  getProviderEnvVars,
+  listKnownProviderAuthEnvVarNames,
+  listKnownSecretEnvVarNames,
+  PROVIDER_AUTH_ENV_VAR_CANDIDATES,
+  PROVIDER_ENV_VARS,
+} from "./provider-env-vars.js";
 
 type MockManifestRegistry = {
   plugins: Array<{
@@ -21,9 +29,9 @@ vi.mock("../plugins/manifest-registry.js", () => ({
 
 describe("provider env vars dynamic manifest metadata", () => {
   beforeEach(() => {
-    vi.resetModules();
     loadPluginManifestRegistry.mockReset();
     loadPluginManifestRegistry.mockReturnValue({ plugins: [], diagnostics: [] });
+    __testing.resetProviderEnvVarCachesForTests();
   });
 
   it("includes later-installed plugin env vars without a bundled generated map", async () => {
@@ -43,12 +51,10 @@ describe("provider env vars dynamic manifest metadata", () => {
       diagnostics: [],
     });
 
-    const mod = await import("./provider-env-vars.js");
-
-    expect(mod.getProviderEnvVars("fireworks")).toEqual(["FIREWORKS_ALT_API_KEY"]);
-    expect(mod.getProviderEnvVars("fireworks-plan")).toEqual(["FIREWORKS_ALT_API_KEY"]);
-    expect(mod.listKnownProviderAuthEnvVarNames()).toContain("FIREWORKS_ALT_API_KEY");
-    expect(mod.listKnownSecretEnvVarNames()).toContain("FIREWORKS_ALT_API_KEY");
+    expect(getProviderEnvVars("fireworks")).toEqual(["FIREWORKS_ALT_API_KEY"]);
+    expect(getProviderEnvVars("fireworks-plan")).toEqual(["FIREWORKS_ALT_API_KEY"]);
+    expect(listKnownProviderAuthEnvVarNames()).toContain("FIREWORKS_ALT_API_KEY");
+    expect(listKnownSecretEnvVarNames()).toContain("FIREWORKS_ALT_API_KEY");
   });
 
   it("keeps lazy manifest-backed exports cold until accessed and resolves them once", async () => {
@@ -65,16 +71,14 @@ describe("provider env vars dynamic manifest metadata", () => {
       diagnostics: [],
     });
 
-    const mod = await import("./provider-env-vars.js");
-
     expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
-    expect(mod.PROVIDER_ENV_VARS.fireworks).toEqual(["FIREWORKS_ALT_API_KEY"]);
-    expect(mod.PROVIDER_AUTH_ENV_VAR_CANDIDATES.fireworks).toEqual(["FIREWORKS_ALT_API_KEY"]);
+    expect(PROVIDER_ENV_VARS.fireworks).toEqual(["FIREWORKS_ALT_API_KEY"]);
+    expect(PROVIDER_AUTH_ENV_VAR_CANDIDATES.fireworks).toEqual(["FIREWORKS_ALT_API_KEY"]);
     const initialLoads = loadPluginManifestRegistry.mock.calls.length;
     expect(initialLoads).toBeGreaterThan(0);
 
-    void mod.PROVIDER_ENV_VARS.fireworks;
-    void mod.PROVIDER_AUTH_ENV_VAR_CANDIDATES.fireworks;
+    void PROVIDER_ENV_VARS.fireworks;
+    void PROVIDER_AUTH_ENV_VAR_CANDIDATES.fireworks;
     expect(loadPluginManifestRegistry).toHaveBeenCalledTimes(initialLoads);
   });
 

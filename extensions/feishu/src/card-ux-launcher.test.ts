@@ -2,6 +2,10 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import {
+  expectFirstSentCardUsesFillWidthOnly,
+  expectSentCardHasP2pAction,
+} from "./card-test-helpers.js";
+import {
   createQuickActionLauncherCard,
   isFeishuQuickActionMenuEventKey,
   maybeHandleFeishuQuickActionMenu,
@@ -71,44 +75,10 @@ describe("feishu quick-action launcher", () => {
       expect.objectContaining({
         to: "user:u123",
         accountId: "main",
-        card: expect.objectContaining({
-          config: expect.objectContaining({
-            width_mode: "fill",
-          }),
-          body: expect.objectContaining({
-            elements: expect.arrayContaining([
-              expect.objectContaining({
-                tag: "action",
-                actions: expect.arrayContaining([
-                  expect.objectContaining({
-                    value: expect.objectContaining({
-                      c: expect.objectContaining({
-                        t: "p2p",
-                      }),
-                    }),
-                  }),
-                ]),
-              }),
-            ]),
-          }),
-        }),
       }),
     );
-    const firstSendArg = (sendCardFeishuMock.mock.calls as unknown[][]).at(0)?.[0] as
-      | {
-          card?: {
-            config?: {
-              width_mode?: string;
-              wide_screen_mode?: boolean;
-              enable_forward?: boolean;
-            };
-          };
-        }
-      | undefined;
-    const sentCard = firstSendArg?.card;
-    expect(sentCard).toBeDefined();
-    expect(sentCard?.config?.wide_screen_mode).toBeUndefined();
-    expect(sentCard?.config?.enable_forward).toBeUndefined();
+    expectSentCardHasP2pAction(sendCardFeishuMock);
+    expectFirstSentCardUsesFillWidthOnly(sendCardFeishuMock);
   });
 
   it("falls back to legacy menu handling when launcher send fails", async () => {

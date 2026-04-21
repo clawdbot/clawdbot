@@ -69,6 +69,26 @@ function labelsForSessionOptions(params: {
   return groups.flatMap((group) => group.options.map((option) => option.label));
 }
 
+function createSettings(): AppViewState["settings"] {
+  return {
+    gatewayUrl: "",
+    token: "",
+    locale: "en",
+    sessionKey: "main",
+    lastActiveSessionKey: "main",
+    theme: "claw",
+    themeMode: "dark",
+    splitRatio: 0.6,
+    navWidth: 280,
+    navCollapsed: false,
+    navGroupsCollapsed: {},
+    borderRadius: 50,
+    chatFocusMode: false,
+    chatShowThinking: false,
+    chatShowToolCalls: true,
+  };
+}
+
 /* ================================================================
  *  parseSessionKey – low-level key → type / fallback mapping
  * ================================================================ */
@@ -461,23 +481,7 @@ describe("resolveSessionOptionGroups", () => {
 
 describe("switchChatSession", () => {
   it("refreshes the chat avatar after clearing session-scoped state", async () => {
-    const settings: AppViewState["settings"] = {
-      gatewayUrl: "",
-      token: "",
-      locale: "en",
-      sessionKey: "main",
-      lastActiveSessionKey: "main",
-      theme: "claw",
-      themeMode: "dark",
-      splitRatio: 0.6,
-      navWidth: 280,
-      navCollapsed: false,
-      navGroupsCollapsed: {},
-      borderRadius: 50,
-      chatFocusMode: false,
-      chatShowThinking: false,
-      chatShowToolCalls: true,
-    };
+    const settings = createSettings();
     const state = {
       sessionKey: "main",
       chatMessage: "draft",
@@ -538,23 +542,7 @@ describe("switchChatSession", () => {
   });
 
   it("does not force agentId=main for plain session keys", async () => {
-    const settings: AppViewState["settings"] = {
-      gatewayUrl: "",
-      token: "",
-      locale: "en",
-      sessionKey: "main",
-      lastActiveSessionKey: "main",
-      theme: "claw",
-      themeMode: "dark",
-      splitRatio: 0.6,
-      navWidth: 280,
-      navCollapsed: false,
-      navGroupsCollapsed: {},
-      borderRadius: 50,
-      chatFocusMode: false,
-      chatShowThinking: false,
-      chatShowToolCalls: true,
-    };
+    const settings = createSettings();
     const state = {
       sessionKey: "main",
       chatMessage: "",

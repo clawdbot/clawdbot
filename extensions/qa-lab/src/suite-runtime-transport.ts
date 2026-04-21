@@ -2,26 +2,11 @@ import { setTimeout as sleep } from "node:timers/promises";
 import {
   createFailureAwareTransportWaitForCondition,
   findFailureOutboundMessage as findTransportFailureOutboundMessage,
+  waitForQaTransportCondition,
   type QaTransportState,
 } from "./qa-transport.js";
 import { extractQaFailureReplyText } from "./reply-failure.js";
 import type { QaBusMessage } from "./runtime-api.js";
-
-async function waitForCondition<T>(
-  check: () => T | Promise<T | null | undefined> | null | undefined,
-  timeoutMs = 15_000,
-  intervalMs = 100,
-): Promise<T> {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    const value = await check();
-    if (value !== null && value !== undefined) {
-      return value;
-    }
-    await sleep(intervalMs);
-  }
-  throw new Error(`timed out after ${timeoutMs}ms`);
-}
 
 function findFailureOutboundMessage(
   state: QaTransportState,
@@ -34,13 +19,15 @@ function createScenarioWaitForCondition(state: QaTransportState) {
   return createFailureAwareTransportWaitForCondition(state);
 }
 
+const waitForCondition = createScenarioWaitForCondition;
+
 async function waitForOutboundMessage(
   state: QaTransportState,
   predicate: (message: QaBusMessage) => boolean,
   timeoutMs = 15_000,
   options?: { sinceIndex?: number },
 ) {
-  return await waitForCondition(() => {
+  return await waitForQaTransportCondition(() => {
     const failureMessage = findFailureOutboundMessage(state, options);
     if (failureMessage) {
       throw new Error(extractQaFailureReplyText(failureMessage.text) ?? failureMessage.text);

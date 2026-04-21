@@ -14,12 +14,15 @@ describe("minimax image-generation provider", () => {
     vi.restoreAllMocks();
   });
 
-  it("generates PNG buffers through the shared provider HTTP path", async () => {
+  function mockMinimaxApiKey() {
     vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "minimax-test-key",
       source: "env",
       mode: "api-key",
     });
+  }
+
+  function mockSuccessfulMinimaxImageResponse() {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -35,6 +38,12 @@ describe("minimax image-generation provider", () => {
       ),
     );
     vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("generates PNG buffers through the shared provider HTTP path", async () => {
+    mockMinimaxApiKey();
+    const fetchMock = mockSuccessfulMinimaxImageResponse();
 
     const provider = buildMinimaxImageGenerationProvider();
     const result = await provider.generateImage({
@@ -73,26 +82,8 @@ describe("minimax image-generation provider", () => {
   });
 
   it("uses the configured provider base URL origin", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "minimax-test-key",
-      source: "env",
-      mode: "api-key",
-    });
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          data: {
-            image_base64: [Buffer.from("png-data").toString("base64")],
-          },
-          base_resp: { status_code: 0 },
-        }),
-        {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        },
-      ),
-    );
-    vi.stubGlobal("fetch", fetchMock);
+    mockMinimaxApiKey();
+    const fetchMock = mockSuccessfulMinimaxImageResponse();
 
     const provider = buildMinimaxImageGenerationProvider();
     await provider.generateImage({
@@ -118,11 +109,7 @@ describe("minimax image-generation provider", () => {
   });
 
   it("does not allow private-network routing just because a custom base URL is configured", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "minimax-test-key",
-      source: "env",
-      mode: "api-key",
-    });
+    mockMinimaxApiKey();
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 

@@ -829,8 +829,11 @@ function runNpmInstall(params) {
     CI: "1",
     npm_config_audit: "false",
     npm_config_fund: "false",
+    npm_config_legacy_peer_deps: "true",
     npm_config_loglevel: "error",
+    npm_config_package_lock: "false",
     npm_config_progress: "false",
+    npm_config_save: "false",
     npm_config_yes: "true",
   };
   const result = spawnSync(params.npmRunner.command, params.npmRunner.args, {
@@ -1045,16 +1048,7 @@ function installPluginRuntimeDeps(params) {
       runNpmInstall({
         cwd: tempInstallDir,
         npmRunner: resolveNpmRunner({
-          npmArgs: [
-            "install",
-            "--omit=dev",
-            "--no-audit",
-            "--no-fund",
-            "--ignore-scripts",
-            "--legacy-peer-deps",
-            "--package-lock=false",
-            "--silent",
-          ],
+          npmArgs: ["install", "--no-audit", "--no-fund", "--ignore-scripts", "--silent"],
         }),
       });
     }

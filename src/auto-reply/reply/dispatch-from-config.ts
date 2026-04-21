@@ -381,6 +381,10 @@ export async function dispatchReplyFromConfig(
       channel: originatingChannel,
       to: originatingTo,
       sessionKey: ctx.SessionKey,
+      policySessionKey:
+        ctx.CommandSource === "native"
+          ? (ctx.CommandTargetSessionKey ?? ctx.SessionKey)
+          : ctx.SessionKey,
       accountId: ctx.AccountId,
       requesterSenderId: ctx.SenderId,
       requesterSenderName: ctx.SenderName,

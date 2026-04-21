@@ -306,6 +306,9 @@ describe("gateway hot reload", () => {
     command: process.execPath,
     // CI-hosted Node binaries can be group-writable; these cases cover reload semantics.
     allowInsecurePath: true,
+    // Full-suite parallelism can make Node startup exceed the production default watchdog.
+    timeoutMs: 15_000,
+    noOutputTimeoutMs: 15_000,
   };
 
   async function writeTalkProviderApiKeyEnvRefConfig(refId = "TALK_API_KEY_REF") {

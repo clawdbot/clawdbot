@@ -1147,6 +1147,24 @@ describe("active-memory plugin", () => {
     ).toBe(true);
   });
 
+  it("returns undefined instead of throwing when an unexpected error escapes prompt building", async () => {
+    const result = await hooks.before_prompt_build(
+      { prompt: "what should i eat? escape test", messages: undefined as never },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:escape-test",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(result).toBeUndefined();
+    const warnLines = vi
+      .mocked(api.logger.warn)
+      .mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(warnLines.some((line: string) => line.includes("before_prompt_build"))).toBe(true);
+  });
+
   it("honors configured timeoutMs values above the former 60 000 ms ceiling", async () => {
     api.pluginConfig = {
       agents: ["main"],

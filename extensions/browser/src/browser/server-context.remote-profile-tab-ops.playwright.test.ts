@@ -8,6 +8,15 @@ import {
 const deps: RemoteProfileTestDeps = await loadRemoteProfileTestDeps();
 installRemoteProfileTestLifecycle(deps);
 
+function page(targetId: string, url = `https://${targetId.toLowerCase()}.example`) {
+  return {
+    targetId,
+    title: targetId === "T1" ? "Tab 1" : targetId,
+    url,
+    type: "page" as const,
+  };
+}
+
 describe("browser remote profile tab ops via Playwright", () => {
   it("uses Playwright tab operations when available", async () => {
     const listPagesViaPlaywright = vi.fn(async () => [
@@ -91,10 +100,7 @@ describe("browser remote profile tab ops via Playwright", () => {
   });
 
   it("rejects stale targetId for remote profiles even when only one tab remains", async () => {
-    const responses = [
-      [{ targetId: "T1", title: "Tab 1", url: "https://example.com", type: "page" }],
-      [{ targetId: "T1", title: "Tab 1", url: "https://example.com", type: "page" }],
-    ];
+    const responses = Array.from({ length: 2 }, () => [page("T1", "https://example.com")]);
     const listPagesViaPlaywright = vi.fn(deps.createSequentialPageLister(responses));
 
     vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
@@ -106,16 +112,7 @@ describe("browser remote profile tab ops via Playwright", () => {
   });
 
   it("keeps rejecting stale targetId for remote profiles when multiple tabs exist", async () => {
-    const responses = [
-      [
-        { targetId: "A", title: "A", url: "https://a.example", type: "page" },
-        { targetId: "B", title: "B", url: "https://b.example", type: "page" },
-      ],
-      [
-        { targetId: "A", title: "A", url: "https://a.example", type: "page" },
-        { targetId: "B", title: "B", url: "https://b.example", type: "page" },
-      ],
-    ];
+    const responses = Array.from({ length: 2 }, () => [page("A"), page("B")]);
     const listPagesViaPlaywright = vi.fn(deps.createSequentialPageLister(responses));
 
     vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({

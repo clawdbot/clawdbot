@@ -133,4 +133,33 @@ describe("channelsHandlers channels.status", () => {
       undefined,
     );
   });
+
+  it("caps probe timeout before passing it to channel plugins", async () => {
+    const autoEnabledConfig = { autoEnabled: true };
+    const probeAccount = vi.fn(async () => ({ ok: true }));
+    mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+    mocks.listChannelPlugins.mockReturnValue([
+      {
+        id: "whatsapp",
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({}),
+          isEnabled: () => true,
+          isConfigured: async () => true,
+        },
+        status: {
+          probeAccount,
+        },
+      },
+    ]);
+
+    await channelsHandlers["channels.status"](createOptions({ probe: true, timeoutMs: 999_999 }));
+
+    expect(probeAccount).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 30_000,
+        cfg: autoEnabledConfig,
+      }),
+    );
+  });
 });

@@ -87,6 +87,9 @@
     "videoGenerationProviders": ["xai"],
     "tools": ["code_execution", "x_search"]
   },
+  "configContracts": {
+    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

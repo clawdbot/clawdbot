@@ -17,7 +17,7 @@ import type {
   MessageEventContent,
 } from "@openclaw/matrix/test-api.js";
 import { buildMatrixQaMessageContent } from "./client.js";
-import { normalizeMatrixQaObservedEvent } from "./events.js";
+import { findMatrixQaObservedEventMatch, normalizeMatrixQaObservedEvent } from "./events.js";
 import type { MatrixQaObservedEvent } from "./events.js";
 import type { MatrixQaRoomEventWaitResult } from "./sync.js";
 
@@ -184,27 +184,6 @@ async function createMatrixQaE2eeMatrixClient(params: MatrixQaE2eeClientParams) 
     syncFilter: MATRIX_QA_E2EE_SYNC_FILTER,
     userId: params.userId,
   });
-}
-
-function findMatrixQaObservedEventMatch(params: {
-  cursorIndex: number;
-  events: MatrixQaObservedEvent[];
-  predicate: (event: MatrixQaObservedEvent) => boolean;
-  roomId: string;
-}) {
-  for (let index = params.cursorIndex; index < params.events.length; index += 1) {
-    const event = params.events[index];
-    if (event?.roomId !== params.roomId) {
-      continue;
-    }
-    if (params.predicate(event)) {
-      return {
-        event,
-        nextCursorIndex: index + 1,
-      };
-    }
-  }
-  return undefined;
 }
 
 export async function createMatrixQaE2eeScenarioClient(

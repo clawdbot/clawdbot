@@ -89,13 +89,16 @@ export async function collectChannelSecurityFindings(params: {
     plugin: (typeof params.plugins)[number],
     cfg: OpenClawConfig,
     accountId: string,
-  ) =>
-    plugin.config.inspectAccount?.(cfg, accountId) ??
-    (await inspectReadOnlyChannelAccount({
+  ) => {
+    if (plugin.config.inspectAccount) {
+      return await plugin.config.inspectAccount(cfg, accountId);
+    }
+    return await inspectReadOnlyChannelAccount({
       channelId: plugin.id,
       cfg,
       accountId,
-    }));
+    });
+  };
 
   const asAccountRecord = (value: unknown): Record<string, unknown> | null =>
     value && typeof value === "object" && !Array.isArray(value)

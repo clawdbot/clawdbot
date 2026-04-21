@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import { __testing, validateConfigObjectRaw } from "./validation.js";
-import { SignalConfigSchema } from "./zod-schema.providers-core.js";
 
 function mapFirstIssue(
   schema: { safeParse: (value: unknown) => { success: true } | { success: false; error: unknown } },
@@ -33,7 +33,10 @@ describe("config validation allowed-values metadata", () => {
   });
 
   it("keeps native enum messages while attaching allowed values metadata", () => {
-    const issue = mapFirstIssue(SignalConfigSchema, { dmPolicy: "maybe" });
+    const issue = mapFirstIssue(
+      z.object({ dmPolicy: z.enum(["pairing", "allowlist", "open", "disabled"]) }),
+      { dmPolicy: "maybe" },
+    );
     expect(issue.path).toBe("dmPolicy");
     expect(issue.message).toContain("expected one of");
     expect(issue.message).not.toContain("(allowed:");

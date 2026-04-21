@@ -1,4 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { resolveOpenAIReasoningEffortForModel } from "./openai-reasoning-effort.js";
 
 type OpenAIReasoningCompatModel = {
   provider?: string | null;
@@ -6,7 +7,7 @@ type OpenAIReasoningCompatModel = {
   compat?: unknown;
 };
 
-const OPENAI_MEDIUM_ONLY_REASONING_MODEL_IDS = new Set(["gpt-5.1-codex-mini", "gpt-5.4-mini"]);
+const OPENAI_MEDIUM_ONLY_REASONING_MODEL_IDS = new Set(["gpt-5.1-codex-mini"]);
 
 function readCompatReasoningEffortMap(compat: unknown): Record<string, string> {
   if (!compat || typeof compat !== "object") {
@@ -48,9 +49,12 @@ export function mapOpenAIReasoningEffortForModel(params: {
   fallbackMap?: Record<string, string>;
 }): string | undefined {
   const { effort } = params;
-  if (effort === undefined || effort === "none") {
+  if (effort === undefined) {
     return effort;
   }
-  const reasoningEffortMap = resolveOpenAIReasoningEffortMap(params.model, params.fallbackMap);
-  return reasoningEffortMap[effort] ?? effort;
+  return resolveOpenAIReasoningEffortForModel({
+    model: params.model,
+    effort,
+    fallbackMap: resolveOpenAIReasoningEffortMap(params.model, params.fallbackMap),
+  });
 }

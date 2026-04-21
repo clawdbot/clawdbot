@@ -21,7 +21,15 @@ type KimiToolCallBlock = {
 };
 
 type KimiThinkingType = "enabled" | "disabled";
-type KimiThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
+type KimiThinkingLevel =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "adaptive"
+  | "max";
 
 function normalizeKimiThinkingType(value: unknown): KimiThinkingType | undefined {
   if (typeof value === "boolean") {

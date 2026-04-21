@@ -9,6 +9,7 @@ import { failTaskRunByRunId } from "../../tasks/task-executor.js";
 import { createTaskRecord, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import type { ReplyPayload } from "../types.js";
 import { handleSubagentsInfoAction } from "./commands-subagents/action-info.js";
+import { baseCommandTestConfig } from "./commands.test-harness.js";
 
 function buildInfoContext(params: { cfg: OpenClawConfig; runs: object[]; restTokens: string[] }) {
   return {
@@ -37,7 +38,7 @@ describe("subagents info", () => {
   it("returns usage for missing targets", () => {
     const cfg = {
       commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
+      channels: { quietchat: { allowFrom: ["*"] } },
     } as OpenClawConfig;
     const result = handleSubagentsInfoAction(buildInfoContext({ cfg, runs: [], restTokens: [] }));
     expect(result.shouldContinue).toBe(false);
@@ -71,11 +72,7 @@ describe("subagents info", () => {
       terminalSummary: "Completed the requested task",
       deliveryStatus: "delivered",
     });
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-      session: { mainKey: "main", scope: "per-sender" },
-    } as OpenClawConfig;
+    const cfg = baseCommandTestConfig;
     const result = handleSubagentsInfoAction(
       buildInfoContext({ cfg, runs: [run], restTokens: ["1"] }),
     );
@@ -135,11 +132,7 @@ describe("subagents info", () => {
       ].join("\n"),
       terminalSummary: "Needs manual follow-up.",
     });
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-      session: { mainKey: "main", scope: "per-sender" },
-    } as OpenClawConfig;
+    const cfg = baseCommandTestConfig;
     const result = handleSubagentsInfoAction(
       buildInfoContext({ cfg, runs: [run], restTokens: ["1"] }),
     );
@@ -182,7 +175,7 @@ describe("subagents info", () => {
     });
     const cfg = {
       commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
+      channels: { quietchat: { allowFrom: ["*"] } },
       session: { mainKey: "main", scope: "per-sender" },
     } as OpenClawConfig;
     const result = handleSubagentsInfoAction({

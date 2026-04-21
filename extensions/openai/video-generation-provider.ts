@@ -4,10 +4,10 @@ import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
   fetchWithTimeout,
+  pollProviderOperationJson,
   postJsonRequest,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
-  waitProviderOperationPollInterval,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type {
@@ -128,29 +128,22 @@ async function pollOpenAIVideo(params: {
     timeoutMs: params.timeoutMs,
     label: `OpenAI video generation task ${params.videoId}`,
   });
-  for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
-    const response = await fetchWithTimeout(
-      `${params.baseUrl}/videos/${params.videoId}`,
-      {
-        method: "GET",
-        headers: params.headers,
-      },
-      resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: DEFAULT_TIMEOUT_MS }),
-      params.fetchFn,
-    );
-    await assertOkOrThrowHttpError(response, "OpenAI video status request failed");
-    const payload = (await response.json()) as OpenAIVideoResponse;
-    if (payload.status === "completed") {
-      return payload;
-    }
-    if (payload.status === "failed") {
-      throw new Error(
-        normalizeOptionalString(payload.error?.message) || "OpenAI video generation failed",
-      );
-    }
-    await waitProviderOperationPollInterval({ deadline, pollIntervalMs: POLL_INTERVAL_MS });
-  }
-  throw new Error(`OpenAI video generation task ${params.videoId} did not finish in time`);
+  return await pollProviderOperationJson<OpenAIVideoResponse>({
+    url: `${params.baseUrl}/videos/${params.videoId}`,
+    headers: params.headers,
+    deadline,
+    defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+    fetchFn: params.fetchFn,
+    maxAttempts: MAX_POLL_ATTEMPTS,
+    pollIntervalMs: POLL_INTERVAL_MS,
+    requestFailedMessage: "OpenAI video status request failed",
+    timeoutMessage: `OpenAI video generation task ${params.videoId} did not finish in time`,
+    isComplete: (payload) => payload.status === "completed",
+    getFailureMessage: (payload) =>
+      payload.status === "failed"
+        ? normalizeOptionalString(payload.error?.message) || "OpenAI video generation failed"
+        : undefined,
+  });
 }
 
 async function downloadOpenAIVideo(params: {

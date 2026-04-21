@@ -10,17 +10,19 @@ title: "Tests"
 - Full testing kit (suites, live, Docker): [Testing](/help/testing)
 
 - `pnpm test:force`: Kills any lingering gateway process holding the default control port, then runs the full Vitest suite with an isolated gateway port so server tests don’t collide with a running instance. Use this when a prior gateway run left port 18789 occupied.
-- `pnpm test:coverage`: Runs the unit suite with V8 coverage (via `vitest.unit.config.ts`). Global thresholds are 70% lines/branches/functions/statements. Coverage excludes integration-heavy entrypoints (CLI wiring, gateway/telegram bridges, webchat static server) to keep the target focused on unit-testable logic.
+- `pnpm test:coverage`: Runs the unit suite with V8 coverage (via `vitest.unit.config.ts`). This is a loaded-file unit coverage gate, not whole-repo all-file coverage. Thresholds are 70% lines/functions/statements and 55% branches. Because `coverage.all` is false, the gate measures files loaded by the unit coverage suite instead of treating every split-lane source file as uncovered.
 - `pnpm test:coverage:changed`: Runs unit coverage only for files changed since `origin/main`.
 - `pnpm test:changed`: expands changed git paths into scoped Vitest lanes when the diff only touches routable source/test files. Config/setup changes still fall back to the native root projects run so wiring edits rerun broadly when needed.
-- `pnpm test`: routes explicit file/directory targets through scoped Vitest lanes. Untargeted runs now execute eleven sequential shard configs (`vitest.full-core-unit-src.config.ts`, `vitest.full-core-unit-security.config.ts`, `vitest.full-core-unit-ui.config.ts`, `vitest.full-core-unit-support.config.ts`, `vitest.full-core-support-boundary.config.ts`, `vitest.full-core-contracts.config.ts`, `vitest.full-core-bundled.config.ts`, `vitest.full-core-runtime.config.ts`, `vitest.full-agentic.config.ts`, `vitest.full-auto-reply.config.ts`, `vitest.full-extensions.config.ts`) instead of one giant root-project process.
+- `pnpm changed:lanes`: shows the architectural lanes triggered by the diff against `origin/main`.
+- `pnpm check:changed`: runs the smart changed gate for the diff against `origin/main`. It runs core work with core test lanes, extension work with extension test lanes, test-only work with test typecheck/tests only, and expands public Plugin SDK or plugin-contract changes to extension validation.
+- `pnpm test`: routes explicit file/directory targets through scoped Vitest lanes. Untargeted runs use fixed shard groups and expand to leaf configs for local parallel execution; the extension group always expands to the per-extension shard configs instead of one giant root-project process.
+- Full and extension shard runs update local timing data in `.artifacts/vitest-shard-timings.json`; later runs use those timings to balance slow and fast shards. Set `OPENCLAW_TEST_PROJECTS_TIMINGS=0` to ignore the local timing artifact.
 - Selected `plugin-sdk` and `commands` test files now route through dedicated light lanes that keep only `test/setup.ts`, leaving runtime-heavy cases on their existing lanes.
 - Selected `plugin-sdk` and `commands` helper source files also map `pnpm test:changed` to explicit sibling tests in those light lanes, so small helper edits avoid rerunning the heavy runtime-backed suites.
 - `auto-reply` now also splits into three dedicated configs (`core`, `top-level`, `reply`) so the reply harness does not dominate the lighter top-level status/token/helper tests.
 - Base Vitest config now defaults to `pool: "threads"` and `isolate: false`, with the shared non-isolated runner enabled across the repo configs.
 - `pnpm test:channels` runs `vitest.channels.config.ts`.
-- `pnpm test:extensions` runs `vitest.extensions.config.ts`.
-- `pnpm test:extensions`: runs extension/plugin suites.
+- `pnpm test:extensions` and `pnpm test extensions` run all extension/plugin shards. Heavy channel extensions and OpenAI run as dedicated shards; other extension groups stay batched. Use `pnpm test extensions/<id>` for one bundled plugin lane.
 - `pnpm test:perf:imports`: enables Vitest import-duration + import-breakdown reporting, while still using scoped lane routing for explicit file/directory targets.
 - `pnpm test:perf:imports:changed`: same import profiling, but only for files changed since `origin/main`.
 - `pnpm test:perf:changed:bench -- --ref <git-ref>` benchmarks the routed changed-mode path against the native root-project run for the same committed git diff.
@@ -37,6 +39,7 @@ title: "Tests"
 
 For local PR land/gate checks, run:
 
+- `pnpm check:changed`
 - `pnpm check`
 - `pnpm check:test-types`
 - `pnpm build`

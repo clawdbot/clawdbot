@@ -1,8 +1,11 @@
 import type { z } from "zod";
+import type { OpenClawConfig } from "../config/config.js";
 import { hasEnvHttpProxyConfigured } from "../infra/net/proxy-env.js";
+import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 import { runPassiveAccountLifecycle } from "./channel-lifecycle.core.js";
 import { createLoggerBackedRuntime } from "./runtime-logger.js";
 export { safeParseJsonWithSchema, safeParseWithSchema } from "../utils/zod-parse.js";
+export { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
 
 type PassiveChannelStatusSnapshot = {
   configured?: boolean;
@@ -132,6 +135,96 @@ export function createDeferred<T>() {
     reject = rej;
   });
   return { promise, resolve, reject };
+}
+
+const DEFAULT_PACKAGE_JSON_VERSION_CANDIDATES = [
+  "../package.json",
+  "./package.json",
+  "../../package.json",
+] as const;
+
+type PackageJsonRequire = (id: string) => unknown;
+
+type PluginConfigIssuePathSegment = string | number;
+
+type PluginConfigIssue = {
+  path: PluginConfigIssuePathSegment[];
+  message: string;
+};
+
+type PluginConfigIssueMessageOptions = {
+  invalidConfigMessage?: string;
+  unknownKeyMessage?: (key: string) => string;
+  rootInvalidTypeMessage?: string;
+};
+
+export function formatPluginConfigIssue(
+  issue: z.ZodIssue | undefined,
+  options?: PluginConfigIssueMessageOptions,
+): string {
+  if (!issue) {
+    return options?.invalidConfigMessage ?? "invalid config";
+  }
+  if (issue.code === "unrecognized_keys" && issue.keys.length > 0) {
+    return options?.unknownKeyMessage?.(issue.keys[0]) ?? `unknown config key: ${issue.keys[0]}`;
+  }
+  if (issue.code === "invalid_type" && issue.path.length === 0) {
+    return options?.rootInvalidTypeMessage ?? "expected config object";
+  }
+  return issue.message;
+}
+
+export function normalizePluginConfigIssuePath(
+  path: readonly unknown[],
+): PluginConfigIssuePathSegment[] {
+  return path.filter((segment): segment is PluginConfigIssuePathSegment => {
+    const kind = typeof segment;
+    return kind === "string" || kind === "number";
+  });
+}
+
+export function mapPluginConfigIssues(
+  issues: readonly z.ZodIssue[],
+  options?: PluginConfigIssueMessageOptions,
+): PluginConfigIssue[] {
+  return issues.map((issue) => ({
+    path: normalizePluginConfigIssuePath(issue.path),
+    message: formatPluginConfigIssue(issue, options),
+  }));
+}
+
+export function canResolveEnvSecretRefInReadOnlyPath(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  id: string;
+}): boolean {
+  const providerConfig = params.cfg?.secrets?.providers?.[params.provider];
+  if (!providerConfig) {
+    return params.provider === resolveDefaultSecretProviderAlias(params.cfg ?? {}, "env");
+  }
+  if (providerConfig.source !== "env") {
+    return false;
+  }
+  const allowlist = providerConfig.allowlist;
+  return !allowlist || allowlist.includes(params.id);
+}
+
+export function readPluginPackageVersion(params: {
+  require: PackageJsonRequire;
+  candidates?: readonly string[];
+  fallback?: string;
+}): string {
+  for (const candidate of params.candidates ?? DEFAULT_PACKAGE_JSON_VERSION_CANDIDATES) {
+    try {
+      const version = (params.require(candidate) as { version?: unknown }).version;
+      if (typeof version === "string" && version.trim().length > 0) {
+        return version;
+      }
+    } catch {
+      // Ignore missing candidate paths across source and bundled layouts.
+    }
+  }
+  return params.fallback ?? "unknown";
 }
 
 let proxyAgentConstructorPromise: Promise<typeof import("proxy-agent").ProxyAgent> | null = null;

@@ -88,8 +88,13 @@ export const DEFAULT_BOOTSTRAP_MAX_CHARS = 12_000;
 export const DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS = 60_000;
 export const DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE = "once";
 const MIN_BOOTSTRAP_FILE_BUDGET_CHARS = 64;
-const BOOTSTRAP_HEAD_RATIO = 0.7;
-const BOOTSTRAP_TAIL_RATIO = 0.2;
+// Ratios split `contentBudget` (= maxChars − marker.length − join separators), not `maxChars`.
+// The marker and "\n" separators are already reserved before this split runs; these ratios
+// only divide what's left between head and tail. Ratios sum to 1.0 — the iteration loop,
+// post-loop guard, and final `truncateUtf16Safe` clamp absorb any `Math.floor` residue.
+const BOOTSTRAP_HEAD_RATIO = 0.75;
+const BOOTSTRAP_TAIL_RATIO = 0.25;
+const MIN_BOOTSTRAP_TRIMMED_CONTENT_CHARS = 16;
 
 type TrimBootstrapResult = {
   content: string;
@@ -139,20 +144,82 @@ function trimBootstrapContent(
     };
   }
 
-  const headChars = Math.floor(maxChars * BOOTSTRAP_HEAD_RATIO);
-  const tailChars = Math.floor(maxChars * BOOTSTRAP_TAIL_RATIO);
+  const markerTemplate = (headChars: number, tailChars: number) =>
+    [
+      "",
+      `[...truncated, read ${fileName} for full content...]`,
+      `…(truncated ${fileName}: kept ${headChars}+${tailChars} chars of ${trimmed.length})…`,
+      "",
+    ].join("\n");
+  const compactMarkerTemplate = (headChars: number, tailChars: number) =>
+    `[…truncated ${headChars}+${tailChars}/${trimmed.length}]`;
+  const separatorCharsFor = (headCount: number, tailCount: number, markerContent: string) =>
+    markerContent.includes("\n") ? Number(headCount > 0) + Number(tailCount > 0) : 0;
+  const renderTruncatedContent = (head: string, markerContent: string, tail: string) =>
+    [head, markerContent, tail]
+      .filter((part) => part.length > 0)
+      .join(markerContent.includes("\n") ? "\n" : "");
+  const resolveMarkerTemplate = () => {
+    const fullMarker = markerTemplate(0, 0);
+    const fullContentBudget = maxChars - fullMarker.length - separatorCharsFor(1, 1, fullMarker);
+    return fullContentBudget >= MIN_BOOTSTRAP_TRIMMED_CONTENT_CHARS
+      ? markerTemplate
+      : compactMarkerTemplate;
+  };
+  const resolvedMarkerTemplate = resolveMarkerTemplate();
+  let headChars = 0;
+  let tailChars = 0;
+  let marker = resolvedMarkerTemplate(headChars, tailChars);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const contentBudget = Math.max(
+      0,
+      maxChars - marker.length - separatorCharsFor(headChars, tailChars, marker),
+    );
+    const nextHeadChars = Math.floor(contentBudget * BOOTSTRAP_HEAD_RATIO);
+    const nextTailChars = Math.floor(contentBudget * BOOTSTRAP_TAIL_RATIO);
+    const nextMarker = resolvedMarkerTemplate(nextHeadChars, nextTailChars);
+    if (
+      nextHeadChars === headChars &&
+      nextTailChars === tailChars &&
+      nextMarker.length === marker.length
+    ) {
+      break;
+    }
+    headChars = nextHeadChars;
+    tailChars = nextTailChars;
+    marker = nextMarker;
+  }
+  let renderedLength =
+    headChars + tailChars + marker.length + separatorCharsFor(headChars, tailChars, marker);
+  while (renderedLength > maxChars && (tailChars > 0 || headChars > 0)) {
+    const overflow = renderedLength - maxChars;
+    if (tailChars > 0) {
+      tailChars = Math.max(0, tailChars - overflow);
+    } else {
+      headChars = Math.max(0, headChars - overflow);
+    }
+    marker = resolvedMarkerTemplate(headChars, tailChars);
+    renderedLength =
+      headChars + tailChars + marker.length + separatorCharsFor(headChars, tailChars, marker);
+  }
+  if (headChars === 0 && tailChars === 0 && trimmed.length > 0) {
+    const singleHeadMarker = resolvedMarkerTemplate(1, 0);
+    const singleHeadLength = 1 + singleHeadMarker.length + separatorCharsFor(1, 0, singleHeadMarker);
+    if (singleHeadLength <= maxChars) {
+      headChars = 1;
+      marker = singleHeadMarker;
+    }
+  }
   const head = trimmed.slice(0, headChars);
-  const tail = trimmed.slice(-tailChars);
+  const tail = tailChars > 0 ? trimmed.slice(-tailChars) : "";
 
-  const marker = [
-    "",
-    `[...truncated, read ${fileName} for full content...]`,
-    `…(truncated ${fileName}: kept ${headChars}+${tailChars} chars of ${trimmed.length})…`,
-    "",
-  ].join("\n");
-  const contentWithMarker = [head, marker, tail].join("\n");
+  const contentWithMarker = renderTruncatedContent(head, marker, tail);
+  const boundedContent =
+    contentWithMarker.length > maxChars
+      ? truncateUtf16Safe(contentWithMarker, maxChars)
+      : contentWithMarker;
   return {
-    content: contentWithMarker,
+    content: boundedContent,
     truncated: true,
     maxChars,
     originalLength: trimmed.length,

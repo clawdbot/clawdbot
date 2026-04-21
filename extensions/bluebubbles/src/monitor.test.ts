@@ -593,6 +593,100 @@ describe("BlueBubbles webhook monitor", () => {
       expect(callArgs.ctx.GroupMembers).toBe("Alice (+15551234567), Bob (+15557654321)");
     });
 
+    it("threads per-group systemPrompt into ctx for group messages", async () => {
+      setupWebhookTarget({
+        account: createMockAccount({
+          groups: {
+            "iMessage;+;chat123456": {
+              systemPrompt: "Reply in thread with action=reply; ack via action=react.",
+            },
+          },
+        }),
+      });
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        text: "hello group",
+        isGroup: true,
+        chatGuid: "iMessage;+;chat123456",
+        chatName: "Family",
+        participants: [{ address: "+15551234567", displayName: "Alice" }],
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      const callArgs = getFirstDispatchCall();
+      expect(callArgs.ctx.GroupSystemPrompt).toBe(
+        "Reply in thread with action=reply; ack via action=react.",
+      );
+    });
+
+    it("falls back to the '*' wildcard systemPrompt when no exact group match", async () => {
+      setupWebhookTarget({
+        account: createMockAccount({
+          groups: {
+            "*": { systemPrompt: "Default group rule: keep it short." },
+          },
+        }),
+      });
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        text: "hi group",
+        isGroup: true,
+        chatGuid: "iMessage;+;chat-unmapped",
+        chatName: "Family",
+        participants: [{ address: "+15551234567", displayName: "Alice" }],
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      const callArgs = getFirstDispatchCall();
+      expect(callArgs.ctx.GroupSystemPrompt).toBe("Default group rule: keep it short.");
+    });
+
+    it("prefers an exact group systemPrompt over the '*' wildcard", async () => {
+      setupWebhookTarget({
+        account: createMockAccount({
+          groups: {
+            "*": { systemPrompt: "wildcard value" },
+            "iMessage;+;chat123456": { systemPrompt: "exact value" },
+          },
+        }),
+      });
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        text: "hi group",
+        isGroup: true,
+        chatGuid: "iMessage;+;chat123456",
+        chatName: "Family",
+        participants: [{ address: "+15551234567", displayName: "Alice" }],
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      const callArgs = getFirstDispatchCall();
+      expect(callArgs.ctx.GroupSystemPrompt).toBe("exact value");
+    });
+
+    it("omits GroupSystemPrompt for DMs even when the group config would match", async () => {
+      setupWebhookTarget({
+        account: createMockAccount({
+          groups: {
+            "+15551234567": { systemPrompt: "unused in DM" },
+          },
+        }),
+      });
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        text: "hi",
+        isGroup: false,
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      const callArgs = getFirstDispatchCall();
+      expect(callArgs.ctx.GroupSystemPrompt).toBeUndefined();
+    });
+
     it("does not enrich group participants when the config flag is disabled", async () => {
       const resolvePhoneNames = vi.fn(async () => new Map([["5551234567", "Alice Contact"]]));
       setupWebhookTarget({
@@ -923,6 +1017,511 @@ describe("BlueBubbles webhook monitor", () => {
         expect(target.runtime.error).not.toHaveBeenCalled();
       } finally {
         vi.useRealTimers();
+      }
+    });
+
+    it("coalesces same-sender DM messages when coalesceSameSenderDms is enabled", async () => {
+      vi.useFakeTimers();
+      try {
+        const core = createMockRuntime();
+        installTimingAwareInboundDebouncer(core);
+        const processMessage = vi.fn().mockResolvedValue(undefined);
+        const registry = createBlueBubblesDebounceRegistry({ processMessage });
+        const account = createMockAccount({ coalesceSameSenderDms: true });
+        const target = {
+          account,
+          // Pin an explicit short debounce window so these tests stay
+          // decoupled from the coalesce-flag default (2500 ms). The
+          // "widens the default debounce window" test intentionally omits
+          // this override to exercise the new default.
+          config: { messages: { inbound: { byChannel: { bluebubbles: 500 } } } },
+          runtime: { log: vi.fn(), error: vi.fn() },
+          core,
+          path: "/bluebubbles-webhook",
+        };
+        const debouncer = registry.getOrCreateDebouncer(target);
+
+        const chatGuid = "iMessage;-;+15551234567";
+
+        // Two distinct user sends: a command ("Dump") followed by a URL.
+        // No associatedMessageGuid linking them. Default buildKey hashes by
+        // per-message messageId, so historically they dispatched separately.
+        await debouncer.enqueue({
+          message: createDebounceTestMessage({
+            chatGuid,
+            text: "Dump",
+            messageId: "dm-msg-1",
+          }),
+          target,
+        });
+
+        await vi.advanceTimersByTimeAsync(300);
+
+        await debouncer.enqueue({
+          message: createDebounceTestMessage({
+            chatGuid,
+            text: "https://example.com/article",
+            messageId: "dm-msg-2",
+          }),
+          target,
+        });
+
+        expect(processMessage).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(600);
+
+        expect(processMessage).toHaveBeenCalledTimes(1);
+        expect(processMessage).toHaveBeenCalledWith(
+          expect.objectContaining({
+            text: "Dump https://example.com/article",
+            // Every source messageId must reach inbound-dedupe so a later
+            // MessagePoller replay of either event alone is recognized as a
+            // duplicate rather than re-processed.
+            coalescedMessageIds: ["dm-msg-1", "dm-msg-2"],
+          }),
+          target,
+        );
+        expect(target.runtime.error).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not coalesce same-sender DM messages when coalesceSameSenderDms is off (default)", async () => {
+      vi.useFakeTimers();
+      try {
+        const core = createMockRuntime();
+        installTimingAwareInboundDebouncer(core);
+        const processMessage = vi.fn().mockResolvedValue(undefined);
+        const registry = createBlueBubblesDebounceRegistry({ processMessage });
+        const account = createMockAccount();
+        const target = {
+          account,
+          config: {},
+          runtime: { log: vi.fn(), error: vi.fn() },
+          core,
+          path: "/bluebubbles-webhook",
+        };
+        const debouncer = registry.getOrCreateDebouncer(target);
+
+        const chatGuid = "iMessage;-;+15551234567";
+
+        await debouncer.enqueue({
+          message: createDebounceTestMessage({
+            chatGuid,
+            text: "Dump",
+            messageId: "dm-msg-1",
+          }),
+          target,
+        });
+
+        await vi.advanceTimersByTimeAsync(300);
+
+        await debouncer.enqueue({
+          message: createDebounceTestMessage({
+            chatGuid,
+            text: "https://example.com/article",
+            messageId: "dm-msg-2",
+          }),
+          target,
+        });
+
+        await vi.advanceTimersByTimeAsync(600);
+
+        expect(processMessage).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("bounds the coalesced output when many messages merge into one turn", async () => {
+      vi.useFakeTimers();
+      try {
+        const core = createMockRuntime();
+        installTimingAwareInboundDebouncer(core);
+        const processMessage = vi.fn().mockResolvedValue(undefined);
+        const registry = createBlueBubblesDebounceRegistry({ processMessage });
+        const account = createMockAccount({ coalesceSameSenderDms: true });
+        const target = {
+          account,
+          // Pin an explicit short debounce window so these tests stay
+          // decoupled from the coalesce-flag default (2500 ms). The
+          // "widens the default debounce window" test intentionally omits
+          // this override to exercise the new default.
+          config: { messages: { inbound: { byChannel: { bluebubbles: 500 } } } },
+          runtime: { log: vi.fn(), error: vi.fn() },
+          core,
+          path: "/bluebubbles-webhook",
+        };
+        const debouncer = registry.getOrCreateDebouncer(target);
+
+        const chatGuid = "iMessage;-;+15551234567";
+        // Use a unique long text block per entry to exceed MAX_COALESCED_TEXT_CHARS (4000)
+        // after naive concatenation. 25 entries × ~400 chars ≈ 10_000 chars worth of content.
+        const blob = "x".repeat(400);
+        for (let i = 0; i < 25; i++) {
+          await debouncer.enqueue({
+            message: createDebounceTestMessage({
+              chatGuid,
+              text: `msg-${i}-${blob}`,
+              messageId: `flood-${i}`,
+              attachments: [{ guid: `att-${i}`, mimeType: "image/jpeg", totalBytes: 1024 }],
+            }),
+            target,
+          });
+          await vi.advanceTimersByTimeAsync(10);
+        }
+
+        await vi.advanceTimersByTimeAsync(600);
+
+        expect(processMessage).toHaveBeenCalledTimes(1);
+        const [merged] = processMessage.mock.calls[0] as [NormalizedWebhookMessage, unknown];
+        // Text is truncated with explicit marker instead of ballooning.
+        expect(merged.text.length).toBeLessThanOrEqual(4000 + "…[truncated]".length);
+        expect(merged.text.endsWith("…[truncated]")).toBe(true);
+        // Attachments are capped so downstream media fan-out stays bounded.
+        expect(merged.attachments?.length).toBeLessThanOrEqual(20);
+        // Every source messageId — including ones whose text/attachments the
+        // cap dropped — still reaches inbound-dedupe. Truncation caps prompt
+        // size; it must not leak replay risk.
+        expect(merged.coalescedMessageIds).toHaveLength(25);
+        expect(merged.coalescedMessageIds?.[0]).toBe("flood-0");
+        expect(merged.coalescedMessageIds?.[24]).toBe("flood-24");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not coalesce group-chat messages even with coalesceSameSenderDms enabled", async () => {
+      vi.useFakeTimers();
+      try {
+        const core = createMockRuntime();
+        installTimingAwareInboundDebouncer(core);
+        const processMessage = vi.fn().mockResolvedValue(undefined);
+        const registry = createBlueBubblesDebounceRegistry({ processMessage });
+        const account = createMockAccount({ coalesceSameSenderDms: true });
+        const target = {
+          account,
+          // Pin an explicit short debounce window so these tests stay
+          // decoupled from the coalesce-flag default (2500 ms). The
+          // "widens the default debounce window" test intentionally omits
+          // this override to exercise the new default.
+          config: { messages: { inbound: { byChannel: { bluebubbles: 500 } } } },
+          runtime: { log: vi.fn(), error: vi.fn() },
+          core,
+          path: "/bluebubbles-webhook",
+        };
+        const debouncer = registry.getOrCreateDebouncer(target);
+
+        const chatGuid = "iMessage;-;group-abc";
+
+        await debouncer.enqueue({
+          message: createDebounceTestMessage({
+            chatGuid,
+            text: "first",
+            messageId: "grp-msg-1",
+            isGroup: true,
+          }),
+          target,
+        });
+
+        await vi.advanceTimersByTimeAsync(300);
+
+        await debouncer.enqueue({
+          message: createDebounceTestMessage({
+            chatGuid,
+            text: "second",
+            messageId: "grp-msg-2",
+            isGroup: true,
+          }),
+          target,
+        });
+
+        await vi.advanceTimersByTimeAsync(600);
+
+        expect(processMessage).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("debounces DM control commands when coalesceSameSenderDms is on so a split-send URL can join the bucket", async () => {
+      vi.useFakeTimers();
+      try {
+        const core = createMockRuntime();
+        installTimingAwareInboundDebouncer(core);
+        const processMessage = vi.fn().mockResolvedValue(undefined);
+        const registry = createBlueBubblesDebounceRegistry({ processMessage });
+        const account = createMockAccount({ coalesceSameSenderDms: true });
+        const target = {
+          account,
+          // Pin an explicit short debounce window so these tests stay
+          // decoupled from the coalesce-flag default (2500 ms). The
+          // "widens the default debounce window" test intentionally omits
+          // this override to exercise the new default.
+          config: { messages: { inbound: { byChannel: { bluebubbles: 500 } } } },
+          runtime: { log: vi.fn(), error: vi.fn() },
+          core,
+          path: "/bluebubbles-webhook",
+        };
+        const debouncer = registry.getOrCreateDebouncer(target);
+
+        const chatGuid = "iMessage;-;+15551234567";
+        // Simulate a registered skill alias ("Dump") — normally this would
+        // flush immediately and miss its split-send URL. The coalesce flag
+        // must override that short-circuit for DMs specifically.
+        mockHasControlCommand.mockReturnValue(true);
+
+        await debouncer.enqueue({
+          message: createDebounceTestMessage({
+            chatGuid,
+            text: "Dump",
+            messageId: "cmd-msg-1",
+          }),
+          target,
+        });
+
+        // Apple/BlueBubbles delivers the URL ~750 ms later — well inside a
+        // reasonable coalesce window.
+        await vi.advanceTimersByTimeAsync(300);
+        expect(processMessage).not.toHaveBeenCalled();
+
+        await debouncer.enqueue({
+          message: createDebounceTestMessage({
+            chatGuid,
+            text: "https://example.com/article",
+            messageId: "cmd-msg-2",
+          }),
+          target,
+        });
+
+        await vi.advanceTimersByTimeAsync(600);
+
+        expect(processMessage).toHaveBeenCalledTimes(1);
+        expect(processMessage).toHaveBeenCalledWith(
+          expect.objectContaining({
+            text: "Dump https://example.com/article",
+            coalescedMessageIds: ["cmd-msg-1", "cmd-msg-2"],
+          }),
+          target,
+        );
+      } finally {
+        vi.useRealTimers();
+        mockHasControlCommand.mockReturnValue(false);
+      }
+    });
+
+    it("coalesces an orphan URL-balloon with a preceding DM control command (Apple split-send)", async () => {
+      vi.useFakeTimers();
+      try {
+        const core = createMockRuntime();
+        installTimingAwareInboundDebouncer(core);
+        const processMessage = vi.fn().mockResolvedValue(undefined);
+        const registry = createBlueBubblesDebounceRegistry({ processMessage });
+        const account = createMockAccount({ coalesceSameSenderDms: true });
+        const target = {
+          account,
+          // Pin an explicit short debounce window so these tests stay
+          // decoupled from the coalesce-flag default (2500 ms). The
+          // "widens the default debounce window" test intentionally omits
+          // this override to exercise the new default.
+          config: { messages: { inbound: { byChannel: { bluebubbles: 500 } } } },
+          runtime: { log: vi.fn(), error: vi.fn() },
+          core,
+          path: "/bluebubbles-webhook",
+        };
+        const debouncer = registry.getOrCreateDebouncer(target);
+
+        const chatGuid = "iMessage;-;+15551234567";
+        mockHasControlCommand.mockReturnValue(true);
+
+        // Matches the live trace from BB server:
+        //   20:45:13.232  New Message "Dump"
+        //   20:45:14.274  New Message "https://..."; Attachments: 3
+        // The second webhook arrives with balloonBundleId set (URL-preview
+        // balloon) but no associatedMessageGuid linking it back to "Dump" —
+        // this is Apple's orphan split-send. buildKey must still place it in
+        // the same dm:<chat>:<sender> bucket as the "Dump" event.
+        await debouncer.enqueue({
+          message: createDebounceTestMessage({
+            chatGuid,
+            text: "Dump",
+            messageId: "split-cmd",
+          }),
+          target,
+        });
+
+        // Stay inside the default 500 ms window so the bucket is still open
+        // when the URL-balloon arrives. Real traffic needs `messages.inbound.byChannel.bluebubbles`
+        // bumped to ~2500 ms for the observed ~800-1800 ms Apple split-send
+        // cadence; this unit test keeps the default window and just proves
+        // the key/shouldDebounce logic buckets both webhooks together.
+        await vi.advanceTimersByTimeAsync(300);
+
+        // The URL-balloon's text is not a registered command, so the mock
+        // must return false for that one call.
+        mockHasControlCommand.mockReturnValueOnce(false);
+        await debouncer.enqueue({
+          message: createDebounceTestMessage({
+            chatGuid,
+            text: "https://www.theverge.com/tech/906873/sofa-app-track-tv-movies-installer",
+            messageId: "split-url",
+            balloonBundleId: "com.apple.messages.URLBalloonProvider",
+          }),
+          target,
+        });
+
+        await vi.advanceTimersByTimeAsync(600);
+
+        expect(processMessage).toHaveBeenCalledTimes(1);
+        expect(processMessage).toHaveBeenCalledWith(
+          expect.objectContaining({
+            text: "Dump https://www.theverge.com/tech/906873/sofa-app-track-tv-movies-installer",
+            coalescedMessageIds: ["split-cmd", "split-url"],
+          }),
+          target,
+        );
+      } finally {
+        vi.useRealTimers();
+        mockHasControlCommand.mockReturnValue(false);
+      }
+    });
+
+    it("widens the default debounce window when coalesceSameSenderDms is enabled without explicit config", async () => {
+      vi.useFakeTimers();
+      try {
+        const core = createMockRuntime();
+        installTimingAwareInboundDebouncer(core);
+        const processMessage = vi.fn().mockResolvedValue(undefined);
+        const registry = createBlueBubblesDebounceRegistry({ processMessage });
+        const account = createMockAccount({ coalesceSameSenderDms: true });
+        const target = {
+          account,
+          // Intentionally NO messages.inbound.byChannel.bluebubbles —
+          // this test exercises the coalesce-flag default (2500 ms).
+          config: {},
+          runtime: { log: vi.fn(), error: vi.fn() },
+          core,
+          path: "/bluebubbles-webhook",
+        };
+        const debouncer = registry.getOrCreateDebouncer(target);
+
+        const chatGuid = "iMessage;-;+15551234567";
+
+        await debouncer.enqueue({
+          message: createDebounceTestMessage({
+            chatGuid,
+            text: "first",
+            messageId: "wide-1",
+          }),
+          target,
+        });
+
+        // 1500 ms is well outside the legacy 500 ms default but inside the
+        // 2500 ms coalesce default — without the new default, the first
+        // entry would flush alone before the second enqueue arrives.
+        await vi.advanceTimersByTimeAsync(1500);
+        expect(processMessage).not.toHaveBeenCalled();
+
+        await debouncer.enqueue({
+          message: createDebounceTestMessage({
+            chatGuid,
+            text: "second",
+            messageId: "wide-2",
+          }),
+          target,
+        });
+
+        await vi.advanceTimersByTimeAsync(3000);
+
+        expect(processMessage).toHaveBeenCalledTimes(1);
+        expect(processMessage).toHaveBeenCalledWith(
+          expect.objectContaining({
+            text: "first second",
+            coalescedMessageIds: ["wide-1", "wide-2"],
+          }),
+          target,
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps the legacy 500 ms default window when coalesceSameSenderDms is off", async () => {
+      vi.useFakeTimers();
+      try {
+        const core = createMockRuntime();
+        installTimingAwareInboundDebouncer(core);
+        const processMessage = vi.fn().mockResolvedValue(undefined);
+        const registry = createBlueBubblesDebounceRegistry({ processMessage });
+        const account = createMockAccount(); // flag off
+        const target = {
+          account,
+          config: {},
+          runtime: { log: vi.fn(), error: vi.fn() },
+          core,
+          path: "/bluebubbles-webhook",
+        };
+        const debouncer = registry.getOrCreateDebouncer(target);
+
+        await debouncer.enqueue({
+          message: createDebounceTestMessage({
+            chatGuid: "iMessage;-;+15551234567",
+            text: "only",
+            messageId: "legacy-1",
+          }),
+          target,
+        });
+
+        // Legacy behavior: flush within the tight 500 ms window so non-opt-in
+        // users keep their existing responsiveness.
+        await vi.advanceTimersByTimeAsync(600);
+        expect(processMessage).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps control commands instant for group chats even when coalesceSameSenderDms is enabled", async () => {
+      vi.useFakeTimers();
+      try {
+        const core = createMockRuntime();
+        installTimingAwareInboundDebouncer(core);
+        const processMessage = vi.fn().mockResolvedValue(undefined);
+        const registry = createBlueBubblesDebounceRegistry({ processMessage });
+        const account = createMockAccount({ coalesceSameSenderDms: true });
+        const target = {
+          account,
+          // Pin an explicit short debounce window so these tests stay
+          // decoupled from the coalesce-flag default (2500 ms). The
+          // "widens the default debounce window" test intentionally omits
+          // this override to exercise the new default.
+          config: { messages: { inbound: { byChannel: { bluebubbles: 500 } } } },
+          runtime: { log: vi.fn(), error: vi.fn() },
+          core,
+          path: "/bluebubbles-webhook",
+        };
+        const debouncer = registry.getOrCreateDebouncer(target);
+
+        mockHasControlCommand.mockReturnValue(true);
+
+        await debouncer.enqueue({
+          message: createDebounceTestMessage({
+            chatGuid: "iMessage;-;group-xyz",
+            text: "Dump",
+            messageId: "grp-cmd-1",
+            isGroup: true,
+          }),
+          target,
+        });
+
+        // Group-chat command must not wait for a hypothetical bucket-mate;
+        // the per-message debounce key never shares anyway, so instant flush
+        // is the correct behavior.
+        expect(processMessage).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+        mockHasControlCommand.mockReturnValue(false);
       }
     });
 

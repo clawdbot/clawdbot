@@ -48,6 +48,37 @@ function createOptions(
   } as unknown as GatewayRequestHandlerOptions;
 }
 
+function createRunningWhatsappContext() {
+  const startChannel = vi.fn();
+  const stopChannel = vi.fn();
+  return {
+    startChannel,
+    stopChannel,
+    context: {
+      stopChannel,
+      startChannel,
+      getRuntimeSnapshot: vi.fn(
+        (): ChannelRuntimeSnapshot => ({
+          channels: {
+            whatsapp: {
+              accountId: "default",
+              running: true,
+            },
+          },
+          channelAccounts: {
+            whatsapp: {
+              default: {
+                accountId: "default",
+                running: true,
+              },
+            },
+          },
+        }),
+      ),
+    } as unknown as GatewayRequestHandlerOptions["context"],
+  };
+}
+
 describe("webHandlers web.login.start", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -65,8 +96,7 @@ describe("webHandlers web.login.start", () => {
         gateway: { loginWithQrStart },
       },
     ]);
-    const startChannel = vi.fn();
-    const stopChannel = vi.fn();
+    const { context, startChannel, stopChannel } = createRunningWhatsappContext();
     const respond = vi.fn();
 
     await webHandlers["web.login.start"](
@@ -74,28 +104,7 @@ describe("webHandlers web.login.start", () => {
         { accountId: "default" },
         {
           respond,
-          context: {
-            stopChannel,
-            startChannel,
-            getRuntimeSnapshot: vi.fn(
-              (): ChannelRuntimeSnapshot => ({
-                channels: {
-                  whatsapp: {
-                    accountId: "default",
-                    running: true,
-                  },
-                },
-                channelAccounts: {
-                  whatsapp: {
-                    default: {
-                      accountId: "default",
-                      running: true,
-                    },
-                  },
-                },
-              }),
-            ),
-          } as unknown as GatewayRequestHandlerOptions["context"],
+          context,
         },
       ),
     );
@@ -124,35 +133,13 @@ describe("webHandlers web.login.start", () => {
         gateway: { loginWithQrStart },
       },
     ]);
-    const startChannel = vi.fn();
-    const stopChannel = vi.fn();
+    const { context, startChannel, stopChannel } = createRunningWhatsappContext();
 
     await webHandlers["web.login.start"](
       createOptions(
         { accountId: "default" },
         {
-          context: {
-            stopChannel,
-            startChannel,
-            getRuntimeSnapshot: vi.fn(
-              (): ChannelRuntimeSnapshot => ({
-                channels: {
-                  whatsapp: {
-                    accountId: "default",
-                    running: true,
-                  },
-                },
-                channelAccounts: {
-                  whatsapp: {
-                    default: {
-                      accountId: "default",
-                      running: true,
-                    },
-                  },
-                },
-              }),
-            ),
-          } as unknown as GatewayRequestHandlerOptions["context"],
+          context,
         },
       ),
     );

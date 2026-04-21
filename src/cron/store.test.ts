@@ -1,12 +1,31 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { setTimeout as scheduleNativeTimeout } from "node:timers";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createCronStoreHarness } from "./service.test-harness.js";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadCronStore, resolveCronStorePath, saveCronStore } from "./store.js";
 import type { CronStoreFile } from "./types.js";
 
-const { makeStorePath } = createCronStoreHarness({ prefix: "openclaw-cron-store-" });
+let fixtureRoot = "";
+let caseId = 0;
+
+beforeAll(async () => {
+  fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-store-"));
+});
+
+afterAll(async () => {
+  if (fixtureRoot) {
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+async function makeStorePath() {
+  const dir = path.join(fixtureRoot, `case-${caseId++}`);
+  await fs.mkdir(dir, { recursive: true });
+  return {
+    storePath: path.join(dir, "cron", "jobs.json"),
+  };
+}
 
 function makeStore(jobId: string, enabled: boolean): CronStoreFile {
   const now = Date.now();
@@ -27,6 +46,23 @@ function makeStore(jobId: string, enabled: boolean): CronStoreFile {
       },
     ],
   };
+}
+
+async function captureRenameDestinations(action: () => Promise<void>): Promise<string[]> {
+  const renamedDestinations: string[] = [];
+  const origRename = fs.rename.bind(fs);
+  const spy = vi.spyOn(fs, "rename").mockImplementation(async (src, dest) => {
+    renamedDestinations.push(String(dest));
+    return origRename(src, dest);
+  });
+
+  try {
+    await action();
+  } finally {
+    spy.mockRestore();
+  }
+
+  return renamedDestinations;
 }
 
 describe("resolveCronStorePath", () => {
@@ -109,8 +145,13 @@ describe("cron store", () => {
 
     const currentRaw = await fs.readFile(store.storePath, "utf-8");
     const backupRaw = await fs.readFile(`${store.storePath}.bak`, "utf-8");
-    expect(JSON.parse(currentRaw)).toEqual(second);
-    expect(JSON.parse(backupRaw)).toEqual(first);
+    const current = JSON.parse(currentRaw);
+    const backup = JSON.parse(backupRaw);
+    // jobs.json now contains config-only (state stripped to {}).
+    expect(current.jobs[0].id).toBe("job-2");
+    expect(current.jobs[0].state).toEqual({});
+    expect(backup.jobs[0].id).toBe("job-1");
+    expect(backup.jobs[0].state).toEqual({});
   });
 
   it("skips backup files for runtime-only state churn", async () => {
@@ -132,9 +173,238 @@ describe("cron store", () => {
     await saveCronStore(store.storePath, first);
     await saveCronStore(store.storePath, second);
 
-    const currentRaw = await fs.readFile(store.storePath, "utf-8");
-    expect(JSON.parse(currentRaw)).toEqual(second);
+    // jobs.json should NOT be rewritten (only runtime changed).
+    const configRaw = await fs.readFile(store.storePath, "utf-8");
+    const config = JSON.parse(configRaw);
+    expect(config.jobs[0].state).toEqual({});
+    expect(config.jobs[0]).not.toHaveProperty("updatedAtMs");
+
+    // State file should contain runtime fields.
+    const statePath = store.storePath.replace(/\.json$/, "-state.json");
+    const stateRaw = await fs.readFile(statePath, "utf-8");
+    const stateFile = JSON.parse(stateRaw);
+    expect(stateFile.jobs[first.jobs[0].id].state.nextRunAtMs).toBe(
+      first.jobs[0].createdAtMs + 60_000,
+    );
+
     await expect(fs.stat(`${store.storePath}.bak`)).rejects.toThrow();
+  });
+
+  it("keeps state separate for custom store paths without a json suffix", async () => {
+    const store = await makeStorePath();
+    const storePath = store.storePath.replace(/\.json$/, "");
+    const statePath = `${storePath}-state.json`;
+    const first = makeStore("job-1", true);
+    const second: CronStoreFile = {
+      ...first,
+      jobs: first.jobs.map((job) => ({
+        ...job,
+        updatedAtMs: job.updatedAtMs + 60_000,
+        state: {
+          ...job.state,
+          nextRunAtMs: job.createdAtMs + 60_000,
+        },
+      })),
+    };
+
+    await saveCronStore(storePath, first);
+    await saveCronStore(storePath, second);
+
+    const config = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(Array.isArray(config.jobs)).toBe(true);
+    expect(config.jobs[0].id).toBe("job-1");
+    expect(config.jobs[0].state).toEqual({});
+
+    const stateFile = JSON.parse(await fs.readFile(statePath, "utf-8"));
+    expect(stateFile.jobs["job-1"].state.nextRunAtMs).toBe(first.jobs[0].createdAtMs + 60_000);
+
+    const loaded = await loadCronStore(storePath);
+    expect(loaded.jobs[0]?.state.nextRunAtMs).toBe(first.jobs[0].createdAtMs + 60_000);
+  });
+
+  it("recreates a missing state sidecar without rewriting unchanged config", async () => {
+    const store = await makeStorePath();
+    const statePath = store.storePath.replace(/\.json$/, "-state.json");
+    const payload = makeStore("job-1", true);
+    payload.jobs[0].state = { nextRunAtMs: payload.jobs[0].createdAtMs + 60_000 };
+
+    await saveCronStore(store.storePath, payload);
+    await loadCronStore(store.storePath);
+    const configRawBefore = await fs.readFile(store.storePath, "utf-8");
+    await fs.rm(statePath);
+
+    const renamedDestinations = await captureRenameDestinations(() =>
+      saveCronStore(store.storePath, payload),
+    );
+
+    const configRawAfter = await fs.readFile(store.storePath, "utf-8");
+    const stateFile = JSON.parse(await fs.readFile(statePath, "utf-8"));
+
+    expect(configRawAfter).toBe(configRawBefore);
+    expect(renamedDestinations).toContain(statePath);
+    expect(renamedDestinations).not.toContain(store.storePath);
+    expect(stateFile.jobs["job-1"].state.nextRunAtMs).toBe(payload.jobs[0].createdAtMs + 60_000);
+  });
+
+  it("recreates a missing config file without rewriting unchanged state", async () => {
+    const store = await makeStorePath();
+    const statePath = store.storePath.replace(/\.json$/, "-state.json");
+    const payload = makeStore("job-1", true);
+    payload.jobs[0].state = { nextRunAtMs: payload.jobs[0].createdAtMs + 60_000 };
+
+    await saveCronStore(store.storePath, payload);
+    await loadCronStore(store.storePath);
+    const stateRawBefore = await fs.readFile(statePath, "utf-8");
+    await fs.rm(store.storePath);
+
+    const renamedDestinations = await captureRenameDestinations(() =>
+      saveCronStore(store.storePath, payload),
+    );
+
+    const config = JSON.parse(await fs.readFile(store.storePath, "utf-8"));
+    const stateRawAfter = await fs.readFile(statePath, "utf-8");
+
+    expect(config.jobs[0].id).toBe("job-1");
+    expect(config.jobs[0].state).toEqual({});
+    expect(stateRawAfter).toBe(stateRawBefore);
+    expect(renamedDestinations).toContain(store.storePath);
+    expect(renamedDestinations).not.toContain(statePath);
+  });
+
+  it("migrates legacy inline state into the state sidecar", async () => {
+    const store = await makeStorePath();
+    const statePath = store.storePath.replace(/\.json$/, "-state.json");
+    const legacy = makeStore("job-1", true);
+    legacy.jobs[0].state = {
+      lastRunAtMs: legacy.jobs[0].createdAtMs + 30_000,
+      nextRunAtMs: legacy.jobs[0].createdAtMs + 60_000,
+    };
+
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
+    await fs.writeFile(store.storePath, JSON.stringify(legacy, null, 2), "utf-8");
+
+    const loaded = await loadCronStore(store.storePath);
+    await saveCronStore(store.storePath, loaded);
+
+    const config = JSON.parse(await fs.readFile(store.storePath, "utf-8"));
+    const stateFile = JSON.parse(await fs.readFile(statePath, "utf-8"));
+
+    expect(config.jobs[0]).not.toHaveProperty("updatedAtMs");
+    expect(config.jobs[0].state).toEqual({});
+    expect(stateFile.jobs["job-1"].updatedAtMs).toBe(legacy.jobs[0].updatedAtMs);
+    expect(stateFile.jobs["job-1"].state.nextRunAtMs).toBe(legacy.jobs[0].createdAtMs + 60_000);
+  });
+
+  it("ignores array-shaped state sidecars when migrating legacy inline state", async () => {
+    const store = await makeStorePath();
+    const statePath = store.storePath.replace(/\.json$/, "-state.json");
+    // Numeric-looking IDs catch accidental array indexing in invalid sidecars.
+    const legacy = makeStore("0", true);
+    legacy.jobs[0].state = {
+      lastRunAtMs: legacy.jobs[0].createdAtMs + 30_000,
+      nextRunAtMs: legacy.jobs[0].createdAtMs + 60_000,
+    };
+    const staleSidecar = {
+      ...legacy,
+      jobs: [
+        {
+          ...legacy.jobs[0],
+          updatedAtMs: legacy.jobs[0].updatedAtMs + 10_000,
+          state: {
+            nextRunAtMs: legacy.jobs[0].createdAtMs + 120_000,
+          },
+        },
+      ],
+    };
+
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
+    await fs.writeFile(store.storePath, JSON.stringify(legacy, null, 2), "utf-8");
+    await fs.writeFile(statePath, JSON.stringify(staleSidecar, null, 2), "utf-8");
+
+    const loaded = await loadCronStore(store.storePath);
+    await saveCronStore(store.storePath, loaded);
+
+    const stateFile = JSON.parse(await fs.readFile(statePath, "utf-8"));
+
+    expect(loaded.jobs[0]?.updatedAtMs).toBe(legacy.jobs[0].updatedAtMs);
+    expect(loaded.jobs[0]?.state.nextRunAtMs).toBe(legacy.jobs[0].createdAtMs + 60_000);
+    expect(Array.isArray(stateFile.jobs)).toBe(false);
+    expect(stateFile.jobs["0"].updatedAtMs).toBe(legacy.jobs[0].updatedAtMs);
+    expect(stateFile.jobs["0"].state.nextRunAtMs).toBe(legacy.jobs[0].createdAtMs + 60_000);
+  });
+
+  it("treats a corrupt state sidecar as absent", async () => {
+    const store = await makeStorePath();
+    const payload = makeStore("job-1", true);
+    payload.jobs[0].state = { nextRunAtMs: payload.jobs[0].createdAtMs + 60_000 };
+    const statePath = store.storePath.replace(/\.json$/, "-state.json");
+
+    await saveCronStore(store.storePath, payload);
+    await fs.writeFile(statePath, "{ not json", "utf-8");
+
+    const loaded = await loadCronStore(store.storePath);
+
+    expect(loaded.jobs[0]?.updatedAtMs).toBe(payload.jobs[0].createdAtMs);
+    expect(loaded.jobs[0]?.state).toEqual({});
+  });
+
+  it("propagates unreadable state sidecar errors", async () => {
+    const store = await makeStorePath();
+    const payload = makeStore("job-1", true);
+    const statePath = store.storePath.replace(/\.json$/, "-state.json");
+
+    await saveCronStore(store.storePath, payload);
+
+    const origReadFile = fs.readFile.bind(fs);
+    const spy = vi.spyOn(fs, "readFile").mockImplementation(async (filePath, options) => {
+      if (filePath === statePath) {
+        const err = new Error("permission denied") as NodeJS.ErrnoException;
+        err.code = "EACCES";
+        throw err;
+      }
+      return origReadFile(filePath, options as never) as never;
+    });
+
+    try {
+      await expect(loadCronStore(store.storePath)).rejects.toThrow(/Failed to read cron state/);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("sanitizes invalid updatedAtMs values from the state sidecar", async () => {
+    const store = await makeStorePath();
+    const job = makeStore("job-1", true).jobs[0];
+    const config = {
+      version: 1,
+      jobs: [{ ...job, state: {}, updatedAtMs: undefined }],
+    };
+    const statePath = store.storePath.replace(/\.json$/, "-state.json");
+
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
+    await fs.writeFile(store.storePath, JSON.stringify(config, null, 2), "utf-8");
+    await fs.writeFile(
+      statePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: {
+            [job.id]: {
+              updatedAtMs: "invalid",
+              state: { nextRunAtMs: job.createdAtMs + 60_000 },
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const loaded = await loadCronStore(store.storePath);
+
+    expect(loaded.jobs[0]?.updatedAtMs).toBe(job.createdAtMs);
+    expect(loaded.jobs[0]?.state.nextRunAtMs).toBe(job.createdAtMs + 60_000);
   });
 
   it.skipIf(process.platform === "win32")(

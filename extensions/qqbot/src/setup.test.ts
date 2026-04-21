@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createPluginSetupWizardStatus } from "../../../test/helpers/plugins/setup-wizard.js";
 import { qqbotConfigAdapter, qqbotMeta, qqbotSetupAdapterShared } from "./channel-config-shared.js";
 import { DEFAULT_ACCOUNT_ID } from "./config.js";
+import { makeQqbotDefaultAccountConfig, makeQqbotSecretRefConfig } from "./qqbot-test-support.js";
 import { qqbotSetupWizard } from "./setup-surface.js";
 
 const qqbotSetupPlugin = {
@@ -89,18 +90,7 @@ describe("qqbot setup", () => {
   });
 
   it("marks unresolved SecretRef accounts as configured in setup-only plugin status", () => {
-    const cfg = {
-      channels: {
-        qqbot: {
-          appId: "123456",
-          clientSecret: {
-            source: "env",
-            provider: "default",
-            id: "QQBOT_CLIENT_SECRET",
-          },
-        },
-      },
-    } as OpenClawConfig;
+    const cfg = makeQqbotSecretRefConfig();
 
     const account = qqbotSetupPlugin.config.resolveAccount?.(cfg, DEFAULT_ACCOUNT_ID);
 
@@ -148,16 +138,7 @@ describe("qqbot setup", () => {
 
     expect(
       setup.resolveAccountId?.({
-        cfg: {
-          channels: {
-            qqbot: {
-              defaultAccount: "bot2",
-              accounts: {
-                bot2: { appId: "123456" },
-              },
-            },
-          },
-        } as OpenClawConfig,
+        cfg: makeQqbotDefaultAccountConfig(),
         accountId: undefined,
       } as never),
     ).toBe("bot2");

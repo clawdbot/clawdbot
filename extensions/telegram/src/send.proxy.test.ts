@@ -21,6 +21,10 @@ const { resolveTelegramFetch } = vi.hoisted(() => ({
   resolveTelegramFetch: vi.fn(),
 }));
 
+const resolveTelegramApiBase = vi.hoisted(
+  () => (apiRoot?: string) => apiRoot?.trim()?.replace(/\/+$/, "") || "https://api.telegram.org",
+);
+
 vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
     "openclaw/plugin-sdk/config-runtime",
@@ -37,8 +41,7 @@ vi.mock("./proxy.js", () => ({
 
 vi.mock("./fetch.js", () => ({
   resolveTelegramFetch,
-  resolveTelegramApiBase: (apiRoot?: string) =>
-    apiRoot?.trim()?.replace(/\/+$/, "") || "https://api.telegram.org",
+  resolveTelegramApiBase,
 }));
 
 vi.mock("grammy", () => ({

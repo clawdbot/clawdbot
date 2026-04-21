@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../../cron/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { getCronChannelOptions, parseCronToolsAllow, printCronList } from "./shared.js";
+import {
+  coerceCronDeliveryPreviews,
+  getCronChannelOptions,
+  parseCronToolsAllow,
+  printCronList,
+} from "./shared.js";
 
 const hoisted = vi.hoisted(() => ({
   listChannelPluginsMock: vi.fn(),
@@ -122,6 +127,32 @@ describe("printCronList", () => {
     expect(dataLine).toContain("sonnet");
   });
 
+  it("shows delivery preview when provided", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const job = createBaseJob({
+      id: "delivery-job",
+      name: "Delivery",
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: "hello" },
+    });
+
+    printCronList([job], runtime, {
+      deliveryPreviews: new Map([
+        [
+          "delivery-job",
+          {
+            label: "announce -> telegram:-100",
+            detail: "resolved from last, main session",
+          },
+        ],
+      ]),
+    });
+
+    expect(logs[0]).toContain("Delivery");
+    expect(logs[1]).toContain("announce -> telegram:-100");
+    expect(logs[1]).toContain("resolved from last");
+  });
+
   it("shows dash in Model column for systemEvent jobs", () => {
     const { logs, runtime } = createRuntimeLogCapture();
     const job = createBaseJob({
@@ -188,8 +219,8 @@ describe("getCronChannelOptions", () => {
   });
 
   it("lists discovered channel plugin ids when plugins are available", () => {
-    hoisted.listChannelPluginsMock.mockReturnValue([{ id: "telegram" }, { id: "signal" }]);
-    expect(getCronChannelOptions()).toBe("last|telegram|signal");
+    hoisted.listChannelPluginsMock.mockReturnValue([{ id: "quietchat" }, { id: "forum" }]);
+    expect(getCronChannelOptions()).toBe("last|quietchat|forum");
   });
 });
 
@@ -206,5 +237,27 @@ describe("parseCronToolsAllow", () => {
 
   it("returns undefined for empty input", () => {
     expect(parseCronToolsAllow(" ,  ")).toBeUndefined();
+  });
+});
+
+describe("coerceCronDeliveryPreviews", () => {
+  it("keeps gateway-provided preview entries", () => {
+    expect(
+      coerceCronDeliveryPreviews({
+        deliveryPreviews: {
+          job1: { label: "announce -> telegram:123", detail: "explicit" },
+        },
+      }).get("job1"),
+    ).toEqual({ label: "announce -> telegram:123", detail: "explicit" });
+  });
+
+  it("drops malformed preview entries", () => {
+    expect(
+      coerceCronDeliveryPreviews({
+        deliveryPreviews: {
+          job1: { label: "announce -> telegram:123" },
+        },
+      }).size,
+    ).toBe(0);
   });
 });

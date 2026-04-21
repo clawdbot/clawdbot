@@ -529,6 +529,193 @@ describe("createModelSelectionState respects session model override", () => {
   });
 });
 
+describe("createModelSelectionState auto-failover override self-healing", () => {
+  const defaultProvider = "mac-studio";
+  const defaultModel = "MiniMax-M2.7-MLX";
+  const sessionKey = "agent:main:telegram:direct:1";
+
+  async function resolveStateWithOverride(params: {
+    providerOverride: string;
+    modelOverride: string;
+    modelOverrideSource: "auto" | "user" | undefined;
+  }) {
+    const cfg = {} as OpenClawConfig;
+    const sessionEntry = makeEntry({
+      providerOverride: params.providerOverride,
+      modelOverride: params.modelOverride,
+      modelOverrideSource: params.modelOverrideSource,
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider,
+      defaultModel,
+      provider: defaultProvider,
+      model: defaultModel,
+      hasModelDirective: false,
+    });
+    return { state, sessionEntry, sessionStore };
+  }
+
+  it("clears auto-failover override and retries the configured primary", async () => {
+    const { state, sessionStore } = await resolveStateWithOverride({
+      providerOverride: "openrouter",
+      modelOverride: "minimax/minimax-m2.7",
+      modelOverrideSource: "auto",
+    });
+
+    // Provider/model should revert to the configured primary, not the fallback.
+    expect(state.provider).toBe(defaultProvider);
+    expect(state.model).toBe(defaultModel);
+    // The auto override should be cleared from session state.
+    expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverrideSource).toBeUndefined();
+    // resetModelOverride must NOT be set — it triggers a "Model override not allowed"
+    // system event which is incorrect for auto-heal (the override was valid).
+    expect(state.resetModelOverride).toBe(false);
+  });
+
+  it("clears a disallowed auto-failover override without reporting an allowlist reset", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: `${defaultProvider}/${defaultModel}` },
+          models: {
+            [`${defaultProvider}/${defaultModel}`]: {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionEntry = makeEntry({
+      providerOverride: "openrouter",
+      modelOverride: "minimax/minimax-m2.7",
+      modelOverrideSource: "auto",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider,
+      defaultModel,
+      provider: "openrouter",
+      model: "minimax/minimax-m2.7",
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe(defaultProvider);
+    expect(state.model).toBe(defaultModel);
+    expect(state.resetModelOverride).toBe(false);
+    expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverrideSource).toBeUndefined();
+  });
+
+  it("resets in-memory provider/model even when caller pre-loaded the fallback", async () => {
+    // Simulates get-reply-directives.ts preloading provider/model from stored override
+    // before calling createModelSelectionState. Our fix must update those in-memory
+    // values so the current turn retries the primary, not the fallback.
+    const cfg = {} as OpenClawConfig;
+    const sessionEntry = makeEntry({
+      providerOverride: "openrouter",
+      modelOverride: "minimax/minimax-m2.7",
+      modelOverrideSource: "auto",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider,
+      defaultModel,
+      // Caller already preloaded fallback values from stored override
+      provider: "openrouter",
+      model: "minimax/minimax-m2.7",
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe(defaultProvider);
+    expect(state.model).toBe(defaultModel);
+    expect(state.resetModelOverride).toBe(false);
+  });
+
+  it("preserves a user-selected override across turns", async () => {
+    const { state, sessionStore } = await resolveStateWithOverride({
+      providerOverride: "openrouter",
+      modelOverride: "minimax/minimax-m2.7",
+      modelOverrideSource: "user",
+    });
+
+    // User-selected override must persist.
+    expect(state.provider).toBe("openrouter");
+    expect(state.model).toBe("minimax/minimax-m2.7");
+    expect(sessionStore[sessionKey]?.providerOverride).toBe("openrouter");
+    expect(sessionStore[sessionKey]?.modelOverride).toBe("minimax/minimax-m2.7");
+    expect(state.resetModelOverride).toBe(false);
+  });
+
+  it("preserves a legacy override with no modelOverrideSource (treated as user)", async () => {
+    // Sessions persisted before modelOverrideSource was introduced lack the field.
+    // Backward-compat rule: missing source + present override = user selection.
+    const { state, sessionStore } = await resolveStateWithOverride({
+      providerOverride: "openrouter",
+      modelOverride: "minimax/minimax-m2.7",
+      modelOverrideSource: undefined,
+    });
+
+    expect(state.provider).toBe("openrouter");
+    expect(state.model).toBe("minimax/minimax-m2.7");
+    expect(sessionStore[sessionKey]?.modelOverride).toBe("minimax/minimax-m2.7");
+    expect(state.resetModelOverride).toBe(false);
+  });
+
+  it("does not touch an auto-failover override inherited from a parent session", async () => {
+    // Auto clearing only applies to a direct session override, not one inherited
+    // from a parent. The parent's own session state is managed separately.
+    const cfg = {} as OpenClawConfig;
+    const parentKey = "agent:main:telegram:direct:1";
+    const childKey = "agent:main:telegram:direct:1:thread:99";
+    const parentEntry = makeEntry({
+      providerOverride: "openrouter",
+      modelOverride: "minimax/minimax-m2.7",
+      modelOverrideSource: "auto",
+    });
+    const childEntry = makeEntry(); // no override of its own
+    const sessionStore = { [parentKey]: parentEntry, [childKey]: childEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry: childEntry,
+      sessionStore,
+      sessionKey: childKey,
+      parentSessionKey: parentKey,
+      defaultProvider,
+      defaultModel,
+      provider: defaultProvider,
+      model: defaultModel,
+      hasModelDirective: false,
+    });
+
+    // Parent auto-override is applied to the child (it has no direct override).
+    expect(state.provider).toBe("openrouter");
+    expect(state.model).toBe("minimax/minimax-m2.7");
+    // Parent session entry is not modified by the child's selection logic.
+    expect(sessionStore[parentKey]?.providerOverride).toBe("openrouter");
+    expect(state.resetModelOverride).toBe(false);
+  });
+});
+
 describe("createModelSelectionState resolveDefaultReasoningLevel", () => {
   it("returns on when catalog model has reasoning true", async () => {
     const { loadModelCatalog } = await import("../../agents/model-catalog.runtime.js");

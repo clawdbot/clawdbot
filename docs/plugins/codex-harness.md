@@ -263,7 +263,9 @@ By default, the plugin starts Codex locally with:
 codex app-server --listen stdio://
 ```
 
-You can keep that default and only tune Codex native policy:
+By default, OpenClaw asks Codex to request native approvals. You can tune that
+policy further, for example by tightening it and routing reviews through the
+guardian:
 
 ```json5
 {
@@ -273,7 +275,8 @@ You can keep that default and only tune Codex native policy:
         enabled: true,
         config: {
           appServer: {
-            approvalPolicy: "on-request",
+            approvalPolicy: "untrusted",
+            approvalsReviewer: "guardian_subagent",
             sandbox: "workspace-write",
             serviceTier: "priority",
           },
@@ -317,7 +320,7 @@ Supported `appServer` fields:
 | `authToken`         | unset                                    | Bearer token for WebSocket transport.                                    |
 | `headers`           | `{}`                                     | Extra WebSocket headers.                                                 |
 | `requestTimeoutMs`  | `60000`                                  | Timeout for app-server control-plane calls.                              |
-| `approvalPolicy`    | `"never"`                                | Native Codex approval policy sent to thread start/resume/turn.           |
+| `approvalPolicy`    | `"on-request"`                           | Native Codex approval policy sent to thread start/resume/turn.           |
 | `sandbox`           | `"workspace-write"`                      | Native Codex sandbox mode sent to thread start/resume.                   |
 | `approvalsReviewer` | `"user"`                                 | Use `"guardian_subagent"` to let Codex guardian review native approvals. |
 | `serviceTier`       | unset                                    | Optional Codex service tier, for example `"priority"`.                   |

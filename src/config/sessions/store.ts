@@ -34,11 +34,11 @@ import {
   type SessionStoreLockQueue,
   type SessionStoreLockTask,
 } from "./store-lock-state.js";
+import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
   getActiveSessionMaintenanceWarning,
   pruneStaleEntries,
-  resolveMaintenanceConfig,
   rotateSessionFile,
   type ResolvedSessionMaintenanceConfig,
   type SessionMaintenanceWarning,

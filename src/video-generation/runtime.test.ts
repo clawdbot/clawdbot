@@ -18,6 +18,23 @@ vi.mock("./provider-registry.js", () => ({
   listVideoGenerationProviders: mocks.listVideoGenerationProviders,
 }));
 
+function createProviderOptionsCaptureProvider(
+  capabilities: VideoGenerationProvider["capabilities"],
+): { provider: VideoGenerationProvider; getSeenProviderOptions: () => unknown } {
+  let seenProviderOptions: unknown;
+  return {
+    provider: {
+      id: "video-plugin",
+      capabilities,
+      async generateVideo(req) {
+        seenProviderOptions = req.providerOptions;
+        return { videos: [{ buffer: Buffer.from("x"), mimeType: "video/mp4" }] };
+      },
+    },
+    getSeenProviderOptions: () => seenProviderOptions,
+  };
+}
+
 describe("video-generation runtime", () => {
   beforeEach(() => {
     resetVideoGenerationRuntimeMocks();
@@ -137,21 +154,13 @@ describe("video-generation runtime", () => {
 
   it("forwards providerOptions to providers that declare the matching schema", async () => {
     mocks.resolveAgentModelPrimaryValue.mockReturnValue("video-plugin/vid-v1");
-    let seenProviderOptions: unknown;
-    const provider: VideoGenerationProvider = {
-      id: "video-plugin",
-      capabilities: {
-        providerOptions: {
-          seed: "number",
-          draft: "boolean",
-          camera_fixed: "boolean",
-        },
+    const { provider, getSeenProviderOptions } = createProviderOptionsCaptureProvider({
+      providerOptions: {
+        seed: "number",
+        draft: "boolean",
+        camera_fixed: "boolean",
       },
-      async generateVideo(req) {
-        seenProviderOptions = req.providerOptions;
-        return { videos: [{ buffer: Buffer.from("x"), mimeType: "video/mp4" }] };
-      },
-    };
+    });
     mocks.getVideoGenerationProvider.mockReturnValue(provider);
 
     await generateVideo({
@@ -162,22 +171,14 @@ describe("video-generation runtime", () => {
       providerOptions: { seed: 42, draft: true, camera_fixed: false },
     });
 
-    expect(seenProviderOptions).toEqual({ seed: 42, draft: true, camera_fixed: false });
+    expect(getSeenProviderOptions()).toEqual({ seed: 42, draft: true, camera_fixed: false });
   });
 
   it("passes providerOptions through to providers that do not declare any schema", async () => {
     // Undeclared schema = backward-compatible pass-through: the provider receives the
     // options and can handle or ignore them. No skip occurs.
     mocks.resolveAgentModelPrimaryValue.mockReturnValue("video-plugin/vid-v1");
-    let seenProviderOptions: unknown;
-    const provider: VideoGenerationProvider = {
-      id: "video-plugin",
-      capabilities: {}, // no providerOptions declared
-      async generateVideo(req) {
-        seenProviderOptions = req.providerOptions;
-        return { videos: [{ buffer: Buffer.from("x"), mimeType: "video/mp4" }] };
-      },
-    };
+    const { provider, getSeenProviderOptions } = createProviderOptionsCaptureProvider({});
     mocks.getVideoGenerationProvider.mockReturnValue(provider);
 
     await generateVideo({
@@ -188,7 +189,7 @@ describe("video-generation runtime", () => {
       providerOptions: { seed: 42 },
     });
 
-    expect(seenProviderOptions).toEqual({ seed: 42 });
+    expect(getSeenProviderOptions()).toEqual({ seed: 42 });
   });
 
   it("skips candidates that explicitly declare an empty providerOptions schema", async () => {
@@ -196,7 +197,11 @@ describe("video-generation runtime", () => {
     mocks.resolveAgentModelPrimaryValue.mockReturnValue("video-plugin/vid-v1");
     const provider: VideoGenerationProvider = {
       id: "video-plugin",
-      capabilities: { providerOptions: {} as Record<string, VideoGenerationProviderOptionType> }, // explicitly empty
+      capabilities: {
+        providerOptions: {
+          // explicitly empty
+        } as Record<string, VideoGenerationProviderOptionType>,
+      },
       async generateVideo() {
         throw new Error("should not be called");
       },

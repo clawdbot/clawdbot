@@ -72,6 +72,22 @@ type PluginInstallRequestKind =
   | "plugin-file"
   | "plugin-npm";
 
+type SkillInstallSpec = {
+  id?: string;
+  kind: "brew" | "node" | "go" | "uv" | "download";
+  label?: string;
+  bins?: string[];
+  os?: string[];
+  formula?: string;
+  package?: string;
+  module?: string;
+  url?: string;
+  archive?: string;
+  extract?: boolean;
+  stripComponents?: number;
+  targetDir?: string;
+};
+
 export type InstallSecurityScanResult = {
   blocked?: {
     code?: "security_scan_blocked" | "security_scan_failed";
@@ -581,21 +597,7 @@ async function runBeforeInstallHook(params: {
   builtinScan: BuiltinInstallScan;
   skill?: {
     installId: string;
-    installSpec?: {
-      id?: string;
-      kind: "brew" | "node" | "go" | "uv" | "download";
-      label?: string;
-      bins?: string[];
-      os?: string[];
-      formula?: string;
-      package?: string;
-      module?: string;
-      url?: string;
-      archive?: string;
-      extract?: boolean;
-      stripComponents?: number;
-      targetDir?: string;
-    };
+    installSpec?: SkillInstallSpec;
   };
   plugin?: {
     contentType: "bundle" | "package" | "file";
@@ -843,21 +845,7 @@ export async function scanFileInstallSourceRuntime(
 export async function scanSkillInstallSourceRuntime(params: {
   dangerouslyForceUnsafeInstall?: boolean;
   installId: string;
-  installSpec?: {
-    id?: string;
-    kind: "brew" | "node" | "go" | "uv" | "download";
-    label?: string;
-    bins?: string[];
-    os?: string[];
-    formula?: string;
-    package?: string;
-    module?: string;
-    url?: string;
-    archive?: string;
-    extract?: boolean;
-    stripComponents?: number;
-    targetDir?: string;
-  };
+  installSpec?: SkillInstallSpec;
   logger: InstallScanLogger;
   origin: string;
   skillName: string;

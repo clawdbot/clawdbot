@@ -1,14 +1,16 @@
 import fs from "node:fs/promises";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { WebSocket } from "ws";
 import {
-  connectOk,
+  loadGatewayConfig,
+  openAuthenticatedGatewayWs,
+  waitForGatewayWsClose,
+} from "./shared-auth.test-helpers.js";
+import {
   getFreePort,
   installGatewayTestHooks,
   rpcReq,
   startGatewayServer,
   testState,
-  trackConnectChallengeNonce,
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -71,45 +73,13 @@ function buildConfigSetWithRotatedToken(config: Record<string, unknown>): Record
   return next;
 }
 
-async function openAuthenticatedWs(token: string): Promise<WebSocket> {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-  trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve) => ws.once("open", resolve));
-  await connectOk(ws, { token });
-  return ws;
-}
-
-async function waitForClose(ws: WebSocket): Promise<{ code: number; reason: string }> {
-  return await new Promise((resolve) => {
-    ws.once("close", (code, reason) => {
-      resolve({ code, reason: reason.toString() });
-    });
-  });
-}
-
-async function loadCurrentConfig(ws: WebSocket): Promise<{
-  hash: string;
-  config: Record<string, unknown>;
-}> {
-  const current = await rpcReq<{
-    hash?: string;
-    config?: Record<string, unknown>;
-  }>(ws, "config.get", {});
-  expect(current.ok).toBe(true);
-  expect(typeof current.payload?.hash).toBe("string");
-  return {
-    hash: String(current.payload?.hash),
-    config: structuredClone(current.payload?.config ?? {}),
-  };
-}
-
 describe("gateway shared token session rotation", () => {
   it("invalidates shared-token websocket sessions after config.set rotation even with reload mode off", async () => {
-    const ws = await openAuthenticatedWs(OLD_TOKEN);
+    const ws = await openAuthenticatedGatewayWs(port, OLD_TOKEN);
     try {
-      const current = await loadCurrentConfig(ws);
+      const current = await loadGatewayConfig(ws);
       const nextConfig = buildConfigSetWithRotatedToken(current.config);
-      const closed = waitForClose(ws);
+      const closed = waitForGatewayWsClose(ws);
       const setRes = await rpcReq(ws, "config.set", {
         baseHash: current.hash,
         raw: JSON.stringify(nextConfig, null, 2),

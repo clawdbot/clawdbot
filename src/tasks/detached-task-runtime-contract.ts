@@ -97,6 +97,17 @@ export type DetachedTaskCancelResult = {
   task?: TaskRecord;
 };
 
+export type DetachedTaskRecoveryAttemptParams = {
+  taskId: string;
+  runtime: TaskRuntime;
+  task: TaskRecord;
+  now: number;
+};
+
+export type DetachedTaskRecoveryAttemptResult = {
+  recovered: boolean;
+};
+
 export type DetachedTaskLifecycleRuntime = {
   createQueuedTaskRun: (params: DetachedTaskCreateParams) => TaskRecord;
   createRunningTaskRun: (params: DetachedRunningTaskCreateParams) => TaskRecord;
@@ -112,6 +123,13 @@ export type DetachedTaskLifecycleRuntime = {
   cancelDetachedTaskRunById: (
     params: DetachedTaskCancelParams,
   ) => Promise<DetachedTaskCancelResult>;
+  /**
+   * Give a registered detached runtime one last chance to recover a stale task
+   * before core marks it lost during maintenance.
+   */
+  tryRecoverTaskBeforeMarkLost?: (
+    params: DetachedTaskRecoveryAttemptParams,
+  ) => DetachedTaskRecoveryAttemptResult | Promise<DetachedTaskRecoveryAttemptResult>;
 };
 
 export type DetachedTaskLifecycleRuntimeRegistration = {

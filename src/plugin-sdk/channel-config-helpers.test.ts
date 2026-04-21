@@ -54,6 +54,27 @@ function expectAdapterAllowFromAndDefaultTo(adapter: unknown) {
   ).toEqual({ enabled: true });
 }
 
+type DemoDmAccount = {
+  accountId?: string | null;
+  dmPolicy?: string;
+  allowFrom?: string[];
+};
+
+function createDemoDmSecurityResolver(
+  params: {
+    inheritSharedDefaultsFromDefaultAccount?: boolean;
+  } = {},
+) {
+  return createScopedDmSecurityResolver<DemoDmAccount>({
+    channelKey: "demo",
+    resolvePolicy: (account) => account.dmPolicy,
+    resolveAllowFrom: (account) => account.allowFrom,
+    policyPathSuffix: "dmPolicy",
+    normalizeEntry: (raw) => raw.toLowerCase(),
+    ...params,
+  });
+}
+
 describe("mapAllowFromEntries", () => {
   it.each([
     {
@@ -311,17 +332,7 @@ describe("createScopedChannelConfigAdapter", () => {
 
 describe("createScopedDmSecurityResolver", () => {
   it("builds account-aware DM policy payloads", () => {
-    const resolveDmPolicy = createScopedDmSecurityResolver<{
-      accountId?: string | null;
-      dmPolicy?: string;
-      allowFrom?: string[];
-    }>({
-      channelKey: "demo",
-      resolvePolicy: (account) => account.dmPolicy,
-      resolveAllowFrom: (account) => account.allowFrom,
-      policyPathSuffix: "dmPolicy",
-      normalizeEntry: (raw) => raw.toLowerCase(),
-    });
+    const resolveDmPolicy = createDemoDmSecurityResolver();
 
     expect(
       resolveDmPolicy({
@@ -352,16 +363,7 @@ describe("createScopedDmSecurityResolver", () => {
   });
 
   it("uses accounts.default paths when named accounts inherit shared defaults", () => {
-    const resolveDmPolicy = createScopedDmSecurityResolver<{
-      accountId?: string | null;
-      dmPolicy?: string;
-      allowFrom?: string[];
-    }>({
-      channelKey: "demo",
-      resolvePolicy: (account) => account.dmPolicy,
-      resolveAllowFrom: (account) => account.allowFrom,
-      policyPathSuffix: "dmPolicy",
-      normalizeEntry: (raw) => raw.toLowerCase(),
+    const resolveDmPolicy = createDemoDmSecurityResolver({
       inheritSharedDefaultsFromDefaultAccount: true,
     });
 
@@ -398,17 +400,7 @@ describe("createScopedDmSecurityResolver", () => {
   });
 
   it("ignores accounts.default paths unless the channel opts into shared default-account inheritance", () => {
-    const resolveDmPolicy = createScopedDmSecurityResolver<{
-      accountId?: string | null;
-      dmPolicy?: string;
-      allowFrom?: string[];
-    }>({
-      channelKey: "demo",
-      resolvePolicy: (account) => account.dmPolicy,
-      resolveAllowFrom: (account) => account.allowFrom,
-      policyPathSuffix: "dmPolicy",
-      normalizeEntry: (raw) => raw.toLowerCase(),
-    });
+    const resolveDmPolicy = createDemoDmSecurityResolver();
 
     expect(
       resolveDmPolicy({

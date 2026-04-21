@@ -1,3 +1,4 @@
+import { buildProfileQuery, withBaseUrl } from "./client-actions-url.js";
 import { fetchBrowserJson } from "./client-fetch.js";
 import type { BrowserTab, BrowserTransport, SnapshotAriaNode } from "./client.types.js";
 
@@ -76,18 +77,6 @@ export type SnapshotResult =
       imagePath?: string;
       imageType?: "png" | "jpeg";
     };
-
-function buildProfileQuery(profile?: string): string {
-  return profile ? `?profile=${encodeURIComponent(profile)}` : "";
-}
-
-function withBaseUrl(baseUrl: string | undefined, path: string): string {
-  const trimmed = baseUrl?.trim();
-  if (!trimmed) {
-    return path;
-  }
-  return `${trimmed.replace(/\/$/, "")}${path}`;
-}
 
 export async function browserStatus(
   baseUrl?: string,

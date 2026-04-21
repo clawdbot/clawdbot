@@ -1,21 +1,7 @@
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import "../../test-support/browser-security-runtime.mock.js";
 import type { BrowserServerState } from "./server-context.js";
-
-vi.mock("openclaw/plugin-sdk/browser-security-runtime", async () => {
-  const actual = await vi.importActual<
-    typeof import("openclaw/plugin-sdk/browser-security-runtime")
-  >("openclaw/plugin-sdk/browser-security-runtime");
-  const lookupFn = async (_hostname: string, options?: { all?: boolean }) => {
-    const result = { address: "93.184.216.34", family: 4 };
-    return options?.all === true ? [result] : result;
-  };
-  return {
-    ...actual,
-    resolvePinnedHostnameWithPolicy: (hostname: string, params: object = {}) =>
-      actual.resolvePinnedHostnameWithPolicy(hostname, { ...params, lookupFn: lookupFn as never }),
-  };
-});
 
 vi.mock("./chrome-mcp.js", () => ({
   closeChromeMcpSession: vi.fn(async () => true),
@@ -89,6 +75,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.useRealTimers();
 });
 
 describe("browser server-context existing-session profile", () => {
@@ -147,5 +134,26 @@ describe("browser server-context existing-session profile", () => {
       "/tmp/brave-profile",
     );
     expect(chromeMcp.closeChromeMcpSession).toHaveBeenCalledWith("chrome-live");
+  });
+
+  it("surfaces DevToolsActivePort attach failures instead of a generic tab timeout", async () => {
+    vi.useFakeTimers();
+    fs.mkdirSync("/tmp/brave-profile", { recursive: true });
+    vi.mocked(chromeMcp.listChromeMcpTabs).mockRejectedValue(
+      new Error(
+        "Could not connect to Chrome. Check if Chrome is running. Cause: Could not find DevToolsActivePort for chrome at /tmp/brave-profile/DevToolsActivePort",
+      ),
+    );
+
+    const state = makeState();
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const live = ctx.forProfile("chrome-live");
+
+    const pending = live.ensureBrowserAvailable();
+    const assertion = expect(pending).rejects.toThrow(
+      /could not connect to Chrome.*managed "openclaw" profile.*DevToolsActivePort/s,
+    );
+    await vi.advanceTimersByTimeAsync(8_000);
+    await assertion;
   });
 });

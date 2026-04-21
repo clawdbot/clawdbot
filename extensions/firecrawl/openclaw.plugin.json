@@ -30,6 +30,9 @@
     "webSearchProviders": ["firecrawl"],
     "tools": ["firecrawl_search", "firecrawl_scrape"]
   },
+  "configContracts": {
+    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

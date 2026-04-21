@@ -202,7 +202,7 @@ async function runStatusCommand(params: {
   spawn: (cmd: string, args: string[]) => ReturnType<typeof createExitedProcess>;
   spawnSync?: (cmd: string, args: string[]) => { status: number; stdout: string };
   env?: Record<string, string>;
-  runRuntimePostBuild?: (params?: { cwd?: string }) => void;
+  runRuntimePostBuild?: (params?: { cwd?: string }) => void | Promise<void>;
 }) {
   return await runNodeMain({
     cwd: params.tmp,
@@ -225,7 +225,7 @@ async function runQaCommand(params: {
   spawn: (cmd: string, args: string[]) => ReturnType<typeof createExitedProcess>;
   spawnSync?: (cmd: string, args: string[]) => { status: number; stdout: string };
   env?: Record<string, string>;
-  runRuntimePostBuild?: (params?: { cwd?: string }) => void;
+  runRuntimePostBuild?: (params?: { cwd?: string }) => void | Promise<void>;
 }) {
   return await runNodeMain({
     cwd: params.tmp,
@@ -619,6 +619,58 @@ describe("run-node script", () => {
     });
   });
 
+  it("serializes runtime postbuild restaging across concurrent clean launchers", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+        },
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+      });
+
+      let activePostbuilds = 0;
+      let maxActivePostbuilds = 0;
+      const runRuntimePostBuild = vi.fn(async () => {
+        activePostbuilds += 1;
+        maxActivePostbuilds = Math.max(maxActivePostbuilds, activePostbuilds);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        activePostbuilds -= 1;
+      });
+      const { spawn, spawnSync } = createSpawnRecorder({
+        gitHead: "abc123\n",
+        gitStatus: "",
+      });
+
+      await expect(
+        Promise.all([
+          runStatusCommand({
+            tmp,
+            spawn,
+            spawnSync,
+            env: {
+              OPENCLAW_RUN_NODE_BUILD_LOCK_POLL_MS: "1",
+            },
+            runRuntimePostBuild,
+          }),
+          runStatusCommand({
+            tmp,
+            spawn,
+            spawnSync,
+            env: {
+              OPENCLAW_RUN_NODE_BUILD_LOCK_POLL_MS: "1",
+            },
+            runRuntimePostBuild,
+          }),
+        ]),
+      ).resolves.toEqual([0, 0]);
+
+      expect(runRuntimePostBuild).toHaveBeenCalledTimes(2);
+      expect(maxActivePostbuilds).toBe(1);
+      expect(fsSync.existsSync(path.join(tmp, ".artifacts", "run-node-build.lock"))).toBe(false);
+    });
+  });
+
   it("returns the build exit code when the compiler step fails", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       const spawn = (cmd: string, args: string[] = []) => {
@@ -693,6 +745,9 @@ describe("run-node script", () => {
         execPath: process.execPath,
       });
 
+      while (spawn.mock.calls.length === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
       fakeProcess.emit("SIGTERM");
       const exitCode = await exitCodePromise;
 

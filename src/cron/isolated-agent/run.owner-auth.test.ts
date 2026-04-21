@@ -37,7 +37,7 @@ describe("runCronIsolatedAgentTurn owner auth", () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     resetRunCronIsolatedAgentTurnHarness();
     resolveDeliveryTargetMock.mockResolvedValue({
-      channel: "telegram",
+      channel: "forum",
       to: "123",
       accountId: undefined,
       error: undefined,

@@ -62,7 +62,7 @@ describe("createChannelPairingChallengeIssuer", () => {
     const upsertPairingRequest = vi.fn(async () => ({ code: "654321", created: true }));
     const { replies, sendPairingReply } = createReplyCollector();
     const issueChallenge = createChannelPairingChallengeIssuer({
-      channel: "signal",
+      channel: "quietchat",
       upsertPairingRequest,
     });
 

@@ -162,7 +162,7 @@ describe("buildSessionEntry", () => {
   });
 
   it("strips inbound metadata envelope from user messages before normalization", async () => {
-    // Real Telegram inbound envelope: Conversation info + Sender blocks prepended
+    // Representative inbound envelope: Conversation info + Sender blocks prepended
     // to the actual user text. Without stripping, the JSON envelope dominates
     // the corpus entry and the user's real words get truncated by the
     // SESSION_INGESTION_MAX_SNIPPET_CHARS cap downstream.

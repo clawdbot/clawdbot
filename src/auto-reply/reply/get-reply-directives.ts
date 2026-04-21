@@ -495,9 +495,14 @@ export async function resolveReplyDirectives(params: {
     (await modelState.resolveDefaultThinkingLevel()) ??
     (agentCfg?.thinkingDefault as ThinkLevel | undefined);
 
+  const thinkingExplicitlySet =
+    directives.thinkLevel !== undefined ||
+    targetSessionEntry?.thinkingLevel !== undefined ||
+    agentCfg?.thinkingDefault !== undefined;
+
   // When neither directive nor session nor agent set reasoning, default to model capability
   // (e.g. OpenRouter with reasoning: true). Skip model default when thinking is active
-  // to avoid redundant Reasoning: output alongside internal thinking blocks.
+  // or when thinking was explicitly disabled.
   const hasAgentReasoningDefault =
     agentEntry?.reasoningDefault !== undefined && agentEntry?.reasoningDefault !== null;
   const reasoningExplicitlySet =
@@ -506,7 +511,12 @@ export async function resolveReplyDirectives(params: {
       targetSessionEntry?.reasoningLevel !== null) ||
     hasAgentReasoningDefault;
   const thinkingActive = resolvedThinkLevelWithDefault !== "off";
-  if (!reasoningExplicitlySet && resolvedReasoningLevel === "off" && !thinkingActive) {
+  if (
+    !reasoningExplicitlySet &&
+    resolvedReasoningLevel === "off" &&
+    !thinkingActive &&
+    !thinkingExplicitlySet
+  ) {
     resolvedReasoningLevel = await modelState.resolveDefaultReasoningLevel();
   }
 

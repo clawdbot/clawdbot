@@ -18,6 +18,21 @@ vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
 let listCodexAppServerModels: typeof import("./models.js").listCodexAppServerModels;
 let resetSharedCodexAppServerClientForTests: typeof import("./shared-client.js").resetSharedCodexAppServerClientForTests;
 
+async function sendInitializeResult(
+  harness: ReturnType<typeof createClientHarness>,
+  userAgent: string,
+): Promise<void> {
+  await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(1));
+  const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
+  harness.send({ id: initialize.id, result: { userAgent } });
+}
+
+async function sendEmptyModelList(harness: ReturnType<typeof createClientHarness>): Promise<void> {
+  await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(3));
+  const modelList = JSON.parse(harness.writes[2] ?? "{}") as { id?: number };
+  harness.send({ id: modelList.id, result: { data: [] } });
+}
+
 describe("shared Codex app-server client", () => {
   beforeAll(async () => {
     ({ listCodexAppServerModels } = await import("./models.js"));
@@ -39,12 +54,7 @@ describe("shared Codex app-server client", () => {
     // Model discovery uses the shared-client path, which owns child teardown
     // when initialize discovers an unsupported app-server.
     const listPromise = listCodexAppServerModels({ timeoutMs: 1000 });
-    await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(1));
-    const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
-    harness.send({
-      id: initialize.id,
-      result: { userAgent: "openclaw/0.117.9 (macOS; test)" },
-    });
+    await sendInitializeResult(harness, "openclaw/0.117.9 (macOS; test)");
 
     await expect(listPromise).rejects.toThrow(
       `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required`,
@@ -67,15 +77,8 @@ describe("shared Codex app-server client", () => {
     expect(first.process.kill).toHaveBeenCalledTimes(1);
 
     const secondList = listCodexAppServerModels({ timeoutMs: 1000 });
-    await vi.waitFor(() => expect(second.writes.length).toBeGreaterThanOrEqual(1));
-    const initialize = JSON.parse(second.writes[0] ?? "{}") as { id?: number };
-    second.send({
-      id: initialize.id,
-      result: { userAgent: "openclaw/0.118.0 (macOS; test)" },
-    });
-    await vi.waitFor(() => expect(second.writes.length).toBeGreaterThanOrEqual(3));
-    const modelList = JSON.parse(second.writes[2] ?? "{}") as { id?: number };
-    second.send({ id: modelList.id, result: { data: [] } });
+    await sendInitializeResult(second, "openclaw/0.118.0 (macOS; test)");
+    await sendEmptyModelList(second);
 
     await expect(secondList).resolves.toEqual({ models: [] });
     expect(startSpy).toHaveBeenCalledTimes(2);
@@ -89,15 +92,8 @@ describe("shared Codex app-server client", () => {
       timeoutMs: 1000,
       authProfileId: "openai-codex:work",
     });
-    await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(1));
-    const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
-    harness.send({
-      id: initialize.id,
-      result: { userAgent: "openclaw/0.118.0 (macOS; test)" },
-    });
-    await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(3));
-    const modelList = JSON.parse(harness.writes[2] ?? "{}") as { id?: number };
-    harness.send({ id: modelList.id, result: { data: [] } });
+    await sendInitializeResult(harness, "openclaw/0.118.0 (macOS; test)");
+    await sendEmptyModelList(harness);
 
     await expect(listPromise).resolves.toEqual({ models: [] });
     expect(mocks.bridgeCodexAppServerStartOptions).toHaveBeenCalledWith(

@@ -79,12 +79,12 @@ export function buildOpenAIWebSocketResponseCreatePayload(params: {
       streamOpts?.reasoning ??
       (params.model.reasoning ? "high" : undefined),
   });
-  if (reasoningEffort !== "none" && (reasoningEffort || streamOpts?.reasoningSummary)) {
+  if (reasoningEffort || streamOpts?.reasoningSummary) {
     const reasoning: { effort?: string; summary?: string } = {};
     if (reasoningEffort !== undefined) {
       reasoning.effort = normalizeOpenAIReasoningEffort(reasoningEffort);
     }
-    if (streamOpts?.reasoningSummary !== undefined) {
+    if (reasoningEffort !== "none" && streamOpts?.reasoningSummary !== undefined) {
       reasoning.summary = streamOpts.reasoningSummary;
     }
     extraParams.reasoning = reasoning;

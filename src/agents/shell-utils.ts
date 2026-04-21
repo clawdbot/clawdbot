@@ -38,6 +38,19 @@ export function resolvePowerShellPath(): string {
   return "powershell.exe";
 }
 
+// Non-interactive placeholder shells that reject "-c"-style invocations.
+// macOS LaunchDaemon service users commonly use /usr/bin/false so login sessions
+// cannot be opened; honoring SHELL in that case causes every exec to exit 1.
+// See https://github.com/openclaw/openclaw/issues/69077.
+const NON_INTERACTIVE_SHELLS = new Set(["false", "nologin"]);
+
+function isNonInteractiveShell(shellPath: string): boolean {
+  if (!shellPath) {
+    return false;
+  }
+  return NON_INTERACTIVE_SHELLS.has(path.basename(shellPath));
+}
+
 export function getShellConfig(): { shell: string; args: string[] } {
   if (process.platform === "win32") {
     // Use PowerShell instead of cmd.exe on Windows.
@@ -51,7 +64,8 @@ export function getShellConfig(): { shell: string; args: string[] } {
     };
   }
 
-  const envShell = process.env.SHELL?.trim();
+  const rawEnvShell = process.env.SHELL?.trim();
+  const envShell = rawEnvShell && !isNonInteractiveShell(rawEnvShell) ? rawEnvShell : undefined;
   const shellName = envShell ? path.basename(envShell) : "";
   // Fish rejects common bashisms used by tools, so prefer bash when detected.
   if (shellName === "fish") {
@@ -64,8 +78,13 @@ export function getShellConfig(): { shell: string; args: string[] } {
       return { shell: sh, args: ["-c"] };
     }
   }
-  const shell = envShell && envShell.length > 0 ? envShell : "sh";
-  return { shell, args: ["-c"] };
+  if (envShell) {
+    return { shell: envShell, args: ["-c"] };
+  }
+  // Placeholder SHELL (or unset): prefer a resolved sh/bash on PATH so we do not
+  // re-invoke the placeholder and get a spurious exitCode=1.
+  const sh = resolveShellFromPath("sh") ?? resolveShellFromPath("bash");
+  return { shell: sh ?? "sh", args: ["-c"] };
 }
 
 export function resolveShellFromPath(name: string): string | undefined {
@@ -114,7 +133,7 @@ export function detectRuntimeShell(): string | undefined {
   }
 
   const envShell = process.env.SHELL?.trim();
-  if (envShell) {
+  if (envShell && !isNonInteractiveShell(envShell)) {
     const name = normalizeShellName(envShell);
     if (name) {
       return name;

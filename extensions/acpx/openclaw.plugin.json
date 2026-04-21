@@ -16,6 +16,10 @@
         "type": "string",
         "minLength": 1
       },
+      "probeAgent": {
+        "type": "string",
+        "minLength": 1
+      },
       "permissionMode": {
         "type": "string",
         "enum": ["approve-all", "approve-reads", "deny-all"]
@@ -86,6 +90,11 @@
     "stateDir": {
       "label": "State Directory",
       "help": "Directory used for embedded ACP session state and persistence."
+    },
+    "probeAgent": {
+      "label": "Health Probe Agent",
+      "help": "Agent id used for the embedded ACP runtime health probe. Defaults to Codex when unset.",
+      "advanced": true
     },
     "permissionMode": {
       "label": "Permission Mode",

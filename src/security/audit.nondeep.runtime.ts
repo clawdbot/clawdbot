@@ -22,8 +22,8 @@ export {
 export {
   collectSandboxBrowserHashLabelFindings,
   collectIncludeFilePermFindings,
-  collectPluginsTrustFindings,
   collectStateDeepFilesystemFindings,
   collectWorkspaceSkillSymlinkEscapeFindings,
   readConfigSnapshotForAudit,
 } from "./audit-extra.async.js";
+export { collectPluginsTrustFindings } from "./audit-plugins-trust.js";

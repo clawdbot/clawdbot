@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const providerRuntimeMocks = vi.hoisted(() => ({
   resolveProviderBinaryThinking: vi.fn(),
   resolveProviderDefaultThinkingLevel: vi.fn(),
+  resolveProviderThinkingProfile: vi.fn(),
   resolveProviderXHighThinking: vi.fn(),
 }));
 
@@ -10,6 +11,7 @@ let listThinkingLevelLabels: typeof import("./thinking.js").listThinkingLevelLab
 let listThinkingLevels: typeof import("./thinking.js").listThinkingLevels;
 let normalizeReasoningLevel: typeof import("./thinking.js").normalizeReasoningLevel;
 let normalizeThinkLevel: typeof import("./thinking.js").normalizeThinkLevel;
+let resolveSupportedThinkingLevel: typeof import("./thinking.js").resolveSupportedThinkingLevel;
 let resolveThinkingDefaultForModel: typeof import("./thinking.js").resolveThinkingDefaultForModel;
 
 async function loadFreshThinkingModuleForTest() {
@@ -17,6 +19,7 @@ async function loadFreshThinkingModuleForTest() {
   vi.doMock("../plugins/provider-thinking.js", () => ({
     resolveProviderBinaryThinking: providerRuntimeMocks.resolveProviderBinaryThinking,
     resolveProviderDefaultThinkingLevel: providerRuntimeMocks.resolveProviderDefaultThinkingLevel,
+    resolveProviderThinkingProfile: providerRuntimeMocks.resolveProviderThinkingProfile,
     resolveProviderXHighThinking: providerRuntimeMocks.resolveProviderXHighThinking,
   }));
   return await import("./thinking.js");
@@ -27,6 +30,8 @@ beforeEach(async () => {
   providerRuntimeMocks.resolveProviderBinaryThinking.mockReturnValue(undefined);
   providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockReset();
   providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockReturnValue(undefined);
+  providerRuntimeMocks.resolveProviderThinkingProfile.mockReset();
+  providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue(undefined);
   providerRuntimeMocks.resolveProviderXHighThinking.mockReset();
   providerRuntimeMocks.resolveProviderXHighThinking.mockReturnValue(undefined);
 
@@ -35,6 +40,7 @@ beforeEach(async () => {
     listThinkingLevels,
     normalizeReasoningLevel,
     normalizeThinkLevel,
+    resolveSupportedThinkingLevel,
     resolveThinkingDefaultForModel,
   } = await loadFreshThinkingModuleForTest());
 });
@@ -71,6 +77,11 @@ describe("normalizeThinkLevel", () => {
     expect(normalizeThinkLevel("adaptive")).toBe("adaptive");
     expect(normalizeThinkLevel("auto")).toBe("adaptive");
     expect(normalizeThinkLevel("Adaptive")).toBe("adaptive");
+  });
+
+  it("accepts max as its own level", () => {
+    expect(normalizeThinkLevel("max")).toBe("max");
+    expect(normalizeThinkLevel("MAX")).toBe("max");
   });
 });
 
@@ -113,9 +124,49 @@ describe("listThinkingLevels", () => {
     expect(listThinkingLevels(undefined, "gpt-4.1-mini")).not.toContain("xhigh");
   });
 
-  it("always includes adaptive", () => {
-    expect(listThinkingLevels(undefined, "gpt-4.1-mini")).toContain("adaptive");
+  it("does not include max without provider support", () => {
+    expect(listThinkingLevels("openai", "gpt-5.4")).not.toContain("max");
+  });
+
+  it("does not include adaptive without provider support", () => {
+    expect(listThinkingLevels(undefined, "gpt-4.1-mini")).not.toContain("adaptive");
+    expect(listThinkingLevels("openai", "gpt-5.4")).not.toContain("adaptive");
+  });
+
+  it("uses provider thinking profiles for adaptive and max support", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ provider }) =>
+      provider === "anthropic"
+        ? { levels: [{ id: "off" }, { id: "adaptive" }, { id: "max" }] }
+        : undefined,
+    );
+
     expect(listThinkingLevels("anthropic", "claude-opus-4-6")).toContain("adaptive");
+    expect(listThinkingLevels("anthropic", "claude-opus-4-7")).toContain("max");
+  });
+
+  it("uses provider thinking profiles ahead of legacy hooks", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [{ id: "off" }, { id: "low", label: "on" }],
+      defaultLevel: "off",
+    });
+    providerRuntimeMocks.resolveProviderXHighThinking.mockReturnValue(true);
+
+    expect(listThinkingLevels("demo", "demo-model")).toEqual(["off", "low"]);
+    expect(listThinkingLevelLabels("demo", "demo-model")).toEqual(["off", "on"]);
+  });
+
+  it("maps stale unsupported levels to the largest profile level", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [{ id: "off" }, { id: "high" }],
+    });
+
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "demo",
+        model: "demo-model",
+        level: "max",
+      }),
+    ).toBe("high");
   });
 });
 

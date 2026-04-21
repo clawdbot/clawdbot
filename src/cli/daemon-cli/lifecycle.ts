@@ -33,6 +33,13 @@ import type { DaemonLifecycleOptions } from "./types.js";
 
 const POST_RESTART_HEALTH_ATTEMPTS = DEFAULT_RESTART_HEALTH_ATTEMPTS;
 const POST_RESTART_HEALTH_DELAY_MS = DEFAULT_RESTART_HEALTH_DELAY_MS;
+const WINDOWS_POST_RESTART_HEALTH_TIMEOUT_MS = 180_000;
+
+function postRestartHealthAttempts(): number {
+  return process.platform === "win32"
+    ? Math.ceil(WINDOWS_POST_RESTART_HEALTH_TIMEOUT_MS / POST_RESTART_HEALTH_DELAY_MS)
+    : POST_RESTART_HEALTH_ATTEMPTS;
+}
 
 function formatRestartFailure(params: {
   health: GatewayRestartSnapshot;
@@ -183,7 +190,8 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   const restartPort = await resolveGatewayLifecyclePort(service).catch(() =>
     resolveGatewayPortFallback(),
   );
-  const restartWaitMs = POST_RESTART_HEALTH_ATTEMPTS * POST_RESTART_HEALTH_DELAY_MS;
+  const restartHealthAttempts = postRestartHealthAttempts();
+  const restartWaitMs = restartHealthAttempts * POST_RESTART_HEALTH_DELAY_MS;
   const restartWaitSeconds = Math.round(restartWaitMs / 1000);
 
   return await runServiceRestart({
@@ -204,7 +212,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       if (restartedWithoutServiceManager) {
         const health = await waitForGatewayHealthyListener({
           port: restartPort,
-          attempts: POST_RESTART_HEALTH_ATTEMPTS,
+          attempts: restartHealthAttempts,
           delayMs: POST_RESTART_HEALTH_DELAY_MS,
         });
         if (health.healthy) {
@@ -233,7 +241,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       let health = await waitForGatewayHealthyRestart({
         service,
         port: restartPort,
-        attempts: POST_RESTART_HEALTH_ATTEMPTS,
+        attempts: restartHealthAttempts,
         delayMs: POST_RESTART_HEALTH_DELAY_MS,
         includeUnknownListenersAsStale: process.platform === "win32",
       });
@@ -254,7 +262,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         health = await waitForGatewayHealthyRestart({
           service,
           port: restartPort,
-          attempts: POST_RESTART_HEALTH_ATTEMPTS,
+          attempts: restartHealthAttempts,
           delayMs: POST_RESTART_HEALTH_DELAY_MS,
           includeUnknownListenersAsStale: process.platform === "win32",
         });

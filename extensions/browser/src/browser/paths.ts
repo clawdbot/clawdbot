@@ -30,6 +30,12 @@ export const DEFAULT_DOWNLOAD_DIR = path.join(DEFAULT_BROWSER_TMP_DIR, "download
 export const DEFAULT_UPLOAD_DIR = path.join(DEFAULT_BROWSER_TMP_DIR, "uploads");
 
 type InvalidPathResult = { ok: false; error: string };
+type ResolvePathsWithinRootParams = {
+  rootDir: string;
+  requestedPaths: string[];
+  scopeLabel: string;
+};
+type ResolvePathsWithinRootResult = { ok: true; paths: string[] } | InvalidPathResult;
 
 function invalidPath(scopeLabel: string): InvalidPathResult {
   return {
@@ -146,11 +152,9 @@ export async function resolveWritablePathWithinRoot(params: {
   return lexical;
 }
 
-export function resolvePathsWithinRoot(params: {
-  rootDir: string;
-  requestedPaths: string[];
-  scopeLabel: string;
-}): { ok: true; paths: string[] } | { ok: false; error: string } {
+export function resolvePathsWithinRoot(
+  params: ResolvePathsWithinRootParams,
+): ResolvePathsWithinRootResult {
   const resolvedPaths: string[] = [];
   for (const raw of params.requestedPaths) {
     const pathResult = resolvePathWithinRoot({
@@ -166,34 +170,22 @@ export function resolvePathsWithinRoot(params: {
   return { ok: true, paths: resolvedPaths };
 }
 
-export async function resolveExistingPathsWithinRoot(params: {
-  rootDir: string;
-  requestedPaths: string[];
-  scopeLabel: string;
-}): Promise<{ ok: true; paths: string[] } | { ok: false; error: string }> {
-  return await resolveCheckedPathsWithinRoot({
-    ...params,
-    allowMissingFallback: true,
-  });
+export async function resolveExistingPathsWithinRoot(
+  params: ResolvePathsWithinRootParams,
+): Promise<ResolvePathsWithinRootResult> {
+  return await resolveCheckedPathsWithinRoot(params, true);
 }
 
-export async function resolveStrictExistingPathsWithinRoot(params: {
-  rootDir: string;
-  requestedPaths: string[];
-  scopeLabel: string;
-}): Promise<{ ok: true; paths: string[] } | { ok: false; error: string }> {
-  return await resolveCheckedPathsWithinRoot({
-    ...params,
-    allowMissingFallback: false,
-  });
+export async function resolveStrictExistingPathsWithinRoot(
+  params: ResolvePathsWithinRootParams,
+): Promise<ResolvePathsWithinRootResult> {
+  return await resolveCheckedPathsWithinRoot(params, false);
 }
 
-async function resolveCheckedPathsWithinRoot(params: {
-  rootDir: string;
-  requestedPaths: string[];
-  scopeLabel: string;
-  allowMissingFallback: boolean;
-}): Promise<{ ok: true; paths: string[] } | { ok: false; error: string }> {
+async function resolveCheckedPathsWithinRoot(
+  params: ResolvePathsWithinRootParams,
+  allowMissingFallback: boolean,
+): Promise<ResolvePathsWithinRootResult> {
   const rootDir = path.resolve(params.rootDir);
   // Keep historical behavior for missing roots and rely on openFileWithinRoot for final checks.
   const rootRealPath = await resolveRealPathIfExists(rootDir);
@@ -253,7 +245,7 @@ async function resolveCheckedPathsWithinRoot(params: {
       });
       resolvedPaths.push(opened.realPath);
     } catch (err) {
-      if (params.allowMissingFallback && err instanceof SafeOpenError && err.code === "not-found") {
+      if (allowMissingFallback && err instanceof SafeOpenError && err.code === "not-found") {
         // Preserve historical behavior for paths that do not exist yet.
         resolvedPaths.push(pathResult.fallbackPath);
         continue;

@@ -1,12 +1,9 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { getPairingAdapter } from "../channels/plugins/pairing.js";
 import type { ChannelPairingAdapter } from "../channels/plugins/pairing.types.js";
-import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import { withFileLock as withPathLock } from "../infra/file-lock.js";
-import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { readJsonFileWithFallback, writeJsonFileAtomically } from "../plugin-sdk/json-store.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import {
@@ -15,6 +12,19 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
+import {
+  clearAllowFromFileReadCacheForNamespace,
+  dedupePreserveOrder,
+  readAllowFromFileSyncWithExists,
+  readAllowFromFileWithExists,
+  resolveAllowFromAccountId,
+  resolveAllowFromFilePath,
+  resolvePairingCredentialsDir,
+  safeChannelKey,
+  setAllowFromFileReadCache,
+  shouldIncludeLegacyAllowFromEntries,
+  type AllowFromStore,
+} from "./allow-from-store-file.js";
 import type { PairingChannel } from "./pairing-store.types.js";
 export type { PairingChannel } from "./pairing-store.types.js";
 
@@ -32,15 +42,7 @@ const PAIRING_STORE_LOCK_OPTIONS = {
   },
   stale: 30_000,
 } as const;
-type AllowFromReadCacheEntry = {
-  exists: boolean;
-  mtimeMs: number | null;
-  size: number | null;
-  entries: string[];
-};
-type AllowFromStatLike = { mtimeMs: number; size: number } | null;
-
-const allowFromReadCache = new Map<string, AllowFromReadCacheEntry>();
+const PAIRING_ALLOW_FROM_CACHE_NAMESPACE = "pairing-store";
 
 export type PairingRequest = {
   id: string;
@@ -55,59 +57,8 @@ type PairingStore = {
   requests: PairingRequest[];
 };
 
-type AllowFromStore = {
-  version: 1;
-  allowFrom: string[];
-};
-
-function resolveCredentialsDir(env: NodeJS.ProcessEnv = process.env): string {
-  const stateDir = resolveStateDir(env, () => resolveRequiredHomeDir(env, os.homedir));
-  return resolveOAuthDir(env, stateDir);
-}
-
-/** Sanitize channel ID for use in filenames (prevent path traversal). */
-function safeChannelKey(channel: PairingChannel): string {
-  const raw = normalizeLowercaseStringOrEmpty(String(channel));
-  if (!raw) {
-    throw new Error("invalid pairing channel");
-  }
-  const safe = raw.replace(/[\\/:*?"<>|]/g, "_").replace(/\.\./g, "_");
-  if (!safe || safe === "_") {
-    throw new Error("invalid pairing channel");
-  }
-  return safe;
-}
-
 function resolvePairingPath(channel: PairingChannel, env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveCredentialsDir(env), `${safeChannelKey(channel)}-pairing.json`);
-}
-
-function safeAccountKey(accountId: string): string {
-  const raw = normalizeLowercaseStringOrEmpty(accountId);
-  if (!raw) {
-    throw new Error("invalid pairing account id");
-  }
-  const safe = raw.replace(/[\\/:*?"<>|]/g, "_").replace(/\.\./g, "_");
-  if (!safe || safe === "_") {
-    throw new Error("invalid pairing account id");
-  }
-  return safe;
-}
-
-function resolveAllowFromPath(
-  channel: PairingChannel,
-  env: NodeJS.ProcessEnv = process.env,
-  accountId?: string,
-): string {
-  const base = safeChannelKey(channel);
-  const normalizedAccountId = normalizeOptionalString(accountId) ?? "";
-  if (!normalizedAccountId) {
-    return path.join(resolveCredentialsDir(env), `${base}-allowFrom.json`);
-  }
-  return path.join(
-    resolveCredentialsDir(env),
-    `${base}-${safeAccountKey(normalizedAccountId)}-allowFrom.json`,
-  );
+  return path.join(resolvePairingCredentialsDir(env), `${safeChannelKey(channel)}-pairing.json`);
 }
 
 export function resolveChannelAllowFromPath(
@@ -115,7 +66,7 @@ export function resolveChannelAllowFromPath(
   env: NodeJS.ProcessEnv = process.env,
   accountId?: string,
 ): string {
-  return resolveAllowFromPath(channel, env, accountId);
+  return resolveAllowFromFilePath(channel, env, accountId);
 }
 
 async function readJsonFile<T>(
@@ -270,16 +221,6 @@ function requestMatchesAccountId(entry: PairingRequest, normalizedAccountId: str
   return resolvePairingRequestAccountId(entry) === normalizedAccountId;
 }
 
-function shouldIncludeLegacyAllowFromEntries(normalizedAccountId: string): boolean {
-  // Keep backward compatibility for legacy channel-scoped allowFrom only on default account.
-  // Non-default accounts should remain isolated to avoid cross-account implicit approvals.
-  return !normalizedAccountId || normalizedAccountId === DEFAULT_ACCOUNT_ID;
-}
-
-function resolveAllowFromAccountId(accountId?: string): string {
-  return normalizePairingAccountId(accountId) || DEFAULT_ACCOUNT_ID;
-}
-
 function normalizeId(value: string | number): string {
   return normalizeStringifiedOptionalString(value) ?? "";
 }
@@ -306,20 +247,6 @@ function normalizeAllowFromInput(channel: PairingChannel, entry: string | number
   return normalizeAllowEntry(channel, normalizeId(entry));
 }
 
-function dedupePreserveOrder(entries: string[]): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const entry of entries) {
-    const normalized = normalizeOptionalString(entry) ?? "";
-    if (!normalized || seen.has(normalized)) {
-      continue;
-    }
-    seen.add(normalized);
-    out.push(normalized);
-  }
-  return out;
-}
-
 async function readAllowFromStateForPath(
   channel: PairingChannel,
   filePath: string,
@@ -327,101 +254,15 @@ async function readAllowFromStateForPath(
   return (await readAllowFromStateForPathWithExists(channel, filePath)).entries;
 }
 
-function cloneAllowFromCacheEntry(entry: AllowFromReadCacheEntry): AllowFromReadCacheEntry {
-  return {
-    exists: entry.exists,
-    mtimeMs: entry.mtimeMs,
-    size: entry.size,
-    entries: entry.entries.slice(),
-  };
-}
-
-function setAllowFromReadCache(filePath: string, entry: AllowFromReadCacheEntry): void {
-  allowFromReadCache.set(filePath, cloneAllowFromCacheEntry(entry));
-}
-
-function resolveAllowFromReadCacheHit(params: {
-  filePath: string;
-  exists: boolean;
-  mtimeMs: number | null;
-  size: number | null;
-}): AllowFromReadCacheEntry | null {
-  const cached = allowFromReadCache.get(params.filePath);
-  if (!cached) {
-    return null;
-  }
-  if (cached.exists !== params.exists) {
-    return null;
-  }
-  if (!params.exists) {
-    return cloneAllowFromCacheEntry(cached);
-  }
-  if (cached.mtimeMs !== params.mtimeMs || cached.size !== params.size) {
-    return null;
-  }
-  return cloneAllowFromCacheEntry(cached);
-}
-
-function resolveAllowFromReadCacheOrMissing(
-  filePath: string,
-  stat: AllowFromStatLike,
-): { entries: string[]; exists: boolean } | null {
-  const cached = resolveAllowFromReadCacheHit({
-    filePath,
-    exists: Boolean(stat),
-    mtimeMs: stat?.mtimeMs ?? null,
-    size: stat?.size ?? null,
-  });
-  if (cached) {
-    return { entries: cached.entries, exists: cached.exists };
-  }
-  if (!stat) {
-    setAllowFromReadCache(filePath, {
-      exists: false,
-      mtimeMs: null,
-      size: null,
-      entries: [],
-    });
-    return { entries: [], exists: false };
-  }
-  return null;
-}
-
 async function readAllowFromStateForPathWithExists(
   channel: PairingChannel,
   filePath: string,
 ): Promise<{ entries: string[]; exists: boolean }> {
-  let stat: Awaited<ReturnType<typeof fs.promises.stat>> | null = null;
-  try {
-    stat = await fs.promises.stat(filePath);
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code !== "ENOENT") {
-      throw err;
-    }
-  }
-
-  const cachedOrMissing = resolveAllowFromReadCacheOrMissing(filePath, stat);
-  if (cachedOrMissing) {
-    return cachedOrMissing;
-  }
-  if (!stat) {
-    return { entries: [], exists: false };
-  }
-
-  const { value, exists } = await readJsonFile<AllowFromStore>(filePath, {
-    version: 1,
-    allowFrom: [],
+  return await readAllowFromFileWithExists({
+    cacheNamespace: PAIRING_ALLOW_FROM_CACHE_NAMESPACE,
+    filePath,
+    normalizeStore: (store) => normalizeAllowFromList(channel, store),
   });
-  const entries = normalizeAllowFromList(channel, value);
-  // stat is guaranteed non-null here: resolveAllowFromReadCacheOrMissing returns early when stat is null.
-  setAllowFromReadCache(filePath, {
-    exists,
-    mtimeMs: stat.mtimeMs,
-    size: stat.size,
-    entries,
-  });
-  return { entries, exists };
 }
 
 function readAllowFromStateForPathSync(channel: PairingChannel, filePath: string): string[] {
@@ -432,55 +273,11 @@ function readAllowFromStateForPathSyncWithExists(
   channel: PairingChannel,
   filePath: string,
 ): { entries: string[]; exists: boolean } {
-  let stat: fs.Stats | null = null;
-  try {
-    stat = fs.statSync(filePath);
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code !== "ENOENT") {
-      return { entries: [], exists: false };
-    }
-  }
-
-  const cachedOrMissing = resolveAllowFromReadCacheOrMissing(filePath, stat);
-  if (cachedOrMissing) {
-    return cachedOrMissing;
-  }
-  if (!stat) {
-    return { entries: [], exists: false };
-  }
-
-  let raw = "";
-  try {
-    raw = fs.readFileSync(filePath, "utf8");
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code === "ENOENT") {
-      return { entries: [], exists: false };
-    }
-    return { entries: [], exists: false };
-  }
-  // stat is guaranteed non-null here: resolveAllowFromReadCacheOrMissing returns early when stat is null.
-  try {
-    const parsed = JSON.parse(raw) as AllowFromStore;
-    const entries = normalizeAllowFromList(channel, parsed);
-    setAllowFromReadCache(filePath, {
-      exists: true,
-      mtimeMs: stat.mtimeMs,
-      size: stat.size,
-      entries,
-    });
-    return { entries, exists: true };
-  } catch {
-    // Keep parity with async reads: malformed JSON still means the file exists.
-    setAllowFromReadCache(filePath, {
-      exists: true,
-      mtimeMs: stat.mtimeMs,
-      size: stat.size,
-      entries: [],
-    });
-    return { entries: [], exists: true };
-  }
+  return readAllowFromFileSyncWithExists({
+    cacheNamespace: PAIRING_ALLOW_FROM_CACHE_NAMESPACE,
+    filePath,
+    normalizeStore: (store) => normalizeAllowFromList(channel, store),
+  });
 }
 
 async function readAllowFromState(params: {
@@ -506,11 +303,15 @@ async function writeAllowFromState(filePath: string, allowFrom: string[]): Promi
   try {
     stat = await fs.promises.stat(filePath);
   } catch {}
-  setAllowFromReadCache(filePath, {
-    exists: true,
-    mtimeMs: stat?.mtimeMs ?? null,
-    size: stat?.size ?? null,
-    entries: allowFrom.slice(),
+  setAllowFromFileReadCache({
+    cacheNamespace: PAIRING_ALLOW_FROM_CACHE_NAMESPACE,
+    filePath,
+    entry: {
+      exists: true,
+      mtimeMs: stat?.mtimeMs ?? null,
+      size: stat?.size ?? null,
+      entries: allowFrom.slice(),
+    },
   });
 }
 
@@ -519,7 +320,7 @@ async function readNonDefaultAccountAllowFrom(params: {
   env: NodeJS.ProcessEnv;
   accountId: string;
 }): Promise<string[]> {
-  const scopedPath = resolveAllowFromPath(params.channel, params.env, params.accountId);
+  const scopedPath = resolveAllowFromFilePath(params.channel, params.env, params.accountId);
   return await readAllowFromStateForPath(params.channel, scopedPath);
 }
 
@@ -528,7 +329,7 @@ function readNonDefaultAccountAllowFromSync(params: {
   env: NodeJS.ProcessEnv;
   accountId: string;
 }): string[] {
-  const scopedPath = resolveAllowFromPath(params.channel, params.env, params.accountId);
+  const scopedPath = resolveAllowFromFilePath(params.channel, params.env, params.accountId);
   return readAllowFromStateForPathSync(params.channel, scopedPath);
 }
 
@@ -540,7 +341,7 @@ async function updateAllowFromStoreEntry(params: {
   apply: (current: string[], normalized: string) => string[] | null;
 }): Promise<{ changed: boolean; allowFrom: string[] }> {
   const env = params.env ?? process.env;
-  const filePath = resolveAllowFromPath(params.channel, env, params.accountId);
+  const filePath = resolveAllowFromFilePath(params.channel, env, params.accountId);
   return await withFileLock(
     filePath,
     { version: 1, allowFrom: [] } satisfies AllowFromStore,
@@ -567,7 +368,7 @@ export async function readLegacyChannelAllowFromStore(
   channel: PairingChannel,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<string[]> {
-  const filePath = resolveAllowFromPath(channel, env);
+  const filePath = resolveAllowFromFilePath(channel, env);
   return await readAllowFromStateForPath(channel, filePath);
 }
 
@@ -585,11 +386,11 @@ export async function readChannelAllowFromStore(
       accountId: resolvedAccountId,
     });
   }
-  const scopedPath = resolveAllowFromPath(channel, env, resolvedAccountId);
+  const scopedPath = resolveAllowFromFilePath(channel, env, resolvedAccountId);
   const scopedEntries = await readAllowFromStateForPath(channel, scopedPath);
   // Backward compatibility: legacy channel-level allowFrom store was unscoped.
   // Keep honoring it for default account to prevent re-pair prompts after upgrades.
-  const legacyPath = resolveAllowFromPath(channel, env);
+  const legacyPath = resolveAllowFromFilePath(channel, env);
   const legacyEntries = await readAllowFromStateForPath(channel, legacyPath);
   return dedupePreserveOrder([...scopedEntries, ...legacyEntries]);
 }
@@ -598,7 +399,7 @@ export function readLegacyChannelAllowFromStoreSync(
   channel: PairingChannel,
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
-  const filePath = resolveAllowFromPath(channel, env);
+  const filePath = resolveAllowFromFilePath(channel, env);
   return readAllowFromStateForPathSync(channel, filePath);
 }
 
@@ -616,15 +417,15 @@ export function readChannelAllowFromStoreSync(
       accountId: resolvedAccountId,
     });
   }
-  const scopedPath = resolveAllowFromPath(channel, env, resolvedAccountId);
+  const scopedPath = resolveAllowFromFilePath(channel, env, resolvedAccountId);
   const scopedEntries = readAllowFromStateForPathSync(channel, scopedPath);
-  const legacyPath = resolveAllowFromPath(channel, env);
+  const legacyPath = resolveAllowFromFilePath(channel, env);
   const legacyEntries = readAllowFromStateForPathSync(channel, legacyPath);
   return dedupePreserveOrder([...scopedEntries, ...legacyEntries]);
 }
 
 export function clearPairingAllowFromReadCacheForTest(): void {
-  allowFromReadCache.clear();
+  clearAllowFromFileReadCacheForNamespace(PAIRING_ALLOW_FROM_CACHE_NAMESPACE);
 }
 
 type AllowFromStoreEntryUpdateParams = {

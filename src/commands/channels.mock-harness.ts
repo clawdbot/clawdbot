@@ -1,10 +1,6 @@
 import { vi } from "vitest";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 
-function buildBundledPluginModuleId(pluginId: string, artifactBasename: string): string {
-  return ["..", "..", "extensions", pluginId, artifactBasename].join("/");
-}
-
 const readConfigFileSnapshotMock = vi.fn() as unknown as MockFn;
 const writeConfigFileMock = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
 const replaceConfigFileMock = vi.fn(async (params: { nextConfig: unknown }) => {
@@ -53,8 +49,4 @@ vi.mock("../cli/command-config-resolution.js", () => ({
 
 vi.mock("../cli/command-secret-targets.js", () => ({
   getChannelsCommandSecretTargetIds: () => new Set<string>(),
-}));
-
-vi.mock(buildBundledPluginModuleId("telegram", "update-offset-runtime-api.js"), () => ({
-  deleteTelegramUpdateOffset: offsetMocks.deleteTelegramUpdateOffset,
 }));

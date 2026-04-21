@@ -107,16 +107,21 @@ function createMockRequest(
   return req;
 }
 
-function createMockResponse(): ServerResponse & {
+type MockResponse = {
   _getData: () => string;
   _getStatusCode: () => number;
-} {
+  write: (chunk: unknown) => boolean;
+  end: (chunk?: unknown) => MockResponse;
+  statusCode: number;
+};
+
+function createMockResponse(): MockResponse {
   let data = "";
   let statusCode = 200;
   const res = Object.assign(new ServerResponse({} as IncomingMessage), {
     _getData: () => data,
     _getStatusCode: () => statusCode,
-  });
+  }) as MockResponse;
 
   res.write = function (chunk: unknown) {
     data += responseChunkText(chunk);
@@ -139,8 +144,6 @@ function createMockResponse(): ServerResponse & {
 
   return res;
 }
-
-type MockResponse = ReturnType<typeof createMockResponse>;
 
 function createMockContext(overrides?: Partial<NostrProfileHttpContext>): NostrProfileHttpContext {
   return {
@@ -177,7 +180,7 @@ function createProfileHttpHarness(
     ctx,
     req,
     res,
-    run: () => handler(req, res),
+    run: () => handler(req, res as unknown as ServerResponse),
   };
 }
 
@@ -203,6 +206,27 @@ function mockSuccessfulProfileImport() {
     relaysQueried: [TEST_PROFILE_RELAY_URL],
     sourceRelay: TEST_PROFILE_RELAY_URL,
   });
+}
+
+async function expectAdminScopeRejected(params: {
+  scopes: readonly string[] | undefined;
+  method: string;
+  url: string;
+  body: unknown;
+  expectOperationNotCalled: () => void;
+}) {
+  setGatewayRuntimeScopes(params.scopes);
+  const { ctx, res, run } = createProfileHttpHarness(params.method, params.url, {
+    body: params.body,
+  });
+
+  await run();
+
+  expect(res._getStatusCode()).toBe(403);
+  const data = JSON.parse(res._getData());
+  expect(data.error).toBe("missing scope: operator.admin");
+  params.expectOperationNotCalled();
+  expect(ctx.updateConfigProfile).not.toHaveBeenCalled();
 }
 
 // ============================================================================
@@ -365,41 +389,23 @@ describe("nostr-profile-http", () => {
     });
 
     it("rejects profile mutation when gateway caller is missing operator.admin", async () => {
-      setGatewayRuntimeScopes(["operator.read"]);
-      const { ctx, res, run } = createProfileHttpHarness(
-        "PUT",
-        "/api/channels/nostr/default/profile",
-        {
-          body: { name: "attacker" },
-        },
-      );
-
-      await run();
-
-      expect(res._getStatusCode()).toBe(403);
-      const data = JSON.parse(res._getData());
-      expect(data.error).toBe("missing scope: operator.admin");
-      expect(publishNostrProfile).not.toHaveBeenCalled();
-      expect(ctx.updateConfigProfile).not.toHaveBeenCalled();
+      await expectAdminScopeRejected({
+        scopes: ["operator.read"],
+        method: "PUT",
+        url: "/api/channels/nostr/default/profile",
+        body: { name: "attacker" },
+        expectOperationNotCalled: () => expect(publishNostrProfile).not.toHaveBeenCalled(),
+      });
     });
 
     it("rejects profile mutation when gateway scope context is missing", async () => {
-      setGatewayRuntimeScopes(undefined);
-      const { ctx, res, run } = createProfileHttpHarness(
-        "PUT",
-        "/api/channels/nostr/default/profile",
-        {
-          body: { name: "attacker" },
-        },
-      );
-
-      await run();
-
-      expect(res._getStatusCode()).toBe(403);
-      const data = JSON.parse(res._getData());
-      expect(data.error).toBe("missing scope: operator.admin");
-      expect(publishNostrProfile).not.toHaveBeenCalled();
-      expect(ctx.updateConfigProfile).not.toHaveBeenCalled();
+      await expectAdminScopeRejected({
+        scopes: undefined,
+        method: "PUT",
+        url: "/api/channels/nostr/default/profile",
+        body: { name: "attacker" },
+        expectOperationNotCalled: () => expect(publishNostrProfile).not.toHaveBeenCalled(),
+      });
     });
 
     it("rejects private IP in picture URL (SSRF protection)", async () => {
@@ -564,41 +570,23 @@ describe("nostr-profile-http", () => {
     });
 
     it("rejects profile import when gateway caller is missing operator.admin", async () => {
-      setGatewayRuntimeScopes(["operator.read"]);
-      const { ctx, res, run } = createProfileHttpHarness(
-        "POST",
-        "/api/channels/nostr/default/profile/import",
-        {
-          body: { autoMerge: true },
-        },
-      );
-
-      await run();
-
-      expect(res._getStatusCode()).toBe(403);
-      const data = JSON.parse(res._getData());
-      expect(data.error).toBe("missing scope: operator.admin");
-      expect(importProfileFromRelays).not.toHaveBeenCalled();
-      expect(ctx.updateConfigProfile).not.toHaveBeenCalled();
+      await expectAdminScopeRejected({
+        scopes: ["operator.read"],
+        method: "POST",
+        url: "/api/channels/nostr/default/profile/import",
+        body: { autoMerge: true },
+        expectOperationNotCalled: () => expect(importProfileFromRelays).not.toHaveBeenCalled(),
+      });
     });
 
     it("rejects profile import when gateway scope context is missing", async () => {
-      setGatewayRuntimeScopes(undefined);
-      const { ctx, res, run } = createProfileHttpHarness(
-        "POST",
-        "/api/channels/nostr/default/profile/import",
-        {
-          body: { autoMerge: true },
-        },
-      );
-
-      await run();
-
-      expect(res._getStatusCode()).toBe(403);
-      const data = JSON.parse(res._getData());
-      expect(data.error).toBe("missing scope: operator.admin");
-      expect(importProfileFromRelays).not.toHaveBeenCalled();
-      expect(ctx.updateConfigProfile).not.toHaveBeenCalled();
+      await expectAdminScopeRejected({
+        scopes: undefined,
+        method: "POST",
+        url: "/api/channels/nostr/default/profile/import",
+        body: { autoMerge: true },
+        expectOperationNotCalled: () => expect(importProfileFromRelays).not.toHaveBeenCalled(),
+      });
     });
 
     it("auto-merges when requested", async () => {

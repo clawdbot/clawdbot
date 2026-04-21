@@ -3,6 +3,7 @@ import {
   buildPluginLoaderJitiOptions,
   createPluginLoaderJitiCacheKey,
   resolvePluginLoaderJitiConfig,
+  type PluginSdkResolutionPreference,
 } from "./sdk-alias.js";
 
 export type PluginJitiLoader = ReturnType<typeof createJiti>;
@@ -19,6 +20,7 @@ export function getCachedPluginJitiLoader(params: {
   createLoader?: PluginJitiLoaderFactory;
   aliasMap?: Record<string, string>;
   tryNative?: boolean;
+  pluginSdkResolution?: PluginSdkResolutionPreference;
   cacheScopeKey?: string;
 }): PluginJitiLoader {
   const jitiFilename = params.jitiFilename ?? params.modulePath;
@@ -38,23 +40,27 @@ export function getCachedPluginJitiLoader(params: {
           argv1: params.argvEntry ?? process.argv[1],
           moduleUrl: params.importerUrl,
           ...(params.preferBuiltDist ? { preferBuiltDist: true } : {}),
+          ...(params.pluginSdkResolution
+            ? { pluginSdkResolution: params.pluginSdkResolution }
+            : {}),
         })
       : null;
+  const canReuseDefaultCacheKey =
+    defaultConfig !== null &&
+    (!hasAliasOverride || params.aliasMap === defaultConfig.aliasMap) &&
+    (!hasTryNativeOverride || params.tryNative === defaultConfig.tryNative);
   const resolved = defaultConfig
     ? {
         tryNative: params.tryNative ?? defaultConfig.tryNative,
         aliasMap: params.aliasMap ?? defaultConfig.aliasMap,
-        cacheKey:
-          !hasAliasOverride &&
-          (!hasTryNativeOverride || params.tryNative === defaultConfig.tryNative)
-            ? defaultConfig.cacheKey
-            : undefined,
+        cacheKey: canReuseDefaultCacheKey ? defaultConfig.cacheKey : undefined,
       }
     : resolvePluginLoaderJitiConfig({
         modulePath: params.modulePath,
         argv1: params.argvEntry ?? process.argv[1],
         moduleUrl: params.importerUrl,
         ...(params.preferBuiltDist ? { preferBuiltDist: true } : {}),
+        ...(params.pluginSdkResolution ? { pluginSdkResolution: params.pluginSdkResolution } : {}),
       });
   const { tryNative, aliasMap } = resolved;
   const cacheKey =

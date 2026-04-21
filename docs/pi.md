@@ -225,7 +225,7 @@ Events handled include:
 - `tool_execution_start` / `tool_execution_update` / `tool_execution_end`
 - `turn_start` / `turn_end`
 - `agent_start` / `agent_end`
-- `auto_compaction_start` / `auto_compaction_end`
+- `compaction_start` / `compaction_end`
 
 ### 4. Prompting
 

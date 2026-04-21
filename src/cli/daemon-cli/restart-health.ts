@@ -20,7 +20,7 @@ export const DEFAULT_RESTART_HEALTH_ATTEMPTS = Math.ceil(
   DEFAULT_RESTART_HEALTH_TIMEOUT_MS / DEFAULT_RESTART_HEALTH_DELAY_MS,
 );
 const STOPPED_FREE_EARLY_EXIT_GRACE_MS = 10_000;
-const WINDOWS_STOPPED_FREE_EARLY_EXIT_GRACE_MS = 25_000;
+const WINDOWS_STOPPED_FREE_EARLY_EXIT_GRACE_MS = 90_000;
 
 export type GatewayRestartWaitOutcome = "healthy" | "stale-pids" | "stopped-free" | "timeout";
 

@@ -29,6 +29,42 @@ vi.mock("../terminal/note.js", () => ({
 describe("noteDevicePairingHealth", () => {
   let noteDevicePairingHealth: typeof import("./doctor-device-pairing.js").noteDevicePairingHealth;
 
+  async function withApprovedOperatorPairing(
+    run: (context: {
+      stateDir: string;
+      identity: ReturnType<typeof loadOrCreateDeviceIdentity>;
+      publicKey: string;
+      initial: Awaited<ReturnType<typeof requestDevicePairing>>;
+    }) => Promise<void>,
+  ): Promise<void> {
+    await withTempDir("openclaw-doctor-device-pairing-", async (stateDir) => {
+      await withEnvAsync(
+        {
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_TEST_FAST: "1",
+        },
+        async () => {
+          const identity = loadOrCreateDeviceIdentity();
+          const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
+          const initial = await requestDevicePairing({
+            deviceId: identity.deviceId,
+            publicKey,
+            role: "operator",
+            scopes: ["operator.read"],
+            clientId: "control-ui",
+            clientMode: "webchat",
+            displayName: "Dashboard",
+          });
+          await approveDevicePairing(initial.request.requestId, {
+            callerScopes: ["operator.read"],
+          });
+
+          await run({ stateDir, identity, publicKey, initial });
+        },
+      );
+    });
+  }
+
   beforeEach(async () => {
     vi.resetModules();
     callGatewayMock.mockReset();
@@ -42,112 +78,67 @@ describe("noteDevicePairingHealth", () => {
   });
 
   it("warns about pending scope upgrades from local pairing state when the gateway is down", async () => {
-    await withTempDir("openclaw-doctor-device-pairing-", async (stateDir) => {
-      await withEnvAsync(
-        {
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_TEST_FAST: "1",
-        },
-        async () => {
-          const identity = loadOrCreateDeviceIdentity();
-          const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
-          const initial = await requestDevicePairing({
-            deviceId: identity.deviceId,
-            publicKey,
-            role: "operator",
-            scopes: ["operator.read"],
-            clientId: "control-ui",
-            clientMode: "webchat",
-            displayName: "Dashboard",
-          });
-          await approveDevicePairing(initial.request.requestId, {
-            callerScopes: ["operator.read"],
-          });
-          await requestDevicePairing({
-            deviceId: identity.deviceId,
-            publicKey,
-            role: "operator",
-            scopes: ["operator.admin"],
-            clientId: "control-ui",
-            clientMode: "webchat",
-            displayName: "Dashboard",
-          });
+    await withApprovedOperatorPairing(async ({ identity, publicKey }) => {
+      await requestDevicePairing({
+        deviceId: identity.deviceId,
+        publicKey,
+        role: "operator",
+        scopes: ["operator.admin"],
+        clientId: "control-ui",
+        clientMode: "webchat",
+        displayName: "Dashboard",
+      });
 
-          await noteDevicePairingHealth({
-            cfg: { gateway: { mode: "local" } },
-            healthOk: false,
-          });
+      await noteDevicePairingHealth({
+        cfg: { gateway: { mode: "local" } },
+        healthOk: false,
+      });
 
-          expect(noteMock).toHaveBeenCalledTimes(1);
-          const message = String(noteMock.mock.calls[0]?.[0] ?? "");
-          expect(noteMock.mock.calls[0]?.[1]).toBe("Device pairing");
-          expect(message).toContain("Pending scope upgrade");
-          expect(message).toContain("operator.admin");
-          expect(message).toContain("openclaw devices approve");
-          expect(callGatewayMock).not.toHaveBeenCalled();
-        },
-      );
+      expect(noteMock).toHaveBeenCalledTimes(1);
+      const message = String(noteMock.mock.calls[0]?.[0] ?? "");
+      expect(noteMock.mock.calls[0]?.[1]).toBe("Device pairing");
+      expect(message).toContain("Pending scope upgrade");
+      expect(message).toContain("operator.admin");
+      expect(message).toContain("openclaw devices approve");
+      expect(callGatewayMock).not.toHaveBeenCalled();
     });
   });
 
   it("warns when the local cached device token predates the gateway rotation", async () => {
-    await withTempDir("openclaw-doctor-device-pairing-", async (stateDir) => {
-      await withEnvAsync(
-        {
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_TEST_FAST: "1",
-        },
-        async () => {
-          const identity = loadOrCreateDeviceIdentity();
-          const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
-          const initial = await requestDevicePairing({
-            deviceId: identity.deviceId,
-            publicKey,
-            role: "operator",
-            scopes: ["operator.read"],
-            clientId: "control-ui",
-            clientMode: "webchat",
-            displayName: "Dashboard",
-          });
-          await approveDevicePairing(initial.request.requestId, {
-            callerScopes: ["operator.read"],
-          });
+    await withApprovedOperatorPairing(async ({ stateDir, identity }) => {
+      storeDeviceAuthToken({
+        deviceId: identity.deviceId,
+        role: "operator",
+        token: "stale-local-token",
+        scopes: ["operator.read"],
+      });
+      const deviceAuthPath = path.join(stateDir, "identity", "device-auth.json");
+      const store = JSON.parse(await fs.readFile(deviceAuthPath, "utf8")) as {
+        version: 1;
+        deviceId: string;
+        tokens: Record<
+          string,
+          { token: string; role: string; scopes: string[]; updatedAtMs: number }
+        >;
+      };
+      store.tokens.operator.updatedAtMs = 1;
+      await fs.writeFile(deviceAuthPath, `${JSON.stringify(store, null, 2)}\n`, "utf8");
 
-          storeDeviceAuthToken({
-            deviceId: identity.deviceId,
-            role: "operator",
-            token: "stale-local-token",
-            scopes: ["operator.read"],
-          });
-          const deviceAuthPath = path.join(stateDir, "identity", "device-auth.json");
-          const store = JSON.parse(await fs.readFile(deviceAuthPath, "utf8")) as {
-            version: 1;
-            deviceId: string;
-            tokens: Record<
-              string,
-              { token: string; role: string; scopes: string[]; updatedAtMs: number }
-            >;
-          };
-          store.tokens.operator.updatedAtMs = 1;
-          await fs.writeFile(deviceAuthPath, `${JSON.stringify(store, null, 2)}\n`, "utf8");
+      const rotated = await rotateDeviceToken({
+        deviceId: identity.deviceId,
+        role: "operator",
+      });
+      expect(rotated.ok).toBe(true);
 
-          const rotated = await rotateDeviceToken({
-            deviceId: identity.deviceId,
-            role: "operator",
-          });
-          expect(rotated.ok).toBe(true);
+      await noteDevicePairingHealth({
+        cfg: { gateway: { mode: "local" } },
+        healthOk: false,
+      });
 
-          await noteDevicePairingHealth({
-            cfg: { gateway: { mode: "local" } },
-            healthOk: false,
-          });
-
-          expect(noteMock).toHaveBeenCalledTimes(1);
-          const message = String(noteMock.mock.calls[0]?.[0] ?? "");
-          expect(message).toContain("stale device-token pattern");
-          expect(message).toContain("openclaw devices rotate");
-        },
-      );
+      expect(noteMock).toHaveBeenCalledTimes(1);
+      const message = String(noteMock.mock.calls[0]?.[0] ?? "");
+      expect(message).toContain("stale device-token pattern");
+      expect(message).toContain("openclaw devices rotate");
     });
   });
 
@@ -264,48 +255,26 @@ describe("noteDevicePairingHealth", () => {
   });
 
   it("does not duplicate missing-token warnings when local cache exists for an approved role", async () => {
-    await withTempDir("openclaw-doctor-device-pairing-", async (stateDir) => {
-      await withEnvAsync(
-        {
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_TEST_FAST: "1",
-        },
-        async () => {
-          const identity = loadOrCreateDeviceIdentity();
-          const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
-          const initial = await requestDevicePairing({
-            deviceId: identity.deviceId,
-            publicKey,
-            role: "operator",
-            scopes: ["operator.read"],
-            clientId: "control-ui",
-            clientMode: "webchat",
-            displayName: "Dashboard",
-          });
-          await approveDevicePairing(initial.request.requestId, {
-            callerScopes: ["operator.read"],
-          });
-          storeDeviceAuthToken({
-            deviceId: identity.deviceId,
-            role: "operator",
-            token: "stale-local-token",
-            scopes: ["operator.read"],
-          });
-          await revokeDeviceToken({
-            deviceId: identity.deviceId,
-            role: "operator",
-          });
+    await withApprovedOperatorPairing(async ({ identity }) => {
+      storeDeviceAuthToken({
+        deviceId: identity.deviceId,
+        role: "operator",
+        token: "stale-local-token",
+        scopes: ["operator.read"],
+      });
+      await revokeDeviceToken({
+        deviceId: identity.deviceId,
+        role: "operator",
+      });
 
-          await noteDevicePairingHealth({
-            cfg: { gateway: { mode: "local" } },
-            healthOk: false,
-          });
+      await noteDevicePairingHealth({
+        cfg: { gateway: { mode: "local" } },
+        healthOk: false,
+      });
 
-          const message = String(noteMock.mock.calls[0]?.[0] ?? "");
-          expect(message).toContain("has no active operator device token");
-          expect(message).not.toContain("no longer has a matching active gateway token");
-        },
-      );
+      const message = String(noteMock.mock.calls[0]?.[0] ?? "");
+      expect(message).toContain("has no active operator device token");
+      expect(message).not.toContain("no longer has a matching active gateway token");
     });
   });
 });

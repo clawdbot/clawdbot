@@ -13,8 +13,27 @@ import {
   setDetachedTaskLifecycleRuntime,
   setDetachedTaskDeliveryStatusByRunId,
   startTaskRunByRunId,
+  tryRecoverTaskBeforeMarkLost,
 } from "./detached-task-runtime.js";
 import type { TaskRecord } from "./task-registry.types.js";
+
+const { mockLogWarn } = vi.hoisted(() => ({
+  mockLogWarn: vi.fn(),
+}));
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({
+    subsystem: "tasks/detached-runtime",
+    isEnabled: () => true,
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: mockLogWarn,
+    error: vi.fn(),
+    fatal: vi.fn(),
+    raw: vi.fn(),
+    child: vi.fn(),
+  }),
+}));
 
 function createFakeTaskRecord(overrides?: Partial<TaskRecord>): TaskRecord {
   return {
@@ -36,6 +55,7 @@ function createFakeTaskRecord(overrides?: Partial<TaskRecord>): TaskRecord {
 describe("detached-task-runtime", () => {
   afterEach(() => {
     resetDetachedTaskLifecycleRuntimeForTests();
+    mockLogWarn.mockClear();
   });
 
   it("dispatches lifecycle operations through the installed runtime", async () => {
@@ -144,5 +164,114 @@ describe("detached-task-runtime", () => {
       runtime,
     });
     expect(getDetachedTaskLifecycleRuntime()).toBe(runtime);
+  });
+
+  describe("tryRecoverTaskBeforeMarkLost", () => {
+    it("returns recovered when hook returns recovered true", async () => {
+      const task = createFakeTaskRecord({ taskId: "task-recover", runtime: "subagent" });
+      setDetachedTaskLifecycleRuntime({
+        ...getDetachedTaskLifecycleRuntime(),
+        tryRecoverTaskBeforeMarkLost: vi.fn(() => ({ recovered: true })),
+      });
+      const result = await tryRecoverTaskBeforeMarkLost({
+        taskId: task.taskId,
+        runtime: task.runtime,
+        task,
+        now: 123,
+      });
+      expect(result).toEqual({ recovered: true });
+    });
+
+    it("returns not recovered when hook returns recovered false", async () => {
+      const task = createFakeTaskRecord({ taskId: "task-no-recover", runtime: "cron" });
+      setDetachedTaskLifecycleRuntime({
+        ...getDetachedTaskLifecycleRuntime(),
+        tryRecoverTaskBeforeMarkLost: vi.fn(() => ({ recovered: false })),
+      });
+      const result = await tryRecoverTaskBeforeMarkLost({
+        taskId: task.taskId,
+        runtime: task.runtime,
+        task,
+        now: 456,
+      });
+      expect(result).toEqual({ recovered: false });
+    });
+
+    it("returns not recovered when hook is not provided", async () => {
+      const task = createFakeTaskRecord({ taskId: "task-no-hook", runtime: "cli" });
+      const result = await tryRecoverTaskBeforeMarkLost({
+        taskId: task.taskId,
+        runtime: task.runtime,
+        task,
+        now: 789,
+      });
+      expect(result).toEqual({ recovered: false });
+    });
+
+    it("returns not recovered and logs warning when hook throws", async () => {
+      const task = createFakeTaskRecord({ taskId: "task-throw", runtime: "acp" });
+      setDetachedTaskLifecycleRuntime({
+        ...getDetachedTaskLifecycleRuntime(),
+        tryRecoverTaskBeforeMarkLost: vi.fn(() => {
+          throw new Error("plugin crashed");
+        }),
+      });
+      const result = await tryRecoverTaskBeforeMarkLost({
+        taskId: task.taskId,
+        runtime: task.runtime,
+        task,
+        now: 1_000,
+      });
+      expect(result).toEqual({ recovered: false });
+      expect(mockLogWarn).toHaveBeenCalledWith(
+        "Detached task recovery hook threw, proceeding with markTaskLost",
+        expect.objectContaining({
+          taskId: "task-throw",
+          runtime: "acp",
+          elapsedMs: expect.any(Number),
+        }),
+      );
+    });
+
+    it("returns not recovered and logs warning when hook returns invalid result", async () => {
+      const task = createFakeTaskRecord({ taskId: "task-invalid", runtime: "cron" });
+      setDetachedTaskLifecycleRuntime({
+        ...getDetachedTaskLifecycleRuntime(),
+        tryRecoverTaskBeforeMarkLost: vi.fn(() => ({ nope: true }) as never),
+      });
+      const result = await tryRecoverTaskBeforeMarkLost({
+        taskId: task.taskId,
+        runtime: task.runtime,
+        task,
+        now: 2_000,
+      });
+      expect(result).toEqual({ recovered: false });
+      expect(mockLogWarn).toHaveBeenCalledWith(
+        "Detached task recovery hook returned invalid result, proceeding with markTaskLost",
+        expect.objectContaining({ taskId: "task-invalid", runtime: "cron" }),
+      );
+    });
+
+    it("logs when the recovery hook is slow", async () => {
+      const task = createFakeTaskRecord({ taskId: "task-slow", runtime: "subagent" });
+      const dateNowSpy = vi.spyOn(Date, "now");
+      dateNowSpy.mockReturnValueOnce(10_000).mockReturnValueOnce(16_000);
+      setDetachedTaskLifecycleRuntime({
+        ...getDetachedTaskLifecycleRuntime(),
+        tryRecoverTaskBeforeMarkLost: vi.fn(async () => ({ recovered: true })),
+      });
+      const result = await tryRecoverTaskBeforeMarkLost({
+        taskId: task.taskId,
+        runtime: task.runtime,
+        task,
+        now: 3_000,
+      });
+      expect(result).toEqual({ recovered: true });
+      expect(mockLogWarn).toHaveBeenCalledWith(
+        "Detached task recovery hook was slow",
+        expect.objectContaining({ taskId: "task-slow", runtime: "subagent", elapsedMs: 6_000 }),
+      );
+      dateNowSpy.mockRestore();
+    });
   });
 });

@@ -106,7 +106,7 @@ export class CodexAppServerEventProjector {
       case "item/autoApprovalReview/started":
       case "item/autoApprovalReview/completed":
         this.guardianReviewCount += 1;
-        this.params.onAgentEvent?.({
+        this.emitAgentEvent({
           stream: "codex_app_server.guardian",
           data: { method: notification.method },
         });
@@ -279,7 +279,7 @@ export class CodexAppServerEventProjector {
     }
     if (item?.type === "contextCompaction" && itemId) {
       this.activeCompactionItemIds.add(itemId);
-      this.params.onAgentEvent?.({
+      this.emitAgentEvent({
         stream: "compaction",
         data: {
           phase: "start",
@@ -291,7 +291,7 @@ export class CodexAppServerEventProjector {
       });
     }
     this.emitStandardItemEvent({ phase: "start", item });
-    this.params.onAgentEvent?.({
+    this.emitAgentEvent({
       stream: "codex_app_server.item",
       data: { phase: "started", itemId, type: item?.type },
     });
@@ -315,7 +315,7 @@ export class CodexAppServerEventProjector {
     if (item?.type === "contextCompaction" && itemId) {
       this.activeCompactionItemIds.delete(itemId);
       this.completedCompactionCount += 1;
-      this.params.onAgentEvent?.({
+      this.emitAgentEvent({
         stream: "compaction",
         data: {
           phase: "end",
@@ -328,7 +328,7 @@ export class CodexAppServerEventProjector {
     }
     this.recordToolMeta(item);
     this.emitStandardItemEvent({ phase: "end", item });
-    this.params.onAgentEvent?.({
+    this.emitAgentEvent({
       stream: "codex_app_server.item",
       data: { phase: "completed", itemId, type: item?.type },
     });
@@ -388,7 +388,7 @@ export class CodexAppServerEventProjector {
     if (!params.explanation && (!params.steps || params.steps.length === 0)) {
       return;
     }
-    this.params.onAgentEvent?.({
+    this.emitAgentEvent({
       stream: "plan",
       data: {
         phase: "update",
@@ -412,7 +412,7 @@ export class CodexAppServerEventProjector {
     if (!kind) {
       return;
     }
-    this.params.onAgentEvent?.({
+    this.emitAgentEvent({
       stream: "item",
       data: {
         itemId: item.id,
@@ -438,6 +438,16 @@ export class CodexAppServerEventProjector {
       toolName,
       ...(itemMeta(item) ? { meta: itemMeta(item) } : {}),
     });
+  }
+
+  private emitAgentEvent(
+    event: Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0],
+  ): void {
+    try {
+      this.params.onAgentEvent?.(event);
+    } catch {
+      // Downstream event consumers must not corrupt the canonical Codex turn projection.
+    }
   }
 
   private collectAssistantTexts(): string[] {

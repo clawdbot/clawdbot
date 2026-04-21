@@ -15,6 +15,14 @@ describe("openai base URL helpers", () => {
   });
 
   it("recognizes Codex ChatGPT backend routes", () => {
+    // New canonical form (includes /codex segment; OpenAI removed the
+    // /backend-api/responses alias server-side on 2026-04).
+    expect(isOpenAICodexBaseUrl("https://chatgpt.com/backend-api/codex")).toBe(true);
+    expect(isOpenAICodexBaseUrl("https://chatgpt.com/backend-api/codex/")).toBe(true);
+    expect(isOpenAICodexBaseUrl("https://chatgpt.com/backend-api/codex/v1")).toBe(true);
+    expect(isOpenAICodexBaseUrl("https://chatgpt.com/backend-api/codex/v1/")).toBe(true);
+    // Legacy form still recognized as a Codex baseURL for backward
+    // compatibility with existing user configs.
     expect(isOpenAICodexBaseUrl("https://chatgpt.com/backend-api")).toBe(true);
     expect(isOpenAICodexBaseUrl("https://chatgpt.com/backend-api/")).toBe(true);
     expect(isOpenAICodexBaseUrl("https://chatgpt.com/backend-api/v1")).toBe(true);
@@ -25,7 +33,7 @@ describe("openai base URL helpers", () => {
     expect(isOpenAICodexBaseUrl("https://api.openai.com/v1")).toBe(false);
     expect(isOpenAICodexBaseUrl("https://chatgpt.com")).toBe(false);
     expect(isOpenAICodexBaseUrl("https://chatgpt.com/backend-api/v2")).toBe(false);
-    expect(isOpenAICodexBaseUrl("https://chatgpt.com/backend-api/codex")).toBe(false);
+    expect(isOpenAICodexBaseUrl("https://chatgpt.com/backend-api/codex/v2")).toBe(false);
     expect(isOpenAICodexBaseUrl(undefined)).toBe(false);
   });
 });

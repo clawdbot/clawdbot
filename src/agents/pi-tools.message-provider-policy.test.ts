@@ -13,7 +13,7 @@ describe("createOpenClawCodingTools message provider policy", () => {
   );
 
   it("keeps tts tool for non-voice providers", () => {
-    const names = new Set(filterToolNamesByMessageProvider(DEFAULT_TOOL_NAMES, "discord"));
+    const names = new Set(filterToolNamesByMessageProvider(DEFAULT_TOOL_NAMES, "guildchat"));
     expect(names.has("tts")).toBe(true);
   });
 });

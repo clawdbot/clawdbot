@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
+import type { CronJob } from "../cron/types.js";
 import { registerCronCli } from "./cron-cli.js";
 
 const CRON_CLI_TEST_TIMEOUT_MS = 15_000;
@@ -91,6 +92,22 @@ function buildProgram() {
   program.exitOverride();
   registerCronCli(program);
   return program;
+}
+
+function createCronJob(id: string, name: string): CronJob {
+  const now = Date.now();
+  return {
+    id,
+    name,
+    enabled: true,
+    createdAtMs: now,
+    updatedAtMs: now,
+    schedule: { kind: "at", at: new Date(now + 3_600_000).toISOString() },
+    sessionTarget: "isolated",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "agentTurn", message: "hello" },
+    state: {},
+  };
 }
 
 function resetGatewayMock() {
@@ -385,6 +402,54 @@ describe("cron cli", () => {
   ])("cron $command sets enabled=$expectedEnabled patch", async ({ command, expectedEnabled }) => {
     const patch = await runCronSimpleAndGetUpdatePatch(command);
     expect(patch.enabled).toBe(expectedEnabled);
+  });
+
+  it("paginates cron show lookups", async () => {
+    resetGatewayMock();
+    callGatewayFromCli.mockImplementation(
+      async (method: string, _opts: unknown, params?: unknown) => {
+        if (method === "cron.status") {
+          return { enabled: true };
+        }
+        if (method === "cron.list") {
+          const offset = (params as { offset?: number }).offset ?? 0;
+          if (offset === 0) {
+            return {
+              jobs: [createCronJob("first-page", "First Page")],
+              hasMore: true,
+              nextOffset: 200,
+            };
+          }
+          return {
+            jobs: [createCronJob("target-job", "Target Job")],
+            hasMore: false,
+            nextOffset: null,
+            deliveryPreviews: {
+              "target-job": {
+                label: "announce -> telegram:-100",
+                detail: "resolved from last, main session",
+              },
+            },
+          };
+        }
+        return { ok: true, params };
+      },
+    );
+
+    const program = buildProgram();
+    await program.parseAsync(["cron", "show", "Target Job"], { from: "user" });
+
+    const listParams = callGatewayFromCli.mock.calls
+      .filter((call) => call[0] === "cron.list")
+      .map((call) => call[2]);
+    expect(listParams).toEqual([
+      { includeDisabled: true, limit: 200, offset: 0 },
+      { includeDisabled: true, limit: 200, offset: 200 },
+    ]);
+    expect(defaultRuntime.log).toHaveBeenCalledWith("id: target-job");
+    expect(defaultRuntime.log).toHaveBeenCalledWith(
+      "delivery: announce -> telegram:-100 (resolved from last, main session)",
+    );
   });
 
   it("sends agent id on cron add", async () => {

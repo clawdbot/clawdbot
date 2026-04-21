@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { resolveDefaultSecretProviderAlias } from "openclaw/plugin-sdk/provider-auth";
+import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/extension-shared";
 import { resolveSecretInputString, normalizeSecretInput } from "openclaw/plugin-sdk/secret-input";
 
 export const DEFAULT_FIRECRAWL_BASE_URL = "https://api.firecrawl.dev";
@@ -107,22 +107,6 @@ type ConfiguredSecretResolution =
   | { status: "available"; value: string }
   | { status: "missing" }
   | { status: "blocked" };
-
-function canResolveEnvSecretRefInReadOnlyPath(params: {
-  cfg?: OpenClawConfig;
-  provider: string;
-  id: string;
-}): boolean {
-  const providerConfig = params.cfg?.secrets?.providers?.[params.provider];
-  if (!providerConfig) {
-    return params.provider === resolveDefaultSecretProviderAlias(params.cfg ?? {}, "env");
-  }
-  if (providerConfig.source !== "env") {
-    return false;
-  }
-  const allowlist = providerConfig.allowlist;
-  return !allowlist || allowlist.includes(params.id);
-}
 
 function resolveConfiguredSecret(
   value: unknown,

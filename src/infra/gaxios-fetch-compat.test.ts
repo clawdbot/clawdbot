@@ -47,7 +47,10 @@ describe("gaxios fetch compat", () => {
 
     vi.stubGlobal("fetch", fetchMock);
     class MockGaxios {
-      _defaultAdapter!: (config: MockRequestConfig) => Promise<Response>;
+      async _defaultAdapter(config: MockRequestConfig): Promise<Response> {
+        const fetchImplementation = config.fetchImplementation ?? fetch;
+        return await fetchImplementation(config.url, config);
+      }
 
       async request(config: MockRequestConfig) {
         const response = await this._defaultAdapter(config);
@@ -59,10 +62,6 @@ describe("gaxios fetch compat", () => {
     }
     MockGaxiosCtor = MockGaxios;
 
-    MockGaxios.prototype._defaultAdapter = async (config: MockRequestConfig) => {
-      const fetchImplementation = config.fetchImplementation ?? fetch;
-      return await fetchImplementation(config.url, config);
-    };
     (globalThis as Record<string, unknown>)[TEST_GAXIOS_CONSTRUCTOR_OVERRIDE] = MockGaxios;
 
     await installGaxiosFetchCompat();

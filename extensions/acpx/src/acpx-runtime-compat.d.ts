@@ -25,6 +25,7 @@ declare module "acpx/runtime" {
     cwd: string;
     sessionStore: AcpSessionStore;
     agentRegistry: AcpAgentRegistry;
+    probeAgent?: string;
     mcpServers?: unknown;
     permissionMode?: unknown;
     nonInteractivePermissions?: unknown;

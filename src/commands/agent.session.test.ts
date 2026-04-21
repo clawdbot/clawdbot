@@ -126,7 +126,7 @@ describe("agent session resolution", () => {
         main: {
           sessionId: "origin-provider-reset",
           updatedAt: Date.now() - 30 * 60_000,
-          origin: { provider: "discord" },
+          origin: { provider: "quietchat" },
         },
       });
       const cfg = mockConfig(home, store);
@@ -134,7 +134,7 @@ describe("agent session resolution", () => {
         ...cfg.session,
         reset: { mode: "idle", idleMinutes: 10 },
         resetByChannel: {
-          discord: { mode: "idle", idleMinutes: 120 },
+          quietchat: { mode: "idle", idleMinutes: 120 },
         },
       };
 

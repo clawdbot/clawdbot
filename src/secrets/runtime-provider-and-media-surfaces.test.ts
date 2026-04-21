@@ -21,6 +21,46 @@ function createOpenAiFileModelsConfig(): NonNullable<OpenClawConfig["models"]> {
 
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 
+function envTokenRef(id: string) {
+  return { source: "env" as const, provider: "default" as const, id };
+}
+
+async function prepareMediaModelAuthSnapshot(params: {
+  provider: string;
+  tokenRef: ReturnType<typeof envTokenRef>;
+  model?: string;
+  capabilities?: string[];
+  audioEnabled?: boolean;
+}) {
+  return await prepareSecretsRuntimeSnapshot({
+    config: asConfig({
+      tools: {
+        media: {
+          models: [
+            {
+              provider: params.provider,
+              ...(params.model ? { model: params.model } : {}),
+              ...(params.capabilities ? { capabilities: params.capabilities } : {}),
+              request: {
+                auth: {
+                  mode: "authorization-bearer",
+                  token: params.tokenRef,
+                },
+              },
+            },
+          ],
+          audio: {
+            enabled: params.audioEnabled ?? false,
+          },
+        },
+      },
+    }),
+    env: {},
+    agentDirs: ["/tmp/openclaw-agent-main"],
+    loadAuthStore: () => ({ version: 1, profiles: {} }),
+  });
+}
+
 describe("secrets runtime provider and media surfaces", () => {
   it("resolves file refs via configured file provider", async () => {
     if (process.platform === "win32") {
@@ -159,37 +199,12 @@ describe("secrets runtime provider and media surfaces", () => {
   });
 
   it("treats shared media model request refs as inactive when their capabilities are disabled", async () => {
-    const sharedTokenRef = {
-      source: "env" as const,
-      provider: "default" as const,
-      id: "MEDIA_DISABLED_AUDIO_TOKEN",
-    };
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        tools: {
-          media: {
-            models: [
-              {
-                provider: "openai",
-                model: "gpt-4o-mini-transcribe",
-                capabilities: ["audio"],
-                request: {
-                  auth: {
-                    mode: "authorization-bearer",
-                    token: sharedTokenRef,
-                  },
-                },
-              },
-            ],
-            audio: {
-              enabled: false,
-            },
-          },
-        },
-      }),
-      env: {},
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    const sharedTokenRef = envTokenRef("MEDIA_DISABLED_AUDIO_TOKEN");
+    const snapshot = await prepareMediaModelAuthSnapshot({
+      provider: "openai",
+      model: "gpt-4o-mini-transcribe",
+      tokenRef: sharedTokenRef,
+      capabilities: ["audio"],
     });
 
     expect(snapshot.config.tools?.media?.models?.[0]?.request?.auth).toEqual({
@@ -265,35 +280,10 @@ describe("secrets runtime provider and media surfaces", () => {
     });
     setActivePluginRegistry(pluginRegistry);
 
-    const inferredTokenRef = {
-      source: "env" as const,
-      provider: "default" as const,
-      id: "MEDIA_INFERRED_DISABLED_AUDIO_TOKEN",
-    };
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        tools: {
-          media: {
-            models: [
-              {
-                provider: "deepgram",
-                request: {
-                  auth: {
-                    mode: "authorization-bearer",
-                    token: inferredTokenRef,
-                  },
-                },
-              },
-            ],
-            audio: {
-              enabled: false,
-            },
-          },
-        },
-      }),
-      env: {},
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    const inferredTokenRef = envTokenRef("MEDIA_INFERRED_DISABLED_AUDIO_TOKEN");
+    const snapshot = await prepareMediaModelAuthSnapshot({
+      provider: "deepgram",
+      tokenRef: inferredTokenRef,
     });
 
     expect(snapshot.config.tools?.media?.models?.[0]?.request?.auth).toEqual({

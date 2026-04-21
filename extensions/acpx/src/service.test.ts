@@ -58,19 +58,24 @@ function createServiceContext(workspaceDir: string) {
   };
 }
 
+function createMockRuntime(overrides: Record<string, unknown> = {}) {
+  return {
+    ensureSession: vi.fn(),
+    runTurn: vi.fn(),
+    cancel: vi.fn(),
+    close: vi.fn(),
+    probeAvailability: vi.fn(async () => {}),
+    isHealthy: vi.fn(() => true),
+    doctor: vi.fn(async () => ({ ok: true, message: "ok" })),
+    ...overrides,
+  };
+}
+
 describe("createAcpxRuntimeService", () => {
   it("registers and unregisters the embedded backend", async () => {
     const workspaceDir = await makeTempDir();
     const ctx = createServiceContext(workspaceDir);
-    const runtime = {
-      ensureSession: vi.fn(),
-      runTurn: vi.fn(),
-      cancel: vi.fn(),
-      close: vi.fn(),
-      probeAvailability: vi.fn(async () => {}),
-      isHealthy: vi.fn(() => true),
-      doctor: vi.fn(async () => ({ ok: true, message: "ok" })),
-    };
+    const runtime = createMockRuntime();
     const service = createAcpxRuntimeService({
       runtimeFactory: () => runtime as never,
     });
@@ -91,18 +96,14 @@ describe("createAcpxRuntimeService", () => {
     const probeAvailability = vi.fn(async () => {
       await fs.access(stateDir);
     });
+    const runtime = createMockRuntime({
+      doctor: async () => ({ ok: true, message: "ok" }),
+      isHealthy: () => true,
+      probeAvailability,
+    });
     const service = createAcpxRuntimeService({
       pluginConfig: { stateDir },
-      runtimeFactory: () =>
-        ({
-          ensureSession: vi.fn(),
-          runTurn: vi.fn(),
-          cancel: vi.fn(),
-          close: vi.fn(),
-          probeAvailability,
-          isHealthy: () => true,
-          doctor: async () => ({ ok: true, message: "ok" }),
-        }) as never,
+      runtimeFactory: () => runtime as never,
     });
 
     await service.start(ctx);
@@ -115,15 +116,7 @@ describe("createAcpxRuntimeService", () => {
   it("passes the default runtime timeout to the embedded runtime factory", async () => {
     const workspaceDir = await makeTempDir();
     const ctx = createServiceContext(workspaceDir);
-    const runtime = {
-      ensureSession: vi.fn(),
-      runTurn: vi.fn(),
-      cancel: vi.fn(),
-      close: vi.fn(),
-      probeAvailability: vi.fn(async () => {}),
-      isHealthy: vi.fn(() => true),
-      doctor: vi.fn(async () => ({ ok: true, message: "ok" })),
-    };
+    const runtime = createMockRuntime();
     const runtimeFactory = vi.fn(() => runtime as never);
     const service = createAcpxRuntimeService({
       runtimeFactory,
@@ -145,15 +138,7 @@ describe("createAcpxRuntimeService", () => {
   it("warns when legacy compatibility config is explicitly ignored", async () => {
     const workspaceDir = await makeTempDir();
     const ctx = createServiceContext(workspaceDir);
-    const runtime = {
-      ensureSession: vi.fn(),
-      runTurn: vi.fn(),
-      cancel: vi.fn(),
-      close: vi.fn(),
-      probeAvailability: vi.fn(async () => {}),
-      isHealthy: vi.fn(() => true),
-      doctor: vi.fn(async () => ({ ok: true, message: "ok" })),
-    };
+    const runtime = createMockRuntime();
     const service = createAcpxRuntimeService({
       pluginConfig: {
         queueOwnerTtlSeconds: 30,
@@ -178,17 +163,13 @@ describe("createAcpxRuntimeService", () => {
     const workspaceDir = await makeTempDir();
     const ctx = createServiceContext(workspaceDir);
     const probeAvailability = vi.fn(async () => {});
+    const runtime = createMockRuntime({
+      doctor: async () => ({ ok: false, message: "nope" }),
+      isHealthy: () => false,
+      probeAvailability,
+    });
     const service = createAcpxRuntimeService({
-      runtimeFactory: () =>
-        ({
-          ensureSession: vi.fn(),
-          runTurn: vi.fn(),
-          cancel: vi.fn(),
-          close: vi.fn(),
-          probeAvailability,
-          isHealthy: () => false,
-          doctor: async () => ({ ok: false, message: "nope" }),
-        }) as never,
+      runtimeFactory: () => runtime as never,
     });
 
     await service.start(ctx);

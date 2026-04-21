@@ -45,7 +45,7 @@ function buildTtsParams(
       commandBodyNormalized,
       isAuthorizedSender: true,
       senderId: "owner",
-      channel: "telegram",
+      channel: "forum",
     },
   } as unknown as Parameters<typeof handleTtsCommands>[0];
 }

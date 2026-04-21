@@ -4,6 +4,9 @@
   "private": true,
   "description": "OpenClaw Matrix QA runner plugin",
   "type": "module",
+  "dependencies": {
+    "undici": "8.1.0"
+  },
   "devDependencies": {
     "@openclaw/matrix": "workspace:*",
     "@openclaw/plugin-sdk": "workspace:*",

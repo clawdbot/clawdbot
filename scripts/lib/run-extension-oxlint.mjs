@@ -28,7 +28,10 @@ export function runExtensionOxlint(params) {
     );
 
     if (extensionFiles.length === 0) {
-      console.error(params.emptyMessage);
+      console.log(params.emptyMessage);
+      if (params.allowEmpty === true) {
+        return;
+      }
       process.exit(1);
     }
 

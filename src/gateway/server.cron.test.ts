@@ -275,7 +275,8 @@ describe("gateway server cron", () => {
         delivery: { mode: "webhook", to: "https://example.invalid/cron-finished" },
       });
       expect(addRes.ok).toBe(true);
-      expect(typeof (addRes.payload as { id?: unknown } | null)?.id).toBe("string");
+      const dailyJobId = (addRes.payload as { id?: unknown } | null)?.id;
+      expect(typeof dailyJobId).toBe("string");
 
       const listRes = await rpcReq(ws, "cron.list", {
         includeDisabled: true,
@@ -288,6 +289,16 @@ describe("gateway server cron", () => {
       expect(
         ((jobs as Array<{ delivery?: { mode?: unknown } }>)[0]?.delivery?.mode as string) ?? "",
       ).toBe("webhook");
+      expect(
+        (
+          listRes.payload as {
+            deliveryPreviews?: Record<string, { label?: unknown; detail?: unknown }>;
+          } | null
+        )?.deliveryPreviews?.[String(dailyJobId)],
+      ).toEqual({
+        label: "webhook:https://example.invalid/cron-finished",
+        detail: "webhook",
+      });
 
       const routeAtMs = Date.now() - 1;
       const routeRes = await rpcReq(ws, "cron.add", {

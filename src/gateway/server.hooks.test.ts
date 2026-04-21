@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import {
@@ -126,6 +127,14 @@ async function expectHookAgentSessionRouting(params: {
   drainSystemEvents(resolveMainKey());
 }
 
+async function writeHookTransformModule(moduleName: string, source: string): Promise<void> {
+  const configPath = process.env.OPENCLAW_CONFIG_PATH;
+  expect(configPath).toBeTruthy();
+  const transformsDir = path.join(path.dirname(configPath!), "hooks", "transforms");
+  await fs.mkdir(transformsDir, { recursive: true });
+  await fs.writeFile(path.join(transformsDir, moduleName), source, "utf-8");
+}
+
 describe("gateway server hooks", () => {
   test("handles auth, wake, and agent flows", async () => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
@@ -146,10 +155,8 @@ describe("gateway server hooks", () => {
       const agentEvents = await waitForSystemEvent();
       expect(agentEvents.some((e) => e.includes("Hook Email: done"))).toBe(true);
       const firstCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
-        deliveryContract?: string;
         job?: { payload?: { externalContentSource?: string } };
       };
-      expect(firstCall?.deliveryContract).toBe("shared");
       expect(firstCall?.job?.payload?.externalContentSource).toBe("webhook");
       drainSystemEvents(resolveMainKey());
 
@@ -393,6 +400,89 @@ describe("gateway server hooks", () => {
 
       const mappedBadPrefix = await postHook(port, "/hooks/mapped-bad", { subject: "hello" });
       expect(mappedBadPrefix.status).toBe(400);
+    });
+  });
+
+  test("enforces templated vs static mapping session keys on /hooks/<mapping>", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowedSessionKeyPrefixes: ["hook:", "hook:gmail:"],
+      mappings: [
+        {
+          match: { path: "mapped-templated" },
+          action: "agent",
+          messageTemplate: "Mapped: {{payload.subject}}",
+          sessionKey: "hook:gmail:{{payload.id}}",
+        },
+        {
+          match: { path: "mapped-static" },
+          action: "agent",
+          messageTemplate: "Mapped: {{payload.subject}}",
+          sessionKey: "hook:gmail:fixed",
+        },
+      ],
+    };
+
+    await withGatewayServer(async ({ port }) => {
+      const templated = await postHook(port, "/hooks/mapped-templated", {
+        subject: "hello",
+        id: "42",
+      });
+      expect(templated.status).toBe(400);
+      const templatedBody = (await templated.json()) as { error?: string };
+      expect(templatedBody.error).toContain("hooks.allowRequestSessionKey");
+      expect(cronIsolatedRun).not.toHaveBeenCalled();
+
+      mockIsolatedRunOkOnce();
+      const staticMapped = await postHook(port, "/hooks/mapped-static", {
+        subject: "hello",
+      });
+      expect(staticMapped.status).toBe(200);
+      await waitForSystemEvent();
+      const staticCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
+        | { sessionKey?: string }
+        | undefined;
+      expect(staticCall?.sessionKey).toBe("hook:gmail:fixed");
+      drainSystemEvents(resolveMainKey());
+    });
+  });
+
+  test("treats malformed transform sessionKeySource as templated on /hooks/<mapping>", async () => {
+    await writeHookTransformModule(
+      "mapped-invalid-session-key-source.mjs",
+      [
+        "export default () => ({",
+        '  kind: "agent",',
+        '  message: "Mapped: from transform",',
+        '  sessionKey: "hook:gmail:from-transform",',
+        '  sessionKeySource: "bogus",',
+        "});",
+      ].join("\n"),
+    );
+
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowedSessionKeyPrefixes: ["hook:", "hook:gmail:"],
+      mappings: [
+        {
+          match: { path: "mapped-invalid-session-key-source" },
+          action: "agent",
+          messageTemplate: "Mapped: {{payload.subject}}",
+          transform: { module: "mapped-invalid-session-key-source.mjs" },
+        },
+      ],
+    };
+
+    await withGatewayServer(async ({ port }) => {
+      const response = await postHook(port, "/hooks/mapped-invalid-session-key-source", {
+        subject: "hello",
+      });
+      expect(response.status).toBe(400);
+      const body = (await response.json()) as { error?: string };
+      expect(body.error).toContain("hooks.allowRequestSessionKey");
+      expect(cronIsolatedRun).not.toHaveBeenCalled();
     });
   });
 

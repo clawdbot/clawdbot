@@ -5,6 +5,7 @@ export type GatewayWsClient = {
   socket: WebSocket;
   connect: ConnectParams;
   connId: string;
+  isDeviceTokenAuth?: boolean;
   usesSharedGatewayAuth: boolean;
   sharedGatewaySessionGeneration?: string;
   presenceKey?: string;

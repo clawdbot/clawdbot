@@ -4,7 +4,6 @@ import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
 import type { ChannelOutboundAdapter, ChannelOutboundContext } from "../channels/plugins/types.js";
 import type { CliDeps } from "../cli/deps.js";
 import { resolveOutboundSendDep } from "../infra/outbound/send-deps.js";
-import { createWhatsAppTestPlugin } from "../infra/outbound/targets.test-helpers.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createCliDeps, mockAgentPayloads } from "./isolated-agent.delivery.test-helpers.js";
@@ -169,7 +168,12 @@ function createCliDelegatingOutbound(params: {
   };
 }
 
-const whatsappResolveTarget = createWhatsAppTestPlugin().outbound?.resolveTarget;
+const identityResolveTarget: ChannelOutboundAdapter["resolveTarget"] = ({ to }) => {
+  const trimmed = to?.trim();
+  return trimmed
+    ? { ok: true, to: trimmed }
+    : { ok: false, error: new Error("target is required") };
+};
 
 describe("runCronIsolatedAgentTurn core-channel direct delivery", () => {
   beforeEach(() => {
@@ -199,7 +203,7 @@ describe("runCronIsolatedAgentTurn core-channel direct delivery", () => {
             outbound: createCliDelegatingOutbound({
               channel: "whatsapp",
               deliveryMode: "gateway",
-              resolveTarget: whatsappResolveTarget,
+              resolveTarget: identityResolveTarget,
             }),
           }),
           source: "test",

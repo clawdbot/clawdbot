@@ -2,7 +2,7 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
-import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "openclaw/plugin-sdk/ssrf-runtime";
 import { LMSTUDIO_PROVIDER_ID } from "./defaults.js";
 import { ensureLmstudioModelLoaded } from "./models.fetch.js";
 import { resolveLmstudioInferenceBase } from "./models.js";
@@ -120,22 +120,6 @@ function createPreloadKey(params: {
   return `${params.baseUrl}::${params.modelKey}::${params.requestedContextLength ?? "default"}`;
 }
 
-function buildLmstudioPreloadSsrFPolicy(baseUrl: string): SsrFPolicy | undefined {
-  const trimmed = baseUrl.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  try {
-    const parsed = new URL(trimmed);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    return { allowedHostnames: [parsed.hostname] };
-  } catch {
-    return undefined;
-  }
-}
-
 async function ensureLmstudioModelLoadedBestEffort(params: {
   baseUrl: string;
   modelKey: string;
@@ -167,7 +151,7 @@ async function ensureLmstudioModelLoadedBestEffort(params: {
     baseUrl: params.baseUrl,
     apiKey: runtimeApiKey ?? configuredApiKey,
     headers,
-    ssrfPolicy: buildLmstudioPreloadSsrFPolicy(params.baseUrl),
+    ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedHostname(params.baseUrl),
     modelKey: params.modelKey,
     requestedContextLength: params.requestedContextLength,
   });

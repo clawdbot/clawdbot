@@ -36,9 +36,9 @@ describe("status.scan.config-shared", () => {
   });
 
   it("skips read/resolve on fast-json cold-start outside tests", async () => {
-    const readBestEffortConfig = vi.fn(async () => ({ channels: { telegram: {} } }));
+    const readBestEffortConfig = vi.fn(async () => ({ channels: { quietchat: {} } }));
     const resolveConfig = vi.fn(async () => ({
-      resolvedConfig: { channels: { telegram: {} } },
+      resolvedConfig: { channels: { quietchat: {} } },
       diagnostics: ["resolved"],
     }));
 
@@ -61,8 +61,8 @@ describe("status.scan.config-shared", () => {
   });
 
   it("still reads and resolves during tests even when the config path is missing", async () => {
-    const sourceConfig = { channels: { telegram: {} } };
-    const resolvedConfig = { channels: { telegram: {} } };
+    const sourceConfig = { channels: { quietchat: {} } };
+    const resolvedConfig = { channels: { quietchat: {} } };
     const readBestEffortConfig = vi.fn(async () => sourceConfig);
     const resolveConfig = vi.fn(async () => ({
       resolvedConfig,

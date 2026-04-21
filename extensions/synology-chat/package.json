@@ -3,6 +3,9 @@
   "version": "2026.4.20",
   "description": "Synology Chat channel plugin for OpenClaw",
   "type": "module",
+  "dependencies": {
+    "zod": "^4.3.6"
+  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },

@@ -53,7 +53,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "false"
-          use-sticky-disk: "false"
 
       - name: Resolve checked-out ref
         id: ref
@@ -160,7 +159,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
-          use-sticky-disk: "false"
           install-deps: "false"
 
       - name: Checkout ClawHub CLI source
@@ -220,7 +218,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
-          use-sticky-disk: "false"
           install-deps: "false"
 
       - name: Checkout ClawHub CLI source

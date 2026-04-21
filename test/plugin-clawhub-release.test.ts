@@ -155,21 +155,7 @@ describe("collectClawHubVersionGateErrors", () => {
 
   it("does not require a version bump for shared release-tooling changes", () => {
     const repoDir = createTempPluginRepo();
-    const baseRef = git(repoDir, ["rev-parse", "HEAD"]);
-
-    mkdirSync(join(repoDir, "scripts"), { recursive: true });
-    writeFileSync(join(repoDir, "scripts", "plugin-clawhub-publish.sh"), "#!/usr/bin/env bash\n");
-    git(repoDir, ["add", "."]);
-    git(repoDir, [
-      "-c",
-      "user.name=Test",
-      "-c",
-      "user.email=test@example.com",
-      "commit",
-      "-m",
-      "shared tooling",
-    ]);
-    const headRef = git(repoDir, ["rev-parse", "HEAD"]);
+    const { baseRef, headRef } = commitSharedReleaseToolingChange(repoDir);
 
     const errors = collectClawHubVersionGateErrors({
       rootDir: repoDir,
@@ -186,21 +172,7 @@ describe("resolveSelectedClawHubPublishablePluginPackages", () => {
     const repoDir = createTempPluginRepo({
       extraExtensionIds: ["demo-two"],
     });
-    const baseRef = git(repoDir, ["rev-parse", "HEAD"]);
-
-    mkdirSync(join(repoDir, "scripts"), { recursive: true });
-    writeFileSync(join(repoDir, "scripts", "plugin-clawhub-publish.sh"), "#!/usr/bin/env bash\n");
-    git(repoDir, ["add", "."]);
-    git(repoDir, [
-      "-c",
-      "user.name=Test",
-      "-c",
-      "user.email=test@example.com",
-      "commit",
-      "-m",
-      "shared tooling",
-    ]);
-    const headRef = git(repoDir, ["rev-parse", "HEAD"]);
+    const { baseRef, headRef } = commitSharedReleaseToolingChange(repoDir);
 
     const selected = resolveSelectedClawHubPublishablePluginPackages({
       rootDir: repoDir,
@@ -346,6 +318,26 @@ function createTempPluginRepo(
   ]);
 
   return repoDir;
+}
+
+function commitSharedReleaseToolingChange(repoDir: string) {
+  const baseRef = git(repoDir, ["rev-parse", "HEAD"]);
+
+  mkdirSync(join(repoDir, "scripts"), { recursive: true });
+  writeFileSync(join(repoDir, "scripts", "plugin-clawhub-publish.sh"), "#!/usr/bin/env bash\n");
+  git(repoDir, ["add", "."]);
+  git(repoDir, [
+    "-c",
+    "user.name=Test",
+    "-c",
+    "user.email=test@example.com",
+    "commit",
+    "-m",
+    "shared tooling",
+  ]);
+  const headRef = git(repoDir, ["rev-parse", "HEAD"]);
+
+  return { baseRef, headRef };
 }
 
 function git(cwd: string, args: string[]) {

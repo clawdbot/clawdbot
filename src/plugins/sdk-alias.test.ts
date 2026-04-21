@@ -699,6 +699,35 @@ describe("plugin sdk alias helpers", () => {
     });
   });
 
+  it("falls back to source plugin-sdk subpath aliases when dist chunks are stale", () => {
+    const fixture = createPluginSdkAliasFixture({
+      srcFile: "provider-entry.ts",
+      distFile: "provider-entry.js",
+      distBody: 'import { entry } from "../missing-provider-entry-chunk.js";\nexport { entry };\n',
+      packageExports: {
+        "./plugin-sdk/provider-entry": { default: "./dist/plugin-sdk/provider-entry.js" },
+      },
+    });
+    const sourceProviderEntryPath = path.join(
+      fixture.root,
+      "src",
+      "plugin-sdk",
+      "provider-entry.ts",
+    );
+    const sourcePluginEntry = writePluginEntry(
+      fixture.root,
+      bundledPluginFile("demo", "src/index.ts"),
+    );
+
+    const distAliases = withEnv({ NODE_ENV: undefined }, () =>
+      buildPluginLoaderAliasMap(sourcePluginEntry, undefined, undefined, "dist"),
+    );
+
+    expect(fs.realpathSync(distAliases["openclaw/plugin-sdk/provider-entry"] ?? "")).toBe(
+      fs.realpathSync(sourceProviderEntryPath),
+    );
+  });
+
   it("builds source plugin-sdk subpath aliases through the wider source extension family", () => {
     const { fixture, sourceRootAlias, sourceChannelRuntimePath } =
       createPluginSdkAliasTargetFixture({
@@ -939,7 +968,45 @@ describe("plugin sdk alias helpers", () => {
       preferBuiltDist: true,
     });
 
-    expect(second).toEqual(first);
+    expect(second).toBe(first);
+  });
+
+  it("scopes plugin loader Jiti config by plugin-sdk resolution", () => {
+    const { fixture, sourceRootAlias, distRootAlias } = createPluginSdkAliasTargetFixture();
+    const sourcePluginEntry = writePluginEntry(
+      fixture.root,
+      bundledPluginFile("demo", "src/index.ts"),
+    );
+
+    const { auto, dist, distAgain } = withEnv({ NODE_ENV: undefined }, () => ({
+      auto: resolvePluginLoaderJitiConfig({
+        modulePath: sourcePluginEntry,
+        argv1: path.join(fixture.root, "openclaw.mjs"),
+        moduleUrl: pathToFileURL(path.join(fixture.root, "src/plugins/loader.ts")).href,
+        pluginSdkResolution: "auto",
+      }),
+      dist: resolvePluginLoaderJitiConfig({
+        modulePath: sourcePluginEntry,
+        argv1: path.join(fixture.root, "openclaw.mjs"),
+        moduleUrl: pathToFileURL(path.join(fixture.root, "src/plugins/loader.ts")).href,
+        pluginSdkResolution: "dist",
+      }),
+      distAgain: resolvePluginLoaderJitiConfig({
+        modulePath: sourcePluginEntry,
+        argv1: path.join(fixture.root, "openclaw.mjs"),
+        moduleUrl: pathToFileURL(path.join(fixture.root, "src/plugins/loader.ts")).href,
+        pluginSdkResolution: "dist",
+      }),
+    }));
+
+    expect(distAgain).toBe(dist);
+    expect(auto).not.toBe(dist);
+    expect(fs.realpathSync(auto.aliasMap["openclaw/plugin-sdk"] ?? "")).toBe(
+      fs.realpathSync(sourceRootAlias),
+    );
+    expect(fs.realpathSync(dist.aliasMap["openclaw/plugin-sdk"] ?? "")).toBe(
+      fs.realpathSync(distRootAlias),
+    );
   });
 
   it("detects bundled plugin extension paths across source and dist roots", () => {

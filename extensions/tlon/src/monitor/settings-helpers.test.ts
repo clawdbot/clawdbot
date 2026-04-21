@@ -26,28 +26,27 @@ const baseAccount: TlonResolvedAccount = {
   ownerShip: "~marzod",
 };
 
+function allowlistMigrationDecisions(currentSettings: Record<string, unknown>) {
+  const allowlistKeys = new Set(["dmAllowlist", "groupInviteAllowlist", "defaultAuthorizedShips"]);
+  return Object.fromEntries(
+    buildTlonSettingsMigrations(baseAccount, currentSettings)
+      .filter((migration) => allowlistKeys.has(migration.key))
+      .map((migration) => [
+        migration.key,
+        shouldMigrateTlonSetting(migration.fileValue, migration.settingsValue),
+      ]),
+  );
+}
+
 describe("shouldMigrateTlonSetting", () => {
   it("does not rehydrate explicit empty-array revocations during startup migration", () => {
-    const migrations = buildTlonSettingsMigrations(baseAccount, {
+    const decisions = allowlistMigrationDecisions({
       dmAllowlist: [],
       groupInviteAllowlist: [],
       defaultAuthorizedShips: [],
     });
 
-    expect(
-      Object.fromEntries(
-        migrations
-          .filter((migration) =>
-            ["dmAllowlist", "groupInviteAllowlist", "defaultAuthorizedShips"].includes(
-              migration.key,
-            ),
-          )
-          .map((migration) => [
-            migration.key,
-            shouldMigrateTlonSetting(migration.fileValue, migration.settingsValue),
-          ]),
-      ),
-    ).toEqual({
+    expect(decisions).toEqual({
       dmAllowlist: false,
       groupInviteAllowlist: false,
       defaultAuthorizedShips: false,
@@ -55,22 +54,9 @@ describe("shouldMigrateTlonSetting", () => {
   });
 
   it("still seeds file-config allowlists on first run when settings are missing", () => {
-    const migrations = buildTlonSettingsMigrations(baseAccount, {});
+    const decisions = allowlistMigrationDecisions({});
 
-    expect(
-      Object.fromEntries(
-        migrations
-          .filter((migration) =>
-            ["dmAllowlist", "groupInviteAllowlist", "defaultAuthorizedShips"].includes(
-              migration.key,
-            ),
-          )
-          .map((migration) => [
-            migration.key,
-            shouldMigrateTlonSetting(migration.fileValue, migration.settingsValue),
-          ]),
-      ),
-    ).toEqual({
+    expect(decisions).toEqual({
       dmAllowlist: true,
       groupInviteAllowlist: true,
       defaultAuthorizedShips: true,

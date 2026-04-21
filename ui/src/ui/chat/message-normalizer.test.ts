@@ -383,7 +383,7 @@ describe("message-normalizer", () => {
     it("preserves top-level sender labels", () => {
       const result = normalizeMessage({
         role: "user",
-        content: "Hello from Telegram",
+        content: "Hello from QuietChat",
         senderLabel: "Iris",
       });
 

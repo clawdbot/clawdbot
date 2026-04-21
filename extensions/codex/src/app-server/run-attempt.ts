@@ -18,8 +18,12 @@ import {
   type EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
+import {
+  createCodexAppServerClientFactoryTestHooks,
+  defaultCodexAppServerClientFactory,
+} from "./client-factory.js";
 import { isCodexAppServerApprovalRequest, type CodexAppServerClient } from "./client.js";
-import { resolveCodexAppServerRuntimeOptions, type CodexAppServerStartOptions } from "./config.js";
+import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import {
@@ -31,21 +35,15 @@ import {
   type JsonValue,
 } from "./protocol.js";
 import { readCodexAppServerBinding, type CodexAppServerThreadBinding } from "./session-binding.js";
-import { clearSharedCodexAppServerClient, getSharedCodexAppServerClient } from "./shared-client.js";
+import { clearSharedCodexAppServerClient } from "./shared-client.js";
 import { buildTurnStartParams, startOrResumeThread } from "./thread-lifecycle.js";
 import { mirrorCodexAppServerTranscript } from "./transcript-mirror.js";
 
-type CodexAppServerClientFactory = (
-  startOptions?: CodexAppServerStartOptions,
-  authProfileId?: string,
-) => Promise<CodexAppServerClient>;
-
-let clientFactory: CodexAppServerClientFactory = (startOptions, authProfileId) =>
-  getSharedCodexAppServerClient({ startOptions, authProfileId });
+let clientFactory = defaultCodexAppServerClientFactory;
 
 export async function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParams,
-  options: { pluginConfig?: unknown } = {},
+  options: { pluginConfig?: unknown; startupTimeoutFloorMs?: number } = {},
 ): Promise<EmbeddedRunAttemptResult> {
   const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig: options.pluginConfig });
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
@@ -102,6 +100,7 @@ export async function runCodexAppServerAttempt(
   try {
     ({ client, thread } = await withCodexStartupTimeout({
       timeoutMs: params.timeoutMs,
+      timeoutFloorMs: options.startupTimeoutFloorMs,
       signal: runAbortController.signal,
       operation: async () => {
         const startupClient = await clientFactory(appServer.start, startupAuthProfileId);
@@ -137,13 +136,23 @@ export async function runCodexAppServerAttempt(
       pendingNotifications.push(notification);
       return;
     }
-    await projector.handleNotification(notification);
-    if (
-      notification.method === "turn/completed" &&
-      isTurnNotification(notification.params, turnId)
-    ) {
-      completed = true;
-      resolveCompletion?.();
+    // Determine terminal-turn status before invoking the projector so a throw
+    // inside projector.handleNotification still releases the session lane.
+    // See openclaw/openclaw#67996.
+    const isTurnCompletion =
+      notification.method === "turn/completed" && isTurnNotification(notification.params, turnId);
+    try {
+      await projector.handleNotification(notification);
+    } catch (error) {
+      embeddedAgentLog.debug("codex app-server projector notification threw", {
+        method: notification.method,
+        error,
+      });
+    } finally {
+      if (isTurnCompletion) {
+        completed = true;
+        resolveCompletion?.();
+      }
     }
   };
   const enqueueNotification = (notification: CodexServerNotification): Promise<void> => {
@@ -356,10 +365,14 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
       input.runAbortController.abort("sessions_yield");
     },
   });
+  const visionFilteredTools = filterToolsForVisionInputs(allTools, {
+    modelHasVision,
+    hasInboundImages: (params.images?.length ?? 0) > 0,
+  });
   const filteredTools =
     params.toolsAllow && params.toolsAllow.length > 0
-      ? allTools.filter((tool) => params.toolsAllow?.includes(tool.name))
-      : allTools;
+      ? visionFilteredTools.filter((tool) => params.toolsAllow?.includes(tool.name))
+      : visionFilteredTools;
   return normalizeProviderToolSchemas({
     tools: filteredTools,
     provider: params.provider,
@@ -372,8 +385,22 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
   });
 }
 
+function filterToolsForVisionInputs<T extends { name?: string }>(
+  tools: T[],
+  params: {
+    modelHasVision: boolean;
+    hasInboundImages: boolean;
+  },
+): T[] {
+  if (!params.modelHasVision || !params.hasInboundImages) {
+    return tools;
+  }
+  return tools.filter((tool) => tool.name !== "image");
+}
+
 async function withCodexStartupTimeout<T>(params: {
   timeoutMs: number;
+  timeoutFloorMs?: number;
   signal: AbortSignal;
   operation: () => Promise<T>;
 }): Promise<T> {
@@ -393,7 +420,7 @@ async function withCodexStartupTimeout<T>(params: {
           }
           reject(error);
         };
-        const timeoutMs = Math.max(100, params.timeoutMs);
+        const timeoutMs = Math.max(params.timeoutFloorMs ?? 100, params.timeoutMs);
         timeout = setTimeout(() => {
           rejectOnce(new Error("codex app-server startup timed out"));
         }, timeoutMs);
@@ -486,11 +513,8 @@ function handleApprovalRequest(params: {
 }
 
 export const __testing = {
-  setCodexAppServerClientFactoryForTests(factory: CodexAppServerClientFactory): void {
+  filterToolsForVisionInputs,
+  ...createCodexAppServerClientFactoryTestHooks((factory) => {
     clientFactory = factory;
-  },
-  resetCodexAppServerClientFactoryForTests(): void {
-    clientFactory = (startOptions, authProfileId) =>
-      getSharedCodexAppServerClient({ startOptions, authProfileId });
-  },
+  }),
 } as const;

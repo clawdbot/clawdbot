@@ -6,7 +6,7 @@ export default defineBundledChannelEntry({
   description: "OpenClaw Google Chat channel plugin",
   importMetaUrl: import.meta.url,
   plugin: {
-    specifier: "./api.js",
+    specifier: "./channel-plugin-api.js",
     exportName: "googlechatPlugin",
   },
   secrets: {

@@ -197,6 +197,7 @@ export default defineSingleProviderPluginEntry({
       shouldContributeXaiCompat({ modelId, model }) ? resolveXaiModelCompatPatch() : undefined,
     normalizeModelId: ({ modelId }) => normalizeXaiModelId(modelId),
     resolveDynamicModel: (ctx) => resolveXaiForwardCompatModel({ providerId: PROVIDER_ID, ctx }),
+    resolveThinkingProfile: () => ({ levels: [{ id: "off" }], defaultLevel: "off" }),
     isModernModelRef: ({ modelId }) => isModernXaiModel(modelId),
   },
   register(api) {

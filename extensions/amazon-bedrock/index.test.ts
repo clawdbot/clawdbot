@@ -96,17 +96,22 @@ describe("amazon-bedrock provider plugin", () => {
     const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
 
     expect(
-      provider.resolveDefaultThinkingLevel?.({
+      provider.resolveThinkingProfile?.({
         provider: "amazon-bedrock",
         modelId: "us.anthropic.claude-opus-4-6-v1",
       } as never),
-    ).toBe("adaptive");
+    ).toMatchObject({
+      levels: expect.arrayContaining([{ id: "adaptive" }]),
+      defaultLevel: "adaptive",
+    });
     expect(
-      provider.resolveDefaultThinkingLevel?.({
+      provider.resolveThinkingProfile?.({
         provider: "amazon-bedrock",
         modelId: "amazon.nova-micro-v1:0",
       } as never),
-    ).toBeUndefined();
+    ).toMatchObject({
+      levels: expect.not.arrayContaining([{ id: "adaptive" }]),
+    });
   });
 
   it("owns Anthropic-style replay policy for Claude Bedrock models", async () => {

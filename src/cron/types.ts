@@ -46,6 +46,34 @@ export type CronDeliveryPatch = Partial<CronDelivery>;
 export type CronRunStatus = "ok" | "error" | "skipped";
 export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
 
+export type CronDeliveryTraceTarget = {
+  channel?: string;
+  to?: string | null;
+  accountId?: string;
+  threadId?: string | number;
+  source?: "explicit" | "last";
+};
+
+export type CronDeliveryTraceMessageTarget = {
+  channel: string;
+  to?: string;
+  accountId?: string;
+  threadId?: string;
+};
+
+export type CronDeliveryTrace = {
+  intended?: CronDeliveryTraceTarget;
+  resolved?: CronDeliveryTraceTarget & { ok: boolean; error?: string };
+  messageToolSentTo?: CronDeliveryTraceMessageTarget[];
+  fallbackUsed?: boolean;
+  delivered?: boolean;
+};
+
+export type CronDeliveryPreview = {
+  label: string;
+  detail: string;
+};
+
 export type CronUsageSummary = {
   input_tokens?: number;
   output_tokens?: number;

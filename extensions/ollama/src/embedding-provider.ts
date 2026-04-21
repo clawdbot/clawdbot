@@ -8,6 +8,7 @@ import {
 import {
   fetchWithSsrFGuard,
   formatErrorMessage,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveOllamaApiBase } from "./provider-models.js";
@@ -55,22 +56,6 @@ function sanitizeAndNormalizeEmbedding(vec: number[]): number[] {
     return sanitized;
   }
   return sanitized.map((value) => value / magnitude);
-}
-
-function buildRemoteBaseUrlPolicy(baseUrl: string): SsrFPolicy | undefined {
-  const trimmed = baseUrl.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  try {
-    const parsed = new URL(trimmed);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    return { allowedHostnames: [parsed.hostname] };
-  } catch {
-    return undefined;
-  }
 }
 
 async function withRemoteHttpResponse<T>(params: {
@@ -149,7 +134,7 @@ function resolveOllamaEmbeddingClient(
   return {
     baseUrl,
     headers,
-    ssrfPolicy: buildRemoteBaseUrlPolicy(baseUrl),
+    ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
     model,
   };
 }

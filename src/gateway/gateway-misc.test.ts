@@ -167,6 +167,74 @@ type TestSocket = {
   close: (code: number, reason: string) => void;
 };
 
+type EventFrame = {
+  type: "event";
+  event: string;
+  payload?: unknown;
+  seq?: number;
+};
+
+type RecordingSocket = TestSocket & {
+  sent: EventFrame[];
+};
+
+function makeRecordingSocket(): RecordingSocket {
+  const sent: EventFrame[] = [];
+  return {
+    bufferedAmount: 0,
+    send: vi.fn((payload: string) => {
+      sent.push(JSON.parse(payload) as EventFrame);
+    }),
+    close: vi.fn(),
+    sent,
+  };
+}
+
+function makeGatewayWsClient(
+  connId: string,
+  socket: TestSocket,
+  connect: GatewayWsClient["connect"],
+): GatewayWsClient {
+  return {
+    socket: socket as unknown as GatewayWsClient["socket"],
+    connect,
+    connId,
+    usesSharedGatewayAuth: false,
+  };
+}
+
+function makeScopedBroadcastClients() {
+  const pairingSocket = makeRecordingSocket();
+  const nodeSocket = makeRecordingSocket();
+  const readSocket = makeRecordingSocket();
+  const writeSocket = makeRecordingSocket();
+  const adminSocket = makeRecordingSocket();
+  const clients = new Set<GatewayWsClient>([
+    makeGatewayWsClient("c-pairing", pairingSocket, {
+      role: "operator",
+      scopes: ["operator.pairing"],
+    } as GatewayWsClient["connect"]),
+    makeGatewayWsClient("c-node", nodeSocket, {
+      role: "node",
+      scopes: ["operator.read"],
+    } as GatewayWsClient["connect"]),
+    makeGatewayWsClient("c-read", readSocket, {
+      role: "operator",
+      scopes: ["operator.read"],
+    } as GatewayWsClient["connect"]),
+    makeGatewayWsClient("c-write", writeSocket, {
+      role: "operator",
+      scopes: ["operator.write"],
+    } as GatewayWsClient["connect"]),
+    makeGatewayWsClient("c-admin", adminSocket, {
+      role: "operator",
+      scopes: ["operator.admin"],
+    } as GatewayWsClient["connect"]),
+  ]);
+
+  return { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, clients };
+}
+
 describe("gateway broadcaster", () => {
   it("filters approval and pairing events by scope", () => {
     const approvalsSocket: TestSocket = {
@@ -186,24 +254,18 @@ describe("gateway broadcaster", () => {
     };
 
     const clients = new Set<GatewayWsClient>([
-      {
-        socket: approvalsSocket as unknown as GatewayWsClient["socket"],
-        connect: { role: "operator", scopes: ["operator.approvals"] } as GatewayWsClient["connect"],
-        connId: "c-approvals",
-        usesSharedGatewayAuth: false,
-      },
-      {
-        socket: pairingSocket as unknown as GatewayWsClient["socket"],
-        connect: { role: "operator", scopes: ["operator.pairing"] } as GatewayWsClient["connect"],
-        connId: "c-pairing",
-        usesSharedGatewayAuth: false,
-      },
-      {
-        socket: readSocket as unknown as GatewayWsClient["socket"],
-        connect: { role: "operator", scopes: ["operator.read"] } as GatewayWsClient["connect"],
-        connId: "c-read",
-        usesSharedGatewayAuth: false,
-      },
+      makeGatewayWsClient("c-approvals", approvalsSocket, {
+        role: "operator",
+        scopes: ["operator.approvals"],
+      } as GatewayWsClient["connect"]),
+      makeGatewayWsClient("c-pairing", pairingSocket, {
+        role: "operator",
+        scopes: ["operator.pairing"],
+      } as GatewayWsClient["connect"]),
+      makeGatewayWsClient("c-read", readSocket, {
+        role: "operator",
+        scopes: ["operator.read"],
+      } as GatewayWsClient["connect"]),
     ]);
 
     const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
@@ -219,6 +281,195 @@ describe("gateway broadcaster", () => {
     expect(readSocket.send).toHaveBeenCalledTimes(1);
     expect(approvalsSocket.send).toHaveBeenCalledTimes(1);
     expect(pairingSocket.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("requires operator.read for chat-class broadcast events", () => {
+    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, clients } =
+      makeScopedBroadcastClients();
+
+    const { broadcast } = createGatewayBroadcaster({ clients });
+
+    broadcast("chat", { sessionKey: "agent:main:main", message: "secret" });
+    broadcast("agent", { type: "status", sessionKey: "agent:main:main" });
+    broadcast("chat.side_result", { sessionKey: "agent:main:main", text: "tool output" });
+
+    expect(pairingSocket.send).not.toHaveBeenCalled();
+    expect(nodeSocket.send).not.toHaveBeenCalled();
+    expect(readSocket.send).toHaveBeenCalledTimes(3);
+    expect(writeSocket.send).toHaveBeenCalledTimes(3);
+    expect(adminSocket.send).toHaveBeenCalledTimes(3);
+    expect(readSocket.sent.map((frame) => frame.event)).toEqual([
+      "chat",
+      "agent",
+      "chat.side_result",
+    ]);
+    expect(writeSocket.sent.map((frame) => frame.event)).toEqual([
+      "chat",
+      "agent",
+      "chat.side_result",
+    ]);
+    expect(adminSocket.sent.map((frame) => frame.event)).toEqual([
+      "chat",
+      "agent",
+      "chat.side_result",
+    ]);
+  });
+
+  it("allows plugin.* broadcast events for operator.write and operator.admin", () => {
+    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, clients } =
+      makeScopedBroadcastClients();
+
+    const { broadcast } = createGatewayBroadcaster({ clients });
+
+    broadcast("plugin.myplugin.custom", { data: "test" });
+    broadcast("plugin.otherplugin.state", { state: "updated" });
+
+    expect(pairingSocket.send).not.toHaveBeenCalled();
+    expect(nodeSocket.send).not.toHaveBeenCalled();
+    expect(readSocket.send).not.toHaveBeenCalled();
+    expect(writeSocket.send).toHaveBeenCalledTimes(2);
+    expect(adminSocket.send).toHaveBeenCalledTimes(2);
+    expect(writeSocket.sent.map((frame) => frame.event)).toEqual([
+      "plugin.myplugin.custom",
+      "plugin.otherplugin.state",
+    ]);
+    expect(adminSocket.sent.map((frame) => frame.event)).toEqual([
+      "plugin.myplugin.custom",
+      "plugin.otherplugin.state",
+    ]);
+  });
+
+  it("defaults unknown events to deny and classifies remaining gateway broadcast events", () => {
+    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, clients } =
+      makeScopedBroadcastClients();
+
+    const { broadcast } = createGatewayBroadcaster({ clients });
+
+    broadcast("cron", { jobId: "job-1" });
+    broadcast("talk.mode", { enabled: true });
+    broadcast("voicewake.changed", { triggers: ["hello"] });
+    broadcast("heartbeat", { ts: 1 });
+    broadcast("presence", { presence: [] });
+    broadcast("health", { ok: true });
+    broadcast("tick", { ts: 2 });
+    broadcast("shutdown", { reason: "restart" });
+    broadcast("update.available", { updateAvailable: { version: "2026.4.20" } });
+    broadcast("unknown.future.event", { hidden: true });
+
+    expect(pairingSocket.sent.map((frame) => frame.event)).toEqual([
+      "heartbeat",
+      "presence",
+      "health",
+      "tick",
+      "shutdown",
+      "update.available",
+    ]);
+    expect(nodeSocket.sent.map((frame) => frame.event)).toEqual([
+      "voicewake.changed",
+      "heartbeat",
+      "presence",
+      "health",
+      "tick",
+      "shutdown",
+      "update.available",
+    ]);
+    expect(readSocket.sent.map((frame) => frame.event)).toEqual([
+      "cron",
+      "voicewake.changed",
+      "heartbeat",
+      "presence",
+      "health",
+      "tick",
+      "shutdown",
+      "update.available",
+    ]);
+    expect(writeSocket.sent.map((frame) => frame.event)).toEqual([
+      "cron",
+      "talk.mode",
+      "voicewake.changed",
+      "heartbeat",
+      "presence",
+      "health",
+      "tick",
+      "shutdown",
+      "update.available",
+    ]);
+    expect(adminSocket.sent.map((frame) => frame.event)).toEqual([
+      "cron",
+      "talk.mode",
+      "voicewake.changed",
+      "heartbeat",
+      "presence",
+      "health",
+      "tick",
+      "shutdown",
+      "update.available",
+    ]);
+  });
+
+  it("keeps event seq contiguous per receiving client when scoped events are filtered", () => {
+    const pairingSocket = makeRecordingSocket();
+    const readSocket = makeRecordingSocket();
+
+    const clients = new Set<GatewayWsClient>([
+      makeGatewayWsClient("c-pairing", pairingSocket, {
+        role: "operator",
+        scopes: ["operator.pairing"],
+      } as GatewayWsClient["connect"]),
+      makeGatewayWsClient("c-read", readSocket, {
+        role: "operator",
+        scopes: ["operator.read"],
+      } as GatewayWsClient["connect"]),
+    ]);
+
+    const { broadcast } = createGatewayBroadcaster({ clients });
+
+    broadcast("chat", { sessionKey: "agent:main:main", message: "secret" });
+    broadcast("heartbeat", { ts: 1 });
+    broadcast("chat.side_result", { sessionKey: "agent:main:main", text: "tool output" });
+    broadcast("tick", { ts: 2 });
+
+    expect(pairingSocket.sent.map((frame) => [frame.event, frame.seq])).toEqual([
+      ["heartbeat", 1],
+      ["tick", 2],
+    ]);
+    expect(readSocket.sent.map((frame) => [frame.event, frame.seq])).toEqual([
+      ["chat", 1],
+      ["heartbeat", 2],
+      ["chat.side_result", 3],
+      ["tick", 4],
+    ]);
+  });
+
+  it("preserves seq gaps when dropIfSlow skips an eligible broadcast", () => {
+    const slowReadSocket = makeRecordingSocket();
+    slowReadSocket.bufferedAmount = Number.MAX_SAFE_INTEGER;
+    const readSocket = makeRecordingSocket();
+
+    const clients = new Set<GatewayWsClient>([
+      makeGatewayWsClient("c-slow-read", slowReadSocket, {
+        role: "operator",
+        scopes: ["operator.read"],
+      } as GatewayWsClient["connect"]),
+      makeGatewayWsClient("c-read", readSocket, {
+        role: "operator",
+        scopes: ["operator.read"],
+      } as GatewayWsClient["connect"]),
+    ]);
+
+    const { broadcast } = createGatewayBroadcaster({ clients });
+
+    broadcast("chat", { sessionKey: "agent:main:main", message: "secret" }, { dropIfSlow: true });
+    slowReadSocket.bufferedAmount = 0;
+    broadcast("heartbeat", { ts: 1 });
+
+    expect(slowReadSocket.sent.map((frame) => [frame.event, frame.seq])).toEqual([
+      ["heartbeat", 2],
+    ]);
+    expect(readSocket.sent.map((frame) => [frame.event, frame.seq])).toEqual([
+      ["chat", 1],
+      ["heartbeat", 2],
+    ]);
   });
 });
 

@@ -144,6 +144,44 @@ describe("hooks mapping", () => {
     }
   });
 
+  it("marks template-derived session keys as templated", async () => {
+    const result = await applyGmailMappings({
+      mappings: [
+        {
+          id: "templated-session-key",
+          match: { path: "gmail" },
+          action: "agent",
+          messageTemplate: "Subject: {{messages[0].subject}}",
+          sessionKey: "hook:gmail:{{messages[0].subject}}",
+        },
+      ],
+    });
+    expect(result?.ok).toBe(true);
+    if (result?.ok && result.action?.kind === "agent") {
+      expect(result.action.sessionKey).toBe("hook:gmail:Hello");
+      expect(result.action.sessionKeySource).toBe("templated");
+    }
+  });
+
+  it("marks literal session keys as static", async () => {
+    const result = await applyGmailMappings({
+      mappings: [
+        {
+          id: "static-session-key",
+          match: { path: "gmail" },
+          action: "agent",
+          messageTemplate: "Subject: {{messages[0].subject}}",
+          sessionKey: "hook:gmail:static",
+        },
+      ],
+    });
+    expect(result?.ok).toBe(true);
+    if (result?.ok && result.action?.kind === "agent") {
+      expect(result.action.sessionKey).toBe("hook:gmail:static");
+      expect(result.action.sessionKeySource).toBe("static");
+    }
+  });
+
   it("runs transform module", async () => {
     const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-"));
     const transformsRoot = path.join(configDir, "hooks", "transforms");
@@ -179,6 +217,184 @@ describe("hooks mapping", () => {
     if (result?.ok && result.action?.kind === "wake") {
       expect(result.action.kind).toBe("wake");
       expect(result.action.text).toBe("Ping Ada");
+    }
+  });
+
+  it("treats transform-provided session keys as templated by default", async () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-sessionkey-xform-"));
+    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    fs.mkdirSync(transformsRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(transformsRoot, "transform.mjs"),
+      [
+        "export default ({ payload }) => ({",
+        '  kind: "agent",',
+        '  message: "Transformed",',
+        "  sessionKey: `hook:gmail:${payload.subject}`,",
+        "});",
+      ].join("\n"),
+    );
+
+    const mappings = resolveHookMappings(
+      {
+        mappings: [
+          {
+            match: { path: "gmail" },
+            action: "agent",
+            messageTemplate: "Subject: {{messages[0].subject}}",
+            sessionKey: "hook:gmail:static",
+            transform: { module: "transform.mjs" },
+          },
+        ],
+      },
+      { configDir },
+    );
+
+    const result = await applyHookMappings(mappings, {
+      payload: { subject: "external" },
+      headers: {},
+      url: baseUrl,
+      path: "gmail",
+    });
+
+    expect(result?.ok).toBe(true);
+    if (result?.ok && result.action?.kind === "agent") {
+      expect(result.action.sessionKey).toBe("hook:gmail:external");
+      expect(result.action.sessionKeySource).toBe("templated");
+    }
+  });
+
+  it("uses transform-provided static session key source metadata", async () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-sessionkey-static-"));
+    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    fs.mkdirSync(transformsRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(transformsRoot, "transform.mjs"),
+      [
+        "export default () => ({",
+        '  kind: "agent",',
+        '  message: "Transformed",',
+        '  sessionKey: "hook:gmail:fixed",',
+        '  sessionKeySource: "static",',
+        "});",
+      ].join("\n"),
+    );
+
+    const mappings = resolveHookMappings(
+      {
+        mappings: [
+          {
+            match: { path: "gmail" },
+            action: "agent",
+            messageTemplate: "Subject: {{messages[0].subject}}",
+            sessionKey: "hook:gmail:{{messages[0].subject}}",
+            transform: { module: "transform.mjs" },
+          },
+        ],
+      },
+      { configDir },
+    );
+
+    const result = await applyHookMappings(mappings, {
+      payload: gmailPayload,
+      headers: {},
+      url: baseUrl,
+      path: "gmail",
+    });
+
+    expect(result?.ok).toBe(true);
+    if (result?.ok && result.action?.kind === "agent") {
+      expect(result.action.sessionKey).toBe("hook:gmail:fixed");
+      expect(result.action.sessionKeySource).toBe("static");
+    }
+  });
+
+  it("treats empty transform session keys as absent for source tracking", async () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-sessionkey-empty-"));
+    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    fs.mkdirSync(transformsRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(transformsRoot, "transform.mjs"),
+      [
+        "export default () => ({",
+        '  kind: "agent",',
+        '  message: "Transformed",',
+        '  sessionKey: "",',
+        '  sessionKeySource: "templated",',
+        "});",
+      ].join("\n"),
+    );
+
+    const mappings = resolveHookMappings(
+      {
+        mappings: [
+          {
+            match: { path: "gmail" },
+            action: "agent",
+            messageTemplate: "Subject: {{messages[0].subject}}",
+            sessionKey: "hook:gmail:{{messages[0].subject}}",
+            transform: { module: "transform.mjs" },
+          },
+        ],
+      },
+      { configDir },
+    );
+
+    const result = await applyHookMappings(mappings, {
+      payload: gmailPayload,
+      headers: {},
+      url: baseUrl,
+      path: "gmail",
+    });
+
+    expect(result?.ok).toBe(true);
+    if (result?.ok && result.action?.kind === "agent") {
+      expect(result.action.sessionKey).toBe("");
+      expect(result.action.sessionKeySource).toBeUndefined();
+    }
+  });
+
+  it("defaults invalid transform session key source metadata to templated", async () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-sessionkey-invalid-"));
+    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    fs.mkdirSync(transformsRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(transformsRoot, "transform.mjs"),
+      [
+        "export default () => ({",
+        '  kind: "agent",',
+        '  message: "Transformed",',
+        '  sessionKey: "hook:gmail:from-transform",',
+        '  sessionKeySource: "bogus",',
+        "});",
+      ].join("\n"),
+    );
+
+    const mappings = resolveHookMappings(
+      {
+        mappings: [
+          {
+            match: { path: "gmail" },
+            action: "agent",
+            messageTemplate: "Subject: {{messages[0].subject}}",
+            transform: { module: "transform.mjs" },
+          },
+        ],
+      },
+      { configDir },
+    );
+
+    const result = await applyHookMappings(mappings, {
+      payload: gmailPayload,
+      headers: {},
+      url: baseUrl,
+      path: "gmail",
+    });
+
+    expect(result?.ok).toBe(true);
+    if (result?.ok && result.action?.kind === "agent") {
+      expect(result.action.sessionKey).toBe("hook:gmail:from-transform");
+      expect(result.action.sessionKeySource).toBe("templated");
     }
   });
 

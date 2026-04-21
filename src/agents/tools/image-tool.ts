@@ -19,6 +19,7 @@ import {
   coerceImageAssistantText,
   coerceImageModelConfig,
   decodeDataUrl,
+  hasImageReasoningOnlyResponse,
   type ImageModelConfig,
   resolveProviderVisionModelFromConfig,
 } from "./image-tool.helpers.js";
@@ -58,6 +59,7 @@ const imageToolProviderDeps = {
 export const __testing = {
   decodeDataUrl,
   coerceImageAssistantText,
+  hasImageReasoningOnlyResponse,
   resolveImageToolMaxTokens,
   setProviderDepsForTest(overrides?: {
     buildProviderRegistry?: typeof buildProviderRegistry;

@@ -449,6 +449,19 @@ describe("BlueBubblesConfigSchema", () => {
     ).accounts?.work;
     expect(accountConfig?.enrichGroupParticipantsFromContacts).toBe(true);
   });
+
+  it("accepts explicit enrichGroupParticipantsFromContacts at channel and account scope", () => {
+    const parsed = BlueBubblesConfigSchema.safeParse({
+      enrichGroupParticipantsFromContacts: true,
+      accounts: {
+        work: {
+          enrichGroupParticipantsFromContacts: false,
+        },
+      },
+    });
+
+    expect(parsed.success).toBe(true);
+  });
 });
 
 describe("bluebubbles group policy", () => {

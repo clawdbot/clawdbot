@@ -1,8 +1,8 @@
-import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../../cron/service.test-harness.js";
 import { createCronServiceState } from "../../cron/service/state.js";
 import { onTimer } from "../../cron/service/timer.js";
+import { loadCronStore } from "../../cron/store.js";
 import type { CronJob } from "../../cron/types.js";
 import * as detachedTaskRuntime from "../../tasks/detached-task-runtime.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
@@ -68,9 +68,7 @@ describe("cron service timer seam coverage", () => {
       heartbeat: { target: "last" },
     });
 
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as {
-      jobs: CronJob[];
-    };
+    const persisted = await loadCronStore(storePath);
     const job = persisted.jobs[0];
     expect(job).toBeDefined();
     expect(job?.state.lastStatus).toBe("ok");

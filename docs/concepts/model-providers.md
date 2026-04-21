@@ -42,8 +42,9 @@ For model selection rules, see [/concepts/models](/concepts/models).
   `buildAuthDoctorHint`,
   `matchesContextOverflowError`, `classifyFailoverReason`,
   `isCacheTtlEligible`, `buildMissingAuthMessage`, `suppressBuiltInModel`,
-  `augmentModelCatalog`, `isBinaryThinking`, `supportsXHighThinking`,
-  `resolveDefaultThinkingLevel`, `applyConfigDefaults`, `isModernModelRef`,
+  `augmentModelCatalog`, `resolveThinkingProfile`, `isBinaryThinking`,
+  `supportsXHighThinking`, `resolveDefaultThinkingLevel`,
+  `applyConfigDefaults`, `isModernModelRef`,
   `prepareRuntimeAuth`, `resolveUsageAuth`, `fetchUsageSnapshot`, and
   `onModelSelected`.
 - Note: provider runtime `capabilities` is shared runner metadata (provider
@@ -131,10 +132,11 @@ Typical split:
   vendor-owned error for direct resolution failures
 - `augmentModelCatalog`: provider appends synthetic/final catalog rows after
   discovery and config merging
-- `isBinaryThinking`: provider owns binary on/off thinking UX
-- `supportsXHighThinking`: provider opts selected models into `xhigh`
-- `resolveDefaultThinkingLevel`: provider owns default `/think` policy for a
-  model family
+- `resolveThinkingProfile`: provider owns the exact `/think` level set,
+  optional display labels, and default level for a selected model
+- `isBinaryThinking`: compatibility hook for binary on/off thinking UX
+- `supportsXHighThinking`: compatibility hook for selected `xhigh` models
+- `resolveDefaultThinkingLevel`: compatibility hook for default `/think` policy
 - `applyConfigDefaults`: provider applies provider-specific global defaults
   during config materialization based on auth mode, env, or model family
 - `isModernModelRef`: provider owns live/smoke preferred-model matching
@@ -431,7 +433,7 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
   `input: ["text", "image"]`; the bundled provider catalog keeps the chat refs
   text-only until that provider config is materialized
 - Moonshot: `moonshot` (`MOONSHOT_API_KEY`)
-- Example model: `moonshot/kimi-k2.5`
+- Example model: `moonshot/kimi-k2.6`
 - Kimi Coding: `kimi` (`KIMI_API_KEY` or `KIMICODE_API_KEY`)
 - Example model: `kimi/kimi-code`
 - Qianfan: `qianfan` (`QIANFAN_API_KEY`)
@@ -488,13 +490,14 @@ need to override the base URL or model metadata:
 
 - Provider: `moonshot`
 - Auth: `MOONSHOT_API_KEY`
-- Example model: `moonshot/kimi-k2.5`
+- Example model: `moonshot/kimi-k2.6`
 - CLI: `openclaw onboard --auth-choice moonshot-api-key` or `openclaw onboard --auth-choice moonshot-api-key-cn`
 
 Kimi K2 model IDs:
 
 [//]: # "moonshot-kimi-k2-model-refs:start"
 
+- `moonshot/kimi-k2.6`
 - `moonshot/kimi-k2.5`
 - `moonshot/kimi-k2-thinking`
 - `moonshot/kimi-k2-thinking-turbo`
@@ -505,7 +508,7 @@ Kimi K2 model IDs:
 ```json5
 {
   agents: {
-    defaults: { model: { primary: "moonshot/kimi-k2.5" } },
+    defaults: { model: { primary: "moonshot/kimi-k2.6" } },
   },
   models: {
     mode: "merge",
@@ -514,7 +517,7 @@ Kimi K2 model IDs:
         baseUrl: "https://api.moonshot.ai/v1",
         apiKey: "${MOONSHOT_API_KEY}",
         api: "openai-completions",
-        models: [{ id: "kimi-k2.5", name: "Kimi K2.5" }],
+        models: [{ id: "kimi-k2.6", name: "Kimi K2.6" }],
       },
     },
   },

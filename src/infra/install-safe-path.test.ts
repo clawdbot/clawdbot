@@ -25,7 +25,7 @@ describe("packageNameMatchesId", () => {
   it.each([
     { packageName: "@openclaw/matrix", id: "matrix", expected: true },
     { packageName: "@openclaw/matrix", id: "@openclaw/matrix", expected: true },
-    { packageName: "@openclaw/matrix", id: "signal", expected: false },
+    { packageName: "@openclaw/matrix", id: "quietchat", expected: false },
     { packageName: " ", id: "matrix", expected: false },
     { packageName: "@openclaw/matrix", id: " ", expected: false },
   ])("matches ids for %j", ({ packageName, id, expected }) => {

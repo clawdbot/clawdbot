@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TemplateContext } from "../templating.js";
-import type { FollowupRun, QueueSettings } from "./queue.js";
+import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
+import type { QueueSettings } from "./queue.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 const freshCfg = { runtimeFresh: true };
@@ -9,7 +10,7 @@ const staleCfg = {
   skills: {
     entries: {
       whisper: {
-        apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        apiKey: { source: "env" as const, provider: "default", id: "OPENAI_API_KEY" },
       },
     },
   },
@@ -56,6 +57,56 @@ vi.mock("./queue.js", async () => {
 
 const { runReplyAgent } = await import("./agent-runner.js");
 
+function createTelegramSessionCtx(): TemplateContext {
+  return {
+    Provider: "telegram",
+    OriginatingChannel: "telegram",
+    OriginatingTo: "12345",
+    AccountId: "default",
+    ChatType: "dm",
+    MessageSid: "msg-1",
+  } as unknown as TemplateContext;
+}
+
+function createDirectRuntimeReplyParams({
+  shouldFollowup,
+  isActive,
+}: {
+  shouldFollowup: boolean;
+  isActive: boolean;
+}) {
+  const followupRun = createTestFollowupRun({
+    sessionId: "session-1",
+    sessionKey: "agent:main:telegram:default:direct:test",
+    messageProvider: "telegram",
+    config: staleCfg,
+    provider: "openai",
+    model: "gpt-5.4",
+  });
+  const resolvedQueue = { mode: "interrupt" } as QueueSettings;
+  const replyParams: Parameters<typeof runReplyAgent>[0] = {
+    commandBody: "hello",
+    followupRun,
+    queueKey: "main",
+    resolvedQueue,
+    shouldSteer: false,
+    shouldFollowup,
+    isActive,
+    isStreaming: false,
+    typing: createMockTypingController(),
+    sessionCtx: createTelegramSessionCtx(),
+    defaultModel: "openai/gpt-5.4",
+    resolvedVerboseLevel: "off",
+    isNewSession: false,
+    blockStreamingEnabled: false,
+    resolvedBlockStreamingBreak: "message_end",
+    shouldInjectGroupIntro: false,
+    typingMode: "instant",
+  };
+
+  return { followupRun, resolvedQueue, replyParams };
+}
+
 describe("runReplyAgent runtime config", () => {
   beforeEach(() => {
     resolveQueuedReplyExecutionConfigMock.mockReset();
@@ -75,65 +126,12 @@ describe("runReplyAgent runtime config", () => {
   });
 
   it("resolves direct reply runs before early helpers read config", async () => {
-    const followupRun = {
-      prompt: "hello",
-      summaryLine: "hello",
-      enqueuedAt: Date.now(),
-      run: {
-        sessionId: "session-1",
-        sessionKey: "agent:main:telegram:default:direct:test",
-        messageProvider: "telegram",
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/tmp",
-        config: staleCfg,
-        skillsSnapshot: {},
-        provider: "openai",
-        model: "gpt-5.4",
-        thinkLevel: "low",
-        verboseLevel: "off",
-        elevatedLevel: "off",
-        bashElevated: {
-          enabled: false,
-          allowed: false,
-          defaultLevel: "off",
-        },
-        timeoutMs: 1_000,
-        blockReplyBreak: "message_end",
-      },
-    } as unknown as FollowupRun;
+    const { followupRun, replyParams } = createDirectRuntimeReplyParams({
+      shouldFollowup: false,
+      isActive: false,
+    });
 
-    const resolvedQueue = { mode: "interrupt" } as QueueSettings;
-    const typing = createMockTypingController();
-    const sessionCtx = {
-      Provider: "telegram",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "12345",
-      AccountId: "default",
-      ChatType: "dm",
-      MessageSid: "msg-1",
-    } as unknown as TemplateContext;
-
-    await expect(
-      runReplyAgent({
-        commandBody: "hello",
-        followupRun,
-        queueKey: "main",
-        resolvedQueue,
-        shouldSteer: false,
-        shouldFollowup: false,
-        isActive: false,
-        isStreaming: false,
-        typing,
-        sessionCtx,
-        defaultModel: "openai/gpt-5.4",
-        resolvedVerboseLevel: "off",
-        isNewSession: false,
-        blockStreamingEnabled: false,
-        resolvedBlockStreamingBreak: "message_end",
-        shouldInjectGroupIntro: false,
-        typingMode: "instant",
-      }),
-    ).rejects.toBe(sentinelError);
+    await expect(runReplyAgent(replyParams)).rejects.toBe(sentinelError);
 
     expect(followupRun.run.config).toBe(freshCfg);
     expect(resolveQueuedReplyExecutionConfigMock).toHaveBeenCalledWith(
@@ -167,65 +165,12 @@ describe("runReplyAgent runtime config", () => {
   });
 
   it("does not resolve secrets before the enqueue-followup queue path", async () => {
-    const followupRun = {
-      prompt: "hello",
-      summaryLine: "hello",
-      enqueuedAt: Date.now(),
-      run: {
-        sessionId: "session-1",
-        sessionKey: "agent:main:telegram:default:direct:test",
-        messageProvider: "telegram",
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/tmp",
-        config: staleCfg,
-        skillsSnapshot: {},
-        provider: "openai",
-        model: "gpt-5.4",
-        thinkLevel: "low",
-        verboseLevel: "off",
-        elevatedLevel: "off",
-        bashElevated: {
-          enabled: false,
-          allowed: false,
-          defaultLevel: "off",
-        },
-        timeoutMs: 1_000,
-        blockReplyBreak: "message_end",
-      },
-    } as unknown as FollowupRun;
+    const { followupRun, resolvedQueue, replyParams } = createDirectRuntimeReplyParams({
+      shouldFollowup: true,
+      isActive: true,
+    });
 
-    const resolvedQueue = { mode: "interrupt" } as QueueSettings;
-    const typing = createMockTypingController();
-    const sessionCtx = {
-      Provider: "telegram",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "12345",
-      AccountId: "default",
-      ChatType: "dm",
-      MessageSid: "msg-1",
-    } as unknown as TemplateContext;
-
-    await expect(
-      runReplyAgent({
-        commandBody: "hello",
-        followupRun,
-        queueKey: "main",
-        resolvedQueue,
-        shouldSteer: false,
-        shouldFollowup: true,
-        isActive: true,
-        isStreaming: false,
-        typing,
-        sessionCtx,
-        defaultModel: "openai/gpt-5.4",
-        resolvedVerboseLevel: "off",
-        isNewSession: false,
-        blockStreamingEnabled: false,
-        resolvedBlockStreamingBreak: "message_end",
-        shouldInjectGroupIntro: false,
-        typingMode: "instant",
-      }),
-    ).resolves.toBeUndefined();
+    await expect(runReplyAgent(replyParams)).resolves.toBeUndefined();
 
     expect(resolveQueuedReplyExecutionConfigMock).not.toHaveBeenCalled();
     expect(enqueueFollowupRunMock).toHaveBeenCalledWith(

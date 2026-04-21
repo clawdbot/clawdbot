@@ -1,22 +1,13 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { resolveAgentDir } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  resolveAgentDirMock,
+  resolveSessionAgentIdMock,
+} from "./commands-agent-scope.test-support.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 const runBtwSideQuestionMock = vi.fn();
-const resolveSessionAgentIdMock = vi.hoisted(() => vi.fn(() => "main"));
-
-vi.mock("../../agents/agent-scope.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/agent-scope.js")>(
-    "../../agents/agent-scope.js",
-  );
-  return {
-    ...actual,
-    resolveSessionAgentId: resolveSessionAgentIdMock,
-    resolveAgentDir: vi.fn(actual.resolveAgentDir),
-  };
-});
 
 vi.mock("../../agents/btw.js", () => ({
   runBtwSideQuestion: (...args: unknown[]) => runBtwSideQuestionMock(...args),
@@ -35,6 +26,10 @@ function buildParams(commandBody: string) {
 describe("handleBtwCommand", () => {
   beforeEach(() => {
     runBtwSideQuestionMock.mockReset();
+    resolveAgentDirMock.mockReset();
+    resolveAgentDirMock.mockImplementation(
+      (_cfg: unknown, agentId: string) => `/tmp/workspace/.openclaw/agents/${agentId}/agent`,
+    );
     resolveSessionAgentIdMock.mockReset();
     resolveSessionAgentIdMock.mockReturnValue("main");
   });
@@ -207,7 +202,7 @@ describe("handleBtwCommand", () => {
       updatedAt: Date.now(),
     };
     resolveSessionAgentIdMock.mockReturnValue("worker-1");
-    vi.mocked(resolveAgentDir).mockReturnValue("/tmp/worker-1-agent");
+    resolveAgentDirMock.mockReturnValue("/tmp/worker-1-agent");
     runBtwSideQuestionMock.mockResolvedValue({ text: "resolved fallback" });
 
     const result = await handleBtwCommand(params, true);
@@ -216,7 +211,7 @@ describe("handleBtwCommand", () => {
       sessionKey: "agent:worker-1:whatsapp:direct:12345",
       config: expect.any(Object),
     });
-    expect(vi.mocked(resolveAgentDir)).toHaveBeenCalledWith(expect.any(Object), "worker-1");
+    expect(resolveAgentDirMock).toHaveBeenCalledWith(expect.any(Object), "worker-1");
     expect(runBtwSideQuestionMock).toHaveBeenCalledWith(
       expect.objectContaining({
         agentDir: "/tmp/worker-1-agent",

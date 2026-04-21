@@ -1,6 +1,7 @@
 import type { SubagentRunRecord } from "../../agents/subagent-registry.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { handleSubagentsSendAction } from "./commands-subagents/action-send.js";
+import type { InlineDirectives } from "./directive-handling.js";
 
 export function buildSubagentRun(): SubagentRunRecord {
   return {
@@ -41,4 +42,27 @@ export function buildSubagentsSendContext(params?: {
     runs: params?.runs ?? [buildSubagentRun()],
     restTokens: params?.restTokens ?? [],
   } as Parameters<typeof handleSubagentsSendAction>[0];
+}
+
+export function createEmptyInlineDirectives(): InlineDirectives {
+  return {
+    cleaned: "",
+    hasThinkDirective: false,
+    hasVerboseDirective: false,
+    hasFastDirective: false,
+    hasReasoningDirective: false,
+    hasTraceDirective: false,
+    hasElevatedDirective: false,
+    hasExecDirective: false,
+    hasExecOptions: false,
+    invalidExecHost: false,
+    invalidExecSecurity: false,
+    invalidExecAsk: false,
+    invalidExecNode: false,
+    hasStatusDirective: false,
+    hasModelDirective: false,
+    hasQueueDirective: false,
+    queueReset: false,
+    hasQueueOptions: false,
+  };
 }

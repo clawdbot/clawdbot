@@ -5,6 +5,7 @@ import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 export {
   createMoonshotThinkingWrapper,
+  resolveMoonshotThinkingKeep,
   resolveMoonshotThinkingType,
 } from "./moonshot-thinking-stream-wrappers.js";
 

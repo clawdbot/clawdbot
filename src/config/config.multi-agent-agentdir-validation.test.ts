@@ -32,7 +32,7 @@ describe("multi-agent agentDir validation", () => {
             { id: "b", agentDir: "~/.openclaw/agents/shared/agent" },
           ],
         },
-        bindings: [{ agentId: "a", match: { channel: "telegram" } }],
+        bindings: [{ agentId: "a", match: { channel: "forum" } }],
       },
       async () => {
         const spy = vi.spyOn(console, "error").mockImplementation(() => {});

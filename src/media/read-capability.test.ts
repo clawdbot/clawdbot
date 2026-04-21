@@ -36,7 +36,7 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
         allow: ["read"],
       },
       channels: {
-        whatsapp: {
+        requestchat: {
           groups: {
             ops: {
               toolsBySender: {
@@ -52,7 +52,7 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
 
     const result = resolveAgentScopedOutboundMediaAccess({
       cfg,
-      sessionKey: "agent:main:whatsapp:group:ops",
+      sessionKey: "agent:main:requestchat:group:ops",
       mediaSources: ["/Users/peter/Pictures/photo.png"],
       // Production call sites set messageProvider: undefined when sessionKey is present;
       // resolveGroupToolPolicy derives channel from the session key instead.
@@ -69,7 +69,7 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
         allow: ["read"],
       },
       channels: {
-        whatsapp: {
+        requestchat: {
           groups: {
             ops: {
               toolsBySender: {
@@ -85,7 +85,7 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
 
     const result = resolveAgentScopedOutboundMediaAccess({
       cfg,
-      sessionKey: "agent:main:whatsapp:group:ops",
+      sessionKey: "agent:main:requestchat:group:ops",
       mediaSources: ["/Users/peter/Pictures/photo.png"],
       requesterSenderId: "trusted-user",
     });
@@ -101,7 +101,7 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
           allow: ["read"],
         },
       } as OpenClawConfig,
-      messageProvider: "whatsapp",
+      messageProvider: "requestchat",
       requesterSenderId: "trusted-user",
     });
 
@@ -115,7 +115,7 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
           allow: ["read"],
         },
         channels: {
-          whatsapp: {
+          requestchat: {
             groups: {
               ops: {
                 toolsBySender: {
@@ -128,7 +128,7 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
           },
         },
       } as OpenClawConfig,
-      messageProvider: "whatsapp",
+      messageProvider: "requestchat",
       requesterSenderId: "dm-sender",
     });
 

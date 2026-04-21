@@ -15,15 +15,15 @@ class TestSeparator {
   constructor(readonly options: { divider: boolean; spacing: string }) {}
 }
 
-class TestDiscordUiContainer {
+class TestRichUiContainer {
   constructor(readonly components: Array<TestTextDisplay | TestSeparator>) {}
 }
 
-const discordCrossContextPlugin: Pick<
+const richCrossContextPlugin: Pick<
   ChannelPlugin,
   "id" | "meta" | "capabilities" | "config" | "messaging"
 > = {
-  ...createChannelTestPluginBase({ id: "discord" }),
+  ...createChannelTestPluginBase({ id: "rich-chat" }),
   messaging: {
     buildCrossContextComponents: ({ originLabel, message, cfg, accountId }) => {
       const trimmed = message.trim();
@@ -35,7 +35,7 @@ const discordCrossContextPlugin: Pick<
       components.push(new TestTextDisplay(`*From ${originLabel}*`));
       void cfg;
       void accountId;
-      return [new TestDiscordUiContainer(components)];
+      return [new TestRichUiContainer(components)];
     },
   },
 };
@@ -44,38 +44,38 @@ describe("getChannelMessageAdapter", () => {
   beforeEach(() => {
     setActivePluginRegistry(
       createTestRegistry([
-        { pluginId: "discord", plugin: discordCrossContextPlugin, source: "test" },
+        { pluginId: "rich-chat", plugin: richCrossContextPlugin, source: "test" },
         {
-          pluginId: "telegram",
-          plugin: createChannelTestPluginBase({ id: "telegram" }),
+          pluginId: "plain-chat",
+          plugin: createChannelTestPluginBase({ id: "plain-chat" }),
           source: "test",
         },
       ]),
     );
   });
 
-  it("returns the default adapter for non-discord channels", () => {
-    expect(getChannelMessageAdapter("telegram")).toEqual({
+  it("returns the default adapter for channels without structured component support", () => {
+    expect(getChannelMessageAdapter("plain-chat")).toEqual({
       supportsComponentsV2: false,
     });
   });
 
-  it("returns the discord adapter with a cross-context component builder", () => {
-    const adapter = getChannelMessageAdapter("discord");
+  it("returns an adapter with a cross-context component builder", () => {
+    const adapter = getChannelMessageAdapter("rich-chat");
 
     expect(adapter.supportsComponentsV2).toBe(true);
     expect(adapter.buildCrossContextComponents).toBeTypeOf("function");
 
     const components = adapter.buildCrossContextComponents?.({
-      originLabel: "Telegram",
+      originLabel: "Forum",
       message: "Hello from chat",
       cfg: {} as never,
       accountId: "primary",
     });
-    const container = components?.[0] as TestDiscordUiContainer | undefined;
+    const container = components?.[0] as TestRichUiContainer | undefined;
 
     expect(components).toHaveLength(1);
-    expect(container).toBeInstanceOf(TestDiscordUiContainer);
+    expect(container).toBeInstanceOf(TestRichUiContainer);
     expect(container?.components).toEqual([
       expect.any(TestTextDisplay),
       expect.any(TestSeparator),
@@ -86,7 +86,7 @@ describe("getChannelMessageAdapter", () => {
   it.each([
     {
       message: "Hello from chat",
-      originLabel: "Telegram",
+      originLabel: "Forum",
       accountId: "primary",
       expectedComponents: [
         expect.any(TestTextDisplay),
@@ -96,20 +96,20 @@ describe("getChannelMessageAdapter", () => {
     },
     {
       message: "   ",
-      originLabel: "Signal",
+      originLabel: "Pager",
       expectedComponents: [expect.any(TestTextDisplay)],
     },
   ])(
     "builds cross-context components for %j",
     ({ message, originLabel, accountId, expectedComponents }) => {
-      const adapter = getChannelMessageAdapter("discord");
+      const adapter = getChannelMessageAdapter("rich-chat");
       const components = adapter.buildCrossContextComponents?.({
         originLabel,
         message,
         cfg: {} as never,
         ...(accountId ? { accountId } : {}),
       });
-      const container = components?.[0] as TestDiscordUiContainer | undefined;
+      const container = components?.[0] as TestRichUiContainer | undefined;
 
       expect(components).toHaveLength(1);
       expect(container?.components).toEqual(expectedComponents);

@@ -1,7 +1,7 @@
 import { runCommandWithTimeout } from "../process/exec.js";
 
 const SCHTASKS_TIMEOUT_MS = 15_000;
-const SCHTASKS_NO_OUTPUT_TIMEOUT_MS = 5_000;
+const SCHTASKS_NO_OUTPUT_TIMEOUT_MS = 30_000;
 
 export async function execSchtasks(
   args: string[],

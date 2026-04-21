@@ -35,7 +35,7 @@ export default defineBundledChannelEntry({
   description: "Nostr DM channel plugin via NIP-04",
   importMetaUrl: import.meta.url,
   plugin: {
-    specifier: "./api.js",
+    specifier: "./channel-plugin-api.js",
     exportName: "nostrPlugin",
   },
   runtime: {

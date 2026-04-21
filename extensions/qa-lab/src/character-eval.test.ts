@@ -2,11 +2,43 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runQaCharacterEval, type QaCharacterEvalParams } from "./character-eval.js";
+import {
+  runQaCharacterEval,
+  type QaCharacterEvalJudgment,
+  type QaCharacterEvalParams,
+} from "./character-eval.js";
 import type { QaSuiteResult } from "./suite.js";
 
 type CharacterRunSuiteParams = Parameters<NonNullable<QaCharacterEvalParams["runSuite"]>>[0];
 type CharacterRunJudgeParams = Parameters<NonNullable<QaCharacterEvalParams["runJudge"]>>[0];
+type TestJudgeRanking = Pick<QaCharacterEvalJudgment, "model" | "rank" | "score" | "summary"> &
+  Partial<Pick<QaCharacterEvalJudgment, "strengths" | "weaknesses">>;
+
+function makeJudgeReply(rankings: TestJudgeRanking[]) {
+  return JSON.stringify({ rankings });
+}
+
+function makeRunJudge(rankings: TestJudgeRanking[]) {
+  return vi.fn(async (_params: CharacterRunJudgeParams) => makeJudgeReply(rankings));
+}
+
+function defaultModelTranscript(model: string) {
+  return `USER Alice: hi\n\nASSISTANT openclaw: reply from ${model}`;
+}
+
+function makeReplySuiteResult(params: CharacterRunSuiteParams, transcript?: string) {
+  return makeSuiteResult({
+    outputDir: params.outputDir,
+    model: params.primaryModel,
+    transcript: transcript ?? defaultModelTranscript(params.primaryModel),
+  });
+}
+
+function makeRunSuite(transcriptForModel: (model: string) => string = defaultModelTranscript) {
+  return vi.fn(async (params: CharacterRunSuiteParams) =>
+    makeReplySuiteResult(params, transcriptForModel(params.primaryModel)),
+  );
+}
 
 function makeSuiteResult(params: { outputDir: string; model: string; transcript: string }) {
   return {
@@ -48,28 +80,24 @@ describe("runQaCharacterEval", () => {
       const transcript = `USER Alice: prompt for ${model}\n\nASSISTANT openclaw: reply from ${model}`;
       return makeSuiteResult({ outputDir: params.outputDir, model, transcript });
     });
-    const runJudge = vi.fn(async (_params: CharacterRunJudgeParams) =>
-      JSON.stringify({
-        rankings: [
-          {
-            model: "openai/gpt-5.4",
-            rank: 1,
-            score: 9.1,
-            summary: "Most natural.",
-            strengths: ["vivid"],
-            weaknesses: ["none"],
-          },
-          {
-            model: "codex-cli/test-model",
-            rank: 2,
-            score: 7,
-            summary: "Readable but flatter.",
-            strengths: ["coherent"],
-            weaknesses: ["less funny"],
-          },
-        ],
-      }),
-    );
+    const runJudge = makeRunJudge([
+      {
+        model: "openai/gpt-5.4",
+        rank: 1,
+        score: 9.1,
+        summary: "Most natural.",
+        strengths: ["vivid"],
+        weaknesses: ["none"],
+      },
+      {
+        model: "codex-cli/test-model",
+        rank: 2,
+        score: 7,
+        summary: "Readable but flatter.",
+        strengths: ["coherent"],
+        weaknesses: ["less funny"],
+      },
+    ]);
 
     const result = await runQaCharacterEval({
       repoRoot: tempRoot,
@@ -136,22 +164,20 @@ describe("runQaCharacterEval", () => {
       expect(params.prompt).toContain("## CANDIDATE candidate-02");
       expect(params.prompt).not.toContain("openai/gpt-5.4");
       expect(params.prompt).not.toContain("codex-cli/test-model");
-      return JSON.stringify({
-        rankings: [
-          {
-            model: "candidate-02",
-            rank: 1,
-            score: 9.1,
-            summary: "Better vibes.",
-          },
-          {
-            model: "candidate-01",
-            rank: 2,
-            score: 7.4,
-            summary: "Solid.",
-          },
-        ],
-      });
+      return makeJudgeReply([
+        {
+          model: "candidate-02",
+          rank: 1,
+          score: 9.1,
+          summary: "Better vibes.",
+        },
+        {
+          model: "candidate-01",
+          rank: 2,
+          score: 7.4,
+          summary: "Solid.",
+        },
+      ]);
     });
 
     const result = await runQaCharacterEval({
@@ -175,27 +201,17 @@ describe("runQaCharacterEval", () => {
   });
 
   it("defaults to the character eval model panel when no models are provided", async () => {
-    const runSuite = vi.fn(async (params: CharacterRunSuiteParams) =>
-      makeSuiteResult({
-        outputDir: params.outputDir,
-        model: params.primaryModel,
-        transcript: `USER Alice: hi\n\nASSISTANT openclaw: reply from ${params.primaryModel}`,
-      }),
-    );
-    const runJudge = vi.fn(async (_params: CharacterRunJudgeParams) =>
-      JSON.stringify({
-        rankings: [
-          { model: "openai/gpt-5.4", rank: 1, score: 8, summary: "ok" },
-          { model: "openai/gpt-5.2", rank: 2, score: 7.5, summary: "ok" },
-          { model: "openai/gpt-5", rank: 3, score: 7.2, summary: "ok" },
-          { model: "anthropic/claude-opus-4-6", rank: 4, score: 7, summary: "ok" },
-          { model: "anthropic/claude-sonnet-4-6", rank: 5, score: 6.8, summary: "ok" },
-          { model: "zai/glm-5.1", rank: 6, score: 6.3, summary: "ok" },
-          { model: "moonshot/kimi-k2.5", rank: 7, score: 6.2, summary: "ok" },
-          { model: "google/gemini-3.1-pro-preview", rank: 8, score: 6, summary: "ok" },
-        ],
-      }),
-    );
+    const runSuite = makeRunSuite();
+    const runJudge = makeRunJudge([
+      { model: "openai/gpt-5.4", rank: 1, score: 8, summary: "ok" },
+      { model: "openai/gpt-5.2", rank: 2, score: 7.5, summary: "ok" },
+      { model: "openai/gpt-5", rank: 3, score: 7.2, summary: "ok" },
+      { model: "anthropic/claude-opus-4-6", rank: 4, score: 7, summary: "ok" },
+      { model: "anthropic/claude-sonnet-4-6", rank: 5, score: 6.8, summary: "ok" },
+      { model: "zai/glm-5.1", rank: 6, score: 6.3, summary: "ok" },
+      { model: "moonshot/kimi-k2.5", rank: 7, score: 6.2, summary: "ok" },
+      { model: "google/gemini-3.1-pro-preview", rank: 8, score: 6, summary: "ok" },
+    ]);
 
     await runQaCharacterEval({
       repoRoot: tempRoot,
@@ -256,21 +272,13 @@ describe("runQaCharacterEval", () => {
       maxActiveRuns = Math.max(maxActiveRuns, activeRuns);
       await new Promise((resolve) => setTimeout(resolve, 10));
       activeRuns -= 1;
-      return makeSuiteResult({
-        outputDir: params.outputDir,
-        model: params.primaryModel,
-        transcript: `USER Alice: hi\n\nASSISTANT openclaw: reply from ${params.primaryModel}`,
-      });
+      return makeReplySuiteResult(params);
     });
-    const runJudge = vi.fn(async (_params: CharacterRunJudgeParams) =>
-      JSON.stringify({
-        rankings: [
-          { model: "openai/gpt-5.4", rank: 1, score: 8, summary: "ok" },
-          { model: "anthropic/claude-sonnet-4-6", rank: 2, score: 7, summary: "ok" },
-          { model: "moonshot/kimi-k2.5", rank: 3, score: 6, summary: "ok" },
-        ],
-      }),
-    );
+    const runJudge = makeRunJudge([
+      { model: "openai/gpt-5.4", rank: 1, score: 8, summary: "ok" },
+      { model: "anthropic/claude-sonnet-4-6", rank: 2, score: 7, summary: "ok" },
+      { model: "moonshot/kimi-k2.5", rank: 3, score: 6, summary: "ok" },
+    ]);
 
     const result = await runQaCharacterEval({
       repoRoot: tempRoot,
@@ -298,11 +306,7 @@ describe("runQaCharacterEval", () => {
       maxActiveRuns = Math.max(maxActiveRuns, activeRuns);
       await new Promise((resolve) => setTimeout(resolve, 10));
       activeRuns -= 1;
-      return makeSuiteResult({
-        outputDir: params.outputDir,
-        model: params.primaryModel,
-        transcript: `USER Alice: hi\n\nASSISTANT openclaw: reply from ${params.primaryModel}`,
-      });
+      return makeReplySuiteResult(params);
     });
     let activeJudges = 0;
     let maxActiveJudges = 0;
@@ -311,14 +315,14 @@ describe("runQaCharacterEval", () => {
       maxActiveJudges = Math.max(maxActiveJudges, activeJudges);
       await new Promise((resolve) => setTimeout(resolve, 10));
       activeJudges -= 1;
-      return JSON.stringify({
-        rankings: Array.from({ length: 20 }, (_, index) => ({
+      return makeJudgeReply(
+        Array.from({ length: 20 }, (_, index) => ({
           model: `provider/model-${index + 1}`,
           rank: index + 1,
           score: 10 - index,
           summary: "ok",
         })),
-      });
+      );
     });
 
     await runQaCharacterEval({
@@ -343,11 +347,9 @@ describe("runQaCharacterEval", () => {
           "USER Alice: Are you awake?\n\nASSISTANT OpenClaw QA: 400 model `qwen3.6-plus` is not supported.",
       }),
     );
-    const runJudge = vi.fn(async (_params: CharacterRunJudgeParams) =>
-      JSON.stringify({
-        rankings: [{ model: "qwen/qwen3.6-plus", rank: 1, score: 0.5, summary: "failed" }],
-      }),
-    );
+    const runJudge = makeRunJudge([
+      { model: "qwen/qwen3.6-plus", rank: 1, score: 0.5, summary: "failed" },
+    ]);
 
     const result = await runQaCharacterEval({
       repoRoot: tempRoot,
@@ -373,11 +375,9 @@ describe("runQaCharacterEval", () => {
         transcript: "ASSISTANT OpenClaw QA: ⚠️ ✍️ Write: to /tmp/precious.html failed",
       }),
     );
-    const runJudge = vi.fn(async (_params: CharacterRunJudgeParams) =>
-      JSON.stringify({
-        rankings: [{ model: "qwen/qwen3.5-plus", rank: 1, score: 0.5, summary: "failed" }],
-      }),
-    );
+    const runJudge = makeRunJudge([
+      { model: "qwen/qwen3.5-plus", rank: 1, score: 0.5, summary: "failed" },
+    ]);
 
     const result = await runQaCharacterEval({
       repoRoot: tempRoot,
@@ -404,11 +404,9 @@ describe("runQaCharacterEval", () => {
           "ASSISTANT OpenClaw QA: ⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.",
       }),
     );
-    const runJudge = vi.fn(async (_params: CharacterRunJudgeParams) =>
-      JSON.stringify({
-        rankings: [{ model: "qa/generic-fallback-model", rank: 1, score: 0.5, summary: "failed" }],
-      }),
-    );
+    const runJudge = makeRunJudge([
+      { model: "qa/generic-fallback-model", rank: 1, score: 0.5, summary: "failed" },
+    ]);
 
     const result = await runQaCharacterEval({
       repoRoot: tempRoot,
@@ -435,11 +433,9 @@ describe("runQaCharacterEval", () => {
           "ASSISTANT OpenClaw QA: The model did not produce a response before the LLM idle timeout. Please try again, or increase `agents.defaults.llm.idleTimeoutSeconds` in your config.",
       }),
     );
-    const runJudge = vi.fn(async (_params: CharacterRunJudgeParams) =>
-      JSON.stringify({
-        rankings: [{ model: "google/gemini-test", rank: 1, score: 0.5, summary: "failed" }],
-      }),
-    );
+    const runJudge = makeRunJudge([
+      { model: "google/gemini-test", rank: 1, score: 0.5, summary: "failed" },
+    ]);
 
     const result = await runQaCharacterEval({
       repoRoot: tempRoot,
@@ -466,11 +462,9 @@ describe("runQaCharacterEval", () => {
           "ASSISTANT OpenClaw QA: checking thread context; then post a tight progress reply here.\nQA_LEAK_OK",
       }),
     );
-    const runJudge = vi.fn(async (_params: CharacterRunJudgeParams) =>
-      JSON.stringify({
-        rankings: [{ model: "codex/gpt-5.4", rank: 1, score: 0.5, summary: "failed" }],
-      }),
-    );
+    const runJudge = makeRunJudge([
+      { model: "codex/gpt-5.4", rank: 1, score: 0.5, summary: "failed" },
+    ]);
 
     const result = await runQaCharacterEval({
       repoRoot: tempRoot,
@@ -489,21 +483,11 @@ describe("runQaCharacterEval", () => {
   });
 
   it("lets explicit candidate thinking override the default panel", async () => {
-    const runSuite = vi.fn(async (params: CharacterRunSuiteParams) =>
-      makeSuiteResult({
-        outputDir: params.outputDir,
-        model: params.primaryModel,
-        transcript: `USER Alice: hi\n\nASSISTANT openclaw: reply from ${params.primaryModel}`,
-      }),
-    );
-    const runJudge = vi.fn(async (_params: CharacterRunJudgeParams) =>
-      JSON.stringify({
-        rankings: [
-          { model: "openai/gpt-5.4", rank: 1, score: 8, summary: "ok" },
-          { model: "moonshot/kimi-k2.5", rank: 2, score: 7, summary: "ok" },
-        ],
-      }),
-    );
+    const runSuite = makeRunSuite();
+    const runJudge = makeRunJudge([
+      { model: "openai/gpt-5.4", rank: 1, score: 8, summary: "ok" },
+      { model: "moonshot/kimi-k2.5", rank: 2, score: 7, summary: "ok" },
+    ]);
 
     await runQaCharacterEval({
       repoRoot: tempRoot,
@@ -523,18 +507,8 @@ describe("runQaCharacterEval", () => {
   });
 
   it("lets model-specific options override candidate and judge defaults", async () => {
-    const runSuite = vi.fn(async (params: CharacterRunSuiteParams) =>
-      makeSuiteResult({
-        outputDir: params.outputDir,
-        model: params.primaryModel,
-        transcript: `USER Alice: hi\n\nASSISTANT openclaw: reply from ${params.primaryModel}`,
-      }),
-    );
-    const runJudge = vi.fn(async (_params: CharacterRunJudgeParams) =>
-      JSON.stringify({
-        rankings: [{ model: "openai/gpt-5.4", rank: 1, score: 8, summary: "ok" }],
-      }),
-    );
+    const runSuite = makeRunSuite();
+    const runJudge = makeRunJudge([{ model: "openai/gpt-5.4", rank: 1, score: 8, summary: "ok" }]);
 
     await runQaCharacterEval({
       repoRoot: tempRoot,

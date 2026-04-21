@@ -2,12 +2,7 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import {
-  buildToolCardSidebarContent,
-  extractToolCards,
-  renderToolCard,
-  renderToolPreview,
-} from "./tool-cards.ts";
+import { buildToolCardSidebarContent, extractToolCards, renderToolCard } from "./tool-cards.ts";
 
 describe("tool-cards", () => {
   it("pretty-prints structured args and pairs tool output onto the same card", () => {
@@ -207,29 +202,6 @@ describe("tool-cards", () => {
     expect(card?.preview).toBeUndefined();
   });
 
-  it("renders trusted canvas previews with same-origin only when explicitly requested", () => {
-    const container = document.createElement("div");
-    render(
-      renderToolPreview(
-        {
-          kind: "canvas",
-          surface: "assistant_message",
-          render: "url",
-          viewId: "cv_inline",
-          url: "/__openclaw__/canvas/documents/cv_inline/index.html",
-          title: "Inline demo",
-          preferredHeight: 420,
-        },
-        "chat_message",
-        { embedSandboxMode: "trusted" },
-      ),
-      container,
-    );
-
-    const iframe = container.querySelector<HTMLIFrameElement>(".chat-tool-card__preview-frame");
-    expect(iframe?.getAttribute("sandbox")).toBe("allow-scripts allow-same-origin");
-  });
-
   it("does not extract inline-html canvas payloads into canvas previews", () => {
     const [card] = extractToolCards(
       {
@@ -344,50 +316,6 @@ describe("tool-cards", () => {
     const summaryButton = container.querySelector("button.chat-tool-msg-summary");
     expect(summaryButton).not.toBeNull();
     expect(summaryButton?.getAttribute("aria-expanded")).toBe("false");
-  });
-
-  it("does not render inline preview frames inside tool rows anymore", () => {
-    const container = document.createElement("div");
-    render(
-      renderToolCard(
-        {
-          id: "msg:view:6",
-          name: "canvas_render",
-          outputText: JSON.stringify({
-            kind: "canvas",
-            source: {
-              type: "html",
-              content: '<div onclick="alert(1)">front<script>window.bad = true;</script></div>',
-            },
-            presentation: {
-              target: "tool_card",
-              title: "Status view",
-            },
-          }),
-          preview: {
-            kind: "canvas",
-            surface: "assistant_message",
-            render: "url",
-            url: "/__openclaw__/canvas/documents/cv_status/index.html",
-            title: "Status view",
-          },
-        },
-        { expanded: true, onToggleExpanded: vi.fn() },
-      ),
-      container,
-    );
-
-    const rawToggle = container.querySelector<HTMLButtonElement>(".chat-tool-card__raw-toggle");
-    const rawBody = container.querySelector<HTMLElement>(".chat-tool-card__raw-body");
-
-    expect(container.querySelector(".chat-tool-card__preview-frame")).toBeNull();
-    expect(rawToggle?.getAttribute("aria-expanded")).toBe("false");
-    expect(rawBody?.hidden).toBe(true);
-
-    rawToggle?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-
-    expect(rawToggle?.getAttribute("aria-expanded")).toBe("true");
-    expect(rawBody?.hidden).toBe(false);
   });
 
   it("keeps raw details for legacy canvas tool output without rendering tool-row previews", () => {

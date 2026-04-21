@@ -19,7 +19,7 @@ async function createFixture() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-updates-"));
   tempDirs.push(root);
   const storePath = path.join(root, "sessions.json");
-  const sessionKey = "agent:main:telegram:direct:compaction";
+  const sessionKey = "agent:main:forum:direct:compaction";
   const transcriptPath = path.join(root, "s1.jsonl");
   await fs.writeFile(transcriptPath, '{"type":"message"}\n', "utf-8");
   const entry = {

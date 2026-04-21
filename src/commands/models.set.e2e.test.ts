@@ -10,7 +10,7 @@ vi.mock("./models/shared.js", async () => {
   return {
     ...actual,
     updateConfig: async (mutator: (cfg: Record<string, unknown>) => Record<string, unknown>) => {
-      const next = mutator(JSON.parse(JSON.stringify(mocks.currentConfig)));
+      const next = mutator(structuredClone(mocks.currentConfig));
       mocks.writtenConfig = next;
       return next;
     },

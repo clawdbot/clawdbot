@@ -1,11 +1,18 @@
 import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
+import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.types.js";
 import type { SkillSnapshot } from "../../agents/skills.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveCronDeliveryPlan } from "../delivery-plan.js";
-import type { CronJob, CronRunTelemetry } from "../types.js";
+import { resolveCronDeliveryPlan, type CronDeliveryPlan } from "../delivery-plan.js";
+import type {
+  CronDeliveryTrace,
+  CronDeliveryTraceMessageTarget,
+  CronDeliveryTraceTarget,
+  CronJob,
+  CronRunTelemetry,
+} from "../types.js";
 import {
   isHeartbeatOnlyResponse,
   resolveCronPayloadOutcome,
@@ -39,10 +46,11 @@ import {
   resolveCronStyleNow,
   resolveDefaultAgentId,
   resolveHookExternalContentSource,
+  isThinkingLevelSupported,
+  resolveSupportedThinkingLevel,
   resolveSessionTranscriptPath,
   resolveThinkingDefault,
   setSessionRuntimeModel,
-  supportsXHighThinking,
 } from "./run.runtime.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
@@ -119,31 +127,137 @@ type CronModelCatalogRuntime = typeof import("./run-model-catalog.runtime.js");
 type CronDeliveryRuntime = typeof import("./run-delivery.runtime.js");
 type ResolvedCronDeliveryTarget = Awaited<ReturnType<CronDeliveryRuntime["resolveDeliveryTarget"]>>;
 
-type IsolatedDeliveryContract = "cron-owned" | "shared";
-
-function resolveCronToolPolicy(params: {
-  deliveryRequested: boolean;
-  resolvedDelivery: ResolvedCronDeliveryTarget;
-  deliveryMode: "announce" | "webhook" | "none";
-}) {
+function normalizeCronTraceTarget(
+  target: CronDeliveryTraceTarget | undefined,
+): CronDeliveryTraceTarget | undefined {
+  if (!target) {
+    return undefined;
+  }
   return {
-    // Only enforce an explicit message target when the cron delivery target
-    // was successfully resolved. When resolution fails the agent should not
-    // be blocked by a target it cannot satisfy (#27898).
-    requireExplicitMessageTarget: params.deliveryRequested && params.resolvedDelivery.ok,
-    disableMessageTool: params.deliveryMode !== "none",
+    ...(target.channel ? { channel: target.channel } : {}),
+    ...(target.to !== undefined ? { to: target.to } : {}),
+    ...(target.accountId ? { accountId: target.accountId } : {}),
+    ...(target.threadId !== undefined ? { threadId: target.threadId } : {}),
+    ...(target.source ? { source: target.source } : {}),
   };
+}
+
+function normalizeMessagingToolTarget(
+  target: MessagingToolSend,
+): CronDeliveryTraceMessageTarget | undefined {
+  const channel = target.provider?.trim();
+  if (!channel) {
+    return undefined;
+  }
+  return {
+    channel,
+    ...(target.to ? { to: target.to } : {}),
+    ...(target.accountId ? { accountId: target.accountId } : {}),
+    ...(target.threadId ? { threadId: target.threadId } : {}),
+  };
+}
+
+function buildCronDeliveryTrace(params: {
+  deliveryPlan: CronDeliveryPlan;
+  resolvedDelivery: ResolvedCronDeliveryTarget;
+  messagingToolSentTargets: MessagingToolSend[];
+  fallbackUsed: boolean;
+  delivered: boolean;
+}): CronDeliveryTrace {
+  const intended = normalizeCronTraceTarget({
+    channel: params.deliveryPlan.channel ?? "last",
+    to: params.deliveryPlan.to ?? null,
+    accountId: params.deliveryPlan.accountId,
+    threadId: params.deliveryPlan.threadId,
+    source:
+      params.deliveryPlan.channel === "last" || !params.deliveryPlan.channel ? "last" : "explicit",
+  });
+  const resolved = params.resolvedDelivery.ok
+    ? {
+        ok: true,
+        ...normalizeCronTraceTarget({
+          channel: params.resolvedDelivery.channel,
+          to: params.resolvedDelivery.to,
+          accountId: params.resolvedDelivery.accountId,
+          threadId: params.resolvedDelivery.threadId,
+          source: params.resolvedDelivery.mode === "implicit" ? "last" : "explicit",
+        }),
+      }
+    : {
+        ok: false,
+        ...normalizeCronTraceTarget({
+          channel: params.resolvedDelivery.channel,
+          to: params.resolvedDelivery.to ?? null,
+          accountId: params.resolvedDelivery.accountId,
+          threadId: params.resolvedDelivery.threadId,
+          source: params.resolvedDelivery.mode === "implicit" ? "last" : "explicit",
+        }),
+        error: params.resolvedDelivery.error.message,
+      };
+  const messageToolSentTo = params.messagingToolSentTargets
+    .map((target) => normalizeMessagingToolTarget(target))
+    .filter((target): target is CronDeliveryTraceMessageTarget => Boolean(target));
+  return {
+    ...(intended ? { intended } : {}),
+    resolved,
+    ...(messageToolSentTo.length > 0 ? { messageToolSentTo } : {}),
+    fallbackUsed: params.fallbackUsed,
+    delivered: params.delivered,
+  };
+}
+
+function resolveMessagingToolSentTargets(params: {
+  resolvedDelivery: ResolvedCronDeliveryTarget;
+  runResult: CronExecutionResult["runResult"];
+}): MessagingToolSend[] {
+  const explicitTargets = params.runResult.messagingToolSentTargets ?? [];
+  if (explicitTargets.length > 0 || params.runResult.didSendViaMessagingTool !== true) {
+    return explicitTargets;
+  }
+  if (!params.resolvedDelivery.ok) {
+    return [];
+  }
+  return [
+    {
+      tool: "message",
+      provider: params.resolvedDelivery.channel,
+      ...(params.resolvedDelivery.accountId
+        ? { accountId: params.resolvedDelivery.accountId }
+        : {}),
+      ...(params.resolvedDelivery.to ? { to: params.resolvedDelivery.to } : {}),
+      ...(params.resolvedDelivery.threadId
+        ? { threadId: String(params.resolvedDelivery.threadId) }
+        : {}),
+    },
+  ];
+}
+
+function resolveCronToolPolicy(params: { deliveryMode: "announce" | "webhook" | "none" }) {
+  const enableMessageTool = params.deliveryMode !== "webhook";
+  return {
+    requireExplicitMessageTarget: false,
+    disableMessageTool: !enableMessageTool,
+    forceMessageTool: enableMessageTool,
+  };
+}
+
+function canPromptForMessageTool(params: {
+  disableMessageTool: boolean;
+  toolsAllow?: string[];
+}): boolean {
+  if (params.disableMessageTool) {
+    return false;
+  }
+  return !params.toolsAllow?.length || params.toolsAllow.includes("message");
 }
 
 async function resolveCronDeliveryContext(params: {
   cfg: OpenClawConfig;
   job: CronJob;
   agentId: string;
-  deliveryContract: IsolatedDeliveryContract;
 }) {
   const deliveryPlan = resolveCronDeliveryPlan(params.job);
-  const hasMessageTargetContext = deliveryPlan.mode !== "webhook" && deliveryPlan.to !== undefined;
-  if (!deliveryPlan.requested && !hasMessageTargetContext) {
+  if (deliveryPlan.mode === "webhook") {
     const resolvedDelivery = {
       ok: false as const,
       channel: undefined,
@@ -151,15 +265,13 @@ async function resolveCronDeliveryContext(params: {
       accountId: undefined,
       threadId: undefined,
       mode: "implicit" as const,
-      error: new Error("cron delivery not requested"),
+      error: new Error("webhook delivery has no chat target"),
     };
     return {
       deliveryPlan,
-      deliveryRequested: false,
+      deliveryRequested: deliveryPlan.requested,
       resolvedDelivery,
       toolPolicy: resolveCronToolPolicy({
-        deliveryRequested: false,
-        resolvedDelivery,
         deliveryMode: deliveryPlan.mode,
       }),
     };
@@ -177,8 +289,6 @@ async function resolveCronDeliveryContext(params: {
     deliveryRequested: deliveryPlan.requested,
     resolvedDelivery,
     toolPolicy: resolveCronToolPolicy({
-      deliveryRequested: deliveryPlan.requested,
-      resolvedDelivery,
       deliveryMode: deliveryPlan.mode,
     }),
   };
@@ -187,9 +297,17 @@ async function resolveCronDeliveryContext(params: {
 function appendCronDeliveryInstruction(params: {
   commandBody: string;
   deliveryRequested: boolean;
+  messageToolEnabled: boolean;
+  resolvedDeliveryOk: boolean;
 }) {
   if (!params.deliveryRequested) {
     return params.commandBody;
+  }
+  if (params.messageToolEnabled) {
+    const targetHint = params.resolvedDeliveryOk
+      ? "for the current chat"
+      : "with an explicit target";
+    return `${params.commandBody}\n\nUse the message tool if you need to notify the user directly ${targetHint}. If you do not send directly, your final plain-text reply will be delivered automatically.`.trim();
   }
   return `${params.commandBody}\n\nReturn your response as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
 }
@@ -216,7 +334,6 @@ type RunCronAgentTurnParams = {
   sessionKey: string;
   agentId?: string;
   lane?: string;
-  deliveryContract?: IsolatedDeliveryContract;
 };
 
 type WithRunSession = (
@@ -238,6 +355,7 @@ type PreparedCronRunContext = {
   persistSessionEntry: PersistCronSessionEntry;
   withRunSession: WithRunSession;
   agentPayload: Extract<CronJob["payload"], { kind: "agentTurn" }> | null;
+  deliveryPlan: CronDeliveryPlan;
   resolvedDelivery: ResolvedCronDeliveryTarget;
   deliveryRequested: boolean;
   toolPolicy: ReturnType<typeof resolveCronToolPolicy>;
@@ -382,11 +500,18 @@ async function prepareCronRunContext(params: {
       catalog: await loadCatalog(),
     });
   }
-  if (thinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
-    logWarn(
-      `[cron:${input.job.id}] Thinking level "xhigh" is not supported for ${provider}/${model}; downgrading to "high".`,
-    );
-    thinkLevel = "high";
+  if (!isThinkingLevelSupported({ provider, model, level: thinkLevel })) {
+    const fallbackThinkLevel = resolveSupportedThinkingLevel({
+      provider,
+      model,
+      level: thinkLevel,
+    });
+    if (fallbackThinkLevel !== thinkLevel) {
+      logWarn(
+        `[cron:${input.job.id}] Thinking level "${thinkLevel}" is not supported for ${provider}/${model}; downgrading to "${fallbackThinkLevel}".`,
+      );
+      thinkLevel = fallbackThinkLevel;
+    }
   }
 
   const timeoutMs = resolveAgentTimeoutMs({
@@ -395,12 +520,12 @@ async function prepareCronRunContext(params: {
       input.job.payload.kind === "agentTurn" ? input.job.payload.timeoutSeconds : undefined,
   });
   const agentPayload = input.job.payload.kind === "agentTurn" ? input.job.payload : null;
-  const { deliveryRequested, resolvedDelivery, toolPolicy } = await resolveCronDeliveryContext({
-    cfg: cfgWithAgentDefaults,
-    job: input.job,
-    agentId,
-    deliveryContract: input.deliveryContract ?? "cron-owned",
-  });
+  const { deliveryPlan, deliveryRequested, resolvedDelivery, toolPolicy } =
+    await resolveCronDeliveryContext({
+      cfg: cfgWithAgentDefaults,
+      job: input.job,
+      agentId,
+    });
 
   const { formattedTime, timeLine } = resolveCronStyleNow(input.cfg, now);
   const base = `[cron:${input.job.id} ${input.job.name}] ${input.message}`.trim();
@@ -437,7 +562,15 @@ async function prepareCronRunContext(params: {
   } else {
     commandBody = `${base}\n${timeLine}`.trim();
   }
-  commandBody = appendCronDeliveryInstruction({ commandBody, deliveryRequested });
+  commandBody = appendCronDeliveryInstruction({
+    commandBody,
+    deliveryRequested,
+    messageToolEnabled: canPromptForMessageTool({
+      disableMessageTool: toolPolicy.disableMessageTool,
+      toolsAllow: agentPayload?.toolsAllow,
+    }),
+    resolvedDeliveryOk: resolvedDelivery.ok,
+  });
 
   const skillsSnapshot = await resolveCronSkillsSnapshot({
     workspaceDir,
@@ -506,6 +639,7 @@ async function prepareCronRunContext(params: {
       persistSessionEntry,
       withRunSession,
       agentPayload,
+      deliveryPlan,
       resolvedDelivery,
       deliveryRequested,
       toolPolicy,
@@ -596,10 +730,11 @@ async function finalizeCronRun(params: {
     }
     prepared.cronSession.sessionEntry.cacheRead = usage.cacheRead ?? 0;
     prepared.cronSession.sessionEntry.cacheWrite = usage.cacheWrite ?? 0;
+    // Snapshot cost like tokens (runEstimatedCostUsd is already computed from
+    // cumulative run usage, so assign directly instead of accumulating).
+    // Fixes #69347: cost was inflated 1x-72x by accumulating on every persist.
     if (runEstimatedCostUsd !== undefined) {
-      prepared.cronSession.sessionEntry.estimatedCostUsd =
-        (resolveNonNegativeNumber(prepared.cronSession.sessionEntry.estimatedCostUsd) ?? 0) +
-        runEstimatedCostUsd;
+      prepared.cronSession.sessionEntry.estimatedCostUsd = runEstimatedCostUsd;
     }
     telemetry = {
       model: modelUsed,
@@ -628,7 +763,11 @@ async function finalizeCronRun(params: {
     finalAssistantVisibleText: finalRunResult.meta?.finalAssistantVisibleText,
     preferFinalAssistantVisibleText: prepared.resolvedDelivery.channel === "telegram",
   });
-  const resolveRunOutcome = (result?: { delivered?: boolean; deliveryAttempted?: boolean }) =>
+  const resolveRunOutcome = (result?: {
+    delivered?: boolean;
+    deliveryAttempted?: boolean;
+    delivery?: CronDeliveryTrace;
+  }) =>
     prepared.withRunSession({
       status: hasFatalErrorPayload ? "error" : "ok",
       ...(hasFatalErrorPayload
@@ -638,6 +777,7 @@ async function finalizeCronRun(params: {
       outputText,
       delivered: result?.delivered,
       deliveryAttempted: result?.deliveryAttempted,
+      delivery: result?.delivery,
       ...telemetry,
     });
 
@@ -649,11 +789,16 @@ async function finalizeCronRun(params: {
     matchesMessagingToolDeliveryTarget,
     resolveCronDeliveryBestEffort,
   } = await loadCronDeliveryRuntime();
+  const messagingToolSentTargets = resolveMessagingToolSentTargets({
+    resolvedDelivery: prepared.resolvedDelivery,
+    runResult: finalRunResult,
+  });
+  const didSendViaMessagingTool =
+    finalRunResult.didSendViaMessagingTool === true && messagingToolSentTargets.length > 0;
   const skipMessagingToolDelivery =
-    (prepared.input.deliveryContract ?? "cron-owned") === "shared" &&
-    prepared.deliveryRequested &&
-    finalRunResult.didSendViaMessagingTool === true &&
-    (finalRunResult.messagingToolSentTargets ?? []).some((target) =>
+    didSendViaMessagingTool &&
+    prepared.resolvedDelivery.ok &&
+    messagingToolSentTargets.some((target) =>
       matchesMessagingToolDeliveryTarget(target, {
         channel: prepared.resolvedDelivery.channel,
         to: prepared.resolvedDelivery.to,
@@ -674,6 +819,7 @@ async function finalizeCronRun(params: {
     deliveryRequested: prepared.deliveryRequested,
     skipHeartbeatDelivery,
     skipMessagingToolDelivery,
+    unverifiedMessagingToolDelivery: didSendViaMessagingTool && !prepared.resolvedDelivery.ok,
     deliveryBestEffort: resolveCronDeliveryBestEffort(prepared.input.job),
     deliveryPayloadHasStructuredContent,
     deliveryPayloads,
@@ -686,11 +832,19 @@ async function finalizeCronRun(params: {
     abortReason: params.abortReason,
     withRunSession: prepared.withRunSession,
   });
+  const deliveryTrace = buildCronDeliveryTrace({
+    deliveryPlan: prepared.deliveryPlan,
+    resolvedDelivery: prepared.resolvedDelivery,
+    messagingToolSentTargets,
+    fallbackUsed: deliveryResult.deliveryAttempted && !skipMessagingToolDelivery,
+    delivered: deliveryResult.delivered,
+  });
   if (deliveryResult.result) {
     const resultWithDeliveryMeta: RunCronAgentTurnResult = {
       ...deliveryResult.result,
       deliveryAttempted:
         deliveryResult.result.deliveryAttempted ?? deliveryResult.deliveryAttempted,
+      delivery: deliveryTrace,
     };
     if (!hasFatalErrorPayload || deliveryResult.result.status !== "ok") {
       return resultWithDeliveryMeta;
@@ -698,6 +852,7 @@ async function finalizeCronRun(params: {
     return resolveRunOutcome({
       delivered: deliveryResult.result.delivered,
       deliveryAttempted: resultWithDeliveryMeta.deliveryAttempted,
+      delivery: deliveryTrace,
     });
   }
   summary = deliveryResult.summary;
@@ -705,6 +860,7 @@ async function finalizeCronRun(params: {
   return resolveRunOutcome({
     delivered: deliveryResult.delivered,
     deliveryAttempted: deliveryResult.deliveryAttempted,
+    delivery: deliveryTrace,
   });
 }
 
@@ -718,7 +874,6 @@ export async function runCronIsolatedAgentTurn(params: {
   sessionKey: string;
   agentId?: string;
   lane?: string;
-  deliveryContract?: IsolatedDeliveryContract;
 }): Promise<RunCronAgentTurnResult> {
   const abortSignal = params.abortSignal ?? params.signal;
   const isAborted = () => abortSignal?.aborted === true;

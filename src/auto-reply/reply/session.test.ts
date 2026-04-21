@@ -26,6 +26,31 @@ import { drainFormattedSystemEvents } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 import { initSessionState } from "./session.js";
 
+const sessionForkMocks = vi.hoisted(() => ({
+  forkSessionFromParent: vi.fn(),
+  nextSessionId: 0,
+}));
+
+type ForkSessionParamsForTest = {
+  parentEntry: SessionEntry;
+  sessionsDir: string;
+};
+
+vi.mock("./session-fork.js", () => ({
+  forkSessionFromParent: (...args: [ForkSessionParamsForTest]) =>
+    sessionForkMocks.forkSessionFromParent(...args),
+  resolveParentForkMaxTokens: (cfg: { session?: { parentForkMaxTokens?: unknown } }) => {
+    const configured = cfg.session?.parentForkMaxTokens;
+    return typeof configured === "number" && Number.isFinite(configured) && configured >= 0
+      ? Math.floor(configured)
+      : 100_000;
+  },
+}));
+
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: () => null,
+}));
+
 // Perf: session-store locks are exercised elsewhere; most session tests don't need FS lock files.
 vi.mock("../../agents/session-write-lock.js", async () => {
   const actual = await vi.importActual<typeof import("../../agents/session-write-lock.js")>(
@@ -216,6 +241,30 @@ function registerCurrentConversationBindingAdapterForTest(params: {
 
 beforeEach(() => {
   sessionBindingTesting.resetSessionBindingAdaptersForTests();
+  sessionForkMocks.nextSessionId = 0;
+  sessionForkMocks.forkSessionFromParent
+    .mockReset()
+    .mockImplementation(async ({ parentEntry, sessionsDir }: ForkSessionParamsForTest) => {
+      if (!parentEntry.sessionFile) {
+        return null;
+      }
+      await fs.mkdir(sessionsDir, { recursive: true });
+      const sessionId = `forked-session-${++sessionForkMocks.nextSessionId}`;
+      const sessionFile = path.join(sessionsDir, `${sessionId}.jsonl`);
+      await fs.writeFile(
+        sessionFile,
+        `${JSON.stringify({
+          type: "session",
+          version: 3,
+          id: sessionId,
+          timestamp: new Date().toISOString(),
+          cwd: process.cwd(),
+          parentSession: parentEntry.sessionFile,
+        })}\n`,
+        "utf-8",
+      );
+      return { sessionId, sessionFile: await fs.realpath(sessionFile) };
+    });
 });
 afterEach(async () => {
   await sessionMcpTesting.resetSessionMcpRuntimeManager();
@@ -1778,6 +1827,66 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     }
   });
 
+  it("clears auto-sourced model/provider/auth overrides on /new and /reset (#69301)", async () => {
+    const storePath = await createStorePath("openclaw-reset-auto-overrides-");
+    const sessionKey = "agent:main:telegram:direct:6761477233";
+    const existingSessionId = "existing-session-auto-overrides";
+    const autoOverrides = {
+      providerOverride: "openai-codex",
+      modelOverride: "gpt-5.4",
+      modelOverrideSource: "auto",
+      authProfileOverride: "openai-codex:default",
+      authProfileOverrideSource: "auto",
+      authProfileOverrideCompactionCount: 1,
+      verboseLevel: "on",
+    } as const;
+    const cases = [
+      { name: "new clears auto-sourced overrides", body: "/new" },
+      { name: "reset clears auto-sourced overrides", body: "/reset" },
+    ] as const;
+
+    for (const testCase of cases) {
+      await seedSessionStoreWithOverrides({
+        storePath,
+        sessionKey,
+        sessionId: existingSessionId,
+        overrides: { ...autoOverrides },
+      });
+
+      const cfg = {
+        session: { store: storePath, idleMinutes: 999 },
+      } as OpenClawConfig;
+
+      const result = await initSessionState({
+        ctx: {
+          Body: testCase.body,
+          RawBody: testCase.body,
+          CommandBody: testCase.body,
+          From: "6761477233",
+          To: "bot",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession, testCase.name).toBe(true);
+      expect(result.resetTriggered, testCase.name).toBe(true);
+      expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
+      expect(result.sessionEntry.modelOverride, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.providerOverride, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.modelOverrideSource, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.authProfileOverride, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.authProfileOverrideSource, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.authProfileOverrideCompactionCount, testCase.name).toBeUndefined();
+      // Unrelated behavior overrides still carry across the reset.
+      expect(result.sessionEntry.verboseLevel, testCase.name).toBe(autoOverrides.verboseLevel);
+    }
+  });
+
   it("preserves spawned session ownership metadata across /new and /reset", async () => {
     const storePath = await createStorePath("openclaw-reset-spawned-metadata-");
     const sessionKey = "subagent:owned-child";
@@ -2315,7 +2424,7 @@ describe("persistSessionUsageUpdate", () => {
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
   });
 
-  it("accumulates estimatedCostUsd across persisted usage updates", async () => {
+  it("snapshots estimatedCostUsd instead of accumulating (fixes #69347)", async () => {
     const storePath = await createStorePath("openclaw-usage-cost-");
     const sessionKey = "main";
     await seedSessionStore({
@@ -2324,33 +2433,36 @@ describe("persistSessionUsageUpdate", () => {
       entry: {
         sessionId: "s1",
         updatedAt: Date.now(),
-        estimatedCostUsd: 0.0015,
       },
     });
 
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [
+              {
+                id: "gpt-5.4",
+                name: "GPT 5.4",
+                reasoning: true,
+                input: ["text"],
+                cost: { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0.5 },
+                contextWindow: 200_000,
+                maxTokens: 8_192,
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    // First persist: 2000 input + 500 output + 1000 cacheRead + 200 cacheWrite tokens
+    // Cost = (2000*1.25 + 500*10 + 1000*0.125 + 200*0.5) / 1e6 = $0.007725
     await persistSessionUsageUpdate({
       storePath,
       sessionKey,
-      cfg: {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              models: [
-                {
-                  id: "gpt-5.4",
-                  name: "GPT 5.4",
-                  reasoning: true,
-                  input: ["text"],
-                  cost: { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0.5 },
-                  contextWindow: 200_000,
-                  maxTokens: 8_192,
-                },
-              ],
-            },
-          },
-        },
-      } satisfies OpenClawConfig,
+      cfg,
       usage: { input: 2_000, output: 500, cacheRead: 1_000, cacheWrite: 200 },
       lastCallUsage: { input: 800, output: 200, cacheRead: 300, cacheWrite: 50 },
       providerUsed: "openai",
@@ -2358,8 +2470,26 @@ describe("persistSessionUsageUpdate", () => {
       contextTokensUsed: 200_000,
     });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    expect(stored[sessionKey].estimatedCostUsd).toBeCloseTo(0.009225, 8);
+    const stored1 = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored1[sessionKey].estimatedCostUsd).toBeCloseTo(0.007725, 8);
+
+    // Second persist with SAME cumulative usage (e.g., heartbeat or redundant persist)
+    // Before fix: cost would accumulate to $0.0155 (2x)
+    // After fix: cost stays $0.00775 (snapshotted)
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      cfg,
+      usage: { input: 2_000, output: 500, cacheRead: 1_000, cacheWrite: 200 },
+      lastCallUsage: { input: 800, output: 200, cacheRead: 300, cacheWrite: 50 },
+      providerUsed: "openai",
+      modelUsed: "gpt-5.4",
+      contextTokensUsed: 200_000,
+    });
+
+    const stored2 = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    // Cost should still be $0.007725, NOT $0.01545
+    expect(stored2[sessionKey].estimatedCostUsd).toBeCloseTo(0.007725, 8);
   });
 
   it("persists zero estimatedCostUsd for free priced models", async () => {

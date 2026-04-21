@@ -119,7 +119,7 @@ describe("session reference shape detection", () => {
     expect(looksLikeSessionKey("agent:main:main")).toBe(true);
     expect(looksLikeSessionKey("cron:daily-report")).toBe(true);
     expect(looksLikeSessionKey("node:macbook")).toBe(true);
-    expect(looksLikeSessionKey("telegram:group:123")).toBe(true);
+    expect(looksLikeSessionKey("forum:group:123")).toBe(true);
     expect(looksLikeSessionKey("random-slug")).toBe(false);
   });
 

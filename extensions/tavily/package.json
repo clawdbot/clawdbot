@@ -4,6 +4,9 @@
   "private": true,
   "description": "OpenClaw Tavily plugin",
   "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.49"
+  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },

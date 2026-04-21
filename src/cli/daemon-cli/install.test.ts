@@ -413,4 +413,38 @@ describe("runDaemonInstall", () => {
       }
     }
   });
+
+  it("does not reuse stale service control env during forced reinstall", async () => {
+    service.isLoaded.mockResolvedValue(true);
+    service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "run"],
+      environment: {
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-doctor-manual",
+        OPENCLAW_CONFIG_PATH: "/tmp/openclaw-doctor-manual/openclaw.json",
+        OPENCLAW_GATEWAY_TOKEN: "stale-service-token",
+        PATH: "/tmp/doctor-bin:/usr/bin",
+        NODE_OPTIONS: "--require /tmp/evil.js",
+        OPENAI_API_KEY: "service-openai-key",
+      },
+    } as never);
+
+    await runDaemonInstall({ json: true, force: true });
+
+    expect(buildGatewayInstallPlanMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: expect.objectContaining({
+          OPENAI_API_KEY: "service-openai-key",
+        }),
+      }),
+    );
+    const [firstArg] =
+      (buildGatewayInstallPlanMock.mock.calls.at(0) as [Record<string, unknown>] | undefined) ?? [];
+    const env = firstArg?.env as Record<string, string | undefined>;
+    expect(env.OPENCLAW_STATE_DIR).toBeUndefined();
+    expect(env.OPENCLAW_CONFIG_PATH).toBeUndefined();
+    expect(env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
+    expect(env.NODE_OPTIONS).toBeUndefined();
+    expect(env.PATH).not.toContain("/tmp/doctor-bin");
+    expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+  });
 });

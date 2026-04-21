@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to publish, or a full 40-character main commit SHA for validation-only preflight (for example v2026.3.22 or 0123456789abcdef0123456789abcdef01234567)
+        description: Release tag to publish, or a full 40-character workflow-branch commit SHA for validation-only preflight (for example v2026.3.22 or 0123456789abcdef0123456789abcdef01234567)
         required: true
         type: string
       preflight_only:
@@ -85,7 +85,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
-          use-sticky-disk: "false"
 
       - name: Ensure version is not already published
         env:
@@ -132,19 +131,20 @@ jobs:
           OPENCLAW_NPM_RELEASE_SKIP_PACK_CHECK: "1"
           RELEASE_REF: ${{ inputs.tag }}
           PREFLIGHT_ONLY: ${{ inputs.preflight_only }}
-          RELEASE_MAIN_REF: origin/main
+          WORKFLOW_REF_NAME: ${{ github.ref_name }}
           OPENCLAW_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag }}
         run: |
           set -euo pipefail
           RELEASE_SHA=$(git rev-parse HEAD)
-          export RELEASE_SHA RELEASE_MAIN_REF
-          # Fetch the full main ref so merge-base ancestry checks keep working
-          # for older tagged commits that are still contained in main.
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          RELEASE_BRANCH_REF="refs/remotes/origin/${WORKFLOW_REF_NAME}"
+          export RELEASE_SHA RELEASE_BRANCH_REF
+          # Fetch the workflow branch so merge-base ancestry checks keep working
+          # for older tagged commits contained in a release branch.
+          git fetch --no-tags origin "+refs/heads/${WORKFLOW_REF_NAME}:refs/remotes/origin/${WORKFLOW_REF_NAME}"
           if [[ "${RELEASE_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            MAIN_SHA="$(git rev-parse origin/main)"
-            if [[ "${RELEASE_SHA}" != "${MAIN_SHA}" ]]; then
-              echo "Validation-only SHA mode only supports the current origin/main HEAD." >&2
+            BRANCH_SHA="$(git rev-parse "${RELEASE_BRANCH_REF}")"
+            if [[ "${RELEASE_SHA}" != "${BRANCH_SHA}" ]]; then
+              echo "Validation-only SHA mode only supports the current ${WORKFLOW_REF_NAME} HEAD." >&2
               exit 1
             fi
             RELEASE_TAG="v$(node -p "require('./package.json').version")"
@@ -154,6 +154,8 @@ jobs:
             RELEASE_TAG="${RELEASE_REF}"
             export RELEASE_TAG
           fi
+          RELEASE_MAIN_REF="${RELEASE_BRANCH_REF}"
+          export RELEASE_MAIN_REF
           pnpm release:openclaw:npm:check
 
       # KEEP THIS LANE LIMITED TO FAST, REPEATABLE RELEASE READINESS CHECKS.
@@ -254,13 +256,13 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Require main workflow ref for publish
+      - name: Require main or release workflow ref for publish
         env:
           WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
-          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]]; then
-            echo "Real publish runs must be dispatched from main. Use preflight_only=true for branch validation."
+          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]]; then
+            echo "Real publish runs must be dispatched from main or release/YYYY.M.D. Use preflight_only=true for other branch validation."
             exit 1
           fi
 
@@ -313,7 +315,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "false"
-          use-sticky-disk: "false"
 
       - name: Ensure version is not already published
         run: |
@@ -331,10 +332,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
+          EXPECTED_PREFLIGHT_BRANCH: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           RUN_JSON="$(gh run view "$PREFLIGHT_RUN_ID" --repo "$GITHUB_REPOSITORY" --json workflowName,headBranch,event,conclusion,url)"
-          printf '%s' "$RUN_JSON" | node -e 'const fs = require("node:fs"); const run = JSON.parse(fs.readFileSync(0, "utf8")); const checks = [["workflowName", "OpenClaw NPM Release"], ["headBranch", "main"], ["event", "workflow_dispatch"], ["conclusion", "success"]]; for (const [key, expected] of checks) { if (run[key] !== expected) { console.error(`Referenced npm preflight run ${process.env.PREFLIGHT_RUN_ID} must have ${key}=${expected}, got ${run[key] ?? "<missing>"}.`); process.exit(1); } } console.log(`Using npm preflight run ${process.env.PREFLIGHT_RUN_ID}: ${run.url}`);'
+          printf '%s' "$RUN_JSON" | node -e 'const fs = require("node:fs"); const run = JSON.parse(fs.readFileSync(0, "utf8")); const checks = [["workflowName", "OpenClaw NPM Release"], ["headBranch", process.env.EXPECTED_PREFLIGHT_BRANCH], ["event", "workflow_dispatch"], ["conclusion", "success"]]; for (const [key, expected] of checks) { if (run[key] !== expected) { console.error(`Referenced npm preflight run ${process.env.PREFLIGHT_RUN_ID} must have ${key}=${expected}, got ${run[key] ?? "<missing>"}.`); process.exit(1); } } console.log(`Using npm preflight run ${process.env.PREFLIGHT_RUN_ID}: ${run.url}`);'
 
       - name: Download prepared npm tarball
         uses: actions/download-artifact@v8
@@ -350,14 +352,15 @@ jobs:
         env:
           OPENCLAW_NPM_RELEASE_SKIP_PACK_CHECK: "1"
           RELEASE_TAG: ${{ inputs.tag }}
-          RELEASE_MAIN_REF: origin/main
+          WORKFLOW_REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           RELEASE_SHA=$(git rev-parse HEAD)
+          RELEASE_MAIN_REF="refs/remotes/origin/${WORKFLOW_REF_NAME}"
           export RELEASE_SHA RELEASE_TAG RELEASE_MAIN_REF
-          # Fetch the full main ref so merge-base ancestry checks keep working
-          # for older tagged commits that are still contained in main.
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          # Fetch the workflow branch so merge-base ancestry checks keep working
+          # for older tagged commits contained in a release branch.
+          git fetch --no-tags origin "+refs/heads/${WORKFLOW_REF_NAME}:refs/remotes/origin/${WORKFLOW_REF_NAME}"
           pnpm release:openclaw:npm:check
 
       - name: Verify prepared tarball provenance

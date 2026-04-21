@@ -6,19 +6,7 @@ import {
   readStringParam,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { runTavilySearch } from "./tavily-client.js";
-
-function optionalStringEnum<const T extends readonly string[]>(
-  values: T,
-  options: { description?: string } = {},
-) {
-  return Type.Optional(
-    Type.Unsafe<T[number]>({
-      type: "string",
-      enum: [...values],
-      ...options,
-    }),
-  );
-}
+import { optionalStringEnum } from "./tavily-tool-schema.js";
 
 const TavilySearchToolSchema = Type.Object(
   {

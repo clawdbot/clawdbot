@@ -553,22 +553,30 @@ async function deliverOutboundPayloadsCore(
   params: DeliverOutboundPayloadsCoreParams,
 ): Promise<OutboundDeliveryResult[]> {
   const { cfg, channel, to, payloads } = params;
-  const outboundPayloadPlan = createOutboundPayloadPlan(payloads);
+  const outboundPayloadPlan = createOutboundPayloadPlan(payloads, {
+    cfg,
+    sessionKey: params.session?.policyKey ?? params.session?.key,
+    surface: channel,
+  });
   const accountId = params.accountId;
   const deps = params.deps;
   const abortSignal = params.abortSignal;
-  const mediaAccess = resolveAgentScopedOutboundMediaAccess({
-    cfg,
-    agentId: params.session?.agentId ?? params.mirror?.agentId,
-    mediaSources: collectPayloadMediaSources(outboundPayloadPlan),
-    sessionKey: params.session?.key,
-    messageProvider: params.session?.key ? undefined : channel,
-    accountId: params.session?.requesterAccountId ?? accountId,
-    requesterSenderId: params.session?.requesterSenderId,
-    requesterSenderName: params.session?.requesterSenderName,
-    requesterSenderUsername: params.session?.requesterSenderUsername,
-    requesterSenderE164: params.session?.requesterSenderE164,
-  });
+  const mediaSources = collectPayloadMediaSources(outboundPayloadPlan);
+  const mediaAccess =
+    mediaSources.length > 0
+      ? resolveAgentScopedOutboundMediaAccess({
+          cfg,
+          agentId: params.session?.agentId ?? params.mirror?.agentId,
+          mediaSources,
+          sessionKey: params.session?.key,
+          messageProvider: params.session?.key ? undefined : channel,
+          accountId: params.session?.requesterAccountId ?? accountId,
+          requesterSenderId: params.session?.requesterSenderId,
+          requesterSenderName: params.session?.requesterSenderName,
+          requesterSenderUsername: params.session?.requesterSenderUsername,
+          requesterSenderE164: params.session?.requesterSenderE164,
+        })
+      : {};
   const results: OutboundDeliveryResult[] = [];
   const handler = await createChannelHandler({
     cfg,

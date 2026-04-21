@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
+import {
+  getProviderUsageSnapshotWithPluginMock,
+  resetProviderUsageSnapshotWithPluginMock,
+} from "./provider-usage-plugin-runtime.test-mocks.js";
 import { loadProviderUsageSummary } from "./provider-usage.load.js";
 import { ignoredErrors } from "./provider-usage.shared.js";
 import {
@@ -11,31 +15,12 @@ import type { ProviderUsageSnapshot } from "./provider-usage.types.js";
 
 type ProviderAuth = ProviderUsageAuth<typeof loadProviderUsageSummary>;
 const googleGeminiCliProvider = "google-gemini-cli" as unknown as ProviderAuth["provider"];
-const resolveProviderUsageSnapshotWithPluginMock = vi.hoisted(() =>
-  vi.fn<typeof import("../plugins/provider-runtime.js").resolveProviderUsageSnapshotWithPlugin>(
-    async () => null,
-  ),
-);
-
-vi.mock("../config/config.js", () => ({
-  loadConfig: () => ({}),
-}));
-
-vi.mock("../plugins/provider-runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
-    "../plugins/provider-runtime.js",
-  );
-  return {
-    ...actual,
-    resolveProviderUsageSnapshotWithPlugin: resolveProviderUsageSnapshotWithPluginMock,
-  };
-});
+const resolveProviderUsageSnapshotWithPluginMock = getProviderUsageSnapshotWithPluginMock();
 
 describe("provider-usage.load", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    resolveProviderUsageSnapshotWithPluginMock.mockReset();
-    resolveProviderUsageSnapshotWithPluginMock.mockResolvedValue(null);
+    resetProviderUsageSnapshotWithPluginMock();
   });
 
   it("loads snapshots for copilot gemini codex and xiaomi", async () => {

@@ -1,10 +1,90 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createPathResolutionEnv, withEnvAsync } from "../test-utils/env.js";
-import { collectPluginsTrustFindings } from "./audit-extra.async.js";
+import { collectPluginsTrustFindings } from "./audit-plugins-trust.js";
+
+const mockChannelPlugins = vi.hoisted(() => [
+  {
+    id: "discord",
+    capabilities: {},
+    commands: {},
+    config: {
+      listAccountIds: () => [],
+      resolveAccount: () => null,
+    },
+  },
+]);
+
+const readInstalledPackageVersionMock = vi.hoisted(() =>
+  vi.fn(async (dir: string) => {
+    if (dir.includes("/extensions/voice-call") || dir.includes("\\extensions\\voice-call")) {
+      return "9.9.9";
+    }
+    if (dir.includes("/hooks/test-hooks") || dir.includes("\\hooks\\test-hooks")) {
+      return "8.8.8";
+    }
+    return undefined;
+  }),
+);
+
+vi.mock("../infra/package-update-utils.js", () => ({
+  readInstalledPackageVersion: readInstalledPackageVersionMock,
+}));
+
+vi.mock("../plugins/config-state.js", () => ({
+  normalizePluginId: (id: string) => id,
+  normalizePluginsConfig: (
+    config:
+      | {
+          allow?: string[];
+          deny?: string[];
+          enabled?: boolean;
+          entries?: Record<string, { enabled?: boolean }>;
+        }
+      | undefined,
+  ) => ({
+    allow: config?.allow ?? [],
+    deny: config?.deny ?? [],
+    enabled: config?.enabled !== false,
+    entries: config?.entries ?? {},
+  }),
+}));
+
+vi.mock("../channels/plugins/index.js", () => ({
+  getChannelPlugin: (id: string) => mockChannelPlugins.find((plugin) => plugin.id === id),
+  getLoadedChannelPlugin: () => undefined,
+  listChannelPlugins: () => mockChannelPlugins,
+  normalizeChannelId: (id: unknown) => (typeof id === "string" && id ? id : null),
+}));
+
+vi.mock("../channels/read-only-account-inspect.js", () => ({
+  inspectReadOnlyChannelAccount: () => null,
+}));
+
+vi.mock("../agents/sandbox/config.js", () => ({
+  resolveSandboxConfigForAgent: () => ({ mode: "off" }),
+}));
+
+vi.mock("../agents/sandbox/tool-policy.js", () => ({
+  resolveSandboxToolPolicyForAgent: () => undefined,
+}));
+
+vi.mock("../agents/tool-policy-match.js", () => ({
+  isToolAllowedByPolicies: (_tool: string, policies: unknown[]) =>
+    policies.every((policy) => policy == null),
+}));
+
+vi.mock("../agents/tool-policy.js", () => ({
+  resolveToolProfilePolicy: (profile: unknown) =>
+    profile === "coding" || profile === "minimal" ? {} : undefined,
+}));
+
+vi.mock("./audit-tool-policy.js", () => ({
+  pickSandboxToolPolicy: () => undefined,
+}));
 
 describe("security audit install metadata findings", () => {
   let fixtureRoot = "";
@@ -110,25 +190,8 @@ describe("security audit install metadata findings", () => {
       },
       {
         name: "warns when install records drift from installed package versions",
-        run: async () => {
-          const tmp = await makeTmpDir("install-version-drift");
-          const stateDir = path.join(tmp, "state");
-          const pluginDir = path.join(stateDir, "extensions", "voice-call");
-          const hookDir = path.join(stateDir, "hooks", "test-hooks");
-          await fs.mkdir(pluginDir, { recursive: true });
-          await fs.mkdir(hookDir, { recursive: true });
-          await fs.writeFile(
-            path.join(pluginDir, "package.json"),
-            JSON.stringify({ name: "@openclaw/voice-call", version: "9.9.9" }),
-            "utf-8",
-          );
-          await fs.writeFile(
-            path.join(hookDir, "package.json"),
-            JSON.stringify({ name: "@openclaw/test-hooks", version: "8.8.8" }),
-            "utf-8",
-          );
-
-          return runInstallMetadataAudit(
+        run: async () =>
+          runInstallMetadataAudit(
             {
               plugins: {
                 installs: {
@@ -153,9 +216,8 @@ describe("security audit install metadata findings", () => {
                 },
               },
             },
-            stateDir,
-          );
-        },
+            sharedInstallMetadataStateDir,
+          ),
         expectedPresent: ["plugins.installs_version_drift", "hooks.installs_version_drift"],
       },
     ];
@@ -175,6 +237,41 @@ describe("security audit install metadata findings", () => {
         ).toBe(false);
       }
     }
+  });
+
+  it("evaluates phantom allowlist findings", async () => {
+    const bundledStateDir = await makeTmpDir("phantom-bundled-excluded");
+    await fs.mkdir(path.join(bundledStateDir, "extensions", "some-installed-plugin"), {
+      recursive: true,
+    });
+
+    const bundledFindings = await runInstallMetadataAudit(
+      {
+        plugins: { allow: ["discord", "some-installed-plugin"] },
+      },
+      bundledStateDir,
+    );
+    expect(
+      bundledFindings.find((finding) => finding.checkId === "plugins.allow_phantom_entries"),
+    ).toBeUndefined();
+
+    const reportedStateDir = await makeTmpDir("phantom-reported");
+    await fs.mkdir(path.join(reportedStateDir, "extensions", "installed-plugin"), {
+      recursive: true,
+    });
+
+    const reportedFindings = await runInstallMetadataAudit(
+      {
+        plugins: { allow: ["installed-plugin", "ghost-plugin-xyz"] },
+      },
+      reportedStateDir,
+    );
+    const phantomFinding = reportedFindings.find(
+      (finding) => finding.checkId === "plugins.allow_phantom_entries",
+    );
+    expect(phantomFinding?.severity).toBe("warn");
+    expect(phantomFinding?.detail).toContain("ghost-plugin-xyz");
+    expect(phantomFinding?.detail).not.toContain("installed-plugin");
   });
 });
 

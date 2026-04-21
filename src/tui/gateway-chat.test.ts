@@ -110,6 +110,7 @@ describe("resolveGatewayConnection", () => {
       "OPENCLAW_GATEWAY_URL",
       "OPENCLAW_GATEWAY_TOKEN",
       "OPENCLAW_GATEWAY_PASSWORD",
+      "OPENCLAW_TUI_SETUP_AUTH_SOURCE",
     ]);
     loadConfig.mockReset();
     resolveGatewayPort.mockReset();
@@ -126,6 +127,7 @@ describe("resolveGatewayConnection", () => {
     delete process.env.OPENCLAW_GATEWAY_URL;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    delete process.env.OPENCLAW_TUI_SETUP_AUTH_SOURCE;
   });
 
   afterEach(() => {
@@ -197,6 +199,74 @@ describe("resolveGatewayConnection", () => {
     const result = await resolveGatewayConnection({});
     expect(result.password).toBe("config-password");
     expect(result.token).toBeUndefined();
+  });
+
+  it("keeps normal TUI local password mode env precedence by default", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        auth: {
+          mode: "password",
+          password: "config-password", // pragma: allowlist secret
+        },
+      },
+    });
+
+    await withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: "env-password" }, async () => {
+      const result = await resolveGatewayConnection({});
+      expect(result.password).toBe("env-password");
+    });
+  });
+
+  it("uses configured local password for setup-launched TUI despite stale gateway password env", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        auth: {
+          mode: "password",
+          password: "config-password", // pragma: allowlist secret
+        },
+      },
+    });
+
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_PASSWORD: "stale-env-password", // pragma: allowlist secret
+        OPENCLAW_TUI_SETUP_AUTH_SOURCE: "config",
+      },
+      async () => {
+        const result = await resolveGatewayConnection({});
+        expect(result.password).toBe("config-password");
+      },
+    );
+  });
+
+  it("still resolves env SecretRefs for setup-launched TUI config auth", async () => {
+    loadConfig.mockReturnValue({
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+      gateway: {
+        mode: "local",
+        auth: {
+          mode: "password",
+          password: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_PASSWORD" },
+        },
+      },
+    });
+
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_PASSWORD: "resolved-ref-password", // pragma: allowlist secret
+        OPENCLAW_TUI_SETUP_AUTH_SOURCE: "config",
+      },
+      async () => {
+        const result = await resolveGatewayConnection({});
+        expect(result.password).toBe("resolved-ref-password");
+      },
+    );
   });
 
   it("fails when both local token and password are configured but gateway.auth.mode is unset", async () => {

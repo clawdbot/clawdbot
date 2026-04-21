@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { blockedIpv6MulticastLiterals } from "../../shared/net/ip-test-fixtures.js";
-import { isBlockedHostnameOrIp, isPrivateIpAddress } from "./ssrf.js";
+import {
+  isBlockedHostnameOrIp,
+  isPrivateIpAddress,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+} from "./ssrf.js";
 
 const privateIpCases = [
   "198.18.0.1",
@@ -103,6 +107,20 @@ describe("ssrf ip classification", () => {
 
   it("does not treat hostnames as ip literals", () => {
     expectIpPrivacyCases(nonIpHostnameCases, false);
+  });
+});
+
+describe("ssrfPolicyFromHttpBaseUrlAllowedHostname", () => {
+  it("builds an allowed-hostname policy from HTTP base URLs", () => {
+    expect(ssrfPolicyFromHttpBaseUrlAllowedHostname(" https://api.example.com/v1 ")).toEqual({
+      allowedHostnames: ["api.example.com"],
+    });
+  });
+
+  it("ignores empty, invalid, and non-HTTP URLs", () => {
+    expect(ssrfPolicyFromHttpBaseUrlAllowedHostname("")).toBeUndefined();
+    expect(ssrfPolicyFromHttpBaseUrlAllowedHostname("not-a-url")).toBeUndefined();
+    expect(ssrfPolicyFromHttpBaseUrlAllowedHostname("ftp://api.example.com")).toBeUndefined();
   });
 });
 

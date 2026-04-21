@@ -35,9 +35,9 @@ describe("message action media helpers", () => {
       resolveExtraActionMediaSourceParamKeys({
         cfg,
         action: "send",
-        channel: "slack",
+        channel: "workspace",
         args: {
-          channel: "slack",
+          channel: "workspace",
           target: "#C12345678",
           message: "hi",
           media: "https://example.com/photo.png",
@@ -157,7 +157,7 @@ describe("message action media helpers", () => {
     }
   });
 
-  maybeIt("normalizes Discord event image sandbox media params", async () => {
+  maybeIt("normalizes extension event image sandbox media params", async () => {
     const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-image-"));
     try {
       const args: Record<string, unknown> = {
@@ -180,7 +180,7 @@ describe("message action media helpers", () => {
     }
   });
 
-  maybeIt("normalizes Matrix avatarPath and avatarUrl sandbox media params", async () => {
+  maybeIt("normalizes extension avatarPath and avatarUrl sandbox media params", async () => {
     const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-avatar-"));
     try {
       const args: Record<string, unknown> = {
@@ -227,7 +227,7 @@ describe("message action media helpers", () => {
     ]);
   });
 
-  maybeIt("normalizes Matrix snake_case avatar_path and avatar_url aliases", async () => {
+  maybeIt("normalizes extension snake_case avatar_path and avatar_url aliases", async () => {
     const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-avatar-snake-"));
     try {
       const args: Record<string, unknown> = {
@@ -253,7 +253,7 @@ describe("message action media helpers", () => {
     }
   });
 
-  maybeIt("prefers canonical Matrix media params over invalid snake_case aliases", async () => {
+  maybeIt("prefers canonical extension media params over invalid snake_case aliases", async () => {
     const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-avatar-canonical-"));
     try {
       const args: Record<string, unknown> = {
@@ -369,7 +369,7 @@ describe("message action media helpers", () => {
     };
     await hydrateAttachmentParamsForAction({
       cfg,
-      channel: "slack",
+      channel: "workspace",
       args: mediaArgs,
       action: "sendAttachment",
       dryRun: true,
@@ -382,7 +382,7 @@ describe("message action media helpers", () => {
     };
     await hydrateAttachmentParamsForAction({
       cfg,
-      channel: "slack",
+      channel: "workspace",
       args: fileArgs,
       action: "sendAttachment",
       dryRun: true,
@@ -398,7 +398,7 @@ describe("message action media helpers", () => {
 
     await hydrateAttachmentParamsForAction({
       cfg,
-      channel: "slack",
+      channel: "workspace",
       args,
       action: "sendAttachment",
       dryRun: true,
@@ -441,7 +441,7 @@ describe("message action sandbox media hydration", () => {
       await expect(
         hydrateAttachmentParamsForAction({
           cfg,
-          channel: "slack",
+          channel: "workspace",
           args,
           action: "sendAttachment",
           mediaPolicy,

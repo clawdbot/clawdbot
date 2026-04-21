@@ -2,12 +2,17 @@ import { describe, expect, it } from "vitest";
 import { validateUrbitBaseUrl } from "./base-url.js";
 
 describe("validateUrbitBaseUrl", () => {
-  it("adds https:// when scheme is missing and strips path/query fragments", () => {
-    const result = validateUrbitBaseUrl("example.com/foo?bar=baz");
+  function expectValidBaseUrl(raw: string) {
+    const result = validateUrbitBaseUrl(raw);
     expect(result.ok).toBe(true);
     if (!result.ok) {
-      return;
+      throw new Error(result.error);
     }
+    return result;
+  }
+
+  it("adds https:// when scheme is missing and strips path/query fragments", () => {
+    const result = expectValidBaseUrl("example.com/foo?bar=baz");
     expect(result.baseUrl).toBe("https://example.com");
     expect(result.hostname).toBe("example.com");
   });
@@ -31,21 +36,13 @@ describe("validateUrbitBaseUrl", () => {
   });
 
   it("normalizes a trailing dot in the hostname for origin construction", () => {
-    const result = validateUrbitBaseUrl("https://example.com./foo");
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
+    const result = expectValidBaseUrl("https://example.com./foo");
     expect(result.baseUrl).toBe("https://example.com");
     expect(result.hostname).toBe("example.com");
   });
 
   it("preserves port in the normalized origin", () => {
-    const result = validateUrbitBaseUrl("http://example.com:8080/~/login");
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
+    const result = expectValidBaseUrl("http://example.com:8080/~/login");
     expect(result.baseUrl).toBe("http://example.com:8080");
   });
 });

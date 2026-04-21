@@ -19,14 +19,14 @@ describe("describeMoonshotVideo", () => {
       apiKey: "moonshot-test",
       timeoutMs: 1500,
       baseUrl: "https://api.moonshot.ai/v1/",
-      model: "kimi-k2.5",
+      model: "kimi-k2.6",
       headers: { "X-Trace": "1" },
       fetchFn,
     });
     const { url, init } = getRequest();
 
     expect(result.text).toBe("video ok");
-    expect(result.model).toBe("kimi-k2.5");
+    expect(result.model).toBe("kimi-k2.6");
     expect(url).toBe("https://api.moonshot.ai/v1/chat/completions");
     expect(init?.method).toBe("POST");
     expect(init?.signal).toBeInstanceOf(AbortSignal);
@@ -42,7 +42,7 @@ describe("describeMoonshotVideo", () => {
         content?: Array<{ type?: string; text?: string; video_url?: { url?: string } }>;
       }>;
     };
-    expect(body.model).toBe("kimi-k2.5");
+    expect(body.model).toBe("kimi-k2.6");
     expect(body.messages?.[0]?.content?.[0]).toMatchObject({
       type: "text",
       text: "Describe the video.",
@@ -67,6 +67,6 @@ describe("describeMoonshotVideo", () => {
     });
 
     expect(result.text).toBe("reasoned answer");
-    expect(result.model).toBe("kimi-k2.5");
+    expect(result.model).toBe("kimi-k2.6");
   });
 });

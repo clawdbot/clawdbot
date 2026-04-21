@@ -43,7 +43,15 @@ import {
 
 export type { ModelAliasIndex, ModelRef, ModelRefStatus };
 
-export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
+export type ThinkLevel =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "adaptive"
+  | "max";
 
 export {
   buildConfiguredAllowlistKeys,

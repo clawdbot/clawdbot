@@ -8,7 +8,7 @@ describe("maybeHandleQueueDirective", () => {
     const invalid = maybeHandleQueueDirective({
       directives: parseInlineDirectives("/queue collect debounce:bogus cap:zero drop:maybe"),
       cfg: {} as OpenClawConfig,
-      channel: "whatsapp",
+      channel: "quietchat",
     });
     expect(invalid?.text).toContain("Invalid debounce");
     expect(invalid?.text).toContain("Invalid cap");
@@ -26,7 +26,7 @@ describe("maybeHandleQueueDirective", () => {
           },
         },
       } as OpenClawConfig,
-      channel: "whatsapp",
+      channel: "quietchat",
     });
     expect(current?.text).toContain(
       "Current queue settings: mode=collect, debounce=1500ms, cap=9, drop=summarize.",

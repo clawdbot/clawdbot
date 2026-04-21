@@ -645,6 +645,19 @@ describe("handleMatrixSubagentDeliveryTarget", () => {
 });
 
 describe("concurrent spawns across accounts", () => {
+  function spawnForAccount(accountId: "ops" | "forge") {
+    return handleMatrixSubagentSpawning(fakeApi, {
+      threadRequested: true,
+      requester: {
+        channel: "matrix",
+        accountId,
+        to: `room:!room-${accountId}:example.org`,
+      },
+      childSessionKey: `agent:${accountId}:subagent:child-${accountId}`,
+      agentId: `worker-${accountId}`,
+    });
+  }
+
   beforeEach(() => {
     bindMock.mockReset();
     getManagerMock.mockReset();
@@ -664,18 +677,8 @@ describe("concurrent spawns across accounts", () => {
       .mockResolvedValueOnce({ conversation: { accountId: "forge", conversationId: "$t-forge" } });
 
     const [opsResult, forgeResult] = await Promise.all([
-      handleMatrixSubagentSpawning(fakeApi, {
-        threadRequested: true,
-        requester: { channel: "matrix", accountId: "ops", to: "room:!room-ops:example.org" },
-        childSessionKey: "agent:ops:subagent:child-ops",
-        agentId: "worker-ops",
-      }),
-      handleMatrixSubagentSpawning(fakeApi, {
-        threadRequested: true,
-        requester: { channel: "matrix", accountId: "forge", to: "room:!room-forge:example.org" },
-        childSessionKey: "agent:forge:subagent:child-forge",
-        agentId: "worker-forge",
-      }),
+      spawnForAccount("ops"),
+      spawnForAccount("forge"),
     ]);
 
     expect(opsResult).toMatchObject({ status: "ok", threadBindingReady: true });
@@ -709,18 +712,8 @@ describe("concurrent spawns across accounts", () => {
       .mockResolvedValueOnce({ conversation: { accountId: "forge", conversationId: "$t-forge" } });
 
     const [opsResult, forgeResult] = await Promise.all([
-      handleMatrixSubagentSpawning(fakeApi, {
-        threadRequested: true,
-        requester: { channel: "matrix", accountId: "ops", to: "room:!room-ops:example.org" },
-        childSessionKey: "agent:ops:subagent:child-ops",
-        agentId: "worker-ops",
-      }),
-      handleMatrixSubagentSpawning(fakeApi, {
-        threadRequested: true,
-        requester: { channel: "matrix", accountId: "forge", to: "room:!room-forge:example.org" },
-        childSessionKey: "agent:forge:subagent:child-forge",
-        agentId: "worker-forge",
-      }),
+      spawnForAccount("ops"),
+      spawnForAccount("forge"),
     ]);
 
     expect(opsResult).toEqual(

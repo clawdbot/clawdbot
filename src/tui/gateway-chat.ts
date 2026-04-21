@@ -23,6 +23,7 @@ import {
 } from "../gateway/protocol/index.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { VERSION } from "../version.js";
+import { TUI_SETUP_AUTH_SOURCE_CONFIG, TUI_SETUP_AUTH_SOURCE_ENV } from "./setup-launch-env.js";
 import type { ResponseUsageMode, SessionInfo, SessionScope } from "./tui-types.js";
 
 export type GatewayConnectionOptions = {
@@ -317,6 +318,7 @@ export async function resolveGatewayConnection(
   const env = process.env;
   const gatewayAuthMode = config.gateway?.auth?.mode;
   const isRemoteMode = config.gateway?.mode === "remote";
+  const preferConfiguredAuth = env[TUI_SETUP_AUTH_SOURCE_ENV] === TUI_SETUP_AUTH_SOURCE_CONFIG;
 
   const urlOverride =
     typeof opts.url === "string" && opts.url.trim().length > 0 ? opts.url.trim() : undefined;
@@ -394,6 +396,7 @@ export async function resolveGatewayConnection(
     config,
     env,
     explicitAuth,
+    suppressEnvAuthFallback: preferConfiguredAuth,
     surface: "local",
   });
   if (resolved.failureReason) {

@@ -57,9 +57,9 @@ vi.mock("../../media/web-media.js", async () => {
   };
 });
 
-const slackConfig = {
+const workspaceConfig = {
   channels: {
-    slack: {
+    workspace: {
       botToken: "xoxb-test",
       appToken: "xapp-test",
     },
@@ -96,10 +96,10 @@ async function expectSandboxMediaRewrite(params: {
   expectedRelativePath: string;
 }) {
   const result = await runDrySend({
-    cfg: slackConfig,
+    cfg: workspaceConfig,
     actionParams: {
-      channel: "slack",
-      target: "#C12345678",
+      channel: "workspace",
+      target: "12345678",
       ...(params.media
         ? {
             [params.mediaField ?? "media"]: params.media,
@@ -119,15 +119,44 @@ async function expectSandboxMediaRewrite(params: {
   );
 }
 
+async function runAttachmentRemoteMediaAction(params: {
+  cfg: OpenClawConfig;
+  action: "sendAttachment" | "upload-file";
+}) {
+  return runMessageAction({
+    cfg: params.cfg,
+    action: params.action,
+    params: {
+      channel: "attachmentchat",
+      target: "+15551234567",
+      media: "https://example.com/pic.png",
+      message: "caption",
+    },
+  });
+}
+
+function expectAttachmentRemoteMediaPayload(result: Awaited<ReturnType<typeof runMessageAction>>) {
+  expect(result.kind).toBe("action");
+  expect(result.payload).toMatchObject({
+    ok: true,
+    filename: "pic.png",
+    caption: "caption",
+    contentType: "image/png",
+  });
+  expect((result.payload as { buffer?: string }).buffer).toBe(
+    Buffer.from("hello").toString("base64"),
+  );
+}
+
 let actualLoadWebMedia: typeof loadWebMedia;
 
-const slackPlugin: ChannelPlugin = {
+const workspacePlugin: ChannelPlugin = {
   ...createChannelTestPluginBase({
-    id: "slack",
-    label: "Slack",
+    id: "workspace",
+    label: "Workspace",
     config: {
       listAccountIds: () => ["default"],
-      resolveAccount: (cfg) => cfg.channels?.slack ?? {},
+      resolveAccount: (cfg) => cfg.channels?.workspace ?? {},
       isConfigured: async (account) =>
         typeof (account as { botToken?: unknown }).botToken === "string" &&
         (account as { botToken?: string }).botToken!.trim() !== "" &&
@@ -142,13 +171,13 @@ const slackPlugin: ChannelPlugin = {
       if (!trimmed) {
         return {
           ok: false,
-          error: new Error("missing target for slack"),
+          error: new Error("missing target for workspace"),
         };
       }
       return { ok: true, to: trimmed };
     },
-    sendText: async () => ({ channel: "slack", messageId: "msg-test" }),
-    sendMedia: async () => ({ channel: "slack", messageId: "msg-test" }),
+    sendText: async () => ({ channel: "workspace", messageId: "msg-test" }),
+    sendMedia: async () => ({ channel: "workspace", messageId: "msg-test" }),
   },
 };
 
@@ -207,7 +236,7 @@ describe("runMessageAction media behavior", () => {
   describe("sendAttachment hydration", () => {
     const cfg = {
       channels: {
-        bluebubbles: {
+        attachmentchat: {
           enabled: true,
           serverUrl: "http://localhost:1234",
           password: "test-password",
@@ -215,13 +244,13 @@ describe("runMessageAction media behavior", () => {
       },
     } as OpenClawConfig;
     const attachmentPlugin: ChannelPlugin = {
-      id: "bluebubbles",
+      id: "attachmentchat",
       meta: {
-        id: "bluebubbles",
-        label: "BlueBubbles",
-        selectionLabel: "BlueBubbles",
-        docsPath: "/channels/bluebubbles",
-        blurb: "BlueBubbles test plugin.",
+        id: "attachmentchat",
+        label: "AttachmentChat",
+        selectionLabel: "AttachmentChat",
+        docsPath: "/channels/attachmentchat",
+        blurb: "AttachmentChat test plugin.",
       },
       capabilities: { chatTypes: ["direct", "group"], media: true },
       config: {
@@ -248,7 +277,7 @@ describe("runMessageAction media behavior", () => {
       setActivePluginRegistry(
         createTestRegistry([
           {
-            pluginId: "bluebubbles",
+            pluginId: "attachmentchat",
             source: "test",
             plugin: attachmentPlugin,
           },
@@ -290,7 +319,7 @@ describe("runMessageAction media behavior", () => {
         await fs.writeFile(outsidePath, "secret", "utf8");
 
         const actionParams: Record<string, unknown> = {
-          channel: "bluebubbles",
+          channel: "attachmentchat",
           target: params.target,
           [params.mediaField ?? "media"]: outsidePath,
         };
@@ -311,27 +340,9 @@ describe("runMessageAction media behavior", () => {
     }
 
     it("hydrates buffer and filename from media for sendAttachment", async () => {
-      const result = await runMessageAction({
-        cfg,
-        action: "sendAttachment",
-        params: {
-          channel: "bluebubbles",
-          target: "+15551234567",
-          media: "https://example.com/pic.png",
-          message: "caption",
-        },
-      });
+      const result = await runAttachmentRemoteMediaAction({ cfg, action: "sendAttachment" });
 
-      expect(result.kind).toBe("action");
-      expect(result.payload).toMatchObject({
-        ok: true,
-        filename: "pic.png",
-        caption: "caption",
-        contentType: "image/png",
-      });
-      expect((result.payload as { buffer?: string }).buffer).toBe(
-        Buffer.from("hello").toString("base64"),
-      );
+      expectAttachmentRemoteMediaPayload(result);
       const call = vi.mocked(loadWebMedia).mock.calls[0];
       expect(call?.[1]).toEqual(
         expect.objectContaining({
@@ -360,7 +371,7 @@ describe("runMessageAction media behavior", () => {
           },
           action: "sendAttachment",
           params: {
-            channel: "bluebubbles",
+            channel: "attachmentchat",
             target: "+15551234567",
             media: outsidePath,
             message: "caption",
@@ -394,7 +405,7 @@ describe("runMessageAction media behavior", () => {
             },
             action: "sendAttachment",
             params: {
-              channel: "bluebubbles",
+              channel: "attachmentchat",
               target: "+15551234567",
               media: outsidePath,
               message: "caption",
@@ -406,28 +417,10 @@ describe("runMessageAction media behavior", () => {
       }
     });
 
-    it("hydrates buffer and filename from media for bluebubbles upload-file", async () => {
-      const result = await runMessageAction({
-        cfg,
-        action: "upload-file",
-        params: {
-          channel: "bluebubbles",
-          target: "+15551234567",
-          media: "https://example.com/pic.png",
-          message: "caption",
-        },
-      });
+    it("hydrates buffer and filename from media for attachment upload-file", async () => {
+      const result = await runAttachmentRemoteMediaAction({ cfg, action: "upload-file" });
 
-      expect(result.kind).toBe("action");
-      expect(result.payload).toMatchObject({
-        ok: true,
-        filename: "pic.png",
-        caption: "caption",
-        contentType: "image/png",
-      });
-      expect((result.payload as { buffer?: string }).buffer).toBe(
-        Buffer.from("hello").toString("base64"),
-      );
+      expectAttachmentRemoteMediaPayload(result);
     });
 
     it("enforces sandboxed attachment paths for attachment actions", async () => {
@@ -472,7 +465,7 @@ describe("runMessageAction media behavior", () => {
             cfg,
             action: testCase.action,
             params: {
-              channel: "bluebubbles",
+              channel: "attachmentchat",
               target: testCase.target,
               [testCase.mediaField ?? "media"]: testCase.media,
               ...(testCase.message ? { message: testCase.message } : {}),
@@ -663,9 +656,9 @@ describe("runMessageAction media behavior", () => {
       setActivePluginRegistry(
         createTestRegistry([
           {
-            pluginId: "slack",
+            pluginId: "workspace",
             source: "test",
-            plugin: slackPlugin,
+            plugin: workspacePlugin,
           },
         ]),
       );
@@ -700,10 +693,10 @@ describe("runMessageAction media behavior", () => {
       await withSandbox(async (sandboxDir) => {
         await expect(
           runDrySend({
-            cfg: slackConfig,
+            cfg: workspaceConfig,
             actionParams: {
-              channel: "slack",
-              target: "#C12345678",
+              channel: "workspace",
+              target: "12345678",
               [mediaField]: media,
               message: "",
             },
@@ -716,10 +709,10 @@ describe("runMessageAction media behavior", () => {
     it("rejects data URLs in media params", async () => {
       await expect(
         runDrySend({
-          cfg: slackConfig,
+          cfg: workspaceConfig,
           actionParams: {
-            channel: "slack",
-            target: "#C12345678",
+            channel: "workspace",
+            target: "12345678",
             media: "data:image/png;base64,abcd",
             message: "",
           },
@@ -776,10 +769,10 @@ describe("runMessageAction media behavior", () => {
     it("prefers media over mediaUrl when both aliases are present", async () => {
       await withSandbox(async (sandboxDir) => {
         const result = await runDrySend({
-          cfg: slackConfig,
+          cfg: workspaceConfig,
           actionParams: {
-            channel: "slack",
-            target: "#C12345678",
+            channel: "workspace",
+            target: "12345678",
             media: "./data/primary.txt",
             mediaUrl: "./data/secondary.txt",
             message: "",
@@ -810,10 +803,10 @@ describe("runMessageAction media behavior", () => {
         await withSandbox(async (sandboxDir) => {
           const remoteUrl = "https://example.com/files/report.pdf?sig=1";
           const result = await runDrySend({
-            cfg: slackConfig,
+            cfg: workspaceConfig,
             actionParams: {
-              channel: "slack",
-              target: "#C12345678",
+              channel: "workspace",
+              target: "12345678",
               [mediaField]: remoteUrl,
               message: "",
             },
@@ -836,11 +829,11 @@ describe("runMessageAction media behavior", () => {
       try {
         const tmpFile = path.join(tmpRoot, "test-media-image.png");
         const result = await runMessageAction({
-          cfg: slackConfig,
+          cfg: workspaceConfig,
           action: "send",
           params: {
-            channel: "slack",
-            target: "#C12345678",
+            channel: "workspace",
+            target: "12345678",
             media: tmpFile,
             message: "",
           },
@@ -856,11 +849,11 @@ describe("runMessageAction media behavior", () => {
         const hostTmpOutsideOpenClaw = path.join(os.tmpdir(), "outside-openclaw", "test-media.png");
         await expect(
           runMessageAction({
-            cfg: slackConfig,
+            cfg: workspaceConfig,
             action: "send",
             params: {
-              channel: "slack",
-              target: "#C12345678",
+              channel: "workspace",
+              target: "12345678",
               media: hostTmpOutsideOpenClaw,
               message: "",
             },

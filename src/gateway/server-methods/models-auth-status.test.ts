@@ -61,6 +61,33 @@ function createOptions(
 
 const handler = modelsAuthStatusHandlers["models.authStatus"];
 
+function createOpenAiCodexOauthHealthSummary(): AuthHealthSummary {
+  const profile = {
+    profileId: "openai-codex:default",
+    provider: "openai-codex",
+    type: "oauth",
+    status: "ok",
+    expiresAt: 1_000_000,
+    remainingMs: 60_000,
+    source: "store",
+    label: "openai-codex:default",
+  } satisfies AuthHealthSummary["profiles"][number];
+  return {
+    now: 0,
+    warnAfterMs: 0,
+    profiles: [profile],
+    providers: [
+      {
+        provider: "openai-codex",
+        status: "ok",
+        expiresAt: 1_000_000,
+        remainingMs: 60_000,
+        profiles: [profile],
+      },
+    ],
+  };
+}
+
 describe("models.authStatus", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -77,42 +104,7 @@ describe("models.authStatus", () => {
   });
 
   it("returns a serialisable snapshot on first call", async () => {
-    mocks.buildAuthHealthSummary.mockReturnValue({
-      now: 0,
-      warnAfterMs: 0,
-      profiles: [
-        {
-          profileId: "openai-codex:default",
-          provider: "openai-codex",
-          type: "oauth",
-          status: "ok",
-          expiresAt: 1_000_000,
-          remainingMs: 60_000,
-          source: "store",
-          label: "openai-codex:default",
-        },
-      ],
-      providers: [
-        {
-          provider: "openai-codex",
-          status: "ok",
-          expiresAt: 1_000_000,
-          remainingMs: 60_000,
-          profiles: [
-            {
-              profileId: "openai-codex:default",
-              provider: "openai-codex",
-              type: "oauth",
-              status: "ok",
-              expiresAt: 1_000_000,
-              remainingMs: 60_000,
-              source: "store",
-              label: "openai-codex:default",
-            },
-          ],
-        },
-      ],
-    });
+    mocks.buildAuthHealthSummary.mockReturnValue(createOpenAiCodexOauthHealthSummary());
 
     const opts = createOptions();
     await handler(opts);
@@ -196,42 +188,7 @@ describe("models.authStatus", () => {
   });
 
   it("still returns providers when usage fetch fails", async () => {
-    mocks.buildAuthHealthSummary.mockReturnValue({
-      now: 0,
-      warnAfterMs: 0,
-      profiles: [
-        {
-          profileId: "openai-codex:default",
-          provider: "openai-codex",
-          type: "oauth",
-          status: "ok",
-          expiresAt: 1_000_000,
-          remainingMs: 60_000,
-          source: "store",
-          label: "openai-codex:default",
-        },
-      ],
-      providers: [
-        {
-          provider: "openai-codex",
-          status: "ok",
-          expiresAt: 1_000_000,
-          remainingMs: 60_000,
-          profiles: [
-            {
-              profileId: "openai-codex:default",
-              provider: "openai-codex",
-              type: "oauth",
-              status: "ok",
-              expiresAt: 1_000_000,
-              remainingMs: 60_000,
-              source: "store",
-              label: "openai-codex:default",
-            },
-          ],
-        },
-      ],
-    });
+    mocks.buildAuthHealthSummary.mockReturnValue(createOpenAiCodexOauthHealthSummary());
     mocks.loadProviderUsageSummary.mockRejectedValue(new Error("timeout"));
 
     const opts = createOptions();

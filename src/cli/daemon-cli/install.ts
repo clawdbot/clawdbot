@@ -9,6 +9,11 @@ import { readConfigFileSnapshotForWrite } from "../../config/io.js";
 import { resolveGatewayPort } from "../../config/paths.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { isNonFatalSystemdInstallProbeError } from "../../daemon/systemd.js";
+import {
+  isDangerousHostEnvOverrideVarName,
+  isDangerousHostEnvVarName,
+  normalizeEnvVarKey,
+} from "../../infra/host-env-security.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import { buildDaemonServiceSnapshot, installDaemonServiceAndEmit } from "./response.js";
@@ -26,8 +31,32 @@ function mergeInstallInvocationEnv(params: {
   if (!params.existingServiceEnv || Object.keys(params.existingServiceEnv).length === 0) {
     return params.env;
   }
+  const preservedServiceEnv: NodeJS.ProcessEnv = {};
+  for (const [rawKey, rawValue] of Object.entries(params.existingServiceEnv)) {
+    const key = normalizeEnvVarKey(rawKey, { portable: true });
+    if (!key) {
+      continue;
+    }
+    const upper = key.toUpperCase();
+    if (
+      upper === "HOME" ||
+      upper === "PATH" ||
+      upper === "TMPDIR" ||
+      upper.startsWith("OPENCLAW_")
+    ) {
+      continue;
+    }
+    if (isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)) {
+      continue;
+    }
+    const value = rawValue.trim();
+    if (!value) {
+      continue;
+    }
+    preservedServiceEnv[key] = value;
+  }
   return {
-    ...params.existingServiceEnv,
+    ...preservedServiceEnv,
     ...params.env,
   };
 }

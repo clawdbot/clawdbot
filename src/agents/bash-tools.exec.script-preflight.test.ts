@@ -11,6 +11,8 @@ const isWin = process.platform === "win32";
 const describeNonWin = isWin ? describe.skip : describe;
 const describeWin = isWin ? describe : describe.skip;
 const validateExecScriptPreflight = __testing.validateScriptFileForShellBleed;
+const createPreflightTool = () =>
+  createExecTool({ host: "gateway", security: "full", ask: "on-miss" });
 
 afterEach(() => {
   __setFsSafeTestHooksForTest();
@@ -66,7 +68,7 @@ describeNonWin("exec script preflight", () => {
         "utf-8",
       );
 
-      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const tool = createPreflightTool();
 
       await expect(
         tool.execute("call1", {
@@ -87,7 +89,7 @@ describeNonWin("exec script preflight", () => {
         "utf-8",
       );
 
-      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const tool = createPreflightTool();
 
       await expect(
         tool.execute("call1", {
@@ -105,7 +107,7 @@ describeNonWin("exec script preflight", () => {
       const jsPath = path.join(tmp, "bad.js");
       await fs.writeFile(jsPath, "const value = $DM_JSON;", "utf-8");
 
-      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const tool = createPreflightTool();
       await expect(
         tool.execute("call-quoted", {
           command: 'node "bad.js"',
@@ -120,7 +122,7 @@ describeNonWin("exec script preflight", () => {
       const jsPath = path.join(tmp, "..bad.js");
       await fs.writeFile(jsPath, "const value = $DM_JSON;", "utf-8");
 
-      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const tool = createPreflightTool();
       await expect(
         tool.execute("call-dotdot-prefix-script", {
           command: "node ..bad.js",
@@ -137,7 +139,7 @@ describeNonWin("exec script preflight", () => {
       await fs.writeFile(targetPath, "const value = $DM_JSON;", "utf-8");
       await fs.symlink(targetPath, linkPath);
 
-      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const tool = createPreflightTool();
       await expect(
         tool.execute("call-symlink-entrypoint", {
           command: "node link.js",
@@ -153,7 +155,7 @@ describeNonWin("exec script preflight", () => {
       await fs.mkdir(literalTildeDir, { recursive: true });
       await fs.writeFile(path.join(literalTildeDir, "bad.js"), "const value = $DM_JSON;", "utf-8");
 
-      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const tool = createPreflightTool();
       await expect(
         tool.execute("call-literal-tilde-path", {
           command: 'node "~/bad.js"',
@@ -168,7 +170,7 @@ describeNonWin("exec script preflight", () => {
       const pyPath = path.join(tmp, "bad.py");
       await fs.writeFile(pyPath, "payload = $DM_JSON", "utf-8");
 
-      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const tool = createPreflightTool();
       await expect(
         tool.execute("call-env-python", {
           command: "env python bad.py",
@@ -183,7 +185,7 @@ describeNonWin("exec script preflight", () => {
       const pyPath = path.join(tmp, "bad.py");
       await fs.writeFile(pyPath, "payload = $DM_JSON", "utf-8");
 
-      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const tool = createPreflightTool();
       await expect(
         tool.execute("call-abs-env-python", {
           command: "/usr/bin/env python bad.py",
@@ -198,7 +200,7 @@ describeNonWin("exec script preflight", () => {
       const jsPath = path.join(tmp, "bad.js");
       await fs.writeFile(jsPath, "const value = $DM_JSON;", "utf-8");
 
-      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const tool = createPreflightTool();
       await expect(
         tool.execute("call-env-node", {
           command: "env node bad.js",
@@ -213,7 +215,7 @@ describeNonWin("exec script preflight", () => {
       await fs.writeFile(path.join(tmp, "bad.py"), "payload = $DM_JSON", "utf-8");
       await fs.writeFile(path.join(tmp, "ghost.py"), "print('ok')", "utf-8");
 
-      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const tool = createPreflightTool();
       await expect(
         tool.execute("call-python-first-script", {
           command: "python bad.py ghost.py",
@@ -228,7 +230,7 @@ describeNonWin("exec script preflight", () => {
       await fs.writeFile(path.join(tmp, "script.py"), "payload = $DM_JSON", "utf-8");
       await fs.writeFile(path.join(tmp, "out.py"), "print('ok')", "utf-8");
 
-      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const tool = createPreflightTool();
       await expect(
         tool.execute("call-python-trailing-option-value", {
           command: "python script.py --output out.py",
@@ -243,7 +245,7 @@ describeNonWin("exec script preflight", () => {
       await fs.writeFile(path.join(tmp, "app.js"), "const value = $DM_JSON;", "utf-8");
       await fs.writeFile(path.join(tmp, "config.js"), "console.log('ok')", "utf-8");
 
-      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const tool = createPreflightTool();
       await expect(
         tool.execute("call-node-first-script", {
           command: "node app.js config.js",
@@ -258,7 +260,7 @@ describeNonWin("exec script preflight", () => {
       await fs.writeFile(path.join(tmp, "bootstrap.js"), "console.log('bootstrap')", "utf-8");
       await fs.writeFile(path.join(tmp, "app.js"), "const value = $DM_JSON;", "utf-8");
 
-      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const tool = createPreflightTool();
       await expect(
         tool.execute("call-node-require-script", {
           command: "node --require bootstrap.js app.js",
@@ -273,7 +275,7 @@ describeNonWin("exec script preflight", () => {
       await fs.writeFile(path.join(tmp, "bad-preload.js"), "const value = $DM_JSON;", "utf-8");
       await fs.writeFile(path.join(tmp, "app.js"), "console.log('ok')", "utf-8");
 
-      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const tool = createPreflightTool();
       await expect(
         tool.execute("call-node-preload-before-entry", {
           command: "node --require bad-preload.js app.js",
@@ -287,7 +289,7 @@ describeNonWin("exec script preflight", () => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       await fs.writeFile(path.join(tmp, "bad.js"), "const value = $DM_JSON;", "utf-8");
 
-      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const tool = createPreflightTool();
       await expect(
         tool.execute("call-node-require-only", {
           command: "node --require bad.js",
@@ -301,7 +303,7 @@ describeNonWin("exec script preflight", () => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       await fs.writeFile(path.join(tmp, "bad.js"), "const value = $DM_JSON;", "utf-8");
 
-      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const tool = createPreflightTool();
       await expect(
         tool.execute("call-node-import-only", {
           command: "node --import bad.js",
@@ -315,7 +317,7 @@ describeNonWin("exec script preflight", () => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       await fs.writeFile(path.join(tmp, "bad.js"), "const value = $DM_JSON;", "utf-8");
 
-      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const tool = createPreflightTool();
       await expect(
         tool.execute("call-node-require-with-eval", {
           command: 'node --require bad.js -e "console.log(123)"',
@@ -329,7 +331,7 @@ describeNonWin("exec script preflight", () => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       await fs.writeFile(path.join(tmp, "bad.js"), "const value = $DM_JSON;", "utf-8");
 
-      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const tool = createPreflightTool();
       await expect(
         tool.execute("call-node-import-with-eval", {
           command: 'node --import bad.js -e "console.log(123)"',
@@ -337,6 +339,46 @@ describeNonWin("exec script preflight", () => {
         }),
       ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
     });
+  });
+
+  it("skips script-file preflight in yolo host mode", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      const jsPath = path.join(tmp, "bad.js");
+      await fs.writeFile(jsPath, "const value = $DM_JSON;", "utf-8");
+
+      const tool = createExecTool({
+        host: "gateway",
+        security: "full",
+        ask: "off",
+        allowBackground: false,
+      });
+      const result = await tool.execute("call-yolo-bad-js", {
+        command: "node bad.js",
+        workdir: tmp,
+      });
+      const text = result.content.find((c) => c.type === "text")?.text ?? "";
+
+      expect(text).not.toMatch(/exec preflight:/);
+      expect(result.details).toMatchObject({
+        status: expect.stringMatching(/completed|failed/),
+      });
+    });
+  });
+
+  it("runs heredoc-backed node commands in yolo host mode", async () => {
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      allowBackground: false,
+    });
+    const result = await tool.execute("call-yolo-heredoc", {
+      command: "node <<'NODE'\nprocess.stdout.write('ok')\nNODE",
+    });
+    const text = result.content.find((c) => c.type === "text")?.text?.trim();
+
+    expect(result.details).toMatchObject({ status: "completed" });
+    expect(text).toBe("ok");
   });
 
   it("skips preflight file reads for script paths outside the workdir", async () => {
@@ -459,7 +501,7 @@ describeWin("exec script preflight on windows path syntax", () => {
     await withTempDir("openclaw-exec-preflight-win-", async (tmp) => {
       await fs.writeFile(path.join(tmp, "bad.py"), "payload = $DM_JSON", "utf-8");
 
-      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const tool = createPreflightTool();
       await expect(
         tool.execute("call-win-python-relative", {
           command: "python .\\bad.py",
@@ -473,7 +515,7 @@ describeWin("exec script preflight on windows path syntax", () => {
     await withTempDir("openclaw-exec-preflight-win-", async (tmp) => {
       await fs.writeFile(path.join(tmp, "bad.js"), "const value = $DM_JSON;", "utf-8");
 
-      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const tool = createPreflightTool();
       await expect(
         tool.execute("call-win-node-relative", {
           command: "node .\\bad.js",
@@ -489,7 +531,7 @@ describeWin("exec script preflight on windows path syntax", () => {
       await fs.writeFile(absPath, "payload = $DM_JSON", "utf-8");
       const winAbsPath = absPath.replaceAll("/", "\\");
 
-      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const tool = createPreflightTool();
       await expect(
         tool.execute("call-win-python-absolute", {
           command: `python "${winAbsPath}"`,
@@ -504,7 +546,7 @@ describeWin("exec script preflight on windows path syntax", () => {
       await fs.mkdir(path.join(tmp, "subdir"), { recursive: true });
       await fs.writeFile(path.join(tmp, "subdir", "bad.py"), "payload = $DM_JSON", "utf-8");
 
-      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const tool = createPreflightTool();
       await expect(
         tool.execute("call-win-python-subdir-relative", {
           command: "python subdir\\bad.py",

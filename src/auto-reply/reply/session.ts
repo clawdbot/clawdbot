@@ -9,6 +9,7 @@ import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
 import { resolveSessionTranscriptPath, resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveResetPreservedSelection } from "../../config/sessions/reset-preserved-selection.js";
 import {
   evaluateSessionFreshness,
   resolveChannelResetConfig,
@@ -21,7 +22,7 @@ import { resolveAndPersistSessionFile } from "../../config/sessions/session-file
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import { loadSessionStore, updateSessionStore } from "../../config/sessions/store.js";
-import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
+import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import {
   DEFAULT_RESET_TRIGGERS,
   type GroupKeyResolution,
@@ -317,6 +318,7 @@ export async function initSessionState(params: {
   let persistedTtsAuto: TtsAutoMode | undefined;
   let persistedModelOverride: string | undefined;
   let persistedProviderOverride: string | undefined;
+  let persistedModelOverrideSource: SessionEntry["modelOverrideSource"];
   let persistedAuthProfileOverride: string | undefined;
   let persistedAuthProfileOverrideSource: SessionEntry["authProfileOverrideSource"];
   let persistedAuthProfileOverrideCompactionCount: number | undefined;
@@ -472,6 +474,7 @@ export async function initSessionState(params: {
     persistedTtsAuto = entry.ttsAuto;
     persistedModelOverride = entry.modelOverride;
     persistedProviderOverride = entry.providerOverride;
+    persistedModelOverrideSource = entry.modelOverrideSource;
     persistedAuthProfileOverride = entry.authProfileOverride;
     persistedAuthProfileOverrideSource = entry.authProfileOverrideSource;
     persistedAuthProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
@@ -490,11 +493,19 @@ export async function initSessionState(params: {
       persistedTrace = entry.traceLevel;
       persistedReasoning = entry.reasoningLevel;
       persistedTtsAuto = entry.ttsAuto;
-      persistedModelOverride = entry.modelOverride;
-      persistedProviderOverride = entry.providerOverride;
-      persistedAuthProfileOverride = entry.authProfileOverride;
-      persistedAuthProfileOverrideSource = entry.authProfileOverrideSource;
-      persistedAuthProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
+      // Only carry over user-driven overrides on reset. Auto-created
+      // fallback overrides (e.g. rate-limit auth rotation, model auto-pin)
+      // must be cleared so /new and /reset actually return the session to
+      // the configured default instead of staying pinned to the auto pick
+      // (#69301).
+      const preservedSelection = resolveResetPreservedSelection({ entry });
+      persistedModelOverride = preservedSelection.modelOverride;
+      persistedProviderOverride = preservedSelection.providerOverride;
+      persistedModelOverrideSource = preservedSelection.modelOverrideSource;
+      persistedAuthProfileOverride = preservedSelection.authProfileOverride;
+      persistedAuthProfileOverrideSource = preservedSelection.authProfileOverrideSource;
+      persistedAuthProfileOverrideCompactionCount =
+        preservedSelection.authProfileOverrideCompactionCount;
       // Explicit /new and /reset should rotate the underlying CLI conversation too.
       // Keep the model/auth choice, but force the next turn to mint a fresh CLI binding.
       persistedLabel = entry.label;
@@ -590,6 +601,7 @@ export async function initSessionState(params: {
     responseUsage: baseEntry?.responseUsage,
     modelOverride: persistedModelOverride ?? baseEntry?.modelOverride,
     providerOverride: persistedProviderOverride ?? baseEntry?.providerOverride,
+    modelOverrideSource: persistedModelOverrideSource ?? baseEntry?.modelOverrideSource,
     authProfileOverride: persistedAuthProfileOverride ?? baseEntry?.authProfileOverride,
     authProfileOverrideSource:
       persistedAuthProfileOverrideSource ?? baseEntry?.authProfileOverrideSource,
@@ -689,7 +701,7 @@ export async function initSessionState(params: {
       }
     }
   }
-  const threadIdFromSessionKey = parseSessionThreadInfo(
+  const threadIdFromSessionKey = parseSessionThreadInfoFast(
     sessionCtxForState.SessionKey ?? sessionKey,
   ).threadId;
   const fallbackSessionFile = !sessionEntry.sessionFile

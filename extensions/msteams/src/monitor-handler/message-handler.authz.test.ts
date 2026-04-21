@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../../runtime-api.js";
-import type { MSTeamsConversationStore } from "../conversation-store.js";
+import type { OpenClawConfig } from "../../runtime-api.js";
 import type { GraphThreadMessage } from "../graph-thread.js";
-import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.js";
-import { setMSTeamsRuntime } from "../runtime.js";
 import { _resetThreadParentContextCachesForTest } from "../thread-parent-context.js";
+import "./message-handler-mock-support.test-support.js";
+import { getRuntimeApiMockState } from "./message-handler-mock-support.test-support.js";
 import { createMSTeamsMessageHandler } from "./message-handler.js";
+import { createMessageHandlerDeps } from "./message-handler.test-support.js";
 
 type HandlerInput = Parameters<ReturnType<typeof createMSTeamsMessageHandler>>[0];
 type TestThreadUser = {
@@ -17,14 +17,7 @@ type TestAttachment = {
   content: string;
 };
 
-const runtimeApiMockState = vi.hoisted(() => ({
-  dispatchReplyFromConfigWithSettledDispatcher: vi.fn(async (params: { ctxPayload: unknown }) => ({
-    queuedFinal: false,
-    counts: {},
-    capturedCtxPayload: params.ctxPayload,
-  })),
-}));
-
+const runtimeApiMockState = getRuntimeApiMockState();
 const graphThreadMockState = vi.hoisted(() => ({
   resolveTeamGroupId: vi.fn(async () => "group-1"),
   fetchChannelMessage: vi.fn<
@@ -46,16 +39,6 @@ const graphThreadMockState = vi.hoisted(() => ({
   >(async () => []),
 }));
 
-vi.mock("../../runtime-api.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../runtime-api.js")>("../../runtime-api.js");
-  return {
-    ...actual,
-    dispatchReplyFromConfigWithSettledDispatcher:
-      runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher,
-  };
-});
-
 vi.mock("../graph-thread.js", async () => {
   const actual = await vi.importActual<typeof import("../graph-thread.js")>("../graph-thread.js");
   return {
@@ -66,94 +49,22 @@ vi.mock("../graph-thread.js", async () => {
   };
 });
 
-vi.mock("../reply-dispatcher.js", () => ({
-  createMSTeamsReplyDispatcher: () => ({
-    dispatcher: {},
-    replyOptions: {},
-    markDispatchIdle: vi.fn(),
-  }),
-}));
-
 describe("msteams monitor handler authz", () => {
   function createDeps(cfg: OpenClawConfig) {
     const readAllowFromStore = vi.fn(async () => ["attacker-aad"]);
     const upsertPairingRequest = vi.fn(async () => null);
     const recordInboundSession = vi.fn(async () => undefined);
-    setMSTeamsRuntime({
-      logging: { shouldLogVerbose: () => false },
-      system: { enqueueSystemEvent: vi.fn() },
-      channel: {
-        debounce: {
-          resolveInboundDebounceMs: () => 0,
-          createInboundDebouncer: <T>(params: {
-            onFlush: (entries: T[]) => Promise<void>;
-          }): { enqueue: (entry: T) => Promise<void> } => ({
-            enqueue: async (entry: T) => {
-              await params.onFlush([entry]);
-            },
-          }),
-        },
-        pairing: {
-          readAllowFromStore,
-          upsertPairingRequest,
-        },
-        text: {
-          hasControlCommand: () => false,
-        },
-        routing: {
-          resolveAgentRoute: ({ peer }: { peer: { kind: string; id: string } }) => ({
-            sessionKey: `msteams:${peer.kind}:${peer.id}`,
-            agentId: "default",
-            accountId: "default",
-          }),
-        },
-        reply: {
-          formatAgentEnvelope: ({ body }: { body: string }) => body,
-          finalizeInboundContext: <T extends Record<string, unknown>>(ctx: T) => ctx,
-        },
-        session: {
-          recordInboundSession,
-        },
-      },
-    } as unknown as PluginRuntime);
 
-    const conversationStore = {
-      get: vi.fn(async () => null),
-      upsert: vi.fn(async () => undefined),
-      list: vi.fn(async () => []),
-      remove: vi.fn(async () => false),
-      findPreferredDmByUserId: vi.fn(async () => null),
-      findByUserId: vi.fn(async () => null),
-    } satisfies MSTeamsConversationStore;
-
-    const deps: MSTeamsMessageHandlerDeps = {
-      cfg,
-      runtime: { error: vi.fn() } as unknown as RuntimeEnv,
-      appId: "test-app",
-      adapter: {} as MSTeamsMessageHandlerDeps["adapter"],
-      tokenProvider: {
-        getAccessToken: vi.fn(async () => "token"),
-      },
-      textLimit: 4000,
-      mediaMaxBytes: 1024 * 1024,
-      conversationStore,
-      pollStore: {
-        recordVote: vi.fn(async () => null),
-      } as unknown as MSTeamsMessageHandlerDeps["pollStore"],
-      log: {
-        info: vi.fn(),
-        debug: vi.fn(),
-        error: vi.fn(),
-      } as unknown as MSTeamsMessageHandlerDeps["log"],
-    };
-
-    return {
-      conversationStore,
-      deps,
+    return createMessageHandlerDeps(cfg, {
       readAllowFromStore,
       upsertPairingRequest,
       recordInboundSession,
-    };
+      resolveAgentRoute: vi.fn(({ peer }: { peer: { kind: string; id: string } }) => ({
+        sessionKey: `msteams:${peer.kind}:${peer.id}`,
+        agentId: "default",
+        accountId: "default",
+      })),
+    });
   }
 
   function resetThreadMocks() {

@@ -1,9 +1,9 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import * as detachedTaskRuntime from "../../tasks/detached-task-runtime.js";
 import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
+import { loadCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
 import { run, start, stop, update } from "./ops.js";
 import { createCronServiceState } from "./state.js";
@@ -102,7 +102,7 @@ async function expectDueIsolatedManualRunProgresses(storePath: string, now: numb
 
   await expect(run(state, "isolated-timeout")).resolves.toEqual({ ok: true, ran: true });
 
-  const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as {
+  const persisted = (await loadCronStore(storePath)) as {
     jobs: CronJob[];
   };
   expect(persisted.jobs[0]?.state.runningAtMs).toBeUndefined();
@@ -161,7 +161,7 @@ describe("cron service ops seam coverage", () => {
     expect(requestHeartbeatNow).toHaveBeenCalled();
     expect(state.timer).not.toBeNull();
 
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as {
+    const persisted = (await loadCronStore(storePath)) as {
       jobs: CronJob[];
     };
     const job = persisted.jobs[0];

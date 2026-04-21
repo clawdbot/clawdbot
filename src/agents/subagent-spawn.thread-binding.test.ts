@@ -186,15 +186,15 @@ describe("spawnSubagentDirect thread binding delivery", () => {
         {
           status: "active",
           conversation: {
-            channel: "feishu",
+            channel: "collabchat",
             accountId: "work",
-            conversationId: "oc_dm_chat_1",
+            conversationId: "collab_dm_1",
           },
         },
       ],
     };
     currentDeliveryTargetResolver = () => ({
-      to: "channel:oc_dm_chat_1",
+      to: "channel:collab_dm_1",
     });
 
     const result = await spawnSubagentDirect(

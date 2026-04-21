@@ -8,19 +8,19 @@ import {
 describe("origin-routing helpers", () => {
   it("prefers originating channel over provider for message provider", () => {
     const provider = resolveOriginMessageProvider({
-      originatingChannel: "Telegram",
+      originatingChannel: "QuietChat",
       provider: "heartbeat",
     });
 
-    expect(provider).toBe("telegram");
+    expect(provider).toBe("quietchat");
   });
 
   it("falls back to provider when originating channel is missing", () => {
     const provider = resolveOriginMessageProvider({
-      provider: "  Slack  ",
+      provider: "  WorkChat  ",
     });
 
-    expect(provider).toBe("slack");
+    expect(provider).toBe("workchat");
   });
 
   it("prefers originating destination over fallback destination", () => {

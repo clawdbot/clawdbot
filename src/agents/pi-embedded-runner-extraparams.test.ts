@@ -297,6 +297,7 @@ import {
   createOpenAIServiceTierWrapper,
   createOpenAIStringContentWrapper,
   createOpenAITextVerbosityWrapper,
+  createOpenAIThinkingLevelWrapper,
   resolveOpenAIFastMode,
   resolveOpenAIServiceTier,
   resolveOpenAITextVerbosity,
@@ -434,7 +435,9 @@ function createTestOpenAIProviderWrapper(
   });
   streamFn = createOpenAIStringContentWrapper(streamFn);
   return createOpenAIResponsesContextManagementWrapper(
-    createOpenAIReasoningCompatibilityWrapper(streamFn),
+    createOpenAIReasoningCompatibilityWrapper(
+      createOpenAIThinkingLevelWrapper(streamFn, params.context.thinkingLevel),
+    ),
     params.context.extraParams,
   );
 }
@@ -658,7 +661,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload).not.toHaveProperty("reasoning_effort");
   });
 
-  it("keeps disabled reasoning payloads for native OpenAI responses routes", () => {
+  it("strips disabled reasoning payloads for native OpenAI responses models that do not support none", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {
@@ -685,13 +688,12 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads[0]).toEqual({
       context_management: [{ type: "compaction", compact_threshold: 80000 }],
       parallel_tool_calls: true,
-      reasoning: { effort: "none", summary: "auto" },
       store: true,
       text: { verbosity: "low" },
     });
   });
 
-  it("keeps disabled reasoning payloads for proxied OpenAI responses routes", () => {
+  it("strips disabled reasoning payloads for proxied OpenAI responses routes", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {
@@ -2158,7 +2160,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.store).toBe(true);
   });
 
-  it("keeps disabled OpenAI reasoning payloads on native Responses routes", () => {
+  it("strips disabled OpenAI reasoning payloads on native Responses models that do not support none", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "openai",
       applyModelId: "gpt-5-mini",
@@ -2173,10 +2175,10 @@ describe("applyExtraParamsToAgent", () => {
         reasoning: { effort: "none" },
       },
     });
-    expect(payload.reasoning).toEqual({ effort: "none" });
+    expect(payload).not.toHaveProperty("reasoning");
   });
 
-  it("keeps disabled Azure OpenAI Responses reasoning payloads", () => {
+  it("strips disabled Azure OpenAI Responses reasoning payloads for models that do not support none", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "azure-openai-responses",
       applyModelId: "gpt-5-mini",
@@ -2191,7 +2193,7 @@ describe("applyExtraParamsToAgent", () => {
         reasoning: { effort: "none" },
       },
     });
-    expect(payload.reasoning).toEqual({ effort: "none" });
+    expect(payload).not.toHaveProperty("reasoning");
   });
 
   it("injects configured OpenAI service_tier into Responses payloads", () => {

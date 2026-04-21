@@ -1439,4 +1439,114 @@ describe("image tool response validation", () => {
     });
     expect(text).toBe("hello");
   });
+
+  it.each(["reasoning_content", "reasoning", "reasoning_details", "reasoning_text"])(
+    "detects %s as a retryable image reasoning-only response",
+    (thinkingSignature) => {
+      const message = createAssistantMessage({
+        content: [
+          {
+            type: "thinking",
+            thinking: "  <think>private</think> maybe a cat  ",
+            thinkingSignature,
+          },
+        ],
+      });
+      expect(__testing.hasImageReasoningOnlyResponse(message as never)).toBe(true);
+      expect(() =>
+        __testing.coerceImageAssistantText({
+          provider: "openai",
+          model: "gpt-5.4-mini",
+          message: message as never,
+        }),
+      ).toThrow(/returned no text/i);
+    },
+  );
+
+  it.each([
+    JSON.stringify({ id: "rs_123", type: "reasoning" }),
+    { id: "rs_456", type: "reasoning.encrypted" },
+  ])(
+    "detects Responses reasoning signature as a retryable image reasoning-only response",
+    (thinkingSignature) => {
+      const message = createAssistantMessage({
+        content: [
+          {
+            type: "thinking",
+            thinking: "  <think>private</think> maybe a cat  ",
+            thinkingSignature,
+          },
+        ],
+      });
+      expect(__testing.hasImageReasoningOnlyResponse(message as never)).toBe(true);
+      expect(() =>
+        __testing.coerceImageAssistantText({
+          provider: "openai",
+          model: "gpt-5.4-mini",
+          message: message as never,
+        }),
+      ).toThrow(/returned no text/i);
+    },
+  );
+
+  it("detects oversized JSON reasoning signatures without parsing the whole payload", () => {
+    const message = createAssistantMessage({
+      content: [
+        {
+          type: "thinking",
+          thinking: "retryable",
+          thinkingSignature: JSON.stringify({
+            id: "rs_123",
+            summary: [{ text: "x".repeat(2_100) }],
+            type: "reasoning",
+          }),
+        },
+      ],
+    });
+
+    expect(__testing.hasImageReasoningOnlyResponse(message as never)).toBe(true);
+  });
+
+  it("ignores oversized JSON signatures without Responses reasoning markers", () => {
+    const message = createAssistantMessage({
+      content: [
+        {
+          type: "thinking",
+          thinking: "retryable",
+          thinkingSignature: `{"id":"not-reasoning","summary":"${"x".repeat(2_100)}"}`,
+        },
+      ],
+    });
+
+    expect(__testing.hasImageReasoningOnlyResponse(message as never)).toBe(false);
+  });
+
+  it("detects signed reasoning-only responses with empty summary text", () => {
+    const message = createAssistantMessage({
+      content: [
+        {
+          type: "thinking",
+          thinking: "",
+          thinkingSignature: "reasoning_content",
+        },
+      ],
+    });
+
+    expect(__testing.hasImageReasoningOnlyResponse(message as never)).toBe(true);
+  });
+
+  it("bounds reasoning-only detection before scanning every block", () => {
+    const message = createAssistantMessage({
+      content: [
+        ...Array.from({ length: 50 }, () => ({ type: "thinking", thinking: "untagged" })),
+        {
+          type: "thinking",
+          thinking: "retryable",
+          thinkingSignature: "reasoning_content",
+        },
+      ],
+    });
+
+    expect(__testing.hasImageReasoningOnlyResponse(message as never)).toBe(false);
+  });
 });

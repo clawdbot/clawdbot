@@ -1,4 +1,4 @@
-import { defineProject } from "vitest/config";
+import { defineConfig } from "vitest/config";
 import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pattern-file.ts";
 import { resolveVitestIsolation } from "./vitest.scoped-config.ts";
 import {
@@ -50,7 +50,8 @@ export function createUnitVitestConfigWithOptions(
     }
     return ![...protectedIncludeFiles].some((file) => pattern === file || pattern.endsWith("/**"));
   });
-  return defineProject({
+  const extraExcludePatterns = options.extraExcludePatterns ?? [];
+  return defineConfig({
     ...sharedVitestConfig,
     test: {
       ...sharedTest,
@@ -70,10 +71,20 @@ export function createUnitVitestConfigWithOptions(
           ...exclude,
           ...baseExcludePatterns,
           ...unitFastTestFiles,
-          ...(options.extraExcludePatterns ?? []),
+          ...extraExcludePatterns,
           ...loadExtraExcludePatternsFromEnv(env),
         ]),
       ],
+      coverage: {
+        ...sharedTest.coverage,
+        exclude: [
+          ...new Set([
+            ...(sharedTest.coverage?.exclude ?? []),
+            ...baseExcludePatterns,
+            ...extraExcludePatterns,
+          ]),
+        ],
+      },
       ...(cliIncludePatterns !== null ? { passWithNoTests: true } : {}),
     },
   });

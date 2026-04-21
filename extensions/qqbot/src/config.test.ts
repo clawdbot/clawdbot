@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { qqbotConfigAdapter, qqbotSetupAdapterShared } from "./channel-config-shared.js";
 import { QQBotConfigSchema } from "./config-schema.js";
 import { DEFAULT_ACCOUNT_ID, resolveDefaultQQBotAccountId, resolveQQBotAccount } from "./config.js";
+import { makeQqbotDefaultAccountConfig, makeQqbotSecretRefConfig } from "./qqbot-test-support.js";
 
 describe("qqbot config", () => {
   it("honors configured defaultAccount when resolving the default QQ Bot account id", () => {
@@ -127,18 +128,7 @@ describe("qqbot config", () => {
   });
 
   it("rejects unresolved SecretRefs on runtime resolution", () => {
-    const cfg = {
-      channels: {
-        qqbot: {
-          appId: "123456",
-          clientSecret: {
-            source: "env",
-            provider: "default",
-            id: "QQBOT_CLIENT_SECRET",
-          },
-        },
-      },
-    } as OpenClawConfig;
+    const cfg = makeQqbotSecretRefConfig();
 
     expect(() => resolveQQBotAccount(cfg, DEFAULT_ACCOUNT_ID)).toThrow(
       'channels.qqbot.clientSecret: unresolved SecretRef "env:default:QQBOT_CLIENT_SECRET"',
@@ -146,18 +136,7 @@ describe("qqbot config", () => {
   });
 
   it("allows unresolved SecretRefs for setup/status flows", () => {
-    const cfg = {
-      channels: {
-        qqbot: {
-          appId: "123456",
-          clientSecret: {
-            source: "env",
-            provider: "default",
-            id: "QQBOT_CLIENT_SECRET",
-          },
-        },
-      },
-    } as OpenClawConfig;
+    const cfg = makeQqbotSecretRefConfig();
 
     const resolved = resolveQQBotAccount(cfg, DEFAULT_ACCOUNT_ID, {
       allowUnresolvedSecretRef: true,
@@ -254,16 +233,7 @@ describe("qqbot config", () => {
 
     expect(
       runtimeSetup.resolveAccountId?.({
-        cfg: {
-          channels: {
-            qqbot: {
-              defaultAccount: "bot2",
-              accounts: {
-                bot2: { appId: "123456" },
-              },
-            },
-          },
-        } as OpenClawConfig,
+        cfg: makeQqbotDefaultAccountConfig(),
         accountId: undefined,
       } as never),
     ).toBe("bot2");

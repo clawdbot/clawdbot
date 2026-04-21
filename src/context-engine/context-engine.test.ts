@@ -796,15 +796,20 @@ describe("Invalid engine fallback", () => {
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining("missing info"));
   });
 
-  it("falls back to default engine when info.id mismatches the registered id", async () => {
-    const engineId = `mismatched-info-id-${Date.now().toString(36)}`;
+  it("accepts resolved engines whose info.id differs from the registered slot id (#66601)", async () => {
+    // Regression for openclaw/openclaw#66601: third-party plugins like
+    // lossless-claw register under an external slot id ("lossless-claw") but
+    // the ContextEngine they return uses the plugin's own internal id
+    // (e.g. "lcm"). That id is metadata, not the lookup key.
+    const engineId = `plugin-slot-${Date.now().toString(36)}`;
+    const internalInfoId = "lcm";
     registerContextEngine(
       engineId,
       () =>
         ({
-          info: { id: "legacy", name: "Broken Engine" },
+          info: { id: internalInfoId, name: "Lossless Context Manager", version: "0.5.2" },
           async ingest() {
-            return { ingested: false };
+            return { ingested: true };
           },
           async assemble({ messages }: { messages: AgentMessage[] }) {
             return { messages, estimatedTokens: 0 };
@@ -816,10 +821,15 @@ describe("Invalid engine fallback", () => {
     );
 
     const engine = await resolveContextEngine(configWithSlot(engineId));
-    expect(engine.info.id).toBe("legacy");
-    expect(console.error).toHaveBeenCalledWith(
-      expect.stringContaining(`info.id must match registered id "${engineId}"`),
-    );
+    // The engine's own info.id is preserved; resolution does not overwrite it.
+    expect(engine.info.id).toBe(internalInfoId);
+    expect(engine.info.name).toBe("Lossless Context Manager");
+    // And the engine is usable through the wrapper.
+    const result = await engine.assemble({
+      sessionId: "s1",
+      messages: [makeMockMessage("user", "hello")],
+    });
+    expect(result.estimatedTokens).toBe(0);
   });
 
   it("falls back to default engine when resolved engine omits lifecycle methods", async () => {

@@ -7,7 +7,7 @@ import type { PluginHookBeforeToolCallResult, PluginHookMessageSendingResult } f
 const toolEvent = { toolName: "bash", params: { command: "echo hello" } };
 const toolCtx = { toolName: "bash" };
 const messageEvent = { to: "user-1", content: "hello" };
-const messageCtx = { channelId: "telegram" };
+const messageCtx = { channelId: "forum" };
 
 async function runBeforeToolCallWithHooks(
   registry: PluginRegistry,

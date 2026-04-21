@@ -82,12 +82,12 @@ If you want...
 
 Yes — this works well if your “personal” traffic is **DMs** and your “public” traffic is **groups**.
 
-Why: in single-agent mode, DMs typically land in the **main** session key (`agent:main:main`), while groups always use **non-main** session keys (`agent:main:<channel>:group:<id>`). If you enable sandboxing with `mode: "non-main"`, those group sessions run in Docker while your main DM session stays on-host.
+Why: in single-agent mode, DMs typically land in the **main** session key (`agent:main:main`), while groups always use **non-main** session keys (`agent:main:<channel>:group:<id>`). If you enable sandboxing with `mode: "non-main"`, those group sessions run in the configured sandbox backend while your main DM session stays on-host. Docker is the default backend if you do not choose one.
 
 This gives you one agent “brain” (shared workspace + memory), but two execution postures:
 
 - **DMs**: full tools (host)
-- **Groups**: sandbox + restricted tools (Docker)
+- **Groups**: sandbox + restricted tools
 
 > If you need truly separate workspaces/personas (“personal” and “public” must never mix), use a second agent + bindings. See [Multi-Agent Routing](/concepts/multi-agent).
 

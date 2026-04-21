@@ -23,6 +23,39 @@ describe("applyPiCompactionSettingsFromConfig", () => {
     });
   });
 
+  it("can restore reserveTokens after a simulated resource loader reload drops them below floor", () => {
+    const cfg = {
+      agents: { defaults: { compaction: { reserveTokensFloor: DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR } } },
+    } as const;
+    let reserve = 16_384;
+    const keep = 20_000;
+    const settingsManager = {
+      getCompactionReserveTokens: () => reserve,
+      getCompactionKeepRecentTokens: () => keep,
+      applyOverrides: vi.fn((overrides: { compaction: { reserveTokens?: number } }) => {
+        if (overrides.compaction.reserveTokens !== undefined) {
+          reserve = overrides.compaction.reserveTokens;
+        }
+      }),
+    };
+
+    const first = applyPiCompactionSettingsFromConfig({
+      settingsManager,
+      cfg,
+      contextTokenBudget: 100_000,
+    });
+    expect(first.compaction.reserveTokens).toBe(DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR);
+
+    reserve = 16_384;
+    const second = applyPiCompactionSettingsFromConfig({
+      settingsManager,
+      cfg,
+      contextTokenBudget: 100_000,
+    });
+    expect(second.compaction.reserveTokens).toBe(DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR);
+    expect(reserve).toBe(DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR);
+  });
+
   it("does not override when already above floor and not in safeguard mode", () => {
     const settingsManager = {
       getCompactionReserveTokens: () => 32_000,

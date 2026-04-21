@@ -1,9 +1,76 @@
 import { vi } from "vitest";
-import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
+import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import type { MSTeamsAdapter } from "./messenger.js";
 import type { MSTeamsActivityHandler, MSTeamsMessageHandlerDeps } from "./monitor-handler.js";
 import type { MSTeamsPollStore } from "./polls.js";
+import { setMSTeamsRuntime } from "./runtime.js";
+
+type RuntimeRoutePeer = { peer: { kind: string; id: string } };
+
+type MSTeamsTestRuntimeOptions = {
+  enqueueSystemEvent?: ReturnType<typeof vi.fn>;
+  readAllowFromStore?: ReturnType<typeof vi.fn>;
+  upsertPairingRequest?: ReturnType<typeof vi.fn>;
+  recordInboundSession?: ReturnType<typeof vi.fn>;
+  resolveAgentRoute?: (params: RuntimeRoutePeer) => unknown;
+  resolveTextChunkLimit?: () => number;
+  resolveStorePath?: () => string;
+};
+
+export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {}): void {
+  setMSTeamsRuntime({
+    logging: { shouldLogVerbose: () => false },
+    system: { enqueueSystemEvent: options.enqueueSystemEvent ?? vi.fn() },
+    channel: {
+      debounce: {
+        resolveInboundDebounceMs: () => 0,
+        createInboundDebouncer: <T>(params: {
+          onFlush: (entries: T[]) => Promise<void>;
+        }): { enqueue: (entry: T) => Promise<void> } => ({
+          enqueue: async (entry: T) => {
+            await params.onFlush([entry]);
+          },
+        }),
+      },
+      pairing: {
+        readAllowFromStore: options.readAllowFromStore ?? vi.fn(async () => []),
+        upsertPairingRequest: options.upsertPairingRequest ?? vi.fn(async () => null),
+      },
+      text: {
+        hasControlCommand: () => false,
+        resolveChunkMode: () => "length",
+        resolveMarkdownTableMode: () => "code",
+        ...(options.resolveTextChunkLimit
+          ? { resolveTextChunkLimit: options.resolveTextChunkLimit }
+          : {}),
+      },
+      routing: {
+        resolveAgentRoute:
+          options.resolveAgentRoute ??
+          (({ peer }: RuntimeRoutePeer) => ({
+            sessionKey: `msteams:${peer.kind}:${peer.id}`,
+            agentId: "default",
+            accountId: "default",
+          })),
+      },
+      reply: {
+        createReplyDispatcherWithTyping: () => ({
+          dispatcher: {},
+          replyOptions: {},
+          markDispatchIdle: vi.fn(),
+        }),
+        formatAgentEnvelope: ({ body }: { body: string }) => body,
+        finalizeInboundContext: <T extends Record<string, unknown>>(ctx: T) => ctx,
+        resolveHumanDelayConfig: () => undefined,
+      },
+      session: {
+        recordInboundSession: options.recordInboundSession ?? vi.fn(async () => undefined),
+        ...(options.resolveStorePath ? { resolveStorePath: options.resolveStorePath } : {}),
+      },
+    },
+  } as unknown as PluginRuntime);
+}
 
 export function createActivityHandler(
   run = vi.fn(async () => undefined),

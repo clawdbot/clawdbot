@@ -22,6 +22,33 @@ function buildJwt(payload: Record<string, unknown>) {
   return `${encode({ alg: "none", typ: "JWT" })}.${encode(payload)}.sig`;
 }
 
+function mockCodexCliChatGptAuth(params?: {
+  email?: string;
+  accountId?: string;
+  accessToken?: string;
+}) {
+  const accessToken =
+    params?.accessToken ??
+    buildJwt({
+      exp: Math.floor(Date.now() / 1000) + 600,
+      "https://api.openai.com/profile": {
+        email: params?.email ?? "codex@example.com",
+      },
+    });
+  vi.spyOn(fs, "readFileSync").mockReturnValue(
+    JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: {
+        id_token: "id-token",
+        access_token: accessToken,
+        refresh_token: "refresh-token",
+        account_id: params?.accountId ?? "acct_123",
+      },
+    }),
+  );
+  return accessToken;
+}
+
 describe("readOpenAICodexCliOAuthProfile", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -32,23 +59,7 @@ describe("readOpenAICodexCliOAuthProfile", () => {
   });
 
   it("reads Codex CLI chatgpt auth into the default OpenAI Codex profile", () => {
-    const accessToken = buildJwt({
-      exp: Math.floor(Date.now() / 1000) + 600,
-      "https://api.openai.com/profile": {
-        email: "codex@example.com",
-      },
-    });
-    vi.spyOn(fs, "readFileSync").mockReturnValue(
-      JSON.stringify({
-        auth_mode: "chatgpt",
-        tokens: {
-          id_token: "id-token",
-          access_token: accessToken,
-          refresh_token: "refresh-token",
-          account_id: "acct_123",
-        },
-      }),
-    );
+    const accessToken = mockCodexCliChatGptAuth();
 
     const parsed = readOpenAICodexCliOAuthProfile({
       store: { version: 1, profiles: {} },
@@ -126,22 +137,10 @@ describe("readOpenAICodexCliOAuthProfile", () => {
   });
 
   it("refuses Codex CLI bootstrap when an expired local default belongs to a different account", () => {
-    const accessToken = buildJwt({
-      exp: Math.floor(Date.now() / 1000) + 600,
-      "https://api.openai.com/profile": {
-        email: "codex-b@example.com",
-      },
+    mockCodexCliChatGptAuth({
+      email: "codex-b@example.com",
+      accountId: "acct_b",
     });
-    vi.spyOn(fs, "readFileSync").mockReturnValue(
-      JSON.stringify({
-        auth_mode: "chatgpt",
-        tokens: {
-          access_token: accessToken,
-          refresh_token: "refresh-token",
-          account_id: "acct_b",
-        },
-      }),
-    );
 
     const parsed = readOpenAICodexCliOAuthProfile({
       store: {
@@ -164,23 +163,7 @@ describe("readOpenAICodexCliOAuthProfile", () => {
   });
 
   it("allows cli bootstrap when the stored default profile is expired", () => {
-    const accessToken = buildJwt({
-      exp: Math.floor(Date.now() / 1000) + 600,
-      "https://api.openai.com/profile": {
-        email: "codex@example.com",
-      },
-    });
-    vi.spyOn(fs, "readFileSync").mockReturnValue(
-      JSON.stringify({
-        auth_mode: "chatgpt",
-        tokens: {
-          id_token: "id-token",
-          access_token: accessToken,
-          refresh_token: "refresh-token",
-          account_id: "acct_123",
-        },
-      }),
-    );
+    const accessToken = mockCodexCliChatGptAuth();
 
     const parsed = readOpenAICodexCliOAuthProfile({
       store: {
@@ -211,23 +194,7 @@ describe("readOpenAICodexCliOAuthProfile", () => {
   });
 
   it("refuses cli bootstrap when the stored default profile is expired but identity mismatches", () => {
-    const accessToken = buildJwt({
-      exp: Math.floor(Date.now() / 1000) + 600,
-      "https://api.openai.com/profile": {
-        email: "codex@example.com",
-      },
-    });
-    vi.spyOn(fs, "readFileSync").mockReturnValue(
-      JSON.stringify({
-        auth_mode: "chatgpt",
-        tokens: {
-          id_token: "id-token",
-          access_token: accessToken,
-          refresh_token: "refresh-token",
-          account_id: "acct_123",
-        },
-      }),
-    );
+    mockCodexCliChatGptAuth();
 
     const parsed = readOpenAICodexCliOAuthProfile({
       store: {
@@ -249,23 +216,7 @@ describe("readOpenAICodexCliOAuthProfile", () => {
   });
 
   it("allows the runtime-only Codex CLI profile when the stored default already matches", () => {
-    const accessToken = buildJwt({
-      exp: Math.floor(Date.now() / 1000) + 600,
-      "https://api.openai.com/profile": {
-        email: "codex@example.com",
-      },
-    });
-    vi.spyOn(fs, "readFileSync").mockReturnValue(
-      JSON.stringify({
-        auth_mode: "chatgpt",
-        tokens: {
-          id_token: "id-token",
-          access_token: accessToken,
-          refresh_token: "refresh-token",
-          account_id: "acct_123",
-        },
-      }),
-    );
+    const accessToken = mockCodexCliChatGptAuth();
 
     const firstParse = readOpenAICodexCliOAuthProfile({
       store: { version: 1, profiles: {} },

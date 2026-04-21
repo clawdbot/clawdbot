@@ -13,7 +13,8 @@ import type { GuardedFetchMode, GuardedFetchResult } from "../infra/net/fetch-gu
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../infra/net/fetch-guard.js";
 import { hasEnvHttpProxyConfigured, matchesNoProxy } from "../infra/net/proxy-env.js";
 import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
-export { fetchWithTimeout } from "../utils/fetch-timeout.js";
+import { fetchWithTimeout } from "../utils/fetch-timeout.js";
+export { fetchWithTimeout };
 export { normalizeBaseUrl } from "../agents/provider-request-config.js";
 
 const MAX_ERROR_CHARS = 300;
@@ -75,6 +76,49 @@ export async function waitProviderOperationPollInterval(params: {
     throw new Error(`${params.deadline.label} timed out after ${params.deadline.timeoutMs}ms`);
   }
   await new Promise((resolve) => setTimeout(resolve, Math.min(params.pollIntervalMs, remainingMs)));
+}
+
+export async function pollProviderOperationJson<TPayload>(params: {
+  url: string;
+  headers: Headers;
+  deadline: ProviderOperationDeadline;
+  defaultTimeoutMs: number;
+  fetchFn: typeof fetch;
+  maxAttempts: number;
+  pollIntervalMs: number;
+  requestFailedMessage: string;
+  timeoutMessage: string;
+  isComplete: (payload: TPayload) => boolean;
+  getFailureMessage?: (payload: TPayload) => string | undefined;
+}): Promise<TPayload> {
+  for (let attempt = 0; attempt < params.maxAttempts; attempt += 1) {
+    const response = await fetchWithTimeout(
+      params.url,
+      {
+        method: "GET",
+        headers: params.headers,
+      },
+      resolveProviderOperationTimeoutMs({
+        deadline: params.deadline,
+        defaultTimeoutMs: params.defaultTimeoutMs,
+      }),
+      params.fetchFn,
+    );
+    await assertOkOrThrowHttpError(response, params.requestFailedMessage);
+    const payload = (await response.json()) as TPayload;
+    if (params.isComplete(payload)) {
+      return payload;
+    }
+    const failureMessage = params.getFailureMessage?.(payload);
+    if (failureMessage) {
+      throw new Error(failureMessage);
+    }
+    await waitProviderOperationPollInterval({
+      deadline: params.deadline,
+      pollIntervalMs: params.pollIntervalMs,
+    });
+  }
+  throw new Error(params.timeoutMessage);
 }
 
 function resolveGuardedHttpTimeoutMs(timeoutMs: number | undefined): number {

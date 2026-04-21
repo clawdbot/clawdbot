@@ -210,10 +210,16 @@ export async function handleStructuredPayload(
 
 // Media payload handlers.
 
+type StructuredPayloadMediaType = "image" | "video" | "file";
+
+function formatMediaTypeLabel(mediaType: StructuredPayloadMediaType): string {
+  return mediaType[0].toUpperCase() + mediaType.slice(1);
+}
+
 function validateStructuredPayloadLocalPath(
   ctx: ReplyContext,
   payloadPath: string,
-  mediaType: "image" | "video" | "file",
+  mediaType: StructuredPayloadMediaType,
 ): string | null {
   const allowedPath = resolveQQBotPayloadLocalFilePath(payloadPath);
   if (allowedPath) {
@@ -232,6 +238,41 @@ function isRemoteHttpUrl(p: string): boolean {
 
 function isInlineImageDataUrl(p: string): boolean {
   return /^data:image\/[^;]+;base64,/i.test(p);
+}
+
+function resolveStructuredPayloadPath(
+  ctx: ReplyContext,
+  payload: MediaPayload,
+  mediaType: StructuredPayloadMediaType,
+): { path: string; isHttpUrl: boolean } | null {
+  const originalPath = payload.path ?? "";
+  const normalizedPath = normalizePath(originalPath);
+  const isHttpUrl = isRemoteHttpUrl(normalizedPath);
+  const resolvedPath = isHttpUrl
+    ? normalizedPath
+    : validateStructuredPayloadLocalPath(ctx, originalPath, mediaType);
+  if (!resolvedPath) {
+    return null;
+  }
+  if (!resolvedPath.trim()) {
+    ctx.log?.error(
+      `[qqbot:${ctx.account.accountId}] ${formatMediaTypeLabel(mediaType)} missing path`,
+    );
+    return null;
+  }
+  return { path: resolvedPath, isHttpUrl };
+}
+
+function logUnsupportedStructuredMediaTarget(
+  ctx: ReplyContext,
+  mediaType: Exclude<StructuredPayloadMediaType, "image">,
+): void {
+  const label = formatMediaTypeLabel(mediaType);
+  if (ctx.target.type === "dm") {
+    ctx.log?.error(`[qqbot:${ctx.account.accountId}] ${label} not supported in DM`);
+  } else if (ctx.target.channelId) {
+    ctx.log?.error(`[qqbot:${ctx.account.accountId}] ${label} not supported in channel`);
+  }
 }
 
 function sanitizeForLog(value: string, maxLen = 200): string {
@@ -505,19 +546,12 @@ async function handleAudioPayload(ctx: ReplyContext, payload: MediaPayload): Pro
 async function handleVideoPayload(ctx: ReplyContext, payload: MediaPayload): Promise<void> {
   const { target, account, log } = ctx;
   try {
-    const originalPath = payload.path ?? "";
-    const normalizedPath = normalizePath(originalPath);
-    const isHttpUrl = isRemoteHttpUrl(normalizedPath);
-    const videoPath = isHttpUrl
-      ? normalizedPath
-      : validateStructuredPayloadLocalPath(ctx, originalPath, "video");
-    if (!videoPath) {
+    const resolved = resolveStructuredPayloadPath(ctx, payload, "video");
+    if (!resolved) {
       return;
     }
-    if (!videoPath.trim()) {
-      log?.error(`[qqbot:${account.accountId}] Video missing path`);
-      return;
-    }
+    const videoPath = resolved.path;
+    const isHttpUrl = resolved.isHttpUrl;
 
     log?.info(
       `[qqbot:${account.accountId}] Video send: ${describeMediaTargetForLog(videoPath, isHttpUrl)}`,
@@ -546,10 +580,8 @@ async function handleVideoPayload(ctx: ReplyContext, payload: MediaPayload): Pro
               undefined,
               target.messageId,
             );
-          } else if (target.type === "dm") {
-            log?.error(`[qqbot:${account.accountId}] Video not supported in DM`);
-          } else if (target.channelId) {
-            log?.error(`[qqbot:${account.accountId}] Video not supported in channel`);
+          } else {
+            logUnsupportedStructuredMediaTarget(ctx, "video");
           }
         } else {
           const fileBuffer = await readStructuredPayloadLocalFile(videoPath);
@@ -578,10 +610,8 @@ async function handleVideoPayload(ctx: ReplyContext, payload: MediaPayload): Pro
               videoBase64,
               target.messageId,
             );
-          } else if (target.type === "dm") {
-            log?.error(`[qqbot:${account.accountId}] Video not supported in DM`);
-          } else if (target.channelId) {
-            log?.error(`[qqbot:${account.accountId}] Video not supported in channel`);
+          } else {
+            logUnsupportedStructuredMediaTarget(ctx, "video");
           }
         }
       },
@@ -603,19 +633,12 @@ async function handleVideoPayload(ctx: ReplyContext, payload: MediaPayload): Pro
 async function handleFilePayload(ctx: ReplyContext, payload: MediaPayload): Promise<void> {
   const { target, account, log } = ctx;
   try {
-    const originalPath = payload.path ?? "";
-    const normalizedPath = normalizePath(originalPath);
-    const isHttpUrl = isRemoteHttpUrl(normalizedPath);
-    const filePath = isHttpUrl
-      ? normalizedPath
-      : validateStructuredPayloadLocalPath(ctx, originalPath, "file");
-    if (!filePath) {
+    const resolved = resolveStructuredPayloadPath(ctx, payload, "file");
+    if (!resolved) {
       return;
     }
-    if (!filePath.trim()) {
-      log?.error(`[qqbot:${account.accountId}] File missing path`);
-      return;
-    }
+    const filePath = resolved.path;
+    const isHttpUrl = resolved.isHttpUrl;
 
     const fileName = sanitizeFileName(path.basename(filePath));
     log?.info(
@@ -647,10 +670,8 @@ async function handleFilePayload(ctx: ReplyContext, payload: MediaPayload): Prom
               target.messageId,
               fileName,
             );
-          } else if (target.type === "dm") {
-            log?.error(`[qqbot:${account.accountId}] File not supported in DM`);
-          } else if (target.channelId) {
-            log?.error(`[qqbot:${account.accountId}] File not supported in channel`);
+          } else {
+            logUnsupportedStructuredMediaTarget(ctx, "file");
           }
         } else {
           const fileBuffer = await readStructuredPayloadLocalFile(filePath);
@@ -676,10 +697,8 @@ async function handleFilePayload(ctx: ReplyContext, payload: MediaPayload): Prom
               target.messageId,
               fileName,
             );
-          } else if (target.type === "dm") {
-            log?.error(`[qqbot:${account.accountId}] File not supported in DM`);
-          } else if (target.channelId) {
-            log?.error(`[qqbot:${account.accountId}] File not supported in channel`);
+          } else {
+            logUnsupportedStructuredMediaTarget(ctx, "file");
           }
         }
       },

@@ -1,7 +1,7 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
+import { createCapturedThinkingConfigStream } from "../../test/helpers/plugins/stream-hooks.js";
 import plugin from "./index.js";
 
 describe("moonshot provider plugin", () => {
@@ -12,7 +12,7 @@ describe("moonshot provider plugin", () => {
       provider.buildReplayPolicy?.({
         provider: "moonshot",
         modelApi: "openai-completions",
-        modelId: "kimi-k2.5",
+        modelId: "kimi-k2.6",
       } as never),
     ).toMatchObject({
       sanitizeToolCallIds: true,
@@ -25,35 +25,26 @@ describe("moonshot provider plugin", () => {
 
   it("wires moonshot-thinking stream hooks", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
-    let capturedPayload: Record<string, unknown> | undefined;
-    const baseStreamFn: StreamFn = (model, _context, options) => {
-      const payload = { config: { thinkingConfig: { thinkingBudget: -1 } } } as Record<
-        string,
-        unknown
-      >;
-      options?.onPayload?.(payload as never, model as never);
-      capturedPayload = payload;
-      return {} as never;
-    };
+    const capturedStream = createCapturedThinkingConfigStream();
 
     const wrapped = provider.wrapStreamFn?.({
       provider: "moonshot",
-      modelId: "kimi-k2.5",
+      modelId: "kimi-k2.6",
       thinkingLevel: "off",
-      streamFn: baseStreamFn,
+      streamFn: capturedStream.streamFn,
     } as never);
 
     void wrapped?.(
       {
         api: "openai-completions",
         provider: "moonshot",
-        id: "kimi-k2.5",
+        id: "kimi-k2.6",
       } as Model<"openai-completions">,
       { messages: [] } as Context,
       {},
     );
 
-    expect(capturedPayload).toMatchObject({
+    expect(capturedStream.getCapturedPayload()).toMatchObject({
       config: { thinkingConfig: { thinkingBudget: -1 } },
       thinking: { type: "disabled" },
     });

@@ -57,3 +57,35 @@ export function installProviderRegistryAllowlistMockDefaults(): void {
     );
   });
 }
+
+export function primeBundledProviderAllowlistFallback(params: {
+  contractKey: "imageGenerationProviders" | "mediaUnderstandingProviders";
+  providerId?: string;
+}) {
+  const providerId = params.providerId ?? "openai";
+  const cfg = { plugins: { allow: ["custom-plugin"] } };
+  const compatConfig = {
+    plugins: {
+      allow: ["custom-plugin", providerId],
+      entries: { [providerId]: { enabled: true } },
+    },
+  };
+
+  providerRegistryAllowlistMocks.loadPluginManifestRegistry.mockReturnValue({
+    plugins: [
+      {
+        id: providerId,
+        origin: "bundled",
+        contracts: { [params.contractKey]: [providerId] },
+      },
+    ] as never,
+    diagnostics: [],
+  });
+  providerRegistryAllowlistMocks.withBundledPluginEnablementCompat.mockReturnValue(compatConfig);
+  providerRegistryAllowlistMocks.withBundledPluginVitestCompat.mockReturnValue(compatConfig);
+  providerRegistryAllowlistMocks.resolveRuntimePluginRegistry.mockImplementation(() =>
+    createEmptyProviderRegistryAllowlistFallbackRegistry(),
+  );
+
+  return { cfg, compatConfig, providerId };
+}

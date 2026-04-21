@@ -23,7 +23,7 @@ describe("sandbox explain command", () => {
       },
       tools: {
         sandbox: { tools: { deny: ["browser"] } },
-        elevated: { enabled: true, allowFrom: { whatsapp: ["*"] } },
+        elevated: { enabled: true, allowFrom: { quietchat: ["*"] } },
       },
       session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
     };

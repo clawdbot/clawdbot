@@ -85,7 +85,7 @@ describe("config hooks module paths", () => {
           {
             match: { path: "custom" },
             action: "agent",
-            channel: "feishu",
+            channel: "collabchat",
             messageTemplate: "hello",
           },
         ],

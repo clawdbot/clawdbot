@@ -6,6 +6,7 @@ import {
   hasLegacyFlatAllowPrivateNetworkAlias,
   isPrivateNetworkOptInEnabled,
   isHttpsUrlAllowedByHostnameSuffixAllowlist,
+  mergeSsrFPolicies,
   migrateLegacyFlatAllowPrivateNetworkAlias,
   normalizeHostnameSuffixAllowlist,
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
@@ -127,6 +128,36 @@ describe("ssrfPolicyFromPrivateNetworkOptIn", () => {
     },
   ])("$name", ({ input, expected }) => {
     expect(ssrfPolicyFromPrivateNetworkOptIn(input)).toEqual(expected);
+  });
+});
+
+describe("mergeSsrFPolicies", () => {
+  it("returns undefined when no policy contributes values", () => {
+    expect(mergeSsrFPolicies(undefined, {})).toBeUndefined();
+  });
+
+  it("merges boolean flags and dedupes host allowlists", () => {
+    expect(
+      mergeSsrFPolicies(
+        {
+          allowPrivateNetwork: true,
+          allowedHostnames: ["api.example.com"],
+          hostnameAllowlist: ["downloads.example.com"],
+        },
+        {
+          dangerouslyAllowPrivateNetwork: true,
+          allowRfc2544BenchmarkRange: true,
+          allowedHostnames: ["api.example.com", "cdn.example.com"],
+          hostnameAllowlist: ["downloads.example.com", "assets.example.com"],
+        },
+      ),
+    ).toEqual({
+      allowPrivateNetwork: true,
+      dangerouslyAllowPrivateNetwork: true,
+      allowRfc2544BenchmarkRange: true,
+      allowedHostnames: ["api.example.com", "cdn.example.com"],
+      hostnameAllowlist: ["downloads.example.com", "assets.example.com"],
+    });
   });
 });
 

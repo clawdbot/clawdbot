@@ -197,18 +197,21 @@ describe("msteams messenger", () => {
       serviceUrl: "https://service.example.com",
     };
 
-    async function sendAndCaptureRevokeFallbackReference(
-      conversation: StoredConversationReference["conversation"],
-    ) {
+    async function sendAndCaptureRevokeFallbackReference(params: {
+      conversation: StoredConversationReference["conversation"];
+      activityId?: string;
+      threadId?: string;
+    }) {
       const proactiveSent: string[] = [];
       let capturedReference: unknown;
       const conversationRef: StoredConversationReference = {
-        activityId: "activity456",
+        activityId: params.activityId ?? "activity456",
         user: { id: "user123", name: "User" },
         agent: { id: "bot123", name: "Bot" },
-        conversation,
+        conversation: params.conversation,
         channelId: "msteams",
         serviceUrl: "https://service.example.com",
+        ...(params.threadId ? { threadId: params.threadId } : {}),
       };
       const adapter: MSTeamsAdapter = {
         continueConversation: async (_appId, reference, logic) => {
@@ -512,8 +515,10 @@ describe("msteams messenger", () => {
 
     it("reconstructs threaded conversation ID for channel revoke fallback", async () => {
       const { proactiveSent, reference } = await sendAndCaptureRevokeFallbackReference({
-        id: "19:abc@thread.tacv2;messageid=deadbeef",
-        conversationType: "channel",
+        conversation: {
+          id: "19:abc@thread.tacv2;messageid=deadbeef",
+          conversationType: "channel",
+        },
       });
 
       expect(proactiveSent).toEqual(["hello"]);
@@ -524,8 +529,10 @@ describe("msteams messenger", () => {
 
     it("does not add thread suffix for group chat revoke fallback", async () => {
       const { proactiveSent, reference } = await sendAndCaptureRevokeFallbackReference({
-        id: "19:group123@thread.v2",
-        conversationType: "groupChat",
+        conversation: {
+          id: "19:group123@thread.v2",
+          conversationType: "groupChat",
+        },
       });
 
       expect(proactiveSent).toEqual(["hello"]);
@@ -535,99 +542,35 @@ describe("msteams messenger", () => {
     });
 
     it("uses threadId instead of activityId for channel revoke fallback (#58030)", async () => {
-      const proactiveSent: string[] = [];
-      let capturedReference: unknown;
-
-      const channelRef: StoredConversationReference = {
+      const { proactiveSent, reference } = await sendAndCaptureRevokeFallbackReference({
         activityId: "current-message-id",
-        user: { id: "user123", name: "User" },
-        agent: { id: "bot123", name: "Bot" },
         conversation: {
           id: "19:abc@thread.tacv2",
           conversationType: "channel",
         },
-        channelId: "msteams",
-        serviceUrl: "https://service.example.com",
         // threadId is the thread root, which differs from activityId (current message)
         threadId: "thread-root-msg-id",
-      };
-
-      const ctx = createRevokedThreadContext();
-      const adapter: MSTeamsAdapter = {
-        continueConversation: async (_appId, reference, logic) => {
-          capturedReference = reference;
-          await logic({
-            sendActivity: createRecordedSendActivity(proactiveSent),
-            updateActivity: noopUpdateActivity,
-            deleteActivity: noopDeleteActivity,
-          });
-        },
-        process: async () => {},
-        updateActivity: noopUpdateActivity,
-        deleteActivity: noopDeleteActivity,
-      };
-
-      await sendMSTeamsMessages({
-        replyStyle: "thread",
-        adapter,
-        appId: "app123",
-        conversationRef: channelRef,
-        context: ctx,
-        messages: [{ text: "hello" }],
       });
 
       expect(proactiveSent).toEqual(["hello"]);
-      const ref = capturedReference as { conversation?: { id?: string }; activityId?: string };
       // Should use threadId (thread root), NOT activityId (current message)
-      expect(ref.conversation?.id).toBe("19:abc@thread.tacv2;messageid=thread-root-msg-id");
-      expect(ref.activityId).toBeUndefined();
+      expect(reference.conversation?.id).toBe("19:abc@thread.tacv2;messageid=thread-root-msg-id");
+      expect(reference.activityId).toBeUndefined();
     });
 
     it("falls back to activityId when threadId is not set (backward compat)", async () => {
-      const proactiveSent: string[] = [];
-      let capturedReference: unknown;
-
-      const channelRef: StoredConversationReference = {
+      const { proactiveSent, reference } = await sendAndCaptureRevokeFallbackReference({
         activityId: "legacy-activity-id",
-        user: { id: "user123", name: "User" },
-        agent: { id: "bot123", name: "Bot" },
         conversation: {
           id: "19:abc@thread.tacv2",
           conversationType: "channel",
         },
-        channelId: "msteams",
-        serviceUrl: "https://service.example.com",
         // No threadId — older stored references may not have it
-      };
-
-      const ctx = createRevokedThreadContext();
-      const adapter: MSTeamsAdapter = {
-        continueConversation: async (_appId, reference, logic) => {
-          capturedReference = reference;
-          await logic({
-            sendActivity: createRecordedSendActivity(proactiveSent),
-            updateActivity: noopUpdateActivity,
-            deleteActivity: noopDeleteActivity,
-          });
-        },
-        process: async () => {},
-        updateActivity: noopUpdateActivity,
-        deleteActivity: noopDeleteActivity,
-      };
-
-      await sendMSTeamsMessages({
-        replyStyle: "thread",
-        adapter,
-        appId: "app123",
-        conversationRef: channelRef,
-        context: ctx,
-        messages: [{ text: "hello" }],
       });
 
       expect(proactiveSent).toEqual(["hello"]);
-      const ref = capturedReference as { conversation?: { id?: string } };
       // Falls back to activityId when threadId is missing
-      expect(ref.conversation?.id).toBe("19:abc@thread.tacv2;messageid=legacy-activity-id");
+      expect(reference.conversation?.id).toBe("19:abc@thread.tacv2;messageid=legacy-activity-id");
     });
 
     it("does not add thread suffix for top-level replyStyle even with threadId set", async () => {

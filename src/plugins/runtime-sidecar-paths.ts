@@ -1,6 +1,9 @@
 import bundledRuntimeSidecarPaths from "../../scripts/lib/bundled-runtime-sidecar-paths.json" with { type: "json" };
 
-function assertUniqueValues<T extends string>(values: readonly T[], label: string): readonly T[] {
+export function assertUniqueValues<T extends string>(
+  values: readonly T[],
+  label: string,
+): readonly T[] {
   const seen = new Set<string>();
   const duplicates = new Set<string>();
   for (const value of values) {

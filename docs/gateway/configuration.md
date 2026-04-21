@@ -298,7 +298,7 @@ placeholders such as `***` or shortened token values.
   </Accordion>
 
   <Accordion title="Enable sandboxing">
-    Run agent sessions in isolated Docker containers:
+    Run agent sessions in isolated sandbox runtimes:
 
     ```json5
     {

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { handlePluginsCommand } from "./commands-plugins.js";
-import type { HandleCommandsParams } from "./commands-types.js";
+import { buildPluginsCommandParams } from "./commands.test-harness.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const validateConfigObjectWithPluginsMock = vi.hoisted(() => vi.fn());
@@ -90,39 +90,11 @@ function buildCfg(): OpenClawConfig {
   };
 }
 
-function buildPluginsParams(
-  commandBodyNormalized: string,
-  cfg: OpenClawConfig,
-): HandleCommandsParams {
-  return {
+function buildPluginsParams(commandBodyNormalized: string, cfg: OpenClawConfig) {
+  return buildPluginsCommandParams({
+    commandBodyNormalized,
     cfg,
-    ctx: {
-      Provider: "whatsapp",
-      Surface: "whatsapp",
-      CommandSource: "text",
-      GatewayClientScopes: ["operator.write", "operator.pairing"],
-      AccountId: undefined,
-    },
-    command: {
-      commandBodyNormalized,
-      rawBodyNormalized: commandBodyNormalized,
-      isAuthorizedSender: true,
-      senderIsOwner: true,
-      senderId: "owner",
-      channel: "whatsapp",
-      channelId: "whatsapp",
-      surface: "whatsapp",
-      ownerList: [],
-      from: "test-user",
-      to: "test-bot",
-    },
-    sessionKey: "agent:main:whatsapp:direct:test-user",
-    sessionEntry: {
-      sessionId: "session-plugin-command",
-      updatedAt: Date.now(),
-    },
-    workspaceDir: "/tmp/plugins-workspace",
-  } as unknown as HandleCommandsParams;
+  });
 }
 
 describe("handlePluginsCommand", () => {

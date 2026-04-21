@@ -102,13 +102,13 @@ describe("buildOutboundSessionContext", () => {
     expect(
       buildOutboundSessionContext({
         cfg: {} as never,
-        requesterSenderId: "id:telegram:123",
+        requesterSenderId: "id:forum:123",
         requesterSenderName: "  Alice  ",
         requesterSenderUsername: "  alice_u  ",
         requesterSenderE164: "  +15551234567  ",
       }),
     ).toEqual({
-      requesterSenderId: "id:telegram:123",
+      requesterSenderId: "id:forum:123",
       requesterSenderName: "Alice",
       requesterSenderUsername: "alice_u",
       requesterSenderE164: "+15551234567",

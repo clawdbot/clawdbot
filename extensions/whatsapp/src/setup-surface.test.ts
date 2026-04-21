@@ -65,25 +65,22 @@ vi.mock("openclaw/plugin-sdk/setup", async () => {
 
 vi.mock("./accounts.js", async () => {
   const actual = await vi.importActual<typeof import("./accounts.js")>("./accounts.js");
-  return {
-    ...actual,
+  return Object.assign({}, actual, {
     resolveWhatsAppAuthDir: hoisted.resolveWhatsAppAuthDir,
-  };
+  });
 });
 
 vi.mock("./auth-store.js", async () => {
   const actual = await vi.importActual<typeof import("./auth-store.js")>("./auth-store.js");
-  return {
-    ...actual,
+  return Object.assign({}, actual, {
     readWebAuthState: hoisted.readWebAuthState,
-  };
+  });
 });
 
-function createRuntime(): RuntimeEnv {
-  return {
+const createRuntime = (): RuntimeEnv =>
+  ({
     error: vi.fn(),
-  } as unknown as RuntimeEnv;
-}
+  }) as unknown as RuntimeEnv;
 
 const whatsappGetStatus = createPluginSetupWizardStatus({
   id: "whatsapp",

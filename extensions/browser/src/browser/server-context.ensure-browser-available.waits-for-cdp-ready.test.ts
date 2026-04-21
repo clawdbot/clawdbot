@@ -25,6 +25,27 @@ function setupEnsureBrowserAvailableHarness() {
   return { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile, state };
 }
 
+function createAttachOnlyLoopbackProfile(cdpUrl: string) {
+  const state = makeBrowserServerState({
+    profile: {
+      name: "manual-cdp",
+      cdpUrl,
+      cdpHost: "127.0.0.1",
+      cdpIsLoopback: true,
+      cdpPort: 9222,
+      color: "#00AA00",
+      driver: "openclaw",
+      attachOnly: true,
+    },
+    resolvedOverrides: {
+      defaultProfile: "manual-cdp",
+      ssrfPolicy: {},
+    },
+  });
+  const ctx = createBrowserRouteContext({ getState: () => state });
+  return { profile: ctx.forProfile("manual-cdp"), state };
+}
+
 afterEach(() => {
   vi.useRealTimers();
   vi.clearAllMocks();
@@ -142,24 +163,7 @@ describe("browser server-context ensureBrowserAvailable", () => {
     const isChromeReachable = vi.mocked(chromeModule.isChromeReachable);
     const isChromeCdpReady = vi.mocked(chromeModule.isChromeCdpReady);
 
-    const state = makeBrowserServerState({
-      profile: {
-        name: "manual-cdp",
-        cdpUrl: "http://127.0.0.1:9222",
-        cdpHost: "127.0.0.1",
-        cdpIsLoopback: true,
-        cdpPort: 9222,
-        color: "#00AA00",
-        driver: "openclaw",
-        attachOnly: true,
-      },
-      resolvedOverrides: {
-        defaultProfile: "manual-cdp",
-        ssrfPolicy: {},
-      },
-    });
-    const ctx = createBrowserRouteContext({ getState: () => state });
-    const profile = ctx.forProfile("manual-cdp");
+    const { profile, state } = createAttachOnlyLoopbackProfile("http://127.0.0.1:9222");
 
     isChromeReachable.mockResolvedValueOnce(true);
     isChromeCdpReady.mockResolvedValueOnce(true);
@@ -195,24 +199,7 @@ describe("browser server-context ensureBrowserAvailable", () => {
     const isChromeReachable = vi.mocked(chromeModule.isChromeReachable);
     const isChromeCdpReady = vi.mocked(chromeModule.isChromeCdpReady);
 
-    const state = makeBrowserServerState({
-      profile: {
-        name: "manual-cdp",
-        cdpUrl: "ws://127.0.0.1:9222",
-        cdpHost: "127.0.0.1",
-        cdpIsLoopback: true,
-        cdpPort: 9222,
-        color: "#00AA00",
-        driver: "openclaw",
-        attachOnly: true,
-      },
-      resolvedOverrides: {
-        defaultProfile: "manual-cdp",
-        ssrfPolicy: {},
-      },
-    });
-    const ctx = createBrowserRouteContext({ getState: () => state });
-    const profile = ctx.forProfile("manual-cdp");
+    const { profile, state } = createAttachOnlyLoopbackProfile("ws://127.0.0.1:9222");
 
     isChromeReachable.mockResolvedValueOnce(true);
     isChromeCdpReady.mockResolvedValueOnce(true);

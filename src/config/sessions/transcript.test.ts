@@ -12,6 +12,9 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   const fixture = useTempSessionsFixture("transcript-test-");
   const sessionId = "test-session-id";
   const sessionKey = "test-session";
+  type ExactAssistantMessage = Parameters<
+    typeof appendExactAssistantMessageToSessionTranscript
+  >[0]["message"];
 
   function writeTranscriptStore() {
     fs.writeFileSync(
@@ -25,6 +28,31 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       }),
       "utf-8",
     );
+  }
+
+  function createExactAssistantMessage(params: {
+    text?: string;
+    content?: ExactAssistantMessage["content"];
+    provider?: string;
+    model?: string;
+  }): ExactAssistantMessage {
+    return {
+      role: "assistant",
+      content: params.content ?? [{ type: "text", text: params.text ?? "" }],
+      api: "openai-responses",
+      provider: params.provider ?? "codex",
+      model: params.model ?? "gpt-5.4",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
   }
 
   it("creates transcript file and appends message for valid session", async () => {
@@ -124,23 +152,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const exactResult = await appendExactAssistantMessageToSessionTranscript({
       sessionKey,
       storePath: fixture.storePath(),
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Hello from Codex!" }],
-        api: "openai-responses",
-        provider: "codex",
-        model: "gpt-5.4",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "stop",
-        timestamp: Date.now(),
-      },
+      message: createExactAssistantMessage({ text: "Hello from Codex!" }),
     });
 
     expect(exactResult.ok).toBe(true);
@@ -170,45 +182,13 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const olderResult = await appendExactAssistantMessageToSessionTranscript({
       sessionKey,
       storePath: fixture.storePath(),
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Repeated answer" }],
-        api: "openai-responses",
-        provider: "codex",
-        model: "gpt-5.4",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "stop",
-        timestamp: Date.now(),
-      },
+      message: createExactAssistantMessage({ text: "Repeated answer" }),
     });
 
     const latestResult = await appendExactAssistantMessageToSessionTranscript({
       sessionKey,
       storePath: fixture.storePath(),
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Different latest answer" }],
-        api: "openai-responses",
-        provider: "codex",
-        model: "gpt-5.4",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "stop",
-        timestamp: Date.now(),
-      },
+      message: createExactAssistantMessage({ text: "Different latest answer" }),
     });
 
     const mirrorResult = await appendAssistantMessageToSessionTranscript({
@@ -319,8 +299,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const result = await appendExactAssistantMessageToSessionTranscript({
       sessionKey,
       storePath: fixture.storePath(),
-      message: {
-        role: "assistant",
+      message: createExactAssistantMessage({
         content: [
           {
             type: "text",
@@ -333,20 +312,9 @@ describe("appendAssistantMessageToSessionTranscript", () => {
             textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
           },
         ],
-        api: "openai-responses",
         provider: "openclaw",
         model: "delivery-mirror",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "stop",
-        timestamp: Date.now(),
-      },
+      }),
     });
 
     expect(result.ok).toBe(true);
@@ -376,23 +344,11 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       sessionKey,
       storePath: fixture.storePath(),
       updateMode: "file-only",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Done." }],
-        api: "openai-responses",
+      message: createExactAssistantMessage({
+        text: "Done.",
         provider: "openclaw",
         model: "delivery-mirror",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "stop",
-        timestamp: Date.now(),
-      },
+      }),
     });
 
     expect(result.ok).toBe(true);

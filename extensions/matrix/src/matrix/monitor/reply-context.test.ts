@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createMatrixReplyContextResolver, summarizeMatrixReplyEvent } from "./reply-context.js";
+import { createPollStartEvent } from "./test-events.js";
 import type { MatrixRawEvent } from "./types.js";
 
 describe("matrix reply context", () => {
@@ -51,25 +52,9 @@ describe("matrix reply context", () => {
   });
 
   it("summarizes poll start events from poll content", () => {
-    expect(
-      summarizeMatrixReplyEvent({
-        event_id: "$poll",
-        sender: "@alice:example.org",
-        type: "m.poll.start",
-        origin_server_ts: Date.now(),
-        content: {
-          "m.poll.start": {
-            question: { "m.text": "Lunch?" },
-            kind: "m.poll.disclosed",
-            max_selections: 1,
-            answers: [
-              { id: "a1", "m.text": "Pizza" },
-              { id: "a2", "m.text": "Sushi" },
-            ],
-          },
-        },
-      } as MatrixRawEvent),
-    ).toBe("[Poll]\nLunch?\n\n1. Pizza\n2. Sushi");
+    expect(summarizeMatrixReplyEvent(createPollStartEvent("$poll"))).toBe(
+      "[Poll]\nLunch?\n\n1. Pizza\n2. Sushi",
+    );
   });
 
   it("resolves and caches reply context", async () => {

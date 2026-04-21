@@ -1,14 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildSubagentsDispatchContext } from "./commands-subagents-send-steer.test-support.js";
+import {
+  buildSubagentsDispatchContext,
+  subagentControlMocks,
+} from "./commands-subagents-send-steer.test-support.js";
 import { handleSubagentsSendAction } from "./commands-subagents/action-send.js";
-
-const sendControlledSubagentMessageMock = vi.hoisted(() => vi.fn());
-const steerControlledSubagentRunMock = vi.hoisted(() => vi.fn());
-
-vi.mock("./commands-subagents-control.runtime.js", () => ({
-  sendControlledSubagentMessage: sendControlledSubagentMessageMock,
-  steerControlledSubagentRun: steerControlledSubagentRunMock,
-}));
 
 const buildContext = () =>
   buildSubagentsDispatchContext({
@@ -22,7 +17,7 @@ describe("subagents send action", () => {
   });
 
   it("formats accepted send replies", async () => {
-    sendControlledSubagentMessageMock.mockResolvedValue({
+    subagentControlMocks.sendControlledSubagentMessage.mockResolvedValue({
       status: "accepted",
       runId: "run-followup-1",
       replyText: "custom reply",
@@ -35,7 +30,7 @@ describe("subagents send action", () => {
   });
 
   it("formats forbidden send replies", async () => {
-    sendControlledSubagentMessageMock.mockResolvedValue({
+    subagentControlMocks.sendControlledSubagentMessage.mockResolvedValue({
       status: "forbidden",
       error: "Leaf subagents cannot control other sessions.",
     });

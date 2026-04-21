@@ -35,6 +35,11 @@ type CapturedResponse = {
   body: string;
 };
 
+type HttpRequestHandler = (
+  req: IncomingMessage,
+  res: import("node:http").ServerResponse,
+) => boolean | Promise<boolean>;
+
 function createMockWatcherState() {
   const watchers: MockWatcher[] = [];
   const createWatcher = () => {
@@ -62,8 +67,8 @@ function createMockWatcherState() {
   };
 }
 
-async function captureHandlerResponse(
-  handler: Pick<import("./server.js").CanvasHostHandler, "handleHttpRequest">,
+async function captureHttpResponse(
+  handleRequest: HttpRequestHandler,
   url: string,
   method = "GET",
 ): Promise<CapturedResponse> {
@@ -87,7 +92,7 @@ async function captureHandlerResponse(
       return this;
     },
   };
-  response.handled = await handler.handleHttpRequest(
+  response.handled = await handleRequest(
     { method, url } as IncomingMessage,
     res as import("node:http").ServerResponse,
   );
@@ -95,33 +100,16 @@ async function captureHandlerResponse(
   return response;
 }
 
+async function captureHandlerResponse(
+  handler: Pick<import("./server.js").CanvasHostHandler, "handleHttpRequest">,
+  url: string,
+  method = "GET",
+): Promise<CapturedResponse> {
+  return await captureHttpResponse(handler.handleHttpRequest, url, method);
+}
+
 async function captureA2uiResponse(url: string, method = "GET"): Promise<CapturedResponse> {
-  const response: CapturedResponse = {
-    handled: false,
-    status: 200,
-    headers: {},
-    body: "",
-  };
-  const res = {
-    statusCode: 200,
-    setHeader(name: string, value: number | string | readonly string[]) {
-      const headerValue: number | string | string[] =
-        typeof value === "object" ? [...value] : value;
-      response.headers[name.toLowerCase()] = headerValue;
-      return this;
-    },
-    end(chunk?: string | Buffer) {
-      response.status = this.statusCode;
-      response.body = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : (chunk ?? "");
-      return this;
-    },
-  };
-  response.handled = await handleA2uiHttpRequest(
-    { method, url } as IncomingMessage,
-    res as import("node:http").ServerResponse,
-  );
-  response.status = res.statusCode;
-  return response;
+  return await captureHttpResponse(handleA2uiHttpRequest, url, method);
 }
 
 describe("canvas host", () => {
@@ -141,6 +129,22 @@ describe("canvas host", () => {
     await fs.mkdir(dir, { recursive: true });
     return dir;
   };
+
+  const createTestCanvasHostHandler = async (
+    rootDir: string,
+    options: Partial<Parameters<typeof createCanvasHostHandler>[0]> = {},
+  ) =>
+    await createCanvasHostHandler({
+      runtime: quietRuntime,
+      rootDir,
+      basePath: CANVAS_HOST_PATH,
+      allowInTests: true,
+      watchFactory: watcherState.watchFactory as unknown as Parameters<
+        typeof createCanvasHostHandler
+      >[0]["watchFactory"],
+      webSocketServerClass: WebSocketServerClass,
+      ...options,
+    });
 
   beforeAll(async () => {
     vi.doUnmock("undici");
@@ -170,16 +174,7 @@ describe("canvas host", () => {
 
   it("creates a default index.html when missing", async () => {
     const dir = await createCaseDir();
-    const handler = await createCanvasHostHandler({
-      runtime: quietRuntime,
-      rootDir: dir,
-      basePath: CANVAS_HOST_PATH,
-      allowInTests: true,
-      watchFactory: watcherState.watchFactory as unknown as Parameters<
-        typeof createCanvasHostHandler
-      >[0]["watchFactory"],
-      webSocketServerClass: WebSocketServerClass,
-    });
+    const handler = await createTestCanvasHostHandler(dir);
 
     try {
       const response = await captureHandlerResponse(handler, `${CANVAS_HOST_PATH}/`);
@@ -197,17 +192,7 @@ describe("canvas host", () => {
   it("skips live reload injection when disabled", async () => {
     const dir = await createCaseDir();
     await fs.writeFile(path.join(dir, "index.html"), "<html><body>no-reload</body></html>", "utf8");
-    const handler = await createCanvasHostHandler({
-      runtime: quietRuntime,
-      rootDir: dir,
-      basePath: CANVAS_HOST_PATH,
-      allowInTests: true,
-      liveReload: false,
-      watchFactory: watcherState.watchFactory as unknown as Parameters<
-        typeof createCanvasHostHandler
-      >[0]["watchFactory"],
-      webSocketServerClass: WebSocketServerClass,
-    });
+    const handler = await createTestCanvasHostHandler(dir, { liveReload: false });
 
     try {
       const response = await captureHandlerResponse(handler, `${CANVAS_HOST_PATH}/`);
@@ -226,16 +211,7 @@ describe("canvas host", () => {
     const dir = await createCaseDir();
     await fs.writeFile(path.join(dir, "index.html"), "<html><body>v1</body></html>", "utf8");
 
-    const handler = await createCanvasHostHandler({
-      runtime: quietRuntime,
-      rootDir: dir,
-      basePath: CANVAS_HOST_PATH,
-      allowInTests: true,
-      watchFactory: watcherState.watchFactory as unknown as Parameters<
-        typeof createCanvasHostHandler
-      >[0]["watchFactory"],
-      webSocketServerClass: WebSocketServerClass,
-    });
+    const handler = await createTestCanvasHostHandler(dir);
 
     const originalClose = handler.close;
     const closeSpy = vi.fn(async () => originalClose());
@@ -335,14 +311,7 @@ describe("canvas host", () => {
         }
       };
 
-      const handler = await createCanvasHostHandler({
-        runtime: quietRuntime,
-        rootDir: dir,
-        basePath: CANVAS_HOST_PATH,
-        allowInTests: true,
-        watchFactory: watcherState.watchFactory as unknown as Parameters<
-          typeof createCanvasHostHandler
-        >[0]["watchFactory"],
+      const handler = await createTestCanvasHostHandler(dir, {
         webSocketServerClass:
           TrackingWebSocketServerClass as unknown as typeof import("ws").WebSocketServer,
       });

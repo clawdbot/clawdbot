@@ -86,6 +86,7 @@ describe("runQaManualLane", () => {
       alternateModel: "mock-openai/gpt-5.4-alt",
       message: "check the kickoff file",
       timeoutMs: 5_000,
+      replySettleMs: 0,
     });
 
     expect(startQaProviderServer).toHaveBeenCalledWith("mock-openai");
@@ -114,6 +115,7 @@ describe("runQaManualLane", () => {
       alternateModel: "openai/gpt-5.4",
       message: "check the kickoff file",
       timeoutMs: 5_000,
+      replySettleMs: 0,
     });
 
     expect(startQaProviderServer).toHaveBeenCalledWith("live-frontier");

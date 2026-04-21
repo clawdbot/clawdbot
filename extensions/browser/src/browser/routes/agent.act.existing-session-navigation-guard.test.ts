@@ -97,6 +97,10 @@ describe("existing-session interaction navigation guard", () => {
   }
 
   async function expectActionToReject(body: Record<string, unknown>) {
+    await expectActionToThrow(body, "Unable to verify stable post-interaction navigation");
+  }
+
+  async function expectActionToThrow(body: Record<string, unknown>, message: string) {
     const handler = getActPostHandler();
     const response = createBrowserRouteResponse();
     const pending = handler?.({ params: {}, query: {}, body }, response.res) ?? Promise.resolve();
@@ -106,7 +110,7 @@ describe("existing-session interaction navigation guard", () => {
       await pending;
     })();
 
-    await expect(completion).rejects.toThrow("Unable to verify stable post-interaction navigation");
+    await expect(completion).rejects.toThrow(message);
   }
 
   function expectNavigationProbeUrls(urls: string[]) {
@@ -215,18 +219,7 @@ describe("existing-session interaction navigation guard", () => {
       },
     );
 
-    const handler = getActPostHandler();
-    const response = createBrowserRouteResponse();
-    const pending =
-      handler?.({ params: {}, query: {}, body: { kind: "click", ref: "btn-1" } }, response.res) ??
-      Promise.resolve();
-    void pending.catch(() => {});
-    const completion = (async () => {
-      await vi.runAllTimersAsync();
-      await pending;
-    })();
-
-    await expect(completion).rejects.toThrow("blocked new tab");
+    await expectActionToThrow({ kind: "click", ref: "btn-1" }, "blocked new tab");
     expect(chromeMcpMocks.clickChromeMcpElement).toHaveBeenCalledOnce();
   });
 
@@ -338,18 +331,7 @@ describe("existing-session interaction navigation guard", () => {
       throw new Error("stale element");
     });
 
-    const handler = getActPostHandler();
-    const response = createBrowserRouteResponse();
-    const pending =
-      handler?.({ params: {}, query: {}, body: { kind: "click", ref: "btn-1" } }, response.res) ??
-      Promise.resolve();
-    void pending.catch(() => {});
-    const completion = (async () => {
-      await vi.runAllTimersAsync();
-      await pending;
-    })();
-
-    await expect(completion).rejects.toThrow("stale element");
+    await expectActionToThrow({ kind: "click", ref: "btn-1" }, "stale element");
     expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalled();
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalled();
   });

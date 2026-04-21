@@ -29,7 +29,7 @@ describe("execSchtasks", () => {
     });
     expect(runCommandWithTimeout).toHaveBeenCalledWith(["schtasks", "/Query"], {
       timeoutMs: 15_000,
-      noOutputTimeoutMs: 5_000,
+      noOutputTimeoutMs: 30_000,
     });
   });
 

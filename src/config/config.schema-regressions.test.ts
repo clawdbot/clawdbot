@@ -1,126 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./validation.js";
-import {
-  BlueBubblesConfigSchema,
-  IMessageConfigSchema,
-  SignalConfigSchema,
-  TelegramConfigSchema,
-} from "./zod-schema.providers-core.js";
-import { WhatsAppConfigSchema } from "./zod-schema.providers-whatsapp.js";
 
 describe("config schema regressions", () => {
-  it("accepts nested telegram groupPolicy overrides", () => {
-    const res = TelegramConfigSchema.safeParse({
-      groups: {
-        "-1001234567890": {
-          groupPolicy: "open",
-          topics: {
-            "42": {
-              groupPolicy: "disabled",
-            },
-          },
-        },
-      },
-    });
-
-    expect(res.success).toBe(true);
-  });
-
-  it("accepts telegram actions editMessage and createForumTopic", () => {
-    const res = TelegramConfigSchema.safeParse({
-      actions: {
-        editMessage: true,
-        createForumTopic: false,
-      },
-    });
-
-    expect(res.success).toBe(true);
-  });
-
-  it("accepts channels.whatsapp.enabled", () => {
-    const res = WhatsAppConfigSchema.safeParse({
-      enabled: true,
-    });
-
-    expect(res.success).toBe(true);
-  });
-
-  it("keeps inherited WhatsApp account defaults unset at account scope", () => {
-    const res = WhatsAppConfigSchema.safeParse({
-      dmPolicy: "allowlist",
-      groupPolicy: "open",
-      debounceMs: 250,
-      allowFrom: ["+15550001111"],
-      accounts: {
-        work: {
-          allowFrom: ["+15550002222"],
-        },
-      },
-    });
-
-    expect(res.success).toBe(true);
-    if (!res.success) {
-      return;
-    }
-    expect(res.data.dmPolicy).toBe("allowlist");
-    expect(res.data.groupPolicy).toBe("open");
-    expect(res.data.debounceMs).toBe(250);
-    expect(res.data.accounts?.work?.dmPolicy).toBeUndefined();
-    expect(res.data.accounts?.work?.groupPolicy).toBeUndefined();
-    expect(res.data.accounts?.work?.debounceMs).toBeUndefined();
-  });
-
-  it("accepts WhatsApp allowlist accounts inheriting allowFrom from accounts.default", () => {
-    const res = WhatsAppConfigSchema.safeParse({
-      accounts: {
-        default: {
-          allowFrom: ["+15550001111"],
-        },
-        work: {
-          dmPolicy: "allowlist",
-        },
-      },
-    });
-
-    expect(res.success).toBe(true);
-  });
-
-  it("accepts WhatsApp allowlist accounts inheriting allowFrom from mixed-case accounts.Default", () => {
-    const res = WhatsAppConfigSchema.safeParse({
-      accounts: {
-        Default: {
-          allowFrom: ["+15550001111"],
-        },
-        work: {
-          dmPolicy: "allowlist",
-        },
-      },
-    });
-
-    expect(res.success).toBe(true);
-  });
-
-  it("accepts signal accountUuid for loop protection", () => {
-    const res = SignalConfigSchema.safeParse({
-      accountUuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-    });
-
-    expect(res.success).toBe(true);
-  });
-
-  it("accepts BlueBubbles enrichGroupParticipantsFromContacts at channel and account scope", () => {
-    const res = BlueBubblesConfigSchema.safeParse({
-      enrichGroupParticipantsFromContacts: true,
-      accounts: {
-        work: {
-          enrichGroupParticipantsFromContacts: false,
-        },
-      },
-    });
-
-    expect(res.success).toBe(true);
-  });
-
   it('accepts memorySearch fallback "voyage"', () => {
     const res = validateConfigObject({
       agents: {
@@ -264,34 +145,6 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("accepts safe iMessage remoteHost", () => {
-    const res = IMessageConfigSchema.safeParse({
-      remoteHost: "bot@gateway-host",
-    });
-
-    expect(res.success).toBe(true);
-  });
-
-  it("rejects unsafe iMessage remoteHost", () => {
-    const res = IMessageConfigSchema.safeParse({
-      remoteHost: "bot@gateway-host -oProxyCommand=whoami",
-    });
-
-    expect(res.success).toBe(false);
-    if (!res.success) {
-      expect(res.error.issues[0]?.path.join(".")).toBe("remoteHost");
-    }
-  });
-
-  it("accepts iMessage attachment root patterns", () => {
-    const res = IMessageConfigSchema.safeParse({
-      attachmentRoots: ["/Users/*/Library/Messages/Attachments"],
-      remoteAttachmentRoots: ["/Volumes/relay/attachments"],
-    });
-
-    expect(res.success).toBe(true);
-  });
-
   it("accepts string values for agents defaults model inputs", () => {
     const res = validateConfigObject({
       agents: {
@@ -336,17 +189,6 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(false);
     if (!res.ok) {
       expect(res.issues.some((issue) => issue.path.includes("agents.defaults.pdfMax"))).toBe(true);
-    }
-  });
-
-  it("rejects relative iMessage attachment roots", () => {
-    const res = IMessageConfigSchema.safeParse({
-      attachmentRoots: ["./attachments"],
-    });
-
-    expect(res.success).toBe(false);
-    if (!res.success) {
-      expect(res.error.issues[0]?.path.join(".")).toBe("attachmentRoots.0");
     }
   });
 

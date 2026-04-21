@@ -65,7 +65,7 @@
           "approvalPolicy": {
             "type": "string",
             "enum": ["never", "on-request", "on-failure", "untrusted"],
-            "default": "never"
+            "default": "on-request"
           },
           "sandbox": {
             "type": "string",

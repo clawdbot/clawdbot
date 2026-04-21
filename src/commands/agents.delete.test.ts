@@ -29,6 +29,38 @@ import { agentsDeleteCommand } from "./agents.js";
 
 const runtime = createTestRuntime();
 
+async function arrangeAgentsDeleteTest(params: {
+  stateDir: string;
+  cfg: OpenClawConfig;
+  deletedAgentId?: string;
+  sessions: Record<string, { sessionId: string; updatedAt: number }>;
+}) {
+  const deletedAgentId = params.deletedAgentId ?? "ops";
+  const storePath = resolveStorePath(params.cfg.session?.store, { agentId: deletedAgentId });
+  await saveSessionStore(storePath, params.sessions);
+  await fs.mkdir(path.join(params.stateDir, `workspace-${deletedAgentId}`), { recursive: true });
+  await fs.mkdir(path.join(params.stateDir, "agents", deletedAgentId, "agent"), {
+    recursive: true,
+  });
+
+  configMocks.readConfigFileSnapshot.mockResolvedValue({
+    ...baseConfigSnapshot,
+    config: params.cfg,
+    runtimeConfig: params.cfg,
+    sourceConfig: params.cfg,
+    resolved: params.cfg,
+  });
+
+  return storePath;
+}
+
+function expectSessionStore(
+  storePath: string,
+  sessions: Record<string, { sessionId: string; updatedAt: number }>,
+) {
+  expect(loadSessionStore(storePath, { skipCache: true })).toEqual(sessions);
+}
+
 describe("agents delete command", () => {
   beforeEach(() => {
     configMocks.readConfigFileSnapshot.mockReset();
@@ -41,6 +73,7 @@ describe("agents delete command", () => {
 
   it("purges deleted agent entries from the session store", async () => {
     await withStateDirEnv("openclaw-agents-delete-", async ({ stateDir }) => {
+      const now = Date.now();
       const cfg: OpenClawConfig = {
         agents: {
           list: [
@@ -49,21 +82,14 @@ describe("agents delete command", () => {
           ],
         },
       } satisfies OpenClawConfig;
-      const storePath = resolveStorePath(cfg.session?.store, { agentId: "ops" });
-      await saveSessionStore(storePath, {
-        "agent:ops:main": { sessionId: "sess-ops-main", updatedAt: 1 },
-        "agent:ops:discord:direct:u1": { sessionId: "sess-ops-direct", updatedAt: 2 },
-        "agent:main:main": { sessionId: "sess-main", updatedAt: 3 },
-      });
-      await fs.mkdir(path.join(stateDir, "workspace-ops"), { recursive: true });
-      await fs.mkdir(path.join(stateDir, "agents", "ops", "agent"), { recursive: true });
-
-      configMocks.readConfigFileSnapshot.mockResolvedValue({
-        ...baseConfigSnapshot,
-        config: cfg,
-        runtimeConfig: cfg,
-        sourceConfig: cfg,
-        resolved: cfg,
+      const storePath = await arrangeAgentsDeleteTest({
+        stateDir,
+        cfg,
+        sessions: {
+          "agent:ops:main": { sessionId: "sess-ops-main", updatedAt: now + 1 },
+          "agent:ops:quietchat:direct:u1": { sessionId: "sess-ops-direct", updatedAt: now + 2 },
+          "agent:main:main": { sessionId: "sess-main", updatedAt: now + 3 },
+        },
       });
 
       await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
@@ -76,49 +102,50 @@ describe("agents delete command", () => {
           },
         }),
       );
-      expect(loadSessionStore(storePath, { skipCache: true })).toEqual({
-        "agent:main:main": { sessionId: "sess-main", updatedAt: 3 },
+      expectSessionStore(storePath, {
+        "agent:main:main": { sessionId: "sess-main", updatedAt: now + 3 },
       });
     });
   });
 
   it("purges legacy main-alias entries owned by the deleted default agent", async () => {
     await withStateDirEnv("openclaw-agents-delete-main-alias-", async ({ stateDir }) => {
+      const now = Date.now();
       const cfg: OpenClawConfig = {
         agents: {
           list: [{ id: "ops", default: true, workspace: path.join(stateDir, "workspace-ops") }],
         },
       };
-      const storePath = resolveStorePath(cfg.session?.store, { agentId: "ops" });
-      await saveSessionStore(storePath, {
-        "agent:main:main": { sessionId: "sess-default-alias", updatedAt: 1 },
-        "agent:ops:discord:direct:u1": { sessionId: "sess-ops-direct", updatedAt: 2 },
-        "agent:main:discord:direct:u2": { sessionId: "sess-stale-main", updatedAt: 3 },
-        global: { sessionId: "sess-global", updatedAt: 4 },
-      });
-      await fs.mkdir(path.join(stateDir, "workspace-ops"), { recursive: true });
-      await fs.mkdir(path.join(stateDir, "agents", "ops", "agent"), { recursive: true });
-
-      configMocks.readConfigFileSnapshot.mockResolvedValue({
-        ...baseConfigSnapshot,
-        config: cfg,
-        runtimeConfig: cfg,
-        sourceConfig: cfg,
-        resolved: cfg,
+      const storePath = await arrangeAgentsDeleteTest({
+        stateDir,
+        cfg,
+        sessions: {
+          "agent:main:main": { sessionId: "sess-default-alias", updatedAt: now + 1 },
+          "agent:ops:quietchat:direct:u1": { sessionId: "sess-ops-direct", updatedAt: now + 2 },
+          "agent:main:quietchat:direct:u2": {
+            sessionId: "sess-stale-main",
+            updatedAt: now + 3,
+          },
+          global: { sessionId: "sess-global", updatedAt: now + 4 },
+        },
       });
 
       await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
 
       expect(runtime.exit).not.toHaveBeenCalled();
-      expect(loadSessionStore(storePath, { skipCache: true })).toEqual({
-        "agent:main:discord:direct:u2": { sessionId: "sess-stale-main", updatedAt: 3 },
-        global: { sessionId: "sess-global", updatedAt: 4 },
+      expectSessionStore(storePath, {
+        "agent:main:quietchat:direct:u2": {
+          sessionId: "sess-stale-main",
+          updatedAt: now + 3,
+        },
+        global: { sessionId: "sess-global", updatedAt: now + 4 },
       });
     });
   });
 
   it("preserves shared-store legacy default keys when deleting another agent", async () => {
     await withStateDirEnv("openclaw-agents-delete-shared-store-", async ({ stateDir }) => {
+      const now = Date.now();
       const cfg: OpenClawConfig = {
         session: { store: path.join(stateDir, "sessions.json") },
         agents: {
@@ -128,30 +155,23 @@ describe("agents delete command", () => {
           ],
         },
       };
-      const storePath = resolveStorePath(cfg.session?.store, { agentId: "ops" });
-      await saveSessionStore(storePath, {
-        main: { sessionId: "sess-main", updatedAt: 1 },
-        "discord:direct:u1": { sessionId: "sess-main-direct", updatedAt: 2 },
-        "agent:ops:main": { sessionId: "sess-ops-main", updatedAt: 3 },
-        "agent:ops:discord:direct:u2": { sessionId: "sess-ops-direct", updatedAt: 4 },
-      });
-      await fs.mkdir(path.join(stateDir, "workspace-ops"), { recursive: true });
-      await fs.mkdir(path.join(stateDir, "agents", "ops", "agent"), { recursive: true });
-
-      configMocks.readConfigFileSnapshot.mockResolvedValue({
-        ...baseConfigSnapshot,
-        config: cfg,
-        runtimeConfig: cfg,
-        sourceConfig: cfg,
-        resolved: cfg,
+      const storePath = await arrangeAgentsDeleteTest({
+        stateDir,
+        cfg,
+        sessions: {
+          main: { sessionId: "sess-main", updatedAt: now + 1 },
+          "quietchat:direct:u1": { sessionId: "sess-main-direct", updatedAt: now + 2 },
+          "agent:ops:main": { sessionId: "sess-ops-main", updatedAt: now + 3 },
+          "agent:ops:quietchat:direct:u2": { sessionId: "sess-ops-direct", updatedAt: now + 4 },
+        },
       });
 
       await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
 
       expect(runtime.exit).not.toHaveBeenCalled();
-      expect(loadSessionStore(storePath, { skipCache: true })).toEqual({
-        main: { sessionId: "sess-main", updatedAt: 1 },
-        "discord:direct:u1": { sessionId: "sess-main-direct", updatedAt: 2 },
+      expectSessionStore(storePath, {
+        main: { sessionId: "sess-main", updatedAt: now + 1 },
+        "quietchat:direct:u1": { sessionId: "sess-main-direct", updatedAt: now + 2 },
       });
     });
   });

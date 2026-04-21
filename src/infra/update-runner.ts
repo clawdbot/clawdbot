@@ -503,6 +503,10 @@ function mergeCommandEnvironments(
   };
 }
 
+function shouldRunDevPreflightLint(): boolean {
+  return process.platform !== "win32";
+}
+
 export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<UpdateRunResult> {
   const startedAt = Date.now();
   const defaultCommandEnv = await createGlobalInstallEnv();
@@ -885,17 +889,19 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             continue;
           }
 
-          const lintStep = await runStep(
-            step(
-              `preflight lint (${shortSha})`,
-              managerScriptArgs(manager.manager, "lint"),
-              worktreeDir,
-              manager.env,
-            ),
-          );
-          steps.push(lintStep);
-          if (lintStep.exitCode !== 0) {
-            continue;
+          if (shouldRunDevPreflightLint()) {
+            const lintStep = await runStep(
+              step(
+                `preflight lint (${shortSha})`,
+                managerScriptArgs(manager.manager, "lint"),
+                worktreeDir,
+                manager.env,
+              ),
+            );
+            steps.push(lintStep);
+            if (lintStep.exitCode !== 0) {
+              continue;
+            }
           }
 
           selectedSha = sha;

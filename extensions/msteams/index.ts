@@ -6,7 +6,7 @@ export default defineBundledChannelEntry({
   description: "Microsoft Teams channel plugin (Bot Framework)",
   importMetaUrl: import.meta.url,
   plugin: {
-    specifier: "./api.js",
+    specifier: "./channel-plugin-api.js",
     exportName: "msteamsPlugin",
   },
   secrets: {

@@ -327,7 +327,7 @@ Surface different features that extend the above defaults.
       {
         "command": "/think",
         "description": "Set the thinking level",
-        "usage_hint": "<off|minimal|low|medium|high|xhigh>"
+        "usage_hint": "<level>"
       },
       {
         "command": "/verbose",
@@ -448,7 +448,7 @@ Surface different features that extend the above defaults.
       {
         "command": "/think",
         "description": "Set the thinking level",
-        "usage_hint": "<off|minimal|low|medium|high|xhigh>",
+        "usage_hint": "<level>",
         "url": "https://gateway-host.example.com/slack/events"
       },
       {

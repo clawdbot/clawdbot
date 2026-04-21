@@ -83,6 +83,13 @@ describe("detectImageReferences", () => {
     expect(refs.some((r) => r.type === "path")).toBe(true);
   });
 
+  it("does not leak parser state between calls", () => {
+    expectSingleImageReference("[media attached: /tmp/first.png (image/png)]");
+    expectSingleImageReference("[Image: source: /tmp/second.jpg]");
+    expectSingleImageReference("See file:///tmp/third.webp");
+    expectSingleImageReference("See ./fourth.jpeg");
+  });
+
   it("handles various image extensions", () => {
     const extensions = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "heic"];
     for (const ext of extensions) {

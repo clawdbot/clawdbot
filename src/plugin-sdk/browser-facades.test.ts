@@ -1,4 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  expectBrowserHostInspectionDelegation,
+  expectBrowserHostInspectionFacadeUnavailable,
+  mockBrowserHostInspectionFacade,
+} from "./browser-facade-test-helpers.js";
 
 const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
 
@@ -105,36 +110,18 @@ describe("plugin-sdk browser facades", () => {
       kind: "chrome",
       path: "/usr/bin/google-chrome",
     };
-
-    const resolveGoogleChromeExecutableForPlatform = vi.fn().mockReturnValue(executable);
-    const readBrowserVersion = vi.fn().mockReturnValue("Google Chrome 144.0.7534.0");
-    const parseBrowserMajorVersion = vi.fn().mockReturnValue(144);
-    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
-      resolveGoogleChromeExecutableForPlatform,
-      readBrowserVersion,
-      parseBrowserMajorVersion,
-    });
+    mockBrowserHostInspectionFacade(loadBundledPluginPublicSurfaceModuleSync, executable);
 
     const hostInspection = await import("./browser-host-inspection.js");
 
-    expect(hostInspection.resolveGoogleChromeExecutableForPlatform("linux")).toEqual(executable);
-    expect(hostInspection.readBrowserVersion(executable.path)).toBe("Google Chrome 144.0.7534.0");
-    expect(hostInspection.parseBrowserMajorVersion("Google Chrome 144.0.7534.0")).toBe(144);
-    expect(loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
-      dirName: "browser",
-      artifactBasename: "browser-host-inspection.js",
+    expectBrowserHostInspectionDelegation({
+      executable,
+      hostInspection,
+      loadBundledPluginPublicSurfaceModuleSync,
     });
   });
 
   it("hard-fails when browser host inspection facade is unavailable", async () => {
-    loadBundledPluginPublicSurfaceModuleSync.mockImplementation(() => {
-      throw new Error("missing browser host inspection facade");
-    });
-
-    const hostInspection = await import("./browser-host-inspection.js");
-
-    expect(() => hostInspection.resolveGoogleChromeExecutableForPlatform("linux")).toThrow(
-      "missing browser host inspection facade",
-    );
+    await expectBrowserHostInspectionFacadeUnavailable(loadBundledPluginPublicSurfaceModuleSync);
   });
 });

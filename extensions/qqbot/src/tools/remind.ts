@@ -1,5 +1,6 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { jsonToolResult as json } from "./result.js";
 
 interface RemindParams {
   action: "add" | "list" | "remove";
@@ -55,13 +56,6 @@ const RemindSchema = {
   },
   required: ["action"],
 } as const;
-
-function json(data: unknown) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
-    details: data,
-  };
-}
 
 function parseRelativeTime(timeStr: string): number | null {
   const s = normalizeLowercaseStringOrEmpty(timeStr);

@@ -427,7 +427,13 @@ export async function promptDefaultModel(
   const resolvedKey = modelKey(resolved.provider, resolved.model);
   const configuredKey = configuredRaw ? resolvedKey : "";
 
-  const catalog = await loadModelCatalog({ config: cfg, useCache: false });
+  const catalogProgress = params.prompter.progress("Loading available models");
+  let catalog: Awaited<ReturnType<typeof loadModelCatalog>>;
+  try {
+    catalog = await loadModelCatalog({ config: cfg, useCache: false });
+  } finally {
+    catalogProgress.stop();
+  }
   if (catalog.length === 0) {
     return promptManualModel({
       prompter: params.prompter,
@@ -532,6 +538,7 @@ export async function promptDefaultModel(
     message: params.message ?? "Default model",
     options,
     initialValue,
+    searchable: true,
   });
   const selectedValue = selection ?? "";
   if (selectedValue === KEEP_VALUE) {
@@ -603,7 +610,13 @@ export async function promptModelAllowlist(params: {
     ? initialSeeds.filter((key) => allowedKeySet.has(key))
     : initialSeeds;
 
-  const catalog = await loadModelCatalog({ config: cfg, useCache: false });
+  const allowlistProgress = params.prompter.progress("Loading available models");
+  let catalog: Awaited<ReturnType<typeof loadModelCatalog>>;
+  try {
+    catalog = await loadModelCatalog({ config: cfg, useCache: false });
+  } finally {
+    allowlistProgress.stop();
+  }
   if (catalog.length === 0 && allowedKeys.length === 0) {
     const raw = await params.prompter.text({
       message:

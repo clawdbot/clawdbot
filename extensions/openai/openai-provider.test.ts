@@ -121,16 +121,20 @@ describe("buildOpenAIProvider", () => {
     const provider = buildOpenAIProvider();
 
     expect(
-      provider.supportsXHighThinking?.({
-        provider: "openai",
-        modelId: "gpt-5.4-mini",
-      } as never),
+      provider
+        .resolveThinkingProfile?.({
+          provider: "openai",
+          modelId: "gpt-5.4-mini",
+        } as never)
+        ?.levels.some((level) => level.id === "xhigh"),
     ).toBe(true);
     expect(
-      provider.supportsXHighThinking?.({
-        provider: "openai",
-        modelId: "gpt-5.4-nano",
-      } as never),
+      provider
+        .resolveThinkingProfile?.({
+          provider: "openai",
+          modelId: "gpt-5.4-nano",
+        } as never)
+        ?.levels.some((level) => level.id === "xhigh"),
     ).toBe(true);
 
     const entries = provider.augmentModelCatalog?.({
@@ -209,7 +213,7 @@ describe("buildOpenAIProvider", () => {
       provider: "openai-codex",
       id: "gpt-5.4",
       api: "openai-codex-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
       contextWindow: 1_050_000,
       maxTokens: 128_000,
     });

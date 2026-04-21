@@ -224,3 +224,24 @@ export function normalizeMatrixQaObservedEvent(
     ...(attachment ? { attachment } : {}),
   };
 }
+
+export function findMatrixQaObservedEventMatch(params: {
+  cursorIndex: number;
+  events: MatrixQaObservedEvent[];
+  predicate: (event: MatrixQaObservedEvent) => boolean;
+  roomId: string;
+}) {
+  for (let index = params.cursorIndex; index < params.events.length; index += 1) {
+    const event = params.events[index];
+    if (event?.roomId !== params.roomId) {
+      continue;
+    }
+    if (params.predicate(event)) {
+      return {
+        event,
+        nextCursorIndex: index + 1,
+      };
+    }
+  }
+  return undefined;
+}

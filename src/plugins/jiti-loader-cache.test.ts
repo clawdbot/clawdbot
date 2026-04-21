@@ -6,20 +6,28 @@ afterEach(() => {
   vi.doUnmock("jiti");
 });
 
+async function loadCachedPluginJitiLoader(scope: string) {
+  const createJiti = vi.fn((filename: string, options?: Record<string, unknown>) =>
+    Object.assign(vi.fn(), {
+      filename,
+      options,
+    }),
+  );
+  vi.doMock("jiti", () => ({
+    createJiti,
+  }));
+
+  const { getCachedPluginJitiLoader } = await importFreshModule<
+    typeof import("./jiti-loader-cache.js")
+  >(import.meta.url, `./jiti-loader-cache.js?scope=${scope}`);
+
+  return { createJiti, getCachedPluginJitiLoader };
+}
+
 describe("getCachedPluginJitiLoader", () => {
   it("reuses cached loaders for the same module config and filename", async () => {
-    const createJiti = vi.fn((filename: string) =>
-      Object.assign(vi.fn(), {
-        filename,
-      }),
-    );
-    vi.doMock("jiti", () => ({
-      createJiti,
-    }));
-
-    const { getCachedPluginJitiLoader } = await importFreshModule<
-      typeof import("./jiti-loader-cache.js")
-    >(import.meta.url, "./jiti-loader-cache.js?scope=cached-loader");
+    const { createJiti, getCachedPluginJitiLoader } =
+      await loadCachedPluginJitiLoader("cached-loader");
 
     const cache = new Map();
     const params = {
@@ -39,19 +47,8 @@ describe("getCachedPluginJitiLoader", () => {
   });
 
   it("keeps loader caches scoped by jiti filename and dist preference", async () => {
-    const createJiti = vi.fn((filename: string, options: Record<string, unknown>) =>
-      Object.assign(vi.fn(), {
-        filename,
-        options,
-      }),
-    );
-    vi.doMock("jiti", () => ({
-      createJiti,
-    }));
-
-    const { getCachedPluginJitiLoader } = await importFreshModule<
-      typeof import("./jiti-loader-cache.js")
-    >(import.meta.url, "./jiti-loader-cache.js?scope=filename-scope");
+    const { createJiti, getCachedPluginJitiLoader } =
+      await loadCachedPluginJitiLoader("filename-scope");
 
     const cache = new Map();
     const first = getCachedPluginJitiLoader({
@@ -94,19 +91,7 @@ describe("getCachedPluginJitiLoader", () => {
   });
 
   it("lets callers override alias maps and tryNative while keeping cache keys stable", async () => {
-    const createJiti = vi.fn((filename: string, options: Record<string, unknown>) =>
-      Object.assign(vi.fn(), {
-        filename,
-        options,
-      }),
-    );
-    vi.doMock("jiti", () => ({
-      createJiti,
-    }));
-
-    const { getCachedPluginJitiLoader } = await importFreshModule<
-      typeof import("./jiti-loader-cache.js")
-    >(import.meta.url, "./jiti-loader-cache.js?scope=overrides");
+    const { createJiti, getCachedPluginJitiLoader } = await loadCachedPluginJitiLoader("overrides");
 
     const cache = new Map();
     const first = getCachedPluginJitiLoader({
@@ -147,19 +132,8 @@ describe("getCachedPluginJitiLoader", () => {
   });
 
   it("lets callers intentionally share loaders behind a custom cache scope key", async () => {
-    const createJiti = vi.fn((filename: string, options: Record<string, unknown>) =>
-      Object.assign(vi.fn(), {
-        filename,
-        options,
-      }),
-    );
-    vi.doMock("jiti", () => ({
-      createJiti,
-    }));
-
-    const { getCachedPluginJitiLoader } = await importFreshModule<
-      typeof import("./jiti-loader-cache.js")
-    >(import.meta.url, "./jiti-loader-cache.js?scope=cache-scope-key");
+    const { createJiti, getCachedPluginJitiLoader } =
+      await loadCachedPluginJitiLoader("cache-scope-key");
 
     const cache = new Map();
     const first = getCachedPluginJitiLoader({

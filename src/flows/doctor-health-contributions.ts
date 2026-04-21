@@ -255,6 +255,7 @@ async function runBundledPluginRuntimeDepsHealth(ctx: DoctorHealthFlowContext): 
   await maybeRepairBundledPluginRuntimeDeps({
     runtime: ctx.runtime,
     prompter: ctx.prompter,
+    config: ctx.cfg,
   });
 }
 

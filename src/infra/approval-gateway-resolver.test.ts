@@ -2,51 +2,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveApprovalOverGateway } from "./approval-gateway-resolver.js";
 
 const hoisted = vi.hoisted(() => ({
-  createOperatorApprovalsGatewayClient: vi.fn(),
-  clientStart: vi.fn(),
-  clientStop: vi.fn(),
-  clientStopAndWait: vi.fn(),
+  withOperatorApprovalsGatewayClient: vi.fn(),
   clientRequest: vi.fn(),
 }));
 
 vi.mock("../gateway/operator-approvals-client.js", () => ({
-  createOperatorApprovalsGatewayClient: hoisted.createOperatorApprovalsGatewayClient,
+  withOperatorApprovalsGatewayClient: hoisted.withOperatorApprovalsGatewayClient,
 }));
-
-function createGatewayClient(params: {
-  stopAndWaitRejects?: boolean;
-  requestImpl?: typeof hoisted.clientRequest;
-}) {
-  const request = params.requestImpl ?? hoisted.clientRequest;
-  return {
-    start: () => {
-      hoisted.clientStart();
-    },
-    stop: hoisted.clientStop,
-    stopAndWait: params.stopAndWaitRejects
-      ? vi.fn(async () => {
-          hoisted.clientStopAndWait();
-          throw new Error("close failed");
-        })
-      : vi.fn(async () => {
-          hoisted.clientStopAndWait();
-        }),
-    request,
-  };
-}
 
 describe("resolveApprovalOverGateway", () => {
   beforeEach(() => {
-    hoisted.clientStart.mockReset();
-    hoisted.clientStop.mockReset();
-    hoisted.clientStopAndWait.mockReset();
     hoisted.clientRequest.mockReset().mockResolvedValue({ ok: true });
-    hoisted.createOperatorApprovalsGatewayClient.mockReset().mockImplementation(async (params) => {
-      const client = createGatewayClient({});
-      queueMicrotask(() => {
-        params.onHelloOk?.({} as never);
-      });
-      return client;
+    hoisted.withOperatorApprovalsGatewayClient.mockReset().mockImplementation(async (_, run) => {
+      await run({ request: hoisted.clientRequest });
     });
   });
 
@@ -56,22 +24,21 @@ describe("resolveApprovalOverGateway", () => {
       approvalId: "approval-1",
       decision: "allow-once",
       gatewayUrl: "ws://gateway.example.test",
-      clientDisplayName: "Discord approval (default)",
+      clientDisplayName: "QuietChat approval (default)",
     });
 
-    expect(hoisted.createOperatorApprovalsGatewayClient).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expect(hoisted.withOperatorApprovalsGatewayClient).toHaveBeenCalledWith(
+      {
         config: { gateway: { auth: { token: "cfg-token" } } },
         gatewayUrl: "ws://gateway.example.test",
-        clientDisplayName: "Discord approval (default)",
-      }),
+        clientDisplayName: "QuietChat approval (default)",
+      },
+      expect.any(Function),
     );
-    expect(hoisted.clientStart).toHaveBeenCalledTimes(1);
     expect(hoisted.clientRequest).toHaveBeenCalledWith("exec.approval.resolve", {
       id: "approval-1",
       decision: "allow-once",
     });
-    expect(hoisted.clientStopAndWait).toHaveBeenCalledTimes(1);
   });
 
   it("routes plugin approvals through plugin.approval.resolve", async () => {
@@ -120,24 +87,5 @@ describe("resolveApprovalOverGateway", () => {
     ).rejects.toThrow("permission denied");
 
     expect(hoisted.clientRequest).toHaveBeenCalledTimes(1);
-  });
-
-  it("falls back to stop when stopAndWait rejects", async () => {
-    hoisted.createOperatorApprovalsGatewayClient.mockReset().mockImplementation(async (params) => {
-      const client = createGatewayClient({ stopAndWaitRejects: true });
-      queueMicrotask(() => {
-        params.onHelloOk?.({} as never);
-      });
-      return client;
-    });
-
-    await resolveApprovalOverGateway({
-      cfg: {} as never,
-      approvalId: "approval-1",
-      decision: "allow-once",
-    });
-
-    expect(hoisted.clientStopAndWait).toHaveBeenCalledTimes(1);
-    expect(hoisted.clientStop).toHaveBeenCalledTimes(1);
   });
 });

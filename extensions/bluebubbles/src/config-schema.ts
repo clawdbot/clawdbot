@@ -30,6 +30,12 @@ const bluebubblesActionSchema = z
 const bluebubblesGroupConfigSchema = z.object({
   requireMention: z.boolean().optional(),
   tools: ToolPolicySchema,
+  /**
+   * Free-form directive appended to the system prompt for every turn that
+   * handles a message in this group. Use it for per-group persona tweaks or
+   * behavioral rules (reply-threading, tapback conventions, etc.).
+   */
+  systemPrompt: z.string().optional(),
 });
 
 const bluebubblesNetworkSchema = z
@@ -79,6 +85,7 @@ const bluebubblesAccountSchema = z
     historyLimit: z.number().int().min(0).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
     textChunkLimit: z.number().int().positive().optional(),
+    sendTimeoutMs: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
     mediaMaxMb: z.number().int().positive().optional(),
     mediaLocalRoots: z.array(z.string()).optional(),
@@ -87,6 +94,7 @@ const bluebubblesAccountSchema = z
     catchup: bluebubblesCatchupSchema,
     blockStreaming: z.boolean().optional(),
     groups: z.object({}).catchall(bluebubblesGroupConfigSchema).optional(),
+    coalesceSameSenderDms: z.boolean().optional(),
   })
   .superRefine((value, ctx) => {
     const serverUrl = value.serverUrl?.trim() ?? "";

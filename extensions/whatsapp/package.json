@@ -4,9 +4,11 @@
   "description": "OpenClaw WhatsApp channel plugin",
   "type": "module",
   "dependencies": {
+    "@sinclair/typebox": "0.34.49",
     "@whiskeysockets/baileys": "7.0.0-rc.9",
     "jimp": "^1.6.1",
-    "qrcode-terminal": "^0.12.0"
+    "qrcode-terminal": "^0.12.0",
+    "undici": "8.1.0"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

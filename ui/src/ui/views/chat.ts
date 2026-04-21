@@ -6,6 +6,7 @@ import {
   CHAT_ATTACHMENT_ACCEPT,
   isSupportedChatAttachmentMimeType,
 } from "../chat/attachment-support.ts";
+import { buildChatItems } from "../chat/build-chat-items.ts";
 import { renderContextNotice } from "../chat/context-notice.ts";
 import { DeletedMessages } from "../chat/deleted-messages.ts";
 import { exportChatMarkdown } from "../chat/export.ts";
@@ -15,15 +16,9 @@ import {
   renderStreamingGroup,
 } from "../chat/grouped-render.ts";
 import { InputHistory } from "../chat/input-history.ts";
-import { extractTextCached } from "../chat/message-extract.ts";
-import {
-  isToolResultMessage,
-  normalizeMessage,
-  normalizeRoleForGrouping,
-} from "../chat/message-normalizer.ts";
 import { PinnedMessages } from "../chat/pinned-messages.ts";
 import { getPinnedMessageSummary } from "../chat/pinned-summary.ts";
-import { messageMatchesSearchQuery } from "../chat/search-match.ts";
+import { renderChatRunControls } from "../chat/run-controls.ts";
 import { getOrCreateSessionCacheValue } from "../chat/session-cache.ts";
 import { renderSideResult } from "../chat/side-result-render.ts";
 import type { ChatSideResult } from "../chat/side-result.ts";
@@ -36,13 +31,14 @@ import {
   type SlashCommandDef,
 } from "../chat/slash-commands.ts";
 import { isSttSupported, startStt, stopStt } from "../chat/speech.ts";
-import { buildSidebarContent, extractToolCards, extractToolPreview } from "../chat/tool-cards.ts";
+import { renderCompactionIndicator, renderFallbackIndicator } from "../chat/status-indicators.ts";
+import { buildSidebarContent } from "../chat/tool-cards.ts";
+import { getExpandedToolCards, syncToolCardExpansionState } from "../chat/tool-expansion-state.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
 import type { SidebarContent } from "../sidebar-content.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import type { SessionsListResult } from "../types.ts";
-import type { ChatItem, MessageGroup, ToolCard } from "../types/chat-types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { agentLogoUrl, resolveAgentAvatarUrl } from "./agents-utils.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
@@ -116,16 +112,10 @@ export type ChatProps = {
   basePath?: string;
 };
 
-const COMPACTION_TOAST_DURATION_MS = 5000;
-const FALLBACK_TOAST_DURATION_MS = 8000;
-
 // Persistent instances keyed by session
 const inputHistories = new Map<string, InputHistory>();
 const pinnedMessagesMap = new Map<string, PinnedMessages>();
 const deletedMessagesMap = new Map<string, DeletedMessages>();
-const expandedToolCardsBySession = new Map<string, Map<string, boolean>>();
-const initializedToolCardsBySession = new Map<string, Set<string>>();
-const lastAutoExpandPrefBySession = new Map<string, boolean>();
 
 function getInputHistory(sessionKey: string): InputHistory {
   return getOrCreateSessionCacheValue(inputHistories, sessionKey, () => new InputHistory());
@@ -145,143 +135,6 @@ function getDeletedMessages(sessionKey: string): DeletedMessages {
     sessionKey,
     () => new DeletedMessages(sessionKey),
   );
-}
-
-function getExpandedToolCards(sessionKey: string): Map<string, boolean> {
-  return getOrCreateSessionCacheValue(expandedToolCardsBySession, sessionKey, () => new Map());
-}
-
-function getInitializedToolCards(sessionKey: string): Set<string> {
-  return getOrCreateSessionCacheValue(initializedToolCardsBySession, sessionKey, () => new Set());
-}
-
-function appendCanvasBlockToAssistantMessage(
-  message: unknown,
-  preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>,
-  rawText: string | null,
-) {
-  const raw = message as Record<string, unknown>;
-  const existingContent = Array.isArray(raw.content)
-    ? [...raw.content]
-    : typeof raw.content === "string"
-      ? [{ type: "text", text: raw.content }]
-      : typeof raw.text === "string"
-        ? [{ type: "text", text: raw.text }]
-        : [];
-  const alreadyHasArtifact = existingContent.some((block) => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const typed = block as {
-      type?: unknown;
-      preview?: { kind?: unknown; viewId?: unknown; url?: unknown };
-    };
-    return (
-      typed.type === "canvas" &&
-      typed.preview?.kind === "canvas" &&
-      ((preview.viewId && typed.preview.viewId === preview.viewId) ||
-        (preview.url && typed.preview.url === preview.url))
-    );
-  });
-  if (alreadyHasArtifact) {
-    return message;
-  }
-  return {
-    ...raw,
-    content: [
-      ...existingContent,
-      {
-        type: "canvas",
-        preview,
-        ...(rawText ? { rawText } : {}),
-      },
-    ],
-  };
-}
-
-function extractChatMessagePreview(toolMessage: unknown): {
-  preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>;
-  text: string | null;
-  timestamp: number | null;
-} | null {
-  const normalized = normalizeMessage(toolMessage);
-  const cards = extractToolCards(toolMessage, "preview");
-  for (let index = cards.length - 1; index >= 0; index--) {
-    const card = cards[index];
-    if (card?.preview?.kind === "canvas") {
-      return {
-        preview: card.preview,
-        text: card.outputText ?? null,
-        timestamp: normalized.timestamp ?? null,
-      };
-    }
-  }
-  const text = extractTextCached(toolMessage) ?? undefined;
-  const toolRecord = toolMessage as Record<string, unknown>;
-  const toolName =
-    typeof toolRecord.toolName === "string"
-      ? toolRecord.toolName
-      : typeof toolRecord.tool_name === "string"
-        ? toolRecord.tool_name
-        : undefined;
-  const preview = extractToolPreview(text, toolName);
-  if (preview?.kind !== "canvas") {
-    return null;
-  }
-  return { preview, text: text ?? null, timestamp: normalized.timestamp ?? null };
-}
-
-function findNearestAssistantMessageIndex(
-  items: ChatItem[],
-  toolTimestamp: number | null,
-): number | null {
-  const assistantEntries = items
-    .map((item, index) => {
-      if (item.kind !== "message") {
-        return null;
-      }
-      const message = item.message as Record<string, unknown>;
-      const role = typeof message.role === "string" ? message.role.toLowerCase() : "";
-      if (role !== "assistant") {
-        return null;
-      }
-      return {
-        index,
-        timestamp: normalizeMessage(item.message).timestamp ?? null,
-      };
-    })
-    .filter(Boolean) as Array<{ index: number; timestamp: number | null }>;
-  if (assistantEntries.length === 0) {
-    return null;
-  }
-  if (toolTimestamp == null) {
-    return assistantEntries[assistantEntries.length - 1]?.index ?? null;
-  }
-  let previous: { index: number; timestamp: number } | null = null;
-  let next: { index: number; timestamp: number } | null = null;
-  for (const entry of assistantEntries) {
-    if (entry.timestamp == null) {
-      continue;
-    }
-    if (entry.timestamp <= toolTimestamp) {
-      previous = { index: entry.index, timestamp: entry.timestamp };
-      continue;
-    }
-    next = { index: entry.index, timestamp: entry.timestamp };
-    break;
-  }
-  if (previous && next) {
-    const previousDelta = toolTimestamp - previous.timestamp;
-    const nextDelta = next.timestamp - toolTimestamp;
-    return nextDelta < previousDelta ? next.index : previous.index;
-  }
-  if (previous) {
-    return previous.index;
-  }
-  if (next) {
-    return next.index;
-  }
-  return assistantEntries[assistantEntries.length - 1]?.index ?? null;
 }
 
 interface ChatEphemeralState {
@@ -334,126 +187,6 @@ export const cleanupChatModuleState = resetChatViewState;
 function adjustTextareaHeight(el: HTMLTextAreaElement) {
   el.style.height = "auto";
   el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
-}
-
-function syncToolCardExpansionState(
-  sessionKey: string,
-  items: Array<ChatItem | MessageGroup>,
-  autoExpandToolCalls: boolean,
-) {
-  const expanded = getExpandedToolCards(sessionKey);
-  const initialized = getInitializedToolCards(sessionKey);
-  const previousAutoExpand = lastAutoExpandPrefBySession.get(sessionKey) ?? false;
-  const currentToolCardIds = new Set<string>();
-  for (const item of items) {
-    if (item.kind !== "group") {
-      continue;
-    }
-    for (const entry of item.messages) {
-      const cards = extractToolCards(entry.message, entry.key);
-      for (let cardIndex = 0; cardIndex < cards.length; cardIndex++) {
-        const disclosureId = `${entry.key}:toolcard:${cardIndex}`;
-        currentToolCardIds.add(disclosureId);
-        if (initialized.has(disclosureId)) {
-          continue;
-        }
-        expanded.set(disclosureId, autoExpandToolCalls);
-        initialized.add(disclosureId);
-      }
-      const messageRecord = entry.message as Record<string, unknown>;
-      const role = typeof messageRecord.role === "string" ? messageRecord.role : "unknown";
-      const normalizedRole = normalizeRoleForGrouping(role);
-      const isToolMessage =
-        isToolResultMessage(entry.message) ||
-        normalizedRole === "tool" ||
-        role.toLowerCase() === "toolresult" ||
-        role.toLowerCase() === "tool_result" ||
-        typeof messageRecord.toolCallId === "string" ||
-        typeof messageRecord.tool_call_id === "string";
-      if (!isToolMessage) {
-        continue;
-      }
-      const disclosureId = `toolmsg:${entry.key}`;
-      currentToolCardIds.add(disclosureId);
-      if (initialized.has(disclosureId)) {
-        continue;
-      }
-      expanded.set(disclosureId, autoExpandToolCalls);
-      initialized.add(disclosureId);
-    }
-  }
-  if (autoExpandToolCalls && !previousAutoExpand) {
-    for (const toolCardId of currentToolCardIds) {
-      expanded.set(toolCardId, true);
-    }
-  }
-  lastAutoExpandPrefBySession.set(sessionKey, autoExpandToolCalls);
-}
-
-function renderCompactionIndicator(status: CompactionStatus | null | undefined) {
-  if (!status) {
-    return nothing;
-  }
-  if (status.phase === "active" || status.phase === "retrying") {
-    return html`
-      <div
-        class="compaction-indicator compaction-indicator--active"
-        role="status"
-        aria-live="polite"
-      >
-        ${icons.loader} Compacting context...
-      </div>
-    `;
-  }
-  if (status.completedAt) {
-    const elapsed = Date.now() - status.completedAt;
-    if (elapsed < COMPACTION_TOAST_DURATION_MS) {
-      return html`
-        <div
-          class="compaction-indicator compaction-indicator--complete"
-          role="status"
-          aria-live="polite"
-        >
-          ${icons.check} Context compacted
-        </div>
-      `;
-    }
-  }
-  return nothing;
-}
-
-function renderFallbackIndicator(status: FallbackStatus | null | undefined) {
-  if (!status) {
-    return nothing;
-  }
-  const phase = status.phase ?? "active";
-  const elapsed = Date.now() - status.occurredAt;
-  if (elapsed >= FALLBACK_TOAST_DURATION_MS) {
-    return nothing;
-  }
-  const details = [
-    `Selected: ${status.selected}`,
-    phase === "cleared" ? `Active: ${status.selected}` : `Active: ${status.active}`,
-    phase === "cleared" && status.previous ? `Previous fallback: ${status.previous}` : null,
-    status.reason ? `Reason: ${status.reason}` : null,
-    status.attempts.length > 0 ? `Attempts: ${status.attempts.slice(0, 3).join(" | ")}` : null,
-  ]
-    .filter(Boolean)
-    .join(" • ");
-  const message =
-    phase === "cleared"
-      ? `Fallback cleared: ${status.selected}`
-      : `Fallback active: ${status.active}`;
-  const className =
-    phase === "cleared"
-      ? "compaction-indicator compaction-indicator--fallback-cleared"
-      : "compaction-indicator compaction-indicator--fallback";
-  const icon = phase === "cleared" ? icons.check : icons.brain;
-  return html`
-    <div class=${className} role="status" aria-live="polite" title=${details}>
-      ${icon} ${message}
-    </div>
-  `;
 }
 
 function generateAttachmentId(): string {
@@ -1048,7 +781,17 @@ export function renderChat(props: ChatProps) {
     );
   };
 
-  const chatItems = buildChatItems(props);
+  const chatItems = buildChatItems({
+    sessionKey: props.sessionKey,
+    messages: props.messages,
+    toolMessages: props.toolMessages,
+    streamSegments: props.streamSegments,
+    stream: props.stream,
+    streamStartedAt: props.streamStartedAt,
+    showToolCalls: props.showToolCalls,
+    searchOpen: vs.searchOpen,
+    searchQuery: vs.searchQuery,
+  });
   syncToolCardExpansionState(props.sessionKey, chatItems, Boolean(props.autoExpandToolCalls));
   const expandedToolCards = getExpandedToolCards(props.sessionKey);
   const toggleToolCardExpanded = (toolCardId: string) => {
@@ -1503,258 +1246,21 @@ export function renderChat(props: ChatProps) {
             ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}
           </div>
 
-          <div class="agent-chat__toolbar-right">
-            ${nothing /* search hidden for now */}
-            ${canAbort
-              ? nothing
-              : html`
-                  <button
-                    class="btn btn--ghost"
-                    @click=${props.onNewSession}
-                    title="New session"
-                    aria-label="New session"
-                  >
-                    ${icons.plus}
-                  </button>
-                `}
-            <button
-              class="btn btn--ghost"
-              @click=${() => exportMarkdown(props)}
-              title="Export"
-              aria-label="Export chat"
-              ?disabled=${props.messages.length === 0}
-            >
-              ${icons.download}
-            </button>
-
-            ${canAbort
-              ? html`
-                  <button
-                    class="chat-send-btn chat-send-btn--stop"
-                    @click=${props.onAbort}
-                    title="Stop"
-                    aria-label="Stop generating"
-                  >
-                    ${icons.stop}
-                  </button>
-                `
-              : html`
-                  <button
-                    class="chat-send-btn"
-                    @click=${() => {
-                      if (props.draft.trim()) {
-                        inputHistory.push(props.draft);
-                      }
-                      props.onSend();
-                    }}
-                    ?disabled=${!props.connected || props.sending}
-                    title=${isBusy ? "Queue" : "Send"}
-                    aria-label=${isBusy ? "Queue message" : "Send message"}
-                  >
-                    ${icons.send}
-                  </button>
-                `}
-          </div>
+          ${renderChatRunControls({
+            canAbort,
+            connected: props.connected,
+            draft: props.draft,
+            hasMessages: props.messages.length > 0,
+            isBusy,
+            sending: props.sending,
+            onAbort: props.onAbort,
+            onExport: () => exportMarkdown(props),
+            onNewSession: props.onNewSession,
+            onSend: props.onSend,
+            onStoreDraft: (draft) => inputHistory.push(draft),
+          })}
         </div>
       </div>
     </section>
   `;
-}
-
-const CHAT_HISTORY_RENDER_LIMIT = 200;
-
-function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
-  const result: Array<ChatItem | MessageGroup> = [];
-  let currentGroup: MessageGroup | null = null;
-
-  for (const item of items) {
-    if (item.kind !== "message") {
-      if (currentGroup) {
-        result.push(currentGroup);
-        currentGroup = null;
-      }
-      result.push(item);
-      continue;
-    }
-
-    const normalized = normalizeMessage(item.message);
-    const role = normalizeRoleForGrouping(normalized.role);
-    const senderLabel = role.toLowerCase() === "user" ? (normalized.senderLabel ?? null) : null;
-    const timestamp = normalized.timestamp || Date.now();
-
-    if (
-      !currentGroup ||
-      currentGroup.role !== role ||
-      (role.toLowerCase() === "user" && currentGroup.senderLabel !== senderLabel)
-    ) {
-      if (currentGroup) {
-        result.push(currentGroup);
-      }
-      currentGroup = {
-        kind: "group",
-        key: `group:${role}:${item.key}`,
-        role,
-        senderLabel,
-        messages: [{ message: item.message, key: item.key }],
-        timestamp,
-        isStreaming: false,
-      };
-    } else {
-      currentGroup.messages.push({ message: item.message, key: item.key });
-    }
-  }
-
-  if (currentGroup) {
-    result.push(currentGroup);
-  }
-  return result;
-}
-
-function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
-  const items: ChatItem[] = [];
-  const history = Array.isArray(props.messages) ? props.messages : [];
-  const tools = Array.isArray(props.toolMessages) ? props.toolMessages : [];
-  const historyStart = Math.max(0, history.length - CHAT_HISTORY_RENDER_LIMIT);
-  if (historyStart > 0) {
-    items.push({
-      kind: "message",
-      key: "chat:history:notice",
-      message: {
-        role: "system",
-        content: `Showing last ${CHAT_HISTORY_RENDER_LIMIT} messages (${historyStart} hidden).`,
-        timestamp: Date.now(),
-      },
-    });
-  }
-  for (let i = historyStart; i < history.length; i++) {
-    const msg = history[i];
-    const normalized = normalizeMessage(msg);
-    const raw = msg as Record<string, unknown>;
-    const marker = raw.__openclaw as Record<string, unknown> | undefined;
-    if (marker && marker.kind === "compaction") {
-      items.push({
-        kind: "divider",
-        key:
-          typeof marker.id === "string"
-            ? `divider:compaction:${marker.id}`
-            : `divider:compaction:${normalized.timestamp}:${i}`,
-        label: "Compaction",
-        timestamp: normalized.timestamp ?? Date.now(),
-      });
-      continue;
-    }
-
-    if (!props.showToolCalls && normalized.role.toLowerCase() === "toolresult") {
-      continue;
-    }
-
-    // Apply search filter if active
-    if (vs.searchOpen && vs.searchQuery.trim() && !messageMatchesSearchQuery(msg, vs.searchQuery)) {
-      continue;
-    }
-
-    items.push({
-      kind: "message",
-      key: messageKey(msg, i),
-      message: msg,
-    });
-  }
-  const liftedCanvasSources = tools
-    .map((tool) => extractChatMessagePreview(tool))
-    .filter((entry) => Boolean(entry)) as Array<{
-    preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>;
-    text: string | null;
-    timestamp: number | null;
-  }>;
-  for (const liftedCanvasSource of liftedCanvasSources) {
-    const assistantIndex = findNearestAssistantMessageIndex(items, liftedCanvasSource.timestamp);
-    if (assistantIndex == null) {
-      continue;
-    }
-    const item = items[assistantIndex];
-    if (!item || item.kind !== "message") {
-      continue;
-    }
-    items[assistantIndex] = {
-      ...item,
-      message: appendCanvasBlockToAssistantMessage(
-        item.message as Record<string, unknown>,
-        liftedCanvasSource.preview,
-        liftedCanvasSource.text,
-      ),
-    };
-  }
-  // Interleave stream segments and tool cards in order. Each segment
-  // contains text that was streaming before the corresponding tool started.
-  // This ensures correct visual ordering: text → tool → text → tool → ...
-  const segments = props.streamSegments ?? [];
-  const maxLen = Math.max(segments.length, tools.length);
-  for (let i = 0; i < maxLen; i++) {
-    if (i < segments.length && segments[i].text.trim().length > 0) {
-      items.push({
-        kind: "stream" as const,
-        key: `stream-seg:${props.sessionKey}:${i}`,
-        text: segments[i].text,
-        startedAt: segments[i].ts,
-      });
-    }
-    if (i < tools.length && props.showToolCalls) {
-      items.push({
-        kind: "message",
-        key: messageKey(tools[i], i + history.length),
-        message: tools[i],
-      });
-    }
-  }
-
-  if (props.stream !== null) {
-    const key = `stream:${props.sessionKey}:${props.streamStartedAt ?? "live"}`;
-    if (props.stream.trim().length > 0) {
-      items.push({
-        kind: "stream",
-        key,
-        text: props.stream,
-        startedAt: props.streamStartedAt ?? Date.now(),
-      });
-    } else {
-      items.push({ kind: "reading-indicator", key });
-    }
-  }
-
-  return groupMessages(items);
-}
-
-function messageKey(message: unknown, index: number): string {
-  const m = message as Record<string, unknown>;
-  const toolCallId = typeof m.toolCallId === "string" ? m.toolCallId : "";
-  if (toolCallId) {
-    const role = typeof m.role === "string" ? m.role : "unknown";
-    const id = typeof m.id === "string" ? m.id : "";
-    if (id) {
-      return `tool:${role}:${toolCallId}:${id}`;
-    }
-    const messageId = typeof m.messageId === "string" ? m.messageId : "";
-    if (messageId) {
-      return `tool:${role}:${toolCallId}:${messageId}`;
-    }
-    const timestamp = typeof m.timestamp === "number" ? m.timestamp : null;
-    if (timestamp != null) {
-      return `tool:${role}:${toolCallId}:${timestamp}:${index}`;
-    }
-    return `tool:${role}:${toolCallId}:${index}`;
-  }
-  const id = typeof m.id === "string" ? m.id : "";
-  if (id) {
-    return `msg:${id}`;
-  }
-  const messageId = typeof m.messageId === "string" ? m.messageId : "";
-  if (messageId) {
-    return `msg:${messageId}`;
-  }
-  const timestamp = typeof m.timestamp === "number" ? m.timestamp : null;
-  const role = typeof m.role === "string" ? m.role : "unknown";
-  if (timestamp != null) {
-    return `msg:${role}:${timestamp}:${index}`;
-  }
-  return `msg:${role}:${index}`;
 }

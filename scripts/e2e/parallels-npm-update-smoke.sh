@@ -332,11 +332,17 @@ ensure_current_build() {
   pnpm build
 }
 
+write_package_dist_inventory() {
+  node --import tsx --input-type=module --eval \
+    'import { writePackageDistInventory } from "./src/infra/package-dist-inventory.ts"; await writePackageDistInventory(process.cwd());'
+}
+
 pack_main_tgz() {
   local pkg
   CURRENT_HEAD="$(git rev-parse HEAD)"
   CURRENT_HEAD_SHORT="$(git rev-parse --short=7 HEAD)"
   ensure_current_build
+  write_package_dist_inventory
   pkg="$(
     npm pack --ignore-scripts --json --pack-destination "$MAIN_TGZ_DIR" \
       | "$PYTHON_BIN" -c 'import json, sys; data = json.load(sys.stdin); print(data[-1]["filename"])'

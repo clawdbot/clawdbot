@@ -177,7 +177,10 @@ async function startNarrativeRunOrFallback(params: {
   }
 }
 
-function buildNarrativeSessionKey(params: {
+/**
+ * Build the deterministic subagent session key used for dream narratives.
+ */
+export function buildNarrativeSessionKey(params: {
   workspaceDir: string;
   phase: NarrativePhaseData["phase"];
   nowMs: number;
@@ -911,7 +914,7 @@ export async function generateAndAppendDreamNarrative(params: {
       `memory-core: narrative generation failed for ${params.data.phase} phase: ${formatErrorMessage(err)}`,
     );
   } finally {
-    if (runId && waitStatus === "timeout") {
+    if (params.subagent && runId && waitStatus === "timeout") {
       try {
         const settle = await params.subagent.waitForRun({
           runId,
@@ -929,12 +932,15 @@ export async function generateAndAppendDreamNarrative(params: {
       }
     }
 
-    try {
-      await params.subagent.deleteSession({ sessionKey });
-    } catch (cleanupErr) {
-      params.logger.warn(
-        `memory-core: narrative session cleanup failed for ${params.data.phase} phase: ${formatErrorMessage(cleanupErr)}`,
-      );
+    // Guard against subagent becoming unavailable mid-flight (throws TypeError without this).
+    if (params.subagent) {
+      try {
+        await params.subagent.deleteSession({ sessionKey });
+      } catch (cleanupErr) {
+        params.logger.warn(
+          `memory-core: narrative session cleanup failed for ${params.data.phase} phase: ${formatErrorMessage(cleanupErr)}`,
+        );
+      }
     }
 
     await scrubDreamingNarrativeArtifacts(params.logger).catch((scrubErr: unknown) => {

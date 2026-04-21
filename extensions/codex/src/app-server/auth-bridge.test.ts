@@ -17,17 +17,9 @@ describe("bridgeCodexAppServerStartOptions", () => {
       crypto.createHash("sha256").update(profileId).digest("hex").slice(0, 16),
     );
 
-  beforeAll(async () => {
-    ({ bridgeCodexAppServerStartOptions } = await import("./auth-bridge.js"));
-  });
-
-  afterEach(async () => {
-    await Promise.all(
-      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-    );
-  });
-
-  it("bridges canonical OpenClaw oauth into an isolated CODEX_HOME", async () => {
+  async function createAgentDirWithDefaultProfile(
+    profile: Record<string, unknown> = {},
+  ): Promise<string> {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     tempDirs.push(agentDir);
     saveAuthProfileStore(
@@ -40,14 +32,31 @@ describe("bridgeCodexAppServerStartOptions", () => {
             access: "access-token",
             refresh: "refresh-token",
             expires: Date.now() + 60_000,
-            accountId: "acct-123",
-            idToken: "id-token",
+            ...profile,
           },
         },
       },
       agentDir,
       { filterExternalAuthProfiles: false },
     );
+    return agentDir;
+  }
+
+  beforeAll(async () => {
+    ({ bridgeCodexAppServerStartOptions } = await import("./auth-bridge.js"));
+  });
+
+  afterEach(async () => {
+    await Promise.all(
+      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+    );
+  });
+
+  it("bridges canonical OpenClaw oauth into an isolated CODEX_HOME", async () => {
+    const agentDir = await createAgentDirWithDefaultProfile({
+      accountId: "acct-123",
+      idToken: "id-token",
+    });
 
     const result = await bridgeCodexAppServerStartOptions({
       startOptions: {
@@ -110,24 +119,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
   });
 
   it("refuses to overwrite a symlinked auth bridge file", async () => {
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
-    tempDirs.push(agentDir);
-    saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          "openai-codex:default": {
-            type: "oauth",
-            provider: "openai-codex",
-            access: "access-token",
-            refresh: "refresh-token",
-            expires: Date.now() + 60_000,
-          },
-        },
-      },
-      agentDir,
-      { filterExternalAuthProfiles: false },
-    );
+    const agentDir = await createAgentDirWithDefaultProfile();
 
     const codexHome = resolveHashedCodexHome(agentDir, "openai-codex:default");
     await fs.mkdir(codexHome, { recursive: true });

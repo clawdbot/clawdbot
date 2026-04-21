@@ -158,6 +158,26 @@ function createOpenAiProviderTarget(params?: {
   };
 }
 
+function createOpenAiExecProviderTarget(): SecretsApplyPlan["targets"][number] {
+  return {
+    type: "models.providers.apiKey",
+    path: "models.providers.openai.apiKey",
+    providerId: "openai",
+    ref: { source: "exec", provider: "execmain", id: "providers/openai/apiKey" },
+  };
+}
+
+function createOpenAiExecProviderPlan(): SecretsApplyPlan {
+  return createPlan({
+    targets: [createOpenAiExecProviderTarget()],
+    options: {
+      scrubEnv: false,
+      scrubAuthProfilesForProviderTargets: false,
+      scrubLegacyAuthJson: false,
+    },
+  });
+}
+
 function createOpenAiProviderHeaderTarget(params?: {
   path?: string;
   pathSegments?: string[];
@@ -168,6 +188,42 @@ function createOpenAiProviderHeaderTarget(params?: {
     ...(params?.pathSegments ? { pathSegments: params.pathSegments } : {}),
     ref: OPENAI_API_KEY_ENV_REF,
   };
+}
+
+async function writeOpenAiExecResolverConfig(params: {
+  fixture: ApplyFixture;
+  execScriptPath: string;
+  execLogPath?: string;
+}): Promise<void> {
+  await fs.writeFile(
+    params.execScriptPath,
+    [
+      "#!/bin/sh",
+      ...(params.execLogPath ? [`printf 'x\\n' >> ${JSON.stringify(params.execLogPath)}`] : []),
+      "cat >/dev/null",
+      'printf \'{"protocolVersion":1,"values":{"providers/openai/apiKey":"sk-openai-exec"}}\'', // pragma: allowlist secret
+    ].join("\n"),
+    { encoding: "utf8", mode: 0o700 },
+  );
+
+  await writeJsonFile(params.fixture.configPath, {
+    secrets: {
+      providers: {
+        execmain: {
+          source: "exec",
+          command: params.execScriptPath,
+          jsonOnly: true,
+          timeoutMs: 20_000,
+          noOutputTimeoutMs: 10_000,
+        },
+      },
+    },
+    models: {
+      providers: {
+        openai: createOpenAiProviderConfig(),
+      },
+    },
+  });
 }
 
 function createOneWayScrubOptions(): NonNullable<SecretsApplyPlan["options"]> {
@@ -241,51 +297,9 @@ describe("secrets apply", () => {
     }
     const execLogPath = path.join(fixture.rootDir, "exec-calls.log");
     const execScriptPath = path.join(fixture.rootDir, "resolver.sh");
-    await fs.writeFile(
-      execScriptPath,
-      [
-        "#!/bin/sh",
-        `printf 'x\\n' >> ${JSON.stringify(execLogPath)}`,
-        "cat >/dev/null",
-        'printf \'{"protocolVersion":1,"values":{"providers/openai/apiKey":"sk-openai-exec"}}\'', // pragma: allowlist secret
-      ].join("\n"),
-      { encoding: "utf8", mode: 0o700 },
-    );
+    await writeOpenAiExecResolverConfig({ fixture, execScriptPath, execLogPath });
 
-    await writeJsonFile(fixture.configPath, {
-      secrets: {
-        providers: {
-          execmain: {
-            source: "exec",
-            command: execScriptPath,
-            jsonOnly: true,
-            timeoutMs: 20_000,
-            noOutputTimeoutMs: 10_000,
-          },
-        },
-      },
-      models: {
-        providers: {
-          openai: createOpenAiProviderConfig(),
-        },
-      },
-    });
-
-    const plan = createPlan({
-      targets: [
-        {
-          type: "models.providers.apiKey",
-          path: "models.providers.openai.apiKey",
-          providerId: "openai",
-          ref: { source: "exec", provider: "execmain", id: "providers/openai/apiKey" },
-        },
-      ],
-      options: {
-        scrubEnv: false,
-        scrubAuthProfilesForProviderTargets: false,
-        scrubLegacyAuthJson: false,
-      },
-    });
+    const plan = createOpenAiExecProviderPlan();
 
     const dryRunSkipped = await runSecretsApply({ plan, env: fixture.env, write: false });
     expect(dryRunSkipped.mode).toBe("dry-run");
@@ -310,34 +324,7 @@ describe("secrets apply", () => {
       return;
     }
     const execScriptPath = path.join(fixture.rootDir, "resolver.sh");
-    await fs.writeFile(
-      execScriptPath,
-      [
-        "#!/bin/sh",
-        "cat >/dev/null",
-        'printf \'{"protocolVersion":1,"values":{"providers/openai/apiKey":"sk-openai-exec"}}\'', // pragma: allowlist secret
-      ].join("\n"),
-      { encoding: "utf8", mode: 0o700 },
-    );
-
-    await writeJsonFile(fixture.configPath, {
-      secrets: {
-        providers: {
-          execmain: {
-            source: "exec",
-            command: execScriptPath,
-            jsonOnly: true,
-            timeoutMs: 20_000,
-            noOutputTimeoutMs: 10_000,
-          },
-        },
-      },
-      models: {
-        providers: {
-          openai: createOpenAiProviderConfig(),
-        },
-      },
-    });
+    await writeOpenAiExecResolverConfig({ fixture, execScriptPath });
     await writeJsonFile(fixture.authStorePath, {
       version: 1,
       profiles: {
@@ -349,21 +336,7 @@ describe("secrets apply", () => {
       },
     });
 
-    const plan = createPlan({
-      targets: [
-        {
-          type: "models.providers.apiKey",
-          path: "models.providers.openai.apiKey",
-          providerId: "openai",
-          ref: { source: "exec", provider: "execmain", id: "providers/openai/apiKey" },
-        },
-      ],
-      options: {
-        scrubEnv: false,
-        scrubAuthProfilesForProviderTargets: false,
-        scrubLegacyAuthJson: false,
-      },
-    });
+    const plan = createOpenAiExecProviderPlan();
 
     await expect(
       runSecretsApply({ plan, env: fixture.env, write: false, allowExec: true }),

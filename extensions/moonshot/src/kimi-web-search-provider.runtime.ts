@@ -34,7 +34,7 @@ const DEFAULT_KIMI_SEARCH_MODEL = MOONSHOT_DEFAULT_MODEL_ID;
  * Reasoning variants (kimi-k2-thinking, kimi-k2-thinking-turbo) are excluded
  * because they default to thinking-enabled and disabling it would defeat their
  * purpose; they are also unlikely to be used for web search. */
-const KIMI_THINKING_MODELS = new Set(["kimi-k2.5"]);
+const KIMI_THINKING_MODELS = new Set(["kimi-k2.6", "kimi-k2.5"]);
 const KIMI_WEB_SEARCH_TOOL = {
   type: "builtin_function",
   function: { name: "$web_search" },
@@ -262,7 +262,7 @@ export async function executeKimiWebSearchProviderTool(
     ctx.searchConfig,
     "kimi",
     resolveProviderWebSearchPluginConfig(ctx.config, "moonshot"),
-  ) as SearchConfigRecord | undefined;
+  );
   const unsupportedResponse = buildUnsupportedSearchFilterResponse(args, "kimi");
   if (unsupportedResponse) {
     return unsupportedResponse;

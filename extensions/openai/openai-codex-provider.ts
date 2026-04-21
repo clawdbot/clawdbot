@@ -34,7 +34,7 @@ import {
 } from "./shared.js";
 
 const PROVIDER_ID = "openai-codex";
-const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
+const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex";
 const OPENAI_CODEX_GPT_54_MODEL_ID = "gpt-5.4";
 const OPENAI_CODEX_GPT_54_LEGACY_MODEL_ID = "gpt-5.4-codex";
 const OPENAI_CODEX_GPT_54_PRO_MODEL_ID = "gpt-5.4-pro";
@@ -96,6 +96,11 @@ const OPENAI_CODEX_MODERN_MODEL_IDS = [
   OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
 ] as const;
 
+function isLegacyCodexCompatBaseUrl(baseUrl?: string): boolean {
+  const trimmed = baseUrl?.trim();
+  return !!trimmed && /^https?:\/\/api\.githubcopilot\.com(?:\/v1)?\/?$/iu.test(trimmed);
+}
+
 function normalizeCodexTransportFields(params: {
   api?: ProviderRuntimeModel["api"] | null;
   baseUrl?: string;
@@ -104,9 +109,13 @@ function normalizeCodexTransportFields(params: {
   baseUrl?: string;
 } {
   const useCodexTransport =
-    !params.baseUrl || isOpenAIApiBaseUrl(params.baseUrl) || isOpenAICodexBaseUrl(params.baseUrl);
+    !params.baseUrl ||
+    isOpenAIApiBaseUrl(params.baseUrl) ||
+    isOpenAICodexBaseUrl(params.baseUrl) ||
+    isLegacyCodexCompatBaseUrl(params.baseUrl);
   const api =
-    useCodexTransport && (!params.api || params.api === "openai-responses")
+    useCodexTransport &&
+    (!params.api || params.api === "openai-responses" || params.api === "openai-completions")
       ? "openai-codex-responses"
       : (params.api ?? undefined);
   const baseUrl =
@@ -378,8 +387,18 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
     },
     resolveDynamicModel: (ctx) => resolveCodexForwardCompatModel(ctx),
     buildAuthDoctorHint: (ctx) => buildOpenAICodexAuthDoctorHint(ctx),
-    supportsXHighThinking: ({ modelId }) =>
-      matchesExactOrPrefix(modelId, OPENAI_CODEX_XHIGH_MODEL_IDS),
+    resolveThinkingProfile: ({ modelId }) => ({
+      levels: [
+        { id: "off" },
+        { id: "minimal" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "high" },
+        ...(matchesExactOrPrefix(modelId, OPENAI_CODEX_XHIGH_MODEL_IDS)
+          ? [{ id: "xhigh" as const }]
+          : []),
+      ],
+    }),
     isModernModelRef: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_CODEX_MODERN_MODEL_IDS),
     preferRuntimeResolvedModel: (ctx) => {
       if (normalizeProviderId(ctx.provider) !== PROVIDER_ID) {

@@ -17,7 +17,7 @@ import type { OpenClawConfig } from "./runtime-api.js";
 import { warnBlueBubbles } from "./runtime.js";
 import { extractBlueBubblesMessageId, resolveBlueBubblesSendTarget } from "./send-helpers.js";
 import { extractHandleFromChatGuid, normalizeBlueBubblesHandle } from "./targets.js";
-import { type BlueBubblesSendTarget } from "./types.js";
+import { DEFAULT_SEND_TIMEOUT_MS, type BlueBubblesSendTarget } from "./types.js";
 
 export type BlueBubblesSendOpts = {
   serverUrl?: string;
@@ -497,12 +497,18 @@ export async function sendMessageBlueBubbles(
     throw new Error("BlueBubbles send requires text (message was empty after markdown removal)");
   }
 
-  const { baseUrl, password, accountId, allowPrivateNetwork } = resolveBlueBubblesServerAccount({
-    cfg: opts.cfg ?? {},
-    accountId: opts.accountId,
-    serverUrl: opts.serverUrl,
-    password: opts.password,
-  });
+  const { baseUrl, password, accountId, allowPrivateNetwork, sendTimeoutMs } =
+    resolveBlueBubblesServerAccount({
+      cfg: opts.cfg ?? {},
+      accountId: opts.accountId,
+      serverUrl: opts.serverUrl,
+      password: opts.password,
+    });
+  // Send-path timeout: explicit caller override > per-account config > 30s default.
+  // Kept separate from the default 10s client timeout so chat lookups, probes,
+  // and health checks stay snappy while actual sends can ride out macOS 26
+  // Private API stalls. (#67486)
+  const effectiveSendTimeoutMs = opts.timeoutMs ?? sendTimeoutMs ?? DEFAULT_SEND_TIMEOUT_MS;
   let privateApiStatus = getCachedBlueBubblesPrivateApiStatus(accountId);
 
   const target = resolveBlueBubblesSendTarget(to);
@@ -522,7 +528,7 @@ export async function sendMessageBlueBubbles(
         password,
         address: target.address,
         message: strippedText,
-        timeoutMs: opts.timeoutMs,
+        timeoutMs: effectiveSendTimeoutMs,
         allowPrivateNetwork,
       });
     }
@@ -602,7 +608,7 @@ export async function sendMessageBlueBubbles(
     method: "POST",
     path: "/api/v1/message/text",
     body: payload,
-    timeoutMs: opts.timeoutMs,
+    timeoutMs: effectiveSendTimeoutMs,
   });
   if (!res.ok) {
     const errorText = await res.text();

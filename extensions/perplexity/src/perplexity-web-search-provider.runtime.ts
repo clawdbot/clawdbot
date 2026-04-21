@@ -129,6 +129,16 @@ function resolvePerplexityRequestModel(baseUrl: string, model: string): string {
   return model.startsWith("perplexity/") ? model.slice("perplexity/".length) : model;
 }
 
+function buildPerplexityRequestHeaders(apiKey: string, acceptJson = false): Record<string, string> {
+  return {
+    "Content-Type": "application/json",
+    ...(acceptJson ? { Accept: "application/json" } : {}),
+    Authorization: `Bearer ${apiKey}`,
+    "HTTP-Referer": "https://openclaw.ai",
+    "X-Title": "OpenClaw Web Search",
+  };
+}
+
 function resolvePerplexityTransport(perplexity?: PerplexityConfig): {
   apiKey?: string;
   source: "config" | "perplexity_env" | "openrouter_env" | "none";
@@ -228,13 +238,7 @@ async function runPerplexitySearchApi(params: {
       timeoutSeconds: params.timeoutSeconds,
       init: {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-          Authorization: `Bearer ${params.apiKey}`,
-          "HTTP-Referer": "https://openclaw.ai",
-          "X-Title": "OpenClaw Web Search",
-        },
+        headers: buildPerplexityRequestHeaders(params.apiKey, true),
         body: JSON.stringify(body),
       },
     },
@@ -277,12 +281,7 @@ async function runPerplexitySearch(params: {
       timeoutSeconds: params.timeoutSeconds,
       init: {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${params.apiKey}`,
-          "HTTP-Referer": "https://openclaw.ai",
-          "X-Title": "OpenClaw Web Search",
-        },
+        headers: buildPerplexityRequestHeaders(params.apiKey),
         body: JSON.stringify(body),
       },
     },

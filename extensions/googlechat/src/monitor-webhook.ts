@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { WebhookInFlightLimiter } from "openclaw/plugin-sdk/webhook-request-guards";
 import { readJsonWebhookBodyOrReject } from "openclaw/plugin-sdk/webhook-request-guards";
 import {
@@ -13,10 +14,6 @@ import type {
   GoogleChatSpace,
   GoogleChatUser,
 } from "./types.js";
-
-function normalizeLowercaseStringOrEmpty(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
-}
 
 function extractBearerToken(header: unknown): string {
   const authHeader = Array.isArray(header)
@@ -104,6 +101,19 @@ function parseGoogleChatInboundPayload(
   return { ok: true, event, addOnBearerToken };
 }
 
+async function isAuthorizedGoogleChatTarget(
+  target: WebhookTarget,
+  bearer: string,
+): Promise<boolean> {
+  const verification = await verifyGoogleChatRequest({
+    bearer,
+    audienceType: target.audienceType,
+    audience: target.audience,
+    expectedAddOnPrincipal: target.account.config.appPrincipal,
+  });
+  return verification.ok;
+}
+
 export function createGoogleChatWebhookRequestHandler(params: {
   webhookTargets: Map<string, WebhookTarget[]>;
   webhookInFlightLimiter: WebhookInFlightLimiter;
@@ -149,15 +159,7 @@ export function createGoogleChatWebhookRequestHandler(params: {
           selectedTarget = await resolveWebhookTargetWithAuthOrReject({
             targets,
             res,
-            isMatch: async (target) => {
-              const verification = await verifyGoogleChatRequest({
-                bearer: headerBearer,
-                audienceType: target.audienceType,
-                audience: target.audience,
-                expectedAddOnPrincipal: target.account.config.appPrincipal,
-              });
-              return verification.ok;
-            },
+            isMatch: (target) => isAuthorizedGoogleChatTarget(target, headerBearer),
           });
           if (!selectedTarget) {
             return true;
@@ -184,15 +186,7 @@ export function createGoogleChatWebhookRequestHandler(params: {
           selectedTarget = await resolveWebhookTargetWithAuthOrReject({
             targets,
             res,
-            isMatch: async (target) => {
-              const verification = await verifyGoogleChatRequest({
-                bearer: parsed.addOnBearerToken,
-                audienceType: target.audienceType,
-                audience: target.audience,
-                expectedAddOnPrincipal: target.account.config.appPrincipal,
-              });
-              return verification.ok;
-            },
+            isMatch: (target) => isAuthorizedGoogleChatTarget(target, parsed.addOnBearerToken),
           });
           if (!selectedTarget) {
             return true;

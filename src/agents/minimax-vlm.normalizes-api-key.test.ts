@@ -10,6 +10,7 @@ beforeAll(async () => {
 
 describe("minimaxUnderstandImage apiKey normalization", () => {
   const priorFetch = global.fetch;
+  const priorMinimaxApiHost = process.env.MINIMAX_API_HOST;
   const apiResponse = JSON.stringify({
     base_resp: { status_code: 0, status_msg: "ok" },
     content: "ok",
@@ -17,6 +18,11 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
 
   afterEach(() => {
     global.fetch = priorFetch;
+    if (priorMinimaxApiHost === undefined) {
+      delete process.env.MINIMAX_API_HOST;
+    } else {
+      process.env.MINIMAX_API_HOST = priorMinimaxApiHost;
+    }
     vi.restoreAllMocks();
   });
 
@@ -49,6 +55,30 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
 
   it("drops non-Latin1 characters from apiKey before sending Authorization header", async () => {
     await runNormalizationCase("minimax-\u0417\u2502test-key");
+  });
+
+  it("keeps trusted MINIMAX_API_HOST env fallback for VLM routing", async () => {
+    process.env.MINIMAX_API_HOST = "https://api.minimaxi.com";
+    const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
+      const requestUrl =
+        typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      expect(requestUrl).toBe("https://api.minimaxi.com/v1/coding_plan/vlm");
+      return new Response(apiResponse, {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    global.fetch = withFetchPreconnect(fetchSpy);
+
+    await expect(
+      minimaxUnderstandImage({
+        apiKey: "minimax-test-key",
+        prompt: "hi",
+        imageDataUrl: "data:image/png;base64,AAAA",
+      }),
+    ).resolves.toBe("ok");
+
+    expect(fetchSpy).toHaveBeenCalledOnce();
   });
 });
 

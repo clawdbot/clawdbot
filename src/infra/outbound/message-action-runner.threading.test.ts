@@ -8,24 +8,24 @@ import {
 const ensureOutboundSessionEntry = vi.fn(async () => undefined);
 const resolveOutboundSessionRoute = vi.fn();
 
-const slackConfig = {
+const workspaceConfig = {
   channels: {
-    slack: {
+    workspace: {
       botToken: "xoxb-test",
     },
   },
 } as OpenClawConfig;
 
-const telegramConfig = {
+const forumConfig = {
   channels: {
-    telegram: {
-      botToken: "telegram-test",
+    forum: {
+      botToken: "forum-test",
     },
   },
 } as OpenClawConfig;
 
-const defaultTelegramToolContext = {
-  currentChannelId: "telegram:123",
+const defaultForumToolContext = {
+  currentChannelId: "forum:123",
   currentThreadTs: "42",
 } as const;
 
@@ -40,17 +40,17 @@ describe("message action threading helpers", () => {
       name: "exact channel id",
       target: "channel:C123",
       threadTs: "111.222",
-      expectedSessionKey: "agent:main:slack:channel:c123:thread:111.222",
+      expectedSessionKey: "agent:main:workspace:channel:c123:thread:111.222",
     },
     {
       name: "case-insensitive channel id",
       target: "channel:c123",
       threadTs: "333.444",
-      expectedSessionKey: "agent:main:slack:channel:c123:thread:333.444",
+      expectedSessionKey: "agent:main:workspace:channel:c123:thread:333.444",
     },
-  ] as const)("prepares outbound routes for slack using $name", async (testCase) => {
+  ] as const)("prepares outbound routes for workspace using $name", async (testCase) => {
     const actionParams: Record<string, unknown> = {
-      channel: "slack",
+      channel: "workspace",
       target: testCase.target,
       message: "hi",
     };
@@ -65,8 +65,8 @@ describe("message action threading helpers", () => {
     });
 
     const result = await prepareOutboundMirrorRoute({
-      cfg: slackConfig,
-      channel: "slack",
+      cfg: workspaceConfig,
+      channel: "workspace",
       to: testCase.target,
       actionParams,
       toolContext: {
@@ -89,30 +89,30 @@ describe("message action threading helpers", () => {
   it.each([
     {
       name: "injects threadId for matching target",
-      target: "telegram:123",
+      target: "forum:123",
       expectedThreadId: "42",
     },
     {
       name: "injects threadId for prefixed group target",
-      target: "telegram:group:123",
+      target: "forum:group:123",
       expectedThreadId: "42",
     },
     {
       name: "skips threadId when target chat differs",
-      target: "telegram:999",
+      target: "forum:999",
       expectedThreadId: undefined,
     },
-  ] as const)("telegram auto-threading: $name", (testCase) => {
+  ] as const)("forum auto-threading: $name", (testCase) => {
     const actionParams: Record<string, unknown> = {
-      channel: "telegram",
+      channel: "forum",
       target: testCase.target,
       message: "hi",
     };
 
     const resolved = resolveAndApplyOutboundThreadId(actionParams, {
-      cfg: telegramConfig,
+      cfg: forumConfig,
       to: testCase.target,
-      toolContext: defaultTelegramToolContext,
+      toolContext: defaultForumToolContext,
       resolveAutoThreadId: ({ to, toolContext }) =>
         to.includes("123") ? toolContext?.currentThreadTs : undefined,
     });
@@ -121,18 +121,18 @@ describe("message action threading helpers", () => {
     expect(resolved).toBe(testCase.expectedThreadId);
   });
 
-  it("uses explicit telegram threadId when provided", () => {
+  it("uses explicit forum threadId when provided", () => {
     const actionParams: Record<string, unknown> = {
-      channel: "telegram",
-      target: "telegram:123",
+      channel: "forum",
+      target: "forum:123",
       message: "hi",
       threadId: "999",
     };
 
     const resolved = resolveAndApplyOutboundThreadId(actionParams, {
-      cfg: telegramConfig,
-      to: "telegram:123",
-      toolContext: defaultTelegramToolContext,
+      cfg: forumConfig,
+      to: "forum:123",
+      toolContext: defaultForumToolContext,
       resolveAutoThreadId: () => "42",
     });
 
@@ -143,16 +143,16 @@ describe("message action threading helpers", () => {
   it("passes explicit replyTo into auto-thread resolution", () => {
     const resolveAutoThreadId = vi.fn(() => "thread-777");
     const actionParams: Record<string, unknown> = {
-      channel: "telegram",
-      target: "telegram:123",
+      channel: "forum",
+      target: "forum:123",
       message: "hi",
       replyTo: "777",
     };
 
     const resolved = resolveAndApplyOutboundThreadId(actionParams, {
-      cfg: telegramConfig,
-      to: "telegram:123",
-      toolContext: defaultTelegramToolContext,
+      cfg: forumConfig,
+      to: "forum:123",
+      toolContext: defaultForumToolContext,
       resolveAutoThreadId,
     });
 

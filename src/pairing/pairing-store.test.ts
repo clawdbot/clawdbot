@@ -3,7 +3,16 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  type MockInstance,
+  vi,
+} from "vitest";
 import { resolveOAuthDir } from "../config/paths.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -64,6 +73,10 @@ import {
 
 let fixtureRoot = "";
 let caseId = 0;
+type RandomIntSync = (minOrMax: number, max?: number) => number;
+
+let randomIntSpy: MockInstance<RandomIntSync>;
+let nextRandomInt = 0;
 
 beforeAll(async () => {
   fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pairing-"));
@@ -77,7 +90,23 @@ afterAll(async () => {
 
 beforeEach(() => {
   clearPairingAllowFromReadCacheForTest();
+  nextRandomInt = 0;
+  randomIntSpy ??= vi.spyOn(crypto, "randomInt") as unknown as MockInstance<RandomIntSync>;
+  setDefaultRandomIntMock();
 });
+
+afterAll(() => {
+  randomIntSpy?.mockRestore();
+});
+
+function setDefaultRandomIntMock() {
+  randomIntSpy.mockImplementation((minOrMax: number, max?: number) => {
+    const min = max === undefined ? 0 : minOrMax;
+    const upper = max === undefined ? minOrMax : max;
+    const span = Math.max(upper - min, 1);
+    return min + (nextRandomInt++ % span);
+  });
+}
 
 async function withTempStateDir<T>(fn: (stateDir: string) => Promise<T>) {
   const dir = path.join(fixtureRoot, `case-${caseId++}`);
@@ -215,36 +244,35 @@ async function withMockRandomInt(params: {
   fallbackValue?: number;
   run: () => Promise<void>;
 }) {
-  const spy = vi.spyOn(crypto, "randomInt") as unknown as {
-    mockReturnValue: (value: number) => void;
-    mockImplementation: (fn: () => number) => void;
-    mockRestore: () => void;
-  };
-
   try {
     if (params.initialValue !== undefined) {
-      spy.mockReturnValue(params.initialValue);
+      randomIntSpy.mockReturnValue(params.initialValue);
     }
 
     if (params.sequence) {
       let idx = 0;
-      spy.mockImplementation(() => params.sequence?.[idx++] ?? params.fallbackValue ?? 1);
+      randomIntSpy.mockImplementation(() => params.sequence?.[idx++] ?? params.fallbackValue ?? 1);
     }
 
     await params.run();
   } finally {
-    spy.mockRestore();
+    setDefaultRandomIntMock();
   }
 }
 
 async function expectAllowFromReadConsistencyCase(params: {
   accountId?: string;
   expected: readonly string[];
+  expectedLegacy?: readonly string[];
 }) {
   const asyncScoped = await readChannelAllowFromStore("telegram", process.env, params.accountId);
   const syncScoped = readChannelAllowFromStoreSync("telegram", process.env, params.accountId);
   expect(asyncScoped).toEqual(params.expected);
   expect(syncScoped).toEqual(params.expected);
+  if (params.expectedLegacy) {
+    expect(await readLegacyChannelAllowFromStore("telegram")).toEqual(params.expectedLegacy);
+    expect(readLegacyChannelAllowFromStoreSync("telegram")).toEqual(params.expectedLegacy);
+  }
 }
 
 async function expectPendingPairingRequestsIsolatedByAccount(params: {
@@ -281,32 +309,6 @@ async function expectPendingPairingRequestsIsolatedByAccount(params: {
   expect(secondList).toHaveLength(1);
   expect(firstList[0]?.code).toBe(first.code);
   expect(secondList[0]?.code).toBe(second.code);
-}
-
-async function expectScopedAllowFromReadCase(params: {
-  stateDir: string;
-  legacyAllowFrom: string[];
-  scopedAllowFrom: string[];
-  accountId: string;
-  expectedScoped: string[];
-  expectedLegacy: string[];
-}) {
-  await writeAllowFromFixture({
-    stateDir: params.stateDir,
-    channel: "telegram",
-    allowFrom: params.legacyAllowFrom,
-  });
-  await writeAllowFromFixture({
-    stateDir: params.stateDir,
-    channel: "telegram",
-    accountId: params.accountId,
-    allowFrom: params.scopedAllowFrom,
-  });
-
-  const scoped = readChannelAllowFromStoreSync("telegram", process.env, params.accountId);
-  const channelScoped = readLegacyChannelAllowFromStoreSync("telegram");
-  expect(scoped).toEqual(params.expectedScoped);
-  expect(channelScoped).toEqual(params.expectedLegacy);
 }
 
 describe("pairing store", () => {
@@ -473,33 +475,21 @@ describe("pairing store", () => {
     });
   });
 
-  it("reads sync allowFrom with account-scoped isolation and wildcard filtering", async () => {
-    await withTempStateDir(async (stateDir) => {
-      await expectScopedAllowFromReadCase({
-        stateDir,
-        legacyAllowFrom: ["1001", "*", " 1001 ", "  "],
-        scopedAllowFrom: [" 1002 ", "1001", "1002"],
-        accountId: "yy",
-        expectedScoped: ["1002", "1001"],
-        expectedLegacy: ["1001"],
-      });
-    });
-  });
-
   it("reads allowFrom variants with account-scoped isolation", async () => {
     await withTempStateDir(async (stateDir) => {
-      for (const { setup, accountId, expected } of [
+      for (const { setup, accountId, expected, expectedLegacy } of [
         {
           setup: async () => {
             await seedTelegramAllowFromFixtures({
               stateDir,
               scopedAccountId: "yy",
-              scopedAllowFrom: ["1003"],
+              scopedAllowFrom: [" 1003 ", "*", "1003"],
               legacyAllowFrom: ["1001", "*", "1002", "1001"],
             });
           },
           accountId: "yy",
           expected: ["1003"],
+          expectedLegacy: ["1001", "1002"],
         },
         {
           setup: async () => {
@@ -546,6 +536,7 @@ describe("pairing store", () => {
         await expectAllowFromReadConsistencyCase({
           ...(accountId !== undefined ? { accountId } : {}),
           expected,
+          ...(expectedLegacy !== undefined ? { expectedLegacy } : {}),
         });
       }
     });

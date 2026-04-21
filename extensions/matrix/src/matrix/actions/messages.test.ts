@@ -89,6 +89,22 @@ function createMessagesClient(params: {
   };
 }
 
+function createEditClient(originalContent: Record<string, unknown>) {
+  const sendMessage = vi.fn().mockResolvedValue("evt-edit");
+  const client = {
+    getEvent: vi.fn().mockResolvedValue({ content: originalContent }),
+    getJoinedRoomMembers: vi.fn().mockResolvedValue([]),
+    getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
+    sendMessage,
+    prepareForOneOff: vi.fn(async () => undefined),
+    start: vi.fn(async () => undefined),
+    stop: vi.fn(() => undefined),
+    stopAndPersist: vi.fn(async () => undefined),
+  } as unknown as MatrixClient;
+
+  return { client, sendMessage };
+}
+
 describe("matrix message actions", () => {
   it("forwards timeoutMs to the shared Matrix edit helper", async () => {
     const editSpy = vi.spyOn(sendModule, "editMessageMatrix").mockResolvedValue("evt-edit");
@@ -112,22 +128,10 @@ describe("matrix message actions", () => {
 
   it("routes edits through the shared Matrix edit helper so mentions are preserved", async () => {
     installMatrixActionTestRuntime();
-    const sendMessage = vi.fn().mockResolvedValue("evt-edit");
-    const client = {
-      getEvent: vi.fn().mockResolvedValue({
-        content: {
-          body: "hello @alice:example.org",
-          "m.mentions": { user_ids: ["@alice:example.org"] },
-        },
-      }),
-      getJoinedRoomMembers: vi.fn().mockResolvedValue([]),
-      getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
-      sendMessage,
-      prepareForOneOff: vi.fn(async () => undefined),
-      start: vi.fn(async () => undefined),
-      stop: vi.fn(() => undefined),
-      stopAndPersist: vi.fn(async () => undefined),
-    } as unknown as MatrixClient;
+    const { client, sendMessage } = createEditClient({
+      body: "hello @alice:example.org",
+      "m.mentions": { user_ids: ["@alice:example.org"] },
+    });
 
     const result = await editMatrixMessage(
       "!room:example.org",
@@ -150,21 +154,9 @@ describe("matrix message actions", () => {
 
   it("does not re-notify legacy mentions when action edits target pre-m.mentions messages", async () => {
     installMatrixActionTestRuntime();
-    const sendMessage = vi.fn().mockResolvedValue("evt-edit");
-    const client = {
-      getEvent: vi.fn().mockResolvedValue({
-        content: {
-          body: "hello @alice:example.org",
-        },
-      }),
-      getJoinedRoomMembers: vi.fn().mockResolvedValue([]),
-      getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
-      sendMessage,
-      prepareForOneOff: vi.fn(async () => undefined),
-      start: vi.fn(async () => undefined),
-      stop: vi.fn(() => undefined),
-      stopAndPersist: vi.fn(async () => undefined),
-    } as unknown as MatrixClient;
+    const { client, sendMessage } = createEditClient({
+      body: "hello @alice:example.org",
+    });
 
     const result = await editMatrixMessage(
       "!room:example.org",

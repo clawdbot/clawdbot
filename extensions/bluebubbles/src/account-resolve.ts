@@ -19,6 +19,13 @@ export function resolveBlueBubblesServerAccount(params: BlueBubblesAccountResolv
   accountId: string;
   allowPrivateNetwork: boolean;
   allowPrivateNetworkConfig?: boolean;
+  /**
+   * Per-account send timeout from `channels.bluebubbles.sendTimeoutMs` (or
+   * `accounts.<id>.sendTimeoutMs`). Only returned when the caller configured
+   * a positive integer; `undefined` means "fall back to DEFAULT_SEND_TIMEOUT_MS".
+   * (#67486)
+   */
+  sendTimeoutMs?: number;
 } {
   const account = resolveBlueBubblesAccount({
     cfg: params.cfg ?? {},
@@ -49,6 +56,13 @@ export function resolveBlueBubblesServerAccount(params: BlueBubblesAccountResolv
     throw new Error("BlueBubbles password is required");
   }
 
+  const rawSendTimeoutMs = account.config.sendTimeoutMs;
+  const sendTimeoutMs =
+    typeof rawSendTimeoutMs === "number" &&
+    Number.isInteger(rawSendTimeoutMs) &&
+    rawSendTimeoutMs > 0
+      ? rawSendTimeoutMs
+      : undefined;
   return {
     baseUrl,
     password,
@@ -58,5 +72,6 @@ export function resolveBlueBubblesServerAccount(params: BlueBubblesAccountResolv
       config: account.config,
     }),
     allowPrivateNetworkConfig: resolveBlueBubblesPrivateNetworkConfigValue(account.config),
+    sendTimeoutMs,
   };
 }

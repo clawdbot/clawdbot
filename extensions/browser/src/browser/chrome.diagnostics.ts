@@ -178,7 +178,7 @@ async function diagnoseCdpHealthCommand(
             : `WebSocket handshake did not complete within ${timeoutMs}ms`,
         });
       },
-      Math.max(50, timeoutMs + 25),
+      Math.max(1, timeoutMs + Math.min(25, timeoutMs)),
     );
 
     ws.once("open", () => {

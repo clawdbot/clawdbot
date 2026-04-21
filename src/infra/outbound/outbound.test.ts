@@ -60,23 +60,23 @@ describe("DirectoryCache", () => {
 });
 
 describe("buildOutboundResultEnvelope", () => {
-  const whatsappDelivery: OutboundDeliveryJson = {
-    channel: "whatsapp",
+  const directChatDelivery: OutboundDeliveryJson = {
+    channel: "directchat",
     via: "gateway",
     to: "+1",
     messageId: "m1",
     mediaUrl: null,
   };
-  const telegramDelivery: OutboundDeliveryJson = {
-    channel: "telegram",
+  const alphaDelivery: OutboundDeliveryJson = {
+    channel: "alpha",
     via: "direct",
     to: "123",
     messageId: "m2",
     mediaUrl: null,
     chatId: "c1",
   };
-  const discordDelivery: OutboundDeliveryJson = {
-    channel: "discord",
+  const richChatDelivery: OutboundDeliveryJson = {
+    channel: "richchat",
     via: "gateway",
     to: "channel:C1",
     messageId: "m3",
@@ -92,8 +92,8 @@ describe("buildOutboundResultEnvelope", () => {
     }>([
       {
         name: "flatten delivery by default",
-        input: { delivery: whatsappDelivery },
-        expected: whatsappDelivery,
+        input: { delivery: directChatDelivery },
+        expected: directChatDelivery,
       },
       {
         name: "keep payloads + meta",
@@ -108,17 +108,17 @@ describe("buildOutboundResultEnvelope", () => {
       },
       {
         name: "include delivery when payloads exist",
-        input: { payloads: [], delivery: telegramDelivery, meta: { ok: true } },
+        input: { payloads: [], delivery: alphaDelivery, meta: { ok: true } },
         expected: {
           payloads: [],
           meta: { ok: true },
-          delivery: telegramDelivery,
+          delivery: alphaDelivery,
         },
       },
       {
         name: "keep wrapped delivery when flatten disabled",
-        input: { delivery: discordDelivery, flattenDelivery: false },
-        expected: { delivery: discordDelivery },
+        input: { delivery: richChatDelivery, flattenDelivery: false },
+        expected: { delivery: richChatDelivery },
       },
     ]),
   )("$name", ({ input, expected }) => {

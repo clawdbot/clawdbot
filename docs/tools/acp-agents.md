@@ -787,6 +787,18 @@ openclaw config set plugins.entries.acpx.config.timeoutSeconds 180
 
 Restart the gateway after changing this value.
 
+### Health probe agent configuration
+
+The bundled `acpx` plugin probes one harness agent while deciding whether the
+embedded runtime backend is ready. It defaults to `codex`. If your deployment
+uses a different default ACP agent, set the probe agent to the same id:
+
+```bash
+openclaw config set plugins.entries.acpx.config.probeAgent claude
+```
+
+Restart the gateway after changing this value.
+
 ## Permission configuration
 
 ACP sessions run non-interactively — there is no TTY to approve or deny file-write and shell-exec permission prompts. The acpx plugin provides two config keys that control how permissions are handled:

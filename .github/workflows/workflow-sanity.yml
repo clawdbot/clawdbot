@@ -92,7 +92,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: "false"
 
       - name: Check config docs drift statefile
         run: pnpm config:docs:check

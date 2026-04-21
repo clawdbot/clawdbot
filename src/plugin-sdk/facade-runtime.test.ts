@@ -12,32 +12,22 @@ import {
   loadBundledPluginPublicSurfaceModuleSync,
   resetFacadeRuntimeStateForTest,
 } from "./facade-runtime.js";
-import { createPluginSdkTestHarness } from "./test-helpers.js";
+import {
+  createBundledPluginPublicSurfaceFixture,
+  createPluginSdkTestHarness,
+  createThrowingBundledPluginPublicSurfaceFixture,
+} from "./test-helpers.js";
 
 const { createTempDirSync } = createPluginSdkTestHarness();
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 
 function createBundledPluginDir(prefix: string, marker: string): string {
-  const rootDir = createTempDirSync(prefix);
-  fs.mkdirSync(path.join(rootDir, "demo"), { recursive: true });
-  fs.writeFileSync(
-    path.join(rootDir, "demo", "api.js"),
-    `export const marker = ${JSON.stringify(marker)};\n`,
-    "utf8",
-  );
-  return rootDir;
+  return createBundledPluginPublicSurfaceFixture({ createTempDirSync, marker, prefix });
 }
 
 function createThrowingPluginDir(prefix: string): string {
-  const rootDir = createTempDirSync(prefix);
-  fs.mkdirSync(path.join(rootDir, "bad"), { recursive: true });
-  fs.writeFileSync(
-    path.join(rootDir, "bad", "api.js"),
-    `throw new Error("plugin load failure");\n`,
-    "utf8",
-  );
-  return rootDir;
+  return createThrowingBundledPluginPublicSurfaceFixture({ createTempDirSync, prefix });
 }
 
 afterEach(() => {

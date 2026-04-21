@@ -16,7 +16,7 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { GatewayClient } from "./client.js";
+import { GatewayClient, type GatewayClientOptions } from "./client.js";
 import {
   assertCronJobMatches,
   assertCronJobVisibleViaCli,
@@ -472,27 +472,35 @@ export async function connectTestGatewayClient(params: {
   url: string;
   token: string;
   deviceIdentity?: DeviceIdentity;
+  timeoutMs?: number;
+  maxAttemptTimeoutMs?: number;
+  clientDisplayName?: string | null;
+  requestTimeoutMs?: number;
+  onRetry?: (attempt: number, error: Error) => void;
 }): Promise<GatewayClient> {
+  const timeoutMs = params.timeoutMs ?? CLI_GATEWAY_CONNECT_TIMEOUT_MS;
+  const maxAttemptTimeoutMs = params.maxAttemptTimeoutMs ?? 45_000;
   const startedAt = Date.now();
   let attempt = 0;
   let lastError: Error | null = null;
 
-  while (Date.now() - startedAt < CLI_GATEWAY_CONNECT_TIMEOUT_MS) {
+  while (Date.now() - startedAt < timeoutMs) {
     attempt += 1;
-    const remainingMs = CLI_GATEWAY_CONNECT_TIMEOUT_MS - (Date.now() - startedAt);
+    const remainingMs = timeoutMs - (Date.now() - startedAt);
     if (remainingMs <= 0) {
       break;
     }
     try {
       return await connectClientOnce({
         ...params,
-        timeoutMs: Math.min(remainingMs, 45_000),
+        timeoutMs: Math.min(remainingMs, maxAttemptTimeoutMs),
       });
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
       if (!isRetryableGatewayConnectError(lastError) || remainingMs <= 5_000) {
         throw lastError;
       }
+      params.onRetry?.(attempt, lastError);
       await sleep(Math.min(1_000 * attempt, 5_000));
     }
   }
@@ -505,6 +513,8 @@ async function connectClientOnce(params: {
   token: string;
   timeoutMs: number;
   deviceIdentity?: DeviceIdentity;
+  clientDisplayName?: string | null;
+  requestTimeoutMs?: number;
 }): Promise<GatewayClient> {
   return await new Promise<GatewayClient>((resolve, reject) => {
     let done = false;
@@ -528,11 +538,10 @@ async function connectClientOnce(params: {
     const failWithClose = (code: number, reason: string) =>
       finish({ error: new Error(`gateway closed during connect (${code}): ${reason}`) });
 
-    client = new GatewayClient({
+    const clientOptions: GatewayClientOptions = {
       url: params.url,
       token: params.token,
       clientName: GATEWAY_CLIENT_NAMES.TEST,
-      clientDisplayName: "vitest-live",
       clientVersion: "dev",
       mode: GATEWAY_CLIENT_MODES.TEST,
       connectChallengeTimeoutMs: params.timeoutMs,
@@ -540,7 +549,15 @@ async function connectClientOnce(params: {
       onHelloOk: () => finish({ client }),
       onConnectError: (error) => finish({ error }),
       onClose: failWithClose,
-    });
+    };
+    if (params.clientDisplayName !== null) {
+      clientOptions.clientDisplayName = params.clientDisplayName ?? "vitest-live";
+    }
+    if (params.requestTimeoutMs !== undefined) {
+      clientOptions.requestTimeoutMs = params.requestTimeoutMs;
+    }
+
+    client = new GatewayClient(clientOptions);
 
     const connectTimeout = setTimeout(
       () => finish({ error: new Error("gateway connect timeout") }),
@@ -620,7 +637,9 @@ function restoreEnvVar(name: string, value: string | undefined): void {
   process.env[name] = value;
 }
 
-export async function ensurePairedTestGatewayClientIdentity(): Promise<DeviceIdentity> {
+export async function ensurePairedTestGatewayClientIdentity(params?: {
+  displayName?: string;
+}): Promise<DeviceIdentity> {
   const identity = loadOrCreateDeviceIdentity();
   const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
   const requiredScopes = ["operator.admin"];
@@ -639,7 +658,7 @@ export async function ensurePairedTestGatewayClientIdentity(): Promise<DeviceIde
   const pairing = await requestDevicePairing({
     deviceId: identity.deviceId,
     publicKey,
-    displayName: "vitest",
+    displayName: params?.displayName ?? "vitest",
     platform: process.platform,
     clientId: GATEWAY_CLIENT_NAMES.TEST,
     clientMode: GATEWAY_CLIENT_MODES.TEST,

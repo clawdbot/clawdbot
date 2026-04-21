@@ -35,6 +35,7 @@ function shouldIgnoreReadinessFailure(
 export function createReadinessChecker(deps: {
   channelManager: ChannelManager;
   startedAt: number;
+  getStartupPending?: () => boolean;
   cacheTtlMs?: number;
 }): ReadinessChecker {
   const { channelManager, startedAt } = deps;
@@ -45,6 +46,9 @@ export function createReadinessChecker(deps: {
   return (): ReadinessResult => {
     const now = Date.now();
     const uptimeMs = now - startedAt;
+    if (deps.getStartupPending?.()) {
+      return { ready: false, failing: ["startup-sidecars"], uptimeMs };
+    }
     if (cachedState && now - cachedAt < cacheTtlMs) {
       return { ...cachedState, uptimeMs };
     }

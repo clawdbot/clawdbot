@@ -138,10 +138,20 @@ export default definePluginEntry({
       resolveDynamicModel: (ctx) => resolveCopilotForwardCompatModel(ctx),
       wrapStreamFn: wrapCopilotProviderStream,
       buildReplayPolicy: ({ modelId }) => buildGithubCopilotReplayPolicy(modelId),
-      supportsXHighThinking: ({ modelId }) =>
-        COPILOT_XHIGH_MODEL_IDS.includes(
-          (normalizeOptionalLowercaseString(modelId) ?? "") as never,
-        ),
+      resolveThinkingProfile: ({ modelId }) => ({
+        levels: [
+          { id: "off" },
+          { id: "minimal" },
+          { id: "low" },
+          { id: "medium" },
+          { id: "high" },
+          ...(COPILOT_XHIGH_MODEL_IDS.includes(
+            (normalizeOptionalLowercaseString(modelId) ?? "") as never,
+          )
+            ? [{ id: "xhigh" as const }]
+            : []),
+        ],
+      }),
       prepareRuntimeAuth: async (ctx) => {
         const { resolveCopilotApiToken } = await loadGithubCopilotRuntime();
         const token = await resolveCopilotApiToken({

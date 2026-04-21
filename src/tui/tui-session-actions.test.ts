@@ -9,6 +9,53 @@ describe("tui session actions", () => {
     showResult: vi.fn(),
   });
 
+  const createBaseState = (overrides: Partial<TuiStateAccess> = {}): TuiStateAccess => ({
+    agentDefaultId: "main",
+    sessionMainKey: "agent:main:main",
+    sessionScope: "global",
+    agents: [],
+    currentAgentId: "main",
+    currentSessionKey: "agent:main:main",
+    currentSessionId: null,
+    activeChatRunId: null,
+    historyLoaded: false,
+    sessionInfo: {},
+    initialSessionApplied: true,
+    isConnected: true,
+    autoMessageSent: false,
+    toolsExpanded: false,
+    showThinking: false,
+    connectionStatus: "connected",
+    activityStatus: "idle",
+    statusTimeout: null,
+    lastCtrlCAt: 0,
+    ...overrides,
+  });
+
+  const createTestSessionActions = (
+    overrides: Partial<Parameters<typeof createSessionActions>[0]>,
+  ) =>
+    createSessionActions({
+      client: { listSessions: vi.fn() } as unknown as GatewayChatClient,
+      chatLog: {
+        addSystem: vi.fn(),
+        clearAll: vi.fn(),
+      } as unknown as import("./components/chat-log.js").ChatLog,
+      btw: createBtwPresenter(),
+      tui: { requestRender: vi.fn() } as unknown as import("@mariozechner/pi-tui").TUI,
+      opts: {},
+      state: createBaseState(),
+      agentNames: new Map(),
+      initialSessionInput: "",
+      initialSessionAgentId: null,
+      resolveSessionKey: vi.fn((raw?: string) => raw ?? "agent:main:main"),
+      updateHeader: vi.fn(),
+      updateFooter: vi.fn(),
+      updateAutocompleteProvider: vi.fn(),
+      setActivityStatus: vi.fn(),
+      ...overrides,
+    });
+
   it("queues session refreshes and applies the latest result", async () => {
     let resolveFirst: ((value: unknown) => void) | undefined;
     let resolveSecond: ((value: unknown) => void) | undefined;
@@ -28,47 +75,20 @@ describe("tui session actions", () => {
           }),
       );
 
-    const state: TuiStateAccess = {
-      agentDefaultId: "main",
-      sessionMainKey: "agent:main:main",
-      sessionScope: "global",
-      agents: [],
-      currentAgentId: "main",
-      currentSessionKey: "agent:main:main",
-      currentSessionId: null,
-      activeChatRunId: null,
-      historyLoaded: false,
-      sessionInfo: {},
-      initialSessionApplied: true,
-      isConnected: true,
-      autoMessageSent: false,
-      toolsExpanded: false,
-      showThinking: false,
-      connectionStatus: "connected",
-      activityStatus: "idle",
-      statusTimeout: null,
-      lastCtrlCAt: 0,
-    };
+    const state = createBaseState();
 
     const updateFooter = vi.fn();
     const updateAutocompleteProvider = vi.fn();
     const requestRender = vi.fn();
 
-    const { refreshSessionInfo } = createSessionActions({
+    const { refreshSessionInfo } = createTestSessionActions({
       client: { listSessions } as unknown as GatewayChatClient,
       chatLog: { addSystem: vi.fn() } as unknown as import("./components/chat-log.js").ChatLog,
       btw: createBtwPresenter(),
       tui: { requestRender } as unknown as import("@mariozechner/pi-tui").TUI,
-      opts: {},
       state,
-      agentNames: new Map(),
-      initialSessionInput: "",
-      initialSessionAgentId: null,
-      resolveSessionKey: vi.fn(),
-      updateHeader: vi.fn(),
       updateFooter,
       updateAutocompleteProvider,
-      setActivityStatus: vi.fn(),
     });
 
     const first = refreshSessionInfo();
@@ -134,47 +154,17 @@ describe("tui session actions", () => {
       ],
     });
 
-    const state: TuiStateAccess = {
-      agentDefaultId: "main",
-      sessionMainKey: "agent:main:main",
-      sessionScope: "global",
-      agents: [],
-      currentAgentId: "main",
-      currentSessionKey: "agent:main:main",
-      currentSessionId: null,
-      activeChatRunId: null,
-      historyLoaded: false,
+    const state = createBaseState({
       sessionInfo: {
         model: "old-model",
         modelProvider: "ollama",
         updatedAt: 100,
       },
-      initialSessionApplied: true,
-      isConnected: true,
-      autoMessageSent: false,
-      toolsExpanded: false,
-      showThinking: false,
-      connectionStatus: "connected",
-      activityStatus: "idle",
-      statusTimeout: null,
-      lastCtrlCAt: 0,
-    };
+    });
 
-    const { applySessionInfoFromPatch, refreshSessionInfo } = createSessionActions({
+    const { applySessionInfoFromPatch, refreshSessionInfo } = createTestSessionActions({
       client: { listSessions } as unknown as GatewayChatClient,
-      chatLog: { addSystem: vi.fn() } as unknown as import("./components/chat-log.js").ChatLog,
-      btw: createBtwPresenter(),
-      tui: { requestRender: vi.fn() } as unknown as import("@mariozechner/pi-tui").TUI,
-      opts: {},
       state,
-      agentNames: new Map(),
-      initialSessionInput: "",
-      initialSessionAgentId: null,
-      resolveSessionKey: vi.fn(),
-      updateHeader: vi.fn(),
-      updateFooter: vi.fn(),
-      updateAutocompleteProvider: vi.fn(),
-      setActivityStatus: vi.fn(),
     });
 
     applySessionInfoFromPatch({
@@ -220,53 +210,23 @@ describe("tui session actions", () => {
     });
     const btw = createBtwPresenter();
 
-    const state: TuiStateAccess = {
-      agentDefaultId: "main",
-      sessionMainKey: "agent:main:main",
-      sessionScope: "global",
-      agents: [],
-      currentAgentId: "main",
-      currentSessionKey: "agent:main:main",
-      currentSessionId: null,
-      activeChatRunId: null,
+    const state = createBaseState({
       historyLoaded: true,
       sessionInfo: {
         model: "previous-model",
         modelProvider: "anthropic",
         updatedAt: 500,
       },
-      initialSessionApplied: true,
-      isConnected: true,
-      autoMessageSent: false,
-      toolsExpanded: false,
-      showThinking: false,
-      connectionStatus: "connected",
-      activityStatus: "idle",
-      statusTimeout: null,
-      lastCtrlCAt: 0,
-    };
+    });
 
     const setActivityStatus = vi.fn();
-    const { setSession } = createSessionActions({
+    const { setSession } = createTestSessionActions({
       client: {
         listSessions,
         loadHistory,
       } as unknown as GatewayChatClient,
-      chatLog: {
-        addSystem: vi.fn(),
-        clearAll: vi.fn(),
-      } as unknown as import("./components/chat-log.js").ChatLog,
       btw,
-      tui: { requestRender: vi.fn() } as unknown as import("@mariozechner/pi-tui").TUI,
-      opts: {},
       state,
-      agentNames: new Map(),
-      initialSessionInput: "",
-      initialSessionAgentId: null,
-      resolveSessionKey: vi.fn((raw?: string) => raw ?? "agent:main:main"),
-      updateHeader: vi.fn(),
-      updateFooter: vi.fn(),
-      updateAutocompleteProvider: vi.fn(),
       setActivityStatus,
     });
 
@@ -298,48 +258,18 @@ describe("tui session actions", () => {
     });
     const setActivityStatus = vi.fn();
 
-    const state: TuiStateAccess = {
-      agentDefaultId: "main",
-      sessionMainKey: "agent:main:main",
-      sessionScope: "global",
-      agents: [],
-      currentAgentId: "main",
-      currentSessionKey: "agent:main:main",
-      currentSessionId: null,
+    const state = createBaseState({
       activeChatRunId: "run-1",
       historyLoaded: true,
-      sessionInfo: {},
-      initialSessionApplied: true,
-      isConnected: true,
-      autoMessageSent: false,
-      toolsExpanded: false,
-      showThinking: false,
-      connectionStatus: "connected",
       activityStatus: "streaming",
-      statusTimeout: null,
-      lastCtrlCAt: 0,
-    };
+    });
 
-    const { setSession } = createSessionActions({
+    const { setSession } = createTestSessionActions({
       client: {
         listSessions,
         loadHistory,
       } as unknown as GatewayChatClient,
-      chatLog: {
-        addSystem: vi.fn(),
-        clearAll: vi.fn(),
-      } as unknown as import("./components/chat-log.js").ChatLog,
-      btw: createBtwPresenter(),
-      tui: { requestRender: vi.fn() } as unknown as import("@mariozechner/pi-tui").TUI,
-      opts: {},
       state,
-      agentNames: new Map(),
-      initialSessionInput: "",
-      initialSessionAgentId: null,
-      resolveSessionKey: vi.fn((raw?: string) => raw ?? "agent:main:main"),
-      updateHeader: vi.fn(),
-      updateFooter: vi.fn(),
-      updateAutocompleteProvider: vi.fn(),
       setActivityStatus,
     });
 

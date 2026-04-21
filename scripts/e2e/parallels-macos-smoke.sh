@@ -47,7 +47,7 @@ BUILD_LOCK_DIR="${TMPDIR:-/tmp}/openclaw-parallels-build.lock"
 TIMEOUT_INSTALL_SITE_S=420
 TIMEOUT_INSTALL_TGZ_S=420
 TIMEOUT_INSTALL_REGISTRY_S=420
-TIMEOUT_UPDATE_DEV_S=300
+TIMEOUT_UPDATE_DEV_S="${OPENCLAW_PARALLELS_MACOS_UPDATE_DEV_TIMEOUT_S:-600}"
 TIMEOUT_VERIFY_S=60
 TIMEOUT_ONBOARD_S=180
 TIMEOUT_GATEWAY_S=180
@@ -1156,6 +1156,7 @@ pack_main_tgz() {
   fi
   say "Pack current main tgz"
   ensure_current_build
+  write_package_dist_inventory
   stage_pack_runtime_deps
   short_head="$(git rev-parse --short HEAD)"
   pkg="$(
@@ -1236,6 +1237,11 @@ ensure_current_build() {
   release_build_lock
   [[ "$build_commit" == "$head" ]] || die "dist/build-info.json still does not match HEAD after build"
   current_control_ui_ready || die "dist/control-ui/index.html missing after ui build"
+}
+
+write_package_dist_inventory() {
+  node --import tsx --input-type=module --eval \
+    'import { writePackageDistInventory } from "./src/infra/package-dist-inventory.ts"; await writePackageDistInventory(process.cwd());'
 }
 
 stage_pack_runtime_deps() {

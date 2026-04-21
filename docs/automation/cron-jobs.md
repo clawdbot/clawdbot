@@ -25,6 +25,7 @@ openclaw cron add \
 
 # Check your jobs
 openclaw cron list
+openclaw cron show <job-id>
 
 # See run history
 openclaw cron runs --id <job-id>
@@ -33,7 +34,9 @@ openclaw cron runs --id <job-id>
 ## How cron works
 
 - Cron runs **inside the Gateway** process (not inside the model).
-- Jobs persist at `~/.openclaw/cron/jobs.json` so restarts do not lose schedules.
+- Job definitions persist at `~/.openclaw/cron/jobs.json` so restarts do not lose schedules.
+- Runtime execution state persists next to it in `~/.openclaw/cron/jobs-state.json`. If you track cron definitions in git, track `jobs.json` and gitignore `jobs-state.json`.
+- After the split, older OpenClaw versions can read `jobs.json` but may treat jobs as fresh because runtime fields now live in `jobs-state.json`.
 - All cron executions create [background task](/automation/tasks) records.
 - One-shot jobs (`--at`) auto-delete after success by default.
 - Isolated cron runs best-effort close tracked browser tabs/processes for their `cron:<jobId>` session when the run completes, so detached browser automation does not leave orphaned processes behind.
@@ -123,22 +126,19 @@ retries, cron aborts instead of looping forever.
 
 ## Delivery and output
 
-| Mode       | What happens                                             |
-| ---------- | -------------------------------------------------------- |
-| `announce` | Deliver summary to target channel (default for isolated) |
-| `webhook`  | POST finished event payload to a URL                     |
-| `none`     | Internal only, no delivery                               |
+| Mode       | What happens                                                        |
+| ---------- | ------------------------------------------------------------------- |
+| `announce` | Fallback-deliver final text to the target if the agent did not send |
+| `webhook`  | POST finished event payload to a URL                                |
+| `none`     | No runner fallback delivery                                         |
 
 Use `--announce --channel telegram --to "-1001234567890"` for channel delivery. For Telegram forum topics, use `-1001234567890:topic:123`. Slack/Discord/Mattermost targets should use explicit prefixes (`channel:<id>`, `user:<id>`).
 
-For cron-owned isolated jobs, the runner owns the final delivery path. The
-agent is prompted to return a plain-text summary, and that summary is then sent
-through `announce`, `webhook`, or kept internal for `none`. `--no-deliver`
-does not hand delivery back to the agent; it keeps the run internal.
-
-If the original task explicitly says to message some external recipient, the
-agent should note who/where that message should go in its output instead of
-trying to send it directly.
+For isolated jobs, chat delivery is shared. If a chat route is available, the
+agent can use the `message` tool even when the job uses `--no-deliver`. If the
+agent sends to the configured/current target, OpenClaw skips the fallback
+announce. Otherwise `announce`, `webhook`, and `none` only control what the
+runner does with the final reply after the agent turn.
 
 Failure notifications follow a separate destination path:
 
@@ -317,6 +317,9 @@ gog gmail watch start \
 # List all jobs
 openclaw cron list
 
+# Show one job, including resolved delivery route
+openclaw cron show <jobId>
+
 # Edit a job
 openclaw cron edit <jobId> --message "Updated prompt" --model "opus"
 
@@ -368,6 +371,10 @@ Model override note:
 }
 ```
 
+The runtime state sidecar is derived from `cron.store`: a `.json` store such as
+`~/clawd/cron/jobs.json` uses `~/clawd/cron/jobs-state.json`, while a store path
+without a `.json` suffix appends `-state.json`.
+
 Disable cron: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
 
 **One-shot retry**: transient errors (rate limit, overload, network, server error) retry up to 3 times with exponential backoff. Permanent errors disable immediately.
@@ -400,15 +407,15 @@ openclaw doctor
 
 ### Cron fired but no delivery
 
-- Delivery mode is `none` means no external message is expected.
+- Delivery mode `none` means no runner fallback send is expected. The agent can
+  still send directly with the `message` tool when a chat route is available.
 - Delivery target missing/invalid (`channel`/`to`) means outbound was skipped.
 - Channel auth errors (`unauthorized`, `Forbidden`) mean delivery was blocked by credentials.
 - If the isolated run returns only the silent token (`NO_REPLY` / `no_reply`),
   OpenClaw suppresses direct outbound delivery and also suppresses the fallback
   queued summary path, so nothing is posted back to chat.
-- For cron-owned isolated jobs, do not expect the agent to use the message tool
-  as a fallback. The runner owns final delivery; `--no-deliver` keeps it
-  internal instead of allowing a direct send.
+- If the agent should message the user itself, check that the job has a usable
+  route (`channel: "last"` with a previous chat, or an explicit channel/target).
 
 ### Timezone gotchas
 

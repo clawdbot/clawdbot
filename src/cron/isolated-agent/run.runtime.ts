@@ -12,7 +12,11 @@ export { resolveThinkingDefault } from "../../agents/model-thinking-default.js";
 export { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 export { deriveSessionTotalTokens, hasNonzeroUsage } from "../../agents/usage.js";
 export { DEFAULT_IDENTITY_FILENAME, ensureAgentWorkspace } from "../../agents/workspace.js";
-export { normalizeThinkLevel, supportsXHighThinking } from "../../auto-reply/thinking.js";
+export {
+  isThinkingLevelSupported,
+  normalizeThinkLevel,
+  resolveSupportedThinkingLevel,
+} from "../../auto-reply/thinking.js";
 export { resolveSessionTranscriptPath } from "../../config/sessions/paths.js";
 export { setSessionRuntimeModel } from "../../config/sessions/types.js";
 export { logWarn } from "../../logger.js";

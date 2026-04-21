@@ -130,7 +130,7 @@ importers:
         version: 14.1.1
       node-llama-cpp:
         specifier: 3.18.1
-        version: 3.18.1(typescript@6.0.2)
+        version: 3.18.1(typescript@6.0.3)
       openai:
         specifier: ^6.34.0
         version: 6.34.0(ws@8.20.0)(zod@4.3.6)
@@ -287,6 +287,10 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/anthropic:
+    dependencies:
+      '@mariozechner/pi-ai':
+        specifier: 0.67.68
+        version: 0.67.68(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -314,12 +318,38 @@ importers:
         version: link:../..
 
   extensions/brave:
+    dependencies:
+      '@sinclair/typebox':
+        specifier: 0.34.49
+        version: 0.34.49
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
   extensions/browser:
+    dependencies:
+      '@modelcontextprotocol/sdk':
+        specifier: 1.29.0
+        version: 1.29.0(zod@4.3.6)
+      '@sinclair/typebox':
+        specifier: 0.34.49
+        version: 0.34.49
+      commander:
+        specifier: ^14.0.3
+        version: 14.0.3
+      express:
+        specifier: ^5.2.1
+        version: 5.2.1
+      playwright-core:
+        specifier: 1.59.1
+        version: 1.59.1
+      undici:
+        specifier: 8.1.0
+        version: 8.1.0
+      ws:
+        specifier: ^8.20.0
+        version: 8.20.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -450,9 +480,9 @@ importers:
       '@discordjs/voice':
         specifier: ^0.19.2
         version: 0.19.2(@discordjs/opus@0.10.0)(@emnapi/core@1.9.2)(@emnapi/runtime@1.10.0)(opusscript@0.0.8)
-      '@snazzah/davey':
-        specifier: ^0.1.11
-        version: 0.1.11(@emnapi/core@1.9.2)(@emnapi/runtime@1.10.0)
+      '@sinclair/typebox':
+        specifier: 0.34.49
+        version: 0.34.49
       discord-api-types:
         specifier: ^0.38.47
         version: 0.38.47
@@ -462,6 +492,12 @@ importers:
       opusscript:
         specifier: ^0.0.8
         version: 0.0.8
+      undici:
+        specifier: 8.1.0
+        version: 8.1.0
+      ws:
+        specifier: ^8.20.0
+        version: 8.20.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -514,18 +550,33 @@ importers:
         version: link:../..
 
   extensions/firecrawl:
+    dependencies:
+      '@sinclair/typebox':
+        specifier: 0.34.49
+        version: 0.34.49
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
   extensions/fireworks:
+    dependencies:
+      '@mariozechner/pi-ai':
+        specifier: 0.67.68
+        version: 0.67.68(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
   extensions/github-copilot:
+    dependencies:
+      '@clack/prompts':
+        specifier: ^1.2.0
+        version: 1.2.0
+      '@mariozechner/pi-ai':
+        specifier: 0.67.68
+        version: 0.67.68(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -536,6 +587,9 @@ importers:
       '@google/genai':
         specifier: ^1.50.1
         version: 1.50.1(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))
+      '@mariozechner/pi-ai':
+        specifier: 0.67.68
+        version: 0.67.68(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -546,6 +600,9 @@ importers:
       google-auth-library:
         specifier: ^10.6.2
         version: 10.6.2
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -591,6 +648,10 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/kimi-coding:
+    dependencies:
+      '@mariozechner/pi-ai':
+        specifier: 0.67.68
+        version: 0.67.68(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -628,7 +689,11 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
-  extensions/lmstudio: {}
+  extensions/lmstudio:
+    dependencies:
+      '@mariozechner/pi-ai':
+        specifier: 0.67.68
+        version: 0.67.68(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
 
   extensions/lobster:
     dependencies:
@@ -651,9 +716,15 @@ importers:
       '@matrix-org/matrix-sdk-crypto-wasm':
         specifier: 18.1.0
         version: 18.1.0
+      '@sinclair/typebox':
+        specifier: 0.34.49
+        version: 0.34.49
       fake-indexeddb:
         specifier: ^6.2.5
         version: 6.2.5
+      jiti:
+        specifier: ^2.6.1
+        version: 2.6.1
       markdown-it:
         specifier: 14.1.1
         version: 14.1.1
@@ -694,6 +765,13 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/memory-core:
+    dependencies:
+      '@sinclair/typebox':
+        specifier: 0.34.49
+        version: 0.34.49
+      chokidar:
+        specifier: ^5.0.0
+        version: 5.0.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -720,6 +798,9 @@ importers:
 
   extensions/memory-wiki:
     dependencies:
+      '@sinclair/typebox':
+        specifier: 0.34.49
+        version: 0.34.49
       yaml:
         specifier: ^2.8.3
         version: 2.8.3
@@ -800,6 +881,10 @@ importers:
         version: link:../..
 
   extensions/nextcloud-talk:
+    dependencies:
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -813,6 +898,9 @@ importers:
       nostr-tools:
         specifier: ^2.23.3
         version: 2.23.3(typescript@6.0.3)
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -828,6 +916,13 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/ollama:
+    dependencies:
+      '@mariozechner/pi-ai':
+        specifier: 0.67.68
+        version: 0.67.68(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+      '@sinclair/typebox':
+        specifier: 0.34.49
+        version: 0.34.49
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -841,6 +936,9 @@ importers:
 
   extensions/openai:
     dependencies:
+      '@mariozechner/pi-ai':
+        specifier: 0.67.68
+        version: 0.67.68(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
       ws:
         specifier: ^8.20.0
         version: 8.20.0
@@ -884,6 +982,10 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/qa-channel:
+    dependencies:
+      '@sinclair/typebox':
+        specifier: 0.34.49
+        version: 0.34.49
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -897,9 +999,18 @@ importers:
       '@copilotkit/aimock':
         specifier: 1.14.3
         version: 1.14.3
+      '@modelcontextprotocol/sdk':
+        specifier: 1.29.0
+        version: 1.29.0(zod@4.3.6)
       playwright-core:
         specifier: 1.59.1
         version: 1.59.1
+      yaml:
+        specifier: ^2.8.3
+        version: 2.8.3
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -909,6 +1020,10 @@ importers:
         version: link:../..
 
   extensions/qa-matrix:
+    dependencies:
+      undici:
+        specifier: 8.1.0
+        version: 8.1.0
     devDependencies:
       '@openclaw/matrix':
         specifier: workspace:*
@@ -937,6 +1052,9 @@ importers:
       ws:
         specifier: ^8.20.0
         version: 8.20.0
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -980,6 +1098,9 @@ importers:
 
   extensions/slack:
     dependencies:
+      '@sinclair/typebox':
+        specifier: 0.34.49
+        version: 0.34.49
       '@slack/bolt':
         specifier: ^4.7.0
         version: 4.7.0(@types/express@5.0.6)
@@ -1007,6 +1128,10 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/synology-chat:
+    dependencies:
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1019,6 +1144,10 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/tavily:
+    dependencies:
+      '@sinclair/typebox':
+        specifier: 0.34.49
+        version: 0.34.49
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1032,9 +1161,15 @@ importers:
       '@grammyjs/transformer-throttler':
         specifier: ^1.2.1
         version: 1.2.1(grammy@1.42.0)
+      '@sinclair/typebox':
+        specifier: 0.34.49
+        version: 0.34.49
       grammy:
         specifier: ^1.42.0
         version: 1.42.0
+      undici:
+        specifier: 8.1.0
+        version: 8.1.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1157,6 +1292,9 @@ importers:
 
   extensions/whatsapp:
     dependencies:
+      '@sinclair/typebox':
+        specifier: 0.34.49
+        version: 0.34.49
       '@whiskeysockets/baileys':
         specifier: 7.0.0-rc.9
         version: 7.0.0-rc.9(patch_hash=23ec8efe1484afa57c51b96955ba331d1467521a8e676a18c2690da7e70a6201)(audio-decode@2.2.3)(jimp@1.6.1)(sharp@0.34.5)
@@ -1166,6 +1304,9 @@ importers:
       qrcode-terminal:
         specifier: ^0.12.0
         version: 0.12.0
+      undici:
+        specifier: 8.1.0
+        version: 8.1.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1175,6 +1316,13 @@ importers:
         version: link:../..
 
   extensions/xai:
+    dependencies:
+      '@mariozechner/pi-ai':
+        specifier: 0.67.68
+        version: 0.67.68(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+      '@sinclair/typebox':
+        specifier: 0.34.49
+        version: 0.34.49
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -7372,11 +7520,6 @@ packages:
     engines: {node: '>=14.17'}
     hasBin: true
 
-  typescript@6.0.2:
-    resolution: {integrity: sha512-bGdAIrZ0wiGDo5l8c++HWtbaNCWTS4UTv7RaTH/ThVIgjkveJt83m74bBHMJkuCbslY8ixgLBVZJIOiQlQTjfQ==}
-    engines: {node: '>=14.17'}
-    hasBin: true
-
   typescript@6.0.3:
     resolution: {integrity: sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==}
     engines: {node: '>=14.17'}
@@ -13433,7 +13576,7 @@ snapshots:
       fetch-blob: 3.2.0
       formdata-polyfill: 4.0.10
 
-  node-llama-cpp@3.18.1(typescript@6.0.2):
+  node-llama-cpp@3.18.1(typescript@6.0.3):
     dependencies:
       '@huggingface/jinja': 0.5.6
       async-retry: 1.3.3
@@ -13477,7 +13620,7 @@ snapshots:
       '@node-llama-cpp/win-x64-cuda': 3.18.1
       '@node-llama-cpp/win-x64-cuda-ext': 3.18.1
       '@node-llama-cpp/win-x64-vulkan': 3.18.1
-      typescript: 6.0.2
+      typescript: 6.0.3
     transitivePeerDependencies:
       - supports-color
 
@@ -14816,9 +14959,6 @@ snapshots:
       mime-types: 3.0.2
 
   typescript@5.9.3: {}
-
-  typescript@6.0.2:
-    optional: true
 
   typescript@6.0.3: {}
 

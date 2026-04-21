@@ -2,6 +2,25 @@ import type { MatrixEvent } from "matrix-js-sdk/lib/matrix.js";
 import { describe, expect, it } from "vitest";
 import { buildHttpError, matrixEventToRaw, parseMxc } from "./event-helpers.js";
 
+const makeEditedMessageEvent = (): MatrixEvent =>
+  ({
+    getId: () => "$root",
+    getSender: () => "@alice:example.org",
+    getType: () => "m.room.message",
+    getTs: () => 1000,
+    getOriginalContent: () => ({ body: "original", msgtype: "m.text" }),
+    getContent: () => ({
+      body: "@bot edited",
+      "m.mentions": { user_ids: ["@bot:example.org"] },
+      msgtype: "m.text",
+    }),
+    getUnsigned: () => ({
+      "m.relations": {
+        "m.replace": { event_id: "$edit" },
+      },
+    }),
+  }) as unknown as MatrixEvent;
+
 describe("event-helpers", () => {
   it("parses mxc URIs", () => {
     expect(parseMxc("mxc://server.example/media-id")).toEqual({
@@ -59,25 +78,7 @@ describe("event-helpers", () => {
   });
 
   it("serializes current content by default for read APIs", () => {
-    const event = {
-      getId: () => "$root",
-      getSender: () => "@alice:example.org",
-      getType: () => "m.room.message",
-      getTs: () => 1000,
-      getOriginalContent: () => ({ body: "original", msgtype: "m.text" }),
-      getContent: () => ({
-        body: "@bot edited",
-        "m.mentions": { user_ids: ["@bot:example.org"] },
-        msgtype: "m.text",
-      }),
-      getUnsigned: () => ({
-        "m.relations": {
-          "m.replace": { event_id: "$edit" },
-        },
-      }),
-    } as unknown as MatrixEvent;
-
-    expect(matrixEventToRaw(event)).toMatchObject({
+    expect(matrixEventToRaw(makeEditedMessageEvent())).toMatchObject({
       content: {
         body: "@bot edited",
         "m.mentions": { user_ids: ["@bot:example.org"] },
@@ -87,25 +88,7 @@ describe("event-helpers", () => {
   });
 
   it("can serialize original content for inbound trigger filtering", () => {
-    const event = {
-      getId: () => "$root",
-      getSender: () => "@alice:example.org",
-      getType: () => "m.room.message",
-      getTs: () => 1000,
-      getOriginalContent: () => ({ body: "original", msgtype: "m.text" }),
-      getContent: () => ({
-        body: "@bot edited",
-        "m.mentions": { user_ids: ["@bot:example.org"] },
-        msgtype: "m.text",
-      }),
-      getUnsigned: () => ({
-        "m.relations": {
-          "m.replace": { event_id: "$edit" },
-        },
-      }),
-    } as unknown as MatrixEvent;
-
-    expect(matrixEventToRaw(event, { contentMode: "original" })).toMatchObject({
+    expect(matrixEventToRaw(makeEditedMessageEvent(), { contentMode: "original" })).toMatchObject({
       content: { body: "original", msgtype: "m.text" },
       unsigned: {
         "m.relations": {

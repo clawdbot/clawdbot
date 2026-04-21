@@ -78,4 +78,105 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
       ),
     ).toEqual([]);
   });
+
+  it("collects dangerous sandbox, hook, browser, and fs flags", () => {
+    expect(
+      collectEnabledInsecureOrDangerousFlags(
+        asConfig({
+          agents: {
+            defaults: {
+              sandbox: {
+                docker: {
+                  dangerouslyAllowReservedContainerTargets: true,
+                  dangerouslyAllowContainerNamespaceJoin: true,
+                },
+              },
+            },
+            list: [
+              {
+                id: "worker",
+                sandbox: {
+                  docker: {
+                    dangerouslyAllowExternalBindSources: true,
+                  },
+                },
+              },
+            ],
+          },
+          hooks: {
+            allowRequestSessionKey: true,
+          },
+          browser: {
+            ssrfPolicy: {
+              dangerouslyAllowPrivateNetwork: true,
+            },
+          },
+          tools: {
+            fs: {
+              workspaceOnly: false,
+            },
+          },
+        }),
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        "agents.defaults.sandbox.docker.dangerouslyAllowReservedContainerTargets=true",
+        "agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin=true",
+        'agents.list[id="worker"].sandbox.docker.dangerouslyAllowExternalBindSources=true',
+        "hooks.allowRequestSessionKey=true",
+        "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork=true",
+        "tools.fs.workspaceOnly=false",
+      ]),
+    );
+  });
+
+  it("uses stable agent ids for per-agent dangerous sandbox flags", () => {
+    expect(
+      collectEnabledInsecureOrDangerousFlags(
+        asConfig({
+          agents: {
+            list: [
+              {
+                id: "worker",
+                sandbox: {
+                  docker: {
+                    dangerouslyAllowContainerNamespaceJoin: true,
+                  },
+                },
+              },
+              {
+                id: "helper",
+              },
+            ],
+          },
+        }),
+      ),
+    ).toContain(
+      'agents.list[id="worker"].sandbox.docker.dangerouslyAllowContainerNamespaceJoin=true',
+    );
+
+    expect(
+      collectEnabledInsecureOrDangerousFlags(
+        asConfig({
+          agents: {
+            list: [
+              {
+                id: "helper",
+              },
+              {
+                id: "worker",
+                sandbox: {
+                  docker: {
+                    dangerouslyAllowContainerNamespaceJoin: true,
+                  },
+                },
+              },
+            ],
+          },
+        }),
+      ),
+    ).toContain(
+      'agents.list[id="worker"].sandbox.docker.dangerouslyAllowContainerNamespaceJoin=true',
+    );
+  });
 });

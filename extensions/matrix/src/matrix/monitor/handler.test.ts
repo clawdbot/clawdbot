@@ -2734,19 +2734,25 @@ describe("matrix monitor handler draft streaming", () => {
     const { deliver, opts, finish } = await dispatch();
 
     opts.onPartialReply?.({ text: "Alpha" });
-    await vi.waitFor(() => {
-      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-    });
+    await vi.waitFor(
+      () => {
+        expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+      },
+      { interval: 1 },
+    );
 
     opts.onPartialReply?.({ text: "AlphaBeta" });
-    await vi.waitFor(() => {
-      expect(editMessageMatrixMock).toHaveBeenCalledWith(
-        "!room:example.org",
-        "$draft1",
-        "AlphaBeta",
-        expect.anything(),
-      );
-    });
+    await vi.waitFor(
+      () => {
+        expect(editMessageMatrixMock).toHaveBeenCalledWith(
+          "!room:example.org",
+          "$draft1",
+          "AlphaBeta",
+          expect.anything(),
+        );
+      },
+      { interval: 1 },
+    );
 
     await opts.onBlockReplyQueued?.({ text: "Alpha" });
 
@@ -2758,9 +2764,12 @@ describe("matrix monitor handler draft streaming", () => {
     });
     await deliver({ text: "Alpha" }, { kind: "block" });
 
-    await vi.waitFor(() => {
-      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-    });
+    await vi.waitFor(
+      () => {
+        expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+      },
+      { interval: 1 },
+    );
     expect(sendSingleTextMessageMatrixMock.mock.calls[0]?.[1]).toBe("Beta");
     expect(editMessageMatrixMock).toHaveBeenCalledWith(
       "!room:example.org",

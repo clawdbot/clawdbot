@@ -36,7 +36,7 @@ function createTestRunRecord(overrides: Partial<SubagentRunRecord> = {}): Subage
   return {
     runId: "run-1",
     childSessionKey: "agent:main:subagent:test-session-1",
-    requesterSessionKey: "agent:main:signal:direct:+1234567890",
+    requesterSessionKey: "agent:main:quietchat:direct:+1234567890",
     requesterDisplayKey: "main",
     task: "Test task: implement feature X",
     cleanup: "delete",

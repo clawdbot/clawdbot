@@ -57,7 +57,7 @@ describe("ensureConfigReady", () => {
       ...makeSnapshot(),
       exists: true,
       valid: false,
-      issues: [{ path: "channels.whatsapp", message: "invalid" }],
+      issues: [{ path: "channels.quietchat", message: "invalid" }],
       ...overrides,
     };
     readConfigFileSnapshotMock.mockResolvedValue(snapshot);

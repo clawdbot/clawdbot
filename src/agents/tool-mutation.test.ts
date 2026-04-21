@@ -55,7 +55,7 @@ describe("tool mutation helpers", () => {
 
   it("exposes mutation state for downstream payload rendering", () => {
     expect(
-      buildToolMutationState("message", { action: "send", to: "telegram:1" }).mutatingAction,
+      buildToolMutationState("message", { action: "send", to: "forum:1" }).mutatingAction,
     ).toBe(true);
     expect(buildToolMutationState("browser", { action: "list" }).mutatingAction).toBe(false);
     expect(

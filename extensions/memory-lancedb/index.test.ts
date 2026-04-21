@@ -8,10 +8,7 @@
  * - Auto-capture filtering
  */
 
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, test, expect, vi } from "vitest";
 import memoryPlugin, {
   detectCategory,
   formatRelevantMemoriesContext,
@@ -19,6 +16,7 @@ import memoryPlugin, {
   shouldCapture,
 } from "./index.js";
 import { createLanceDbRuntimeLoader, type LanceDbRuntimeLogger } from "./lancedb-runtime.js";
+import { installTmpDirHarness } from "./test-helpers.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "test-key";
 type MemoryPluginTestConfig = {
@@ -50,27 +48,6 @@ type RuntimeManifest = {
   type: "module";
   dependencies: Record<string, string>;
 };
-
-function installTmpDirHarness(params: { prefix: string }) {
-  let tmpDir = "";
-  let dbPath = "";
-
-  beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), params.prefix));
-    dbPath = path.join(tmpDir, "lancedb");
-  });
-
-  afterEach(async () => {
-    if (tmpDir) {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  return {
-    getTmpDir: () => tmpDir,
-    getDbPath: () => dbPath,
-  };
-}
 
 function createMockModule(): LanceDbModule {
   return {

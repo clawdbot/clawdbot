@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: Existing release tag or current full 40-character main commit SHA to validate (for example v2026.4.12 or 0123456789abcdef0123456789abcdef01234567)
+        description: Existing release tag or current full 40-character workflow-branch commit SHA to validate (for example v2026.4.12 or 0123456789abcdef0123456789abcdef01234567)
         required: true
         type: string
       provider:
@@ -45,13 +45,13 @@ jobs:
       provider: ${{ steps.inputs.outputs.provider }}
       mode: ${{ steps.inputs.outputs.mode }}
     steps:
-      - name: Require main workflow ref for release checks
+      - name: Require main or release workflow ref for release checks
         env:
           WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
-          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]]; then
-            echo "Release checks must be dispatched from main so the workflow logic and secrets stay canonical." >&2
+          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]]; then
+            echo "Release checks must be dispatched from main or release/YYYY.M.D so workflow logic and secrets stay controlled." >&2
             exit 1
           fi
 
@@ -61,7 +61,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ ! "${RELEASE_REF}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-beta\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]] && [[ ! "${RELEASE_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            echo "Expected an existing release tag or current full 40-character main commit SHA, got: ${RELEASE_REF}" >&2
+            echo "Expected an existing release tag or current full 40-character workflow-branch commit SHA, got: ${RELEASE_REF}" >&2
             exit 1
           fi
 
@@ -75,20 +75,22 @@ jobs:
         id: ref
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Validate selected ref is on main
+      - name: Validate selected ref is on workflow branch
         env:
           RELEASE_REF: ${{ inputs.ref }}
+          WORKFLOW_REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          RELEASE_BRANCH_REF="refs/remotes/origin/${WORKFLOW_REF_NAME}"
+          git fetch --no-tags origin "+refs/heads/${WORKFLOW_REF_NAME}:refs/remotes/origin/${WORKFLOW_REF_NAME}"
           if [[ "${RELEASE_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            MAIN_SHA="$(git rev-parse origin/main)"
-            if [[ "$(git rev-parse HEAD)" != "${MAIN_SHA}" ]]; then
-              echo "Commit SHA mode only supports the current origin/main HEAD. Use a release tag for older commits." >&2
+            BRANCH_SHA="$(git rev-parse "${RELEASE_BRANCH_REF}")"
+            if [[ "$(git rev-parse HEAD)" != "${BRANCH_SHA}" ]]; then
+              echo "Commit SHA mode only supports the current ${WORKFLOW_REF_NAME} HEAD. Use a release tag for older commits." >&2
               exit 1
             fi
           else
-            git merge-base --is-ancestor HEAD origin/main
+            git merge-base --is-ancestor HEAD "${RELEASE_BRANCH_REF}"
           fi
 
       - name: Capture selected inputs

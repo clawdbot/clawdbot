@@ -101,7 +101,7 @@ function createSearchProviderEntry(id: string): PluginWebSearchProviderEntry {
       });
       const webSearch = ensureWebSearchConfig(config, metadata.pluginId);
       webSearch.baseUrl = baseUrl;
-      webSearch.model = modelChoice === "__keep__" ? "kimi-k2.5" : modelChoice;
+      webSearch.model = modelChoice === "__keep__" ? "kimi-k2.6" : modelChoice;
       return config;
     };
   }
@@ -345,7 +345,7 @@ describe("setupSearch", () => {
     expect(pluginWebSearchApiKey(kimiResult, "moonshot")).toBe("sk-moonshot");
     expect(kimiResult.plugins?.entries?.moonshot?.enabled).toBe(true);
     expect(kimiWebSearchConfig?.baseUrl).toBe("https://api.moonshot.ai/v1");
-    expect(kimiWebSearchConfig?.model).toBe("kimi-k2.5");
+    expect(kimiWebSearchConfig?.model).toBe("kimi-k2.6");
 
     const disabledCfg = createDisabledFirecrawlConfig();
     const { prompter: disabledPrompter } = createPrompter({

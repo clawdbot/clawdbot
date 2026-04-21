@@ -45,76 +45,76 @@ describe("channel display selectors", () => {
   it("returns the channel summary configured flag when present", () => {
     const props = createProps({
       ts: Date.now(),
-      channelOrder: ["discord"],
-      channelLabels: { discord: "Discord" },
-      channels: { discord: { configured: false } },
+      channelOrder: ["guildchat"],
+      channelLabels: { guildchat: "Guild Chat" },
+      channels: { guildchat: { configured: false } },
       channelAccounts: {
-        discord: [{ accountId: "discord-main", configured: true }],
+        guildchat: [{ accountId: "guild-main", configured: true }],
       },
-      channelDefaultAccountId: { discord: "discord-main" },
+      channelDefaultAccountId: { guildchat: "guild-main" },
     });
 
-    expect(resolveChannelConfigured("discord", props)).toBe(false);
-    expect(resolveChannelDisplayState("discord", props).configured).toBe(false);
+    expect(resolveChannelConfigured("guildchat", props)).toBe(false);
+    expect(resolveChannelDisplayState("guildchat", props).configured).toBe(false);
   });
 
   it("falls back to the default account when the channel summary omits configured", () => {
     const props = createProps({
       ts: Date.now(),
-      channelOrder: ["discord"],
-      channelLabels: { discord: "Discord" },
-      channels: { discord: { running: true } },
+      channelOrder: ["guildchat"],
+      channelLabels: { guildchat: "Guild Chat" },
+      channels: { guildchat: { running: true } },
       channelAccounts: {
-        discord: [
+        guildchat: [
           { accountId: "default", configured: false },
-          { accountId: "discord-main", configured: true },
+          { accountId: "guild-main", configured: true },
         ],
       },
-      channelDefaultAccountId: { discord: "discord-main" },
+      channelDefaultAccountId: { guildchat: "guild-main" },
     });
 
-    const displayState = resolveChannelDisplayState("discord", props);
+    const displayState = resolveChannelDisplayState("guildchat", props);
 
-    expect(resolveChannelConfigured("discord", props)).toBe(true);
-    expect(displayState.defaultAccount?.accountId).toBe("discord-main");
-    expect(channelEnabled("discord", props)).toBe(true);
+    expect(resolveChannelConfigured("guildchat", props)).toBe(true);
+    expect(displayState.defaultAccount?.accountId).toBe("guild-main");
+    expect(channelEnabled("guildchat", props)).toBe(true);
   });
 
   it("falls back to the first account when no default account id is available", () => {
     const props = createProps({
       ts: Date.now(),
-      channelOrder: ["slack"],
-      channelLabels: { slack: "Slack" },
-      channels: { slack: { running: true } },
+      channelOrder: ["workspace"],
+      channelLabels: { workspace: "Workspace" },
+      channels: { workspace: { running: true } },
       channelAccounts: {
-        slack: [{ accountId: "workspace-a", configured: true }],
+        workspace: [{ accountId: "workspace-a", configured: true }],
       },
       channelDefaultAccountId: {},
     });
 
-    const displayState = resolveChannelDisplayState("slack", props);
+    const displayState = resolveChannelDisplayState("workspace", props);
 
-    expect(resolveChannelConfigured("slack", props)).toBe(true);
+    expect(resolveChannelConfigured("workspace", props)).toBe(true);
     expect(displayState.defaultAccount?.accountId).toBe("workspace-a");
   });
 
   it("keeps disabled channels hidden when neither summary nor accounts are active", () => {
     const props = createProps({
       ts: Date.now(),
-      channelOrder: ["signal"],
-      channelLabels: { signal: "Signal" },
-      channels: { signal: {} },
+      channelOrder: ["quietchat"],
+      channelLabels: { quietchat: "Quiet Chat" },
+      channels: { quietchat: {} },
       channelAccounts: {
-        signal: [{ accountId: "default", configured: false, running: false, connected: false }],
+        quietchat: [{ accountId: "default", configured: false, running: false, connected: false }],
       },
-      channelDefaultAccountId: { signal: "default" },
+      channelDefaultAccountId: { quietchat: "default" },
     });
 
-    const displayState = resolveChannelDisplayState("signal", props);
+    const displayState = resolveChannelDisplayState("quietchat", props);
 
     expect(displayState.configured).toBe(false);
     expect(displayState.running).toBeNull();
     expect(displayState.connected).toBeNull();
-    expect(channelEnabled("signal", props)).toBe(false);
+    expect(channelEnabled("quietchat", props)).toBe(false);
   });
 });

@@ -214,6 +214,7 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
 
   const key = await params.prompter.text({
     message: params.promptMessage,
+    placeholder: "API key",
     validate: params.validate,
   });
   const apiKey = params.normalize(key ?? "");

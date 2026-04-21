@@ -147,7 +147,7 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
           | { model?: string; modelProvider?: string; systemSent?: boolean }
           | undefined;
         if (entry) {
-          persistedSnapshots.push(JSON.parse(JSON.stringify(entry)));
+          persistedSnapshots.push(structuredClone(entry));
         }
       },
     );

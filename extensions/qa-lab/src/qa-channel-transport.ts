@@ -18,6 +18,7 @@ export const QA_CHANNEL_DEFAULT_SUITE_CONCURRENCY = 4;
 async function waitForQaChannelReady(params: {
   gateway: QaTransportGatewayClient;
   timeoutMs?: number;
+  pollIntervalMs?: number;
 }) {
   await waitForQaTransportCondition(
     async () => {
@@ -45,7 +46,7 @@ async function waitForQaChannelReady(params: {
       }
     },
     params.timeoutMs ?? 45_000,
-    500,
+    params.pollIntervalMs ?? 500,
   );
 }
 

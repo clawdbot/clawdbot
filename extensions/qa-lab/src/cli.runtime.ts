@@ -73,7 +73,9 @@ function parseQaThinkingLevel(
   }
   const normalized = normalizeQaThinkingLevel(value);
   if (!normalized) {
-    throw new Error(`${label} must be one of off, minimal, low, medium, high, xhigh, adaptive`);
+    throw new Error(
+      `${label} must be one of off, minimal, low, medium, high, xhigh, adaptive, max`,
+    );
   }
   return normalized;
 }
@@ -238,7 +240,7 @@ function parseQaModelSpecs(label: string, entries: readonly string[] | undefined
           const thinkingDefault = parseQaThinkingLevel(`${label} thinking`, value);
           if (!thinkingDefault) {
             throw new Error(
-              `${label} thinking must be one of off, minimal, low, medium, high, xhigh, adaptive`,
+              `${label} thinking must be one of off, minimal, low, medium, high, xhigh, adaptive, max`,
             );
           }
           options.thinkingDefault = thinkingDefault;

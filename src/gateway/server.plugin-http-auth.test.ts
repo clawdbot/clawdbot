@@ -119,6 +119,45 @@ function createProtectedPluginAuthOverrides(handlePluginRequest: PluginRequestHa
   };
 }
 
+function createRuntimeScopeRecorderHandler(params: {
+  pluginId: string;
+  path: string;
+  method: string;
+  observedRuntimeScopes: string[][];
+  allowedResults: boolean[];
+  gatewayRuntimeScopeSurface?: "trusted-operator";
+}) {
+  return createGatewayPluginRequestHandler({
+    registry: createTestRegistry({
+      httpRoutes: [
+        {
+          pluginId: params.pluginId,
+          source: params.pluginId,
+          path: params.path,
+          auth: "gateway",
+          ...(params.gatewayRuntimeScopeSurface
+            ? { gatewayRuntimeScopeSurface: params.gatewayRuntimeScopeSurface }
+            : {}),
+          match: "exact",
+          handler: async (_req: IncomingMessage, res: ServerResponse) => {
+            const runtimeScopes =
+              getPluginRuntimeGatewayRequestScope()?.client?.connect?.scopes?.slice() ?? [];
+            params.observedRuntimeScopes.push(runtimeScopes);
+            const auth = authorizeOperatorScopesForMethod(params.method, runtimeScopes);
+            params.allowedResults.push(auth.allowed);
+            res.statusCode = 200;
+            res.end("ok");
+            return true;
+          },
+        },
+      ],
+    }),
+    log: { warn: vi.fn() } as unknown as Parameters<
+      typeof createGatewayPluginRequestHandler
+    >[0]["log"],
+  });
+}
+
 describe("gateway plugin HTTP auth boundary", () => {
   test("applies default security headers and optional strict transport security", async () => {
     await withGatewayTempConfig("openclaw-plugin-http-security-headers-test-", async () => {
@@ -250,31 +289,12 @@ describe("gateway plugin HTTP auth boundary", () => {
   test("preserves trusted-proxy read scopes for gateway-auth plugin runtime routes", async () => {
     const observedRuntimeScopes: string[][] = [];
     const writeAllowedResults: boolean[] = [];
-    const handlePluginRequest = createGatewayPluginRequestHandler({
-      registry: createTestRegistry({
-        httpRoutes: [
-          {
-            pluginId: "runtime-scope",
-            source: "runtime-scope",
-            path: "/secure-hook",
-            auth: "gateway",
-            match: "exact",
-            handler: async (_req: IncomingMessage, res: ServerResponse) => {
-              const runtimeScopes =
-                getPluginRuntimeGatewayRequestScope()?.client?.connect?.scopes?.slice() ?? [];
-              observedRuntimeScopes.push(runtimeScopes);
-              const writeAuth = authorizeOperatorScopesForMethod("node.invoke", runtimeScopes);
-              writeAllowedResults.push(writeAuth.allowed);
-              res.statusCode = 200;
-              res.end("ok");
-              return true;
-            },
-          },
-        ],
-      }),
-      log: { warn: vi.fn() } as unknown as Parameters<
-        typeof createGatewayPluginRequestHandler
-      >[0]["log"],
+    const handlePluginRequest = createRuntimeScopeRecorderHandler({
+      pluginId: "runtime-scope",
+      path: "/secure-hook",
+      method: "node.invoke",
+      observedRuntimeScopes,
+      allowedResults: writeAllowedResults,
     });
 
     await withTempConfig({
@@ -325,31 +345,12 @@ describe("gateway plugin HTTP auth boundary", () => {
   test("keeps write runtime scopes for shared-secret bearer gateway-auth plugin routes", async () => {
     const observedRuntimeScopes: string[][] = [];
     const writeAllowedResults: boolean[] = [];
-    const handlePluginRequest = createGatewayPluginRequestHandler({
-      registry: createTestRegistry({
-        httpRoutes: [
-          {
-            pluginId: "runtime-scope-bearer",
-            source: "runtime-scope-bearer",
-            path: "/secure-hook",
-            auth: "gateway",
-            match: "exact",
-            handler: async (_req: IncomingMessage, res: ServerResponse) => {
-              const runtimeScopes =
-                getPluginRuntimeGatewayRequestScope()?.client?.connect?.scopes?.slice() ?? [];
-              observedRuntimeScopes.push(runtimeScopes);
-              const writeAuth = authorizeOperatorScopesForMethod("node.invoke", runtimeScopes);
-              writeAllowedResults.push(writeAuth.allowed);
-              res.statusCode = 200;
-              res.end("ok");
-              return true;
-            },
-          },
-        ],
-      }),
-      log: { warn: vi.fn() } as unknown as Parameters<
-        typeof createGatewayPluginRequestHandler
-      >[0]["log"],
+    const handlePluginRequest = createRuntimeScopeRecorderHandler({
+      pluginId: "runtime-scope-bearer",
+      path: "/secure-hook",
+      method: "node.invoke",
+      observedRuntimeScopes,
+      allowedResults: writeAllowedResults,
     });
 
     await withGatewayServer({
@@ -385,32 +386,13 @@ describe("gateway plugin HTTP auth boundary", () => {
   test("allows trusted-operator plugin routes to resolve admin-capable runtime scopes for shared-secret bearer auth without scope headers", async () => {
     const observedRuntimeScopes: string[][] = [];
     const adminAllowedResults: boolean[] = [];
-    const handlePluginRequest = createGatewayPluginRequestHandler({
-      registry: createTestRegistry({
-        httpRoutes: [
-          {
-            pluginId: "runtime-scope-bearer-trusted-operator",
-            source: "runtime-scope-bearer-trusted-operator",
-            path: "/secure-admin-hook",
-            auth: "gateway",
-            gatewayRuntimeScopeSurface: "trusted-operator",
-            match: "exact",
-            handler: async (_req: IncomingMessage, res: ServerResponse) => {
-              const runtimeScopes =
-                getPluginRuntimeGatewayRequestScope()?.client?.connect?.scopes?.slice() ?? [];
-              observedRuntimeScopes.push(runtimeScopes);
-              const adminAuth = authorizeOperatorScopesForMethod("set-heartbeats", runtimeScopes);
-              adminAllowedResults.push(adminAuth.allowed);
-              res.statusCode = 200;
-              res.end("ok");
-              return true;
-            },
-          },
-        ],
-      }),
-      log: { warn: vi.fn() } as unknown as Parameters<
-        typeof createGatewayPluginRequestHandler
-      >[0]["log"],
+    const handlePluginRequest = createRuntimeScopeRecorderHandler({
+      pluginId: "runtime-scope-bearer-trusted-operator",
+      path: "/secure-admin-hook",
+      method: "set-heartbeats",
+      observedRuntimeScopes,
+      allowedResults: adminAllowedResults,
+      gatewayRuntimeScopeSurface: "trusted-operator",
     });
 
     await withGatewayServer({

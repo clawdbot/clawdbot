@@ -29,7 +29,7 @@ function buildIsolatedAgentTurnJob(name: string): CronAddInput {
 function buildAnnounceIsolatedAgentTurnJob(name: string): CronAddInput {
   return {
     ...buildIsolatedAgentTurnJob(name),
-    delivery: { mode: "announce", channel: "telegram", to: "123" },
+    delivery: { mode: "announce", channel: "forum", to: "123" },
   };
 }
 

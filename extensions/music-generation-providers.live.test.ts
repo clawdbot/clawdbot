@@ -5,7 +5,7 @@ import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../src/agents/li
 import { resolveApiKeyForProvider } from "../src/agents/model-auth.js";
 import { loadConfig, type OpenClawConfig } from "../src/config/config.js";
 import { isTruthyEnvValue } from "../src/infra/env.js";
-import { getShellEnvAppliedKeys, loadShellEnvFallback } from "../src/infra/shell-env.js";
+import { getShellEnvAppliedKeys } from "../src/infra/shell-env.js";
 import { encodePngRgba, fillPixel } from "../src/media/png-encode.js";
 import {
   DEFAULT_LIVE_MUSIC_MODELS,
@@ -15,13 +15,13 @@ import {
   resolveConfiguredLiveMusicModels,
   resolveLiveMusicAuthStore,
 } from "../src/music-generation/live-test-helpers.js";
-import { getProviderEnvVars } from "../src/secrets/provider-env-vars.js";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "../test/helpers/plugins/provider-registration.js";
 import googlePlugin from "./google/index.js";
 import minimaxPlugin from "./minimax/index.js";
+import { maybeLoadShellEnvForGenerationProviders } from "./test-support/generation-live-test-helpers.js";
 
 const LIVE = isLiveTestEnabled();
 const REQUIRE_PROFILE_KEYS =
@@ -99,18 +99,7 @@ function resolveProviderModelForLiveTest(providerId: string, modelRef: string): 
 }
 
 function maybeLoadShellEnvForMusicProviders(providerIds: string[]): void {
-  const expectedKeys = [
-    ...new Set(providerIds.flatMap((providerId) => getProviderEnvVars(providerId))),
-  ];
-  if (expectedKeys.length === 0) {
-    return;
-  }
-  loadShellEnvFallback({
-    enabled: true,
-    env: process.env,
-    expectedKeys,
-    logger: { warn: (message: string) => console.warn(message) },
-  });
+  maybeLoadShellEnvForGenerationProviders(providerIds);
 }
 
 function resolveLiveLyrics(providerId: string): string | undefined {

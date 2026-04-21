@@ -21,6 +21,7 @@ import {
   updateSessionStore,
 } from "../config/sessions.js";
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
+import { resolveResetPreservedSelection } from "../config/sessions/reset-preserved-selection.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
@@ -60,48 +61,6 @@ function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined 
     contextTokens: undefined,
     systemPromptReport: undefined,
   };
-}
-
-type ResetPreservedSelectionState = Pick<
-  SessionEntry,
-  | "providerOverride"
-  | "modelOverride"
-  | "modelOverrideSource"
-  | "authProfileOverride"
-  | "authProfileOverrideSource"
-  | "authProfileOverrideCompactionCount"
->;
-
-function resolveResetPreservedSelection(params: {
-  entry?: SessionEntry;
-}): Partial<ResetPreservedSelectionState> {
-  const { entry } = params;
-  if (!entry) {
-    return {};
-  }
-
-  const preserved: Partial<ResetPreservedSelectionState> = {};
-  // `modelOverrideSource` is new. Older persisted sessions can still carry
-  // user-selected overrides without the source field, so treat an absent
-  // source as legacy user state during reset and backfill it forward.
-  const preserveLegacyUserModelOverride =
-    entry.modelOverrideSource === "user" ||
-    (entry.modelOverrideSource === undefined && Boolean(entry.modelOverride));
-  if (preserveLegacyUserModelOverride && entry.modelOverride) {
-    preserved.providerOverride = entry.providerOverride;
-    preserved.modelOverride = entry.modelOverride;
-    preserved.modelOverrideSource = "user";
-  }
-
-  if (entry.authProfileOverrideSource === "user" && entry.authProfileOverride) {
-    preserved.authProfileOverride = entry.authProfileOverride;
-    preserved.authProfileOverrideSource = entry.authProfileOverrideSource;
-    if (entry.authProfileOverrideCompactionCount !== undefined) {
-      preserved.authProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
-    }
-  }
-
-  return preserved;
 }
 
 export function archiveSessionTranscriptsForSession(params: {

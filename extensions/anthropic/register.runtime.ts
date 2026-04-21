@@ -34,7 +34,7 @@ import {
 } from "./cli-shared.js";
 import {
   applyAnthropicConfigDefaults,
-  normalizeAnthropicProviderConfig,
+  normalizeAnthropicProviderConfigForProvider,
 } from "./config-defaults.js";
 import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildAnthropicReplayPolicy } from "./replay-policy.js";
@@ -278,6 +278,10 @@ function isAnthropicOpus47Model(modelId: string): boolean {
   );
 }
 
+function supportsAnthropicAdaptiveThinking(modelId: string): boolean {
+  return shouldUseAnthropicAdaptiveThinkingDefault(modelId) || isAnthropicOpus47Model(modelId);
+}
+
 function matchesAnthropicModernModel(modelId: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(modelId);
   return ANTHROPIC_MODERN_MODEL_PREFIXES.some((prefix) => lower.startsWith(prefix));
@@ -479,7 +483,8 @@ export function buildAnthropicProvider(): ProviderPlugin {
         },
       }),
     ],
-    normalizeConfig: ({ providerConfig }) => normalizeAnthropicProviderConfig(providerConfig),
+    normalizeConfig: ({ provider, providerConfig }) =>
+      normalizeAnthropicProviderConfigForProvider({ provider, providerConfig }),
     applyConfigDefaults: ({ config, env }) => applyAnthropicConfigDefaults({ config, env }),
     resolveDynamicModel: (ctx) => resolveAnthropicForwardCompatModel(ctx),
     resolveSyntheticAuth: ({ provider }) =>
@@ -489,14 +494,26 @@ export function buildAnthropicProvider(): ProviderPlugin {
     buildReplayPolicy: buildAnthropicReplayPolicy,
     isModernModelRef: ({ modelId }) => matchesAnthropicModernModel(modelId),
     resolveReasoningOutputMode: () => "native",
-    supportsXHighThinking: ({ modelId }) => isAnthropicOpus47Model(modelId),
+    resolveThinkingProfile: ({ modelId }) => {
+      const levels: Array<{
+        id: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
+      }> = [{ id: "off" }, { id: "minimal" }, { id: "low" }, { id: "medium" }, { id: "high" }];
+      if (isAnthropicOpus47Model(modelId)) {
+        levels.push({ id: "xhigh" }, { id: "adaptive" }, { id: "max" });
+      } else if (supportsAnthropicAdaptiveThinking(modelId)) {
+        levels.push({ id: "adaptive" });
+      }
+      return {
+        levels,
+        defaultLevel: isAnthropicOpus47Model(modelId)
+          ? "off"
+          : matchesAnthropicModernModel(modelId) &&
+              shouldUseAnthropicAdaptiveThinkingDefault(modelId)
+            ? "adaptive"
+            : undefined,
+      };
+    },
     wrapStreamFn: wrapAnthropicProviderStream,
-    resolveDefaultThinkingLevel: ({ modelId }) =>
-      isAnthropicOpus47Model(modelId)
-        ? "off"
-        : matchesAnthropicModernModel(modelId) && shouldUseAnthropicAdaptiveThinkingDefault(modelId)
-          ? "adaptive"
-          : undefined,
     resolveUsageAuth: async (ctx) => await ctx.resolveOAuthToken(),
     fetchUsageSnapshot: async (ctx) =>
       await fetchClaudeUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),

@@ -39,7 +39,7 @@ describe("buildStatusCommandReportData", () => {
     );
     expect(result.pluginCompatibilityLines).toEqual(["  warn(WARN) legacy"]);
     expect(result.pairingRecoveryLines[0]).toBe("warn(Gateway pairing approval required.)");
-    expect(result.channelsRows[0]?.Channel).toBe("Discord");
+    expect(result.channelsRows[0]?.Channel).toBe("QuietChat");
     expect(result.sessionsRows[0]?.Cache).toBe("cache ok");
     expect(result.healthRows?.[0]).toEqual({
       Item: "Gateway",

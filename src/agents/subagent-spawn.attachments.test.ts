@@ -104,7 +104,7 @@ describe("spawnSubagentDirect filename validation", () => {
 
   const ctx = {
     agentSessionKey: "agent:main:main",
-    agentChannel: "telegram" as const,
+    agentChannel: "forum" as const,
     agentAccountId: "123",
     agentTo: "456",
   };

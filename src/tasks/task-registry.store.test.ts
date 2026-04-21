@@ -229,10 +229,10 @@ describe("task-registry store runtime", () => {
   it("preserves requesterSessionKey when it differs from ownerKey across sqlite restore", () => {
     const created = createTaskRecord({
       runtime: "cli",
-      requesterSessionKey: "agent:main:slack:channel:C1234567890",
+      requesterSessionKey: "agent:main:workspace:channel:C1234567890",
       ownerKey: "agent:main:main",
       scopeKind: "session",
-      childSessionKey: "agent:main:slack:channel:C1234567890",
+      childSessionKey: "agent:main:workspace:channel:C1234567890",
       runId: "run-requester-session-restore",
       task: "Reply to channel task",
       status: "running",
@@ -244,9 +244,9 @@ describe("task-registry store runtime", () => {
 
     expect(findTaskByRunId("run-requester-session-restore")).toMatchObject({
       taskId: created.taskId,
-      requesterSessionKey: "agent:main:slack:channel:C1234567890",
+      requesterSessionKey: "agent:main:workspace:channel:C1234567890",
       ownerKey: "agent:main:main",
-      childSessionKey: "agent:main:slack:channel:C1234567890",
+      childSessionKey: "agent:main:workspace:channel:C1234567890",
     });
   });
 

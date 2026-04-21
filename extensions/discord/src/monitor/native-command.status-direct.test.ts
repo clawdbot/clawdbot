@@ -1,10 +1,7 @@
 import { ChannelType } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createMockCommandInteraction,
-  type MockCommandInteraction,
-} from "./native-command.test-helpers.js";
+import { createMockCommandInteraction as createInteraction } from "./native-command.test-helpers.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 const runtimeModuleMocks = vi.hoisted(() => ({
@@ -30,26 +27,6 @@ vi.mock("openclaw/plugin-sdk/command-status-runtime", () => ({
 
 let createDiscordNativeCommand: typeof import("./native-command.js").createDiscordNativeCommand;
 let discordNativeCommandTesting: typeof import("./native-command.js").__testing;
-
-function createInteraction(params?: {
-  channelType?: ChannelType;
-  channelId?: string;
-  threadParentId?: string | null;
-  guildId?: string | null;
-  guildName?: string;
-}): MockCommandInteraction {
-  return createMockCommandInteraction({
-    userId: "owner",
-    username: "tester",
-    globalName: "Tester",
-    channelType: params?.channelType ?? ChannelType.DM,
-    channelId: params?.channelId ?? "dm-1",
-    threadParentId: params?.threadParentId,
-    guildId: params?.guildId ?? null,
-    guildName: params?.guildName,
-    interactionId: "interaction-1",
-  });
-}
 
 function createConfig(params?: { requireMention?: boolean }): OpenClawConfig {
   return {

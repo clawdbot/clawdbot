@@ -1,38 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../protocol/index.js";
-import type { GatewayRequestContext, RespondFn } from "./types.js";
-
-const loadSessionEntryMock = vi.fn();
-const resolveDeletedAgentIdFromSessionKeyMock = vi.fn();
-
-vi.mock("../session-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
-  return {
-    ...actual,
-    loadSessionEntry: (...args: unknown[]) => loadSessionEntryMock(...args),
-    resolveDeletedAgentIdFromSessionKey: (...args: unknown[]) =>
-      resolveDeletedAgentIdFromSessionKeyMock(...args),
-  };
-});
-
+import {
+  mockDeletedAgentSession,
+  resetDeletedAgentSessionMocks,
+} from "./deleted-agent-guard.test-helpers.js";
 import { sessionsHandlers } from "./sessions.js";
+import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 describe("sessions.send / sessions.steer deleted-agent guard", () => {
   beforeEach(() => {
-    loadSessionEntryMock.mockReset();
-    resolveDeletedAgentIdFromSessionKeyMock.mockReset();
+    resetDeletedAgentSessionMocks();
   });
 
   for (const method of ["sessions.send", "sessions.steer"] as const) {
     it(`${method} rejects keys belonging to a deleted agent`, async () => {
-      const orphanKey = "agent:deleted-agent:main";
-      loadSessionEntryMock.mockReturnValue({
-        cfg: {},
-        canonicalKey: orphanKey,
-        storePath: "/tmp/sessions.json",
-        entry: { sessionId: "sess-orphan" },
-      });
-      resolveDeletedAgentIdFromSessionKeyMock.mockReturnValue("deleted-agent");
+      const orphanKey = mockDeletedAgentSession();
 
       const respond = vi.fn() as unknown as RespondFn;
       const context = {

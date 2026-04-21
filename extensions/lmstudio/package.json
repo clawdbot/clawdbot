@@ -4,6 +4,9 @@
   "private": true,
   "description": "OpenClaw LM Studio provider plugin",
   "type": "module",
+  "dependencies": {
+    "@mariozechner/pi-ai": "0.67.68"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"

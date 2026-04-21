@@ -178,7 +178,7 @@ describe("llm-task tool (json-only)", () => {
   it("throws on unsupported xhigh thinking level", async () => {
     const tool = createLlmTaskTool(fakeApi());
     await expect(tool.execute("id", { prompt: "x", thinking: "xhigh" })).rejects.toThrow(
-      /only supported/i,
+      /not supported/i,
     );
   });
 

@@ -1,3 +1,4 @@
+import type { ResolvedConfiguredAcpBinding } from "../acp/persistent-bindings.types.js";
 import { buildChatChannelMetaById } from "../channels/chat-meta-shared.js";
 import type { ChatChannelId } from "../channels/ids.js";
 import { emptyChannelConfigSchema } from "../channels/plugins/config-schema.js";
@@ -80,6 +81,7 @@ export type {
   ProviderTransportTurnState,
   ProviderToolSchemaDiagnostic,
   ProviderResolveUsageAuthContext,
+  ProviderThinkingProfile,
   ProviderThinkingPolicyContext,
   ProviderValidateReplayTurnsContext,
   ProviderWebSocketSessionPolicy,
@@ -209,8 +211,15 @@ export {
 export { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 export { isTrustedProxyAddress, resolveClientIp } from "../gateway/net.js";
 export { formatZonedTimestamp } from "../infra/format-time/format-datetime.js";
-export { ensureConfiguredAcpBindingReady } from "../acp/persistent-bindings.lifecycle.js";
 export { resolveConfiguredAcpBindingRecord } from "../acp/persistent-bindings.resolve.js";
+
+export async function ensureConfiguredAcpBindingReady(params: {
+  cfg: OpenClawConfig;
+  configuredBinding: ResolvedConfiguredAcpBinding | null;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const runtime = await import("../acp/persistent-bindings.lifecycle.js");
+  return runtime.ensureConfiguredAcpBindingReady(params);
+}
 
 export { resolveTailnetHostWithRunner } from "../shared/tailscale-status.js";
 export type {

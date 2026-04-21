@@ -5,6 +5,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
+import {
+  SilentReplyPolicyConfigSchema,
+  SilentReplyRewriteConfigSchema,
+} from "./zod-schema.agent-defaults.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
 import { ApprovalsSchema } from "./zod-schema.approvals.js";
@@ -963,6 +967,17 @@ export const OpenClawSchema = z
           .optional(),
       })
       .strict()
+      .optional(),
+    surfaces: z
+      .record(
+        z.string(),
+        z
+          .object({
+            silentReply: SilentReplyPolicyConfigSchema.optional(),
+            silentReplyRewrite: SilentReplyRewriteConfigSchema.optional(),
+          })
+          .strict(),
+      )
       .optional(),
   })
   .strict()

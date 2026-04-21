@@ -28,7 +28,7 @@ describe("resolveRunTypingPolicy", () => {
     const resolved = resolveRunTypingPolicy({
       requestedPolicy: "user_message",
       systemEvent: true,
-      originatingChannel: "telegram",
+      originatingChannel: "quietchat",
     });
     expect(resolved).toEqual({
       typingPolicy: "system_event",
@@ -39,7 +39,7 @@ describe("resolveRunTypingPolicy", () => {
   it("preserves requested policy for regular user turns", () => {
     const resolved = resolveRunTypingPolicy({
       requestedPolicy: "user_message",
-      originatingChannel: "telegram",
+      originatingChannel: "quietchat",
     });
     expect(resolved).toEqual({
       typingPolicy: "user_message",
@@ -50,7 +50,7 @@ describe("resolveRunTypingPolicy", () => {
   it("respects explicit suppressTyping", () => {
     const resolved = resolveRunTypingPolicy({
       requestedPolicy: "auto",
-      originatingChannel: "telegram",
+      originatingChannel: "quietchat",
       suppressTyping: true,
     });
     expect(resolved).toEqual({

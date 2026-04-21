@@ -429,13 +429,22 @@ function expectPluginSourcePrecedence(
   },
 ) {
   const entries = registry.plugins.filter((entry) => entry.id === scenario.pluginId);
-  const loaded = entries.find((entry) => entry.status === "loaded");
-  const overridden = entries.find((entry) => entry.status === "disabled");
+  expect(entries, scenario.label).toHaveLength(1);
+  const loaded = entries[0];
   expect(loaded?.origin, scenario.label).toBe(scenario.expectedLoadedOrigin);
-  expect(overridden?.origin, scenario.label).toBe(scenario.expectedDisabledOrigin);
-  if (scenario.expectedDisabledError) {
-    expect(overridden?.error, scenario.label).toContain(scenario.expectedDisabledError);
-  }
+  expect(loaded?.status, scenario.label).toBe("loaded");
+  const expectedWarning =
+    scenario.expectedDisabledError ??
+    `${scenario.expectedDisabledOrigin} plugin will be overridden by ${scenario.expectedLoadedOrigin} plugin`;
+  expect(
+    registry.diagnostics.some(
+      (diag) =>
+        diag.level === "warn" &&
+        diag.pluginId === scenario.pluginId &&
+        diag.message.includes(expectedWarning),
+    ),
+    scenario.label,
+  ).toBe(true);
 }
 
 function expectPluginOriginAndStatus(params: {
@@ -844,6 +853,266 @@ describe("loadOpenClawPlugins", () => {
 
     const bundled = registry.plugins.find((entry) => entry.id === "bundled");
     expect(bundled?.status).toBe("disabled");
+  });
+
+  it("repairs enabled bundled plugin runtime deps before importing the plugin", () => {
+    const bundledDir = makeTempDir();
+    const plugin = writePlugin({
+      id: "discord",
+      dir: path.join(bundledDir, "discord"),
+      filename: "index.cjs",
+      body: `const dep = require("discord-runtime/package.json");
+module.exports = {
+  id: "discord",
+  register() {
+    if (dep.name !== "discord-runtime") {
+      throw new Error("missing runtime dep");
+    }
+  },
+};`,
+    });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    fs.writeFileSync(
+      path.join(plugin.dir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/discord",
+          version: "1.0.0",
+          dependencies: {
+            "discord-runtime": "1.0.0",
+          },
+          openclaw: { extensions: ["./index.cjs"] },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "discord",
+          channels: ["discord"],
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    const installedSpecs: string[] = [];
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          enabled: true,
+        },
+        channels: {
+          discord: {
+            enabled: true,
+          },
+        },
+      },
+      bundledRuntimeDepsInstaller: ({ installRoot, missingSpecs }) => {
+        installedSpecs.push(...missingSpecs);
+        expect(fs.realpathSync(installRoot)).toBe(fs.realpathSync(plugin.dir));
+        fs.mkdirSync(path.join(installRoot, "node_modules", "discord-runtime"), {
+          recursive: true,
+        });
+        fs.writeFileSync(
+          path.join(installRoot, "node_modules", "discord-runtime", "package.json"),
+          JSON.stringify({ name: "discord-runtime", version: "1.0.0" }),
+          "utf-8",
+        );
+      },
+    });
+
+    expect(installedSpecs).toEqual(["discord-runtime@1.0.0"]);
+    expect(registry.plugins.find((entry) => entry.id === "discord")?.status).toBe("loaded");
+  });
+
+  it("does not repair disabled bundled plugin runtime deps", () => {
+    const bundledDir = makeTempDir();
+    const plugin = writePlugin({
+      id: "discord",
+      dir: path.join(bundledDir, "discord"),
+      filename: "index.cjs",
+      body: `module.exports = { id: "discord", register() {} };`,
+    });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    fs.writeFileSync(
+      path.join(plugin.dir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/discord",
+          version: "1.0.0",
+          dependencies: {
+            "discord-runtime": "1.0.0",
+          },
+          openclaw: { extensions: ["./index.cjs"] },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          enabled: true,
+        },
+      },
+      bundledRuntimeDepsInstaller: () => {
+        throw new Error("disabled plugin deps should not install");
+      },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "discord")?.status).toBe("disabled");
+  });
+
+  it("repairs default-enabled bundled plugin runtime deps", () => {
+    const bundledDir = makeTempDir();
+    const plugin = writePlugin({
+      id: "openai",
+      dir: path.join(bundledDir, "openai"),
+      filename: "index.cjs",
+      body: `module.exports = { id: "openai", register() {} };`,
+    });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    fs.writeFileSync(
+      path.join(plugin.dir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/openai",
+          version: "1.0.0",
+          dependencies: {
+            "openai-runtime": "1.0.0",
+          },
+          openclaw: { extensions: ["./index.cjs"] },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "openai",
+          enabledByDefault: true,
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    const installedSpecs: string[] = [];
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          enabled: true,
+        },
+      },
+      bundledRuntimeDepsInstaller: ({ missingSpecs }) => {
+        installedSpecs.push(...missingSpecs);
+      },
+    });
+
+    expect(installedSpecs).toEqual(["openai-runtime@1.0.0"]);
+    expect(registry.plugins.find((entry) => entry.id === "openai")?.status).toBe("loaded");
+  });
+
+  it("installs bundled runtime deps into each plugin root", () => {
+    const bundledDir = makeTempDir();
+    const alpha = writePlugin({
+      id: "alpha",
+      dir: path.join(bundledDir, "alpha"),
+      filename: "index.cjs",
+      body: `module.exports = { id: "alpha", register() {} };`,
+    });
+    const beta = writePlugin({
+      id: "beta",
+      dir: path.join(bundledDir, "beta"),
+      filename: "index.cjs",
+      body: `module.exports = { id: "beta", register() {} };`,
+    });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    for (const [plugin, depName] of [
+      [alpha, "alpha-runtime"],
+      [beta, "beta-runtime"],
+    ] as const) {
+      fs.writeFileSync(
+        path.join(plugin.dir, "package.json"),
+        JSON.stringify(
+          {
+            name: `@openclaw/${plugin.id}`,
+            version: "1.0.0",
+            dependencies: {
+              [depName]: "1.0.0",
+            },
+            openclaw: { extensions: ["./index.cjs"] },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+      fs.writeFileSync(
+        path.join(plugin.dir, "openclaw.plugin.json"),
+        JSON.stringify(
+          {
+            id: plugin.id,
+            enabledByDefault: true,
+            configSchema: EMPTY_PLUGIN_SCHEMA,
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+    }
+    const calls: Array<{ missingSpecs: string[]; installSpecs: string[] | undefined }> = [];
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          enabled: true,
+        },
+      },
+      bundledRuntimeDepsInstaller: ({ installRoot, missingSpecs, installSpecs }) => {
+        calls.push({ missingSpecs, installSpecs });
+        for (const spec of installSpecs ?? missingSpecs) {
+          const name = spec.split("@")[0] || spec;
+          fs.mkdirSync(path.join(installRoot, "node_modules", name), { recursive: true });
+          fs.writeFileSync(
+            path.join(installRoot, "node_modules", name, "package.json"),
+            JSON.stringify({ name, version: "1.0.0" }),
+            "utf-8",
+          );
+        }
+      },
+    });
+
+    expect(registry.plugins.map((entry) => entry.id)).toEqual(["alpha", "beta"]);
+    expect(calls).toEqual([
+      {
+        missingSpecs: ["alpha-runtime@1.0.0"],
+        installSpecs: ["alpha-runtime@1.0.0"],
+      },
+      {
+        missingSpecs: ["beta-runtime@1.0.0"],
+        installSpecs: ["beta-runtime@1.0.0"],
+      },
+    ]);
   });
 
   it("registers standalone text transforms", () => {
@@ -2262,6 +2531,87 @@ module.exports = { id: "throws-after-import", register() {} };`,
 
     const second = loadOpenClawPlugins(options);
     expect(second).toBe(first);
+    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual(
+      expectedArtifacts,
+    );
+  });
+
+  it("preserves previously registered memory capability across activate:false snapshot loads", async () => {
+    useNoBundledPlugins();
+    const workspaceDir = makeTempDir();
+    const absolutePath = path.join(workspaceDir, "MEMORY.md");
+    fs.writeFileSync(absolutePath, "# Memory\n");
+    const memoryPlugin = writePlugin({
+      id: "capability-survives-memory",
+      filename: "capability-survives-memory.cjs",
+      body: `module.exports = {
+        id: "capability-survives-memory",
+        kind: "memory",
+        register(api) {
+          api.registerMemoryCapability({
+            publicArtifacts: {
+              async listArtifacts() {
+                return [{
+                  kind: "memory-root",
+                  workspaceDir: ${JSON.stringify(workspaceDir)},
+                  relativePath: "MEMORY.md",
+                  absolutePath: ${JSON.stringify(absolutePath)},
+                  agentIds: ["main"],
+                  contentType: "markdown",
+                }];
+              },
+            },
+          });
+        },
+      };`,
+    });
+    const sidecarPlugin = writePlugin({
+      id: "capability-survives-sidecar",
+      filename: "capability-survives-sidecar.cjs",
+      body: `module.exports = {
+        id: "capability-survives-sidecar",
+        register() {},
+      };`,
+    });
+
+    const activateConfig = {
+      plugins: {
+        load: { paths: [memoryPlugin.file, sidecarPlugin.file] },
+        allow: ["capability-survives-memory", "capability-survives-sidecar"],
+        slots: { memory: "capability-survives-memory" },
+      },
+    };
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: memoryPlugin.dir,
+      config: activateConfig,
+    });
+
+    const expectedArtifacts = [
+      {
+        kind: "memory-root",
+        workspaceDir,
+        relativePath: "MEMORY.md",
+        absolutePath,
+        agentIds: ["main"],
+        contentType: "markdown" as const,
+      },
+    ];
+
+    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual(
+      expectedArtifacts,
+    );
+
+    // Simulate what resolvePluginWebSearchProviders and similar read-only paths do:
+    // load plugins again with activate:false. Each per-plugin snapshot/rollback must
+    // preserve the previously registered memory capability.
+    loadOpenClawPlugins({
+      cache: false,
+      activate: false,
+      workspaceDir: memoryPlugin.dir,
+      config: activateConfig,
+    });
+
     await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual(
       expectedArtifacts,
     );

@@ -3,7 +3,7 @@ import path from "node:path";
 import { loadConfig } from "../../config/config.js";
 import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "../jiti-loader-cache.js";
 import { loadPluginManifestRegistry } from "../manifest-registry.js";
-import { buildPluginLoaderAliasMap, shouldPreferNativeJiti } from "../sdk-alias.js";
+import { shouldPreferNativeJiti } from "../sdk-alias.js";
 
 type PluginRuntimeRecord = {
   origin?: string;
@@ -116,13 +116,11 @@ export function resolvePluginRuntimeModulePath(
 
 export function getPluginBoundaryJiti(modulePath: string, loaders: PluginJitiLoaderCache) {
   const tryNative = shouldPreferNativeJiti(modulePath);
-  const aliasMap = buildPluginLoaderAliasMap(modulePath);
   return getCachedPluginJitiLoader({
     cache: loaders,
     modulePath,
     importerUrl: import.meta.url,
     jitiFilename: import.meta.url,
-    aliasMap,
     tryNative,
   });
 }

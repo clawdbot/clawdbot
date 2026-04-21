@@ -4,6 +4,10 @@
   "private": true,
   "description": "OpenClaw core memory search plugin",
   "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.49",
+    "chokidar": "^5.0.0"
+  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"

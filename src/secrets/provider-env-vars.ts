@@ -124,10 +124,15 @@ export function resolveProviderEnvVars(
   };
 }
 
+const lazyRecordCacheResetters = new Set<() => void>();
+
 function createLazyReadonlyRecord(
   resolve: () => Record<string, readonly string[]>,
 ): Record<string, readonly string[]> {
   let cached: Record<string, readonly string[]> | undefined;
+  lazyRecordCacheResetters.add(() => {
+    cached = undefined;
+  });
   const getResolved = (): Record<string, readonly string[]> => {
     cached ??= resolve();
     return cached;
@@ -185,6 +190,14 @@ export const PROVIDER_AUTH_ENV_VAR_CANDIDATES = createLazyReadonlyRecord(() =>
  * overrides where generic onboarding wants a different preferred env var.
  */
 export const PROVIDER_ENV_VARS = createLazyReadonlyRecord(() => resolveProviderEnvVars());
+
+export const __testing = {
+  resetProviderEnvVarCachesForTests(): void {
+    for (const reset of lazyRecordCacheResetters) {
+      reset();
+    }
+  },
+};
 
 export function getProviderEnvVars(
   providerId: string,

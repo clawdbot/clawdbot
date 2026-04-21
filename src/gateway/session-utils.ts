@@ -25,6 +25,7 @@ import {
   listSubagentRunsForController,
   resolveSubagentSessionStatus,
 } from "../agents/subagent-registry-read.js";
+import { listThinkingLevelLabels, resolveThinkingDefaultForModel } from "../auto-reply/thinking.js";
 import { loadConfig } from "../config/config.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -438,19 +439,18 @@ export function resolveFreshestSessionStoreMatchFromStoreKeys(
   store: Record<string, SessionEntry>,
   storeKeys: string[],
 ): { key: string; entry: SessionEntry } | undefined {
-  const matches = storeKeys
-    .map((key) => {
-      const entry = store[key];
-      return entry ? { key, entry } : undefined;
-    })
-    .filter((match): match is { key: string; entry: SessionEntry } => match !== undefined);
-  if (matches.length === 0) {
-    return undefined;
+  let freshest: { key: string; entry: SessionEntry } | undefined;
+  for (const key of storeKeys) {
+    const entry = store[key];
+    if (!entry) {
+      continue;
+    }
+    const match = { key, entry };
+    if (!freshest || (match.entry.updatedAt ?? 0) > (freshest.entry.updatedAt ?? 0)) {
+      freshest = match;
+    }
   }
-  if (matches.length === 1) {
-    return matches[0];
-  }
-  return [...matches].toSorted((a, b) => (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0))[0];
+  return freshest;
 }
 
 export function resolveFreshestSessionEntryFromStoreKeys(
@@ -484,9 +484,13 @@ function findFreshestStoreMatch(
   if (matches.size === 0) {
     return undefined;
   }
-  return [...matches.values()].toSorted(
-    (a, b) => (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0),
-  )[0];
+  let freshest: { entry: SessionEntry; key: string } | undefined;
+  for (const match of matches.values()) {
+    if (!freshest || (match.entry.updatedAt ?? 0) > (freshest.entry.updatedAt ?? 0)) {
+      freshest = match;
+    }
+  }
+  return freshest;
 }
 
 /**
@@ -1369,6 +1373,11 @@ export function buildGatewaySessionRow(params: {
     }
   }
 
+  const rowModelProvider = selectedModel?.provider ?? modelProvider;
+  const rowModel = selectedModel?.model ?? model;
+  const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
+  const thinkingModel = rowModel ?? DEFAULT_MODEL;
+
   return {
     key,
     spawnedBy: subagentOwner || entry?.spawnedBy,
@@ -1393,6 +1402,11 @@ export function buildGatewaySessionRow(params: {
     systemSent: entry?.systemSent,
     abortedLastRun: entry?.abortedLastRun,
     thinkingLevel: entry?.thinkingLevel,
+    thinkingOptions: listThinkingLevelLabels(thinkingProvider, thinkingModel),
+    thinkingDefault: resolveThinkingDefaultForModel({
+      provider: thinkingProvider,
+      model: thinkingModel,
+    }),
     fastMode: entry?.fastMode,
     verboseLevel: entry?.verboseLevel,
     traceLevel: entry?.traceLevel,
@@ -1411,8 +1425,8 @@ export function buildGatewaySessionRow(params: {
     parentSessionKey: subagentOwner || entry?.parentSessionKey,
     childSessions,
     responseUsage: entry?.responseUsage,
-    modelProvider: selectedModel?.provider ?? modelProvider,
-    model: selectedModel?.model ?? model,
+    modelProvider: rowModelProvider,
+    model: rowModel,
     contextTokens,
     deliveryContext: deliveryFields.deliveryContext,
     lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,

@@ -994,7 +994,7 @@ Options:
 - `-t, --to <dest>` (for session key and optional delivery)
 - `--session-id <id>`
 - `--agent <id>` (agent id; overrides routing bindings)
-- `--thinking <off|minimal|low|medium|high|xhigh>` (provider support varies; not model-gated at CLI level)
+- `--thinking <level>` (validated against the selected model's provider profile)
 - `--verbose <on|off>`
 - `--channel <channel>` (delivery channel; omit to use the main session channel)
 - `--reply-to <target>` (delivery target override, separate from session routing)

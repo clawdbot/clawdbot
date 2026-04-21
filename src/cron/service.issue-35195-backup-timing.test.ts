@@ -54,7 +54,7 @@ describe("cron backup timing for edit", () => {
       ...diskAfterEdit.jobs[0],
       payload: {
         ...diskAfterEdit.jobs[0].payload,
-        channel: "telegram",
+        channel: "forum",
       },
     };
 

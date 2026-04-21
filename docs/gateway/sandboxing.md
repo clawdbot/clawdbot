@@ -58,7 +58,7 @@ Not sandboxed:
 
 `agents.defaults.sandbox.backend` controls **which runtime** provides the sandbox:
 
-- `"docker"` (default): local Docker-backed sandbox runtime.
+- `"docker"` (default when sandboxing is enabled): local Docker-backed sandbox runtime.
 - `"ssh"`: generic SSH-backed remote sandbox runtime.
 - `"openshell"`: OpenShell-backed sandbox runtime.
 
@@ -79,7 +79,10 @@ OpenShell-specific config lives under `plugins.entries.openshell.config`.
 
 ### Docker backend
 
-The Docker backend is the default runtime, executing tools and sandbox browsers locally via the Docker daemon socket (`/var/run/docker.sock`). Sandbox container isolation is determined by Docker namespaces.
+Sandboxing is off by default. If you enable sandboxing and do not choose a
+backend, OpenClaw uses the Docker backend. It executes tools and sandbox browsers
+locally via the Docker daemon socket (`/var/run/docker.sock`). Sandbox container
+isolation is determined by Docker namespaces.
 
 **Docker-out-of-Docker (DooD) Constraints**:
 If you deploy the OpenClaw Gateway itself as a Docker container, it orchestrates sibling sandbox containers using the host's Docker socket (DooD). This introduces a specific path mapping constraint:

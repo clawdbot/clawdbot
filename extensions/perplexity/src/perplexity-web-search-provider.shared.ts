@@ -1,6 +1,15 @@
+import {
+  createWebSearchProviderContractFields,
+  mergeScopedSearchConfig,
+  resolveProviderWebSearchPluginConfig,
+  type WebSearchProviderPlugin,
+} from "openclaw/plugin-sdk/provider-web-search-config-contract";
+
 export const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
 export const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
+export const PERPLEXITY_CREDENTIAL_PATH = "plugins.entries.perplexity.config.webSearch.apiKey";
 
+const PERPLEXITY_ONBOARDING_SCOPES: Array<"text-inference"> = ["text-inference"];
 const PERPLEXITY_KEY_PREFIXES = ["pplx-"];
 const OPENROUTER_KEY_PREFIXES = ["sk-or-"];
 
@@ -12,6 +21,44 @@ export type PerplexityRuntimeTransportContext = {
   keySource: "config" | "secretRef" | "env" | "missing";
   fallbackEnvVar?: string;
 };
+
+export function createPerplexityWebSearchProviderBase() {
+  return {
+    id: "perplexity",
+    label: "Perplexity Search",
+    hint: "Requires Perplexity API key or OpenRouter API key · structured results",
+    onboardingScopes: [...PERPLEXITY_ONBOARDING_SCOPES],
+    credentialLabel: "Perplexity API key",
+    envVars: ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"],
+    placeholder: "pplx-...",
+    signupUrl: "https://www.perplexity.ai/settings/api",
+    docsUrl: "https://docs.openclaw.ai/perplexity",
+    autoDetectOrder: 50,
+    credentialPath: PERPLEXITY_CREDENTIAL_PATH,
+    ...createWebSearchProviderContractFields({
+      credentialPath: PERPLEXITY_CREDENTIAL_PATH,
+      searchCredential: { type: "scoped", scopeId: "perplexity" },
+      configuredCredential: { pluginId: "perplexity" },
+    }),
+  };
+}
+
+export function resolvePerplexityWebSearchRuntimeMetadata(
+  ctx: Parameters<NonNullable<WebSearchProviderPlugin["resolveRuntimeMetadata"]>>[0],
+) {
+  return {
+    perplexityTransport: resolvePerplexityRuntimeTransport({
+      searchConfig: mergeScopedSearchConfig(
+        ctx.searchConfig,
+        "perplexity",
+        resolveProviderWebSearchPluginConfig(ctx.config, "perplexity"),
+      ),
+      resolvedKey: ctx.resolvedCredential?.value,
+      keySource: ctx.resolvedCredential?.source ?? "missing",
+      fallbackEnvVar: ctx.resolvedCredential?.fallbackEnvVar,
+    }),
+  };
+}
 
 function trimToUndefined(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;

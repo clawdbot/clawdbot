@@ -1,21 +1,28 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   resolveExternalBestEffortDeliveryTarget,
   shouldDowngradeDeliveryToSessionOnly,
 } from "./best-effort-delivery.js";
 
+vi.mock("../../utils/message-channel.js", () => ({
+  INTERNAL_MESSAGE_CHANNEL: "webchat",
+  isDeliverableMessageChannel: (value: string) => ["alpha", "richchat"].includes(value),
+  normalizeMessageChannel: (value?: string | null) =>
+    typeof value === "string" ? value.trim().toLowerCase() : undefined,
+}));
+
 describe("best-effort delivery helpers", () => {
   it("resolves external delivery targets only for deliverable channels with to", () => {
     expect(
       resolveExternalBestEffortDeliveryTarget({
-        channel: "discord",
+        channel: "richchat",
         to: "channel:123",
         accountId: "default",
         threadId: "thread-1",
       }),
     ).toEqual({
       deliver: true,
-      channel: "discord",
+      channel: "richchat",
       to: "channel:123",
       accountId: "default",
       threadId: "thread-1",
@@ -40,7 +47,7 @@ describe("best-effort delivery helpers", () => {
   it("returns session-only when to is missing", () => {
     expect(
       resolveExternalBestEffortDeliveryTarget({
-        channel: "telegram",
+        channel: "alpha",
       }),
     ).toEqual({
       deliver: false,
@@ -72,7 +79,7 @@ describe("best-effort delivery helpers", () => {
       shouldDowngradeDeliveryToSessionOnly({
         wantsDelivery: true,
         bestEffortDeliver: true,
-        resolvedChannel: "discord",
+        resolvedChannel: "richchat",
       }),
     ).toBe(false);
   });

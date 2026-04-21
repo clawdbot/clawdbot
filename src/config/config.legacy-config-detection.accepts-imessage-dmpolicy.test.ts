@@ -2,16 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   expectSchemaConfigValue,
   expectSchemaValid,
-  expectSchemaValidationIssue,
 } from "./legacy-config-detection.test-support.js";
 import { AudioSchema, BindingsSchema } from "./zod-schema.agents.js";
 import { OpenClawSchema } from "./zod-schema.js";
-import {
-  DiscordConfigSchema,
-  IMessageConfigSchema,
-  MSTeamsConfigSchema,
-  SlackConfigSchema,
-} from "./zod-schema.providers-core.js";
 
 function expectOpenClawSchemaInvalidPreservesField(params: {
   config: unknown;
@@ -36,120 +29,10 @@ function expectOpenClawSchemaInvalidPreservesField(params: {
 }
 
 describe("legacy config detection", () => {
-  it('accepts imessage.dmPolicy="open" with allowFrom "*"', () => {
-    expectSchemaConfigValue({
-      schema: IMessageConfigSchema,
-      config: { dmPolicy: "open", allowFrom: ["*"] },
-      readValue: (config) => (config as { dmPolicy?: string }).dmPolicy,
-      expectedValue: "open",
-    });
-  });
-  it("defaults imessage.dmPolicy to pairing when imessage section exists", () => {
-    expectSchemaConfigValue({
-      schema: IMessageConfigSchema,
-      config: {},
-      readValue: (config) => (config as { dmPolicy?: string }).dmPolicy,
-      expectedValue: "pairing",
-    });
-  });
-  it("defaults imessage.groupPolicy to allowlist when imessage section exists", () => {
-    expectSchemaConfigValue({
-      schema: IMessageConfigSchema,
-      config: {},
-      readValue: (config) => (config as { groupPolicy?: string }).groupPolicy,
-      expectedValue: "allowlist",
-    });
-  });
-  it.each([
-    [
-      "defaults discord.groupPolicy to allowlist when discord section exists",
-      DiscordConfigSchema,
-      {},
-      (config: unknown) => (config as { groupPolicy?: string }).groupPolicy,
-      "allowlist",
-    ],
-    [
-      "defaults slack.groupPolicy to allowlist when slack section exists",
-      SlackConfigSchema,
-      {},
-      (config: unknown) => (config as { groupPolicy?: string }).groupPolicy,
-      "allowlist",
-    ],
-    [
-      "defaults msteams.groupPolicy to allowlist when msteams section exists",
-      MSTeamsConfigSchema,
-      {},
-      (config: unknown) => (config as { groupPolicy?: string }).groupPolicy,
-      "allowlist",
-    ],
-  ])("defaults: %s", (_name, schema, config, readValue, expectedValue) => {
-    expectSchemaConfigValue({ schema, config, readValue, expectedValue });
-  });
-  it("rejects unsafe executable config values", () => {
-    expectSchemaValidationIssue({
-      schema: IMessageConfigSchema,
-      config: { cliPath: "imsg; rm -rf /" },
-      expectedPath: "cliPath",
-    });
-  });
   it("accepts tools audio transcription without cli", () => {
     expectSchemaValid(AudioSchema, {
       transcription: { command: ["whisper", "--model", "base"] },
     });
-  });
-  it("accepts path-like executable values with spaces", () => {
-    expectSchemaValid(IMessageConfigSchema, {
-      cliPath: "/Applications/Imsg Tools/imsg",
-    });
-  });
-  it.each([
-    [
-      'rejects discord.dm.policy="open" without allowFrom "*"',
-      DiscordConfigSchema,
-      { dm: { policy: "open", allowFrom: ["123"] } },
-      "dm.allowFrom",
-    ],
-    [
-      'rejects discord.dmPolicy="open" without allowFrom "*"',
-      DiscordConfigSchema,
-      { dmPolicy: "open", allowFrom: ["123"] },
-      "allowFrom",
-    ],
-    [
-      'rejects slack.dm.policy="open" without allowFrom "*"',
-      SlackConfigSchema,
-      { dm: { policy: "open", allowFrom: ["U123"] } },
-      "dm.allowFrom",
-    ],
-    [
-      'rejects slack.dmPolicy="open" without allowFrom "*"',
-      SlackConfigSchema,
-      { dmPolicy: "open", allowFrom: ["U123"] },
-      "allowFrom",
-    ],
-  ])("rejects: %s", (_name, schema, config, expectedPath) => {
-    expectSchemaValidationIssue({ schema, config, expectedPath });
-  });
-
-  it.each([
-    {
-      name: 'accepts discord dm.allowFrom="*" with top-level allowFrom alias',
-      schema: DiscordConfigSchema,
-      config: {
-        dm: { policy: "open", allowFrom: ["123"] },
-        allowFrom: ["*"],
-      },
-    },
-    {
-      name: 'accepts slack dm.allowFrom="*" with top-level allowFrom alias',
-      schema: SlackConfigSchema,
-      config: {
-        dm: { policy: "open", allowFrom: ["U123"] },
-        allowFrom: ["*"],
-      },
-    },
-  ])("$name", ({ schema, config }) => {
-    expectSchemaValid(schema, config);
   });
   it("rejects legacy agent.model string", () => {
     const res = OpenClawSchema.safeParse({

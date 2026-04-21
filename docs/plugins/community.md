@@ -25,6 +25,19 @@ OpenClaw checks ClawHub first and falls back to npm automatically.
 
 ## Listed plugins
 
+### Apify
+
+Scrape data from any website with 20,000+ ready-made scrapers. Let your agent
+extract data from Instagram, Facebook, TikTok, YouTube, Google Maps, Google
+Search, e-commerce sites, and more — just by asking.
+
+- **npm:** `@apify/apify-openclaw-plugin`
+- **repo:** [github.com/apify/apify-openclaw-plugin](https://github.com/apify/apify-openclaw-plugin)
+
+```bash
+openclaw plugins install @apify/apify-openclaw-plugin
+```
+
 ### Codex App Server Bridge
 
 Independent OpenClaw bridge for Codex App Server conversations. Bind a chat to
@@ -73,6 +86,19 @@ cost, tokens, errors, and more.
 
 ```bash
 openclaw plugins install @opik/opik-openclaw
+```
+
+### Prometheus Avatar
+
+Give your OpenClaw agent a Live2D avatar with real-time lip-sync, emotion
+expressions, and text-to-speech. Includes creator tools for AI asset generation
+and one-click deployment to the Prometheus Marketplace. Currently in alpha.
+
+- **npm:** `@prometheusavatar/openclaw-plugin`
+- **repo:** [github.com/myths-labs/prometheus-avatar](https://github.com/myths-labs/prometheus-avatar)
+
+```bash
+openclaw plugins install @prometheusavatar/openclaw-plugin
 ```
 
 ### QQbot

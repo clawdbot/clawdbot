@@ -5,6 +5,10 @@ const hoisted = vi.hoisted(() => {
   const startGmailWatcherWithLogs = vi.fn(async () => undefined);
   const loadInternalHooks = vi.fn(async () => 0);
   const setInternalHooksEnabled = vi.fn();
+  const hasInternalHookListeners = vi.fn(() => false);
+  const startupHookEvent = { type: "gateway", action: "startup", sessionKey: "gateway:startup" };
+  const createInternalHookEvent = vi.fn(() => startupHookEvent);
+  const triggerInternalHook = vi.fn(async () => undefined);
   const startGatewayMemoryBackend = vi.fn(async () => undefined);
   const scheduleGatewayUpdateCheck = vi.fn(() => () => {});
   const startGatewayTailscaleExposure = vi.fn(async () => null);
@@ -22,6 +26,10 @@ const hoisted = vi.hoisted(() => {
     startGmailWatcherWithLogs,
     loadInternalHooks,
     setInternalHooksEnabled,
+    hasInternalHookListeners,
+    startupHookEvent,
+    createInternalHookEvent,
+    triggerInternalHook,
     startGatewayMemoryBackend,
     scheduleGatewayUpdateCheck,
     startGatewayTailscaleExposure,
@@ -61,9 +69,10 @@ vi.mock("../hooks/gmail-watcher-lifecycle.js", () => ({
 }));
 
 vi.mock("../hooks/internal-hooks.js", () => ({
-  createInternalHookEvent: vi.fn(() => ({})),
+  createInternalHookEvent: hoisted.createInternalHookEvent,
+  hasInternalHookListeners: hoisted.hasInternalHookListeners,
   setInternalHooksEnabled: hoisted.setInternalHooksEnabled,
-  triggerInternalHook: vi.fn(async () => undefined),
+  triggerInternalHook: hoisted.triggerInternalHook,
 }));
 
 vi.mock("../hooks/loader.js", () => ({
@@ -105,7 +114,8 @@ vi.mock("./server-tailscale.js", () => ({
   startGatewayTailscaleExposure: hoisted.startGatewayTailscaleExposure,
 }));
 
-const { startGatewayPostAttachRuntime } = await import("./server-startup-post-attach.js");
+const { startGatewayPostAttachRuntime, startGatewaySidecars } =
+  await import("./server-startup-post-attach.js");
 const { STARTUP_UNAVAILABLE_GATEWAY_METHODS } =
   await import("./server-startup-unavailable-methods.js");
 
@@ -118,6 +128,10 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.startGmailWatcherWithLogs.mockClear();
     hoisted.loadInternalHooks.mockClear();
     hoisted.setInternalHooksEnabled.mockClear();
+    hoisted.hasInternalHookListeners.mockReset();
+    hoisted.hasInternalHookListeners.mockReturnValue(false);
+    hoisted.createInternalHookEvent.mockClear();
+    hoisted.triggerInternalHook.mockClear();
     hoisted.startGatewayMemoryBackend.mockClear();
     hoisted.scheduleGatewayUpdateCheck.mockClear();
     hoisted.startGatewayTailscaleExposure.mockClear();
@@ -130,18 +144,39 @@ describe("startGatewayPostAttachRuntime", () => {
 
   it("re-enables startup-gated methods after post-attach sidecars start", async () => {
     const unavailableGatewayMethods = new Set<string>(["chat.history", "models.list"]);
+    const onSidecarsReady = vi.fn();
 
     await startGatewayPostAttachRuntime({
       ...createPostAttachParams(),
       unavailableGatewayMethods,
+      onSidecarsReady,
     });
 
+    await vi.waitFor(() => {
+      expect(onSidecarsReady).toHaveBeenCalledTimes(1);
+    });
     expect([...unavailableGatewayMethods]).toEqual([]);
     expect(hoisted.startPluginServices).toHaveBeenCalledTimes(1);
-    expect(hoisted.setInternalHooksEnabled).toHaveBeenCalledWith(false);
+    expect(hoisted.loadInternalHooks).not.toHaveBeenCalled();
+    expect(hoisted.setInternalHooksEnabled).not.toHaveBeenCalled();
     expect(hoisted.logGatewayStartup).toHaveBeenCalledWith(
       expect.objectContaining({ loadedPluginIds: ["beta", "alpha"] }),
     );
+    expect(hoisted.startGatewayMemoryBackend).not.toHaveBeenCalled();
+  });
+
+  it("starts the qmd memory backend only when configured", async () => {
+    await startGatewayPostAttachRuntime({
+      ...createPostAttachParams(),
+      gatewayPluginConfigAtStart: {
+        hooks: { internal: { enabled: false } },
+        memory: { backend: "qmd" },
+      } as never,
+    });
+
+    await vi.waitFor(() => {
+      expect(hoisted.startGatewayMemoryBackend).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("keeps startup-gated methods unavailable while sidecars are still resuming", async () => {
@@ -154,7 +189,7 @@ describe("startGatewayPostAttachRuntime", () => {
     });
     const unavailableGatewayMethods = new Set<string>(STARTUP_UNAVAILABLE_GATEWAY_METHODS);
 
-    const startup = startGatewayPostAttachRuntime(
+    await startGatewayPostAttachRuntime(
       {
         ...createPostAttachParams(),
         unavailableGatewayMethods,
@@ -173,10 +208,57 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(hoisted.startPluginServices).not.toHaveBeenCalled();
 
     resumeSidecars();
-    await startup;
-
+    await vi.waitFor(() => {
+      expect([...unavailableGatewayMethods]).toEqual([]);
+    });
     expect([...unavailableGatewayMethods]).toEqual([]);
     expect(startGatewaySidecars).toHaveBeenCalledTimes(1);
+  });
+
+  it("dispatches registered gateway startup internal hooks without configured hook packs", async () => {
+    vi.useFakeTimers();
+    hoisted.hasInternalHookListeners.mockReturnValue(true);
+    const cfg = {} as never;
+    const deps = {} as never;
+
+    try {
+      await startGatewaySidecars({
+        cfg,
+        pluginRegistry: createPostAttachParams().pluginRegistry,
+        defaultWorkspaceDir: "/tmp/openclaw-workspace",
+        deps,
+        startChannels: vi.fn(async () => undefined),
+        log: { warn: vi.fn() },
+        logHooks: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+        },
+        logChannels: {
+          info: vi.fn(),
+          error: vi.fn(),
+        },
+      });
+
+      expect(hoisted.loadInternalHooks).not.toHaveBeenCalled();
+      expect(hoisted.hasInternalHookListeners).toHaveBeenCalledWith("gateway", "startup");
+
+      await vi.advanceTimersByTimeAsync(250);
+
+      expect(hoisted.createInternalHookEvent).toHaveBeenCalledWith(
+        "gateway",
+        "startup",
+        "gateway:startup",
+        {
+          cfg,
+          deps,
+          workspaceDir: "/tmp/openclaw-workspace",
+        },
+      );
+      expect(hoisted.triggerInternalHook).toHaveBeenCalledWith(hoisted.startupHookEvent);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

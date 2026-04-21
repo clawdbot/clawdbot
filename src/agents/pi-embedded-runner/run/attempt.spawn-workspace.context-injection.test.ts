@@ -204,7 +204,7 @@ describe("embedded attempt context injection", () => {
         assemble,
       } satisfies AttemptContextEngine,
       sessionId: "session",
-      sessionKey: "agent:main:discord:dm:test-user",
+      sessionKey: "agent:main:guildchat:dm:test-user",
       messages: limited,
       modelId: "gpt-test",
     });

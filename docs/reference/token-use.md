@@ -96,6 +96,10 @@ transcript totals can win when stored totals are missing or smaller.
 Usage auth for provider quota windows comes from provider-specific hooks when
 available; otherwise OpenClaw falls back to matching OAuth/API-key credentials
 from auth profiles, env, or config.
+Assistant transcript entries persist the same normalized usage shape, including
+`usage.cost` when the active model has pricing configured and the provider
+returns usage metadata. This gives `/usage cost` and transcript-backed session
+status a stable source even after the live runtime state is gone.
 
 ## Cost estimation (when shown)
 

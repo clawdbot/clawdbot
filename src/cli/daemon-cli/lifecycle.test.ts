@@ -289,6 +289,27 @@ describe("runDaemonRestart health checks", () => {
     expect(renderRestartDiagnostics).toHaveBeenCalledTimes(1);
   });
 
+  it("waits longer for Windows gateway restart health", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    waitForGatewayHealthyRestart.mockResolvedValue({
+      healthy: true,
+      staleGatewayPids: [],
+      runtime: { status: "running" },
+      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+    });
+
+    await runDaemonRestart({ json: true });
+
+    expect(waitForGatewayHealthyRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attempts: 360,
+        delayMs: 500,
+        includeUnknownListenersAsStale: true,
+        port: 18789,
+      }),
+    );
+  });
+
   it("fails restart with a stopped-free message when the waiter exits early", async () => {
     const { formatCliCommand } = await import("../command-format.js");
     const unhealthy: RestartHealthSnapshot = {

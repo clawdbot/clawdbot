@@ -28,6 +28,42 @@ type CdpReplyHandler = (
   msg: { id?: number; method?: string; params?: Record<string, unknown> },
   socket: WebSocket,
 ) => void;
+type CdpMockMessage = Parameters<CdpReplyHandler>[0];
+
+function sendCdpResult(socket: WebSocket, id: number | undefined, result: Record<string, unknown>) {
+  socket.send(JSON.stringify({ id, result }));
+}
+
+function replyToPageEnable(msg: CdpMockMessage, socket: WebSocket): boolean {
+  if (msg.method !== "Page.enable") {
+    return false;
+  }
+  sendCdpResult(socket, msg.id, {});
+  return true;
+}
+
+function replyWithScreenshotData(msg: CdpMockMessage, socket: WebSocket, data: string): boolean {
+  if (msg.method !== "Page.captureScreenshot") {
+    return false;
+  }
+  sendCdpResult(socket, msg.id, { data: Buffer.from(data).toString("base64") });
+  return true;
+}
+
+function replyToViewportCommandOrScreenshot(
+  msg: CdpMockMessage,
+  socket: WebSocket,
+  data: string,
+): boolean {
+  if (
+    msg.method === "Emulation.setDeviceMetricsOverride" ||
+    msg.method === "Emulation.clearDeviceMetricsOverride"
+  ) {
+    sendCdpResult(socket, msg.id, {});
+    return true;
+  }
+  return replyWithScreenshotData(msg, socket, data);
+}
 
 async function startMockWsServer(handle: CdpReplyHandler) {
   const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
@@ -59,6 +95,24 @@ describe("cdp internal", () => {
       wss = null;
     }
   });
+
+  async function captureScreenshotAndObserveParams(
+    options: Omit<Parameters<typeof captureScreenshot>[0], "wsUrl">,
+  ) {
+    const observed: Array<Record<string, unknown>> = [];
+    const server = await startMockWsServer((msg, socket) => {
+      if (replyToPageEnable(msg, socket)) {
+        return;
+      }
+      if (msg.method === "Page.captureScreenshot") {
+        observed.push(msg.params ?? {});
+        replyWithScreenshotData(msg, socket, "JPG");
+      }
+    });
+    wss = server.wss;
+    const buf = await captureScreenshot({ wsUrl: server.wsUrl, ...options });
+    return { buf, observed };
+  }
 
   describe("captureScreenshot", () => {
     it("captures a PNG without fullPage", async () => {
@@ -104,24 +158,10 @@ describe("cdp internal", () => {
     });
 
     it("clamps out-of-range JPEG quality values into [0, 100]", async () => {
-      const observed: Array<Record<string, unknown>> = [];
-      const server = await startMockWsServer((msg, socket) => {
-        if (msg.method === "Page.enable") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-          return;
-        }
-        if (msg.method === "Page.captureScreenshot") {
-          observed.push(msg.params ?? {});
-          socket.send(
-            JSON.stringify({
-              id: msg.id,
-              result: { data: Buffer.from("JPG").toString("base64") },
-            }),
-          );
-        }
+      const { observed } = await captureScreenshotAndObserveParams({
+        format: "jpeg",
+        quality: 250,
       });
-      wss = server.wss;
-      await captureScreenshot({ wsUrl: server.wsUrl, format: "jpeg", quality: 250 });
       expect(observed[0]?.format).toBe("jpeg");
       expect(observed[0]?.quality).toBe(100);
     });
@@ -160,21 +200,8 @@ describe("cdp internal", () => {
           );
           return;
         }
-        if (msg.method === "Emulation.setDeviceMetricsOverride") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
+        if (replyToViewportCommandOrScreenshot(msg, socket, "FULL")) {
           return;
-        }
-        if (msg.method === "Emulation.clearDeviceMetricsOverride") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-          return;
-        }
-        if (msg.method === "Page.captureScreenshot") {
-          socket.send(
-            JSON.stringify({
-              id: msg.id,
-              result: { data: Buffer.from("FULL").toString("base64") },
-            }),
-          );
         }
       });
       wss = server.wss;
@@ -650,24 +677,7 @@ describe("cdp internal", () => {
 
   describe("captureScreenshot branch coverage", () => {
     it("uses the default jpeg quality when opts.quality is omitted", async () => {
-      const observed: Array<Record<string, unknown>> = [];
-      const server = await startMockWsServer((msg, socket) => {
-        if (msg.method === "Page.enable") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-          return;
-        }
-        if (msg.method === "Page.captureScreenshot") {
-          observed.push(msg.params ?? {});
-          socket.send(
-            JSON.stringify({
-              id: msg.id,
-              result: { data: Buffer.from("J").toString("base64") },
-            }),
-          );
-        }
-      });
-      wss = server.wss;
-      await captureScreenshot({ wsUrl: server.wsUrl, format: "jpeg" });
+      const { observed } = await captureScreenshotAndObserveParams({ format: "jpeg" });
       expect(observed[0]?.quality).toBe(85);
     });
 
@@ -720,21 +730,8 @@ describe("cdp internal", () => {
           socket.send(JSON.stringify({ id: msg.id, result: { result: { value: {} } } }));
           return;
         }
-        if (msg.method === "Emulation.setDeviceMetricsOverride") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
+        if (replyToViewportCommandOrScreenshot(msg, socket, "C")) {
           return;
-        }
-        if (msg.method === "Emulation.clearDeviceMetricsOverride") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-          return;
-        }
-        if (msg.method === "Page.captureScreenshot") {
-          socket.send(
-            JSON.stringify({
-              id: msg.id,
-              result: { data: Buffer.from("C").toString("base64") },
-            }),
-          );
         }
       });
       wss = server.wss;

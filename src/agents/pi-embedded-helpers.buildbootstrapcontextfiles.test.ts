@@ -66,18 +66,71 @@ describe("buildBootstrapContextFiles", () => {
     const files = [makeFile({ name: "TOOLS.md", content: long })];
     const warnings: string[] = [];
     const maxChars = 200;
-    const expectedTailChars = Math.floor(maxChars * 0.2);
     const [result] = buildBootstrapContextFiles(files, {
       maxChars,
       warn: (message) => warnings.push(message),
     });
+    const kept = result?.content.match(/kept (\d+)\+(\d+) chars/);
+    expect(kept).not.toBeNull();
+    if (!kept) {
+      throw new Error("missing truncation kept-count marker");
+    }
+    const headChars = Number(kept[1]);
+    const tailChars = Number(kept[2]);
     expect(result?.content).toContain("[...truncated, read TOOLS.md for full content...]");
     expect(result?.content.length).toBeLessThan(long.length);
-    expect(result?.content.startsWith(long.slice(0, 120))).toBe(true);
-    expect(result?.content.endsWith(long.slice(-expectedTailChars))).toBe(true);
+    expect(result?.content.length).toBeLessThanOrEqual(maxChars);
+    expect(result?.content.startsWith(long.slice(0, headChars))).toBe(true);
+    if (tailChars > 0) {
+      expect(result?.content.endsWith(long.slice(-tailChars))).toBe(true);
+    }
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("TOOLS.md");
     expect(warnings[0]).toContain("limit 200");
+  });
+  it("fits the rendered truncation marker inside the per-file budget", () => {
+    const maxChars = DEFAULT_BOOTSTRAP_MAX_CHARS;
+    const files = [
+      makeFile({
+        name: "HEARTBEAT.md",
+        path: "/tmp/HEARTBEAT.md",
+        content: "a".repeat(maxChars * 2),
+      }),
+    ];
+    const [result] = buildBootstrapContextFiles(files, { maxChars });
+    expect(result?.content).toContain("[...truncated, read HEARTBEAT.md for full content...]");
+    expect(result?.content.length).toBeLessThanOrEqual(maxChars);
+  });
+  it("keeps bootstrap bytes in tiny per-file budgets when the marker is longer than the limit", () => {
+    const maxChars = 64;
+    const content = `HEAD-${"a".repeat(1_000)}-TAIL`;
+    const files = [
+      makeFile({
+        name: "HEARTBEAT.md",
+        path: "/tmp/HEARTBEAT.md",
+        content,
+      }),
+    ];
+    const [result] = buildBootstrapContextFiles(files, { maxChars });
+    expect(result?.content.startsWith("HEAD-")).toBe(true);
+    expect(result?.content.endsWith("-TAIL")).toBe(true);
+    expect(result?.content).toContain("truncated");
+    expect(result?.content.length).toBeLessThanOrEqual(maxChars);
+  });
+  it("keeps at least one bootstrap byte when only the compact marker fits", () => {
+    const maxChars = 22;
+    const content = `HEAD-${"a".repeat(1_000)}-TAIL`;
+    const files = [
+      makeFile({
+        name: "HEARTBEAT.md",
+        path: "/tmp/HEARTBEAT.md",
+        content,
+      }),
+    ];
+    const [result] = buildBootstrapContextFiles(files, { maxChars });
+    expect(result?.content).toContain("truncated");
+    expect(result?.content.length).toBeLessThanOrEqual(maxChars);
+    expect(result?.content).toContain("H");
   });
   it("keeps content under the default limit", () => {
     const long = "a".repeat(DEFAULT_BOOTSTRAP_MAX_CHARS - 10);

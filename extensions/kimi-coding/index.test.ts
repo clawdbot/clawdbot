@@ -7,17 +7,17 @@ describe("kimi provider plugin", () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
     expect(
-      provider.isBinaryThinking?.({
-        provider: "kimi",
-        modelId: "kimi-code",
-      } as never),
-    ).toBe(true);
-    expect(
-      provider.resolveDefaultThinkingLevel?.({
+      provider.resolveThinkingProfile?.({
         provider: "kimi",
         modelId: "kimi-code",
         reasoning: true,
       } as never),
-    ).toBe("off");
+    ).toEqual({
+      levels: [
+        { id: "off", label: "off" },
+        { id: "low", label: "on" },
+      ],
+      defaultLevel: "off",
+    });
   });
 });

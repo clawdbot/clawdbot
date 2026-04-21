@@ -322,7 +322,7 @@ describe("handshake auth helpers", () => {
     ).toBe("remote");
   });
 
-  it("keeps non-CLI clients remote when only the Docker CLI fallback conditions match", () => {
+  it("classifies non-CLI Docker-published loopback clients as shared_secret_loopback_local when auth is token/password", () => {
     const connectParams = {
       client: {
         id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
@@ -340,7 +340,7 @@ describe("handshake auth helpers", () => {
         sharedAuthOk: true,
         authMethod: "token",
       }),
-    ).toBe("remote");
+    ).toBe("shared_secret_loopback_local");
   });
 
   it("skips backend self-pairing only for direct-local backend clients", () => {
@@ -440,5 +440,133 @@ describe("handshake auth helpers", () => {
         authMethod: "token",
       }),
     ).toBe(false);
+  });
+
+  it("classifies non-CLI loopback + shared-secret clients as shared_secret_loopback_local", () => {
+    const connectParams = {
+      client: {
+        id: GATEWAY_CLIENT_IDS.NODE_HOST,
+        mode: GATEWAY_CLIENT_MODES.NODE,
+      },
+    } as ConnectParams;
+    expect(
+      resolvePairingLocality({
+        connectParams,
+        isLocalClient: false,
+        requestHost: "127.0.0.1:18789",
+        remoteAddress: "127.0.0.1",
+        hasProxyHeaders: false,
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "token",
+      }),
+    ).toBe("shared_secret_loopback_local");
+  });
+
+  it("keeps non-CLI loopback clients remote without shared-secret auth", () => {
+    const connectParams = {
+      client: {
+        id: GATEWAY_CLIENT_IDS.NODE_HOST,
+        mode: GATEWAY_CLIENT_MODES.NODE,
+      },
+    } as ConnectParams;
+    const base = {
+      connectParams,
+      isLocalClient: false,
+      requestHost: "127.0.0.1:18789",
+      remoteAddress: "127.0.0.1",
+      hasProxyHeaders: false,
+      hasBrowserOriginHeader: false,
+    } as const;
+
+    expect(
+      resolvePairingLocality({
+        ...base,
+        sharedAuthOk: false,
+        authMethod: "token",
+      }),
+    ).toBe("remote");
+    expect(
+      resolvePairingLocality({
+        ...base,
+        sharedAuthOk: true,
+        authMethod: "device-token",
+      }),
+    ).toBe("remote");
+    expect(
+      resolvePairingLocality({
+        ...base,
+        remoteAddress: "192.168.1.10",
+        sharedAuthOk: true,
+        authMethod: "token",
+      }),
+    ).toBe("remote");
+    expect(
+      resolvePairingLocality({
+        ...base,
+        hasProxyHeaders: true,
+        sharedAuthOk: true,
+        authMethod: "token",
+      }),
+    ).toBe("remote");
+    expect(
+      resolvePairingLocality({
+        ...base,
+        hasBrowserOriginHeader: true,
+        sharedAuthOk: true,
+        authMethod: "token",
+      }),
+    ).toBe("remote");
+  });
+
+  it("allows silent scope-upgrade for shared_secret_loopback_local", () => {
+    expect(
+      shouldAllowSilentLocalPairing({
+        locality: "shared_secret_loopback_local",
+        hasBrowserOriginHeader: false,
+        isControlUi: false,
+        isWebchat: false,
+        reason: "scope-upgrade",
+      }),
+    ).toBe(true);
+    expect(
+      shouldAllowSilentLocalPairing({
+        locality: "shared_secret_loopback_local",
+        hasBrowserOriginHeader: false,
+        isControlUi: false,
+        isWebchat: false,
+        reason: "role-upgrade",
+      }),
+    ).toBe(true);
+    expect(
+      shouldAllowSilentLocalPairing({
+        locality: "shared_secret_loopback_local",
+        hasBrowserOriginHeader: false,
+        isControlUi: false,
+        isWebchat: false,
+        reason: "metadata-upgrade",
+      }),
+    ).toBe(false);
+  });
+
+  it("prefers cli_container_local over shared_secret_loopback_local for CLI clients", () => {
+    const connectParams = {
+      client: {
+        id: GATEWAY_CLIENT_IDS.CLI,
+        mode: GATEWAY_CLIENT_MODES.CLI,
+      },
+    } as ConnectParams;
+    expect(
+      resolvePairingLocality({
+        connectParams,
+        isLocalClient: false,
+        requestHost: "127.0.0.1:18789",
+        remoteAddress: "127.0.0.1",
+        hasProxyHeaders: false,
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "token",
+      }),
+    ).toBe("cli_container_local");
   });
 });

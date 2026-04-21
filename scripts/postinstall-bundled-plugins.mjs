@@ -465,6 +465,19 @@ export function createNestedNpmInstallEnv(env = process.env) {
   return nextEnv;
 }
 
+export function createBundledRuntimeDependencyInstallEnv(env = process.env) {
+  return {
+    ...createNestedNpmInstallEnv(env),
+    npm_config_legacy_peer_deps: "true",
+    npm_config_package_lock: "false",
+    npm_config_save: "false",
+  };
+}
+
+export function createBundledRuntimeDependencyInstallArgs(missingSpecs) {
+  return ["install", "--ignore-scripts", ...missingSpecs];
+}
+
 function shouldEagerInstallBundledPluginDeps(env = process.env) {
   return env?.[EAGER_BUNDLED_PLUGIN_DEPS_ENV]?.trim() === "1";
 }
@@ -756,28 +769,21 @@ export function runBundledPluginPostinstall(params = {}) {
   }
 
   try {
-    const nestedEnv = createNestedNpmInstallEnv(env);
+    const installEnv = createBundledRuntimeDependencyInstallEnv(env);
     const npmRunner =
       params.npmRunner ??
       resolveNpmRunner({
-        env: nestedEnv,
+        env: installEnv,
         execPath: params.execPath,
         existsSync: pathExists,
         platform: params.platform,
         comSpec: params.comSpec,
-        npmArgs: [
-          "install",
-          "--omit=dev",
-          "--no-save",
-          "--package-lock=false",
-          "--legacy-peer-deps",
-          ...missingSpecs,
-        ],
+        npmArgs: createBundledRuntimeDependencyInstallArgs(missingSpecs),
       });
     const result = spawn(npmRunner.command, npmRunner.args, {
       cwd: packageRoot,
       encoding: "utf8",
-      env: npmRunner.env ?? nestedEnv,
+      env: npmRunner.env ?? installEnv,
       stdio: "pipe",
       shell: npmRunner.shell,
       windowsVerbatimArguments: npmRunner.windowsVerbatimArguments,

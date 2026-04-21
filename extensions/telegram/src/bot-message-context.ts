@@ -67,6 +67,7 @@ type TelegramStatusReactionController = {
   cancelPending: () => void;
   setError: () => void | Promise<void>;
   setDone: () => void | Promise<void>;
+  restoreInitial: () => void | Promise<void>;
 };
 
 export type TelegramMessageContext = {

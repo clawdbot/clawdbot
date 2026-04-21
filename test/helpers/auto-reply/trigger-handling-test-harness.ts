@@ -7,7 +7,6 @@ import { clearRuntimeAuthProfileStoreSnapshots } from "../../../src/agents/auth-
 import { withFastReplyConfig } from "../../../src/auto-reply/reply/get-reply-fast-path.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import { resetProviderRuntimeHookCacheForTest } from "../../../src/plugins/provider-runtime.js";
-import { resolveRelativeBundledPluginPublicModuleId } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
 type AnyMock = any;
@@ -164,17 +163,16 @@ const webSessionMocks = getSharedMocks("openclaw.trigger-handling.web-session-mo
   readWebSelfId: vi.fn().mockReturnValue({ e164: "+1999" }),
 }));
 
-const whatsappRuntimeApiModuleId = resolveRelativeBundledPluginPublicModuleId({
-  fromModuleUrl: import.meta.url,
-  pluginId: "whatsapp",
-  artifactBasename: "runtime-api.js",
-});
-
 export function getWebSessionMocks(): AnyMocks {
   return webSessionMocks;
 }
 
-const installWebSessionMock = () => vi.doMock(whatsappRuntimeApiModuleId, () => webSessionMocks);
+const installWebSessionMock = () =>
+  vi.doMock("../../../src/plugins/runtime/runtime-web-channel-plugin.js", () => ({
+    webAuthExists: (...args: unknown[]) => webSessionMocks.webAuthExists(...args),
+    getWebAuthAgeMs: (...args: unknown[]) => webSessionMocks.getWebAuthAgeMs(...args),
+    readWebSelfId: (...args: unknown[]) => webSessionMocks.readWebSelfId(...args),
+  }));
 
 installWebSessionMock();
 
